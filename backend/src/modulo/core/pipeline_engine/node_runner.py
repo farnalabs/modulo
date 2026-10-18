@@ -938,22 +938,8 @@ def _extract_reported_cost(
     here (the provenance gate is evaluated in ``_enrich_union``, PR A2, where
     the frozen node-type map is in scope).
     """
-    if not isinstance(output_json, dict):
-        return None
-    if output_json.get("schema_drift"):
-        return None
-    val = output_json.get("model_cost_raw_usd")
-    if val is None:
-        val = output_json.get("model_cost_usd")
-    if val is None:
-        return None
-    if isinstance(val, bool):
-        return None
-    try:
-        val_f = float(val)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if not math.isfinite(val_f):
+    val_f = _read_reported_cost_raw(output_json)
+    if val_f is None:
         return None
     if val_f == 0:
         # FAR-653 GENUINE-ZERO: an explicit 0 is a REAL report ONLY when the
@@ -964,15 +950,49 @@ def _extract_reported_cost(
         if not is_proven_zero_token_usage(output_json.get("token_usage")):
             return None
         return 0.0, 0.0, False, False
-    if val_f <= 0:
-        return None
     floor = float(max_reportable_usd_min) if max_reportable_usd_min is not None else float(MAX_REPORTABLE_USD_MIN)
     if val_f < floor:
         return None
     raw = val_f
+    band = float(max_reportable_band_usd) if max_reportable_band_usd is not None else float(MAX_REPORTABLE_BAND_USD)
+    clamped, out_of_band_high = _clamp_reported_cost(raw, per_node_cap, band)
+    was_clamped = clamped != raw
+    return raw, clamped, was_clamped, out_of_band_high
+
+
+def _read_reported_cost_raw(output_json: Any) -> float | None:
+    """Read the finite, non-negative numeric reported cost, or ``None``.
+
+    The dict / schema-drift / bool / NaN-Inf / negative rejections shared by
+    ``_extract_reported_cost``. The genuine-zero token proof stays in the
+    caller (it needs the whole output dict, not only the numeric value).
+    """
+    if not isinstance(output_json, dict):
+        return None
+    if output_json.get("schema_drift"):
+        return None
+    val = output_json.get("model_cost_raw_usd")
+    if val is None:
+        val = output_json.get("model_cost_usd")
+    if val is None or isinstance(val, bool):
+        return None
+    try:
+        val_f = float(val)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(val_f) or val_f < 0:
+        return None
+    return val_f
+
+
+def _clamp_reported_cost(raw: float, per_node_cap: float | None, band: float) -> tuple[float, bool]:
+    """Clamp *raw* at the per-node cap and the band ceiling.
+
+    Returns ``(clamped, out_of_band_high)``; a band-capped value records the
+    out-of-band metric and logs the warning exactly as before.
+    """
     cap = per_node_cap if per_node_cap is not None else _effective_self_reported_cap()
     clamped = min(raw, cap)
-    band = float(max_reportable_band_usd) if max_reportable_band_usd is not None else float(MAX_REPORTABLE_BAND_USD)
     out_of_band_high = False
     if clamped > band:
         clamped = band
@@ -982,8 +1002,7 @@ def _extract_reported_cost(
             "cost_components_out_of_band_high",
             extra={"direction": "cost_out_of_band_high", "raw": raw, "clamped": clamped},
         )
-    was_clamped = clamped != raw
-    return raw, clamped, was_clamped, out_of_band_high
+    return clamped, out_of_band_high
 
 
 #: Producer output.json ``token_usage`` key -> node-output field. The producer
@@ -2446,17 +2465,14 @@ async def _write_raw_output_marker(
             # node_id at a different `index`, or the same node_id with an edited
             # `payload`, must derive a DIFFERENT key.
             run_ref = run.idempotency_key if hasattr(run, "idempotency_key") else None
-            if run_ref:
-                with suppress(TypeError, ValueError):
-                    derived = node_idempotency_key(run_ref, node_id, index=index, payload=payload)
-                    if promote_newest_key:
-                        # CONNECTOR path (FAR-458): a content-edit re-run that
-                        # delivers a NEWER payload must promote that newest
-                        # derived key, so the latest delivery is independently
-                        # suppressible and a superseded content-version is not.
-                        marker["idempotency_key"] = derived
-                    else:
-                        marker.setdefault("idempotency_key", derived)
+            _stamp_marker_idempotency_key(
+                marker,
+                run_ref,
+                node_id=node_id,
+                index=index,
+                payload=payload,
+                promote_newest_key=promote_newest_key,
+            )
             persisted_marker = _merge_existing_raw_output_marker(
                 marker,
                 markers.get(key),
@@ -2488,27 +2504,7 @@ async def _write_raw_output_marker(
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                from sqlalchemy.exc import SQLAlchemyError
-
-                from modulo.db.sqlstates import sqlstate_of
-
-                # qa Major 2: sqlstate_of walks __context__, so the
-                # savepoint's 25P02 rollback-wrapper failure (raised by the
-                # __aexit__ of an already-aborted savepoint) does NOT mask
-                # the ORIGINAL transaction-aborting state (40P01 etc.).
-                # B2c claimer: a transaction-aborting failure loses this
-                # persist AND poisons the whole transaction - without a
-                # legacy fallback leg the 'legacy survives' fallback is gone, so
-                # the claim is loud and named honestly. The outer handler
-                # still swallows (the persist never-raise contract).
-                sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
-                _log.exception(
-                    "sandbox_agent.raw_output_marker_persist_uncommitted run=%s node_id=%s attempt_key=%s sqlstate=%s",
-                    run_id,
-                    node_id,
-                    key,
-                    sqlstate,
-                )
+                _log_marker_uncommitted_failure(exc, run_id=run_id, node_id=node_id, key=key)
             _log.info(
                 "sandbox_agent.raw_output_marker_persisted",
                 extra={
@@ -2525,6 +2521,55 @@ async def _write_raw_output_marker(
             "sandbox_agent.raw_output_marker_persist_failed",
             extra={"run_id": run_id, "node_id": node_id, "attempt_key": attempt_key},
         )
+
+
+def _stamp_marker_idempotency_key(
+    marker: dict[str, Any],
+    run_ref: str | None,
+    *,
+    node_id: str,
+    index: int | str | None,
+    payload: str | bytes | None,
+    promote_newest_key: bool,
+) -> None:
+    """Stamp the derived per-node idempotency key onto *marker* (FAR-438).
+
+    Fail-open: a missing persisted ``run_ref`` stamps nothing, and a malformed
+    ref is swallowed. Monotone: ``setdefault`` never downgrades an applied key.
+    The CONNECTOR path (``promote_newest_key``) promotes the newest derived
+    key so a content-edit re-run's latest delivery is independently
+    suppressible while a superseded content-version is not (FAR-458).
+    """
+    if not run_ref:
+        return
+    with suppress(TypeError, ValueError):
+        derived = node_idempotency_key(run_ref, node_id, index=index, payload=payload)
+        if promote_newest_key:
+            marker["idempotency_key"] = derived
+        else:
+            marker.setdefault("idempotency_key", derived)
+
+
+def _log_marker_uncommitted_failure(exc: Exception, *, run_id: str, node_id: str, key: str) -> None:
+    """Loud claim when the savepoint-scoped marker write loses the persist.
+
+    ``sqlstate_of`` walks ``__context__``, so the savepoint's 25P02
+    rollback-wrapper failure does NOT mask the ORIGINAL transaction-aborting
+    state (40P01 etc.). A transaction-aborting failure poisons the whole
+    transaction; the outer handler still swallows (persist never-raise).
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from modulo.db.sqlstates import sqlstate_of
+
+    sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
+    _log.exception(
+        "sandbox_agent.raw_output_marker_persist_uncommitted run=%s node_id=%s attempt_key=%s sqlstate=%s",
+        run_id,
+        node_id,
+        key,
+        sqlstate,
+    )
 
 
 def _merge_existing_raw_output_marker(
@@ -4247,55 +4292,13 @@ async def _invoke_node_model(
     # FAR-900: render the schema for the target provider before dispatch.
     # The effective profile defaults to "verbatim" when None (no override).
     if output_schema_json and backend.supports_native_structured_output:
-        effective_profile: SchemaProfile = schema_profile or "verbatim"
-        provider_id = _extract_provider_id(backend)
-        # Bounds-check the RAW schema as the fallback: rendering inlines
-        # ``$ref``s and can amplify a schema past the limits, in which case we
-        # send the raw schema (which the provider resolves itself) rather than
-        # silently dropping native structured output.
-        raw_ok, _raw_reason = _is_safe_schema(output_schema_json)
-        try:
-            rendered = render_for_profile(output_schema_json, effective_profile, provider_id)
-            schema_to_check = rendered.schema
-            if rendered.skipped:
-                _log.info(
-                    "node_model.schema_render_skipped",
-                    extra={
-                        "node_id": node_id,
-                        "profile": effective_profile,
-                        "reason": rendered.skip_reason,
-                    },
-                )
-        except Exception:
-            # Best-effort: rendering failure must never block the node.
-            _log.warning(
-                "node_model.schema_render_failed; falling back to verbatim",
-                extra={"node_id": node_id, "profile": effective_profile},
-                exc_info=True,
-            )
-            schema_to_check = output_schema_json
-        # FAR-900: the RENDERED schema is what must reach the provider —
-        # otherwise provider-strict keyword stripping never takes effect and
-        # the translation layer is a runtime no-op.  Bounds-check the rendered
-        # copy (inlining can amplify a schema past the size/depth limits).  If
-        # the rendered schema fails bounds (or rendering raised), fall back to
-        # the raw schema when IT passes bounds — the provider resolves $ref
-        # itself, so this preserves the pre-FAR-900 behaviour.  If neither
-        # passes, send no native schema.
-        rendered_ok, rendered_reason = _is_safe_schema(schema_to_check)
-        if rendered_ok:
-            invoke_kwargs["output_schema"] = schema_to_check
-            if _native_output_flag is not None:
-                _native_output_flag[0] = True
-        elif raw_ok:
-            invoke_kwargs["output_schema"] = output_schema_json
-            if _native_output_flag is not None:
-                _native_output_flag[0] = True
-        else:
-            _log.warning(
-                "node_model.schema_bounds_rejected",
-                extra={"node_id": node_id, "reason": rendered_reason},
-            )
+        invoke_kwargs = _prepare_native_output_schema(
+            output_schema_json,
+            backend,
+            schema_profile=schema_profile,
+            node_id=node_id,
+            native_output_flag=_native_output_flag,
+        )
     response = await backend.invoke(messages, **invoke_kwargs)
 
     content = response.content if hasattr(response, "content") else str(response)
@@ -4304,6 +4307,67 @@ async def _invoke_node_model(
         with suppress(json.JSONDecodeError, ValueError):
             output_data = json.loads(content)
     return output_data
+
+
+def _prepare_native_output_schema(
+    output_schema_json: dict[str, Any],
+    backend: Any,
+    *,
+    schema_profile: SchemaProfile | None,
+    node_id: str,
+    native_output_flag: list[bool] | None,
+) -> dict[str, Any]:
+    """Build the ``invoke_kwargs`` for native structured output (FAR-898 / FAR-900).
+
+    Renders the schema for the target provider profile, bounds-checks the
+    RENDERED copy (inlining can amplify a schema past the size/depth limits),
+    then falls back to the RAW schema when it passes bounds (the provider
+    resolves ``$ref`` itself), and finally to no native schema at all.
+    Best-effort: a rendering failure never blocks the node.
+    """
+    invoke_kwargs: dict[str, Any] = {}
+    effective_profile: SchemaProfile = schema_profile or "verbatim"
+    provider_id = _extract_provider_id(backend)
+    # Bounds-check the RAW schema as the fallback: rendering inlines
+    # ``$ref``s and can amplify a schema past the limits, in which case we
+    # send the raw schema (which the provider resolves itself) rather than
+    # silently dropping native structured output.
+    raw_ok, _raw_reason = _is_safe_schema(output_schema_json)
+    try:
+        rendered = render_for_profile(output_schema_json, effective_profile, provider_id)
+        schema_to_check = rendered.schema
+        if rendered.skipped:
+            _log.info(
+                "node_model.schema_render_skipped",
+                extra={
+                    "node_id": node_id,
+                    "profile": effective_profile,
+                    "reason": rendered.skip_reason,
+                },
+            )
+    except Exception:
+        # Best-effort: rendering failure must never block the node.
+        _log.warning(
+            "node_model.schema_render_failed; falling back to verbatim",
+            extra={"node_id": node_id, "profile": effective_profile},
+            exc_info=True,
+        )
+        schema_to_check = output_schema_json
+    rendered_ok, rendered_reason = _is_safe_schema(schema_to_check)
+    if rendered_ok:
+        invoke_kwargs["output_schema"] = schema_to_check
+        if native_output_flag is not None:
+            native_output_flag[0] = True
+    elif raw_ok:
+        invoke_kwargs["output_schema"] = output_schema_json
+        if native_output_flag is not None:
+            native_output_flag[0] = True
+    else:
+        _log.warning(
+            "node_model.schema_bounds_rejected",
+            extra={"node_id": node_id, "reason": rendered_reason},
+        )
+    return invoke_kwargs
 
 
 def _build_error_enforcement_record(
@@ -9115,6 +9179,20 @@ def _format_sandbox_provider_error(exc: Exception, provider_exc_type: type | Non
     return msg
 
 
+def _set_envelope_sentinels(inner: dict[str, Any], output: _SandboxNodeOutput, attrs: tuple[str, ...]) -> None:
+    """Copy sentinel-gated optional fields onto the envelope inner dict.
+
+    Each named ``output`` attribute is set under its own name ONLY when it was
+    left at the ``_UNSET`` sentinel; the insertion order follows *attrs* so the
+    emitted key set — and its order — is identical to the per-field ``if``
+    form it replaces.
+    """
+    for attr in attrs:
+        value = getattr(output, attr)
+        if value is not _UNSET:
+            inner[attr] = value
+
+
 def _build_sandbox_node_envelope(
     *,
     node_id: str,
@@ -9162,45 +9240,34 @@ def _build_sandbox_node_envelope(
     if provider:
         inner["provider"] = provider
         inner["via_provider"] = bool(via_provider)
-    if output.output_json is not _UNSET:
-        inner["output_json"] = output.output_json
+    _set_envelope_sentinels(inner, output, ("output_json",))
     inner["agent_stdout"] = output.agent_stdout
     inner["agent_stderr"] = output.agent_stderr
     inner["stdout_length"] = output.stdout_length
     inner["stderr_length"] = output.stderr_length
     if output.stdout_truncated:
         inner["stdout_truncated"] = True
-    if output.stdout_artifact is not _UNSET:
-        inner["stdout_artifact"] = output.stdout_artifact
-    if output.stderr_artifact is not _UNSET:
-        inner["stderr_artifact"] = output.stderr_artifact
-    if output.changed_files is not _UNSET:
-        inner["changed_files"] = output.changed_files
-    if output.pr_url is not _UNSET:
-        inner["pr_url"] = output.pr_url
-    if output.agent_status is not _UNSET:
-        inner["agent_status"] = output.agent_status
-    if output.agent_outcome is not _UNSET:
-        inner["agent_outcome"] = output.agent_outcome
+    _set_envelope_sentinels(inner, output, ("stdout_artifact", "stderr_artifact"))
+    _set_envelope_sentinels(inner, output, ("changed_files", "pr_url", "agent_status", "agent_outcome"))
     if output.stall_reason is not _UNSET and output.stall_reason:
         inner["stall_reason"] = output.stall_reason
     if output.sandbox_session_lost is not _UNSET and output.sandbox_session_lost:
         inner["sandbox_session_lost"] = True
-    if output.error_type is not _UNSET:
-        inner["error_type"] = output.error_type
-    if output.error_message is not _UNSET:
-        inner["error_message"] = output.error_message
-    if output.sandbox_id is not _UNSET:
-        inner["sandbox_id"] = output.sandbox_id
-    if output.sandbox_log_tail is not _UNSET:
-        inner["sandbox_log_tail"] = output.sandbox_log_tail
     # FAR-800: surface managed workspace-input drift detection on the envelope.
     # Left at the ``_UNSET`` sentinel when no workspace inputs were configured,
     # so the key set is unchanged for every other node type.
-    if output.workspace_drift is not _UNSET:
-        inner["workspace_drift"] = output.workspace_drift
-    if output.workspace_drift_detected is not _UNSET:
-        inner["workspace_drift_detected"] = output.workspace_drift_detected
+    _set_envelope_sentinels(
+        inner,
+        output,
+        (
+            "error_type",
+            "error_message",
+            "sandbox_id",
+            "sandbox_log_tail",
+            "workspace_drift",
+            "workspace_drift_detected",
+        ),
+    )
     if output.modulo_synthetic_failure:
         inner[MODULO_SYNTHETIC_FAILURE_MARKER] = True
     inner["attempt_key"] = output.attempt_key
@@ -12714,6 +12781,57 @@ def _filter_watch_globs(raw: Any) -> list[str]:
     return [g for g in raw if isinstance(g, str) and g]
 
 
+def _resolve_stdout_retention(
+    node_def: dict[str, Any],
+    pipeline_stdout_retention_config: dict[str, Any] | None,
+) -> tuple[str, int | None]:
+    """Resolve ``(stdout_retention_mode, stdout_max_bytes)`` (FAR-792 / FAR-811).
+
+    Precedence: an explicit node mode wins on BOTH fields; a node that set only
+    ``stdout_max_bytes`` keeps its explicit max_bytes while the mode inherits
+    the pipeline default (or legacy ``"tail"``); with neither set the node
+    inherits both pipeline-default fields, else the legacy ``"tail"`` default.
+    """
+    node_raw_mode = node_def.get("stdout_retention_mode")
+    node_raw_max_bytes = node_def.get("stdout_max_bytes")
+    if node_raw_mode is not None:
+        return _coerce_stdout_retention_mode(node_raw_mode), _coerce_stdout_max_bytes(node_raw_max_bytes)
+    if node_raw_max_bytes is not None:
+        inherited_mode = (
+            _coerce_stdout_retention_mode(pipeline_stdout_retention_config.get("mode"))
+            if pipeline_stdout_retention_config is not None
+            else "tail"
+        )
+        return inherited_mode, _coerce_stdout_max_bytes(node_raw_max_bytes)
+    if pipeline_stdout_retention_config is not None:
+        return (
+            _coerce_stdout_retention_mode(pipeline_stdout_retention_config.get("mode")),
+            _coerce_stdout_max_bytes(pipeline_stdout_retention_config.get("max_bytes")),
+        )
+    return "tail", None
+
+
+def _parse_loop_intercept_config(node_def: dict[str, Any], node_id: str) -> LoopInterceptConfig | None:
+    """Parse the node's ``loop_intercept`` config, or ``None`` when absent.
+
+    A malformed config is a programming error (graph validation already
+    rejects it at save-time) — fail the node construction with a named error,
+    never silently disable a declared control.
+    """
+    from modulo.core.guardrails.loop_intercept import (
+        LoopInterceptConfigError,
+        parse_loop_intercept_config,
+    )
+
+    loop_intercept_raw = node_def.get("loop_intercept")
+    if not loop_intercept_raw:
+        return None
+    try:
+        return parse_loop_intercept_config(loop_intercept_raw)
+    except LoopInterceptConfigError as exc:
+        raise ValueError(f"sandbox_agent node '{node_id}' has malformed loop_intercept config: {exc}") from exc
+
+
 def _build_sandbox_node_config(
     node_def: dict[str, Any],
     *,
@@ -12806,32 +12924,7 @@ def _build_sandbox_node_config(
     # stdout_max_bytes without stdout_retention_mode: its explicit max_bytes must
     # win, while the mode is inherited from the pipeline default (or the legacy
     # "tail" default when there is no pipeline default).
-    _node_raw_mode = node_def.get("stdout_retention_mode")
-    _node_raw_max_bytes = node_def.get("stdout_max_bytes")
-    if _node_raw_mode is not None:
-        # Node explicitly set its mode — node wins on both mode and max_bytes.
-        stdout_retention_mode = _coerce_stdout_retention_mode(_node_raw_mode)
-        stdout_max_bytes = _coerce_stdout_max_bytes(_node_raw_max_bytes)
-    elif _node_raw_max_bytes is not None:
-        # Node set max_bytes but not mode — the node's explicit max_bytes still
-        # wins; mode inherits the pipeline default (or "tail" with no default).
-        stdout_retention_mode = (
-            _coerce_stdout_retention_mode(pipeline_stdout_retention_config.get("mode"))
-            if pipeline_stdout_retention_config is not None
-            else "tail"
-        )
-        stdout_max_bytes = _coerce_stdout_max_bytes(_node_raw_max_bytes)
-    elif pipeline_stdout_retention_config is not None:
-        # Node set neither — inherit both mode and max_bytes from the pipeline default.
-        stdout_retention_mode = _coerce_stdout_retention_mode(
-            pipeline_stdout_retention_config.get("mode"),
-        )
-        stdout_max_bytes = _coerce_stdout_max_bytes(
-            pipeline_stdout_retention_config.get("max_bytes"),
-        )
-    else:
-        stdout_retention_mode = "tail"
-        stdout_max_bytes = None
+    stdout_retention_mode, stdout_max_bytes = _resolve_stdout_retention(node_def, pipeline_stdout_retention_config)
     # FAR-228: the opt-in delivery sentinel (full-line marker in sandbox output
     # that proves the side effect — e.g. an email — was sent) and the
     # single-node guard (the gate is inert on multi-node graphs).
@@ -12852,18 +12945,7 @@ def _build_sandbox_node_config(
     # ingestion edge. A malformed config is a programming error (graph
     # validation already rejects it at save-time) — fail the node construction,
     # never silently disable a declared control.
-    from modulo.core.guardrails.loop_intercept import (
-        LoopInterceptConfigError,
-        parse_loop_intercept_config,
-    )
-
-    loop_intercept_config: LoopInterceptConfig | None = None
-    loop_intercept_raw = node_def.get("loop_intercept")
-    if loop_intercept_raw:
-        try:
-            loop_intercept_config = parse_loop_intercept_config(loop_intercept_raw)
-        except LoopInterceptConfigError as exc:
-            raise ValueError(f"sandbox_agent node '{node_id}' has malformed loop_intercept config: {exc}") from exc
+    loop_intercept_config: LoopInterceptConfig | None = _parse_loop_intercept_config(node_def, node_id)
 
     # FIX E: schema_validator_mode — env-var seed removed; the async caller
     # (_sandbox_agent_impl) resolves the authoritative value via
