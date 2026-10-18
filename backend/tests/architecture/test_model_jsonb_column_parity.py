@@ -166,14 +166,20 @@ def _module_string_constants(tree: ast.Module) -> dict[str, str]:
 
 
 def _execute_sql_literals(tree: ast.Module) -> list[str]:
-    """Every string constant passed to an ``execute(...)`` call (raw-SQL path)."""
+    """Every string constant passed to an ``execute(...)``-family call.
+
+    Covers ``op.execute(...)`` / ``<bind>.execute(...)`` and a migration-local
+    wrapper such as 0254's ``_execute(sql)`` (whose whole body is
+    ``op.execute(text(sql))``). Only strings actually handed to the executor are
+    yielded — prose in a module/function docstring is never a declaration.
+    """
     literals: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
         name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
-        if name != "execute":
+        if name is None or name.strip("_") != "execute":
             continue
         for arg in node.args:
             literals.extend(
@@ -394,7 +400,11 @@ def test_jsonb_is_only_constructed_in_the_shared_alias() -> None:
 #   * ``op.alter_column(<table>, <col>, type_=<jsonb-type>, ...)``
 #   * raw SQL ``ALTER TABLE <t> ADD COLUMN [IF NOT EXISTS] <c> ... jsonb``
 #   * raw SQL ``ALTER TABLE <t> ALTER COLUMN <c> TYPE jsonb``
-#   * raw SQL ``CREATE TABLE <t> ( ... <c> jsonb ... )``
+#   * raw SQL ``CREATE TABLE <t> ( ... <c> jsonb ... )`` — the parenthesised
+#     body is split on TOP-LEVEL commas (paren- and quote-aware), so a
+#     single-line body parses exactly like a multi-line one and a table-level
+#     constraint (PRIMARY KEY / FOREIGN KEY / UNIQUE / CHECK / CONSTRAINT) is
+#     never mistaken for a column
 #   * a declarative module-level list — a tuple of ``(table, column)`` pairs
 #     (0147's ``_JSON_TO_JSONB``) or a table-name constant plus a JSON-named
 #     tuple of column names (0129's ``_TABLE`` / ``_JSON_COLUMNS``) — harvested
@@ -406,7 +416,15 @@ def test_jsonb_is_only_constructed_in_the_shared_alias() -> None:
 # ``...with_variant(<JSONB>, "postgresql")`` call, including the conditional
 # ``<jsonb> if is_postgres else <json>`` form (0192) and assignment to a local
 # variable later passed to ``sa.Column`` (0192's ``blob_type`` / 0220's
-# ``col_type``).
+# ``col_type``). The bare CLASS reference (``sa.dialects.postgresql.JSONB``
+# with no call) is deliberately NOT recognised: it is not a jsonb-type
+# *expression* under this definition, and no migration declares a column that
+# way — add it here if one ever does.
+#
+# The raw-SQL path only sees strings actually handed to an executor
+# (``op.execute`` / ``<bind>.execute`` / a migration-local ``_execute``
+# wrapper); prose in a docstring or comment is never a declaration, however
+# jsonb-shaped it looks (0129's docstring shows an ``ALTER ... TYPE jsonb``).
 # ---------------------------------------------------------------------------
 
 _ALTER_ADD_JSONB_RE = re.compile(
@@ -421,7 +439,76 @@ _CREATE_TABLE_RE = re.compile(
     r'CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?:public\.)?"?([A-Za-z0-9_]+)"?\s*\(',
     re.IGNORECASE,
 )
-_CREATE_COLUMN_JSONB_RE = re.compile(r'^\s*"?([A-Za-z0-9_]+)"?\s+jsonb\b', re.IGNORECASE | re.MULTILINE)
+#: A single column definition, ``<name> jsonb ...``, matched against ONE
+#: top-level comma-separated entry of a parsed ``CREATE TABLE`` body. Anchored
+#: per-entry (never per line), so a single-line ``CREATE TABLE`` is parsed the
+#: same as a multi-line one, and a table-level constraint never matches: its
+#: first identifier is not followed by the ``jsonb`` type token (``CONSTRAINT``
+#: → ``<name>``, ``PRIMARY`` → ``KEY``, ``CHECK`` → ``(``).
+_COLUMN_JSONB_RE = re.compile(r'^\s*"?([A-Za-z0-9_]+)"?\s+jsonb\b', re.IGNORECASE)
+
+
+def _create_table_body(sql: str, open_index: int) -> str | None:
+    """The text between the ``(`` at *open_index* and its matching ``)``.
+
+    Paren depth, single- and double-quoted strings are tracked, so a
+    ``CHECK ((...))`` or a ``DEFAULT 'a)b'`` inside the body cannot terminate
+    it early. Returns ``None`` when the parentheses never close.
+    """
+    depth = 0
+    quote: str | None = None
+    index = open_index
+    while index < len(sql):
+        char = sql[index]
+        if quote is not None:
+            if char == quote:
+                if index + 1 < len(sql) and sql[index + 1] == quote:
+                    index += 2
+                    continue
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return sql[open_index + 1 : index]
+        index += 1
+    return None
+
+
+def _split_top_level_commas(body: str) -> list[str]:
+    """Split *body* on commas that are not nested in parens or quotes.
+
+    This is what makes a single-line ``CREATE TABLE`` parse: a column definition
+    is delimited by a top-level comma, not by a newline.
+    """
+    parts: list[str] = []
+    depth = 0
+    quote: str | None = None
+    start = 0
+    index = 0
+    while index < len(body):
+        char = body[index]
+        if quote is not None:
+            if char == quote:
+                if index + 1 < len(body) and body[index + 1] == quote:
+                    index += 2
+                    continue
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(body[start:index])
+            start = index + 1
+        index += 1
+    parts.append(body[start:])
+    return parts
 
 
 def _string_constant(node: ast.expr, constants: dict[str, str]) -> str | None:
@@ -511,18 +598,14 @@ def _raw_sql_jsonb_pairs(sql: str) -> set[tuple[str, str]]:
     for match in _ALTER_TYPE_JSONB_RE.finditer(sql):
         pairs.add((match.group(1).lower(), match.group(2).lower()))
     for match in _CREATE_TABLE_RE.finditer(sql):
-        depth = 1
-        index = match.end()
-        while index < len(sql) and depth:
-            if sql[index] == "(":
-                depth += 1
-            elif sql[index] == ")":
-                depth -= 1
-            index += 1
-        body = sql[match.end() : index - 1]
+        body = _create_table_body(sql, match.end() - 1)
+        if body is None:
+            continue
         table = match.group(1).lower()
-        for column_match in _CREATE_COLUMN_JSONB_RE.finditer(body):
-            pairs.add((table, column_match.group(1).lower()))
+        for definition in _split_top_level_commas(body):
+            column_match = _COLUMN_JSONB_RE.match(definition)
+            if column_match is not None:
+                pairs.add((table, column_match.group(1).lower()))
     return pairs
 
 
@@ -573,7 +656,12 @@ def _declared_jsonb_pairs(source: str) -> set[tuple[str, str]]:
             ):
                 pairs.add((table, column_name))
 
-    for literal in (n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)):
+    # Only strings actually handed to an executor — NEVER every string constant.
+    # A migration docstring can contain an illustrative ``ALTER TABLE ... jsonb``
+    # (0129's does), and harvesting prose would inject a phantom pair: benign
+    # only while the name does not resolve, but a hard false positive the day a
+    # docstring names a real non-jsonb column.
+    for literal in _execute_sql_literals(tree):
         pairs |= _raw_sql_jsonb_pairs(literal)
 
     # Declarative module-level lists (0147's ``_JSON_TO_JSONB``, 0129's
@@ -642,6 +730,91 @@ def test_every_migration_declared_jsonb_column_is_jsonb_on_postgres() -> None:
         "ORM columns declared jsonb by a migration but mapped to generic JSON (each binds as ::JSON "
         "on a predicate and raises 'operator does not exist: jsonb = json'):\n  " + "\n  ".join(violations)
     )
+
+
+def test_raw_sql_create_table_parses_jsonb_column_on_one_line() -> None:
+    """A single-line ``CREATE TABLE`` body is split on top-level commas.
+
+    Regression guard (FAR-1941 verification): the first extractor anchored a
+    column definition to the START OF A LINE, so a ``CREATE TABLE`` written on
+    one line — as 0108/0109/0110 are — yielded NO pair at all. The gate read as
+    green while a jsonb column went unchecked, and because
+    ``tests/architecture/`` is the PR-time gate while the integration parity
+    test runs only in the pre-deploy gate, the drift could reach ``main``.
+    """
+    single_line = "CREATE TABLE IF NOT EXISTS public.foo ( id uuid NOT NULL, payload jsonb NOT NULL, name text );"
+    assert _raw_sql_jsonb_pairs(single_line) == {("foo", "payload")}
+
+    multi_line = "CREATE TABLE public.bar (\n    id uuid NOT NULL,\n    payload jsonb NOT NULL,\n    name text\n);"
+    assert _raw_sql_jsonb_pairs(multi_line) == {("bar", "payload")}
+
+
+def test_raw_sql_create_table_handles_constraints_and_quoted_identifiers() -> None:
+    """Table-level constraints and nested type parens are never a column.
+
+    ``numeric(18,6)`` and the ``CHECK (...)`` array contain commas INSIDE
+    parens; ``PRIMARY KEY`` / ``FOREIGN KEY`` / ``CONSTRAINT`` are table-level
+    clauses whose first identifier is not followed by the ``jsonb`` type token.
+    The quoted ``"values"`` column is a real jsonb declaration and must survive.
+    """
+    sql = (
+        "CREATE TABLE public.baz ("
+        " id uuid NOT NULL,"
+        " \"values\" jsonb DEFAULT '{}'::jsonb NOT NULL,"
+        " rate numeric(18,6),"
+        " CONSTRAINT ck_baz_kind CHECK (((kind)::text = ANY "
+        "((ARRAY['a'::character varying, 'b'::character varying])::text[]))),"
+        " PRIMARY KEY (id),"
+        " FOREIGN KEY (id) REFERENCES public.other (id)"
+        " );"
+    )
+    assert _raw_sql_jsonb_pairs(sql) == {("baz", "values")}
+
+
+def test_docstring_prose_is_not_harvested_as_a_declaration() -> None:
+    """Only strings handed to an executor are declarations, never docstring prose.
+
+    The extractor used to walk EVERY string constant, so a docstring example
+    containing ``ALTER TABLE ... jsonb`` entered the pair set as if it were
+    executed DDL. Only the ``execute(...)`` string is a real declaration.
+    """
+    source = '''
+"""Illustrative DDL (never executed):
+    ALTER TABLE public.widgets ADD COLUMN payload jsonb;
+    CREATE TABLE public.gadgets ( id uuid NOT NULL, blob jsonb NOT NULL );
+"""
+
+
+def upgrade() -> None:
+    op.execute("ALTER TABLE public.real_table ADD COLUMN real_col jsonb")
+'''
+    pairs = _declared_jsonb_pairs(source)
+    assert ("real_table", "real_col") in pairs
+    assert ("widgets", "payload") not in pairs
+    assert ("gadgets", "blob") not in pairs
+
+
+def test_migration_docstring_illustration_is_not_a_declaration() -> None:
+    """0129's docstring example must not become a real declared pair.
+
+    ``0129_runs_json_to_jsonb``'s module docstring shows
+    ``ALTER TABLE public."runs" ALTER COLUMN "col" TYPE jsonb`` as prose. The
+    original extractor harvested it as ``("runs", "col")`` — benign only while
+    the name does not resolve, but a docstring naming a real, non-jsonb column
+    would fail the gate on a PR that never touched that column.
+    """
+    assert ("runs", "col") not in _migration_declared_jsonb_pairs()
+
+
+def test_executed_ddl_through_a_local_execute_wrapper_is_harvested() -> None:
+    """0254's ``_execute(sql)`` wrapper DDL still counts as a declaration.
+
+    Restricting the scan to executed strings must not lose real DDL: 0254
+    promotes ``evals.config_json`` to jsonb via its local ``_execute`` helper
+    (an ``op.execute(text(sql))`` wrapper), so the execute-family match has to
+    recognise it — otherwise the pair silently drops out of the gate's scope.
+    """
+    assert ("evals", "config_json") in _migration_declared_jsonb_pairs()
 
 
 _SCHEMA_ENFORCEMENT_MIGRATION = _MIGRATION_VERSIONS_DIR / "0251_schema_enforcement_telemetry.py"
