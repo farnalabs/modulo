@@ -205,7 +205,12 @@
         </Button>
       </div>
 
-      <div v-if="diffResult" class="space-y-2" data-testid="snapshot-timeline-diff-result">
+      <div
+        v-if="diffResult"
+        class="space-y-2"
+        data-testid="snapshot-timeline-diff-result"
+        :data-has-changes="changeCounts.hasChanges"
+      >
         <div class="text-xs">
           <span class="font-medium">{{ $t('components.PipelineSnapshotTimeline.impacted_nodes') }}</span>
           <span class="text-muted-foreground">{{ impactedLabel ? impactedLabel : $t('components.PipelineSnapshotTimeline.none') }}</span>
@@ -264,6 +269,7 @@ import { isSubstantiveKind, createdKindLabel, SNAPSHOT_PAGE_SIZE } from '../../l
 import {
   isBlockingSeverity,
   readBreakingChanges,
+  readChangeClassCounts,
   readImpactedNodes,
   severityLabel as resolveSeverityLabel,
   shortId,
@@ -409,6 +415,11 @@ const breakingChanges = computed(() => readBreakingChanges(diffResult.value))
 
 const impactedLabel = computed(() => readImpactedNodes(diffResult.value).map((id) => shortId(id)).join(', '))
 
+// FAR-1893: whether ANY change bucket (including one this bundle does not
+// recognise yet) is non-empty comes from the shared enumeration, so this
+// compact summary and the compare view agree on what "changed" means.
+const changeCounts = computed(() => readChangeClassCounts(diffResult.value))
+
 function severityText(severity?: string): string {
   return resolveSeverityLabel(severity, t)
 }
@@ -550,7 +561,7 @@ async function runDiff(): Promise<void> {
       actionError.value = formatApiError(error)
       return
     }
-    diffResult.value = (data as SnapshotDiffResponse) ?? null
+    diffResult.value = data ?? null
   } catch (e: unknown) {
     if (seq !== diffRequestSeq) return
     actionError.value = formatApiError(e)

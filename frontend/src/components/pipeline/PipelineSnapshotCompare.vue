@@ -273,16 +273,19 @@ import {
   hasStructuralChanges as diffHasStructuralChanges,
   isBlockingSeverity,
   readBreakingChanges,
+  readChangeClassCounts,
+  readChangeClasses,
+  readFrozenGraphNodes,
   readImpactedNodes,
   readNodeSignatureNodeIds,
   readUnchangedNodeIds,
   severityLabel as resolveSeverityLabel,
   shortId,
+  type NodePortDelta,
   type SnapshotDiffEdge,
   type SnapshotDiffNode,
   type SnapshotDiffResponse,
   type SnapshotModifiedEdge,
-  type SnapshotPortChange,
 } from '../../lib/pipelineSnapshotDiff'
 import { X as XIcon } from '@lucide/vue'
 
@@ -496,12 +499,16 @@ async function ensureSnapshotLoaded(id: string | null): Promise<void> {
   }
 }
 
-const nodesAdded = computed(() => diff.value?.nodes_added ?? [])
-const nodesRemoved = computed(() => diff.value?.nodes_removed ?? [])
-const nodesModified = computed(() => diff.value?.nodes_modified ?? [])
-const edgesAdded = computed(() => diff.value?.edges_added ?? [])
-const edgesRemoved = computed(() => diff.value?.edges_removed ?? [])
-const edgesModified = computed(() => diff.value?.edges_modified ?? [])
+// FAR-1893: the change-class enumeration lives in the shared module — this
+// component never reads a raw response key, and neither do its siblings.
+const changeClasses = computed(() => readChangeClasses(diff.value))
+const changeCounts = computed(() => readChangeClassCounts(diff.value))
+const nodesAdded = computed(() => changeClasses.value.nodesAdded)
+const nodesRemoved = computed(() => changeClasses.value.nodesRemoved)
+const nodesModified = computed(() => changeClasses.value.nodesModified)
+const edgesAdded = computed(() => changeClasses.value.edgesAdded)
+const edgesRemoved = computed(() => changeClasses.value.edgesRemoved)
+const edgesModified = computed(() => changeClasses.value.edgesModified)
 
 
 // FAR-1893: the semantic layer and the port-signature rule are interpreted by
@@ -522,13 +529,14 @@ function plural(key: string, count: number): string {
 }
 
 const summaryLine = computed(() => {
+  const counts = changeCounts.value
   const parts = [
-    plural('components.PipelineSnapshotCompare.summary_node_added', nodesAdded.value.length),
-    plural('components.PipelineSnapshotCompare.summary_node_removed', nodesRemoved.value.length),
-    plural('components.PipelineSnapshotCompare.summary_node_modified', nodesModified.value.length),
-    plural('components.PipelineSnapshotCompare.summary_edge_added', edgesAdded.value.length),
-    plural('components.PipelineSnapshotCompare.summary_edge_removed', edgesRemoved.value.length),
-    plural('components.PipelineSnapshotCompare.summary_edge_modified', edgesModified.value.length),
+    plural('components.PipelineSnapshotCompare.summary_node_added', counts.nodesAdded),
+    plural('components.PipelineSnapshotCompare.summary_node_removed', counts.nodesRemoved),
+    plural('components.PipelineSnapshotCompare.summary_node_modified', counts.nodesModified),
+    plural('components.PipelineSnapshotCompare.summary_edge_added', counts.edgesAdded),
+    plural('components.PipelineSnapshotCompare.summary_edge_removed', counts.edgesRemoved),
+    plural('components.PipelineSnapshotCompare.summary_edge_modified', counts.edgesModified),
   ]
   if (portChangedNodeCount.value > 0) {
     parts.push(plural('components.PipelineSnapshotCompare.summary_ports', portChangedNodeCount.value))
@@ -549,8 +557,8 @@ const nodeLabels = computed<Record<string, string>>(() => {
       if (node?.id) map[node.id] = node.label || shortId(node.id)
     }
   }
-  add(diff.value?.snapshot_a?.graph?.nodes)
-  add(diff.value?.snapshot_b?.graph?.nodes)
+  add(readFrozenGraphNodes(diff.value, 'a'))
+  add(readFrozenGraphNodes(diff.value, 'b'))
   return map
 })
 
@@ -631,9 +639,14 @@ function fieldEntries(changes?: Record<string, unknown>): Array<{ key: string; o
 }
 
 /** Node port deltas are a LIST of `{direction, port, change}` entries. */
-function portsOf(changes?: Record<string, unknown>): SnapshotPortChange[] {
+function portsOf(changes?: Record<string, unknown>): NodePortDelta[] {
   const raw = changes?.ports
-  return Array.isArray(raw) ? (raw as SnapshotPortChange[]) : []
+  if (!Array.isArray(raw)) return []
+  // Shape-guard the entries: a malformed element must degrade, not throw on
+  // the first `.direction` access (FAR-1893 robustness contract).
+  return raw.filter(
+    (entry): entry is NodePortDelta => typeof entry === 'object' && entry !== null,
+  )
 }
 
 /** Edge port deltas are a `{source_port, target_port}` -> `{old, new}` dict. */
@@ -667,7 +680,7 @@ function directionLabel(direction?: string): string {
   return direction ?? ''
 }
 
-function portChangeLabel(change: SnapshotPortChange): string {
+function portChangeLabel(change: NodePortDelta): string {
   const direction = directionLabel(change.direction)
   const port = change.port ?? ''
   if (change.change === 'added') return t('components.PipelineSnapshotCompare.port_added', { direction, port })
@@ -746,7 +759,7 @@ async function loadDiff(): Promise<void> {
       status.value = 'error'
       return
     }
-    diff.value = data as unknown as SnapshotDiffResponse
+    diff.value = data
     status.value = 'ready'
   } catch (e: unknown) {
     if (token !== diffRequestToken) return

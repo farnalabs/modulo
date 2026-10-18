@@ -361,8 +361,12 @@ describe('PipelineSnapshotCompare', () => {
           port_changes: [
             // A genuine signature change on a node in both versions.
             { kind: 'node_signature', node_id: 'n1', direction: 'output', port: 'out', change: 'removed' },
-            // An edge's port binding names a node, but is not a signature change.
-            { kind: 'edge_port', node_id: 'n2', direction: 'output', port: 'out', change: 'edge_source' },
+            // An edge's port binding names a node present in BOTH graphs, so
+            // ONLY the `kind` discriminator excludes it — this test would fail
+            // if the kind filter were deleted. (n2 would have passed for the
+            // wrong reason: it exists only in snapshot_a, so the both-graphs
+            // check alone would already exclude it.)
+            { kind: 'edge_port', node_id: 'n3', direction: 'output', port: 'out', change: 'edge_source' },
             // A node present only in the newer version has no signature delta.
             { kind: 'node_signature', node_id: 'n4', direction: 'input', port: 'in', change: 'added' },
           ],

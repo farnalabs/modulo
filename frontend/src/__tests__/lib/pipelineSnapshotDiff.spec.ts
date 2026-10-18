@@ -4,11 +4,14 @@ import {
   hasStructuralChanges,
   isBlockingSeverity,
   readBreakingChanges,
+  readChangeClassCounts,
+  readChangeClasses,
   readImpactedNodes,
   readNodeSignatureNodeIds,
   readUnchangedNodeIds,
   severityLabel,
   shortId,
+  type SnapshotDiffPayload,
   type SnapshotDiffResponse,
 } from '../../lib/pipelineSnapshotDiff'
 
@@ -20,7 +23,7 @@ import {
 
 const t = (key: string): string => `label:${key}`
 
-function diff(overrides: Partial<SnapshotDiffResponse> = {}): SnapshotDiffResponse {
+function diff(overrides: Partial<SnapshotDiffResponse> = {}): SnapshotDiffPayload {
   return {
     snapshot_a: {
       version: 1,
@@ -68,6 +71,57 @@ describe('SNAPSHOT_CHANGE_CLASSES', () => {
   })
 })
 
+describe('readChangeClasses', () => {
+  it('groups the six known classes under semantic names', () => {
+    const payload = diff({
+      nodes_added: [{ id: 'n4' }],
+      nodes_modified: [{ node_id: 'n1', changes: {} }],
+      edges_removed: [{ source: 'n1', target: 'n3' }],
+    })
+    const classes = readChangeClasses(payload)
+    expect(classes.nodesAdded).toHaveLength(1)
+    expect(classes.nodesModified).toHaveLength(1)
+    expect(classes.edgesRemoved).toHaveLength(1)
+    expect(classes.nodesRemoved).toHaveLength(0)
+    expect(classes.edgesAdded).toHaveLength(0)
+    expect(classes.edgesModified).toHaveLength(0)
+  })
+
+  it('degrades a malformed class to empty rather than throwing', () => {
+    const payload = diff({ nodes_added: 'not-an-array' as unknown as [] })
+    expect(readChangeClasses(payload).nodesAdded).toHaveLength(0)
+    expect(hasStructuralChanges(payload)).toBe(false)
+  })
+})
+
+describe('readChangeClassCounts', () => {
+  it('reports the per-class counts and whether anything changed', () => {
+    const counts = readChangeClassCounts(
+      diff({ nodes_added: [{ id: 'n4' }], edges_modified: [{ changes: {} }] }),
+    )
+    expect(counts.nodesAdded).toBe(1)
+    expect(counts.edgesModified).toBe(1)
+    expect(counts.nodesRemoved).toBe(0)
+    expect(counts.hasChanges).toBe(true)
+  })
+
+  it('counts an unrecognised change class as a change (never silently ignored)', () => {
+    const payload = diff()
+    // A backend that ships a seventh bucket ahead of this bundle.
+    ;(payload as Record<string, unknown>).config_changed = [{ field: 'x' }]
+    const counts = readChangeClassCounts(payload)
+    expect(counts.unrecognised).toEqual({ config_changed: 1 })
+    expect(counts.hasChanges).toBe(true)
+    expect(hasStructuralChanges(payload)).toBe(true)
+  })
+
+  it('ignores the non-change response objects', () => {
+    const counts = readChangeClassCounts(diff())
+    expect(counts.unrecognised).toEqual({})
+    expect(counts.hasChanges).toBe(false)
+  })
+})
+
 describe('hasStructuralChanges', () => {
   it('is false for a missing or all-empty diff', () => {
     expect(hasStructuralChanges(null)).toBe(false)
@@ -89,6 +143,39 @@ describe('semantic layer readers', () => {
     expect(readImpactedNodes(null)).toHaveLength(0)
     expect(readBreakingChanges({})).toHaveLength(0)
     expect(readImpactedNodes({})).toHaveLength(0)
+  })
+
+  it('degrades malformed semantic sections instead of throwing', () => {
+    const payload = {
+      semantic: {
+        breaking_changes: 'oops',
+        impacted_nodes: { nope: true },
+        port_changes: 42,
+      },
+    } as unknown as SnapshotDiffResponse
+    expect(readBreakingChanges(payload)).toHaveLength(0)
+    expect(readImpactedNodes(payload)).toHaveLength(0)
+    expect(readNodeSignatureNodeIds(payload)).toHaveLength(0)
+  })
+
+  it('keeps string and numeric impacted ids and drops unusable elements', () => {
+    const payload = diff({
+      semantic: {
+        impacted_nodes: ['n2', 7, null, { id: 'x' }] as unknown as string[],
+      },
+    })
+    expect(readImpactedNodes(payload)).toEqual(['n2', '7'])
+  })
+
+  it('drops non-object entries in breaking_changes and port_changes', () => {
+    const payload = diff({
+      semantic: {
+        breaking_changes: [null, 'oops', { severity: 'block', reason: 'x' }] as unknown as never[],
+        port_changes: [null, { kind: 'node_signature', node_id: 'n1' }] as unknown as never[],
+      },
+    })
+    expect(readBreakingChanges(payload)).toHaveLength(1)
+    expect(readNodeSignatureNodeIds(payload)).toEqual(['n1'])
   })
 
   it('reads the semantic layer verbatim', () => {
@@ -194,12 +281,22 @@ describe('readUnchangedNodeIds', () => {
   it('is empty when the newer frozen graph is absent', () => {
     expect(readUnchangedNodeIds(diff({ snapshot_b: undefined }))).toHaveLength(0)
   })
+
+  it('degrades a malformed frozen graph instead of throwing', () => {
+    const payload = diff({
+      snapshot_a: { graph: { nodes: 'oops' } } as unknown as Record<string, unknown>,
+      snapshot_b: { graph: null } as unknown as Record<string, unknown>,
+      nodes_modified: null as unknown as [],
+    })
+    expect(readUnchangedNodeIds(payload)).toHaveLength(0)
+    expect(readNodeSignatureNodeIds(payload)).toHaveLength(0)
+  })
 })
 
 describe('severity display', () => {
   it('maps the known severities to their shared i18n labels', () => {
-    expect(severityLabel('block', t)).toBe('label:components.PipelineSnapshotCompare.severity_block')
-    expect(severityLabel('warning', t)).toBe('label:components.PipelineSnapshotCompare.severity_warning')
+    expect(severityLabel('block', t)).toBe('label:components.SnapshotDiffSeverity.block')
+    expect(severityLabel('warning', t)).toBe('label:components.SnapshotDiffSeverity.warning')
   })
 
   it('surfaces an unknown severity raw rather than mislabelling it', () => {
@@ -207,7 +304,11 @@ describe('severity display', () => {
   })
 
   it('treats an absent severity as a warning', () => {
-    expect(severityLabel(undefined, t)).toBe('label:components.PipelineSnapshotCompare.severity_warning')
+    expect(severityLabel(undefined, t)).toBe('label:components.SnapshotDiffSeverity.warning')
+  })
+
+  it('treats an EMPTY severity the same as absent (pinned decision)', () => {
+    expect(severityLabel('', t)).toBe('label:components.SnapshotDiffSeverity.warning')
   })
 
   it('treats only block as blocking', () => {
