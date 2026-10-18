@@ -59,12 +59,17 @@ import ErrorAlert from '../shared/ErrorAlert.vue'
 // forwarded, so nothing is silently swallowed.
 defineOptions({ inheritAttrs: false })
 
+// Read the fallthrough attrs once, in setup: both computeds below filter the
+// same reactive attrs object, so hoisting the single useAttrs() call avoids
+// calling it twice and keeps the read where the composition API documents it.
+const attrs = useAttrs()
+
 const UNSUPPORTED_ATTRS = new Set(['ondismiss', 'dismisslabel', 'dismissicon', 'retryable'])
 const normaliseAttrName = (key: string) => key.replace(/-/g, '').toLowerCase()
 
 const forwardedAttrs = computed(() =>
   Object.fromEntries(
-    Object.entries(useAttrs()).filter(
+    Object.entries(attrs).filter(
       ([key]) => !UNSUPPORTED_ATTRS.has(normaliseAttrName(key))
     )
   )
@@ -75,7 +80,7 @@ const forwardedAttrs = computed(() =>
 // watchEffect-based so it reports the current attr set rather than firing on
 // every render.
 const unsupportedAttrNames = computed(() =>
-  Object.keys(useAttrs()).filter((key) => UNSUPPORTED_ATTRS.has(normaliseAttrName(key)))
+  Object.keys(attrs).filter((key) => UNSUPPORTED_ATTRS.has(normaliseAttrName(key)))
 )
 
 if (import.meta.env.DEV) {
