@@ -10303,6 +10303,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/evidence/redaction-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Redaction Rules Endpoint
+         * @description List the caller org's redaction rules (admin only).
+         *
+         *     DB failures are translated by ``@handle_db_errors``; a read cannot produce a
+         *     rule conflict, so no local ``IntegrityError`` arm re-labels one as such.
+         */
+        get: operations["list_redaction_rules_endpoint_api_v1_evidence_redaction_rules_get"];
+        /**
+         * Upsert Redaction Rule Endpoint
+         * @description Create or update one redaction rule for the caller org (admin only).
+         *
+         *     DB failures (including the unique-constraint ``IntegrityError`` that a
+         *     concurrent upsert of the same ``(key_pattern, role)`` can raise) are
+         *     translated to their status codes by ``@handle_db_errors`` — one shared
+         *     mapping instead of a duplicated per-route chain.
+         */
+        put: operations["upsert_redaction_rule_endpoint_api_v1_evidence_redaction_rules_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/evidence/{evidence_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Evidence Endpoint
+         * @description Return one evidence row for the caller org, redacted for their role.
+         *
+         *     The 404 for a missing row is raised inside the body and passed through
+         *     untouched by ``@handle_db_errors``; DB failures use the shared mapping.
+         */
+        get: operations["get_evidence_endpoint_api_v1_evidence__evidence_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Evidence Endpoint
+         * @description List a run's evidence rows for the caller org, redacted for their role.
+         *
+         *     At most :data:`_EVIDENCE_LIST_LIMIT` rows are returned.
+         *
+         *     The org's redaction rules are loaded ONCE per request and each row resolved
+         *     in memory from that list — never one rule query per row. DB failures use the
+         *     shared ``@handle_db_errors`` mapping; a read cannot produce a rule conflict.
+         */
+        get: operations["list_evidence_endpoint_api_v1_evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/assistant/sessions": {
         parameters: {
             query?: never;
@@ -13952,6 +14033,49 @@ export interface components {
              * @default 0
              */
             current_row_count: number;
+        };
+        /**
+         * EvidenceRowResponse
+         * @description One evidence row with its ``value`` already redacted for the caller's role.
+         */
+        EvidenceRowResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /** Key */
+            key: string;
+            /** Subject Type */
+            subject_type: string;
+            /** Subject Id */
+            subject_id: string;
+            /** Value */
+            value: unknown;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Producer Type */
+            producer_type: string;
+            /** Producer Id */
+            producer_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /** ExportPreviewResponse */
         ExportPreviewResponse: {
@@ -18595,6 +18719,45 @@ export interface components {
             detail: string | null;
             /** Evaluated At */
             evaluated_at: string;
+        };
+        /**
+         * RedactionRuleResponse
+         * @description A stored redaction rule.
+         */
+        RedactionRuleResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Key Pattern */
+            key_pattern: string;
+            /** Role */
+            role: string;
+            /** Redacted Fields */
+            redacted_fields: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * RedactionRuleUpsert
+         * @description Upsert payload for one ``(key_pattern, role)`` redaction rule (§2.4).
+         */
+        RedactionRuleUpsert: {
+            /** Key Pattern */
+            key_pattern: string;
+            /** Role */
+            role: string;
+            /** Redacted Fields */
+            redacted_fields?: string[];
         };
         /** RegisterPublisherRequest */
         RegisterPublisherRequest: {
@@ -44760,6 +44923,142 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    list_redaction_rules_endpoint_api_v1_evidence_redaction_rules_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedactionRuleResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    upsert_redaction_rule_endpoint_api_v1_evidence_redaction_rules_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedactionRuleUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedactionRuleResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_evidence_endpoint_api_v1_evidence__evidence_id__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidenceRowResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    list_evidence_endpoint_api_v1_evidence_get: {
+        parameters: {
+            query: {
+                /** @description Run id whose evidence rows to list */
+                run_id: string;
+                /** @description Optional node id to include node-level evidence */
+                node_id?: string | null;
+                /** @description Optional exact evidence key filter */
+                key?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidenceRowResponse"][];
                 };
             };
             /** @description Validation Error */

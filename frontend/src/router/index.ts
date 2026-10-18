@@ -74,6 +74,7 @@ const VariantBatchCompareView = () => import('../views/VariantBatchCompareView.v
 const RunsListView = () => import('../views/RunsListView.vue')
 const RunDetailView = () => import('../views/RunDetailView.vue')
 const AgentOutputDiffView = () => import('../views/AgentOutputDiffView.vue')
+const EvidenceView = () => import('../views/EvidenceView.vue')
 const AdminAuditView = () => import('../views/AdminAuditView.vue')
 const AdminFeatureFlagsView = () => import('../views/AdminFeatureFlagsView.vue')
 const AdminPluginsView = () => import('../views/AdminPluginsView.vue')
@@ -365,6 +366,11 @@ const router = createRouter({
       path: '/runs/diff',
       name: 'runs-diff',
       component: AgentOutputDiffView,
+    },
+    {
+      path: '/evidence',
+      name: 'evidence',
+      component: EvidenceView,
     },
     {
       path: '/runs/:id',

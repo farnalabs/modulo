@@ -48,7 +48,7 @@ from modulo.db.models.publisher import Publisher
 
 _MIGRATION_REVISION = "0311_library_cluster_schema_hygiene"
 _MIGRATION_DOWN_REVISION = "0310_library_cluster_db_hardening"
-_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
+_HEAD_MIGRATION = "0320_evidence_redaction_rules"
 
 _DROP_INSTALL_ENTITY_INDEX = "ix_collection_install_entity_install_id"
 _DROP_PUBLISHER_INDEX = "ix_publishers_public_key_hex"
