@@ -404,7 +404,7 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
   }
 
   it('renders the persistent BYO helper copy that names the agent-commands path', async () => {
-    const wrapper = await mountWithProvider('local_docker')
+    const wrapper = await mountWithProvider('runner_docker')
     const help = wrapper.find('#envprofile-form-image-help')
     expect(help.exists()).toBe(true)
     expect(help.text()).toContain('Bring your own agent image')
@@ -412,7 +412,7 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
   })
 
   it('acknowledges a digest-pinned ref and shows no mutable-tag warning', async () => {
-    const wrapper = await mountWithProvider('local_docker')
+    const wrapper = await mountWithProvider('runner_docker')
     await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`ghcr.io/acme/agent@sha256:${'a'.repeat(64)}`)
     await nextTick()
 
@@ -422,9 +422,47 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
     expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
   })
 
+  it('acknowledges a digest-pinned ref on the dispatchable runner_docker provider', async () => {
+    // FAR-1779 F2: runner_docker is the provider that actually dispatches a
+    // container image (local_docker is refused at dispatch), so the digest
+    // classification must apply to it.
+    const wrapper = await mountWithProvider('runner_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`modulo-runner:opencode@sha256:${'c'.repeat(64)}`)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(true)
+  })
+
+  it.each([
+    ['uppercase digest hex', `ghcr.io/acme/agent@sha256:${'A'.repeat(64)}`],
+    ['uppercase repository', `GHCR.io/acme/agent@sha256:${'a'.repeat(64)}`],
+    ['uppercase namespace segment', `ghcr.io/ACME/agent@sha256:${'a'.repeat(64)}`],
+    ['embedded space', `ghcr.io/acme/agent @sha256:${'a'.repeat(64)}`],
+  ])('does not report a ref with a %s as pinned', async (_label, ref) => {
+    // FAR-1779 F1: Docker/containerd reject these, so classifying them as
+    // pinned would assert immutability the runtime would refuse to honour.
+    const wrapper = await mountWithProvider('runner_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(ref)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(true)
+  })
+
+  it('does not digest-classify a local_docker profile because dispatch refuses the provider', async () => {
+    // FAR-1779 F2: local_docker cannot dispatch a container image
+    // (SandboxDispatchUnboundError), so it is NOT in the pinnable set.
+    const wrapper = await mountWithProvider('local_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`ghcr.io/acme/agent@sha256:${'a'.repeat(64)}`)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
+  })
+
   it('warns without blocking when a mutable tag is used, and still saves', async () => {
     postMock.mockResolvedValue(fullProfile({ name: 'byo' }))
-    const wrapper = await mountWithProvider('local_docker')
+    const wrapper = await mountWithProvider('runner_docker')
 
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('byo')
     await wrapper.find('[data-testid="envprofile-form-image"]').setValue('ghcr.io/acme/agent:latest')
@@ -460,7 +498,7 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
   })
 
   it('references the dynamic state region only while it is rendered', async () => {
-    const wrapper = await mountWithProvider('local_docker')
+    const wrapper = await mountWithProvider('runner_docker')
     const input = wrapper.find('[data-testid="envprofile-form-image"]')
     expect(input.attributes('aria-describedby')).toBe('envprofile-form-image-help')
 

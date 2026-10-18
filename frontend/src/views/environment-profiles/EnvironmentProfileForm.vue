@@ -275,13 +275,24 @@ const providerTypeOptions = computed(() => [
 ])
 
 // FAR-1779 / ADR 059 §4: digest pinning is docs-advised, never enforced. A
-// `name@sha256:<64 hex>` ref is immutable and visibly acknowledged; any other
-// ref (a mutable tag, or no tag at all — an implicit `:latest`) warns without
-// blocking the save. The classification applies only where image_ref is a
-// container image (Docker and Kubernetes profiles); on E2B it is a template
-// ID, so warning about a digest there would be a false positive.
-const DIGEST_REF_RE = /@sha256:[0-9a-f]{64}$/i
-const DIGEST_PINNABLE_PROVIDERS = ['local_docker', 'kubernetes']
+// `name[@tag]@sha256:<64 lowercase hex>` ref is immutable and visibly
+// acknowledged; any other ref (a mutable tag, or no tag at all — an implicit
+// `:latest`) warns without blocking the save. The whole reference is
+// validated, not just its digest suffix: Docker/containerd reject an uppercase
+// repository, uppercase digest hex and an embedded space, so a ref that merely
+// ENDS in `@sha256:<hex>` must never be announced as pinned. An invalid ref is
+// reported as mutable (the warning) rather than pinned. The tag stays
+// mixed-case (Docker allows it), and an optional registry port and a
+// multi-level namespace are supported.
+//
+// The classification applies only where image_ref is dispatched as a container
+// image — the Runner (runner_docker) and Kubernetes providers. E2B is excluded
+// (its image_ref is a template ID) and so is local_docker, which dispatch
+// refuses outright (`runner_dispatch.py` raises SandboxDispatchUnboundError),
+// so claiming it runs a container image would be false.
+const DIGEST_REF_RE =
+  /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?@sha256:[0-9a-f]{64}$/
+const DIGEST_PINNABLE_PROVIDERS = ['runner_docker', 'kubernetes']
 
 const imageRefState = computed<'pinned' | 'mutable' | null>(() => {
   if (!DIGEST_PINNABLE_PROVIDERS.includes(form.provider_type)) return null

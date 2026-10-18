@@ -320,6 +320,12 @@ function tierLabel(providerType: string): string {
 }
 
 function healthLabel(row: ProfileRow): string {
+  // FAR-1779: a placeholder-digest row is excluded from image inspection, so
+  // the backend reports health_state='healthy' (or None) alongside
+  // placeholder_digest=true. A green "healthy" badge would contradict the
+  // "Image cannot be resolved" note directly below it, so the badge agrees
+  // with the note instead of the un-inspectable probe state.
+  if (row.health?.placeholder_digest) return t('views.RunnersProfilesTab.health_image_unresolvable')
   if (row.profile.provider_type !== 'runner_docker') return row.profile.status === 'active' ? t('views.RunnersProfilesTab.status_active') : row.profile.status
   switch (row.health?.health_state) {
     case 'healthy':
@@ -334,6 +340,7 @@ function healthLabel(row: ProfileRow): string {
 }
 
 function healthBadgeClass(row: ProfileRow): string {
+  if (row.health?.placeholder_digest) return 'bg-warning/10 text-warning-text'
   if (row.profile.provider_type !== 'runner_docker') return 'bg-success/10 text-success'
   switch (row.health?.health_state) {
     case 'healthy':
@@ -348,6 +355,7 @@ function healthBadgeClass(row: ProfileRow): string {
 }
 
 function healthDotClass(row: ProfileRow): string {
+  if (row.health?.placeholder_digest) return 'bg-warning'
   if (row.profile.provider_type !== 'runner_docker') return 'bg-success'
   switch (row.health?.health_state) {
     case 'healthy':
