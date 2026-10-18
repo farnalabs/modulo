@@ -29,7 +29,7 @@
         <button type="button"
           v-if="canManage"
           data-testid="composite-editor-publish"
-          class="rounded-md bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-500"
+          class="rounded-md bg-green-700 px-3 py-1 text-xs font-medium text-white hover:bg-green-600"
           @click="showPublishFlow = true"
         >
           {{ $t('views.CompositeEditorView.publish') }}

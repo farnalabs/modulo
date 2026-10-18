@@ -4541,6 +4541,9 @@ elements:
       - testid: schema-editor-description
         type: input
         dynamic_testid: false
+      - testid: schema-editor-empty-new
+        type: button
+        dynamic_testid: false
       - testid: schema-editor-field
         type: element
         dynamic_testid: false

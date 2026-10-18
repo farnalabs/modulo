@@ -525,6 +525,23 @@ describe('AdminUsersView', () => {
     expect(usersState.find(u => u.id === 'u-1')?.org_role).toBe('operator')
   })
 
+  it('shows the error flash when a role update fails', async () => {
+    mockPut.mockRejectedValue(new Error('role update exploded'))
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    await (wrapper.vm as unknown as { updateRole: (u: unknown, r: unknown) => Promise<void> }).updateRole(
+      { ...USERS_RESPONSE.items[0], id: 'u-1', org_role: 'admin' },
+      'operator',
+    )
+    await flushPromises()
+    await nextTick()
+
+    // The flash banner's destructive arm must render, not just the success arm.
+    expect(wrapper.text()).toContain('role update exploded')
+  })
+
   it('deactivates and reactivates a user via the row actions', async () => {
     mockPost.mockResolvedValue({ ...USERS_RESPONSE.items[0], is_active: false })
     const wrapper = mountView()
