@@ -2007,6 +2007,24 @@ elements:
       - testid: org-hitl-review-window-status
         type: element
         dynamic_testid: false
+      - testid: org-mcp-authority-load-error
+        type: element
+        dynamic_testid: false
+      - testid: org-mcp-authority-retry
+        type: button
+        dynamic_testid: false
+      - testid: org-mcp-authority-status
+        type: element
+        dynamic_testid: false
+      - testid: org-mcp-authority-toggle
+        type: element
+        dynamic_testid: false
+      - testid: org-mcp-authority-error
+        type: element
+        dynamic_testid: false
+      - testid: org-mcp-authority-saved
+        type: element
+        dynamic_testid: false
     /admin/parameter-schemas:
       - testid: paramschema-new
         type: button
@@ -3247,6 +3265,9 @@ elements:
       - testid: oauth-consent-no-scopes-hint
         type: element
         dynamic_testid: false
+      - testid: oauth-consent-authority-note
+        type: element
+        dynamic_testid: false
       - testid: oauth-consent-approve
         type: button
         dynamic_testid: false
@@ -3468,6 +3489,9 @@ elements:
         type: input
         dynamic_testid: false
       - testid: pipeline-editor-ownerless-gate-advisory
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-human-only-credential-note
         type: element
         dynamic_testid: false
       - testid: pipeline-editor-save-error
@@ -4120,6 +4144,9 @@ elements:
         dynamic_testid: false
       - testid: hitl-gate-notes
         type: textarea
+        dynamic_testid: false
+      - testid: hitl-gate-decision-attribution
+        type: element
         dynamic_testid: false
       - testid: hitl-gate-approve
         type: button
@@ -4787,6 +4814,9 @@ elements:
         type: button
         dynamic_testid: false
     /settings/hitl-review:
+      - testid: hitl-review-decider-note
+        type: element
+        dynamic_testid: false
       - testid: hitl-review-pipeline-select
         type: select
         dynamic_testid: false
@@ -4867,6 +4897,9 @@ elements:
         dynamic_testid: false
       - testid: hitl-gate-notes
         type: textarea
+        dynamic_testid: false
+      - testid: hitl-gate-decision-attribution
+        type: element
         dynamic_testid: false
       - testid: hitl-gate-approve
         type: button
@@ -5023,6 +5056,9 @@ elements:
       - testid: settings-mcp-org-scope-note
         type: element
         dynamic_testid: false
+      - testid: settings-mcp-machine-credential-note
+        type: element
+        dynamic_testid: false
       - testid: settings-mcp-grants-loading
         type: element
         dynamic_testid: false
@@ -5090,6 +5126,9 @@ elements:
         type: button
         dynamic_testid: false
       - testid: settings-mcp-oauth-scopes-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-hitl-review-scope-note
         type: element
         dynamic_testid: false
       - testid: settings-mcp-oauth-register-error
