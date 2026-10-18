@@ -775,6 +775,8 @@ def _pipeline_fakes() -> dict[str, Any]:
         owner_team_id=uuid.uuid4(),
         account_id=_ACCOUNT_ID,
         visibility="org",
+        # FAR-1883: a bounded capacity-queue timeout must survive export.
+        queue_timeout_seconds=3600,
     )
     agent = SimpleNamespace(
         id=agent_id,
@@ -852,6 +854,7 @@ async def test_export_pipeline_bundle_builds_portable_zip(monkeypatch: pytest.Mo
     assert bundle["format_version"] == "1"
     assert bundle["pipeline"]["name"] == "My Pipeline"
     assert bundle["pipeline"]["node_timeout_seconds"] == 600
+    assert bundle["pipeline"]["queue_timeout_seconds"] == 3600
     assert bundle["pipeline"]["retry_policy"] == {"on": ["failure"], "max_retries": 2}
     assert "owner_team_id" not in bundle["pipeline"]
     assert bundle["pipeline"]["visibility"] == "org"
@@ -1576,6 +1579,7 @@ async def test_materialize_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
             "retry_policy": {"on": ["failure"], "max_retries": 2},
             "node_timeout_seconds": 900,
             "run_context_defaults": {"foo": "bar"},
+            "queue_timeout_seconds": 3600,
         },
         agents=[
             {
@@ -1620,6 +1624,7 @@ async def test_materialize_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert created["agent"].await_args.kwargs["name"] == "Agent A"
     assert created["pipeline"].await_args.kwargs["name"] == "Imported"
     assert created["pipeline"].await_args.kwargs["node_timeout_seconds"] == 900
+    assert created["pipeline"].await_args.kwargs["queue_timeout_seconds"] == 3600
     assert created["pipeline"].await_args.kwargs["owner_team_id"] is None
     assert created["pipeline"].await_args.kwargs["visibility"] == "org"
     assert created["prim"].await_args.kwargs["slug"] == "imported"
@@ -1631,6 +1636,19 @@ async def test_materialize_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
         }
     ]
     assert created["pipeline"].return_value.retry_policy == {"on": ["failure"], "max_retries": 2}
+
+
+async def test_materialize_absent_queue_timeout_imports_as_null(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1883: a bundle with no ``queue_timeout_seconds`` key (every bundle
+    exported before the column existed) imports as NULL — the shipped
+    "never expire" default — never a spurious bounded timeout.
+
+    Proves the bare ``.get`` (not ``or ...``) semantics: the key's absence and
+    an explicit null map to the same None."""
+    created = _patch_crud(monkeypatch)
+    bundle = _make_bundle()
+    await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
+    assert created["pipeline"].await_args.kwargs["queue_timeout_seconds"] is None
 
 
 async def test_materialize_warns_on_schemaless_manual_node(monkeypatch: pytest.MonkeyPatch) -> None:

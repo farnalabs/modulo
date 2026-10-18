@@ -567,6 +567,12 @@ async def export_pipeline_bundle(
                 # bundles exported before this column existed -> import inherits
                 # the org/instance default, the shipped behaviour).
                 "hitl_review_window_seconds": getattr(pipeline, "hitl_review_window_seconds", None),
+                # FAR-1883: the capacity-queue timeout is threaded through
+                # exactly like its HITL sibling (absent on bundles exported
+                # before this column existed -> import reads NULL, the shipped
+                # default "never expire"). Without this a bounded queue timeout
+                # silently reverted to "wait forever" on import.
+                "queue_timeout_seconds": getattr(pipeline, "queue_timeout_seconds", None),
                 "retry_policy": dict(pipeline.retry_policy or {}),
                 "visibility": "org",  # Always strip team scoping
                 "business_owner_email": business_owner_email,
@@ -2245,6 +2251,10 @@ async def _create_imported_pipeline(
                     # None IS the meaningful "no override" value here, and an
                     # absent key on a pre-FAR-1257 bundle maps to the same None.
                     hitl_review_window_seconds=pipeline_info.get("hitl_review_window_seconds"),
+                    # FAR-1883: bare ``.get`` for the same reason as its HITL
+                    # sibling — None is the meaningful "never expire" default,
+                    # and an absent key on a pre-FAR-1883 bundle maps to NULL.
+                    queue_timeout_seconds=pipeline_info.get("queue_timeout_seconds"),
                     run_context_defaults=pipeline_info.get("run_context_defaults"),
                     business_owner_id=business_owner_id,
                     reliability_owner_id=reliability_owner_id,

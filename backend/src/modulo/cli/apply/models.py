@@ -679,6 +679,19 @@ class PipelineEntity(BaseModel):
             "PipelineCreate/PipelineUpdate field of the same name (FAR-1257)."
         ),
     )
+    queue_timeout_seconds: int | None = Field(
+        default=None,
+        ge=1,
+        le=604800,
+        description=(
+            "Per-pipeline capacity-queue timeout override (1-604800s = 1s..7 days); "
+            "null = never expire (a capacity-queued run waits indefinitely). Managed "
+            "UNCONDITIONALLY like hitl_review_window_seconds: an omitted key means "
+            "null (clears a UI/API-set override), matching the REST "
+            "PipelineCreate/PipelineUpdate field of the same name (FAR-1883). On "
+            "expiry the run ends as a supersession (queue.expired), not a failure."
+        ),
+    )
     circuit_breaker_threshold: float | None = Field(
         default=None,
         gt=0,
@@ -914,6 +927,7 @@ class PipelineEntity(BaseModel):
             "max_concurrent_runs": self.max_concurrent_runs,
             "stdout_retention_config": self.stdout_retention_config,
             "hitl_review_window_seconds": self.hitl_review_window_seconds,
+            "queue_timeout_seconds": self.queue_timeout_seconds,
             "business_owner_id": business_owner_id,
             "reliability_owner_id": reliability_owner_id,
         }

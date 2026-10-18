@@ -2367,6 +2367,7 @@ def _validate_create_pipeline_args(
     *,
     folder_id: str | None,
     hitl_review_window_seconds: int | None,
+    queue_timeout_seconds: int | None,
     circuit_breaker_threshold: float | None,
     business_owner_id: str | None,
     reliability_owner_id: str | None,
@@ -2383,6 +2384,9 @@ def _validate_create_pipeline_args(
       (FAR-1257: the same envelope as the REST/Pydantic layer and
       ``ck_pipelines_hitl_review_window`` — validated up front so an
       out-of-range value is a clean tool error, not a DB IntegrityError).
+    - ``queue_timeout_seconds`` must sit in the 1..604800 envelope (FAR-1883:
+      the same envelope as the REST/Pydantic layer and
+      ``ck_pipelines_queue_timeout``; null = never expire).
     - ``circuit_breaker_threshold`` runs the shared FAR-1182 check.
     - owner ids must parse as optional UUIDs (FAR-1161).
     - the autonomy ceiling must be a valid level at or above the default
@@ -2400,6 +2404,12 @@ def _validate_create_pipeline_args(
             "detail": (
                 f"hitl_review_window_seconds must be between 60 and 604800 seconds, got {hitl_review_window_seconds}"
             ),
+        }
+    if queue_timeout_seconds is not None and not (1 <= queue_timeout_seconds <= 604800):
+        return {
+            "error": "validation_failed",
+            "field": "queue_timeout_seconds",
+            "detail": (f"queue_timeout_seconds must be between 1 and 604800 seconds, got {queue_timeout_seconds}"),
         }
     threshold_error = _circuit_breaker_threshold_error(circuit_breaker_threshold)
     if threshold_error is not None:
@@ -2430,7 +2440,11 @@ def _validate_create_pipeline_args(
     "visibility is 'team', a member of the owner team — an ineligible owner is rejected with a "
     "validation error, never silently dropped. Omit or pass null for unassigned. "
     "Optional hitl_review_window_seconds (60-604800) sets the per-pipeline HITL review window "
-    "override. Omit or pass null to inherit the org default, then the instance default."
+    "override. Omit or pass null to inherit the org default, then the instance default. "
+    "Optional queue_timeout_seconds (1-604800) sets the per-pipeline capacity-queue timeout: "
+    "when set, a pending run carrying a capacity marker older than this window is ended as a "
+    "supersession (status rejected, error_code queue.expired), never a failure. Omit or pass "
+    "null (default) to never expire."
 )
 @mcp_audited("pipeline_created", "pipeline", fail_closed=False)
 @_RETRY_DB
@@ -2442,6 +2456,7 @@ async def create_pipeline(
     lock_wait_timeout_seconds: int = 300,
     node_timeout_seconds: int = 300,
     hitl_review_window_seconds: int | None = None,
+    queue_timeout_seconds: int | None = None,
     default_autonomy_level: str = "manual_approval",
     max_autonomy_level: str | None = None,
     folder_id: str | None = None,
@@ -2452,6 +2467,7 @@ async def create_pipeline(
     args = _validate_create_pipeline_args(
         folder_id=folder_id,
         hitl_review_window_seconds=hitl_review_window_seconds,
+        queue_timeout_seconds=queue_timeout_seconds,
         circuit_breaker_threshold=circuit_breaker_threshold,
         business_owner_id=business_owner_id,
         reliability_owner_id=reliability_owner_id,
@@ -2502,6 +2518,7 @@ async def create_pipeline(
                 lock_wait_timeout_seconds=lock_wait_timeout_seconds,
                 node_timeout_seconds=node_timeout_seconds,
                 hitl_review_window_seconds=hitl_review_window_seconds,
+                queue_timeout_seconds=queue_timeout_seconds,
                 default_autonomy_level=default_autonomy_level,
                 max_autonomy_level=max_autonomy_level,
                 folder_id=parsed_folder_id,

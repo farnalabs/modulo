@@ -349,6 +349,24 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
+  it('renders the superseded status badge (not plain rejected) for a queue-expired run (FAR-1883)', async () => {
+    mockRunStatus = 'rejected'
+    mockErrorCode = 'queue.expired'
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    const badge = wrapper.find('[data-testid="run-detail-status-superseded"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('Superseded by a newer version')
+    expect(badge.text()).not.toBe('rejected')
+    // The tooltip/accessible name resolves the queue-expired description, not
+    // the generic supersession copy.
+    expect(badge.attributes('title')).toContain('capacity queue')
+    wrapper.unmount()
+  })
+
   it('renders the plain rejected status badge for a human rejection', async () => {
     mockRunStatus = 'rejected'
     mockErrorCode = 'hitl.rejected'

@@ -345,6 +345,10 @@ def _create_payload(
         # stdout_retention_config — omission means null (inherit
         # org/instance default).
         "hitl_review_window_seconds": entity.hitl_review_window_seconds,
+        # FAR-1883: capacity-queue timeout — unconditional like its HITL
+        # sibling, so an explicit null (never expire, the default) writes
+        # through and the drift hash compares it.
+        "queue_timeout_seconds": entity.queue_timeout_seconds,
         "max_autonomy_level": entity.max_autonomy_level,
         "business_owner_id": business_owner_id,
         "reliability_owner_id": reliability_owner_id,
@@ -388,6 +392,10 @@ def _patch_payload(
         # stdout_retention_config, so the declared null must be able to CLEAR
         # a UI/API-set per-pipeline override (PipelineUpdate accepts null).
         "hitl_review_window_seconds": entity.hitl_review_window_seconds,
+        # FAR-1883: managed unconditionally like its HITL sibling — the
+        # declared value (or explicit null) must be able to set AND clear the
+        # per-pipeline capacity-queue timeout.
+        "queue_timeout_seconds": entity.queue_timeout_seconds,
         "business_owner_id": business_owner_id,
         "reliability_owner_id": reliability_owner_id,
     }

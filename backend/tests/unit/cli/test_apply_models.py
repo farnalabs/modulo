@@ -442,6 +442,7 @@ class TestPipelineEntityContracts:
             "max_concurrent_runs": 2,
             "stdout_retention_config": None,
             "hitl_review_window_seconds": None,
+            "queue_timeout_seconds": None,
             "business_owner_id": None,
             "reliability_owner_id": None,
         }
@@ -455,6 +456,28 @@ class TestPipelineEntityContracts:
         omitted = PipelineEntity.model_validate({"name": "sample"})
         assert omitted.hitl_review_window_seconds is None
         assert omitted.managed_view()["hitl_review_window_seconds"] is None
+
+    def test_queue_timeout_round_trips_into_managed_view(self) -> None:
+        """FAR-1883: the declarative capacity-queue timeout parses, hashes into
+        the managed view, and an omitted key means null (never expire)."""
+        entity = PipelineEntity.model_validate({"name": "sample", "queue_timeout_seconds": 3600})
+        assert entity.queue_timeout_seconds == 3600
+        assert entity.managed_view()["queue_timeout_seconds"] == 3600
+        omitted = PipelineEntity.model_validate({"name": "sample"})
+        assert omitted.queue_timeout_seconds is None
+        assert omitted.managed_view()["queue_timeout_seconds"] is None
+
+    @pytest.mark.parametrize("value", [0, 604801])
+    def test_queue_timeout_out_of_bounds_rejected(self, value: int) -> None:
+        """Same 1..604800 envelope the REST Pydantic field and the DB CHECK
+        enforce (FAR-1883); a bad value fails at config load, not at apply."""
+        with pytest.raises(ValidationError):
+            PipelineEntity.model_validate({"name": "sample", "queue_timeout_seconds": value})
+
+    @pytest.mark.parametrize("value", [1, 604800])
+    def test_queue_timeout_bounds_accepted(self, value: int) -> None:
+        entity = PipelineEntity.model_validate({"name": "sample", "queue_timeout_seconds": value})
+        assert entity.queue_timeout_seconds == value
 
     @pytest.mark.parametrize("value", [59, 604801])
     def test_hitl_review_window_out_of_bounds_rejected(self, value: int) -> None:
