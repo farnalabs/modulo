@@ -40,9 +40,11 @@
  *
  * That same filtered set also refuses `retryable`, because retry is this
  * surface's only recovery affordance: a call site may not switch it off,
- * so it stays ErrorAlert's default, an always-visible retry. A refused
- * attr is reported in development rather than dropped in silence; every
- * other attr is still forwarded, so nothing is silently swallowed.
+ * so `retryable` stays at ErrorAlert's default (true), and the button
+ * renders whenever the required `onRetry` callback is supplied - which
+ * every call site does. A refused attr is reported in development,
+ * dropped without a report in production. Every other attr is still
+ * forwarded.
  *
  * The root is <ErrorAlert> directly - no wrapper element - so the `class`
  * and `data-testid` a call site passes are forwarded (FolderListError ->
@@ -55,8 +57,8 @@ import ErrorAlert from '../shared/ErrorAlert.vue'
 // dismiss button or switch off its retry affordance: ErrorAlert declares
 // onDismiss/dismissLabel/dismissIcon and retryable, so with fallthrough a
 // caller passing on-dismiss or retryable=false would take effect. Unsupported
-// attrs are refused and reported in development; every other attr is still
-// forwarded, so nothing is silently swallowed.
+// attrs are refused and reported in development, dropped without a report in
+// production; every other attr is still forwarded.
 defineOptions({ inheritAttrs: false })
 
 const UNSUPPORTED_ATTRS = new Set(['ondismiss', 'dismisslabel', 'dismissicon', 'retryable'])
@@ -78,6 +80,8 @@ const unsupportedAttrNames = computed(() =>
   Object.keys(useAttrs()).filter((key) => UNSUPPORTED_ATTRS.has(normaliseAttrName(key)))
 )
 
+// `import.meta.env.DEV` is statically replaced with `false` in a production
+// build, so this block and its watcher are eliminated there.
 if (import.meta.env.DEV) {
   watchEffect(() => {
     if (unsupportedAttrNames.value.length > 0) {

@@ -33,6 +33,13 @@ afterEach(() => {
   warnSpy.mockRestore()
 })
 
+// Filter the global console.warn spy down to this component's own message:
+// unrelated library warnings (e.g. PrimeVue's license notice) must neither
+// satisfy nor mask these assertions. Kept strict for OUR message: length 1
+// means exactly one FolderListError warning, length 0 means none.
+const folderListWarnings = () =>
+  warnSpy.mock.calls.filter((call: unknown[]) => String(call[0]).includes('FolderListError:'))
+
 describe('FolderListError', () => {
   it('renders the caller testid on the alert root, with no wrapper element', () => {
     const wrapper = mountError({ 'data-testid': 'probe-folder-error', class: 'mb-4' })
@@ -116,13 +123,14 @@ describe('FolderListError', () => {
 
   it('warns in dev when an unsupported attr is dropped', () => {
     mountError({ retryable: false })
-    expect(warnSpy).toHaveBeenCalledTimes(1)
+    const warnings = folderListWarnings()
+    expect(warnings).toHaveLength(1)
     // The message must name the attr so the call site can find what it passed.
-    expect(warnSpy.mock.calls[0][0]).toContain('retryable')
+    expect(warnings[0][0]).toContain('retryable')
   })
 
   it('does not warn when no unsupported attr is passed', () => {
     mountError({ 'data-testid': 'probe-folder-error', class: 'mb-4' })
-    expect(warnSpy).not.toHaveBeenCalled()
+    expect(folderListWarnings()).toHaveLength(0)
   })
 })
