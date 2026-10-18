@@ -41,13 +41,15 @@ jobs:
 
   changes:
     # FAR-1427: one cheap, checkout-free path detector feeding the path gates
-    # on the heavy jobs below (Frontend and WCAG, Tier 1b testcontainers,
-    # SonarCloud scan). It reads the PR file list from the GitHub API (no
-    # checkout, no toolchain: a few seconds) and publishes three outputs:
+    # on the heavy jobs below (Frontend and WCAG, Frontend unit suite
+    # (merge-queue parity), Tier 1b testcontainers, SonarCloud scan). It reads
+    # the PR file list from the GitHub API (no checkout, no toolchain: a few
+    # seconds) and publishes three outputs:
     #
-    #   frontend      - the Frontend and WCAG job has something to validate:
-    #                   anything under frontend/, the e2e route-coverage script,
-    #                   or this workflow itself.
+    #   frontend      - the Frontend and WCAG job (and the FAR-1947 merge-queue
+    #                   parity job) has something to validate: anything under
+    #                   frontend/, the e2e route-coverage script, or this
+    #                   workflow itself.
     #   sonar         - the change is NOT docs-only (markdown + docs/ outside
     #                   docs/api/examples/). SonarCloud analyses source,
     #                   workflows, Dockerfiles and config, so anything else keeps
@@ -184,11 +186,20 @@ jobs:
         # and are ANCHORED to semgrep's own line prefixes, so a finding that
         # merely quotes the phrase (pipelines.py contains the literal
         # "dispatch.wait_timeout error") cannot false-trigger. We deliberately
-        # do NOT fail on "Partially analyzed": mcp_server.py reports that on
-        # every run because of a pre-existing PEP 695 parse skip (FAR-1933
-        # section 3), so matching it would make CI permanently red. `--error`
-        # semantics are unchanged: the step still propagates semgrep's own exit
-        # code for real findings.
+        # do NOT fail on "Partially analyzed". On THIS step's invocation
+        # (uv run --project backend --no-sync semgrep) the one reproducible
+        # per-file instance is backend/src/modulo/api/mcp_server.py:2111 (the
+        # PEP 695 generic `async def _run_db_shell[**TOOL_SHELL_P]`, a genuine
+        # 1-line skip), so matching it would make CI permanently red. Semgrep's
+        # aggregate partial-analysis summary is not stable across invocations /
+        # entry points — an earlier scan through a different semgrep binary
+        # named node_runner.py and several frontend .spec.ts files, which
+        # per-file scans with this invocation did not reproduce. The per-file
+        # scan is the authoritative signal. The HITL graph-write guard's region
+        # at mcp_server.py:4014 is nonetheless analyzed despite the line-2111
+        # skip (mutation-verified, FAR-1933).
+        # `--error` semantics are unchanged: the step still propagates semgrep's
+        # own exit code for real findings.
         working-directory: .
         shell: bash
         run: |
@@ -252,12 +263,32 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Every fixture in the repo carrying a semgrep test annotation
+          # (`# ruleid:` / `# ok:`) is exercised here (FAR-1933), paired to the
+          # rule FILE that contains its rule id. Pairing is by RULE ID, not by
+          # rule-file stem (see the step comment above): a stem-derived loop is
+          # how a dead rule can ship green for months. Most fixtures live under
+          # .semgrep/tests/, but two sit BESIDE their rule files
+          # (credential_in_state.py, missing_session_begin.py) — a sweep scoped
+          # to .semgrep/tests/*.py is exactly what missed them, so enumerate by
+          # annotation, not by directory:
+          #   grep -rl '# ruleid:' --include='*.py' --include='*.ts' \
+          #     --include='*.vue' --include='*.js' .
           pairs="
-          .semgrep/no-raw-httpx-client.yml:.semgrep/tests/no-raw-httpx-client.py
-          .semgrep/connector-egress-verify-required.yml:.semgrep/tests/connector-egress-verify-required.py
+          .semgrep/all-empty-iterable.yml:.semgrep/tests/all-empty-iterable.py
+          .semgrep/asyncio_waitfor_wait_unshielded.yml:.semgrep/tests/asyncio-waitfor-wait-unshielded.py
           .semgrep/callable-dunder-name.yml:.semgrep/tests/callable-dunder-name.py
-          .semgrep/missing-is-privileged.yml:.semgrep/tests/graph-write-missing-is-privileged.py
+          .semgrep/connector-egress-verify-required.yml:.semgrep/tests/connector-egress-verify-required.py
+          .semgrep/credential_in_state.yml:.semgrep/credential_in_state.py
+          .semgrep/exception-mro-ordering.yml:.semgrep/tests/test_exception_mro_ordering.py
+          .semgrep/hitl-review-edge-mutation-outside-guard.yml:.semgrep/tests/hitl-review-edge-mutation-outside-guard.py
           .semgrep/hitl-review-mcp-caller-type.yml:.semgrep/tests/hitl-review-mcp-caller-type-literal.py
+          .semgrep/missing-is-privileged.yml:.semgrep/tests/graph-write-missing-is-privileged.py
+          .semgrep/missing_session_begin.yml:.semgrep/missing_session_begin.py
+          .semgrep/no-op-except-reraise.yml:.semgrep/tests/no-op-except-reraise.py
+          .semgrep/no-raw-httpx-client.yml:.semgrep/tests/no-raw-httpx-client.py
+          .semgrep/non_serializable_in_langgraph_state.yml:.semgrep/tests/non-serializable-in-langgraph-state.py
+          .semgrep/retry-loop-last-exc.yml:.semgrep/tests/retry-loop-last-exc.py
           "
           for pair in $pairs; do
             rule="${pair%%:*}"
@@ -272,12 +303,6 @@ jobs:
             fi
             uv run --no-build --project backend --no-sync semgrep --config="$rule" --test "$fixture"
           done
-          # NOT wired in (pre-existing failure — do NOT add it here; tracked in
-          # FAR-1933):
-          #   .semgrep/hitl-review-edge-mutation-outside-guard.yml ->
-          #     .semgrep/tests/hitl-review-edge-mutation-outside-guard.py
-          # currently fails 0/1 (missed lines [23], incorrect lines [25]).
-          # Repairing that fixture/rule is out of scope for FAR-1859.
       - name: pip-audit (bounded retry on transient PyPI service errors)
         # pip-audit's PyPI vulnerability service raises ServiceError on any
         # non-404 HTTP error (pip_audit/_service/pypi.py: `raise ServiceError
@@ -824,6 +849,68 @@ jobs:
         run: |
           echo "::error::E2E route coverage gate failed (rc=2: malformed router or missing e2e directory). See the 'E2E route coverage gate' step output." >&2
           exit 1
+
+  frontend-unit-parity:
+    # FAR-1947: the "Frontend and WCAG" job runs the unit suite with
+    # `--maxWorkers=2` (a deliberate 2-vCPU cap — see the vitest step there),
+    # but the merge queue runs `pnpm run test:unit`, which is `vitest run src
+    # --pool=threads --maxWorkers=4`, against the MERGED state. Worker count
+    # changes file -> worker assignment, so an order-dependent spec can pass at
+    # 2 workers and fail at 4. On 2026-10-17 exactly that happened
+    # (main-bootstrap.spec.ts, since made order-independent by FAR-1943): the
+    # queue's frontend step failed, main CI stayed green, PR CI reported
+    # "Frontend and WCAG" green, and NOTHING merged for ~2.5 h — the only
+    # external symptom was an opaque queue stall.
+    #
+    # This job runs the merge queue's EXACT command (`pnpm run test:unit` — same
+    # script, no flags added or dropped) so a queue-only failure surfaces as a
+    # red PR/main check instead of a silent stall. It does NOT replace the
+    # queue's run: validating the merged state remains the queue's job, and the
+    # queue's step is deliberately left untouched.
+    #
+    # Gate: STEP-level `needs.changes.outputs.frontend`, the established
+    # convention in this workflow (the `changes` detector publishes it, the
+    # "Frontend and WCAG" job consumes it). Step-level, never job-level, so a
+    # skipped run still reports the check as "success" rather than a non-green
+    # "skipped" (same reasoning as the `changes` job comment). On any
+    # non-pull_request event the detector sets every output true, so this job
+    # runs on every push to main and on workflow_dispatch.
+    #
+    # Cost (measured in the merge queue: 470 s for 271 files / 5380 tests, plus
+    # a cached `pnpm install`): a frontend-touching PR and a push to main each
+    # add ~8-9 runner-minutes on their own runner — parallel with backend-test
+    # (~25 min), so no added PR critical-path wall-clock; a backend-only PR
+    # skips every step (a few seconds of runner allocation).
+    name: Frontend unit suite (merge-queue parity)
+    needs: [changes]
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.frontend == 'true'
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        if: needs.changes.outputs.frontend == 'true'
+        with:
+          version: 11.28.5
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        if: needs.changes.outputs.frontend == 'true'
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+        if: needs.changes.outputs.frontend == 'true'
+      # The queue's exact invocation. Do NOT add flags here: `--coverage` or a
+      # worker-count override would diverge from what the queue runs and defeat
+      # the point of this job (see the header comment).
+      - name: Run unit tests (exact merge-queue invocation)
+        if: needs.changes.outputs.frontend == 'true'
+        run: pnpm run test:unit
 
   sonarcloud-scan:
     name: SonarCloud scan (coverage import)
@@ -1421,7 +1508,7 @@ jobs:
     # gate. A job that is merely SKIPPED is neither failure() nor cancelled();
     # every job here either always runs (path gates are step-level) or is only
     # skipped because an ancestor already failed, which is itself a failure.
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -1710,8 +1797,22 @@ jobs:
     # pre-deploy gate (e.g. SonarCloud, schema freshness, secret scan)
     # had no automated fix mechanism. The Branch Fixer creates its own
     # fix branch from main — branchName: main, prNumber: 0 signals this.
+    #
+    # FAR-1947/FAR-1429: `needs` must list EVERY job that can run and fail on
+    # this job's own events (push or workflow_dispatch to main) — the
+    # `contains(needs.*.result, 'failure')` guard below only sees jobs named
+    # here, so a failing job omitted from this list never reaches the dispatcher.
+    # `changes` always runs (no `if:`; a 5-min timeout can fail it).
+    # `tier1b-light` and the FAR-1947 `frontend-unit-parity` job run on every
+    # push to main (the path detector forces all outputs true off-PR).
+    # `coverage-gate` is NOT PR-only: its `if:` admits `workflow_dispatch`, so a
+    # manual dispatch to main runs it and its failure must reach the dispatcher.
+    # Still excluded, per each job's own condition: `sonar-new-issues-gate`
+    # (`if: github.event_name == 'pull_request'`), and `notify-pr-failure` /
+    # `self-report-ci` (both `github.event_name == 'pull_request' && ...`) never
+    # run on a push or dispatch to main, so they cannot fail there.
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && always()
-    needs: [backend-lint, backend-test, integration-changed, frontend, runner-ci-harness, sonarcloud-scan, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -1844,8 +1945,25 @@ jobs:
     # the URL secret points at the dogfood map's endpoint.
     #
     # NOT a required check: this job is observability only.
+    #
+    # FAR-1947/FAR-1429: the `!contains(needs.*.result, 'failure')` guard reads
+    # ONLY the jobs named in `needs`, so a failure of a job omitted here still
+    # satisfies the guard and self-reports the "ci" stage as done — a false-green
+    # observability report while the PR's run is red. The rule is precise: every
+    # PRODUCT job that can fail on a PR is listed — the 15 below, including the
+    # FAR-1947 `frontend-unit-parity` job plus the pre-existing `tier1b-light`,
+    # `runner-ci-harness` and `changes` (5-min timeout) omissions swept here
+    # (this list equals notify-pr-failure's). Notifier jobs are deliberately
+    # excluded from a notifier's `needs` (the convention notify-main-failure
+    # documents for its own list), and the exclusion cannot false-green:
+    # `notify-main-failure` never runs on a PR (its `if:` requires a
+    # push/workflow_dispatch to main), and `notify-pr-failure` cannot fail
+    # unless one of the 15 product jobs above already failed or the run was
+    # cancelled — every step of it that can fail is gated on
+    # `failure() || cancelled()` — and both of those conditions already make
+    # this job's guard false. `self-report-ci` cannot list itself.
     if: github.event_name == 'pull_request' && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
-    needs: [backend-lint, backend-test, integration-changed, frontend, coverage-gate, sonarcloud-scan, sonar-new-issues-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     steps:
       - name: Self-report CI Validate stage to Modulo (fail-open, best-effort)

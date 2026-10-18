@@ -35,11 +35,33 @@ const { ddRum, ddLogs, sentry, faroInit, faroApi, logsSdkMode, faroMode, faroHan
   }
   const logsSdkMode = { value: 'normal' as 'normal' | 'missing' }
   const faroMode = { value: 'normal' as 'normal' | 'hang' }
-  // In "hang" mode the faro mock factory returns a promise the test resolves
-  // AFTER its assertions. This models a stalled chunk fetch for the duration of
-  // the init timeout, then lets the import settle so a never-pending module
-  // evaluation cannot leak into later faro tests (FAR-1944).
-  const faroHang: { release: (() => void) | null } = { release: null }
+  // The faro "never settles" deferred is created at TEST scope by arm() —
+  // BEFORE the import is attempted — never inside the mock factory. The factory
+  // simply returns that already-created promise, so the test's `finally` can
+  // ALWAYS release it, even if the factory has not executed yet. A deferred
+  // created inside the factory (as it was before FAR-1952) leaves the `finally`
+  // a silent no-op whenever module evaluation is delayed past the end of the
+  // test, and the never-settled factory promise then poisons later faro
+  // imports. Returning an already-created deferred means a late factory returns
+  // an already-settled promise instead of introducing a fresh pending
+  // evaluation — no permanently pending evaluation, by construction.
+  const faroHang: {
+    promise: Promise<unknown>
+    release: () => void
+    arm: () => void
+    releaseIfArmed: () => void
+  } = {
+    promise: Promise.resolve(),
+    release: () => {},
+    arm() {
+      faroHang.promise = new Promise<unknown>((resolve) => {
+        faroHang.release = () => resolve({ initializeFaro: () => {}, api: {} })
+      })
+    },
+    releaseIfArmed() {
+      faroHang.release()
+    },
+  }
   return { ddRum, ddLogs, sentry, faroInit, faroApi, logsSdkMode, faroMode, faroHang }
 })
 
@@ -67,15 +89,15 @@ function registerNormalSdkMocks(): void {
   }))
   vi.doMock('@sentry/vue', () => sentry)
   // The faro factory consults faroMode at import time (inside the backend's
-  // try/catch). In "hang" mode the returned promise is held open until the test
-  // releases it, modelling a stalled SDK chunk fetch for the init timeout
-  // without leaving a permanently-pending import behind. A single registration
-  // means there is no mock-registry race between "normal" and "hang" (FAR-1944).
+  // try/catch). In "hang" mode it returns the deferred the test ARMED before
+  // the import (faroHang.arm()), modelling a stalled SDK chunk fetch for the
+  // init timeout without leaving a pending import behind: the test's `finally`
+  // releases that same deferred whether or not this factory has run yet
+  // (FAR-1952). A single registration means there is no mock-registry race
+  // between "normal" and "hang" (FAR-1944).
   vi.doMock('@grafana/faro-web-sdk', () => {
     if (faroMode.value === 'hang') {
-      return new Promise((resolve) => {
-        faroHang.release = () => resolve({ initializeFaro: () => {}, api: {} })
-      })
+      return faroHang.promise
     }
     return { initializeFaro: faroInit, api: faroApi }
   })
@@ -89,7 +111,10 @@ beforeEach(() => {
   vi.clearAllMocks()
   logsSdkMode.value = 'normal'
   faroMode.value = 'normal'
-  faroHang.release = null
+  // Disarm any deferred left armed by a previous test: a fresh arm() is what
+  // the "hang" case uses, and an unarmed release stays a safe no-op.
+  faroHang.promise = Promise.resolve()
+  faroHang.release = () => {}
   registerNormalSdkMocks()
   vi.spyOn(console, 'warn').mockImplementation(() => undefined)
   vi.spyOn(console, 'error').mockImplementation(() => undefined)
@@ -627,6 +652,10 @@ describe('monitor/index', () => {
     // second vi.doMock: the beforeEach registration and an in-test override are
     // asynchronous and unordered, so the override intermittently lost and the
     // normal mock resolved, letting grafana-faro initialise (FAR-1944).
+    //
+    // Arm the deferred BEFORE the import is attempted, so the `finally` can
+    // release it even if the factory has not executed by then (FAR-1952).
+    faroHang.arm()
     faroMode.value = 'hang'
 
     try {
@@ -651,8 +680,9 @@ describe('monitor/index', () => {
       // Release the stalled import once the assertion is done: a permanently
       // pending module evaluation poisons later faro tests in this file (only
       // order-dependent under shuffle). The stuck backend is already dropped,
-      // so the late continuation is inert.
-      faroHang.release?.()
+      // so the late continuation is inert. The deferred was armed before the
+      // import, so this release is never a no-op on timing (FAR-1952).
+      faroHang.releaseIfArmed()
     }
   })
 })

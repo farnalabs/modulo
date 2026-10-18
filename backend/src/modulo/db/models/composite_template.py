@@ -1,17 +1,14 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, Index, String, Text, Uuid, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import ForeignKey, Index, String, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
 
-# Repeated column type (S1192): JSON with PostgreSQL JSONB variant. Both graph
-# columns are jsonb in the DB (migration 0147 standardised them); the PG
-# variant keeps the ORM honest against the migrated schema while the generic
-# JSON keeps SQLite parity (the repo-wide multi-backend convention).
-_JSONB_COL = JSON().with_variant(JSONB(), "postgresql")
+# Both graph columns are jsonb in the DB (migration 0147 standardised them);
+# the shared JSONB_COL keeps the ORM honest against the migrated schema while
+# generic JSON keeps SQLite parity (the repo-wide multi-backend convention).
 
 
 class CompositeTemplate(SoftDeleteMixin, OrgScoped):
@@ -34,8 +31,8 @@ class CompositeTemplate(SoftDeleteMixin, OrgScoped):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    sub_pipeline_graph_json: Mapped[dict[str, Any]] = mapped_column(_JSONB_COL, nullable=False, default=dict)
-    parameter_ports_json: Mapped[list[dict[str, Any]]] = mapped_column(_JSONB_COL, nullable=False, default=list)
+    sub_pipeline_graph_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
+    parameter_ports_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False, default=list)
     input_schema_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("schemas.id", ondelete="SET NULL"), nullable=True, index=True
     )

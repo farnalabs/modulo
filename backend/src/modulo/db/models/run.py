@@ -4,7 +4,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlalchemy import (
-    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -18,13 +17,12 @@ from sqlalchemy import (
     Uuid,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import expression
 from sqlalchemy.sql.compiler import SQLCompiler
 
-from modulo.db.models.base import ONDELETE_SET_NULL, OrgScoped
+from modulo.db.models.base import JSONB_COL, JSONB_COL_NONE_AS_NULL, ONDELETE_SET_NULL, OrgScoped
 
 if TYPE_CHECKING:
     from modulo.db.models.organisation import Organisation
@@ -484,11 +482,11 @@ class Run(OrgScoped):
     total_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     # Cost breakdown — list of component snapshots (amounts as strings).
     # NULL for pre-migration runs. Migration 0066.
-    cost_breakdown: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
+    cost_breakdown: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB_COL)
     # Ledger guards (migration 0066) — terminal-only spend recording (PR A2).
     ledger_written: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     ledger_refused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    node_token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
+    node_token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL)
     error_detail: Mapped[str | None] = mapped_column(Text)
     error_code: Mapped[str | None] = mapped_column(String(255))
     # FAR-153 / §15.1: the GLOBAL unique constraint this column used to carry
@@ -497,7 +495,10 @@ class Run(OrgScoped):
     # INTENTIONALLY shares its parent's thread to continue the checkpoint,
     # while every other row keeps global thread uniqueness.
     langgraph_thread_id: Mapped[str] = mapped_column(String(512), nullable=False)
-    input_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # DB jsonb — 0110 created it ``json``; 0129 promoted it. JSONB_COL keeps the
+    # ORM declaration honest (a bare JSON over a jsonb column binds ``col = {}``
+    # as ``$1::JSON`` and Postgres raises 'operator does not exist: jsonb = json').
+    input_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL)
     rate_limit_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     claimed_by: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     # SAQ dispatch tracking (PR B, migration 0031) — dispatcher reflects where
@@ -591,7 +592,7 @@ class Run(OrgScoped):
     # INTERNAL ONLY: not API-projected (like ``dispatch_phase`` above).
     # NULL for rows that predate migration 0308.
     dispatch_phase_history: Mapped[list[dict[str, Any]] | None] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"),
+        JSONB_COL,
         nullable=True,
     )
     # FAR-1714 / FAR-1511: how many durable phase writes this run ABANDONED
@@ -636,24 +637,27 @@ class Run(OrgScoped):
     # absent pr_url_provenance/delivery_confidence key as legacy/unknown, not
     # an error. UNIQUE(run_id) is the runs PK; the record is
     # written atomically with terminalization by the shared fenced terminal
-    # write (crud/run) and refreshed (upsert) on re-terminalization. Generic
-    # JSON here for SQLite/MariaDB parity (the run_classification precedent).
-    run_classification: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # write (crud/run) and refreshed (upsert) on re-terminalization. Physical
+    # jsonb since 0110; JSONB_COL keeps the ORM declaration honest while
+    # preserving SQLite/MariaDB parity.
+    run_classification: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL)
     # FAR-213 blocked-partial summary (migration 0111) — structured
     # run-termination compensation record written when a run terminalizes
     # ``eval_failed``/``eval_blocked`` from a guardrail block: executed nodes
     # (in order), per-node publish status (published/compensated/
     # not-compensated), output references (never duplicated raw payloads), and
-    # per-attempt compensation outcomes. Generic JSON for SQLite/MariaDB
-    # parity (the run_classification precedent).
-    blocked_partial_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # per-attempt compensation outcomes. JSONB in the 0111 migration;
+    # JSONB_COL keeps the ORM declaration honest while preserving
+    # SQLite/MariaDB parity.
+    blocked_partial_summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL)
     # FAR-223 item 11 guardrail_summary telemetry (migration 0113) — a
     # point-in-time snapshot of the guardrail interception written at
     # create_run when guardrails ran; NULL otherwise. Shape:
     # {bound, evaluated, passed, violated, observed, errored, redacted,
-    # skipped, expected_skips, unexpected_skips}. Generic JSON for
-    # SQLite/MariaDB parity (the run_classification precedent).
-    guardrail_summary_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # skipped, expected_skips, unexpected_skips}. 0129 promoted it to jsonb;
+    # JSONB_COL keeps the ORM declaration honest while preserving
+    # SQLite/MariaDB parity.
+    guardrail_summary_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL)
     # FAR-801: workspace-input drift detection flag — written by the audit
     # layer (record_drift) in the SAME transaction as the audit row so
     # terminalization sees the flag before it classifies the run.  NULL =
@@ -664,12 +668,12 @@ class Run(OrgScoped):
     # nullable, never backfilled.  ``work_item_id`` is the chain anchor written
     # ONCE at create (floor id or adopted from the parent run) and NEVER
     # mutated; ``work_item_refs`` is a JSON array of {kind, ref, source,
-    # status?} entries (JSONB in the migration for the partial GIN index;
-    # generic JSON here keeps SQLite/MariaDB parity — the
-    # hitl_claims.decision_payload precedent). ``is_replay`` is set by
-    # replay_event; ``variant_group_id`` by run_variant_weighted.
+    # status?} entries. Physical jsonb (0110, for the partial GIN index);
+    # JSONB_COL_NONE_AS_NULL keeps the ORM declaration honest AND preserves the
+    # Python-None -> SQL NULL binding this column was declared with. ``is_replay``
+    # is set by replay_event; ``variant_group_id`` by run_variant_weighted.
     work_item_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
-    work_item_refs: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+    work_item_refs: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB_COL_NONE_AS_NULL, nullable=True)
     is_replay: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     variant_group_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("variant_groups.id", ondelete=ONDELETE_SET_NULL)
@@ -683,8 +687,10 @@ class Run(OrgScoped):
     # source of truth for "which input each variant ran with". Shape:
     # {variant_id, variant_name, snapshot_id, run_context_overrides, batch_id}.
     # The compare view reads this, never the live snapshot, so later edits to
-    # the variant group cannot rewrite history.
-    variant_config_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+    # the variant group cannot rewrite history. Physical jsonb since 0129;
+    # JSONB_COL_NONE_AS_NULL preserves both the honest declaration and the
+    # Python-None -> SQL NULL binding this column was declared with.
+    variant_config_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL_NONE_AS_NULL, nullable=True)
     # FAR-902: schema enforcement metadata — populated at finalization from
     # per-node enforcement records.  ``schema_validator_mode`` is the mode
     # the run actually executed under (resolved from enforcement records);

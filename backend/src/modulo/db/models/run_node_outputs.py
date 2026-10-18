@@ -43,11 +43,16 @@ Deliberate deviations from the ``RunEvidence`` precedent:
 * ``raw_output_markers`` is typed loosely (``Any``): marker payloads are
   JSON-serialisable values (dicts today, strings historically).
 
-The model keeps generic ``JSON`` columns (the repo parity rule: JSONB lives
-only in migrations — migration 0192 promotes the three blob columns to JSONB
-on Postgres and adds the STRICT sentinel-shape CHECKs there; the model carries
-the portable subset). Sentinel constants live here (the DB layer) because
-core imports db freely and the reverse is forbidden by importlinter.
+The four JSON blob columns use the shared JSONB alias: migration 0192 promotes
+them to ``jsonb`` on Postgres, so they are declared with
+``JSON().with_variant(JSONB(), "postgresql")`` (``modulo.db.models.base.
+JSONB_COL``) rather than a bare generic ``JSON`` — a bare ``JSON`` over a jsonb
+column binds equality/containment predicates as ``$1::JSON`` and Postgres
+raises ``operator does not exist: jsonb = json`` (FAR-1856's failure class).
+The alias keeps SQLite/MariaDB parity because the generic ``JSON`` is used on
+those dialects. JSONB is NOT migration-only in this repo — the alias lives in
+``db/models``. Sentinel constants live here (the DB layer) because core imports
+db freely and the reverse is forbidden by importlinter.
 """
 
 from __future__ import annotations
@@ -59,7 +64,7 @@ from typing import Any
 from sqlalchemy import JSON, CheckConstraint, ForeignKey, PrimaryKeyConstraint, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import Base, TimestampMixin
+from modulo.db.models.base import JSONB_COL, Base, TimestampMixin
 
 FINAL_ATTEMPT_KEY = "__final__"
 META_NODE_ID = "__run_meta__"
@@ -145,19 +150,19 @@ class RunNodeOutput(Base, TimestampMixin):
     # Marker rows: the FULL original attempt key (evidence preserved, FAR-188).
     # '__final__' rows: the constant FINAL_ATTEMPT_KEY.
     attempt_key: Mapped[str] = mapped_column(Text(), nullable=False)
-    outputs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    node_telemetry_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    raw_output_markers: Mapped[Any] = mapped_column(JSON, nullable=True)
+    outputs_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True)
+    node_telemetry_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True)
+    raw_output_markers: Mapped[Any] = mapped_column(JSONB_COL, nullable=True)
     # FAR-582: per-node attempt artifact pointer list.
-    # JSON on the ORM (repo parity convention: JSONB only in migrations).
-    # Stores ``list[pointer]`` — zero or more artifact pointer dicts
-    # (stdout/stderr side-car files) for the node attempt.
-    artifacts_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    # Physical jsonb (0220). Stores ``list[pointer]`` — zero or more artifact
+    # pointer dicts (stdout/stderr side-car files) for the node attempt.
+    artifacts_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB_COL, nullable=True)
     # FAR-902: per-attempt schema enforcement telemetry.  Stores the
     # SchemaEnforcementRecord payload (outcome, profile, native flag, repair/
     # wasted-attempt counts, validation errors) — bound to 64 KB at write time.
-    # Written BEFORE update_run_status (D3 ordering guarantee).  On the ORM
-    # it is JSON (repo parity); the migration promotes to JSONB on Postgres.
+    # Written BEFORE update_run_status (D3 ordering guarantee).  On the ORM it
+    # is generic JSON; migration 0251 adds the column with the same generic-JSON
+    # type (NOT JSONB — its own prose says otherwise and is wrong).
     # NEVER written into outputs_json / node_telemetry_json (Agent Return
     # Contract columns).
     schema_enforcement_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

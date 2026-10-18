@@ -57,10 +57,26 @@ function removeBootstrapSurface(): void {
 // This runs before (and possibly instead of) the mounted app, so it must never
 // throw: an exception here would replace the bootstrap surface with an
 // unhandled rejection — the exact failure this module exists to prevent.
+//
+// A non-empty string is NOT sufficient for it to be usable. The pinned
+// vue-i18n (11.4.14) returns the KEY ITSELF when the catalogue has no entry
+// for it (observed: `t('common.failed_to_load')` yields the literal string
+// 'common.failed_to_load'), and it can return a whitespace-only value. Either
+// would put a key-shaped or invisible string in front of the user on the fatal
+// bootstrap surface — the exact moment the app has already failed to load — so
+// both fall back to the literal, and the fallback stays logged so an operator
+// can see it happened.
 function bootstrapMessage(key: string, fallback: string): string {
   try {
     const translated = i18n.global.t(key)
-    return typeof translated === 'string' && translated.length > 0 ? translated : fallback
+    if (typeof translated === 'string' && translated !== key && translated.trim().length > 0) {
+      return translated
+    }
+    console.warn('[bootstrap] catalogue returned no usable message; using a literal', {
+      key,
+      translated,
+    })
+    return fallback
   } catch (error) {
     console.warn('[bootstrap] i18n unavailable; using a literal message', error)
     return fallback

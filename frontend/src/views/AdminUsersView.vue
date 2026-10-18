@@ -2,13 +2,22 @@
   <FeatureGate feature-name="user_management" required-tier="community" show-disabled>
   <div class="page-wide">
     <div class="flex items-center justify-between">
-      <PageHeader title="Users" :subtitle="$t('views.AdminUsersView.manage_user_accounts_and_permissions')" />
+      <PageHeader :title="$t('views.AdminUsersView.users_title')" :subtitle="$t('views.AdminUsersView.manage_user_accounts_and_permissions')" />
       <Button class="border-primary/30" data-testid="admin-users-add-user" @click="openAddUser">
         {{ $t('views.AdminUsersView.add_user') }}
       </Button>
     </div>
 
-    <LoadingSpinner v-if="loading" />
+    <!-- STATE-3 (ux-conformance): the column layout is known before the first
+         row arrives, so the loading placeholder is a determinate table
+         skeleton (shared TableSkeleton) instead of an indeterminate spinner. -->
+    <TableSkeleton
+      v-if="loading"
+      :columns="7"
+      :rows="5"
+      :aria-label="$t('common.loading')"
+      data-testid="admin-users-loading"
+    />
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadUsers" />
 
@@ -35,7 +44,7 @@
           <tr v-for="u in users" :key="u.id" class="border-b last:border-0 hover:bg-muted/20 transition-colors">
             <td class="table-cell">
               <div class="flex items-center gap-2">
-                <div class="avatar-ring">
+                <div class="avatar-ring" aria-hidden="true">
                   <div class="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
                     {{ initialOf(u.display_name || u.email) }}
                   </div>
@@ -48,10 +57,10 @@
             </td>
             <td class="table-cell">
               <Select
-  aria-label="User role"
+  :aria-label="$t('views.AdminUsersView.user_role_label')"
   :model-value="u.org_role"
   @update:model-value="updateRole(u, $event)"
-  placeholder="Select role"
+  :placeholder="$t('views.AdminUsersView.select_role')"
   :data-testid="`admin-users-role-${u.id}`"
   :options="[{ value: 'admin', label: $t('views.AdminUsersView.admin') }, { value: 'operator', label: $t('views.AdminUsersView.operator') }, { value: 'runner', label: $t('views.AdminUsersView.runner') }, { value: 'viewer', label: $t('views.AdminUsersView.viewer') }]"
   option-label="label"
@@ -64,15 +73,15 @@
             </td>
             <td class="table-cell">
               <span v-if="u.is_active" class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success">
-                <span class="h-1.5 w-1.5 rounded-full bg-success" />
+                <span class="h-1.5 w-1.5 rounded-full bg-success" aria-hidden="true" />
                 {{ $t('views.AdminUsersView.active') }}
               </span>
               <span v-else class="inline-flex items-center gap-1.5 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive-text">
-                <span class="h-1.5 w-1.5 rounded-full bg-destructive" />
+                <span class="h-1.5 w-1.5 rounded-full bg-destructive" aria-hidden="true" />
                 {{ $t('views.AdminUsersView.inactive') }}
               </span>
             </td>
-            <td class="table-cell text-xs text-muted-foreground">{{ u.auth_provider }}</td>
+            <td class="table-cell text-xs text-muted-foreground">{{ u.auth_provider || '—' }}</td>
             <td class="table-cell">
               <span v-if="!u.last_login" class="text-xs text-muted-foreground italic">{{ $t('views.AdminUsersView.never_logged_in') }}</span>
               <span v-else class="text-xs text-muted-foreground" :title="formatDateShortWithTime(new Date(u.last_login))">
@@ -115,7 +124,13 @@
     <!-- Pending Invitations (FAR-461) -->
     <section class="mt-8" data-testid="admin-invitations-section">
       <h2 class="text-base font-semibold mb-2">{{ $t('views.AdminUsersView.pending_invitations') }}</h2>
-      <LoadingSpinner v-if="invitationsLoading" />
+      <TableSkeleton
+        v-if="invitationsLoading"
+        :columns="5"
+        :rows="5"
+        :aria-label="$t('common.loading')"
+        data-testid="admin-invitations-loading"
+      />
       <p
         v-else-if="invitationsError"
         class="text-sm text-destructive"
@@ -229,9 +244,9 @@
         <div>
           <label for="adminusersview-field-1" class="block text-sm font-medium mb-1">{{ $t('views.AdminUsersView.role') }}</label>
           <Select
-  aria-label="Role"
+  :aria-label="$t('views.AdminUsersView.role')"
   v-model="newUser.org_role"
-  placeholder="Select role"
+  :placeholder="$t('views.AdminUsersView.select_role')"
   data-testid="admin-users-create-role"
   class="w-full"
   :options="[{ value: 'runner', label: $t('views.AdminUsersView.runner') }, { value: 'operator', label: $t('views.AdminUsersView.operator') }, { value: 'admin', label: $t('views.AdminUsersView.admin') }, { value: 'viewer', label: $t('views.AdminUsersView.viewer') }]"
@@ -337,7 +352,7 @@
       <p class="text-sm text-muted-foreground">{{ $t('views.AdminUsersView.confirm_revoke_invitation', { email: revokeTarget?.email ?? '' }) }}</p>
       <template #footer>
         <div class="flex justify-end gap-2">
-          <Button severity="secondary" outlined @click="showRevokeDialog = false">{{ $t('common.cancel') }}</Button>
+          <Button severity="secondary" outlined data-testid="admin-invitations-cancel-revoke" @click="showRevokeDialog = false">{{ $t('common.cancel') }}</Button>
           <Button severity="danger" data-testid="admin-invitations-confirm-revoke" @click="revokeInvitation">{{ $t('common.confirm') }}</Button>
         </div>
       </template>
@@ -353,7 +368,7 @@ import { useI18n } from 'vue-i18n'
 import QRCode from 'qrcode'
 import { useApi } from '../composables/useApi'
 import { useDataFetch } from '../composables/useDataFetch'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Button from 'primevue/button'
 import EmptyState from '../components/shared/EmptyState.vue'

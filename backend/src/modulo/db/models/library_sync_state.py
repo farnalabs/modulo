@@ -13,17 +13,14 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, String, Uuid, func, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import DateTime, String, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import Base
+from modulo.db.models.base import JSONB_COL, Base
 
-# Repeated column type (S1192): JSON with PostgreSQL JSONB variant. Both
-# payload columns are jsonb in the DB (migration 0147 standardised them); the
-# PG variant keeps the ORM honest against the migrated schema while the generic
-# JSON keeps SQLite parity (the repo-wide multi-backend convention).
-_JSONB_COL = JSON().with_variant(JSONB(), "postgresql")
+# Both payload columns are jsonb in the DB (migration 0147 standardised them);
+# the shared JSONB_COL keeps the ORM honest against the migrated schema while
+# generic JSON keeps SQLite parity (the repo-wide multi-backend convention).
 
 # Fixed singleton primary key — the library sync state is a single-row table.
 SINGLETON_ID = uuid.UUID("6f6a1c1e-0b3a-4c8d-9e2f-7a5b1c2d3e4f")
@@ -36,9 +33,9 @@ class LibrarySyncState(Base):
         Uuid(), primary_key=True, default=SINGLETON_ID, server_default=text("gen_random_uuid()")
     )
     # Last-good signed manifest (as verified against the root public key).
-    manifest_json: Mapped[dict[str, Any]] = mapped_column(_JSONB_COL, nullable=False)
+    manifest_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False)
     # Last-good catalog entries list ({id, type, slug, ...} dicts).
-    catalog_json: Mapped[list[dict[str, Any]]] = mapped_column(_JSONB_COL, nullable=False)
+    catalog_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False)
     last_synced_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.current_timestamp(),

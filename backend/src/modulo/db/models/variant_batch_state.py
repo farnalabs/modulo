@@ -3,11 +3,10 @@
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, ForeignKey, Text, Uuid
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import ForeignKey, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from modulo.db.models.base import Base, SoftDeleteMixin, TimestampMixin
+from modulo.db.models.base import JSONB_COL, Base, SoftDeleteMixin, TimestampMixin
 
 if TYPE_CHECKING:
     from modulo.db.models.organisation import Organisation
@@ -38,7 +37,7 @@ class VariantBatchState(SoftDeleteMixin, Base, TimestampMixin):
         nullable=True,
     )
     input_payload: Mapped[dict[str, Any] | None] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"),
+        JSONB_COL,
         nullable=True,
         server_default="{}",
     )

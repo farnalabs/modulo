@@ -2,11 +2,11 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, String, Uuid
+from sqlalchemy import Boolean, CheckConstraint, DateTime, String, Uuid
 from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import Base, TimestampMixin
+from modulo.db.models.base import JSONB_COL, Base, TimestampMixin
 
 # ---------------------------------------------------------------------------
 # Principal kind (ADR 056 / ADR 058, FAR-1385 slice 1).
@@ -92,7 +92,7 @@ class Account(Base, TimestampMixin):
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    preferences: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, server_default=sa_text("'{}'"))
+    preferences: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, server_default=sa_text("'{}'"))
     is_system_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     is_break_glass: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     break_glass_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

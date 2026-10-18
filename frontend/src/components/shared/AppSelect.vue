@@ -211,6 +211,21 @@ onMounted(() => {
   isInClippingAncestor.value = hasClippingAncestor(rootEl.value)
 })
 
+// Decision (FAR-1946, accepting FAR-1920): the general predicate below sends
+// EVERY page-level Select to `'body'`, because the app layout's
+// `<main class="overflow-auto">` is itself a computed clipping ancestor. That
+// is accepted deliberately:
+//   - `c12307ea7` (FAR-851, "anchor filter dropdown overlays beneath their
+//     trigger") shows the intent was ANCHORING the overlay to its trigger;
+//     `'self'` was the means, not the end.
+//   - The FAR-851 anchoring pin passes with body-portalling (#1960), so the
+//     end is preserved.
+//   - `'body'` is PrimeVue's own default, so this moves toward the library
+//     default rather than away from it.
+//   - Keeping `'self'` for the page scroll region would reintroduce exactly the
+//     container-specific branch FAR-1920 deleted.
+//   - It is reversible if a real regression appears.
+//
 // Precedence: explicit prop → clipping-ancestor-derived → FAR-851 'self'. An
 // empty-string prop is treated as absent (PrimeVue cannot use '' as an append
 // target, and passing it through would silently bypass the derived default).
