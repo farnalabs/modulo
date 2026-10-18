@@ -39,7 +39,7 @@ from modulo.db.models.policy_gate_decision import (
 
 _MIGRATION_REVISION = "0305_guardrail_escalate_action"
 _MIGRATION_DOWN_REVISION = "0304_metrics_staging_recorded_at_index"
-_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
+_HEAD_MIGRATION = "0320_evidence_redaction_rules"
 _GATES_CHECK = "ck_policy_gates_action"
 _DECISIONS_CHECK = "ck_policy_gate_decisions_resolved_action"
 

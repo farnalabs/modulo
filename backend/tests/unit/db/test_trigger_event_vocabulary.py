@@ -195,7 +195,7 @@ _MIGRATION_PATH = (
 # (_MIGRATION_NAME above is pinned to the migration that owns the widened
 # constraint under test — the Slack parse-failure fix moved that ownership to
 # 0319_trigger_event_parse_failed.)
-_CHAIN_HEAD_MIGRATION_NAME = "0319_trigger_event_parse_failed"
+_CHAIN_HEAD_MIGRATION_NAME = "0320_evidence_redaction_rules"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

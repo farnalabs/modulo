@@ -24,7 +24,7 @@ import pytest
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.pipeline import GraphWriteRecording, replace_pipeline_graph
+from modulo.db.crud.pipeline import GraphWriteActor, GraphWriteRecording, replace_pipeline_graph
 from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
 from modulo.db.models.account import Account
 from modulo.db.models.audit_event import AuditEvent
@@ -147,10 +147,12 @@ async def _patch_graph(
         org_id=_ORG_ID,
         nodes=nodes,
         edges=edges,
-        is_privileged=True,
-        caller_type=caller_type,
-        account_id=account_id,
-        is_guardrail_admin=True,
+        actor=GraphWriteActor(
+            is_privileged=True,
+            caller_type=caller_type,
+            account_id=account_id,
+            is_guardrail_admin=True,
+        ),
     )
 
 
@@ -305,9 +307,7 @@ class TestGraphUpdatedAuditEvent:
             org_id=_ORG_ID,
             nodes=[],
             edges=[],
-            is_privileged=True,
-            caller_type="rest",
-            account_id=None,
+            actor=GraphWriteActor(is_privileged=True, caller_type="rest", account_id=None),
         )
         assert result is None
         assert not await _graph_events(session), "no graph mutation must produce no event"
@@ -337,10 +337,12 @@ class TestGraphUpdatedAuditEvent:
                 )
             ],
             edges=[],
-            is_privileged=True,
-            caller_type="rest",
-            account_id=None,
-            is_guardrail_admin=True,
+            actor=GraphWriteActor(
+                is_privileged=True,
+                caller_type="rest",
+                account_id=None,
+                is_guardrail_admin=True,
+            ),
             recording=GraphWriteRecording(patched_fields=["timeout_seconds", "label"]),
         )
         await session.flush()

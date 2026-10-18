@@ -150,7 +150,7 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0314_external_agents_mcp_servers chains off 0313_collection_install_drop_installed_entities, and
 # 0315_service_accounts_lifecycle chains off 0314_external_agents_mcp_servers, and
 # 0317_drop_retired_pipeline_diff_rollback_flag chains off 0316_policy_gate_evaluation_mode as the chain head.
-_CHAIN_HEAD_MIGRATION = "0319_trigger_event_parse_failed"
+_CHAIN_HEAD_MIGRATION = "0320_evidence_redaction_rules"
 
 
 def _source(name: str) -> str:
