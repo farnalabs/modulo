@@ -3333,6 +3333,9 @@ elements:
       - testid: pipeline-list-move-error
         type: element
         dynamic_testid: false
+      - testid: pipeline-list-folder-error
+        type: element
+        dynamic_testid: false
       - testid: pipeline-list-new-pipeline
         type: button
         dynamic_testid: false
@@ -3356,6 +3359,9 @@ elements:
         dynamic_testid: false
       - testid: folder-tree-all-pipelines
         type: button
+        dynamic_testid: false
+      - testid: folder-tree-error
+        type: element
         dynamic_testid: false
       - testid: pipeline-list-action-menu
         type: button
@@ -3428,6 +3434,9 @@ elements:
         type: button
         dynamic_testid: false
     /pipelines/:id/editor:
+      - testid: pipeline-editor-folder-error
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-save
         type: button
         dynamic_testid: false
@@ -4407,6 +4416,9 @@ elements:
         type: button
         dynamic_testid: false
     /schemas:
+      - testid: schema-list-folder-error
+        type: element
+        dynamic_testid: false
       - testid: schema-list-move-error
         type: element
         dynamic_testid: false
@@ -4454,6 +4466,9 @@ elements:
         dynamic_testid: false
       - testid: folder-tree-all-pipelines
         type: button
+        dynamic_testid: false
+      - testid: folder-tree-error
+        type: element
         dynamic_testid: false
     /schemas/editor/:id:
       - testid: feature-gate

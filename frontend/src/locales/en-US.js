@@ -415,7 +415,8 @@ export default {
       "visibility_team": "Team",
       "pipeline_name_placeholder": "Pipeline name",
       "delete_confirm": "Are you sure? This permanently deletes the pipeline and all its runs.",
-      "failed_to_load_folders": "Failed to load folders: {error}"
+      "failed_to_load_folders": "Failed to load folders: {error}",
+      "invalid_folder_list_response": "The server returned an invalid folder list."
     },
     "SettingsRateLimitsView": {
       "rate_limits": "Rate Limits",
@@ -1382,6 +1383,7 @@ export default {
       "empty_run_warning": "No input provided — this pipeline will run with an empty input payload. Are you sure?",
       "failed_to_load_graph": "Failed to load graph: {error}",
       "failed_to_load_pipeline": "Failed to load pipeline: {error}",
+      "invalid_folder_list_response": "The server returned an invalid folder list.",
       "failed_to_archive_pipeline": "Failed to archive pipeline: {error}",
       "failed_to_unarchive_pipeline": "Failed to unarchive pipeline: {error}",
       "failed_to_update_max_duration": "Failed to update max duration: {error}",
@@ -3325,6 +3327,7 @@ export default {
     "SchemaListView": {
       "deprecate_schema": "Deprecate schema",
       "failed_to_load_folders": "Failed to load folders:",
+      "invalid_folder_list_response": "The server returned an invalid folder list.",
       "deprecating": "Deprecating...",
       "manage_schemas_and_deprecate_outdated_definitions": "Manage schemas and deprecate outdated definitions",
       "no_schemas_found": "No schemas found",
@@ -4024,6 +4027,7 @@ export default {
       "FolderTree": {
         "parent_folder": "Parent folder",
         "no_parent_root_level": "No parent (root level)",
+        "invalid_list_response": "The server returned an invalid folder list.",
         "delete_confirm_empty": "Are you sure you want to delete this folder?",
         "delete_confirm_with_items": "Are you sure you want to delete this folder? {itemNoun} will be moved to {uncategorisedLabel}."
       }
