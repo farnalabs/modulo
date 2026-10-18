@@ -246,7 +246,21 @@ jobs:
 
             if [ "$DISPATCH_OK" = "false" ]; then
               DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-              echo "::error::Branch Fixer dispatch failed for PR #$PR_NUM (HTTP ${LAST_HTTP}: ${DETAIL}) after retries."
+              # FAR-1949: an undelivered dispatch must never be SILENT, and it must
+              # be attributable to the PR it concerns. On 2026-10-17 the dispatch was
+              # refused with HTTP 429 ("Concurrent run limit of 5 reached") and the
+              # conflicted PR was left with nothing durable saying the Branch Fixer
+              # had never been asked to reconcile it. So: name the PR in the
+              # annotation AND leave a durable comment on that PR, mirroring
+              # merge-queue.yml's undelivered-notification fallback (FAR-1939). The
+              # retry count and backoff above are deliberately unchanged.
+              echo "::error::Branch Fixer dispatch failed for PR #$PR_NUM (HTTP ${LAST_HTTP}: ${DETAIL}) after retries — this PR was never handed to the fixer."
+              UNDELIVERED_BODY="The PR Conflict Reconciler could NOT dispatch the Branch Fixer for this PR: all 5 webhook attempts failed (last HTTP ${LAST_HTTP}: ${DETAIL}). Until the conflict is reconciled this PR stays conflicted against \`origin/main\` (mergeable=CONFLICTING), so no pull_request workflow will run to hand it to the fixer. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              if gh pr comment "$PR_NUM" --repo farnalabs/modulo --body "$UNDELIVERED_BODY" > /dev/null 2>&1; then
+                echo "::notice::PR #$PR_NUM: posted a comment recording that the Branch Fixer was never dispatched."
+              else
+                echo "::error::PR #$PR_NUM: could not post the undelivered-notification comment either — this PR has NO durable signal that the Branch Fixer was never asked to reconcile it (webhook HTTP ${LAST_HTTP}: ${DETAIL})."
+              fi
               FAILED=$((FAILED + 1))
             fi
           done

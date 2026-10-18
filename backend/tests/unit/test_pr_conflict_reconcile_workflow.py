@@ -179,3 +179,82 @@ def test_resolves_main_sha_for_the_fingerprint() -> None:
     raw = _raw()
     assert "repos/farnalabs/modulo/commits/main" in raw, "Workflow does not resolve the tip of main (FAR-1935)"
     assert "MAIN_SHA=" in raw, "Workflow never assigns MAIN_SHA (FAR-1935)"
+
+
+# --- FAR-1949: an undelivered Branch Fixer dispatch must leave a durable,
+# --- PR-attributable signal on the PR (mirrors merge-queue.yml's FAR-1939
+# --- undelivered-notification fallback).
+
+
+def _dispatch_step_block() -> str:
+    """Raw text of the 'Dispatch the Branch Fixer' step, up to the next step.
+
+    Scoping the containment checks below to this one step matters: the
+    manual-delivery step already calls ``gh pr comment``, so a file-wide
+    ``"gh pr comment" in raw`` check would pass even while the dispatch-failure
+    arm posts nothing — exactly the FAR-1949 defect."""
+    raw = _raw()
+    marker = "- name: Dispatch the Branch Fixer"
+    start = raw.index(marker)
+    rest = raw[start + len(marker) :]
+    end = rest.find("- name: ")
+    return rest if end == -1 else rest[:end]
+
+
+def test_dispatch_failure_posts_a_pr_comment() -> None:
+    """FAR-1949: after the retries are exhausted the step must leave a durable
+    comment on the affected PR. On 2026-10-17 the dispatch was refused (HTTP
+    429, concurrent-run limit) and the conflicted PR carried nothing saying
+    reconciliation had been attempted and refused."""
+    block = _dispatch_step_block()
+    assert 'gh pr comment "$PR_NUM"' in block, (
+        "Dispatch-failure arm must post a `gh pr comment` on the affected PR (FAR-1949)"
+    )
+
+
+def test_dispatch_failure_comment_says_why_and_links_the_run() -> None:
+    """FAR-1949: the comment must record why the fixer was never asked (the
+    HTTP status / error detail) and link the run, so a conflicted PR is
+    visibly stuck rather than silently stuck."""
+    block = _dispatch_step_block()
+    why = (
+        "could NOT dispatch the Branch Fixer for this PR: all 5 webhook attempts "
+        "failed (last HTTP ${LAST_HTTP}: ${DETAIL})"
+    )
+    assert why in block, "Undelivered-notification body must state why (HTTP status) (FAR-1949)"
+    assert "actions/runs/${{ github.run_id }}" in block, (
+        "Undelivered-notification body must carry the run URL (FAR-1949)"
+    )
+
+
+def test_dispatch_failure_error_names_the_pr() -> None:
+    """FAR-1949: the ::error:: must name the affected PR so the line is
+    attributable rather than an anonymous count."""
+    block = _dispatch_step_block()
+    assert (
+        "::error::Branch Fixer dispatch failed for PR #$PR_NUM (HTTP ${LAST_HTTP}: "
+        "${DETAIL}) after retries — this PR was never handed to the fixer."
+    ) in block, "Dispatch-failure ::error:: must name the affected PR (FAR-1949)"
+
+
+def test_dispatch_failure_escalates_when_the_comment_fails() -> None:
+    """FAR-1949: if the durable comment itself cannot be posted, that gap must
+    not be silent — an escalated ::error:: names the PR."""
+    block = _dispatch_step_block()
+    assert "::error::PR #$PR_NUM: could not post the undelivered-notification comment either" in block, (
+        "Missing escalated ::error:: for a failed undelivered-notification comment (FAR-1949)"
+    )
+
+
+def test_dispatch_failure_keeps_the_loud_failure_and_can_comment() -> None:
+    """FAR-1949: the durable comment is the fix, but the loud failure and the
+    credentials that make the comment possible must both survive. The retry
+    count/backoff are unchanged; the step must still exit 1, the step env must
+    still carry GH_TOKEN, and the token must still be granted
+    ``pull-requests: write``. The first assertion is new (it fails before the
+    change); the rest are retained invariants pinned alongside it."""
+    block = _dispatch_step_block()
+    assert "this PR was never handed to the fixer." in block
+    assert "exit 1" in block, "Dispatch-failure arm must still exit 1 (FAR-1949)"
+    assert "GH_TOKEN" in block, "Dispatch step env must keep GH_TOKEN for the comment (FAR-1949)"
+    assert "pull-requests: write" in _raw(), "pull-requests: write permission missing (FAR-1949)"
