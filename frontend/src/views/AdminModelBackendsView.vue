@@ -10,7 +10,7 @@
 
       <TableSkeleton
         v-if="loading"
-        :columns="6"
+        :columns="7"
         :rows="5"
         :aria-label="$t('common.loading')"
         data-testid="admin-model-backends-loading"
