@@ -36,7 +36,10 @@ import pytest
 
 from modulo.core.cost_controller import (
     _REPORT_COMPONENT_LIMIT,
+    _SQL_COST_COMPONENT_BUCKETS,
+    _SQL_EXPORT_MODEL,
     build_cost_report_buckets,
+    get_cost_export_rows,
 )
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -665,6 +668,46 @@ async def test_numeric_string_regex_is_embedded_in_the_buckets_sql() -> None:
     components_sql = str(session.execute.await_args_list[0].args[0])
     occurrences = components_sql.count(_NUMERIC_STRING_RE)
     assert occurrences == 2
+
+
+async def test_export_model_statement_applies_the_billable_filter() -> None:
+    """FAR-1780 NEW-2: the per-model export CSV sums BILLABLE entries only.
+
+    ``_SQL_EXPORT_MODEL`` (behind ``get_cost_export_rows(group_by="model")``)
+    drives the /admin/costs export CSV; summing the agent's DECLARED unbilled
+    ``billable: false`` self_reported entries there would drift the CSV's
+    ``total_spend_usd`` above the billed components the buckets now sum. The
+    filter rides the lateral WHERE with the same typeof-gated fragment as the
+    buckets SQL, so an absent key, a JSON-null or any non-boolean value
+    defaults to billable.
+    """
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+
+    rows = await get_cost_export_rows(session, org_id=_ORG_ID, group_by="model", period="month")
+
+    assert rows == []
+    export_sql = str(session.execute.await_args_list[0].args[0])
+    assert "jsonb_typeof(elem->'billable') = 'boolean'" in export_sql
+    assert "elem->'billable' = 'false'::jsonb" in export_sql
+    assert "elem->>'source' = 'self_reported'" in export_sql
+    params = session.execute.await_args_list[0].args[1]
+    assert params["org_id"] == _ORG_ID
+    assert "pattern" in params
+
+
+async def test_export_model_billable_filter_mirrors_the_buckets_filter() -> None:
+    """The export SQL's per-entry billable filter is the BUCKETS filter, verbatim.
+
+    Mirrored-semantics pin: both static literals must carry the exact same
+    typeof-gated ``NOT (boolean AND false)`` fragment, so a drift on one
+    surface (buckets vs /admin/costs export) cannot ship silently. A mock
+    cannot execute SQL — the DB-level proof of the filter is the real-Postgres
+    integration run in ``tests/integration/test_cost_buckets_sql_execution.py``.
+    """
+    for fragment in ("jsonb_typeof(elem->'billable') = 'boolean'", "elem->'billable' = 'false'::jsonb"):
+        assert fragment in _SQL_COST_COMPONENT_BUCKETS
+        assert fragment in _SQL_EXPORT_MODEL
 
 
 async def test_queries_are_scoped_to_org_and_period() -> None:
