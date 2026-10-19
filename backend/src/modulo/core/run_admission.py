@@ -766,8 +766,12 @@ def derive_ci_failure_coalesce_key(raw_payload: dict[str, Any] | None) -> str | 
 
     Returns ``None`` (no coalescing) for anything that is not a CI-failure
     delivery — the merge-queue conflict / migration-collision payloads carry
-    ``phase`` and no ``prNumber``, and a manual ``branch-fixer.yml`` dispatch has
-    no ``headSha``, so an intentionally-fired fix is never suppressed.
+    ``phase`` and no ``prNumber``. ``branch-fixer.yml`` and
+    ``pr-conflict-reconcile.yml`` now resolve and send the PR's current head
+    SHA, so their repeats for an unchanged commit coalesce as well; a caller
+    that omits ``headSha`` (or cannot resolve one) is never coalesced, and a
+    human bypasses coalescing on ``branch-fixer.yml`` by passing
+    ``force: true``, which deliberately omits ``headSha``.
     """
     if not isinstance(raw_payload, dict):
         return None

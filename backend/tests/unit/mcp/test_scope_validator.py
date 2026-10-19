@@ -22,9 +22,12 @@ from modulo.core.mcp.scope_validator import (
     MCPAuthorizationError,
     MCPConfigurationError,
     _denial_message,
+    check_node_allowed_tools,
     check_tool_scope,
     classify_caller_scope,
+    get_request_allowed_tools,
     resolve_tool_access,
+    set_request_allowed_tools,
 )
 
 
@@ -472,6 +475,68 @@ class TestAllowedToolsNarrowing:
         # the role (viewer lacks pipeline.create -> denied by the role check).
         with pytest.raises(MCPAuthorizationError):
             check_tool_scope("viewer", "create_pipeline", allowed_tools=["create_pipeline"])
+
+
+class TestCheckNodeAllowedTools:
+    """FAR-1976: the standalone node ``allowed_tools`` leg.
+
+    ``check_node_allowed_tools`` applies ONLY the chokepoint's leg-1 narrowing
+    for the tools that bypass ``check_tool_scope`` entirely. It carries no role
+    leg, so it must be a pure allow-list check whose refusal message is
+    byte-identical to the chokepoint's.
+    """
+
+    def test_no_scope_is_unrestricted(self) -> None:
+        assert check_node_allowed_tools("list_pipelines", allowed_tools=None) is None
+
+    def test_in_scope_tool_passes(self) -> None:
+        assert check_node_allowed_tools("list_pipelines", allowed_tools=["list_pipelines", "get_run_status"]) is None
+
+    def test_out_of_scope_tool_raises_chokepoint_message(self) -> None:
+        with pytest.raises(MCPAuthorizationError) as exc_info:
+            check_node_allowed_tools("list_pipelines", allowed_tools=["get_run_status"])
+        assert str(exc_info.value) == "Tool 'list_pipelines' is outside the node's allowed_tools scope"
+
+    def test_message_matches_the_chokepoint_leg_one_message(self) -> None:
+        """The two enforcement sites cannot diverge on caller-facing text."""
+        expected = _denial_message(
+            tool_name="list_pipelines",
+            normalized="list_pipelines",
+            action=None,
+            act=None,
+            current_role="admin",
+            key_scope="org",
+            auth_type="jwt",
+            allowed_set={"get_run_status"},
+        )
+        with pytest.raises(MCPAuthorizationError) as exc_info:
+            check_node_allowed_tools("list_pipelines", allowed_tools=["get_run_status"])
+        assert str(exc_info.value) == expected
+
+    def test_empty_allow_list_is_deny_by_default(self) -> None:
+        with pytest.raises(MCPAuthorizationError, match="allowed_tools scope"):
+            check_node_allowed_tools("list_pipelines", allowed_tools=[])
+
+    def test_matching_is_case_insensitive(self) -> None:
+        assert check_node_allowed_tools("LIST_PIPELINES", allowed_tools=["list_pipelines"]) is None
+
+    def test_falls_back_to_the_request_scoped_value(self) -> None:
+        previous = get_request_allowed_tools()
+        set_request_allowed_tools(["get_run_status"])
+        try:
+            with pytest.raises(MCPAuthorizationError, match="allowed_tools scope"):
+                check_node_allowed_tools("list_pipelines")
+        finally:
+            set_request_allowed_tools(previous)
+
+    def test_non_string_tool_name_raises(self) -> None:
+        with pytest.raises(MCPAuthorizationError, match="must be a string"):
+            check_node_allowed_tools(123, allowed_tools=["list_pipelines"])  # type: ignore[arg-type]
+
+    def test_unmapped_tool_passes_when_unrestricted(self) -> None:
+        """This leg carries no role/resolution check: a tool with no scope
+        entry is unaffected when no node scope is present."""
+        assert check_node_allowed_tools("not_a_registered_tool", allowed_tools=None) is None
 
 
 class TestMCPAuthorizationError:
