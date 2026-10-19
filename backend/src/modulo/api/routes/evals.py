@@ -85,7 +85,7 @@ from modulo.core.eval_engine.suite_run import (
     summarise_eval_timeseries,
 )
 from modulo.core.node_output_split import node_return
-from modulo.db.crud._gate_advisory_lock import with_gate_advisory_lock
+from modulo.db.crud._gate_advisory_lock import acquire_gate_advisory_lock, with_gate_advisory_lock
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.crud.run_node_outputs import read_run_blobs
 from modulo.db.models.eval import Eval
@@ -125,6 +125,7 @@ _POLICY_GATE_EVALUATION_MODE_PATTERN = r"^(automatic|human)$"
 _MSG_EVAL_SUITE_NOT_FOUND = "Eval suite not found"
 _MSG_POLICY_GATE_NOT_FOUND = "Policy gate not found for this eval"
 _MSG_POLICY_GATE_CONFLICT = "A policy gate for this eval was created concurrently. Please retry."
+_MSG_POLICY_GATE_ALREADY_EXISTS = "A policy gate for this eval already exists. Use PUT to update it."
 _MSG_POLICY_GATE_LOCK_TIMEOUT = "Gate save is temporarily unavailable due to high contention. Please retry."
 _CODE_EVAL_DEFINITION_UPDATE = "eval.definition.update"
 _CODE_EVAL_DEFINITION_DELETE = "eval.definition.delete"
@@ -292,11 +293,14 @@ class PolicyGateCreateRequest(BaseModel):
     action: str = Field(pattern=_POLICY_GATE_ACTION_PATTERN)
     # FAR-939 chunk 12: 'automatic' (default — current behaviour) or 'human'
     # (the HITL decision is the gate's evaluation result). OPTIONAL on the
-    # wire so a caller that does not know about the field keeps today's
-    # behaviour and the generated OpenAPI types leave the field optional for
-    # existing clients. FAR-1750: a fresh create with the mode omitted
-    # defaults to 'automatic'; a POST that REPLACES a live gate preserves
-    # that gate's mode (an explicit value always writes).
+    # wire (omitted → 'automatic'), so a caller that does not know about the
+    # field keeps today's behaviour and the generated OpenAPI types leave
+    # the field optional for existing clients.
+    #
+    # FAR-1750: POST is CREATE-ONLY. An omitted mode defaults to 'automatic'
+    # on a fresh create; it never means "inherit from an existing gate",
+    # because a POST onto an eval that already has a live gate is refused
+    # with 409. Replacing a gate — including changing its mode — is PUT.
     evaluation_mode: str | None = Field(None, pattern=_POLICY_GATE_EVALUATION_MODE_PATTERN)
 
 
@@ -352,34 +356,36 @@ class PolicyGateResponse(BaseModel):
 
 # The per-eval advisory lock is SHARED with the declarative graph writer
 # (``modulo.db.crud.pipeline``): both serialise through
-# ``modulo.db.crud._gate_advisory_lock.with_gate_advisory_lock`` — the SAME
-# ``policy_gate:<eval_id>`` key through ``hashtext`` (FAR-1688). The helper
-# lives in a neutral ``db``-side module because the ``db-does-not-import-core``
-# import-linter contract forbids ``modulo.db`` -> ``modulo.api``, so this layer
-# cannot own the helper the DB layer also needs.
+# ``modulo.db.crud._gate_advisory_lock`` — the SAME ``policy_gate:<eval_id>``
+# key through ``hashtext`` (FAR-1688). The helper lives in a neutral
+# ``db``-side module because the ``db-does-not-import-core`` import-linter
+# contract forbids ``modulo.db`` -> ``modulo.api``, so this layer cannot own
+# the helper the DB layer also needs.
 
 
-async def _create_or_replace_gate(
+async def _create_gate(
     eval_id: uuid.UUID,
     gate_fields: dict[str, Any],
     session: AsyncSession,
     principal: "TenantPrincipal",
 ) -> PolicyGate:
-    """Create or replace a PolicyGate under an advisory lock.
+    """Create a PolicyGate under the per-eval advisory lock (POST is create-only).
 
-    Re-checks for a live gate (the advisory lock serialises concurrent
-    requests), soft-deletes any conflicting gate, then inserts the new one.
-    A second ``UniqueViolation`` while holding the lock is a true race
+    FAR-1750 (decision of record): POST creates, PUT replaces. Re-checking for
+    a live gate inside the advisory lock (which serialises concurrent creates)
+    means an eval that already has a live gate is REFUSED with a typed 409 —
+    the caller must PUT. Making POST create-only removes the silent
+    ``human → automatic`` downgrade class structurally: there is no replace
+    path here that could reset the gate's ``evaluation_mode`` or its
+    operator-controlled ``enabled`` state.
+
+    A fresh create stamps ``version=1``, ``enabled=True``, ``enabled_at=now``,
+    ``disabled_at=NULL`` (the CHECK-acceptable creation state, CO-2) and the
+    supplied ``evaluation_mode`` (or ``"automatic"`` when absent).
+
+    A second ``UniqueViolation`` while holding the lock (the live-gate check
+    saw nothing and a concurrent writer committed in between) is a true race
     that could not be resolved → 409 Conflict.
-
-    FAR-967 F6: when a live gate is replaced, the new row INHERITS its
-    ``enabled``/``enabled_at``/``disabled_at`` state — a replace never
-    silently re-enables a gate the operator disabled.
-
-    FAR-1750: a replace also PRESERVES the live gate's ``evaluation_mode``
-    when the supplied fields omit it (``None``) — the same preserve-on-omit
-    contract as PUT. An explicit value (including ``"automatic"``) still
-    writes; a fresh create with no supplied mode defaults to ``"automatic"``.
     """
 
     async def _do_insert() -> PolicyGate:
@@ -390,51 +396,27 @@ async def _create_or_replace_gate(
                 PolicyGate.deleted_at.is_(None),
             )
         )
-        live_gate = existing.scalar_one_or_none()
+        if existing.scalar_one_or_none() is not None:
+            # FAR-1750: create-only. Replacing is PUT's job; a POST must
+            # never mutate (or soft-delete) the live gate.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_MSG_POLICY_GATE_ALREADY_EXISTS,
+            )
         now = datetime.now(UTC)
-        if live_gate is not None:
-            # Soft-delete the conflicting gate
-            live_gate.deleted_at = func.now()
-            live_gate.deleted_by = principal.account_id
-            # FAR-967 F6: the replacement INHERITS the operator's enabled
-            # state (and its timestamp pair).  A create-or-replace must
-            # never silently re-enable a gate the operator deliberately
-            # disabled — enforcement state is operator product state (CO-5),
-            # not something a re-POST should reset.
-            enabled = live_gate.enabled
-            enabled_at = live_gate.enabled_at
-            disabled_at = live_gate.disabled_at
-            # Normalise so the symmetric CHECK constraint
-            # (ck_policy_gates_enabled_timestamps) is satisfied on insert
-            # even if the carried row somehow arrived with a missing stamp.
-            if enabled and enabled_at is None:
-                enabled_at = now
-            if not enabled and disabled_at is None:
-                disabled_at = now
-        else:
-            # Fresh create — enabled at creation time so the symmetric CHECK
-            # constraint is satisfied at insert (CO-2).
-            enabled = True
-            enabled_at = now
-            disabled_at = None
         new_gate = PolicyGate(
             organisation_id=principal.organisation_id,
             eval_id=eval_id,
             node_id=gate_fields["node_id"],
             action=gate_fields["action"],
             # FAR-939 chunk 12: carried exactly as ``action`` is. FAR-1750:
-            # an omitted mode preserves the live gate's mode on a replace
-            # (an explicit value still wins); only a fresh create falls back
-            # to ``"automatic"``.
-            evaluation_mode=(
-                gate_fields.get("evaluation_mode")
-                or (live_gate.evaluation_mode if live_gate is not None else None)
-                or "automatic"
-            ),
+            # a fresh create falls back to ``"automatic"`` when the caller
+            # omitted the mode; there is no inherit-on-replace path.
+            evaluation_mode=gate_fields.get("evaluation_mode") or "automatic",
             version=1,
-            enabled=enabled,
-            enabled_at=enabled_at,
-            disabled_at=disabled_at,
+            enabled=True,
+            enabled_at=now,
+            disabled_at=None,
         )
         session.add(new_gate)
         await session.flush()
@@ -557,7 +539,7 @@ async def _collect_author_warnings(
     responses={
         400: {"description": "Bad Request — binding validation failed"},
         404: {"description": "Eval not found"},
-        409: {"description": "Conflict — concurrent gate creation"},
+        409: {"description": "Conflict — a live gate already exists (use PUT), or concurrent creation"},
         503: {"description": "Service Unavailable — lock timeout"},
     },
 )
@@ -570,6 +552,12 @@ async def create_policy_gate(
 ) -> PolicyGateResponse:
     """Create a PolicyGate for an eval (admin only).
 
+    POST is CREATE-ONLY (FAR-1750, decision of record): an eval that already
+    has a live gate is refused with a typed 409 — updating (including
+    changing ``evaluation_mode``) is ``PUT``, which is the single replace
+    path. With ``evaluation_mode`` omitted, a fresh create defaults to
+    ``automatic``.
+
     The gate inherits the eval's edit permission — no separate permission
     check is performed (criterion 14).
 
@@ -580,8 +568,9 @@ async def create_policy_gate(
     (criteria 5-9).
 
     Concurrent creates are serialised via a transaction-scoped advisory lock
-    (section 4.4/5).  A ``UniqueViolation`` while holding the lock → 409.
-    A lock-acquisition timeout (SQLSTATE 57014) → 503.
+    (section 4.4/5).  A POST that finds a live gate while holding the lock →
+    409; a ``UniqueViolation`` (true race) → 409. A lock-acquisition timeout
+    (SQLSTATE 57014) → 503.
     """
     if principal.org_role != "admin":
         raise HTTPException(
@@ -627,15 +616,15 @@ async def create_policy_gate(
 
             gate_fields = {
                 "action": req.action,
-                # FAR-1750: leave an omitted mode as ``None`` so the helper
-                # can distinguish omit (preserve the live gate's mode on a
-                # replace) from an explicit ``"automatic"`` (overwrite).
-                "evaluation_mode": req.evaluation_mode,
+                # FAR-1750: POST is create-only, so an omitted mode simply
+                # means "fresh create with the default"; there is no
+                # inherit-on-replace semantics to preserve.
+                "evaluation_mode": req.evaluation_mode or "automatic",
                 "node_id": eval_row.node_id,
             }
 
             try:
-                gate = await _create_or_replace_gate(eval_id, gate_fields, session, principal)
+                gate = await _create_gate(eval_id, gate_fields, session, principal)
             except IntegrityError:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -756,6 +745,11 @@ async def update_policy_gate(
     ``validate_binding`` is called to verify the gate-to-eval binding is
     still valid after the update.  Violations are logged at WARNING with
     structured context but the caller receives a generic 400 (criteria 5-9).
+
+    The load-and-mutate runs under the same transaction-scoped advisory lock
+    as create/toggle (FAR-1750), so a concurrent POST/PATCH cannot interleave
+    with this read-modify-write. A lock-acquisition timeout (SQLSTATE 57014)
+    surfaces through the standard 503 DB-error mapping.
     """
     if principal.org_role != "admin":
         raise HTTPException(
@@ -767,6 +761,10 @@ async def update_policy_gate(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            # FAR-1750: serialise the whole load-and-mutate against a
+            # concurrent POST/PATCH on the same eval (the lock releases on
+            # commit/rollback).
+            await acquire_gate_advisory_lock(eval_id, session)
 
             # Load the eval and the existing live gate (404 when either is missing)
             eval_row = await _load_eval_or_404(session, eval_id, principal)
@@ -1041,8 +1039,8 @@ async def toggle_policy_gate(
     (CO-3).
 
     The load-and-mutate runs under the same transaction-scoped advisory lock
-    as create-or-replace (FAR-967 F6) so a concurrent replace cannot
-    interleave with this read-modify-write.  A lock-acquisition timeout
+    as create/update (FAR-967 F6) so a concurrent write cannot interleave
+    with this read-modify-write.  A lock-acquisition timeout
     (SQLSTATE 57014) → 503.
 
     An audit-log entry is emitted (best-effort, same path as create/update).
