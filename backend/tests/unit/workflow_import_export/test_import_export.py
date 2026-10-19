@@ -1103,7 +1103,7 @@ async def test_export_pipeline_bundle_omits_binding_with_invisible_backend(
     bundle = extract_bundle_json_from_zip(data)
 
     assert "model_backend_bindings" not in bundle["agents"][0]
-    assert bundle["model_backends"] == []
+    assert not bundle["model_backends"]
     warning.assert_called_once()
     assert "invisible model backend" in warning.call_args.args[0]
 
