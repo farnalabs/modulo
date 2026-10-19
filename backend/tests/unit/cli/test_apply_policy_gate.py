@@ -443,6 +443,85 @@ class TestEvalResolution:
         assert pipeline_apply.resolve_policy_gate_evals(entity, {"evals_error": "boom"}) is None
 
 
+class _RecordingExecutor:
+    """Minimal ``ApplyExecutor`` double: records writes, performs no HTTP.
+
+    Lets these tests drive ``pipeline_apply._apply_one_pipeline`` in
+    isolation — at the module boundary where the FAR-1973 guard lives —
+    without the mock-HTTP surface the executor-level tests use.
+    """
+
+    def __init__(self) -> None:
+        self.patch_payloads: list[dict] = []
+        self.post_paths: list[str] = []
+
+    def _patch(self, path: str, payload: dict) -> dict:
+        self.patch_payloads.append(payload)
+        return {}
+
+    def _post(self, path: str, *args: object, **kwargs: object) -> dict:
+        self.post_paths.append(path)
+        return {}
+
+
+def _apply_one(entity: PipelineEntity, *, current_graph: dict | None) -> tuple[_RecordingExecutor, dict, str]:
+    """Run ``_apply_one_pipeline`` for an existing pipeline at the module boundary."""
+    executor = _RecordingExecutor()
+    report: dict = {"created": [], "updated": [], "unchanged": [], "blocked": [], "failed": []}
+    current_pipelines = {"sample": {"id": PIPELINE_ID, "graph": current_graph}}
+    pipeline_id = pipeline_apply._apply_one_pipeline(
+        executor,
+        entity,
+        "updated",
+        report=report,
+        agents={"worker": AGENT_ID},
+        current_pipelines=current_pipelines,
+        current_entities={},
+        refresh_secrets=False,
+        git_resolver=None,
+    )
+    return executor, report, pipeline_id
+
+
+class TestPipelineApplyGraphGuard:
+    """FAR-1973: a graphless entity locally honours "never claims what was not persisted".
+
+    In production the mismatch is unreachable — ``executor.py`` only fetches a
+    stored graph for pipelines whose config declares one
+    (``declared_names = {e.name for e in config.entities.pipelines if e.graph is
+    not None}``), so ``current_graph`` is ``_EMPTY_GRAPH`` whenever the desired
+    graph is ``None``. These tests pin that invariant at the ``pipeline_apply``
+    boundary, since ``apply_pipelines`` is exported public API, and prove the
+    guard does not suppress a genuine gate change.
+    """
+
+    def test_graphless_entity_reports_no_gate_change_with_populated_current_graph(self) -> None:
+        """The invariant: no declared graph yields no gate diff and no gate report.
+
+        Without the guard, ``policy_gate_changes(None, current_graph)`` reads the
+        supplied populated current side as removals and reports gate changes
+        that were never persisted.
+        """
+        entity = PipelineEntity.model_validate(
+            {"name": "sample", "description": "Sample pipeline", "max_concurrent_runs": 3}
+        )
+        executor, report, pipeline_id = _apply_one(entity, current_graph=_current_graph(gate=_gate("block")))
+        assert not report.get("gate_changes")
+        assert pipeline_id == PIPELINE_ID
+        # The graphless update still PATCHes its managed top-level fields, but
+        # never a graph_json (there is no declared graph to write).
+        assert executor.patch_payloads
+        assert "graph_json" not in executor.patch_payloads[0]
+
+    def test_declared_graph_still_reports_real_gate_change(self) -> None:
+        """Control: the guard must not suppress a real gate change."""
+        entity = _entity(gate=_gate("block"))
+        _executor, report, _pipeline_id = _apply_one(entity, current_graph=_current_graph(gate=None))
+        assert report["gate_changes"] == [
+            {"pipeline": "sample", "change": "added", "node": NODE_ID, "action": "block", "eval_id": EVAL_ID}
+        ]
+
+
 def _pipeline_item(name: str, pipeline_id: str) -> dict:
     return {
         "id": pipeline_id,

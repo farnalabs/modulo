@@ -526,7 +526,7 @@ Each action item must include:
 | Owner | Yes | @engineer-name |
 | Severity | Yes | Critical |
 | Due date | Yes | 2026-07-05 |
-| Verification | Yes | `pytest tests/unit/test_rls.py -v` passes |
+| Verification | Yes | `uv run pytest tests/unit/db/test_rls.py -v` passes (from `backend/`) |
 | Linked ticket | Recommended | Task ID from delivery plan |
 
 ### 6.5 Lessons-Learned Integration

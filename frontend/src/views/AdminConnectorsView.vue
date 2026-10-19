@@ -9,7 +9,16 @@
       </Button>
     </header>
 
-    <LoadingSpinner v-if="loading" />
+    <!-- STATE-3 (ux-conformance): the column layout is known before the first
+         row arrives, so the loading placeholder is a determinate table
+         skeleton (shared TableSkeleton) instead of an indeterminate spinner. -->
+    <TableSkeleton
+      v-if="loading"
+      :columns="5"
+      :rows="5"
+      :aria-label="$t('common.loading')"
+      data-testid="admin-connectors-loading"
+    />
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadConnectors" />
 
@@ -112,12 +121,12 @@
         </form>
       </div>
 
-      <div v-if="nativeConnectors.length === 0" class="card p-8 text-center">
-        <p class="text-lg font-medium">{{ $t('views.AdminConnectorsView.no_connectors_configured') }}</p>
-        <p class="mt-1 text-sm text-muted-foreground">
-          {{ $t('views.AdminConnectorsView.add_a_connector_to_integrate') }}
-        </p>
-      </div>
+      <EmptyState
+        v-if="nativeConnectors.length === 0"
+        :title="$t('views.AdminConnectorsView.no_connectors_configured')"
+        :description="$t('views.AdminConnectorsView.add_a_connector_to_integrate')"
+        data-testid="admin-connectors-empty"
+      />
 
       <div v-else class="table-wrapper overflow-x-auto">
         <table class="w-full text-left text-sm">
@@ -152,6 +161,7 @@
                   <span
                     class="h-1.5 w-1.5 rounded-full"
                     :class="connector.enabled ? 'bg-success' : 'bg-muted-foreground'"
+                    aria-hidden="true"
                   />
                   {{ connector.enabled ? $t('views.AdminConnectorsView.enabled') : $t('views.AdminConnectorsView.disabled') }}
                 </span>
@@ -317,7 +327,8 @@ import type { components } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useProductAnalytics } from '../composables/useProductAnalytics'
 import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import TableSkeleton from '../components/shared/TableSkeleton.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
