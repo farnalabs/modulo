@@ -318,16 +318,17 @@ paths and their repair guarantee:
 | Enqueue path | Queued TTL | What happens if the hash is shed |
 |---|---|---|
 | Run dispatch (`dispatch._enqueue_saq`) | yes | `dispatcher_reconcile` sees `q.job()` absent on its `pending` + `dispatcher='saq'` leg and re-enqueues the run after `SAQ_REENQUEUE_WINDOW` (600s default). |
-| Cron fire and cron catch-up fire jobs (`cron_helpers._enqueue_fire_job_async`) | yes, when the cadence is inside the catch-up window | `_fire_missed_cron_epochs` re-fires the consumed epoch once the epoch's 960s marker expires. A **weekly/monthly** cadence is exempt (no TTL): the miss would fall outside the 48-hour catch-up bound, so a shed hash would be lost silently until the next scheduled fire. A trigger that has **never** fired is the other exception: its first epoch cannot be distinguished from an upcoming first fire, so a shed first-fire hash is skipped and the trigger resumes at its next cadence. |
+| Cron fire and cron catch-up fire jobs (`cron_helpers._enqueue_fire_job_async`) | yes, **only** for a cadence in `30 min ≤ cadence ≤ 47 h` | `_fire_missed_cron_epochs` re-fires the consumed epoch once the epoch's 960s marker (written when the fire was enqueued) expires. Outside that range the fire is **exempt** (no TTL) because the catch-up could not repair a shed hash: a shed hash disappears `cadence + 3600s` after the previous fire, while the catch-up abandons a miss older than `min(48h, cadence × 3)`. **Below 30 min** the hash outlives the window before the scan can act (for `*/5`: gone at age 3900s, window closed at age 900s), and **above 47 h** the miss falls outside the 48-hour bound. The 960s marker must also expire while the window is still open (`cadence + 960 ≤ min(48h, cadence × 3)`, i.e. `cadence ≥ 8 min`), which the 30-minute floor already satisfies. An exempt fire keeps its hash unbounded while queued rather than being shed silently. A trigger that has **never** fired is the remaining exception: the scan measures staleness from `last_fired_at`, which is NULL, so a shed first-fire hash is not re-fired and the trigger resumes at its next cadence. |
 | Polling and ongoing fire jobs, and their `suite_run` variants | yes | Continuous scans: the next interval enqueues an equivalent job, so a shed hash delays one scan rather than losing a slot. |
 | Scheduled-report fires (`fire_report_trigger`) | **no** | `next_send_at` is advanced *before* the enqueue and there is no rollback and no missed-report scan, so a TTL here would silently drop the report slot. The hash stays unbounded while queued; the deployment `maxmemory` bound and the capacity alert below are the backstop. |
 | Suite-run execution jobs (`_enqueue_suite_run_execution`) | **no** | Nothing reconciles a stranded `pending` `SuiteRun`, so an expired hash would strand the run forever. The hash stays unbounded while queued; the `maxmemory` bound and the capacity alert are the backstop. |
 
 So for run dispatch the guarantee is: a queued run job whose hash is evicted or
-expired is not lost — `dispatcher_reconcile` re-enqueues it. For trigger fires
-it is the catch-up scan / next interval. The two un-TTL'd paths remain bounded
-once SAQ finishes them (SAQ's finish-origin `ttl`), and are protected while
-queued by the deployment bound rather than by silent expiry.
+expired is not lost — `dispatcher_reconcile` re-enqueues it. For a polling or
+ongoing fire it is the next scan interval, and for a cron fire inside the
+`30 min .. 47 h` cadence range it is the catch-up scan. The un-TTL'd paths
+remain bounded once SAQ finishes them (SAQ's finish-origin `ttl`), and are
+protected while queued by the deployment bound rather than by silent expiry.
 
 **The bound is alerted, not silent.** The capacity alert sweep
 (`core/capacity_alerts.py`, wired into `dispatcher_reconcile`) reads `INFO

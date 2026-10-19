@@ -3121,31 +3121,70 @@ def _suppress_aclose() -> Any:
 # ---------------------------------------------------------------------------
 
 
-# A shed cron fire hash is first visible to the catch-up scan roughly one cadence
-# plus the queued TTL after the previous fire (the hash expires TTL seconds after
-# the enqueue). ``_fire_missed_cron_epochs`` abandons a miss older than
-# ``min(CATCHUP_BOUND_SECONDS, cadence * 3)``, so a cadence longer than the
-# difference below falls outside the repair window on the very first scan: the
-# lost occurrence would not be re-fired until the NEXT scheduled fire (up to a
-# week or a month away). Such long-cadence cron fires must therefore not take
-# the queued TTL — a lost slot would be silent, exactly like a report.
+# FAR-2002: which cron cadences can the catch-up scan actually repair?
+#
+# A queued fire-job hash is written at its epoch E and given
+# ``SAQ_QUEUED_JOB_TTL`` (Q = 3600s), so a shed hash disappears at E + Q. The
+# row's last successful fire is E - c (c = cadence), and
+# ``_fire_missed_cron_epochs`` re-fires the missed epoch only while the miss age
+# ``now - (E - c)`` satisfies
+#
+#     c + G < age <= min(B, 3c)        G = CATCHUP_GRACE_SECONDS   (300s)
+#                                      B = CATCHUP_BOUND_SECONDS   (48h)
+#
+# i.e. it can fire only for ``E + G < now <= E + W(c) - c``, where
+# ``W(c) = min(B, 3c)``. Two independent conditions must therefore hold:
+#
+#   (1) HASH LIFETIME — the epoch must STILL be eligible when the shed hash
+#       disappears, or the occurrence is already unrecoverable before any scan
+#       can act:                       c + Q <= W(c)
+#
+#   (2) MARKER — the normal fire path writes the epoch's catch-up marker
+#       (``_CATCHUP_MARKER_TTL`` M = 960s; >= the worst-case 300s x 3 in-flight
+#       window) and ``_claim_catchup_marker`` refuses the epoch until it
+#       expires, so the FIRST catch-up attempt is at ``E + max(G, M) = E + M``
+#       and must still be eligible:    c + M <= W(c)
+#
+# Q (3600s) > M (960s), so (1) implies (2): the hash lifetime is the binding
+# constraint. With ``W(c) = min(B, 3c)`` it splits into
+#
+#   lower:  c + Q <= 3c   =>   c >= Q / 2 = 1800s   (30 min)
+#   upper:  c + Q <= B    =>   c <= B - Q = 169200s (47 h)
+#
+# and both equalities are eligible (the scan rejects ``age > W``, not ``>=``),
+# so the repairable range is the CLOSED interval [1800, 169200] seconds.
+#
+# Just below 1800s the hash outlives the catch-up window: e.g. ``*/5`` (c=300)
+# is eligible only for ages in (600, 900], while the hash dies at age 3900, and
+# its 960s marker means the earliest catch-up attempt is age 1260 — so that
+# epoch can NEVER be re-fired and the occurrence is lost silently (the
+# missed-fire alert skips sub-hourly periods). Above 169200s the miss falls
+# outside the 48h bound before the hash even disappears. Cadences outside the
+# range are therefore EXEMPT from the queued TTL: their hash stays unbounded
+# while queued (the deployment ``maxmemory`` bound and the capacity alert are
+# the backstop) rather than being shed into a repair path that cannot reach it.
+_CATCHUP_REPAIRABLE_MIN_CADENCE = SAQ_QUEUED_JOB_TTL // 2
 _CATCHUP_REPAIRABLE_MAX_CADENCE = CATCHUP_BOUND_SECONDS - SAQ_QUEUED_JOB_TTL
 
 
 def _cron_fire_ttl_is_repairable(row: Any, now: datetime) -> bool:
     """Whether a shed hash for this cron row is re-fired by the catch-up scan.
 
-    ``True`` when the row's cadence is short enough that the catch-up scan can
-    still see a TTL-shed job (``cadence <= CATCHUP_BOUND_SECONDS - TTL``). A
-    shorter cadence is also self-healing: the next scheduled fire follows within
-    one cadence. ``False`` for a long-cadence (weekly/monthly) row or an
-    uncomputable cadence — those must keep an unbounded queued hash rather than
-    risk silently losing an occurrence.
+    ``True`` only for a cadence inside the derived repairable interval
+    ``_CATCHUP_REPAIRABLE_MIN_CADENCE <= cadence <= _CATCHUP_REPAIRABLE_MAX_CADENCE``
+    (30 min .. 47 h) — see the derivation above: that is the range in which the
+    shed hash (gone at ``cadence + 3600s`` past the last fire) and the epoch's
+    960s catch-up marker both expire while the missed epoch is still inside the
+    ``min(48h, cadence * 3)`` catch-up window. ``False`` for a shorter cadence
+    (the hash outlives the window, so the catch-up can never re-fire it), a
+    longer one (the miss falls outside the 48h bound), or an uncomputable
+    cadence — all of those must keep an unbounded queued hash rather than risk
+    silently losing an occurrence.
     """
     cadence = _cron_cadence_seconds(row.cron_expression, getattr(row, "cron_timezone", None), now)
     if cadence is None:
         return False
-    return cadence <= _CATCHUP_REPAIRABLE_MAX_CADENCE
+    return _CATCHUP_REPAIRABLE_MIN_CADENCE <= cadence <= _CATCHUP_REPAIRABLE_MAX_CADENCE
 
 
 async def _enqueue_fire_job_async(
@@ -3169,19 +3208,24 @@ async def _enqueue_fire_job_async(
     ``repairable`` encodes that classification:
 
     * ``True`` (default) — catch-up, polling, ongoing and suite fire jobs, and
-      cron fires whose cadence is inside the catch-up window
-      (``_cron_fire_ttl_is_repairable``). A shed cron/catch-up hash is re-fired
-      by ``_fire_missed_cron_epochs`` (the marker's 960s TTL is shorter than the
-      3600s job TTL, and the 48h catch-up bound is longer); polling/ongoing are
-      continuous scans that enqueue an equivalent job at the next interval, so a
-      shed hash delays one scan instead of losing a slot.
-    * ``False`` — the report fire, and a long-cadence (weekly/monthly) cron
-      fire whose miss would fall outside the catch-up bound. ``next_send_at`` is
-      advanced BEFORE the report enqueue and there is no rollback and no
-      missed-report scan, so an expired hash is a silently lost report slot; a
-      long-cadence cron's next fire is too far away for the catch-up scan to
-      reach. Both stay unbounded while queued (the ``maxmemory`` bound and the
-      capacity alert are the backstop) but are never silently dropped.
+      cron fires whose cadence is inside the repairable interval
+      (``_cron_fire_ttl_is_repairable``: 30 min .. 47 h). A shed cron/catch-up
+      hash is re-fired by ``_fire_missed_cron_epochs`` — inside that interval
+      both the 3600s hash lifetime and the epoch's 960s catch-up marker expire
+      while the missed epoch is still inside the
+      ``min(48h, cadence * 3)`` catch-up window (see the derivation at
+      ``_CATCHUP_REPAIRABLE_MIN_CADENCE``); polling/ongoing are continuous
+      scans that enqueue an equivalent job at the next interval, so a shed hash
+      delays one scan instead of losing a slot.
+    * ``False`` — the report fire, and a cron fire whose cadence is OUTSIDE
+      that interval. ``next_send_at`` is advanced BEFORE the report enqueue and
+      there is no rollback and no missed-report scan, so an expired hash is a
+      silently lost report slot; a sub-30-min cron's hash outlives the catch-up
+      window and a long-cadence (weekly/monthly) cron's next fire is too far
+      away for the scan to reach, so in both cases a TTL would drop the
+      occurrence silently. All of them stay unbounded while queued (the
+      ``maxmemory`` bound and the capacity alert are the backstop) but are
+      never silently dropped.
     """
     job = await q.enqueue(
         function,

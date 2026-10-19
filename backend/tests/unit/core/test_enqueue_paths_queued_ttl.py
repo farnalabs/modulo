@@ -148,20 +148,166 @@ def _cron_row(expression: str) -> SimpleNamespace:
         cron_timezone="UTC",
         run_kind="run",
         next_fire_at=datetime.now(UTC),
+        last_fired_at=datetime.now(UTC),
     )
 
 
 @pytest.mark.parametrize(
     ("expression", "expected"),
     [
-        ("*/15 * * * *", True),  # 15 min - next fire follows within one cadence
-        ("0 * * * *", True),  # hourly - inside the catch-up window
-        ("0 0 * * 0", False),  # weekly - a lost slot would fall outside the bound
-        ("0 0 1 * *", False),  # monthly - same
+        # FAR-2002: the short range. A shed hash is gone at
+        # ``cadence + 3600s`` past the last fire, but the catch-up window is
+        # ``min(48h, cadence * 3)`` — for every cadence below 1800s the hash
+        # outlives the window, so the catch-up can NEVER re-fire the epoch.
+        ("* * * * *", False),  # 60s  - window closes at 180s, hash dies at 3660s
+        ("*/5 * * * *", False),  # 300s - window closes at 900s, hash dies at 3900s
+        ("*/15 * * * *", False),  # 900s - window closes at 2700s, hash dies at 4500s
+        ("*/29 * * * *", False),  # 1740s - one step BELOW the derived floor
+        # The derived floor/ceiling of the repairable interval (inclusive).
+        ("*/30 * * * *", True),  # 1800s - floor: hash expiry lands exactly on the edge
+        ("*/31 * * * *", True),  # 1860s - one step ABOVE the floor
+        ("0 * * * *", True),  # 3600s - hourly, well inside the window
+        ("0 0 * * *", True),  # 86400s - daily, still inside the 48h bound
+        ("0 0 * * 0", False),  # 604800s - weekly, beyond the 48h bound
+        ("0 0 1 * *", False),  # monthly - beyond the 48h bound
+    ],
+    ids=[
+        "every-minute-60s",
+        "every-5-min-300s",
+        "every-15-min-900s",
+        "29-min-below-floor",
+        "30-min-at-floor",
+        "31-min-above-floor",
+        "hourly-3600s",
+        "daily-86400s",
+        "weekly-604800s",
+        "monthly",
     ],
 )
 def test_cron_ttl_is_repairable_only_inside_the_catchup_window(expression: str, expected: bool) -> None:
     assert ch._cron_fire_ttl_is_repairable(_cron_row(expression), datetime.now(UTC)) is expected
+
+
+def test_repairable_interval_is_derived_from_both_catchup_conditions() -> None:
+    """Pin the arithmetic, not just the sampled cadences above.
+
+    The floor/ceiling must be the exact edges where BOTH conditions still hold:
+    the hash-lifetime condition ``c + Q <= min(B, 3c)`` and the marker
+    condition ``c + M <= min(B, 3c)`` (implied by the first, since Q > M).
+    """
+    queued_ttl = ch.SAQ_QUEUED_JOB_TTL
+    bound = ch.CATCHUP_BOUND_SECONDS
+    marker_ttl = ch._CATCHUP_MARKER_TTL
+    floor = ch._CATCHUP_REPAIRABLE_MIN_CADENCE
+    ceiling = ch._CATCHUP_REPAIRABLE_MAX_CADENCE
+
+    def window(cadence: int) -> int:
+        return min(bound, cadence * 3)
+
+    assert floor == queued_ttl // 2
+    assert floor == 1800  # 30 min
+    assert ceiling == bound - queued_ttl
+    assert ceiling == 169200  # 47 h
+
+    # At the floor both conditions hold at equality, so the closed edge is
+    # repairable; one second lower and the hash outlives the window.
+    assert floor + queued_ttl == window(floor)
+    assert floor + marker_ttl <= window(floor)
+    assert (floor - 1) + queued_ttl > window(floor - 1)
+
+    # Same at the ceiling: the equality case is eligible, one second above is
+    # outside the 48h bound.
+    assert ceiling + queued_ttl == window(ceiling)
+    assert (ceiling + 1) + queued_ttl > window(ceiling + 1)
+
+
+@pytest.mark.parametrize(
+    ("cadence", "expected"),
+    [
+        (1799, False),  # just below the derived floor
+        (1800, True),  # the floor itself (closed interval)
+        (169200, True),  # the ceiling itself (closed interval)
+        (169201, False),  # just above the derived ceiling
+    ],
+)
+def test_repairable_boundaries_exact_seconds(monkeypatch: pytest.MonkeyPatch, cadence: int, expected: bool) -> None:
+    """The edges are exact seconds — probe them without an exotic cron string."""
+    monkeypatch.setattr(ch, "_cron_cadence_seconds", lambda *args, **kwargs: cadence)
+
+    assert ch._cron_fire_ttl_is_repairable(_cron_row("0 * * * *"), datetime.now(UTC)) is expected
+
+
+async def test_short_cadence_cron_fire_passes_repairable_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the call site: a */5 fire must NOT take the queued TTL.
+
+    This is the FAR-2002 regression — the helper used to return True for every
+    cadence <= 47h, so */5 (and * * * * *) took a 3600s TTL they had no repair
+    path for.
+    """
+    enqueue = AsyncMock(return_value="job-1")
+    monkeypatch.setattr(ch, "_enqueue_fire_job_async", enqueue)
+    redis_client = AsyncMock()
+    summary: dict[str, Any] = {"enqueue_failures": 0, "cron_enqueued": 0}
+
+    ok = await ch._enqueue_cron_fire(
+        SimpleNamespace(redis=redis_client),  # type: ignore[arg-type]
+        redis_client,
+        datetime.now(UTC),
+        "org-1",
+        _cron_row("*/5 * * * *"),
+        None,
+        set(),
+        summary,
+    )
+
+    assert ok is True
+    assert enqueue.call_args.kwargs["repairable"] is False
+
+
+async def test_hourly_cron_fire_passes_repairable_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The other side of the call site: an hourly fire keeps the TTL."""
+    enqueue = AsyncMock(return_value="job-1")
+    monkeypatch.setattr(ch, "_enqueue_fire_job_async", enqueue)
+    redis_client = AsyncMock()
+    summary: dict[str, Any] = {"enqueue_failures": 0, "cron_enqueued": 0}
+
+    ok = await ch._enqueue_cron_fire(
+        SimpleNamespace(redis=redis_client),  # type: ignore[arg-type]
+        redis_client,
+        datetime.now(UTC),
+        "org-1",
+        _cron_row("0 * * * *"),
+        None,
+        set(),
+        summary,
+    )
+
+    assert ok is True
+    assert enqueue.call_args.kwargs["repairable"] is True
+
+
+async def test_short_cadence_catchup_fire_passes_repairable_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The catch-up fire path uses the same classification (no second opinion)."""
+    enqueue = AsyncMock(return_value="job-1")
+    monkeypatch.setattr(ch, "_enqueue_fire_job_async", enqueue)
+    redis_client = AsyncMock()
+    summary: dict[str, Any] = {"enqueue_failures": 0, "cron_catchup_enqueued": 0}
+    now = datetime.now(UTC)
+
+    await ch._enqueue_catchup_fire(
+        object(),  # type: ignore[arg-type]
+        redis_client,
+        SimpleNamespace(redis=redis_client),  # type: ignore[arg-type]
+        "org-1",
+        _cron_row("*/5 * * * *"),
+        now,
+        None,
+        now,
+        int(now.timestamp()),
+        summary,
+    )
+
+    assert enqueue.call_args.kwargs["repairable"] is False
 
 
 async def test_weekly_cron_fire_passes_repairable_false(monkeypatch: pytest.MonkeyPatch) -> None:
