@@ -13,6 +13,7 @@ import pytest
 
 from modulo.core.capacity_providers import build_platform_capacity_probe
 from modulo.core.capacity_providers.fly import (
+    DEFAULT_CACHE_TTL_SECONDS,
     FlyVolumeCapacityProbe,
     capacity_bytes_from_volumes,
 )
@@ -237,3 +238,97 @@ async def test_probe_returns_none_when_no_volume_matches() -> None:
     factory, _ = _client_factory_capturing(_FakeResponse([{"id": "v", "name": "other", "size_gb": 80}]))
     probe = FlyVolumeCapacityProbe(app="app", token="tok", volume="pg_data", client_factory=factory)
     assert await probe.probe_capacity_bytes() is None
+
+
+# --- TTL memo on the probe (FAR-1992 Major fix) -----------------------------
+#
+# The gate resolves capacity on EVERY new-run creation and the admin banner
+# polls the same path, so a successful reading must not cost a fresh provider
+# round-trip each time. The clock is injected, so these tests never sleep.
+
+
+async def test_probe_reuses_one_reading_inside_the_ttl_window() -> None:
+    now = [1_000.0]
+    calls = 0
+
+    async def factory(url: str, **kwargs: Any) -> _FakeClient:
+        nonlocal calls
+        calls += 1
+        return _FakeClient(_FakeResponse([{"id": "v", "name": "pg_data", "size_gb": 80}]))
+
+    probe = FlyVolumeCapacityProbe(app="app", token="tok", client_factory=factory, clock=lambda: now[0])
+    first = await probe.probe_capacity_bytes()
+    now[0] += 30.0
+    second = await probe.probe_capacity_bytes()
+
+    assert first == 80 * _GIB
+    assert second == 80 * _GIB
+    assert calls == 1
+
+
+async def test_probe_reprobes_and_uses_the_new_value_after_the_ttl_expires() -> None:
+    now = [1_000.0]
+    calls = 0
+    payloads = [
+        [{"id": "v", "name": "pg_data", "size_gb": 80}],
+        [{"id": "v", "name": "pg_data", "size_gb": 120}],
+    ]
+
+    async def factory(url: str, **kwargs: Any) -> _FakeClient:
+        nonlocal calls
+        calls += 1
+        return _FakeClient(_FakeResponse(payloads[calls - 1]))
+
+    probe = FlyVolumeCapacityProbe(app="app", token="tok", client_factory=factory, clock=lambda: now[0])
+    first = await probe.probe_capacity_bytes()
+    now[0] += DEFAULT_CACHE_TTL_SECONDS
+    second = await probe.probe_capacity_bytes()
+
+    assert first == 80 * _GIB
+    assert second == 120 * _GIB
+    assert calls == 2
+
+
+async def test_probe_failure_is_not_cached_so_the_next_resolution_retries() -> None:
+    # A provider outage must not pin the source to "unresolved" for the TTL:
+    # only successful readings are memoised, so the very next resolution probes
+    # again and recovers.
+    calls = 0
+    responses = [
+        _FakeResponse([], status_error=True),
+        _FakeResponse([{"id": "v", "name": "pg_data", "size_gb": 80}]),
+    ]
+
+    async def factory(url: str, **kwargs: Any) -> _FakeClient:
+        nonlocal calls
+        calls += 1
+        return _FakeClient(responses[calls - 1])
+
+    probe = FlyVolumeCapacityProbe(app="app", token="tok", client_factory=factory, clock=lambda: 1_000.0)
+    first = await probe.probe_capacity_bytes()
+    second = await probe.probe_capacity_bytes()
+
+    assert first is None
+    assert second == 80 * _GIB
+    assert calls == 2
+
+
+async def test_cache_ttl_is_overridable_for_tests() -> None:
+    calls = 0
+
+    async def factory(url: str, **kwargs: Any) -> _FakeClient:
+        nonlocal calls
+        calls += 1
+        return _FakeClient(_FakeResponse([{"id": "v", "name": "pg_data", "size_gb": 80}]))
+
+    probe = FlyVolumeCapacityProbe(
+        app="app",
+        token="tok",
+        client_factory=factory,
+        cache_ttl_seconds=0.0,
+        clock=lambda: 1_000.0,
+    )
+    await probe.probe_capacity_bytes()
+    await probe.probe_capacity_bytes()
+
+    assert calls == 2

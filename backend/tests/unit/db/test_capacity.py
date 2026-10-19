@@ -6,11 +6,12 @@ Capacity auto-detection and the source chain are FAR-1882.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from modulo.core.capacity_providers.fly import FlyVolumeCapacityProbe
 from modulo.db import capacity
 from modulo.db.capacity import (
     ALERT_CRITICAL_PCT,
@@ -628,6 +629,65 @@ async def test_platform_is_not_discarded_when_the_database_size_is_unknown() -> 
     assert status["source"] == "platform"
     assert status["capacity_bytes"] == 100_000_000
     assert status["capacity_percent"] is None
+
+
+class _VolumeResponse:
+    """Minimal Fly ``/volumes`` response for the resolution-path memo test."""
+
+    def __init__(self, size_gb: int) -> None:
+        self._size_gb = size_gb
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> Any:
+        return [{"id": "v", "name": "pg_data", "size_gb": self._size_gb}]
+
+
+class _VolumeClient:
+    def __init__(self, response: _VolumeResponse) -> None:
+        self._response = response
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    async def get(self, url: str) -> _VolumeResponse:
+        return self._response
+
+
+async def test_repeated_resolutions_reuse_one_platform_reading_within_the_ttl() -> None:
+    # The memo is on the REAL probe adapter, so the run-creation path only pays
+    # one provider round-trip per TTL window even though resolution runs per
+    # run creation (and per banner poll). Two resolutions, one client built.
+    engine = _fake_engine(used_bytes=50_000_000)
+    now = [1_000.0]
+    constructed = 0
+
+    async def factory(url: str, **kwargs: Any) -> _VolumeClient:
+        nonlocal constructed
+        constructed += 1
+        return _VolumeClient(_VolumeResponse(100))
+
+    capacity.set_platform_capacity_probe(
+        FlyVolumeCapacityProbe(app="app", token="tok", client_factory=factory, clock=lambda: now[0])
+    )
+    disk_usage = MagicMock(side_effect=OSError("absent"))
+    settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
+    with (
+        patch("modulo.db.capacity.get_settings", return_value=settings),
+        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+    ):
+        first = await db_capacity_status(engine)
+        now[0] += 10.0
+        second = await db_capacity_status(engine)
+
+    assert first["source"] == "platform"
+    assert first["capacity_bytes"] == 100 * 1024**3
+    assert second["capacity_bytes"] == 100 * 1024**3
+    assert constructed == 1
 
 
 # --- _probe_filesystem_capacity --------------------------------------------

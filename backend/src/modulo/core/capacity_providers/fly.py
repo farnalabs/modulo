@@ -23,11 +23,19 @@ Every failure - no credentials, app/volume ambiguous, HTTP error, malformed
 payload - returns ``None`` (with a warning) so the DB layer's source chain falls
 through to ``none`` and the 98% hard-stop stays INERT. The probe never raises and
 never guesses a volume.
+
+MEMOISED
+--------
+The gate resolves capacity on EVERY new-run creation, so a successful reading is
+reused for ``DEFAULT_CACHE_TTL_SECONDS`` (60 s - the banner's poll cadence)
+rather than paying a fresh pinned-client handshake per run. Failures are never
+cached, so an outage cannot disable the source beyond one resolution.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -45,6 +53,30 @@ _BYTES_PER_GIB = 1024**3
 # the SSRF-pinned client (``modulo.core.ssrf``); injectable so tests can supply a
 # fake without touching the network or the pinned transport.
 ClientFactory = Callable[..., Awaitable[Any]]
+
+# Monotonic clock used by the reading memo. Injectable so tests exercise the TTL
+# without sleeping (the same seam shape as ``ClientFactory``).
+Clock = Callable[[], float]
+
+# How long a SUCCESSFUL reading is reused, in seconds (FAR-1992 - Major fix).
+#
+# This probe sits on the new-run creation path: ``enforce_capacity_gate`` runs
+# for EVERY run creation (the API request path AND the worker's cron/polling
+# dispatch), and the admin capacity banner polls the same resolution roughly
+# once a minute. Without a memo each of those would build a fresh
+# ``pinned_async_client`` - a DNS resolve + pin, TCP and TLS handshake - with a
+# 10 s request timeout, awaited while the caller's session transaction is
+# already open. 60 s matches the banner's poll cadence and is far shorter than
+# the timescale on which a volume's CONFIGURED capacity changes (only on an
+# explicit ``fly volumes extend``), so staleness is not a concern.
+#
+# Only successes are cached: a failed probe returns ``None`` and is retried on
+# the next resolution, so a provider outage can never pin the source to
+# "unresolved" for the life of the process. The memo is a best-effort
+# per-instance cache, not a single-flight guard - a simultaneous burst may
+# issue more than one request, which is acceptable for a read-only capacity
+# probe and avoids holding a lock across an external await.
+DEFAULT_CACHE_TTL_SECONDS = 60.0
 
 
 def capacity_bytes_from_volumes(payload: Any, selector: str = "") -> int | None:
@@ -94,6 +126,8 @@ class FlyVolumeCapacityProbe:
         api_base_url: str = FLY_API_BASE_URL,
         timeout_seconds: float = 10.0,
         client_factory: ClientFactory | None = None,
+        cache_ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS,
+        clock: Clock = time.monotonic,
     ) -> None:
         self._app = app
         self._token = token
@@ -101,6 +135,10 @@ class FlyVolumeCapacityProbe:
         self._api_base_url = api_base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
         self._client_factory: ClientFactory = client_factory or pinned_async_client
+        self._cache_ttl_seconds = cache_ttl_seconds
+        self._clock = clock
+        self._cached_capacity: int | None = None
+        self._cached_at: float | None = None
 
     def _volumes_url(self) -> str:
         return f"{self._api_base_url}/v1/apps/{self._app}/volumes"
@@ -134,9 +172,27 @@ class FlyVolumeCapacityProbe:
     async def probe_capacity_bytes(self) -> int | None:
         """Return the DB volume capacity in bytes, or ``None`` (fail-open).
 
-        Any failure - connect error, non-2xx, malformed body - is logged and
-        resolves to ``None`` so the caller's source chain falls through.
+        A successful reading is memoised for ``cache_ttl_seconds`` so repeated
+        resolutions inside the window (one per new-run creation, plus the admin
+        banner's poll) re-use one provider round-trip instead of each paying a
+        fresh pinned client + TLS handshake. Any failure - connect error,
+        non-2xx, malformed body - is logged and resolves to ``None``; failures
+        are deliberately NOT cached, so the next resolution retries the provider
+        rather than pinning the source to "unresolved".
         """
+        now = self._clock()
+        cached = self._cached_capacity
+        if cached is not None and self._cached_at is not None and now - self._cached_at < self._cache_ttl_seconds:
+            return cached
+
+        capacity = await self._probe_capacity_bytes_uncached()
+        if capacity is not None and capacity > 0:
+            self._cached_capacity = capacity
+            self._cached_at = now
+        return capacity
+
+    async def _probe_capacity_bytes_uncached(self) -> int | None:
+        """Issue one provider request and parse its capacity (never memoised)."""
         url = self._volumes_url()
         response = await self._request_volumes(url)
         if response is None:

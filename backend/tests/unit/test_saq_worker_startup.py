@@ -21,6 +21,7 @@ import pytest
 
 import modulo.core.saq_worker as sw
 from modulo.core.events import worker_subscription as ws
+from modulo.db import capacity as db_capacity
 
 
 def _settings(**overrides: object) -> MagicMock:
@@ -252,6 +253,77 @@ class TestStartupHook:
             await sw._startup_event_bus_hook({})
 
         reg.assert_not_called()
+
+
+class TestCapacityProbeInstall:
+    """FAR-1992: the worker startup hook is one of the TWO production wiring
+    points for the platform capacity probe (the other is the API lifespan).
+
+    Worker-created runs (cron/polling triggers) run the same capacity gate, so
+    the probe must be installed in this process too. Every install path is
+    fail-open, so a deleted/typo'd call leaves the suite green while the feature
+    silently disappears - these tests assert the installed port itself.
+    """
+
+    async def test_startup_hook_installs_the_capacity_platform_probe(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        probe = object()
+        factory = MagicMock(return_value=probe)
+        monkeypatch.setattr("modulo.core.capacity_providers.build_platform_capacity_probe", factory)
+        monkeypatch.setattr(db_capacity, "_platform_probe", None)
+
+        with (
+            patch("modulo.core.events.register_listeners"),
+            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock),
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch("modulo.core.events.worker_subscription.spawn_worker_event_subscription"),
+        ):
+            await sw._startup_event_bus_hook({})
+
+        assert db_capacity._platform_probe is probe
+        factory.assert_called_once()
+
+    async def test_probe_is_installed_before_the_no_redis_early_return(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The install must precede the Redis steps' early returns, otherwise a
+        # worker deployed without Redis (or with a broken broker) would never
+        # get the probe and its cron-created runs would silently skip the gate.
+        probe = object()
+        monkeypatch.setattr(
+            "modulo.core.capacity_providers.build_platform_capacity_probe",
+            MagicMock(return_value=probe),
+        )
+        monkeypatch.setattr(db_capacity, "_platform_probe", None)
+
+        with (
+            patch("modulo.core.events.register_listeners"),
+            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
+            patch.object(sw, "get_settings", return_value=_settings(redis_url="")),
+        ):
+            await sw._startup_event_bus_hook({})
+
+        cfg.assert_not_awaited()
+        assert db_capacity._platform_probe is probe
+
+    async def test_factory_failure_is_fail_open(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(
+            "modulo.core.capacity_providers.build_platform_capacity_probe",
+            MagicMock(side_effect=RuntimeError("factory boom")),
+        )
+        monkeypatch.setattr(db_capacity, "_platform_probe", None)
+
+        with (
+            patch("modulo.core.events.register_listeners"),
+            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch("modulo.core.events.worker_subscription.spawn_worker_event_subscription"),
+            caplog.at_level("WARNING", logger="modulo.core.saq_worker"),
+        ):
+            await sw._startup_event_bus_hook({})  # must not raise
+
+        assert db_capacity._platform_probe is None
+        cfg.assert_awaited_once()
+        assert "saq_worker.capacity_platform_probe_failed" in caplog.text
 
 
 class _BlockingPubSub:
