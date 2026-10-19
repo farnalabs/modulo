@@ -67,7 +67,7 @@ defineOptions({ inheritAttrs: false })
 const attrs = useAttrs()
 
 const UNSUPPORTED_ATTRS = new Set(['ondismiss', 'dismisslabel', 'dismissicon', 'retryable'])
-const normaliseAttrName = (key: string) => key.replace(/-/g, '').toLowerCase()
+const normaliseAttrName = (key: string) => key.replaceAll('-', '').toLowerCase()
 
 const forwardedAttrs = computed(() =>
   Object.fromEntries(
@@ -85,8 +85,12 @@ const unsupportedAttrNames = computed(() =>
   Object.keys(attrs).filter((key) => UNSUPPORTED_ATTRS.has(normaliseAttrName(key)))
 )
 
-// `import.meta.env.DEV` is statically replaced with `false` in a production
-// build, so this block and its watcher are eliminated there.
+// `import.meta.env.DEV` is a compile-time constant: `false` in a production
+// build (which eliminates this block and its watcher entirely) and `true` in
+// the test build. With `true`, the `if` keeps a dead `false` arm that no test
+// can reach, so the dev-only block is excluded from coverage — the JS analogue
+// of coverage.py's `# pragma: no cover`.
+/* v8 ignore start */
 if (import.meta.env.DEV) {
   watchEffect(() => {
     if (unsupportedAttrNames.value.length > 0) {
@@ -96,6 +100,7 @@ if (import.meta.env.DEV) {
     }
   })
 }
+/* v8 ignore stop */
 
 // Mirrors ErrorAlert's prop idiom (a leading `on` for the callback). No
 // dismiss prop exists by design - see the comment above.
