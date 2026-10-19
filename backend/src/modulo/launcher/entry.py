@@ -237,7 +237,10 @@ def _start_detached(data_dir: Path, bin_dir: Path | None, *, clear_degraded: boo
     _redirect_stdio(data_dir / LAUNCHER_LOG_FILENAME)
     try:
         code = _run_foreground(data_dir, bin_dir=bin_dir, clear_degraded=clear_degraded, serve=None, ready_fd=write_fd)
-    except BaseException as exc:
+    except Exception as exc:
+        # Catching Exception (not BaseException) lets SystemExit/KeyboardInterrupt
+        # propagate as the interpreter intends (S5754); the parent still sees the
+        # closed handshake pipe and reports "died before signalling readiness".
         message = f"failed: {exc}".encode()
         with contextlib.suppress(OSError):
             os.write(write_fd, message)
@@ -287,6 +290,74 @@ def _redirect_stdio(log_path: Path) -> None:  # pragma: no cover - needs a real 
         os.close(log_fd)
 
 
+def _shutdown_supervisor_after_boot_error(supervisor: Any) -> None:
+    """Tear down a built supervisor without masking the original boot error."""
+    try:
+        supervisor.shutdown()
+    except (OSError, RuntimeError):
+        _log.exception("supervisor.shutdown_failed during boot error handling")
+
+
+def _assert_not_degraded(data_dir: Path, degraded_path: Path, clear_degraded: bool) -> None:
+    """Terminal-degraded gate (FAR-674): clear on request, else refuse to start.
+
+    The resume path clears the record first; a present record refuses the
+    normal start with its persisted reason and the resume instructions.
+    """
+    from modulo.launcher.supervisor import clear_degraded_record, read_degraded_record
+
+    if clear_degraded:
+        clear_degraded_record(degraded_path)
+        _log.info("entry.degraded_state_cleared path=%s", degraded_path)
+    degraded_record = read_degraded_record(degraded_path)
+    if degraded_record is not None:
+        raise BootError(_degraded_refusal_message(degraded_record, degraded_path, data_dir))
+
+
+def _serve_until_shutdown(
+    supervisor: Any,
+    run_state: _RunState,
+    launcher_state: Any,
+    *,
+    serve: Callable[[str, int, threading.Event], None] | None,
+    ready_fd: int | None,
+    degraded_path: Path,
+    data_dir: Path,
+) -> int:
+    """Serve until signalled, then return the clean/degraded exit code.
+
+    The boot reached the serve phase here — everything before this point has
+    succeeded, so the readiness handshake (when a detached caller is waiting)
+    is written first. A terminal-degraded outcome (the supervisor tripped, or
+    its monitor thread died unexpectedly) returns ``DEGRADED_EXIT_CODE`` after
+    the ordered teardown.
+    """
+    from modulo.launcher import policy
+
+    if run_state.shutdown_requested.is_set():
+        supervisor.shutdown()
+        return 0
+    if ready_fd is not None:
+        with contextlib.suppress(OSError):
+            os.write(ready_fd, b"ready\n")
+    if serve is not None:
+        serve(POSTGRES_HOST, launcher_state.api_port, run_state.serve_stop)
+    else:
+        _serve_api(POSTGRES_HOST, launcher_state.api_port, run_state.serve_stop, run_state.force_exit)
+    monitor_abnormal = (
+        not supervisor.monitor_thread_alive()
+        and supervisor.degraded_reason is None
+        and not run_state.shutdown_requested.is_set()
+    )
+    supervisor.shutdown()
+    if run_state.degraded.is_set() or supervisor.degraded_reason is not None or monitor_abnormal:
+        reason = supervisor.degraded_reason or "a supervisor failure was detected"
+        sys.stderr.write(_degraded_exit_message(reason, degraded_path, data_dir))
+        sys.stderr.flush()
+        return policy.DEGRADED_EXIT_CODE
+    return 0
+
+
 def _run_foreground(
     data_dir: Path,
     *,
@@ -306,9 +377,7 @@ def _run_foreground(
         DataDirLock,
         LauncherError,
         Supervisor,
-        clear_degraded_record,
         knobs_from_env,
-        read_degraded_record,
         reconcile_orphans,
     )
 
@@ -323,14 +392,7 @@ def _run_foreground(
     supervisor: Supervisor | None = None
     try:
         try:
-            # Terminal-degraded gate (FAR-674): the resume path clears the
-            # record first; a present record refuses the normal start.
-            if clear_degraded:
-                clear_degraded_record(degraded_path)
-                _log.info("entry.degraded_state_cleared path=%s", degraded_path)
-            degraded_record = read_degraded_record(degraded_path)
-            if degraded_record is not None:
-                raise BootError(_degraded_refusal_message(degraded_record, degraded_path, data_dir))
+            _assert_not_degraded(data_dir, degraded_path, clear_degraded)
             env_safety.assert_no_ambient_service_urls(data_dir)
             _verify_bundled_binaries(effective_bin_dir)
             secrets = secrets_file.load_or_create(data_dir / SECRETS_FILENAME)
@@ -368,33 +430,7 @@ def _run_foreground(
             _ensure_app_database(launcher_state, secrets)
             _prepare_database_env(composed)
             settings = _build_settings()
-
             _add_saq_children(supervisor, settings, composed)
-            if run_state.shutdown_requested.is_set():
-                supervisor.shutdown()
-                return 0
-
-            if ready_fd is not None:
-                # Readiness handshake: the boot reached the serve phase —
-                # everything before this point has succeeded.
-                with contextlib.suppress(OSError):
-                    os.write(ready_fd, b"ready\n")
-            if serve is not None:
-                serve(POSTGRES_HOST, launcher_state.api_port, run_state.serve_stop)
-            else:
-                _serve_api(POSTGRES_HOST, launcher_state.api_port, run_state.serve_stop, run_state.force_exit)
-            monitor_abnormal = (
-                not supervisor.monitor_thread_alive()
-                and supervisor.degraded_reason is None
-                and not run_state.shutdown_requested.is_set()
-            )
-            supervisor.shutdown()
-            if run_state.degraded.is_set() or supervisor.degraded_reason is not None or monitor_abnormal:
-                reason = supervisor.degraded_reason or "a supervisor failure was detected"
-                sys.stderr.write(_degraded_exit_message(reason, degraded_path, data_dir))
-                sys.stderr.flush()
-                return policy.DEGRADED_EXIT_CODE
-            return 0
         except (BootError, LauncherError, env_safety.AmbientEnvironmentError):
             raise
         except Exception as exc:
@@ -405,11 +441,17 @@ def _run_foreground(
             # The ORIGINAL boot error must never be masked by a teardown
             # failure, and the remaining children must still be torn down.
             if supervisor is not None:
-                try:
-                    supervisor.shutdown()
-                except (OSError, RuntimeError):
-                    _log.exception("supervisor.shutdown_failed during boot error handling")
+                _shutdown_supervisor_after_boot_error(supervisor)
             raise
+        return _serve_until_shutdown(
+            supervisor,
+            run_state,
+            launcher_state,
+            serve=serve,
+            ready_fd=ready_fd,
+            degraded_path=degraded_path,
+            data_dir=data_dir,
+        )
     finally:
         lock.release()
 
@@ -787,6 +829,20 @@ def _redis_ping_probe(bin_dir: Path, port: int, password: str) -> Callable[[], b
     return _probe
 
 
+def _poll_pending_probes(pending: dict[str, Callable[[], bool | ProbeOutcome]]) -> None:
+    """One pass over the not-yet-healthy probes; drop the healthy ones."""
+    from modulo.launcher.supervisor import ProbeOutcome
+
+    for name, probe in list(pending.items()):
+        try:
+            outcome = probe()
+        except Exception:
+            _log.exception("entry.probe_error name=%s", name)
+            outcome = ProbeOutcome.UNAVAILABLE
+        if outcome is True or outcome is ProbeOutcome.HEALTHY:
+            pending.pop(name)
+
+
 def _await_health(
     probes: dict[str, Callable[[], bool | ProbeOutcome]],
     *,
@@ -797,21 +853,12 @@ def _await_health(
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
     """Wait until every bundled service answers its probe (or fail the boot)."""
-    from modulo.launcher.supervisor import ProbeOutcome
-
     pending = dict(probes)
     deadline = clock() + timeout
     while pending:
         if stop.is_set():
             raise BootError("shutdown requested while waiting for the bundled services")
-        for name, probe in list(pending.items()):
-            try:
-                outcome = probe()
-            except Exception:
-                _log.exception("entry.probe_error name=%s", name)
-                outcome = ProbeOutcome.UNAVAILABLE
-            if outcome is True or outcome is ProbeOutcome.HEALTHY:
-                pending.pop(name)
+        _poll_pending_probes(pending)
         if not pending:
             return
         if clock() >= deadline:
