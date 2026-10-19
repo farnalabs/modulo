@@ -431,12 +431,36 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   `created_at` bumped, and a `coalesced` TriggerEvent is recorded. On by
   default; disable per trigger with `config_json.coalesce_pending: false`.
   Replays never coalesce.
-- **Dispatcher backpressure:** trigger dispatch (webhook, cron, polling)
+- **Dispatcher backpressure (per-funnel wedge posture):** trigger dispatch
   refuses NEW runs when the pipeline's pending queue exceeds
-  `max(3 x max_concurrent_runs, 5)` rows or its oldest pending run is older
-  than `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` (default 60 min). Refusals are
-  loud: a `backpressure_skipped` TriggerEvent carries the depths, and the
-  webhook path answers 429 so the sender retries.
+  `max(3 x max_concurrent_runs, 5)` rows, or its oldest genuinely-wedged
+  pending run is older than `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` (default
+  60 min). `org_capacity_limited` rows are excluded from the age leg — a busy
+  org is not a wedged pipeline — while `pipeline_capacity` rows still count: a
+  pipeline pinned at its own cap (possibly by a leaked slot) is itself the
+  wedge this guard exists to break. How the refusal reaches the delivery
+  depends on the funnel (FAR-1342):
+
+  | Funnel | At a wedged pipeline | Why |
+  |---|---|---|
+  | Webhook | HTTP 429, no run created | The delivery is discrete and the sender can retry; refusing beats queueing work that will never run. |
+  | Cron | The fire is CONSUMED and recorded: a `backpressure_skipped` TriggerEvent plus `last_fired_at` stamped | A cron fire has no sender to retry it; the next scheduled fire carries the future. `next_fire_at` was already advanced at enqueue time, so the epoch is consumed rather than re-fired (the missed-fire catch-up only re-fires an epoch advanced but never fired). |
+  | Polling | Skipped and recorded; the next poll interval re-fires | The poll repeats naturally on its own schedule, so deferral is free. |
+  | Manual / MCP | Exempt — no backpressure check | A human explicitly asked for this run; capacity gates may still DEFER its dispatch, but they do not refuse it. |
+
+  Invariant: **a pending run may wait indefinitely while its pipeline makes
+  progress; a pipeline making NO progress stops accepting new work.** Every
+  refusal is recorded: the webhook arm re-writes its `backpressure_skipped`
+  event in a fresh transaction after the main transaction unwinds (otherwise
+  the in-transaction write would roll back with the refusal), and all three
+  refusing funnels record the same `validation_result`, so an operator sees the
+  skip in `/api/v1/admin/trigger-events` and the per-trigger event log, and it
+  is counted in the capacity-outcome summary. The FAR-1344 wedge alert
+  evaluates the same predicate on every dispatcher-reconcile tick, pairing the
+  skip with a notification. Webhook replays bypass the guard (an intentional
+  re-fire must never be refused). The guard fails OPEN on a read error (admits,
+  with a warning) and is today shape-based: a slow-but-progressing pipeline can
+  still be refused until FAR-1355's progress-based detection replaces it.
 - **Legacy stale-run sweep:** pending runs past the never-dispatched window
   (`SAQ_NEVER_DISPATCHED_WINDOW`), capacity-marked runs past the TTL
   (`capacity_timeout`), and legacy non-SAQ `running` rows with 5+ claims
