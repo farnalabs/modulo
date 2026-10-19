@@ -18,8 +18,6 @@ from modulo.db.crud.hitl_review_guard import (
     is_privileged_role,
 )
 
-pytestmark = pytest.mark.asyncio(loop_scope="module")
-
 _SESSION = None  # the primitive's session param is reserved; comparison is pure
 
 
