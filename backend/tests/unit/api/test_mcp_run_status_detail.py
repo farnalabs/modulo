@@ -24,7 +24,15 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-from modulo.api.mcp_server import _get_run_status_impl, _load_run_for_status, _run_status_detail
+from modulo.api.mcp_server import (
+    _MCP_INPUT_PAYLOAD_MAX_DEPTH,
+    _MCP_INPUT_PAYLOAD_MAX_STRING_CHARS,
+    _MCP_INPUT_PAYLOAD_MAX_TOTAL_ITEMS,
+    _get_run_status_impl,
+    _load_run_for_status,
+    _run_status_detail,
+)
+from modulo.core.pipeline_engine.hitl_context import TRUNCATION_MARKER
 from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
 from modulo.db.crud.run_node_outputs import RunBlobs
 from modulo.db.models.run import Run
@@ -166,6 +174,76 @@ class TestRunStatusDetailParityFields:
 
         assert len(result["nodes"]) == 1
         assert result["nodes"][0]["node_id"] == "n1"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1575 — the detail input_payload is size-bounded (after masking)
+# ---------------------------------------------------------------------------
+
+
+class TestRunStatusDetailPayloadBounds:
+    def test_normal_small_payload_is_unchanged(self) -> None:
+        from modulo.api.routes.runs import _mask_output_value
+
+        run = _run_row()
+
+        bounded = _run_status_detail(run, _blobs(markers=None))["input_payload"]
+
+        assert bounded == _mask_output_value(run.input_payload)
+        assert TRUNCATION_MARKER not in bounded["prompt"]
+
+    def test_long_string_is_truncated_with_marker(self) -> None:
+        long_prompt = "p" * (_MCP_INPUT_PAYLOAD_MAX_STRING_CHARS + 5_000)
+        run = _run_row(input_payload={"prompt": long_prompt})
+
+        bounded = _run_status_detail(run, _blobs(markers=None))["input_payload"]
+
+        assert len(bounded["prompt"]) <= _MCP_INPUT_PAYLOAD_MAX_STRING_CHARS
+        assert bounded["prompt"].endswith(TRUNCATION_MARKER)
+
+    def test_huge_list_is_capped(self) -> None:
+        run = _run_row(input_payload={"items": list(range(10_000))})
+
+        bounded = _run_status_detail(run, _blobs(markers=None))["input_payload"]
+
+        assert len(bounded["items"]) <= _MCP_INPUT_PAYLOAD_MAX_TOTAL_ITEMS
+        assert bounded["items"][-1] == TRUNCATION_MARKER
+
+    def test_huge_dict_is_capped_with_omitted_count(self) -> None:
+        run = _run_row(input_payload={f"key-{i}": i for i in range(10_000)})
+
+        bounded = _run_status_detail(run, _blobs(markers=None))["input_payload"]
+
+        # Retained entries plus the one marker key that reports the remainder.
+        assert len(bounded) == _MCP_INPUT_PAYLOAD_MAX_TOTAL_ITEMS + 1
+        assert "item(s) omitted" in bounded[TRUNCATION_MARKER]
+
+    def test_deeply_nested_value_collapses_to_marker(self) -> None:
+        payload: dict[str, Any] = {"leaf": "bottom"}
+        for _ in range(_MCP_INPUT_PAYLOAD_MAX_DEPTH + 5):
+            payload = {"nested": payload}
+        run = _run_row(input_payload=payload)
+
+        bounded = _run_status_detail(run, _blobs(markers=None))["input_payload"]
+
+        node: Any = bounded
+        while isinstance(node, dict) and "nested" in node:
+            node = node["nested"]
+        assert node == TRUNCATION_MARKER
+
+    def test_secret_straddling_the_string_cap_is_still_masked(self) -> None:
+        # The secret STARTS 10 chars before the cap and would be cut in half if
+        # truncation ran before masking — masking must win.
+        # A non-alphanumeric tail: an alphanumeric one would extend the greedy
+        # token regex and change the masked length.
+        long_prompt = "x" * (_MCP_INPUT_PAYLOAD_MAX_STRING_CHARS - 10) + _RAW_SECRET_IN_PROMPT + "!" * 1_000
+        run = _run_row(input_payload={"prompt": long_prompt})
+
+        bounded = _run_status_detail(run, _blobs(markers=None))["input_payload"]
+
+        assert "ghp_" not in bounded["prompt"]
+        assert _RAW_SECRET_IN_PROMPT not in bounded["prompt"]
+        assert bounded["prompt"].endswith(TRUNCATION_MARKER)
 
 
 # ---------------------------------------------------------------------------
