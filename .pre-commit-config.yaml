@@ -139,6 +139,19 @@
         files: ^\.github/workflows/.*\.ya?ml$
         pass_filenames: false
 
+      # FAR-1847: deploy-critical guard. deploy.yml runs
+      # `playwright test --grep "@regression"` against staging before promoting
+      # to production, so an E2E caller whose method no longer matches the live
+      # route blocks the deploy - and a stale page.route interceptor keeps
+      # passing while asserting nothing. Checks frontend/tests/e2e/** against
+      # the backend's OpenAPI route table.
+      - id: check-e2e-route-methods
+        name: check E2E HTTP calls match live API routes
+        entry: uv run --project backend --no-sync python scripts/run_check_e2e_route_methods.py
+        language: system
+        files: ^(frontend/tests/e2e/.*|backend/src/modulo/api/.*|scripts/run_check_e2e_route_methods\.py)$
+        pass_filenames: false
+
       - id: check-utf8
         name: check UTF-8 encoding (no corrupted files)
         entry: uv run --project backend --no-sync python scripts/run_check_utf8_encoding.py

@@ -44,7 +44,7 @@ jobs:
     # on the heavy jobs below (Frontend and WCAG, Frontend unit suite
     # (merge-queue parity), Tier 1b testcontainers, SonarCloud scan). It reads
     # the PR file list from the GitHub API (no checkout, no toolchain: a few
-    # seconds) and publishes three outputs:
+    # seconds) and publishes four outputs:
     #
     #   frontend      - the Frontend and WCAG job (and the FAR-1947 merge-queue
     #                   parity job) has something to validate: anything under
@@ -58,11 +58,14 @@ jobs:
     #                   Tier 1b suites drive backend connectors/model servers
     #                   against containers and read nothing under frontend/ or
     #                   docs/ (verified by grep).
+    #   e2e_route_methods - an E2E spec, an API route module or the FAR-1847
+    #                   guard itself changed, so the E2E route-method check has
+    #                   something to validate.
     #
     # Every output is "true" for every event except pull_request (push to main,
     # workflow_dispatch, merge-queue dispatches ALWAYS run everything), and the
     # detector FAILS OPEN: any API error, a 3000+ file PR (the API's cap), or
-    # an empty list sets all three to true with a ::warning::. Gated jobs skip
+    # an empty list sets every output to true with a ::warning::. Gated jobs skip
     # at STEP level, never job level, so their check still reports "success"
     # (a job-level skip is surfaced as a non-green "skipped" check, which the
     # PR Reviewer flags - same reason notify-pr-failure gates at step level).
@@ -80,6 +83,7 @@ jobs:
       frontend: ${{ steps.detect.outputs.frontend }}
       sonar: ${{ steps.detect.outputs.sonar }}
       backend_heavy: ${{ steps.detect.outputs.backend_heavy }}
+      e2e_route_methods: ${{ steps.detect.outputs.e2e_route_methods }}
     steps:
       - name: Detect changed paths
         id: detect
@@ -95,6 +99,7 @@ jobs:
               echo "frontend=true"
               echo "sonar=true"
               echo "backend_heavy=true"
+              echo "e2e_route_methods=true"
             } >> "$GITHUB_OUTPUT"
           }
           if [ "$EVENT_NAME" != "pull_request" ]; then
@@ -117,9 +122,12 @@ jobs:
           fi
           echo "Changed files (${COUNT}):"
           printf '%s\n' "$FILES" | sort -u | sed 's/^/  /'
-          FRONTEND=false; SONAR=true; BACKEND=true
+          FRONTEND=false; SONAR=true; BACKEND=true; E2E_ROUTE_METHODS=false
           if printf '%s\n' "$FILES" | grep -qE '^(frontend/|\.github/workflows/ci\.yml$|\.github/scripts/check_e2e_route_coverage\.py$)'; then
             FRONTEND=true
+          fi
+          if printf '%s\n' "$FILES" | grep -qE '^(frontend/tests/e2e/|backend/src/modulo/api/|scripts/run_check_e2e_route_methods\.py$)'; then
+            E2E_ROUTE_METHODS=true
           fi
           # docs-only: every file is markdown, or lives under docs/ (but not the
           # docs/api/examples/ code samples Sonar analyses).
@@ -136,8 +144,9 @@ jobs:
             echo "frontend=${FRONTEND}"
             echo "sonar=${SONAR}"
             echo "backend_heavy=${BACKEND}"
+            echo "e2e_route_methods=${E2E_ROUTE_METHODS}"
           } >> "$GITHUB_OUTPUT"
-          echo "frontend=${FRONTEND} sonar=${SONAR} backend_heavy=${BACKEND}"
+          echo "frontend=${FRONTEND} sonar=${SONAR} backend_heavy=${BACKEND} e2e_route_methods=${E2E_ROUTE_METHODS}"
 
   backend-lint:
     name: Lint (Backend)
@@ -1461,6 +1470,44 @@ jobs:
           echo "No migration-prefix collision"
           exit 0
 
+  e2e-route-methods-check:
+    # FAR-1847: deploy-critical structural guard. deploy.yml runs
+    # `playwright test --grep "@regression"` against staging before promoting
+    # to production, so an E2E caller whose method no longer matches the live
+    # route blocks the deploy - and a stale page.route interceptor is worse:
+    # it keeps passing while asserting nothing. Imports the backend app under
+    # the same template env as schema-freshness (no DB, no network) and
+    # matches every method/path pair extracted from frontend/tests/e2e/**
+    # against the live OpenAPI route table.
+    name: E2E route methods
+    needs: [changes]
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Check E2E HTTP calls match live API routes
+        # Step-level gate (never job-level): a docs-only PR skips the check
+        # while the job still reports success, matching the other path-gated
+        # jobs. Every non-PR event runs it (`changes` sets all outputs true).
+        if: needs.changes.outputs.e2e_route_methods == 'true'
+        working-directory: backend
+        shell: bash
+        env:
+          DATABASE_URL: "sqlite+aiosqlite:///./modulo-e2e-route-check.db"
+          SECRET_KEY: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          FERNET_KEY: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          MODULO_CSRF_ENABLED: "false"
+        run: |
+          uv sync --frozen
+          uv run --no-build --no-sync python ../scripts/run_check_e2e_route_methods.py
+
   # Break-glass deploy gate = acceptance (b) of the break-glass admin recovery
   # plan sec. 3: automated staging verification = the boot-time allow-list assertion
   # + the connectivity smoke that FAILS boot when ENABLED AND
@@ -1509,7 +1556,7 @@ jobs:
     # gate. A job that is merely SKIPPED is neither failure() nor cancelled();
     # every job here either always runs (path gates are step-level) or is only
     # skipped because an ancestor already failed, which is itself a failure.
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -1813,7 +1860,7 @@ jobs:
     # `self-report-ci` (both `github.event_name == 'pull_request' && ...`) never
     # run on a push or dispatch to main, so they cannot fail there.
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && always()
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -1951,7 +1998,7 @@ jobs:
     # ONLY the jobs named in `needs`, so a failure of a job omitted here still
     # satisfies the guard and self-reports the "ci" stage as done — a false-green
     # observability report while the PR's run is red. The rule is precise: every
-    # PRODUCT job that can fail on a PR is listed — the 15 below, including the
+    # PRODUCT job that can fail on a PR is listed — the 16 below, including the
     # FAR-1947 `frontend-unit-parity` job plus the pre-existing `tier1b-light`,
     # `runner-ci-harness` and `changes` (5-min timeout) omissions swept here
     # (this list equals notify-pr-failure's). Notifier jobs are deliberately
@@ -1959,12 +2006,12 @@ jobs:
     # documents for its own list), and the exclusion cannot false-green:
     # `notify-main-failure` never runs on a PR (its `if:` requires a
     # push/workflow_dispatch to main), and `notify-pr-failure` cannot fail
-    # unless one of the 15 product jobs above already failed or the run was
+    # unless one of the 16 product jobs above already failed or the run was
     # cancelled — every step of it that can fail is gated on
     # `failure() || cancelled()` — and both of those conditions already make
     # this job's guard false. `self-report-ci` cannot list itself.
     if: github.event_name == 'pull_request' && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, e2e-route-methods-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     steps:
       - name: Self-report CI Validate stage to Modulo (fail-open, best-effort)
