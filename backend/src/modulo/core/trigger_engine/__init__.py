@@ -75,10 +75,12 @@ from modulo.core.release_channels import (
     resolve_channel_binding,
 )
 from modulo.core.run_admission import (
+    TRIGGER_PENDING_SLOT_GRACE_SECONDS,
     coalesce_enabled,
     derive_ci_failure_coalesce_key,
     derive_webhook_coalesce_key,
     evaluate_backpressure,
+    trigger_slot_count_predicate,
 )
 from modulo.db.crud.pipeline_snapshot_versioning import (
     resolve_snapshot_for_channel,
@@ -86,7 +88,7 @@ from modulo.db.crud.pipeline_snapshot_versioning import (
 from modulo.db.crud.run import WorkItemRefsRequiredError, coalesce_pending_run, create_run
 from modulo.db.lifecycle_refs import _RESERVED_INPUT_PAYLOAD_KEYS
 from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
+from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
@@ -270,10 +272,6 @@ _CI_FAILURE_COALESCE_WINDOW_SECONDS = 3600  # 1 hour
 # and would mute same-head re-failures for far too long.
 _CI_FAILURE_COALESCE_WINDOW_MAX_SECONDS = 7 * 24 * 60 * 60  # 7 days
 _REPLAY_WINDOW_SECONDS = 300  # ±300s for X-Modulo-Timestamp
-# Active (non-terminal) run statuses — single-sourced from the canonical set
-# in db.models.run (the never-entered ``waiting_for_lock`` sub-state was
-# excised in migration 0074/0075).
-_ACTIVE_STATUSES = ACTIVE_RUN_STATUSES
 
 
 # ---------------------------------------------------------------------------
@@ -1238,12 +1236,19 @@ class TriggerEngine:
         return trigger
 
     async def _count_active_runs(self, session: AsyncSession, trigger_id: uuid.UUID) -> int:
+        """Count the runs occupying this trigger's concurrency slots.
+
+        FAR-1999: a ``pending`` run counts only while it is inside the
+        create→dispatch grace window. A run that has been accepted but is
+        still queued (or capacity-deferred) is not executing and must not
+        hold a slot for the whole time it waits — the observed failure mode
+        was a single pending run occupying one of eight slots for ~50 minutes
+        with no live dispatch. See
+        :func:`modulo.core.run_admission.trigger_slot_count_predicate`.
+        """
+        grace = TRIGGER_PENDING_SLOT_GRACE_SECONDS
         result = await session.execute(
-            select(func.count()).where(
-                Run.trigger_id == trigger_id,
-                Run.status.in_(_ACTIVE_STATUSES),
-                Run.cancellation_requested.is_(False),
-            )
+            select(func.count()).where(trigger_slot_count_predicate(trigger_id, pending_grace_seconds=grace))
         )
         return int(result.scalar_one() or 0)
 

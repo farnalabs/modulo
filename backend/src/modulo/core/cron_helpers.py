@@ -73,7 +73,6 @@ from modulo.core.trigger_streak import (
 )
 from modulo.db.models.organisation import SYSTEM_ORG_ID
 from modulo.db.models.run import (
-    ACTIVE_RUN_STATUSES,
     AWAITING_HUMAN_STATUS,
     CANCEL_REASON_HITL_REVIEW_EXPIRED,
     CANCEL_REASON_HITL_REVIEW_MISSING,
@@ -210,6 +209,22 @@ CAPACITY_REDISPATCH_SECONDS = 120
 # never-re-claimable zombie is ultimately bounded by the B4 mid-graph-wedge age
 # backstop.
 _NODELESS_ZOMBIE_ERROR_CODE = "executor_stalled"
+
+# FAR-1999: the durable node-deadline reaper's error code. A run whose first
+# node STARTED (``dispatch_phase='first_node_dispatched'``) but produced no node
+# envelope (no checkpoint, no finalised output, no token usage) is a
+# node-deadline kill, exactly like the in-process FAR-369 watchdog's
+# ``node_deadline_exceeded`` — so it writes the SAME registered code (aliased
+# ``node.deadline_exceeded``) and increments the same durable firing counter.
+# Before this reaper the class was only collected by the mid-graph age gate
+# (~135 min, ``run.no_progress``), holding a concurrency slot for over two hours
+# for a run that had provably made no progress (FAR-1999 measurement: 70 such
+# runs averaged 135 minutes).
+_NODE_DEADLINE_EXCEEDED_ERROR_CODE = "node_deadline_exceeded"
+_NODE_DEADLINE_REAP_STABLE_MESSAGE = (
+    "dispatcher_reconcile: node-deadline reaped (a node started but no node envelope "
+    "— checkpoint/output/token usage — arrived by its durable deadline)"
+)
 
 # FAR-714 root-cause note — how a run reaches this repair at all. The
 # in-process guards (execute_run zombie_watchdog fails a claimed-but-nodeless
@@ -603,6 +618,10 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     # such runs sit ``running``; terminalisation at the age bound lands in
     # ``age_terminalized``. Additive .get() contract like the rest.
     "node_started_executor_lost": 0,
+    # FAR-1999: node-started zero-progress runs terminalised at their DURABLE
+    # node deadline by the reaper in the row loop (previously they waited for
+    # the ~135-minute age gate). Additive .get() contract like the rest.
+    "node_deadline_reaped": 0,
     # The terminalizer counters below (and their healthz aliases) are seeded
     # from the registry (FAR-720) just after the registry is defined — see
     # ``_dispatcher_reconcile_stats.update(_terminalizer_stats_defaults())``.
@@ -673,6 +692,8 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["nodeless_fresh_premise_deferred"] = stats.get("nodeless_fresh_premise_deferred", 0)
     # FAR-1803: the node-started / executor-lost gauge (additive .get()).
     _dispatcher_reconcile_stats["node_started_executor_lost"] = stats.get("node_started_executor_lost", 0)
+    # FAR-1999: runs reaped at their durable node deadline (additive .get()).
+    _dispatcher_reconcile_stats["node_deadline_reaped"] = stats.get("node_deadline_reaped", 0)
     # Terminalizer counters (and their healthz aliases) derive from the
     # registry (FAR-720): a new terminalizer registers once below and is
     # carried through here, the module dict, the summary and the telemetry
@@ -774,9 +795,6 @@ async def read_dispatcher_reconcile_stats(redis_client: AsyncRedis) -> dict[str,
     except (ValueError, TypeError):
         return None
     return data if isinstance(data, dict) else None
-
-
-_ACTIVE_STATUSES = ACTIVE_RUN_STATUSES
 
 
 def _machine_hostname() -> str:
@@ -1098,16 +1116,23 @@ async def _set_org_statement_timeout(session: AsyncSession) -> None:
 
 
 async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> int:
-    from sqlalchemy import func, or_
+    """Count the runs occupying one of *trigger_id*'s concurrency slots.
 
-    from modulo.db.models.run import Run
+    FAR-1999: a ``pending`` run (accepted but not yet dispatched — queued or
+    capacity-deferred) counts only inside the create→dispatch grace window,
+    not for its whole time in the queue. See
+    :func:`modulo.core.run_admission.trigger_slot_count_predicate`.
+    """
+    from sqlalchemy import func
 
+    from modulo.core.run_admission import (
+        TRIGGER_PENDING_SLOT_GRACE_SECONDS,
+        trigger_slot_count_predicate,
+    )
+
+    grace = TRIGGER_PENDING_SLOT_GRACE_SECONDS
     result = await session.execute(
-        select(func.count()).where(
-            Run.trigger_id == trigger_id,
-            Run.status.in_(_ACTIVE_STATUSES),
-            or_(Run.cancellation_requested.is_(False), Run.cancellation_requested.is_(None)),
-        )
+        select(func.count()).where(trigger_slot_count_predicate(trigger_id, pending_grace_seconds=grace))
     )
     return int(result.scalar_one() or 0)
 
@@ -4838,11 +4863,140 @@ def _is_zero_progress_shape_row(row: Any) -> bool:
     """
     if getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:
         return False
+    return _has_zero_progress_evidence(row)
+
+
+def _has_zero_progress_evidence(row: Any) -> bool:
+    """Do the reconcile flags prove ZERO node progress for *row*?
+
+    No token usage (written when the run finalises), no finalised store row
+    (``outputs_absent``), and no LangGraph checkpoint (``checkpoints_absent`` —
+    a checkpoint is written when a node COMPLETES a super-step). Fails CLOSED
+    (``False``) when a flag is absent, so a row source that forgets a column is
+    never treated as zero-progress.
+    """
     return (
         getattr(row, "node_token_usage", None) is None
         and bool(getattr(row, "outputs_absent", False))
         and bool(getattr(row, "checkpoints_absent", False))
     )
+
+
+def _is_node_started_no_progress_row(row: Any) -> bool:
+    """FAR-1999: did a node START but never report any progress?
+
+    The complement of :func:`_is_zero_progress_shape_row` for the node-started
+    class: ``running`` + ``dispatcher='saq'`` + the durable
+    ``first_node_dispatched`` phase + zero node progress
+    (:func:`_has_zero_progress_evidence`). This is the shape the node-deadline
+    reaper owns — the first node was dispatched but no super-step completed and
+    no output/token usage landed, so the run is not progressing and is safe to
+    terminate once its node deadline has provably passed.
+
+    A row that does not expose the flags fails CLOSED (``False``) and keeps the
+    pre-FAR-1999 age-gate path — missing evidence is never proof of no progress.
+    """
+    return (
+        getattr(row, "status", None) == "running"
+        and getattr(row, "dispatcher", None) == "saq"
+        and getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED
+        and _has_zero_progress_evidence(row)
+    )
+
+
+def _as_utc(value: Any) -> datetime | None:
+    """*value* as a timezone-aware datetime, or ``None`` (never raises)."""
+    if not isinstance(value, datetime):
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _settings_int(name: str, default: int) -> int:
+    """Read an integer Settings field with a fallback for double stand-ins.
+
+    A test settings double (MagicMock) exposes every attribute as a non-int
+    mock; production Settings always carries these fields. Falling back keeps
+    the reaper's arithmetic defined for both, mirroring the same pattern the
+    nodeless in-flight floor uses for its settings read.
+    """
+    value = getattr(get_settings(), name, None)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return default
+    return value
+
+
+def _node_started_deadline(row: Any, *, node_budget_seconds: int) -> datetime | None:
+    """FAR-1999: the absolute deadline by which a node-started run must report.
+
+    Mirrors the in-process FAR-369 node-deadline watchdog, but derived from
+    durable columns so it survives the executor's death (the class the reaper
+    exists for):
+
+    * anchor — ``dispatch_phase_entered_at``, stamped by the same durable write
+      that records ``first_node_dispatched`` (the node's start);
+    * budget — *node_budget_seconds*, the run's maximum node
+      ``timeout_seconds`` (derived from the scan row's frozen snapshot graph by
+      :func:`_row_pipeline_max_node_timeout_seconds`, the SAME per-pipeline
+      derivation the nodeless window uses — FAR-1740). The MAX across the graph
+      is deliberate: terminating before the longest legitimate node's budget
+      could false-fail a live node.
+
+    When no durable phase timestamp exists (the phase write is best-effort and
+    can be dropped), fall back to the attempt clock:
+    ``max(dispatched_at, started_at) + SAQ_SETUP_GRACE_SECONDS + node budget`` —
+    a node cannot start before its claim, and the setup grace bounds
+    claim→first-node.
+
+    ``None`` when there is no time anchor at all (no age evidence → the age gate
+    remains the only bound, exactly as before).
+    """
+    anchors = [
+        value
+        for value in (
+            _as_utc(getattr(row, "dispatched_at", None)),
+            _as_utc(getattr(row, "started_at", None)),
+        )
+        if value is not None
+    ]
+    phase_entered = _as_utc(getattr(row, "dispatch_phase_entered_at", None))
+    if phase_entered is not None:
+        return phase_entered + timedelta(seconds=node_budget_seconds)
+    if not anchors:
+        return None
+    setup_grace = _settings_int("saq_setup_grace_seconds", SAQ_SETUP_GRACE_DEFAULT_SECONDS)
+    return max(anchors) + timedelta(seconds=setup_grace + node_budget_seconds)
+
+
+def _row_graph_max_node_timeout_seconds(row: Any) -> int | None:
+    """Largest EXPLICIT node ``timeout_seconds`` in the row's graph(s), or ``None``.
+
+    Deliberately excludes the pipeline-level default (unlike
+    :func:`_row_pipeline_max_node_timeout_seconds`, whose nodeless window uses
+    it): the in-process node-deadline watchdog resolves an explicit per-node
+    value and otherwise falls back to ``SAQ_NODE_DEFAULT_TIMEOUT_SECONDS``, so
+    mirroring that split keeps the durable reaper's deadline aligned with the
+    watchdog it stands in for.
+    """
+    candidates: list[int] = []
+    for attr in ("snapshot_graph_json", "pipeline_graph_json"):
+        value = _positive_int(_max_node_timeout_seconds_from_graph(getattr(row, attr, None)))
+        if value is not None:
+            candidates.append(value)
+    return max(candidates) if candidates else None
+
+
+def _row_node_budget_seconds(row: Any) -> int:
+    """FAR-1999: the run's node budget (mirrors the in-process watchdog).
+
+    The larger of the graph's explicit maximum node ``timeout_seconds`` and
+    ``SAQ_NODE_DEFAULT_TIMEOUT_SECONDS`` — the watchdog uses the default for
+    every node that does not declare its own timeout, so taking the maximum
+    never under-estimates a legitimate deadline (over-estimating only delays
+    the reap, which is the safe direction).
+    """
+    graph_budget = _row_graph_max_node_timeout_seconds(row)
+    default_budget = _settings_int("saq_node_default_timeout_seconds", 1200)
+    return max(graph_budget or 0, default_budget)
 
 
 def _row_age_seconds(row: Any) -> float | None:
@@ -5523,6 +5677,142 @@ async def _fail_nodeless_run(
             "started_at": started_at.isoformat() if started_at is not None else None,
         },
     )
+
+
+async def _fail_node_deadline_run(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    summary: dict[str, Any],
+    *,
+    stale_window: int,
+    node_budget_seconds: int,
+) -> bool:
+    """FAR-1999: reap a node-started, zero-progress run at its node deadline.
+
+    The class this owns (:func:`_is_node_started_no_progress_row`): the first
+    node STARTED (``dispatch_phase='first_node_dispatched'``) but no node
+    envelope ever arrived — no LangGraph checkpoint, no finalised output, no
+    token usage — and the executor's heartbeat has gone stale, so nothing in
+    the worker process can enforce the in-process FAR-369 deadline any more.
+    Before this reaper the only collector was the mid-graph age gate at the
+    ~135-minute zero-progress bound (``run.no_progress``), which held a
+    concurrency slot for over two hours for a run that had provably made no
+    progress (FAR-1999).
+
+    The deadline is derived from durable state, not from the (dead) executor:
+    ``dispatch_phase_entered_at + max node timeout_seconds``, with the attempt
+    clock as the fallback — see :func:`_node_started_deadline`.
+
+    Safety, in order:
+
+    1. The row is locked (``with_for_update``) and EVERY premise is re-checked
+       on the locked row — status ``running``, still ``dispatcher='saq'``, the
+       ``first_node_dispatched`` phase, a stale/NULL heartbeat, not the
+       guardrail-override class, and ZERO node progress (the checkpoint /
+       final-output legs are re-queried too, so a node that reported between
+       the scan and this write is never killed).
+    2. The deadline is recomputed from the locked row and re-compared; a row
+       that is not yet due is left alone.
+    3. Terminal-fail ONLY — never a re-dispatch. A started node may already
+       have executed side effects, so re-execution is unsafe (the same
+       FAR-1649 premise the selection legs enforce). The run's retry policy is
+       deliberately NOT consulted: the in-process watchdog can consult it
+       because it still owns the execution context, whereas this reaper runs
+       precisely when that context is gone.
+
+    The write mirrors the in-process watchdog's fingerprint: error code
+    ``node_deadline_exceeded`` (registered/aliased as ``node.deadline_exceeded``)
+    and ``node_deadline_watchdog_fired_count + 1``, so analytics cannot tell a
+    reaped run apart from a watchdog kill in the wrong direction — both are
+    node-deadline terminations.
+
+    Returns ``True`` when the run was terminalised by this call.
+    """
+    from sqlalchemy import select as sa_select
+
+    from modulo.db.models.run import Run
+
+    run = await session.get(Run, run_id, with_for_update=True)
+    if run is None:
+        return False
+    if not _is_node_started_executor_lost_row(run, stale_window):
+        return False
+    # The ORM row carries the phase/status/token fields but NOT the reconcile
+    # flags (``outputs_absent`` / ``checkpoints_absent``), so the zero-progress
+    # premise is checked in two steps rather than through the scan-row helper.
+    if getattr(run, "dispatch_phase", None) != PHASE_FIRST_NODE_DISPATCHED:
+        return False
+    if run.node_token_usage is not None:
+        return False
+    flags = (
+        await session.execute(
+            sa_select(
+                _final_row_absent_expr().label("outputs_absent"),
+                _checkpoint_absent_expr().label("checkpoints_absent"),
+            ).where(Run.id == run_id)
+        )
+    ).one()
+    if not flags.outputs_absent or not flags.checkpoints_absent:
+        # A node reported after the scan snapshot: the zero-progress premise no
+        # longer holds. Leave the row to the normal progress/age machinery.
+        return False
+    now = datetime.now(UTC)
+    deadline = _node_started_deadline(run, node_budget_seconds=node_budget_seconds)
+    if deadline is None or now < deadline:
+        return False
+    started_at = _as_utc(getattr(run, "started_at", None))
+    age_minutes = max((now - started_at).total_seconds() / 60, 0.0) if started_at is not None else None
+    phase_entered = _as_utc(getattr(run, "dispatch_phase_entered_at", None))
+    phase_elapsed = max((now - phase_entered).total_seconds(), 0.0) if phase_entered is not None else None
+    age_text = f"{age_minutes:.0f}" if age_minutes is not None else "unknown"
+    phase_text = f"{phase_elapsed:.1f}s" if phase_elapsed is not None else "unknown"
+    run.status = "failed"
+    run.error_code = _NODE_DEADLINE_EXCEEDED_ERROR_CODE
+    run.node_deadline_watchdog_fired_count = int(run.node_deadline_watchdog_fired_count or 0) + 1
+    run.error_detail = (
+        "Node started (dispatch_phase=first_node_dispatched) but produced no node envelope "
+        f"(no checkpoint, output or token usage) by its node deadline ({node_budget_seconds}s "
+        f"from {deadline.isoformat()}); reaped by dispatcher_reconcile's durable node-deadline "
+        f"bound (FAR-1999). pipeline={run.pipeline_id}, trigger={run.trigger_id}, "
+        f"claim_count={run.claim_count}, dispatch_phase_elapsed={phase_text}"
+    )
+    run.completed_at = now
+    await session.flush()
+    summary["node_deadline_reaped"] += 1
+    _log.error(
+        "dispatcher_reconcile.node_deadline_reaped run=%s org=%s pipeline=%s trigger=%s "
+        "claim_count=%s dispatch_phase_elapsed=%s run_age_minutes=%s node_budget_seconds=%d "
+        "deadline=%s — node started but no node envelope arrived; terminal-failed "
+        "(never re-dispatched: re-execution unsafe)",
+        run_id,
+        org_id,
+        run.pipeline_id,
+        run.trigger_id,
+        run.claim_count,
+        phase_text,
+        age_text,
+        node_budget_seconds,
+        deadline.isoformat(),
+    )
+    await _ingest_saq_error(
+        session,
+        org_id,
+        function="dispatcher_reconcile",
+        message=_NODE_DEADLINE_REAP_STABLE_MESSAGE,
+        context={
+            "run_id": str(run_id),
+            "pipeline_id": str(run.pipeline_id),
+            "trigger_id": str(run.trigger_id) if run.trigger_id is not None else None,
+            "claim_count": run.claim_count,
+            "dispatch_phase": run.dispatch_phase,
+            "dispatch_phase_elapsed": phase_elapsed,
+            "run_age_minutes": age_minutes,
+            "node_budget_seconds": node_budget_seconds,
+            "node_deadline": deadline.isoformat(),
+        },
+    )
+    return True
 
 
 def _build_re_dispatch_predicate(
@@ -8156,6 +8446,10 @@ def _dispatcher_summary() -> dict[str, Any]:
         # it; the age gate terminalises it once the shield lifts). Additive
         # .get() contract.
         "node_started_executor_lost": 0,
+        # FAR-1999: node-started zero-progress runs reaped at their durable
+        # node deadline (instead of waiting for the ~135-minute age gate).
+        # Additive .get() contract.
+        "node_deadline_reaped": 0,
         "streak_scanned": 0,
         "streak_deactivated": 0,
         "streak_capped": 0,
@@ -8403,6 +8697,10 @@ async def _reconcile_org(
                 # as a zero-node zombie (no safe re-dispatch, no
                 # "dispatched no node" mislabel).
                 Run.dispatch_phase,
+                # FAR-1999: the durable first-node-start timestamp — the anchor
+                # of the node-deadline reaper's deadline for a node-started,
+                # zero-progress run.
+                Run.dispatch_phase_entered_at,
                 # FAR-1728: the override-resume class discriminator — the
                 # flip's single-writer dedicated marker column
                 # (_is_override_resume_row) — plus the row's
@@ -9532,20 +9830,50 @@ async def _reconcile_one_row(
     # started node may have executed side effects — FAR-1649) and never
     # silently skipped: it gets its own counter so a readiness read can never
     # report 0 while such runs exist (the observed defect: every counter 0
-    # while runs sat ``running`` for hours). Terminalisation belongs to the
-    # B4 age gate, whose live-marker shield lifts once the heartbeat is stale;
-    # the row loop only holds and reports it until then.
+    # while runs sat ``running`` for hours).
+    #
+    # FAR-1999 — the terminalisation bound for this class is now the run's
+    # DURABLE node deadline, not the ~135-minute mid-graph age gate. When the
+    # row shows ZERO node progress (no checkpoint, no finalised output, no
+    # token usage) and its first node started longer ago than the graph's
+    # maximum node ``timeout_seconds``, the node deadline has provably passed
+    # and the executor that would have enforced it is dead, so the row is
+    # reaped here. A row that is still inside its node budget (or has made any
+    # progress) keeps the old hold-and-report path and is left to the age gate
+    # — which remains the safety net if this reaper cannot act (e.g. no time
+    # anchor).
     if _is_node_started_executor_lost_row(row, stale_window):
+        deadline: datetime | None = None
+        if _is_node_started_no_progress_row(row):
+            node_budget = _row_node_budget_seconds(row)
+            deadline = _node_started_deadline(row, node_budget_seconds=node_budget)
+            if (
+                deadline is not None
+                and datetime.now(UTC) >= deadline
+                and await _fail_node_deadline_run(
+                    session,
+                    row.id,
+                    org_id,
+                    summary,
+                    stale_window=stale_window,
+                    node_budget_seconds=node_budget,
+                )
+            ):
+                terminalized_run_ids.append((row.id, org_id))
+                return enqueue_failed_redispatched
         summary["node_started_executor_lost"] += 1
         _log.warning(
             "dispatcher_reconcile.node_started_executor_lost run=%s org=%s dispatch_phase=%s "
-            "claim_count=%s heartbeat_at=%s — node-started row whose executor heartbeat is stale; "
-            "held back from re-dispatch (re-execution unsafe), terminalised by the age gate at the bound (FAR-1803)",
+            "claim_count=%s heartbeat_at=%s node_deadline=%s — node-started row whose executor "
+            "heartbeat is stale; held back from re-dispatch (re-execution unsafe). "
+            "Reaped at its node deadline when it has zero progress (FAR-1999), "
+            "otherwise terminalised by the age gate at the bound (FAR-1803)",
             row.id,
             org_id,
             getattr(row, "dispatch_phase", None),
             getattr(row, "claim_count", None),
             getattr(row, "heartbeat_at", None),
+            deadline.isoformat() if deadline is not None else None,
         )
         return enqueue_failed_redispatched
     # FAR-873: early-detect for fresh-heartbeat nodeless zombies.  Fire BEFORE

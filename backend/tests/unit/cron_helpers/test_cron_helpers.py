@@ -1766,11 +1766,18 @@ class TestCountActiveRuns:
         assert count == 4
         sql = str(session.executed[0][0])
         assert "cancellation_requested" in sql
-        # Every active status must be counted, never re-dispatched away
-        # (``hitl_parked`` — FAR-604 D2 — is in ACTIVE_RUN_STATUSES like
-        # awaiting_human: it only drops out of the PIPELINE capacity gate).
-        statuses = session.executed[0][0].compile().params["status_1"]
-        assert set(statuses) == {"running", "pending", "awaiting_human", "claimed", "unknown", "hitl_parked"}
+        # FAR-1999: the always-counted set excludes ``pending`` — a run that
+        # has been accepted but not yet dispatched holds a slot only inside the
+        # create→dispatch grace window (the ``created_at`` leg below), never for
+        # its whole time in the queue. ``hitl_parked`` — FAR-604 D2 — stays in
+        # the always-counted set like ``awaiting_human``: it only drops out of
+        # the PIPELINE capacity gate.
+        params = session.executed[0][0].compile().params
+        assert set(params["status_1"]) == {"running", "awaiting_human", "claimed", "unknown", "hitl_parked"}
+        # The pending grace window is present in the same predicate: pending is
+        # bound as its own equality with a created_at lower bound.
+        assert params["status_2"] == "pending"
+        assert "created_at" in sql
 
 
 class TestLogEvent:

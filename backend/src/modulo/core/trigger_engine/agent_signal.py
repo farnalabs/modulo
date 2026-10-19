@@ -23,16 +23,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
 from modulo.core.node_output_split import DEFAULT_NODE_TYPE, SPLITTABLE_NODE_TYPES, split_node_output
+from modulo.core.run_admission import (
+    TRIGGER_PENDING_SLOT_GRACE_SECONDS,
+    trigger_slot_count_predicate,
+)
 from modulo.core.trigger_engine import is_guardrail_blocked_run, record_dependent_suppressed
 from modulo.db.crud.run import create_run
-from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
+from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused
 
 _log = logging.getLogger(__name__)
-
-_ACTIVE_STATUSES = ACTIVE_RUN_STATUSES
 
 
 def _resolve_child_node_output(
@@ -474,14 +476,16 @@ async def _create_child_run_in_savepoint(
 
 
 async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> int:
+    """Count the runs occupying this agent-signal trigger's concurrency slots.
+
+    FAR-1999: a ``pending`` run counts only inside the create→dispatch grace
+    window; see :func:`modulo.core.run_admission.trigger_slot_count_predicate`.
+    """
     from sqlalchemy import func as sa_func
 
+    grace = TRIGGER_PENDING_SLOT_GRACE_SECONDS
     result = await session.execute(
-        select(sa_func.count()).where(
-            Run.trigger_id == trigger_id,
-            Run.status.in_(_ACTIVE_STATUSES),
-            Run.cancellation_requested.is_(False),
-        )
+        select(sa_func.count()).where(trigger_slot_count_predicate(trigger_id, pending_grace_seconds=grace))
     )
     return int(result.scalar_one() or 0)
 

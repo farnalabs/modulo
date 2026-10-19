@@ -29,13 +29,15 @@ from modulo.connectors.base import (
     ConnectorPermissionError,
     ConnectorResult,
 )
-from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
+from modulo.core.run_admission import (
+    TRIGGER_PENDING_SLOT_GRACE_SECONDS,
+    trigger_slot_count_predicate,
+)
+from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 
 _log = logging.getLogger(__name__)
-
-_ACTIVE_STATUSES = ACTIVE_RUN_STATUSES
 
 
 # ---------------------------------------------------------------------------
@@ -440,12 +442,14 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
 
 
 async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> int:
+    """Count the runs occupying this polling trigger's concurrency slots.
+
+    FAR-1999: a ``pending`` run counts only inside the create→dispatch grace
+    window; see :func:`modulo.core.run_admission.trigger_slot_count_predicate`.
+    """
+    grace = TRIGGER_PENDING_SLOT_GRACE_SECONDS
     result = await session.execute(
-        select(func.count()).where(
-            Run.trigger_id == trigger_id,
-            Run.status.in_(_ACTIVE_STATUSES),
-            Run.cancellation_requested.is_(False),
-        )
+        select(func.count()).where(trigger_slot_count_predicate(trigger_id, pending_grace_seconds=grace))
     )
     return int(result.scalar_one() or 0)
 
