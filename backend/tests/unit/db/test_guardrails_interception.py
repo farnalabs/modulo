@@ -39,7 +39,6 @@ from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.base import Base
 from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.models.eval import Eval
-from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.evidence import Evidence
 from modulo.db.models.journey import Journey
@@ -66,7 +65,6 @@ _TABLES: list[Table] = cast(
         Run.__table__,
         PipelineSnapshot.__table__,
         Journey.__table__,
-        EvalDefinition.__table__,
         EvalResult.__table__,
         Evidence.__table__,
         Eval.__table__,
@@ -134,7 +132,7 @@ async def _seed_env_profile(session: AsyncSession, *, capabilities: list[str]) -
 async def _seed_snapshot_with_pins(
     session: AsyncSession,
     *,
-    guardrail_defs: list[EvalDefinition],
+    guardrail_defs: list[Eval],
 ) -> None:
     session.add(
         PipelineSnapshot(
@@ -171,18 +169,6 @@ async def _seed_guardrail(
     if config:
         cfg.update(config)
     guardrail_id = uuid.uuid4()
-    eval_def = EvalDefinition(
-        id=guardrail_id,
-        organisation_id=_ORG,
-        pipeline_id=_PIPELINE,
-        node_id=None,
-        name=name,
-        eval_type="guardrail",
-        config_json=cfg,
-        failure_behaviour="block" if action in ("block", "redact") else "warn",
-        account_id=_ACCOUNT,
-    )
-    session.add(eval_def)
     # load_pipeline_guardrail_rows reads from the evals table (Eval model).
     eval_row = Eval(
         id=guardrail_id,
@@ -199,8 +185,8 @@ async def _seed_guardrail(
     return guardrail_id
 
 
-async def _get_guardrail_row(session: AsyncSession, guardrail_id: uuid.UUID) -> EvalDefinition:
-    return (await session.execute(select(EvalDefinition).where(EvalDefinition.id == guardrail_id))).scalar_one()
+async def _get_guardrail_row(session: AsyncSession, guardrail_id: uuid.UUID) -> Eval:
+    return (await session.execute(select(Eval).where(Eval.id == guardrail_id))).scalar_one()
 
 
 async def _create(
@@ -445,7 +431,7 @@ async def test_create_run_cap_violation_node_bound(session: AsyncSession):
     for i in range(9):
         await _seed_guardrail(session, name=f"node-g-{i}", action="observe")
     # Re-bind all 9 as node-bound rows on the same node.
-    rows = (await session.execute(select(EvalDefinition))).scalars().all()
+    rows = (await session.execute(select(Eval))).scalars().all()
     for row in rows:
         row.node_id = uuid.UUID("00000000-0000-0000-0000-0000000000f1")
     await session.flush()
@@ -536,7 +522,7 @@ async def test_create_run_replay_skips_soft_deleted_pinned_guardrail(session: As
     pinned_row = await _get_guardrail_row(session, pinned)
     await _seed_snapshot_with_pins(session, guardrail_defs=[pinned_row])
     # Delete the live row BEFORE the replay.
-    await session.execute(EvalDefinition.__table__.delete().where(EvalDefinition.__table__.c.id == pinned))
+    await session.execute(Eval.__table__.delete().where(Eval.__table__.c.id == pinned))
     await session.execute(Eval.__table__.delete().where(Eval.__table__.c.id == pinned))
     await session.flush()
 
@@ -571,7 +557,7 @@ async def test_create_run_replay_all_pins_soft_deleted_never_falls_back_to_live_
     # A DIFFERENT live guardrail exists that was NOT pinned at snapshot time.
     await _seed_guardrail(session, name="live-only", action="block")
     # Delete the pinned guardrail's live row BEFORE the replay.
-    await session.execute(EvalDefinition.__table__.delete().where(EvalDefinition.__table__.c.id == pinned))
+    await session.execute(Eval.__table__.delete().where(Eval.__table__.c.id == pinned))
     await session.execute(Eval.__table__.delete().where(Eval.__table__.c.id == pinned))
     await session.flush()
 
@@ -640,7 +626,7 @@ async def test_create_run_replay_pinned_all_soft_deleted_never_falls_back_to_liv
         config={"type": "regex", "field": "body", "pattern": r"LIVE_ONLY_MARKER_\d{4}"},
     )
     # Delete the pinned row BEFORE the replay — its live row is soft-deleted.
-    await session.execute(EvalDefinition.__table__.delete().where(EvalDefinition.__table__.c.id == pinned))
+    await session.execute(Eval.__table__.delete().where(Eval.__table__.c.id == pinned))
     await session.execute(Eval.__table__.delete().where(Eval.__table__.c.id == pinned))
     await session.flush()
 
@@ -757,7 +743,7 @@ async def test_create_run_conformance_block_preserves_pin_skip(session: AsyncSes
     conformance_row = await _get_guardrail_row(session, conformance_guardrail)
     await _seed_snapshot_with_pins(session, guardrail_defs=[pinned_row, conformance_row])
     # Delete the pinned row's live row BEFORE the replay (soft-deleted pin).
-    await session.execute(EvalDefinition.__table__.delete().where(EvalDefinition.__table__.c.id == pinned))
+    await session.execute(Eval.__table__.delete().where(Eval.__table__.c.id == pinned))
     await session.execute(Eval.__table__.delete().where(Eval.__table__.c.id == pinned))
     await session.flush()
 
@@ -812,7 +798,7 @@ async def test_create_run_replay_skip_fires_enforcement_gap_alert(
     pinned = await _seed_guardrail(session, name="ghost-block", action="block")
     pinned_row = await _get_guardrail_row(session, pinned)
     await _seed_snapshot_with_pins(session, guardrail_defs=[pinned_row])
-    await session.execute(EvalDefinition.__table__.delete().where(EvalDefinition.__table__.c.id == pinned))
+    await session.execute(Eval.__table__.delete().where(Eval.__table__.c.id == pinned))
     await session.execute(Eval.__table__.delete().where(Eval.__table__.c.id == pinned))
     await session.flush()
 

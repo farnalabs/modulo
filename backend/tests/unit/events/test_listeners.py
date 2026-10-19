@@ -305,6 +305,27 @@ def test_register_listeners_is_idempotent(caplog: pytest.LogCaptureFixture) -> N
     assert "event_listeners.already_registered" in caplog.text
 
 
+def test_eval_audit_registration_covers_the_live_eval_model() -> None:
+    """FAR-1961: eval audit events stay registered against the LIVE ``Eval`` model.
+
+    The legacy ``EvalDefinition`` ORM entity was deleted. Removing its map entry
+    without substituting ``Eval`` would silently de-register every eval audit
+    event — no error, no other test failure. This pins the substitution: the map
+    must resolve ``Eval`` to the ``"eval"`` resource type, and registration must
+    attach all three actions to it.
+    """
+    from modulo.db.models.eval import Eval
+
+    assert listeners._RESOURCE_TYPES[Eval] == "eval"
+
+    with patch("sqlalchemy.event.listen") as mock_listen:
+        register_listeners()
+
+    eval_calls = [call for call in mock_listen.call_args_list if call.args[0] is Eval]
+    actions = {call.args[1] for call in eval_calls}
+    assert actions == {"after_insert", "after_update", "after_delete"}
+
+
 # ---------------------------------------------------------------------------
 # FAR-250: commit-deferred delivery (exactly-one-event + rollback-no-phantom)
 # ---------------------------------------------------------------------------

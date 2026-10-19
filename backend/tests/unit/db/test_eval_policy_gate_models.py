@@ -9,7 +9,6 @@ import re
 from sqlalchemy import CheckConstraint, Integer, UniqueConstraint
 
 from modulo.db.models.eval import _VALID_EVAL_TYPES, Eval
-from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.policy_gate_decision import PolicyGateDecision
 
@@ -96,22 +95,13 @@ def _find_check_constraint(table_args: tuple, substring: str) -> CheckConstraint
 
 
 class TestC17CheckConstraintVocabulary:
-    """The two eval_type CHECK constraints carry identical vocabulary and order."""
+    """The live ``Eval`` eval_type CHECK carries the centralised vocabulary.
 
-    def test_eval_and_eval_definition_same_vocabulary(self) -> None:
-        """Extract both constraint sqltexts and compare the vocabulary.
-        Do NOT hardcode the value list -- compare the two constraints to each
-        other so a future value added to one only fails the test."""
-        eval_ck = _find_check_constraint(Eval.__table_args__, "eval_type IN")
-        eval_def_ck = _find_check_constraint(EvalDefinition.__table_args__, "eval_type IN")
-
-        eval_vocab = _extract_check_vocabulary(str(eval_ck.sqltext))
-        eval_def_vocab = _extract_check_vocabulary(str(eval_def_ck.sqltext))
-
-        assert eval_vocab == eval_def_vocab, (
-            f"evals.eval_type CHECK vocabulary {eval_vocab} does not match "
-            f"eval_definitions.eval_type CHECK vocabulary {eval_def_vocab}"
-        )
+    The legacy ``EvalDefinition`` ORM entity was deleted (FAR-1961); its
+    cross-model vocabulary comparison no longer has a model side. The live
+    table's constraint is still pinned against the single source of truth
+    below.
+    """
 
     def test_vocabulary_matches_centralised_constant(self) -> None:
         """The centralised _VALID_EVAL_TYPES tuple is the source of truth.
