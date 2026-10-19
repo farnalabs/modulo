@@ -1520,11 +1520,6 @@ jobs:
     permissions:
       actions: write
       pull-requests: write
-      # The gate-only classifier below reads the PR's completed check runs
-      # (GET /commits/{sha}/check-runs). Declaring job permissions explicitly
-      # sets every unlisted scope to `none`, so `checks: read` must be listed
-      # or the query 403s and the classifier can only ever fail open.
-      checks: read
     # Guard predicate below is NEEDS-AWARE, not step-level `failure()`
     # (contains(needs.*.result, 'failure') || cancelled()). Step-level
     # `failure()` sees only THIS job's own previous steps: with every product
@@ -1576,6 +1571,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          REPO: ${{ github.repository }}
           PR_NUM: ${{ github.event.pull_request.number }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
@@ -1603,7 +1599,7 @@ jobs:
             # repository" before reaching the API. Pass the repository
             # explicitly. (Same fix, same class, as the dispatch-failure notice
             # below.)
-            gh pr comment "$PR_NUM" --repo "${{ github.repository }}" --body "## Branch Fixer Exhausted
+            gh pr comment "$PR_NUM" --repo "$REPO" --body "## Branch Fixer Exhausted
 
             The automated branch fixer has attempted $FIX_COUNT fixes against this PR but CI is still failing. Manual intervention is required.
 
@@ -1684,96 +1680,6 @@ jobs:
             echo "queue_in_flight=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Classify failure (gate-only vs fixable)
-        id: gate-check
-        # Runs on exactly the path that would otherwise reach the dispatch
-        # step: after superseded / exhausted / queue-check / manual-delivery,
-        # and before the dispatch step itself, so it can suppress it.
-        if: (contains(needs.*.result, 'failure') || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted != 'true' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUM: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          # A PR whose ONLY failing checks are quality gates cannot be fixed
-          # by an agent pushing code: the Branch Fixer burns a full run
-          # (observed: a 3306s / 55-minute node) and then fails the same gate
-          # again, because satisfying it needs new tests or resolved
-          # SonarCloud issues - not a code repair. Classify the failing checks
-          # first and suppress the dispatch when every one is in the
-          # non-automatable set.
-          #
-          # NON_AUTOMATABLE names are the job `name:` values in THIS workflow
-          # (grep them before editing this list):
-          #   - "Coverage gate (changed lines)"      -> job coverage-gate
-          #   - "New issues gate (SonarCloud)"       -> job sonar-new-issues-gate
-          #   - "SonarCloud scan (coverage import)"  -> job sonarcloud-scan
-          # A rename on one side without the other silently re-enables the
-          # wasted dispatch (the classifier just sees an unknown failing name
-          # and fails open), so keep both in step.
-          #
-          # FAIL OPEN: any API/parse failure sets gate_only=false, so a genuine
-          # code failure still reaches the fixer. This classification is an
-          # optimisation on the dispatch path, never a gate that can strand a
-          # real failure.
-          NON_AUTOMATABLE='Coverage gate (changed lines)
-          New issues gate (SonarCloud)
-          SonarCloud scan (coverage import)'
-          if ! CHECK_RUNS=$(gh api "/repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100" 2>/dev/null); then
-            echo "gate_only=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Could not query check-runs for ${HEAD_SHA} - failing OPEN (gate_only=false) so a genuine failure still reaches the Branch Fixer."
-            exit 0
-          fi
-          if ! FAILING=$(printf '%s' "$CHECK_RUNS" | jq -r '[.check_runs[] | select(.status == "completed") | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out") | .name] | .[]' 2>/dev/null); then
-            echo "gate_only=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Could not parse check-runs for ${HEAD_SHA} - failing OPEN (gate_only=false) so a genuine failure still reaches the Branch Fixer."
-            exit 0
-          fi
-          GATE_ONLY="false"
-          if [ -n "$FAILING" ]; then
-            GATE_ONLY="true"
-            while IFS= read -r CHECK_NAME; do
-              [ -n "$CHECK_NAME" ] || continue
-              if ! printf '%s\n' "$NON_AUTOMATABLE" | grep -Fxq -- "$CHECK_NAME"; then
-                GATE_ONLY="false"
-                break
-              fi
-            done <<< "$FAILING"
-          fi
-          echo "gate_only=${GATE_ONLY}" >> "$GITHUB_OUTPUT"
-          if [ "$GATE_ONLY" != "true" ]; then
-            if [ -z "$FAILING" ]; then
-              echo "::notice::PR #${PR_NUM}: no completed failing check runs found - Branch Fixer dispatch permitted (fail open)."
-            else
-              echo "::notice::PR #${PR_NUM}: at least one failing check is fixable by code - Branch Fixer dispatch permitted."
-            fi
-            exit 0
-          fi
-          # gate_only=true IS the exhausted-equivalent for this job: the
-          # dispatch step's `if:` requires
-          # steps.gate-check.outputs.gate_only != 'true', so setting it here
-          # suppresses the dispatch exactly like retry-check's exhausted=true.
-          echo "::notice::PR #${PR_NUM}: every failing check is a non-automatable quality gate - suppressing Branch Fixer dispatch."
-          COMMENT_FILE=$(mktemp)
-          {
-            echo "## Branch Fixer dispatch suppressed: quality-gate failure"
-            echo ""
-            echo "Every failing check on this PR is a **quality gate an automated code fix cannot satisfy**, so the Branch Fixer was not dispatched - pushing more code would not turn it green."
-            echo ""
-            echo "**Failing check(s):**"
-            printf '%s\n' "$FAILING" | sed 's/^/- /'
-            echo ""
-            echo "**What is needed:** a human has to address these checks before this PR can pass CI. The changed-lines coverage gate needs tests exercising the changed lines; the SonarCloud gates need the newly flagged issues resolved and the analysis restored."
-          } > "$COMMENT_FILE"
-          gh pr comment "$PR_NUM" --body-file "$COMMENT_FILE" || echo "::warning::Failed to post the gate-only comment on PR #${PR_NUM}"
-          rm -f "$COMMENT_FILE"
-          # `modulo-cannot-fix` already exists in this repo; we never create
-          # labels. REST, not `gh pr edit` (which silently no-ops on labels
-          # since Projects-classic retirement - see the operating lessons).
-          gh api -X POST "/repos/${REPO}/issues/${PR_NUM}/labels" -f "labels[]=modulo-cannot-fix" >/dev/null 2>&1 || echo "::warning::Failed to add the 'modulo-cannot-fix' label to PR #${PR_NUM}"
-
       # FAR-1843 D3 was a Branch Fixer in-flight cap in this job (counting
       # actions/workflows/branch-fixer.yml/runs against BRANCH_FIXER_CAP=5);
       # removed after pre-PR review (F1). It could not bound what it claimed:
@@ -1798,9 +1704,10 @@ jobs:
       # and hand-managed dispatches.
 
       - name: Trigger Modulo Branch Fixer
-        if: (contains(needs.*.result, 'failure') || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted != 'true' && steps.queue-check.outputs.queue_in_flight != 'true' && steps.gate-check.outputs.gate_only != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        if: (contains(needs.*.result, 'failure') || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted != 'true' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          REPO: ${{ github.repository }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
           PR_NUM: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -1927,7 +1834,7 @@ jobs:
             # notice is a HARD error (its own non-zero exit code), never a
             # warning annotation: exit 1 = dispatch failed but the PR was told,
             # exit 2 = dispatch failed AND the PR could not be told.
-            if ! gh pr comment "$PR_NUM" --repo "${{ github.repository }}" --body "## Branch Fixer Dispatch Failed
+            if ! gh pr comment "$PR_NUM" --repo "$REPO" --body "## Branch Fixer Dispatch Failed
 
             The CI failure notification could not be delivered to the Branch Fixer pipeline after multiple retries.
 
@@ -1947,7 +1854,7 @@ jobs:
 
       - name: Report Branch Fixer check status
         if: success()
-        run: echo "Branch Fixer trigger check passed (all required checks green or fixer dispatched)."
+        run: echo "Branch Fixer trigger check passed (required checks green, fixer dispatched, or dispatch suppressed by a guard)."
 
   notify-main-failure:
     name: Trigger Branch Fixer on main CI failure
