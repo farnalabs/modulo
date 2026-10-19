@@ -752,6 +752,79 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
     wrapper.unmount()
   })
 
+  it('clears the stale chip list on a failed RE-query so a rollback shows the NEW version, not the pre-rollback one (FAR-1895, finding A re-query)', async () => {
+    // The chip list is only reassigned on SUCCESS. A rollback reloads the
+    // catalog and re-issues the filtered chip query; if that re-query fails
+    // while the previous list survives, `currentVersionSnapshot`'s `??` keeps
+    // preferring the STALE list and the documented catalog fallback is dead —
+    // the chip would show the pre-rollback version. This drives the exact
+    // re-query: first success (v9), then a failed refresh with a catalog that
+    // now carries the new v10 rollback version.
+    seedRoute({})
+    seedApi()
+    let failChipQuery = false
+    const catalogRows = (rows: Array<Record<string, any>>) =>
+      rows.map((row) => ({ channel: 'none', notes: null, created_by: 'acct-0123456789abcdef', ...row }))
+    apiGetMock.mockImplementation((url: string, init?: any) => {
+      if (url.endsWith('/snapshots')) {
+        if (isVersionChipQuery(init)) {
+          if (failChipQuery) {
+            return Promise.resolve({ data: undefined, error: { detail: 'chip refresh unavailable' } })
+          }
+          return Promise.resolve({
+            data: { items: [{ id: 'snap-9', snapshot_version: 9, created_kind: 'edit', draft: false, tag: null }] },
+            error: undefined,
+          })
+        }
+        const rows = failChipQuery
+          ? catalogRows([
+              { id: 'snap-10', snapshot_version: 10, created_kind: 'rollback', version_kind: 'edit', draft: false, tag: null },
+              { id: 'snap-9', snapshot_version: 9, created_kind: 'edit', version_kind: 'edit', draft: false, tag: null },
+            ])
+          : SNAPSHOT_LIST
+        return Promise.resolve(serveSnapshotPage(rows, init))
+      }
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: structuredClone(LIVE_GRAPH), error: undefined })
+      }
+      if (url.includes('/pipelines/{pipeline_id}')) {
+        return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.currentTier = 'team'
+    store.features = { pipeline_delete: true }
+    const wrapper = mount(PipelineEditorView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: { VueFlow: { template: '<div><slot /></div>' }, Background: true, Controls: true },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+    const vm = wrapper.vm as any
+    // 1) The successful first resolve labels the chip v9.
+    expect(wrapper.find('[data-testid="pipeline-editor-version-chip"]').text()).toBe('v9')
+
+    // 2) The rollback's `loadCatalog()` re-issues the chip query, which FAILS,
+    //    while the catalog now carries the new v10.
+    failChipQuery = true
+    await vm.loadCatalog()
+    await flushPromises()
+
+    const chip = wrapper.find('[data-testid="pipeline-editor-version-chip"]')
+    expect(chip.exists()).toBe(true)
+    // The stale v9 must NOT survive: the chip resolves v10 from the fresh
+    // catalog via the (now genuinely reachable) fallback.
+    expect(chip.text()).toBe('v10')
+    // The degradation is still surfaced, not silent.
+    expect(wrapper.find('[data-testid="pipeline-editor-version-chip-error"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('ignores a stale in-flight version-chip response (FAR-1895, finding E)', async () => {
     const wrapper = await mountEditor()
     const vm = wrapper.vm as any

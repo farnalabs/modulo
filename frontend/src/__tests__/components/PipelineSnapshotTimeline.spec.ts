@@ -223,8 +223,15 @@ describe('PipelineSnapshotTimeline', () => {
     // No fabricated version row at all.
     expect(wrapper.findAll('[data-testid^="snapshot-timeline-row-"]')).toHaveLength(0)
     expect(rowFor(wrapper, 'snap-1').exists()).toBe(false)
-    // ...but the runs are still reachable, unattributed.
-    expect(wrapper.find('[data-testid="snapshot-timeline-earlier-toggle"]').text()).toBe('ran 3x on earlier versions')
+    // FAR-1895: an all-run version-DESC window holds the NEWEST runs, so they
+    // must NOT be labelled "earlier" — that asserts a provenance and a
+    // direction the rows do not have. They render unattributed instead.
+    expect(wrapper.find('[data-testid="snapshot-timeline-earlier"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="snapshot-timeline-unattributed"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="snapshot-timeline-unattributed-toggle"]').text()).toBe('ran 3x (version not in the loaded history)')
+    // The runs stay reachable, still outside any version row.
+    await wrapper.find('[data-testid="snapshot-timeline-unattributed-toggle"]').trigger('click')
+    expect(wrapper.find('[data-testid="snapshot-timeline-unattributed-run-snap-3"]').exists()).toBe(true)
   })
 
   it('anchors on the resolved current version when the loaded window has no substantive row (FAR-1895)', async () => {

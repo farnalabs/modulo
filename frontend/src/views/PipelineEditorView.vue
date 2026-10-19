@@ -3303,11 +3303,13 @@ async function loadCatalog() {
  * Failure handling is the point of this helper. The typed client returns
  * `{ error }` WITHOUT throwing on 4xx/5xx, and `withTimeout` can reject on its
  * own deadline, so both HTTP failures and timeouts are caught here and recorded
- * in `versionChipError`. `currentVersionSnapshots` is left EMPTY on failure so
- * `versionChipSnapshot` falls back to the already-loaded unfiltered catalog —
- * the chip never vanishes because one auxiliary request failed, and the
- * failure is surfaced with a retry rather than silently degrading to "no
- * version yet".
+ * in `versionChipError`. `currentVersionSnapshots` is CLEARED on failure — not
+ * merely left untouched — so `currentVersionSnapshot` falls back to the
+ * already-loaded unfiltered catalog even when a PREVIOUS query succeeded. That
+ * matters after a rollback: the reload re-queries this endpoint, and without the
+ * clear a failed re-query would keep serving the pre-rollback version. The chip
+ * never vanishes because one auxiliary request failed, and the failure is
+ * surfaced with a retry rather than silently degrading to "no version yet".
  */
 async function loadCurrentVersionSnapshot() {
   const token = ++versionChipToken
@@ -3330,6 +3332,13 @@ async function loadCurrentVersionSnapshot() {
     }))
     if (token !== versionChipToken) return
     if (error) {
+      // Clear the previous success FIRST. This ref is only reassigned on
+      // success, so without the clear a failed RE-query (e.g. the reload after
+      // a rollback) would leave the pre-rollback list in place; the `??` in
+      // currentVersionSnapshot prefers it over the fresh catalog, so the chip
+      // would show the OLD version and the documented catalog fallback would be
+      // unreachable. Emptying it makes the fallback real and the docstring true.
+      currentVersionSnapshots.value = []
       versionChipError.value = formatApiError(error)
       return
     }
@@ -3337,6 +3346,7 @@ async function loadCurrentVersionSnapshot() {
   } catch (e: unknown) {
     if (token !== versionChipToken) return
     console.warn('Failed to resolve the pipeline version chip', e)
+    currentVersionSnapshots.value = []
     versionChipError.value = formatApiError(e)
   }
 }
@@ -4698,9 +4708,11 @@ const historicResolving = computed(
 // wrong.
 //
 // FALLBACK: when the auxiliary filtered request FAILED, `currentVersionSnapshots`
-// is empty and this falls back to the already-loaded unfiltered catalog — the
-// pre-FAR-1895 behaviour. A version inside that window therefore still labels
-// the chip even though one auxiliary request failed, and only a genuinely
+// is empty (the loader CLEARS it on every failure, so a failed re-query after a
+// rollback cannot leave a stale pre-rollback list behind) and this falls back to
+// the already-loaded unfiltered catalog — the pre-FAR-1895 behaviour. A version
+// inside that window therefore still labels the chip even though one auxiliary
+// request failed, and only a genuinely
 // version-less pipeline hides it. The failure itself is surfaced separately by
 // `versionChipError` (with a retry) so degraded is never silent.
 //

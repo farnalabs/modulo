@@ -4594,6 +4594,7 @@ export default {
       "select_version_aria": "Select v{version} for compare or restore",
       "ran_times": "ran {count}x",
       "ran_earlier": "ran {count}x on earlier versions",
+      "ran_unattributed": "ran {count}x (version not in the loaded history)",
       "no_version_in_window": "No version in the loaded history.",
       "truncated_notice": "Showing the most recent {loaded} of {total} versions.",
       "load_more": "Load more",

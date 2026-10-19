@@ -169,6 +169,47 @@
               </button>
             </div>
           </div>
+
+          <!-- FAR-1895: a version-DESC all-run window with NO resolved current
+               version holds the NEWEST runs (the newest version is below the
+               window, or the resolving query failed). They are NOT "earlier"
+               and must not claim to be, so they render in their own bucket with
+               no version attribution. -->
+          <div
+            v-if="unattributedRuns.length > 0"
+            class="rounded-md border border-dashed p-1.5"
+            data-testid="snapshot-timeline-unattributed"
+          >
+            <button
+              type="button"
+              class="w-full rounded-md px-1 py-0.5 text-left text-[10px] font-medium text-muted-foreground hover:bg-accent"
+              :aria-expanded="expandedGroups.has('unattributed')"
+              aria-controls="snapshot-timeline-runs-unattributed"
+              data-testid="snapshot-timeline-unattributed-toggle"
+              @click="toggleGroup('unattributed')"
+            >
+              {{ $t('components.PipelineSnapshotTimeline.ran_unattributed', { count: unattributedRuns.length }) }}
+            </button>
+            <div
+              :hidden="!expandedGroups.has('unattributed')"
+              id="snapshot-timeline-runs-unattributed"
+              data-testid="snapshot-timeline-unattributed-list"
+              class="mt-1 space-y-1"
+            >
+              <button
+                v-for="r in unattributedRuns"
+                :key="r.id"
+                type="button"
+                class="flex w-full items-center justify-between gap-2 rounded-md border border-dashed px-2 py-1 text-left text-[10px] text-muted-foreground hover:bg-accent"
+                :aria-label="$t('components.PipelineSnapshotTimeline.open_version_aria', { version: r.snapshot_version })"
+                :data-testid="`snapshot-timeline-unattributed-run-${r.id}`"
+                @click="emit('view', r.id)"
+              >
+                <span class="font-medium">v{{ r.snapshot_version }}</span>
+                <span>{{ formatDate(r.created_at) }}</span>
+              </button>
+            </div>
+          </div>
         </div>
 
         <!-- M1: history is windowed (page_size 100). Never leave the user
@@ -371,23 +412,33 @@ function isRenderableSnapshot(s: TimelineSnapshot): boolean {
  * to a fabricated `initial` version: that is exactly how the timeline could
  * show "v500 Initial" while the chip showed "v2".
  *
- * M2: runs OLDER than every substantive version are NOT attributed to any
- * version — they are returned as `earlierRuns` and rendered as an explicit
- * "earlier versions" bucket. Folding them onto the oldest row would assert a
- * provenance the run does not have.
+ * M2: runs OLDER than every substantive version in the window are NOT
+ * attributed to any version — they are returned as `earlierRuns` and rendered
+ * as an explicit "earlier versions" bucket. Folding them onto the oldest row
+ * would assert a provenance the run does not have.
+ *
+ * FAR-1895: a window with NO substantive row AND no resolved `currentVersion`
+ * is a THIRD case, distinct from M2. Those runs are not known to be earlier —
+ * rows arrive version-DESC, so an all-run window holds the NEWEST runs (the
+ * newest version is below the window, or the query that resolves it failed).
+ * They are returned as `unattributedRuns` and rendered without any version
+ * claim, never folded into the "earlier" bucket, which would assert a
+ * provenance (and a direction) the rows do not have.
  */
 function groupHistory(
   rows: TimelineSnapshot[],
   currentVersion: TimelineSnapshot | null,
-): { groups: VersionGroup[]; earlierRuns: TimelineSnapshot[] } {
+): { groups: VersionGroup[]; earlierRuns: TimelineSnapshot[]; unattributedRuns: TimelineSnapshot[] } {
   const substantive = rows.filter((s) => isSubstantiveKind(s.created_kind))
   const runs = rows.filter((s) => !isSubstantiveKind(s.created_kind))
   if (substantive.length === 0) {
-    if (runs.length === 0) return { groups: [], earlierRuns: [] }
+    if (runs.length === 0) return { groups: [], earlierRuns: [], unattributedRuns: [] }
     if (!currentVersion) {
       // No substantive row in the window and no resolved version to anchor on:
-      // surface the runs unattributed and let the panel state the gap.
-      return { groups: [], earlierRuns: runs }
+      // we cannot say whether these runs executed a version newer or older than
+      // the window, so they carry NO version attribution and are NOT labelled
+      // "earlier". The panel states the gap; the runs stay reachable here.
+      return { groups: [], earlierRuns: [], unattributedRuns: runs }
     }
     // The resolved version sits BELOW every run in the window (it is the
     // newest version and is absent from the window), so each run executed it —
@@ -400,6 +451,7 @@ function groupHistory(
         runs,
       }],
       earlierRuns: [],
+      unattributedRuns: [],
     }
   }
   const groups: VersionGroup[] = substantive.map((s) => ({
@@ -417,12 +469,13 @@ function groupHistory(
     if (group) group.runs.push(run)
     else earlierRuns.push(run)
   }
-  return { groups, earlierRuns }
+  return { groups, earlierRuns, unattributedRuns: [] }
 }
 
 const groupedHistory = computed(() => groupHistory(snapshots.value, props.currentVersion ?? null))
 const versionGroups = computed(() => groupedHistory.value.groups)
 const earlierRuns = computed(() => groupedHistory.value.earlierRuns)
+const unattributedRuns = computed(() => groupedHistory.value.unattributedRuns)
 
 const compareOptions = computed(() =>
   versionGroups.value.map((g) => {
