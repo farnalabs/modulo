@@ -454,7 +454,8 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
     expect(badge.exists()).toBe(true)
     expect(badge.text()).toContain('No-delivery streak 3/5')
     // The badge conveys dynamic status, so it is a status region (WCAG 4.1.3).
-    expect(badge.attributes('role')).toBe('status')
+    // `<output>` carries the implicit status role (Sonar Web:S6819).
+    expect(badge.element.tagName).toBe('OUTPUT')
     expect(badge.attributes('aria-live')).toBe('polite')
     // "Deactivated" is state-driven: a notify-only cron trip never says it.
     expect(wrapper.find('[data-testid="settings-triggers-deactivated-badge"]').exists()).toBe(false)

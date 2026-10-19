@@ -413,12 +413,11 @@
         class="mb-4 rounded-lg border border-border bg-muted/40 p-4"
       >
         <h3 class="text-sm font-semibold mb-1">{{ $t('views.RunDetailView.cancel_reason_title') }}</h3>
-        <p
+        <output
           data-testid="run-detail-cancel-reason-message"
-          role="status"
           aria-live="polite"
-          class="text-sm text-muted-foreground"
-        >{{ cancelReasonMessage }}</p>
+          class="block text-sm text-muted-foreground"
+        >{{ cancelReasonMessage }}</output>
         <p
           v-if="cancelledByLabel"
           data-testid="run-detail-cancelled-by"
@@ -1353,36 +1352,47 @@ function githubRefId(item: WorkItemRef): string {
   return (item.ref || '').trim().replace(/^[^/\s]+\/[^/\s]+#/, '')
 }
 
+// Resolve an explicit `owner/repo#id` ref to its URL, or null when the ref is
+// not in that shape (or any of its three segments is malformed).
+function explicitGithubRefUrl(ref: string, kind: string): string | null {
+  const hashIndex = ref.indexOf('#')
+  if (hashIndex <= 0) return null
+  const slashIndex = ref.indexOf('/')
+  if (slashIndex <= 0 || slashIndex >= hashIndex) return null
+  const owner = ref.slice(0, slashIndex)
+  const repo = ref.slice(slashIndex + 1, hashIndex)
+  const id = ref.slice(hashIndex + 1)
+  if (!owner || !repo || !id || /\s/.test(owner) || /\s/.test(repo) || repo.includes('/')) return null
+  if (kind === 'github_pr') return `https://github.com/${owner}/${repo}/pull/${id}`
+  if (kind === 'github_issue') return `https://github.com/${owner}/${repo}/issues/${id}`
+  return `https://github.com/${owner}/${repo}`
+}
+
+// Resolve a PR URL from the run payload's pull_request context when the ref
+// itself carries only a bare number (or a non-numeric ref matching the
+// context's PR number). Mirrors getPrUrl's context branch.
+function contextGithubPrUrl(item: WorkItemRef): string | null {
+  const ctx = prContext.value
+  if (!ctx || !ctx.fullName) return null
+  const refId = githubRefId(item)
+  const refIsNumber = /^\d+$/.test(refId)
+  const ctxNumber = /^\d+$/.test(ctx.number) ? ctx.number : ''
+  if (refIsNumber && (!ctxNumber || ctxNumber === refId)) {
+    return `https://github.com/${ctx.fullName}/pull/${refId}`
+  }
+  if (!refIsNumber && ctxNumber) {
+    return `https://github.com/${ctx.fullName}/pull/${ctxNumber}`
+  }
+  return null
+}
+
 function getPrUrl(item: WorkItemRef): string | null {
   const kind = normalizeGithubKind(item.kind)
   const ref = (item.ref || '').trim()
-  const hashIndex = ref.indexOf('#')
-  if (hashIndex > 0) {
-    const slashIndex = ref.indexOf('/')
-    if (slashIndex > 0 && slashIndex < hashIndex) {
-      const owner = ref.slice(0, slashIndex)
-      const repo = ref.slice(slashIndex + 1, hashIndex)
-      const id = ref.slice(hashIndex + 1)
-      if (owner && repo && id && !/\s/.test(owner) && !/\s/.test(repo) && !repo.includes('/')) {
-        if (kind === 'github_pr') return `https://github.com/${owner}/${repo}/pull/${id}`
-        if (kind === 'github_issue') return `https://github.com/${owner}/${repo}/issues/${id}`
-        return `https://github.com/${owner}/${repo}`
-      }
-    }
-  }
-  if (kind === 'github_pr') {
-    const ctx = prContext.value
-    const refId = githubRefId(item)
-    const refIsNumber = /^\d+$/.test(refId)
-    const ctxNumber = ctx && /^\d+$/.test(ctx.number) ? ctx.number : ''
-    if (ctx && ctx.fullName && refIsNumber && (!ctxNumber || ctxNumber === refId)) {
-      return `https://github.com/${ctx.fullName}/pull/${refId}`
-    }
-    if (ctx && ctx.fullName && !refIsNumber && ctxNumber) {
-      return `https://github.com/${ctx.fullName}/pull/${ctxNumber}`
-    }
-  }
-  return null
+  const explicitUrl = explicitGithubRefUrl(ref, kind)
+  if (explicitUrl) return explicitUrl
+  if (kind !== 'github_pr') return null
+  return contextGithubPrUrl(item)
 }
 
 const prContext = computed<{ fullName: string; number: string; title: string | null } | null>(() => {
