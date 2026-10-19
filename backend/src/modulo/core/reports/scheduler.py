@@ -34,6 +34,7 @@ import logging
 import threading
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -394,142 +395,266 @@ async def _fire_scheduled_report(
     if lease_value is None:
         return {"status": "skipped", "reason": "already_firing"}
     try:
-        # ---- Phase 1: SHORT row lock — read + snapshot the fire state ----
-        async with factory() as session, session.begin():
-            await rls(session, org_id)
-
-            now = datetime.datetime.now(datetime.UTC)
-            report = (
-                await session.execute(
-                    select(ScheduledReport)
-                    .where(
-                        ScheduledReport.id == report_id,
-                        ScheduledReport.organisation_id == org_id,
-                        ScheduledReport.active.is_(True),
-                    )
-                    .with_for_update()
-                )
-            ).scalar_one_or_none()
-            if report is None or not report.active:
-                return {"status": "skipped", "reason": "report_inactive_or_missing"}
-
-            # Idempotency guard (finding 1): ``last_sent_at`` carries the epoch
-            # of the last DELIVERED fire, so a retry/re-queue of an already-
-            # delivered epoch is a skip. A cancelled/failed attempt never
-            # reaches phase 3, so its epoch is NOT recorded as delivered and the
-            # retry still makes progress (at-least-once for an unconfirmed send).
-            if epoch_dt is not None:
-                last_sent_at = getattr(report, "last_sent_at", None)
-                if last_sent_at is not None and last_sent_at >= epoch_dt:
-                    _log.info("Report %s already delivered for epoch %s; skipping", report_id, epoch)
-                    return {"status": "skipped", "reason": "already_delivered"}
-
-            # Snapshot the plain values generation needs BEFORE the transaction
-            # commits (the ORM instance is detached afterwards).
-            report_type = report.report_type
-            config = report.config_json or {}
-            recipient_config = report.recipient_config or {}
-            schedule_type = config.get("schedule_type")
-
-            if schedule_type == "one_time":
-                next_send: datetime.datetime | None = None
-            else:
-                try:
-                    next_send = compute_next_send(report.cron_expression, after=now)
-                except (ValueError, TypeError, KeyError) as exc:
-                    _log.exception(
-                        "Invalid cron expression '%s' for report %s: %s",
-                        report.cron_expression,
-                        report_id,
-                        exc,
-                        exc_info=True,
-                    )
-                    await session.execute(
-                        update(ScheduledReport).where(ScheduledReport.id == report_id).values(active=False)
-                    )
-                    return {"status": "failed", "reason": f"invalid_cron: {exc}"}
-
-            # FAR-1822 (finding 2): do NOT stamp ``next_send_at`` here. The
-            # enqueue already advanced it atomically, and a never-completed
-            # one-time fire MUST keep its non-NULL value so the due-scan
-            # (``next_send_at IS NOT NULL``) can re-select it — nulling it here
-            # strands the report forever if the process dies before phase 3.
-        # ---- Phase 2: generate + deliver OUTSIDE the row lock ----
-        generator = get_generator(report_type)
-        if generator is None:
-            _log.warning("No generator registered for report type %s", report_type)
-            return {"status": "failed", "reason": f"no_generator_for_{report_type}"}
-
-        try:
-            async with factory() as gen_session, gen_session.begin():
-                # The generator runs in its OWN transaction (the row lock is
-                # gone) — re-apply the org RLS context so it can read the
-                # team-scoped tables org-wide exactly as before.
-                await rls(gen_session, org_id)
-                report_data = await generator(gen_session, org_id, config)
-
-            formatter = get_formatter(report_type)
-            payload: Any = formatter(report_data) if formatter is not None else report_data
-
-            deliverer = get_deliverer(report_type)
-            if deliverer is not None:
-                delivery_results = await deliverer(payload, recipient_config)
-            else:
-                delivery_results = await _deliver_via_config(payload, recipient_config)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("Report %s (%s) generation or delivery failed", report_id, report_type)
-            return {"status": "failed", "reason": "generation_or_delivery_failed"}
-
-        # ---- Phase 3: guarded terminal stamp ----
-        # FAR-1822 (finding 5): write ONLY what this phase observed. A recurring
-        # report's next_send_at was advanced by the enqueue and a concurrent
-        # advance/deactivation must not be rewound, so we never restate
-        # next_send_at/active for it. A one-time report is terminally retired
-        # here, on SUCCESS only, guarded on active so we never resurrect a row a
-        # concurrent operator deactivated.
-        delivered_at = epoch_dt if epoch_dt is not None else now
-        terminal = update(ScheduledReport).where(ScheduledReport.id == report_id)
-        if schedule_type == "one_time":
-            terminal = terminal.where(ScheduledReport.active.is_(True)).values(
-                last_sent_at=delivered_at,
-                next_send_at=None,
-                active=False,
-            )
-        else:
-            terminal = terminal.values(last_sent_at=delivered_at)
-        try:
-            async with factory() as session, session.begin():
-                await rls(session, org_id)
-                await session.execute(terminal)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            # The send already happened. Retrying the whole fire would deliver
-            # AGAIN — so log the terminal-stamp failure and report success.
-            _log.exception(
-                "Report %s (%s) sent but its terminal stamp failed; not retrying the fire",
-                report_id,
-                report_type,
-            )
-
-        _log.info(
-            "Report %s (%s) sent. Next send: %s",
-            report_id,
-            report_type,
-            next_send.isoformat() if next_send is not None else "none (one-time report completed)",
+        snapshot, early_result = await _snapshot_fire_state(
+            factory,
+            rls,
+            report_id=report_id,
+            org_id=org_id,
+            epoch_dt=epoch_dt,
+            epoch=epoch,
         )
-
-        return {
-            "status": "sent",
-            "report_id": str(report_id),
-            "report_type": report_type,
-            "next_send_at": next_send.isoformat() if next_send is not None else None,
-            "delivery_results": delivery_results,
-        }
+        if early_result is not None:
+            return early_result
+        assert snapshot is not None
+        return await _generate_deliver_and_stamp(
+            factory,
+            rls,
+            report_id=report_id,
+            org_id=org_id,
+            snapshot=snapshot,
+            epoch_dt=epoch_dt,
+        )
     finally:
         await _release_report_fire_lease(redis_client, report_id, lease_value)
+
+
+@dataclass(frozen=True)
+class _FireSnapshot:
+    """Plain values captured under the phase-1 row lock."""
+
+    report_type: str
+    config: dict[str, Any]
+    recipient_config: dict[str, Any]
+    schedule_type: Any
+    next_send: datetime.datetime | None
+    now: datetime.datetime
+
+
+async def _snapshot_fire_state(
+    factory: async_sessionmaker[AsyncSession],
+    rls: Callable[[AsyncSession, uuid.UUID], Awaitable[None]],
+    *,
+    report_id: uuid.UUID,
+    org_id: uuid.UUID,
+    epoch_dt: datetime.datetime | None,
+    epoch: str | None,
+) -> tuple[_FireSnapshot | None, dict[str, Any] | None]:
+    """Phase 1: read + snapshot the fire inputs under a SHORT row lock."""
+    async with factory() as session, session.begin():
+        await rls(session, org_id)
+
+        now = datetime.datetime.now(datetime.UTC)
+        report = (
+            await session.execute(
+                select(ScheduledReport)
+                .where(
+                    ScheduledReport.id == report_id,
+                    ScheduledReport.organisation_id == org_id,
+                    ScheduledReport.active.is_(True),
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if report is None or not report.active:
+            return None, {"status": "skipped", "reason": "report_inactive_or_missing"}
+
+        if _already_delivered(report, epoch_dt, report_id=report_id, epoch=epoch):
+            return None, {"status": "skipped", "reason": "already_delivered"}
+
+        # Snapshot the plain values generation needs BEFORE the transaction
+        # commits (the ORM instance is detached afterwards).
+        config = report.config_json or {}
+        recipient_config = report.recipient_config or {}
+        schedule_type = config.get("schedule_type")
+        try:
+            next_send = _compute_next_send(schedule_type, report.cron_expression, now)
+        except (ValueError, TypeError, KeyError) as exc:
+            _log.exception(
+                "Invalid cron expression '%s' for report %s: %s",
+                report.cron_expression,
+                report_id,
+                exc,
+                exc_info=True,
+            )
+            await session.execute(update(ScheduledReport).where(ScheduledReport.id == report_id).values(active=False))
+            return None, {"status": "failed", "reason": f"invalid_cron: {exc}"}
+
+        # FAR-1822 (finding 2): do NOT stamp ``next_send_at`` here. The
+        # enqueue already advanced it atomically, and a never-completed
+        # one-time fire MUST keep its non-NULL value so the due-scan
+        # (``next_send_at IS NOT NULL``) can re-select it — nulling it here
+        # strands the report forever if the process dies before phase 3.
+        return (
+            _FireSnapshot(
+                report_type=report.report_type,
+                config=config,
+                recipient_config=recipient_config,
+                schedule_type=schedule_type,
+                next_send=next_send,
+                now=now,
+            ),
+            None,
+        )
+
+
+def _already_delivered(
+    report: Any,
+    epoch_dt: datetime.datetime | None,
+    *,
+    report_id: uuid.UUID,
+    epoch: str | None,
+) -> bool:
+    """Idempotency guard: has this epoch's delivery already been recorded?"""
+    # ``last_sent_at`` carries the epoch of the last DELIVERED fire, so a
+    # retry/re-queue of an already-delivered epoch is a skip. A cancelled/failed
+    # attempt never reaches phase 3, so its epoch is NOT recorded as delivered
+    # and the retry still makes progress (at-least-once for an unconfirmed send).
+    if epoch_dt is None:
+        return False
+    last_sent_at = getattr(report, "last_sent_at", None)
+    if last_sent_at is not None and last_sent_at >= epoch_dt:
+        _log.info("Report %s already delivered for epoch %s; skipping", report_id, epoch)
+        return True
+    return False
+
+
+def _compute_next_send(
+    schedule_type: Any,
+    cron_expression: str,
+    now: datetime.datetime,
+) -> datetime.datetime | None:
+    """Next send time: None for one-time reports, computed otherwise."""
+    if schedule_type == "one_time":
+        return None
+    return compute_next_send(cron_expression, after=now)
+
+
+async def _generate_deliver_and_stamp(
+    factory: async_sessionmaker[AsyncSession],
+    rls: Callable[[AsyncSession, uuid.UUID], Awaitable[None]],
+    *,
+    report_id: uuid.UUID,
+    org_id: uuid.UUID,
+    snapshot: _FireSnapshot,
+    epoch_dt: datetime.datetime | None,
+) -> dict[str, Any]:
+    """Phases 2 and 3: generate + deliver outside the lock, then stamp."""
+    delivery_results, failure = await _generate_and_deliver(
+        factory,
+        rls,
+        report_id=report_id,
+        org_id=org_id,
+        snapshot=snapshot,
+    )
+    if failure is not None:
+        return failure
+
+    delivered_at = epoch_dt if epoch_dt is not None else snapshot.now
+    await _stamp_terminal(
+        factory,
+        rls,
+        report_id=report_id,
+        org_id=org_id,
+        schedule_type=snapshot.schedule_type,
+        delivered_at=delivered_at,
+    )
+
+    _log.info(
+        "Report %s (%s) sent. Next send: %s",
+        report_id,
+        snapshot.report_type,
+        snapshot.next_send.isoformat() if snapshot.next_send is not None else "none (one-time report completed)",
+    )
+
+    return {
+        "status": "sent",
+        "report_id": str(report_id),
+        "report_type": snapshot.report_type,
+        "next_send_at": snapshot.next_send.isoformat() if snapshot.next_send is not None else None,
+        "delivery_results": delivery_results,
+    }
+
+
+async def _generate_and_deliver(
+    factory: async_sessionmaker[AsyncSession],
+    rls: Callable[[AsyncSession, uuid.UUID], Awaitable[None]],
+    *,
+    report_id: uuid.UUID,
+    org_id: uuid.UUID,
+    snapshot: _FireSnapshot,
+) -> tuple[list[dict[str, Any]] | None, dict[str, Any] | None]:
+    """Phase 2: run the generator/formatter/deliverer without the row lock."""
+    generator = get_generator(snapshot.report_type)
+    if generator is None:
+        _log.warning("No generator registered for report type %s", snapshot.report_type)
+        return None, {"status": "failed", "reason": f"no_generator_for_{snapshot.report_type}"}
+
+    try:
+        async with factory() as gen_session, gen_session.begin():
+            # The generator runs in its OWN transaction (the row lock is gone)
+            # — re-apply the org RLS context so it can read the team-scoped
+            # tables org-wide exactly as before.
+            await rls(gen_session, org_id)
+            report_data = await generator(gen_session, org_id, snapshot.config)
+
+        formatter = get_formatter(snapshot.report_type)
+        payload: Any = formatter(report_data) if formatter is not None else report_data
+
+        deliverer = get_deliverer(snapshot.report_type)
+        if deliverer is not None:
+            return await deliverer(payload, snapshot.recipient_config), None
+        return await _deliver_via_config(payload, snapshot.recipient_config), None
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "Report %s (%s) generation or delivery failed",
+            report_id,
+            snapshot.report_type,
+        )
+        return None, {"status": "failed", "reason": "generation_or_delivery_failed"}
+
+
+async def _stamp_terminal(
+    factory: async_sessionmaker[AsyncSession],
+    rls: Callable[[AsyncSession, uuid.UUID], Awaitable[None]],
+    *,
+    report_id: uuid.UUID,
+    org_id: uuid.UUID,
+    schedule_type: Any,
+    delivered_at: datetime.datetime,
+) -> None:
+    """Phase 3: guarded terminal stamp (best-effort after a successful send).
+
+    FAR-1822 (finding 5): write ONLY what this phase observed. A recurring
+    report's next_send_at was advanced by the enqueue and a concurrent
+    advance/deactivation must not be rewound, so we never restate
+    next_send_at/active for it. A one-time report is terminally retired here,
+    on SUCCESS only, guarded on active so we never resurrect a row a concurrent
+    operator deactivated.
+    """
+    terminal = update(ScheduledReport).where(ScheduledReport.id == report_id)
+    if schedule_type == "one_time":
+        terminal = terminal.where(ScheduledReport.active.is_(True)).values(
+            last_sent_at=delivered_at,
+            next_send_at=None,
+            active=False,
+        )
+    else:
+        terminal = terminal.values(last_sent_at=delivered_at)
+    try:
+        async with factory() as session, session.begin():
+            await rls(session, org_id)
+            await session.execute(terminal)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # The send already happened. Retrying the whole fire would deliver
+        # AGAIN — so log the terminal-stamp failure and report success.
+        _log.exception(
+            "Report %s sent but its terminal stamp failed; not retrying the fire",
+            report_id,
+        )
 
 
 # ---------------------------------------------------------------------------
