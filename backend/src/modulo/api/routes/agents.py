@@ -720,6 +720,33 @@ async def update_agent_endpoint(
     return await _write_agent_patch(session, agent_id=agent_id, updates=updates, principal=principal)
 
 
+def _require_eval_result_ids(req: PromptOptimizeRequest) -> None:
+    """Reject an optimize request with no eval results to learn from."""
+    if not req.eval_result_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="At least one eval_result_id is required",
+        )
+
+
+def _require_owned_agent(agent: Agent | None, principal: TenantPrincipal) -> Agent:
+    """Resolve a loaded agent, enforcing the caller's org ownership."""
+    if agent is None or agent.organisation_id != principal.organisation_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
+    return agent
+
+
+def _resolve_source_template_or_404(agent: Agent, version: str) -> str:
+    """Resolve a prompt version label to its template, or 404."""
+    source_template = _resolve_prompt_template(agent, version)
+    if source_template is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Prompt version {version} not found",
+        )
+    return source_template
+
+
 def _flatten_message_content(content: Any) -> str:
     """Flatten a LangChain message's list-or-scalar content to plain text."""
     if isinstance(content, list):
@@ -762,28 +789,17 @@ async def optimize_prompt(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_AGENT_UPDATE),
 ) -> PromptOptimizeResponse:
-    if not req.eval_result_ids:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="At least one eval_result_id is required",
-        )
-
-    agent = await _run_org_scoped_query(
-        session,
+    _require_eval_result_ids(req)
+    agent = _require_owned_agent(
+        await _run_org_scoped_query(
+            session,
+            principal,
+            lambda: get_agent(session, agent_id),
+            code=_CODE_AGENTS_OPTIMIZE_PROMPT,
+        ),
         principal,
-        lambda: get_agent(session, agent_id),
-        code=_CODE_AGENTS_OPTIMIZE_PROMPT,
     )
-
-    if agent is None or agent.organisation_id != principal.organisation_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
-
-    source_template = _resolve_prompt_template(agent, version)
-    if source_template is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Prompt version {version} not found",
-        )
+    source_template = _resolve_source_template_or_404(agent, version)
 
     eval_results, eval_defs = await _run_org_scoped_query(
         session,
