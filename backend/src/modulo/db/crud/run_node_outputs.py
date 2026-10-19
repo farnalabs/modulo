@@ -870,7 +870,7 @@ async def _fetch_output_rows(session: AsyncSession, run_id: uuid.UUID) -> Sequen
 
 def _is_meta_row(row: Any) -> bool:
     """True for the reserved metadata sentinel row."""
-    return row.attempt_key == FINAL_ATTEMPT_KEY and row.node_id == META_NODE_ID
+    return bool(row.attempt_key == FINAL_ATTEMPT_KEY and row.node_id == META_NODE_ID)
 
 
 def _valid_meta_flags(row: Any) -> dict[str, Any] | None:
