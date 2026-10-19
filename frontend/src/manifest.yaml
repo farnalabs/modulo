@@ -3877,6 +3877,18 @@ elements:
       - testid: snapshot-timeline-no-version-in-window
         type: element
         dynamic_testid: false
+      # FAR-1895: runs in a version-DESC window with no resolved current version
+      # render in their own "unattributed" bucket rather than mislabelled as
+      # "earlier".
+      - testid: snapshot-timeline-unattributed
+        type: element
+        dynamic_testid: false
+      - testid: snapshot-timeline-unattributed-toggle
+        type: button
+        dynamic_testid: false
+      - testid: snapshot-timeline-unattributed-list
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-snapshot-lock
         type: element
         dynamic_testid: false
