@@ -25,7 +25,7 @@ grep -rn '\.with_for_update(' backend/src/modulo --include='*.py' | wc -l   # 57
 grep -rn 'with_for_update='  backend/src/modulo --include='*.py' | wc -l   #  2  (session.get kwargs)
 # total SQLAlchemy row-lock call sites: 59
 
-# (2) raw SQL `FOR UPDATE` occurrences. NOTE: the filter is LOOSE — it also
+# (2) raw SQL `FOR UPDATE` occurrences. NOTE: the filter is LOOSE – it also
 #     matches docstring/prose mentions of `FOR UPDATE`, so do not read the raw
 #     hit count as the locking-site count (see the note below the command):
 grep -rn 'FOR UPDATE' backend/src/modulo --include='*.py' \
@@ -55,14 +55,14 @@ hit; the raw `file:line` set is exactly reproducible from command (1).
 > **Count corrections (FAR-1822 + FAR-1832).** The original audit recorded **63**
 > `.with_for_update(` sites. FAR-1822 (PR #1842, merged 2026-10-15) removed the
 > `cron_helpers` scheduled-report lock (D7) after the audit was written, taking it to
-> **62**; **FAR-1832** (Land 1b of FAR-1823) then removed four more — the
+> **62**; **FAR-1832** (Land 1b of FAR-1823) then removed four more – the
 > sandbox-concurrency and HITL-window writers (old C2/C3), the product-analytics
 > consent read (old C1) and the org-runtime-flags writer (old D14) are now
-> single-statement atomic settings patches with no `SELECT … FOR UPDATE` pre-lock —
+> single-statement atomic settings patches with no `SELECT … FOR UPDATE` pre-lock –
 > giving the **58** `.with_for_update(` sites that main carried before this branch.
 
 > **FAR-1833 cutover (this branch).** The org spend-ceiling gate (former D9,
-> `core/cost_controller/finalize.py`) no longer takes an SQLAlchemy row lock — it
+> `core/cost_controller/finalize.py`) no longer takes an SQLAlchemy row lock – it
 > takes a per-org **advisory** lock (`pg_advisory_xact_lock`, not a row lock) and the
 > ceiling/cumulative state moved to `organisation_cost_state`. It is therefore removed
 > from this *row-lock* inventory: a further **-1**, to the **57** `.with_for_update(`
@@ -137,14 +137,14 @@ unrelated writer or is held across non-lock work.
 
 > **FAR-1832 removed C1, C2 and C3** (analytics-consent read, sandbox-concurrency
 > writer, HITL-window writer): each is now a single-statement atomic settings patch
-> (`update_org_settings_patch`) with no `SELECT … FOR UPDATE` pre-lock — see §10
+> (`update_org_settings_patch`) with no `SELECT … FOR UPDATE` pre-lock – see §10
 > finding 3. Row IDs are kept gap-stable for cross-references.
 
 | # | file:line | function | lock | txn | hold / blocking scope | over-serialises |
 |---|---|---|---|---|---|---|
 | C4 | `api/routes/model_backends.py:658` | `create_model_backend_endpoint` | FOR UPDATE | mutation txn | Locks existing same-name `ModelBackend` row for creation uniqueness (409 on clash). | no. |
-| C5 | `db/crud/organisation.py:89` | `get_organisation` | FOR UPDATE (opt-in) | caller txn | Generic org row lock used by org-updating callers. Marks itself FAR-1624: intentionally plain `FOR UPDATE`, not `FOR NO KEY UPDATE`. Since FAR-1830/1832 its only caller is the atomic settings patch's **generic-dialect (SQLite/MariaDB) fallback** (`_apply_json_column_patch_generic`) — on Postgres the patch is a single `UPDATE` and never takes this. | **watch** – Organisation row (Postgres never reaches it). |
-| C6 | `db/crud/observability.py:28` (`update_otel_config` → shared `db/crud/organisation.py` machinery) | `update_otel_config` | FOR UPDATE (generic-dialect fallback only) | caller txn | **FAR-1832 (QA F3):** routes through the shared atomic JSON-column patch (`update_org_json_column_patch`) — the Postgres path is a single-statement atomic `otel_config_json = COALESCE(…) || :patch` write with no pre-lock; the `FOR UPDATE` survives only on the SQLite/MariaDB fallback branch (`_apply_json_column_patch_generic`, which never runs on Postgres). Deliberately `require_live_row=False` (still `include_soft_deleted` on the generic read) — FAR-1025 keeps OTel config writable during the pending-deletion window (unlike `settings_json`, whose writers now refuse soft-deleted orgs). QA F3 also gave this path the same fail-closed tenant guard as the settings writer (it previously trusted `org_id` verbatim — and `organisations` is not RLS-scoped, so that guard is the only tenant control). | no – never reached on Postgres. |
+| C5 | `db/crud/organisation.py:89` | `get_organisation` | FOR UPDATE (opt-in) | caller txn | Generic org row lock used by org-updating callers. Marks itself FAR-1624: intentionally plain `FOR UPDATE`, not `FOR NO KEY UPDATE`. Since FAR-1830/1832 its only caller is the atomic settings patch's **generic-dialect (SQLite/MariaDB) fallback** (`_apply_json_column_patch_generic`) – on Postgres the patch is a single `UPDATE` and never takes this. | **watch** – Organisation row (Postgres never reaches it). |
+| C6 | `db/crud/observability.py:28` (`update_otel_config` → shared `db/crud/organisation.py` machinery) | `update_otel_config` | FOR UPDATE (generic-dialect fallback only) | caller txn | **FAR-1832 (QA F3):** routes through the shared atomic JSON-column patch (`update_org_json_column_patch`) – the Postgres path is a single-statement atomic `otel_config_json = COALESCE(…) || :patch` write with no pre-lock; the `FOR UPDATE` survives only on the SQLite/MariaDB fallback branch (`_apply_json_column_patch_generic`, which never runs on Postgres). Deliberately `require_live_row=False` (still `include_soft_deleted` on the generic read) – FAR-1025 keeps OTel config writable during the pending-deletion window (unlike `settings_json`, whose writers now refuse soft-deleted orgs). QA F3 also gave this path the same fail-closed tenant guard as the settings writer (it previously trusted `org_id` verbatim – and `organisations` is not RLS-scoped, so that guard is the only tenant control). | no – never reached on Postgres. |
 | C7 | `db/crud/parameter_set.py:84` | `update_set` | FOR UPDATE | caller txn | Parameter-set version bump RMW. | no. |
 | C8 | `db/crud/account.py:121` | `_get_account_locked` | FOR UPDATE (`session.get`) | caller txn | The account-preferences serialisation point (documented): all preference writers serialise here. | **watch** – Account row shared with key quota B9. |
 | C9 | `db/crud/node_observation.py:36` | `observe_node` | FOR UPDATE | caller txn | Idempotent node-observation upsert (insert if absent). | no. |
@@ -166,11 +166,11 @@ unrelated writer or is held across non-lock work.
 ### D – operational / other (11)
 
 > **D7, D9 and D14 have been removed.** **FAR-1822** removed D7 (the `cron_helpers`
-> scheduled-report lock — PR #1842 merged 2026-10-15; the stamp-and-commit path now
+> scheduled-report lock – PR #1842 merged 2026-10-15; the stamp-and-commit path now
 > lives in `reports/scheduler.py` with a phase-1 short lock). **FAR-1832** removed D14
 > (the org-runtime-flags writer is now an atomic settings patch). **FAR-1833** removes
 > D9 (the org spend-ceiling gate moved off the `organisations` row onto
-> `organisation_cost_state` under a per-org advisory lock — an advisory lock is not a
+> `organisation_cost_state` under a per-org advisory lock – an advisory lock is not a
 > row lock). Row IDs stay gap-stable for cross-references.
 
 | # | file:line | function | lock | txn | hold / blocking scope | over-serialises |
@@ -181,7 +181,7 @@ unrelated writer or is held across non-lock work.
 | D4 | `db/crud/org_deletion.py:418` | `export_org_data` | FOR UPDATE | caller txn, `include_soft_deleted` | Org lifecycle FSM (FAR-1624 marker). | watch – Organisation row, and an export may run long under it. |
 | D5 | `db/crud/error_tracking.py:86` | `upsert_error_group` | FOR UPDATE **OF error_groups** (`of=ErrorGroup`) | caller txn | Error-group aggregation upsert; `of=` avoids locking the nullable side of the `sample_event` outer join. | no. |
 | D6 | `db/crud/daily_run_count.py:54` | `upsert_daily_run_count` | FOR UPDATE | caller txn | Daily run-count upsert (non-critical convenience path; `cost_controller` is the serialised one). | no. |
-| D8 | `core/reports/scheduler.py:410` | `_fire_scheduled_report` | FOR UPDATE | **own** `session.begin()` | Scheduled-report fire **after FAR-1822 (PR #1842, merged 2026-10-15)**: the lock is now the SHORT phase-1 read+idempotency-snapshot section only — report generation and delivery run outside it (the lock-held-across-generation shape this audit flagged as risk #1 is closed). | no – short critical section (§7 risk #1 closed). |
+| D8 | `core/reports/scheduler.py:410` | `_fire_scheduled_report` | FOR UPDATE | **own** `session.begin()` | Scheduled-report fire **after FAR-1822 (PR #1842, merged 2026-10-15)**: the lock is now the SHORT phase-1 read+idempotency-snapshot section only – report generation and delivery run outside it (the lock-held-across-generation shape this audit flagged as risk #1 is closed). | no – short critical section (§7 risk #1 closed). |
 | D10 | `core/cost_controller/finalize.py:1705` | `_ledger_block` | FOR UPDATE | caller txn | Run-row lock for the duplicate-terminal ledger guard (`ledger_written OR ledger_refused_at`) + savepoint retries. | watch – run-row hotspot. |
 | D11 | `core/cost_controller/__init__.py:270` | `get_or_create_daily_count` | FOR UPDATE | caller txn | Daily-count row RMW with `begin_nested()` IntegrityError re-read. | no. |
 | D12 | `core/audit_logger/__init__.py:337` | `_get_chain_head_locked` | FOR UPDATE | caller txn | Per-org audit-chain head; prevents forked appends. | watch – held for the append; A13 appends an audit event inside its pipeline lock, stacking two locks (see §7). |
@@ -249,7 +249,7 @@ single-use rows for credentials/entities.
   for snapshot allocation (A4), FOR SHARE for the clone
   source read (A12), `SKIP LOCKED` for run coalescing (A5), and scoped `OF <table>` locks
   (A14, D5). These are all deliberate and correct. (The org spend-ceiling gate's former
-  FOR NO KEY UPDATE — D9 — is retired; it is now an advisory lock, see §10.)
+  FOR NO KEY UPDATE – D9 – is retired; it is now an advisory lock, see §10.)
 - **`FOR UPDATE` on a row that does not exist takes no lock** – B10 explicitly fails closed
   for this reason (a missing anchor row must not silently degrade to an unserialised
   rotation).
@@ -265,44 +265,44 @@ took `FOR UPDATE` on the `ScheduledReport` row and then called `generator(sessio
 only after it completed. Consequences: (a) the lock was held for the whole generation window,
 not just the RMW; (b) two code paths implemented the same fire-serialisation.
 
-**FAR-1822 ("stamp-and-commit") supersedes this and closes risk #1 — MERGED as PR #1842
+**FAR-1822 ("stamp-and-commit") supersedes this and closes risk #1 – MERGED as PR #1842
 (2026-10-15, `c64a99c68`).** It reconciles the two fire paths into one shared core that holds
 the `ScheduledReport` row lock only for two short critical sections (the read/snapshot before
 generation and the terminal stamp after it) and **releases the lock before generation/delivery
 runs**, with a Redis lease fencing concurrent fires. The `cron_helpers` lock (old D7) is gone
 entirely; D8 is now the single, short-lock site (`reports/scheduler.py:410`).
 
-### 2. The `organisations` row is a cross-feature mutex — NARROWED by FAR-1830/1832, cost path removed by FAR-1833
+### 2. The `organisations` row is a cross-feature mutex – NARROWED by FAR-1830/1832, cost path removed by FAR-1833
 
 *Originally eleven distinct writers locked the same organisation row for unrelated concerns
 (sandbox concurrency, HITL window, analytics consent, OTEL config, runtime flags, licence,
 retention/email/logo/cost whole-column writers, org deletion/export, generic org update, and
 the spend-ceiling gate). Any two serialised even when they shared no data; D9 was forced to
-weaken to `FOR NO KEY UPDATE` because plain `FOR UPDATE` deadlocked — a symptom of the
+weaken to `FOR NO KEY UPDATE` because plain `FOR UPDATE` deadlocked – a symptom of the
 over-broad locking.*
 
 **Status after FAR-1830 (unlocked writers, PR #1850) + FAR-1832 (locked writers):** every
 `settings_json` concern now writes through the single-statement atomic patch
 (`UPDATE … settings_json = COALESCE(…) || :patch`), which takes the row lock only for its own
-statement instead of pre-locking across a read-modify-write. The converted sites — sandbox
+statement instead of pre-locking across a read-modify-write. The converted sites – sandbox
 concurrency, HITL window, analytics consent ×2, runtime flags, licence set/clear, plus the
-already-converted retention/email/logo/cost/run-concurrency writers — no longer appear in the
+already-converted retention/email/logo/cost/run-concurrency writers – no longer appear in the
 inventory at all. The product-analytics writers (QA F1) use the patch's nested sub-field form
 (`jsonb_set(…, '{product_analytics}', COALESCE(…) || :subpatch)`), still one statement and
 still no pre-lock: two writers of DIFFERENT sub-fields of the block both survive without
 serialising. What still locks the `organisations` row:
 
-- **D1–D4 (deletion FSM) — intentional and preserved.** Deletion must keep exclusive
+- **D1–D4 (deletion FSM) – intentional and preserved.** Deletion must keep exclusive
   `FOR UPDATE` so a hard delete still blocks concurrent child inserts (`FOR KEY SHARE`); a
   statement-level config patch still conflicts with it, so deletion exclusivity survives
   (proven by `tests/integration/crud/test_org_settings_patch.py`:
   a config patch wait-bounds against an in-flight deletion; a child FK insert still queues).
-- **C5 / C6** — generic-dialect (SQLite/MariaDB) fallbacks only; Postgres never reaches them.
-- **~~D9 (spend-ceiling gate, `FOR NO KEY UPDATE`)~~ — REMOVED by FAR-1833 (Land 2).** The
+- **C5 / C6** – generic-dialect (SQLite/MariaDB) fallbacks only; Postgres never reaches them.
+- **~~D9 (spend-ceiling gate, `FOR NO KEY UPDATE`)~~ – REMOVED by FAR-1833 (Land 2).** The
   ceiling/cumulative state moved off the org row onto `organisation_cost_state` and the row
   lock became a per-org advisory lock, so D9 is retired from §3/§5. The finalize path is not
-  entirely org-row-free — the auto-pause write (`organisations.triggers_paused`) and the
-  implicit FK `FOR KEY SHARE` on child inserts remain — but they are now taken in a fixed
+  entirely org-row-free – the auto-pause write (`organisations.triggers_paused`) and the
+  implicit FK `FOR KEY SHARE` on child inserts remain – but they are now taken in a fixed
   advisory → org-row order that cannot form the old ABBA cycle; see §10.
 
 The mutex is narrower but not gone, and the residual *hold-time* watch item is D4 (org export
@@ -355,12 +355,12 @@ original finding.
    off a single `Organisation` row lock, or give each concern its own row/`key_share`-style
    lock, so unrelated org writers stop serialising; preserve the deletion FSM's exclusive
    hold. *(Categories C + D.)*
-   **DELIVERED in three lands — FAR-1830 (unlocked whole-column writers, PR #1850), FAR-1832
+   **DELIVERED in three lands – FAR-1830 (unlocked whole-column writers, PR #1850), FAR-1832
    (the locked RMW writers: sandbox/HITL/consent/OTEL/runtime-flags/licence now
    single-statement atomic patches, `FOR UPDATE` pre-locks removed; deletion FSM exclusive
-   hold preserved — see §7 risk #2), and FAR-1833 (Land 2: the D9 spend-ceiling half moved
+   hold preserved – see §7 risk #2), and FAR-1833 (Land 2: the D9 spend-ceiling half moved
    off the org row onto `organisation_cost_state` under a per-org advisory lock, so D9 is
-   retired — see §10).**
+   retired – see §10).**
 4. **Shrink `replace_pipeline_graph`'s critical section** – move the `pipeline.graph_updated`
    audit append and any non-lock work outside the pipeline-row lock (or explicitly document
    why the full-replace must hold it), and assert the lock-ordering against the audit-chain
@@ -401,7 +401,7 @@ shipped behaviour. The corrections:
 - **D7 / D8 / §7 risk #1 / §8 item 2** – the lock-held-across-generation shape is superseded by
   FAR-1822 ("stamp-and-commit"), which reconciles the two fire paths into one shared core and
   runs report generation outside the `ScheduledReport` row lock. **FAR-1822 closes risk #1.**
-  (MERGED as PR #1842, `c64a99c68`, 2026-10-15 — the `cron_helpers` lock (old D7) was removed
+  (MERGED as PR #1842, `c64a99c68`, 2026-10-15 – the `cron_helpers` lock (old D7) was removed
   outright; D8 retains only the phase-1 short lock.)
 - **`backend/src/modulo/db/crud/run.py` docstrings** – four docstrings (`request_cancellation`,
   `update_run_status`, `unpark_parked_run`, `transition_run`) repeated a stale FAR-1601
@@ -417,32 +417,32 @@ shipped behaviour. The corrections:
    `admin_update_org` (`api/routes/admin.py`, `logo_url`), `costs._apply_cost_control_updates`
    (`api/routes/costs.py`), the `run_concurrency_limit` writer (`api/routes/admin.py:4500`), and
    `core/seed_data/demo_data.py`. This was live silent data loss on `main`, not a future risk.
-   **FIXED — FAR-1830 (Land 1a, PR #1850):** all five write through the atomic
+   **FIXED – FAR-1830 (Land 1a, PR #1850):** all five write through the atomic
    `update_org_settings_patch`, and `update_organisation` now REFUSES a `settings_json` key
    (FAR-1832 added the guard) so the dumper shape cannot return.
 2. **`confirm_org_deletion` used a mixed lock order.** The handler appended the org-independent
    system-audit event (`api/routes/admin.py`) *before*
    `db.crud.org_deletion.confirm_org_deletion` took the `organisations` row `FOR UPDATE`
-   (`db/crud/org_deletion.py:327`) — the one FSM site where an in-transaction write preceded
+   (`db/crud/org_deletion.py:327`) – the one FSM site where an in-transaction write preceded
    the org-row lock (every sibling route locked the org row first). *(Mechanism correction,
-   FAR-1832: `system_audit_events` is deliberately NOT hash-chained — see
-   `db/models/system_audit_event.py` — so there was no per-org audit-chain-head lock on this
+   FAR-1832: `system_audit_events` is deliberately NOT hash-chained – see
+   `db/models/system_audit_event.py` – so there was no per-org audit-chain-head lock on this
    path; the defect was the lock-order inversion itself against global order R6.)*
-   **FIXED — FAR-1832:** the append now runs after the crud call, same transaction (atomicity
+   **FIXED – FAR-1832:** the append now runs after the crud call, same transaction (atomicity
    and the fail-closed append property unchanged), pinned by
    `backend/tests/unit/api/test_far1832_lock_order.py`.
 3. **Measured counts moved (FAR-1822 + FAR-1832 + FAR-1833).** Re-measuring §1 before this
    branch gives 58 `.with_for_update(` sites (60 SQLAlchemy call sites total once the 2
-   `session.get` kwargs are included, 62 total row-lock sites with the 2 raw SQL sites) — the
+   `session.get` kwargs are included, 62 total row-lock sites with the 2 raw SQL sites) – the
    audit's original 63 was already stale by one when FAR-1822 (PR #1842) removed the
-   `cron_helpers` lock, and FAR-1832 removed four more (old C1, C2, C3, D14 — the locked
+   `cron_helpers` lock, and FAR-1832 removed four more (old C1, C2, C3, D14 – the locked
    settings writers are now single-statement atomic patches). **FAR-1833 retires D9** (the
    spend-ceiling gate's row lock becomes a per-org advisory lock), giving the **57**
-   `.with_for_update(` sites measured on this branch — **59** SQLAlchemy call sites, **61**
+   `.with_for_update(` sites measured on this branch – **59** SQLAlchemy call sites, **61**
    total row-lock sites. §3/§5/§7 carry the post-change shape; removed row IDs are left as
    gaps so cross-references stay stable.
 
-### Correction (FAR-1833) — D9 retired: the org spend-ceiling gate is no longer a row lock
+### Correction (FAR-1833) – D9 retired: the org spend-ceiling gate is no longer a row lock
 
 The org spend-ceiling gate (`core/cost_controller/finalize.py::_apply_spend_ceiling_gate`)
 took an SQLAlchemy `with_for_update(key_share=True)` (FOR NO KEY UPDATE) on the
@@ -455,7 +455,7 @@ row lock with a per-org **advisory** lock (`modulo.core.runner_capacity.lock_org
 → `pg_advisory_xact_lock`). An advisory lock is transaction-scoped and is NOT a row lock, so
 it does not belong in this row-lock inventory; D9 is retired from §3/§5 and the row-lock
 counts drop by one. On the finalize path the gate takes NO *cost-column* read or write on the
-`organisations` row — it reads the row only for existence, and the ceiling/cumulative values
+`organisations` row – it reads the row only for existence, and the ceiling/cumulative values
 come from `organisation_cost_state`. Migration `0321` deliberately LEAVES the three physical
 `organisations` cost columns in place (the expand half of an expand/contract cutover, so the
 rolling deploy never serves old code against a dropped column); a follow-up migration drops

@@ -23,11 +23,19 @@ async def deployment_info() -> dict[str, object]:
     Served unauthenticated on purpose: the CI/CD deploy pipelines
     (deploy.yml, rc-validate.yml, deploy-watchdog.yml,
     deploy-staleness-check.yml) call it without a principal to verify which
-    build is live. The repo is public, so the git metadata is already
-    world-readable. Only genuinely non-public locals (hostname, ci_job_url)
-    are omitted. If values are absent they fall back to empty strings so the
-    endpoint is always safe to call.
+    build is live. Only public-safe build identifiers are returned; source-repo
+    free text (git_branch, git_commit_message) and other non-public locals
+    (hostname, ci_job_url) are omitted. If values are absent they fall back to
+    empty strings so the endpoint is always safe to call.
     """
+    # The deploy pipelines consume only ``git_sha`` / ``build_timestamp`` /
+    # ``version`` (deploy.yml, rc-validate.yml, deploy-watchdog.yml,
+    # deploy-staleness-check.yml). ``git_branch`` and ``git_commit_message``
+    # are deliberately NOT returned: they are free text from the DEPLOYMENT's
+    # source repository, which is not necessarily public (a self-hosted
+    # customer may build from a private fork), and no consumer reads them
+    # (FAR-1975). Keep the response to build identifiers that are useless
+    # without the repo itself.
     return {
         "version": get_version(),
         "uptime_seconds": int(time.time() - _start_time),
@@ -35,8 +43,6 @@ async def deployment_info() -> dict[str, object]:
         "python_version": os.environ.get("PYTHON_VERSION", ""),
         "environment": os.environ.get("MODULO_ENV", "development"),
         "git_sha": os.environ.get("GIT_SHA", ""),
-        "git_branch": os.environ.get("GIT_BRANCH", ""),
         "git_commit_timestamp": os.environ.get("GIT_COMMIT_TIMESTAMP", ""),
-        "git_commit_message": os.environ.get("GIT_COMMIT_MESSAGE", ""),
         "build_timestamp": os.environ.get("BUILD_TIMESTAMP", ""),
     }

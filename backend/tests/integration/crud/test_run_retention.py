@@ -37,18 +37,28 @@ from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, R
 pytestmark = pytest.mark.integration
 
 
-def _seed_run(
+async def _seed_run(
     session: AsyncSession,
     *,
     org_id: uuid.UUID,
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
-    run_number: int,
     status: str,
     created_at: datetime,
     input_payload: dict[str, Any] | None = None,
     cost_breakdown: list[dict[str, Any]] | None = None,
 ) -> Run:
+    """Seed a run, allocating ``run_number`` through the production counter.
+
+    ``test_org`` is session-scoped and shared by every integration module in one
+    invocation, so a hardcoded low literal (1/2/3) may already belong to a run
+    committed by an earlier module — the insert then violates
+    ``uq_runs_org_run_number`` order-dependently (the FAR-1968 flake class).
+    Allocating from the same atomic per-org counter ``create_run`` uses makes
+    the fixture order-independent and collision-free by construction.
+    """
+    from modulo.db.crud.run import _allocate_run_number
+
     run = Run(
         id=uuid.uuid4(),
         organisation_id=org_id,
@@ -56,7 +66,7 @@ def _seed_run(
         snapshot_id=snapshot_id,
         trigger_type="manual",
         status=status,
-        run_number=run_number,
+        run_number=await _allocate_run_number(session, org_id),
         input_hash="a" * 64,
         langgraph_thread_id=f"{org_id}:{uuid.uuid4()}",
         created_at=created_at,
@@ -99,32 +109,29 @@ async def test_candidates_shape_and_estimates(
     test_pipeline: uuid.UUID,
     test_snapshot: uuid.UUID,
 ) -> None:
-    bare = _seed_run(
+    bare = await _seed_run(
         rls_session,
         org_id=test_org,
         pipeline_id=test_pipeline,
         snapshot_id=test_snapshot,
-        run_number=1,
         status="complete",
         created_at=datetime(2026, 6, 1, tzinfo=UTC),
     )
-    big = _seed_run(
+    big = await _seed_run(
         rls_session,
         org_id=test_org,
         pipeline_id=test_pipeline,
         snapshot_id=test_snapshot,
-        run_number=2,
         status="complete",
         created_at=datetime(2026, 6, 2, tzinfo=UTC),
         input_payload={"data": "y" * 1000},
         cost_breakdown=[{"amount": "1.00"}],
     )
-    store = _seed_run(
+    store = await _seed_run(
         rls_session,
         org_id=test_org,
         pipeline_id=test_pipeline,
         snapshot_id=test_snapshot,
-        run_number=3,
         status="pending",
         created_at=datetime(2026, 6, 3, tzinfo=UTC),
         input_payload={"k": "v"},
@@ -203,22 +210,20 @@ async def test_page_estimate_and_total_use_documented_different_byte_metrics(
     authoritative whole-set figure and the per-run values are indicative —
     this pins the documented asymmetry instead of pretending parity (the
     equality assertions stay on the ASCII render-equal subset above)."""
-    ascii_run = _seed_run(
+    ascii_run = await _seed_run(
         rls_session,
         org_id=test_org,
         pipeline_id=test_pipeline,
         snapshot_id=test_snapshot,
-        run_number=1,
         status="complete",
         created_at=datetime(2026, 6, 1, tzinfo=UTC),
         input_payload={"data": "a" * 100},
     )
-    unicode_run = _seed_run(
+    unicode_run = await _seed_run(
         rls_session,
         org_id=test_org,
         pipeline_id=test_pipeline,
         snapshot_id=test_snapshot,
-        run_number=2,
         status="complete",
         created_at=datetime(2026, 6, 2, tzinfo=UTC),
         input_payload={"accent": "é" * 10, "tiny": 1e-05},
@@ -248,21 +253,19 @@ async def test_candidates_status_filter_narrows_counts_and_estimates(
     test_pipeline: uuid.UUID,
     test_snapshot: uuid.UUID,
 ) -> None:
-    _seed_run(
+    await _seed_run(
         rls_session,
         org_id=test_org,
         pipeline_id=test_pipeline,
         snapshot_id=test_snapshot,
-        run_number=1,
         status="complete",
         created_at=datetime(2026, 6, 1, tzinfo=UTC),
     )
-    store = _seed_run(
+    store = await _seed_run(
         rls_session,
         org_id=test_org,
         pipeline_id=test_pipeline,
         snapshot_id=test_snapshot,
-        run_number=2,
         status="pending",
         created_at=datetime(2026, 6, 2, tzinfo=UTC),
         input_payload={"k": "v"},
@@ -286,22 +289,20 @@ async def test_candidates_date_filter_applies_to_the_aggregates(
     test_pipeline: uuid.UUID,
     test_snapshot: uuid.UUID,
 ) -> None:
-    _seed_run(
+    await _seed_run(
         rls_session,
         org_id=test_org,
         pipeline_id=test_pipeline,
         snapshot_id=test_snapshot,
-        run_number=1,
         status="complete",
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         input_payload={"old": "o" * 100},
     )
-    new = _seed_run(
+    new = await _seed_run(
         rls_session,
         org_id=test_org,
         pipeline_id=test_pipeline,
         snapshot_id=test_snapshot,
-        run_number=2,
         status="complete",
         created_at=datetime(2026, 6, 1, tzinfo=UTC),
         input_payload={"new": "n" * 50},
@@ -379,12 +380,11 @@ async def test_candidates_org_scoping_excludes_other_orgs(
     test_pipeline: uuid.UUID,
     test_snapshot: uuid.UUID,
 ) -> None:
-    _seed_run(
+    await _seed_run(
         rls_session,
         org_id=test_org,
         pipeline_id=test_pipeline,
         snapshot_id=test_snapshot,
-        run_number=1,
         status="complete",
         created_at=datetime(2026, 6, 1, tzinfo=UTC),
         input_payload={"mine": "m" * 100},

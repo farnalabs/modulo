@@ -363,16 +363,16 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   `running` until the 30-minute heartbeat TTL above detects the loss (and
   misattributes it to the dispatch path), the worker's SAQ `shutdown` hook
   processes every run it still owns the moment shutdown begins, and each run
-  takes one of two paths. If a re-run is safe — a pre-node run (zero nodes
+  takes one of two paths. If a re-run is safe – a pre-node run (zero nodes
   executed, so nothing can double-execute) within its retry budget, or a
   node-started run whose graph is idempotent and whose `retry_policy` permits
-  the re-run — the claim is freed (row reset to `pending`,
+  the re-run – the claim is freed (row reset to `pending`,
   `dispatched_at`/`dispatcher`/`heartbeat_at` cleared) and stamped with the
   truthful `harness.worker_lost` code plus a detail naming the shutdown;
   `dispatcher_reconcile` re-dispatches it on its next 60s tick, so an
   in-flight run at a release is handed back within ~1 minute of the new worker
-  becoming ready — never 30-35 minutes. If a re-run is NOT safe — a
-  non-idempotent node-started graph, or a `retry_policy` that forbids it — the
+  becoming ready – never 30-35 minutes. If a re-run is NOT safe – a
+  non-idempotent node-started graph, or a `retry_policy` that forbids it – the
   run is failed in place with the same `harness.worker_lost` code and a detail
   naming why, rather than being put on the un-gated re-dispatch leg (which
   would re-EXECUTE a side-effecting node). Both writes are claim-token-fenced
@@ -647,29 +647,29 @@ surfaces with `auth_type` / `key_scope` / masked-prefix payload stamps.
 
 **Service accounts (FAR-1478, ADR 056 / 058).** A service principal is a
 first-class `accounts` row (`kind='service'`, carrying no email, password or
-SSO identity — structurally unreachable by every login/invite/SSO/SCIM path,
+SSO identity – structurally unreachable by every login/invite/SSO/SCIM path,
 FAR-1385 slice 1; `accounts.kind` itself is immutable after insert, enforced
 by the `trg_accounts_kind_immutable` DB trigger, so a human row can never be
-flipped into a service row — or vice versa — by any writer). Org admins
+flipped into a service row – or vice versa – by any writer). Org admins
 provision, read, list, rename and decommission them at
 `/api/v1/service-accounts`; an `admin` org-role grant on a service
 principal is rejected with 422 at the surface and structurally refused by a
-DB trigger (`trg_org_memberships_service_role_ceiling`, migration 0315) — the
+DB trigger (`trg_org_memberships_service_role_ceiling`, migration 0315) – the
 role ceiling is `operator`, never admin. Service accounts hold team
 memberships through the normal team surface (team roles never include admin).
 Keys minted for a service principal are OWNED by it (`org_api_keys.account_id`
 is the service account, never the minting human): a human admin bootstraps one
 via `POST /api/v1/service-accounts/{id}/keys`, and the service principal
 mints its own with its own `mk_` credential (MCP `create_api_key`, or the same
-endpoint acting as the principal itself — a key may only mint keys for its own
+endpoint acting as the principal itself – a key may only mint keys for its own
 principal). Service-owned keys are capped at **365 days** (ADR 058's tiered
-TTL — the service half of the 365d-service / 90d-user-scoped resolution),
+TTL – the service half of the 365d-service / 90d-user-scoped resolution),
 enforced at the `create_api_key` AND `update_api_key` choke points so every
-surface — mint and extension alike — refuses the same way (a mint-only cap
+surface – mint and extension alike – refuses the same way (a mint-only cap
 would let any runner/operator extend a service-owned key arbitrarily via
 `PUT /api/v1/api-keys/{id}`). Decommission is explicit and one-way: it stamps
 `accounts.decommissioned_at` (CHECK-restricted to service rows), tombstones
-the org membership, flips `active` off and bulk-revokes every live key — a
+the org membership, flips `active` off and bulk-revokes every live key – a
 service account survives human offboarding and is retired only by that
 deliberate act; the human user-admin surface refuses service targets that are
 members of the caller's org (non-members surface as 404 first, so the
@@ -865,7 +865,7 @@ non-production use.
 
 Hosted Ubicloud runners (ubicloud-standard-2). Workflows:
 - Lint, type-check, unit test, frontend build, audit, and WCAG contrast test on every push
-- Each backend/frontend container is built once and published to ghcr.io only from `main` or a version tag, gated by image smoke checks (`import modulo`, `nginx -t`) only. The publish job does not yet scan the built image — the trivy/grype gates, digest-drift guard and cosign/SBOM attest are the D4 GA/CI follow-up item noted above. CI's Trivy check is a filesystem scan of the repository (dependency CVEs + misconfigurations), not a scan of the built images
+- Each backend/frontend container is built once and published to ghcr.io only from `main` or a version tag, gated by image smoke checks (`import modulo`, `nginx -t`) only. The publish job does not yet scan the built image – the trivy/grype gates, digest-drift guard and cosign/SBOM attest are the D4 GA/CI follow-up item noted above. CI's Trivy check is a filesystem scan of the repository (dependency CVEs + misconfigurations), not a scan of the built images
 - Staging smoke, WCAG, and regression suites share one dependency/browser setup while retaining separate result artifacts
 - Release workflow (tag-driven, semver)
 

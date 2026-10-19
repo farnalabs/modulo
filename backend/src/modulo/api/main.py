@@ -1047,7 +1047,7 @@ async def _start_background_tasks(settings: Settings) -> dict[str, Any]:
 
     # Start the HITL claim expiry background job.
     claim_expiry_job = ClaimExpiryJob(db_engine)
-    await claim_expiry_job.start()
+    claim_expiry_job.start()
 
     # NOTE: no in-process trigger-event cleanup loop here (FAR-523). The SAQ
     # system crons ``webhook_dedup_cleanup`` / ``trigger_events_cleanup`` own

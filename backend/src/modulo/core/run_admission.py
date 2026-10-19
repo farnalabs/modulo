@@ -195,6 +195,56 @@ _PARK_RUNS_SQL = text(
     "RETURNING runs.id, runs.pipeline_id, runs.organisation_id"
 )
 
+# FAR-779 / FAR-812: auto-retry heartbeat-stale runs instead of terminal-failing
+# them immediately. When claim_count <= retry_budget
+# (settings.heartbeat_stale_retry_budget), the run is reset to pending (clearing
+# dispatched_at/dispatcher/heartbeat_at) so dispatcher_reconcile re-dispatches
+# it on its next 60s tick. When claim_count > budget, the run is terminal-failed
+# — it has been claimed multiple times and still goes heartbeat-stale, meaning
+# it is genuinely stuck.
+# FAR-1649 qa iteration 2 (finding 5): the UPDATE's WHERE excludes durably
+# node-STARTED rows (first_node_dispatched) from the RETRY-RESET arm only — see
+# the SQL comment below; over-budget node-started rows are still terminal-failed
+# here so their pipeline slot is released promptly.
+_RECONCILE_RUNS_SQL = text(
+    "UPDATE runs SET "
+    "status = CASE "
+    "  WHEN claim_count <= :retry_budget THEN 'pending' "
+    "  ELSE 'failed' "
+    "END, "
+    "error_code = 'heartbeat_stale', "
+    "error_detail = :detail, "
+    "completed_at = CASE "
+    "  WHEN claim_count <= :retry_budget THEN NULL "
+    "  ELSE now() "
+    "END, "
+    "dispatched_at = NULL, "
+    "dispatcher = NULL, "
+    "heartbeat_at = NULL "
+    "WHERE status = 'running' "
+    "AND organisation_id = :oid "
+    "AND cancellation_requested = false "
+    "AND COALESCE(heartbeat_at, started_at, created_at) "
+    "    < now() - (:stale_seconds * interval '1 second') "
+    # FAR-1649 qa iteration 2 (finding 5): the node-started exclusion applies
+    # to the RETRY-RESET arm only (claim_count <= budget). The retry reset
+    # clears ``dispatched_at``, which would admit the row to the reconcile
+    # re-dispatch legs and RE-EXECUTE the started node (side effects can
+    # duplicate) — so an in-budget node-started row is left ``running`` for the
+    # in-process watchdogs and the reconcile age gate's truthful
+    # ``run.no_progress`` (the generic stale-heartbeat leg of the reconcile
+    # predicate carries the SAME exclusion so nothing re-dispatches it in
+    # between). The OVER-budget arm (claim_count > budget) still terminal-fails
+    # the row: terminal-fail re-executes nothing, and skipping it there only
+    # delays the pipeline-slot release until the age gate collects the same row
+    # much later. A NULL phase = no durable node-start evidence (legacy rows)
+    # and stays fully eligible for both arms.
+    "AND (claim_count > :retry_budget "
+    "     OR dispatch_phase IS NULL "
+    "     OR dispatch_phase <> :first_node_phase) "
+    "RETURNING id, organisation_id, pipeline_id, claim_count"
+)
+
 #: FAR-1257: floor on the park margin — five ``dispatcher_reconcile`` ticks
 #: (60s each). ``HITL_PARK_GRACE_SECONDS`` may be configured down to its own
 #: ``ge=60`` floor, which would otherwise let the park sweep match in the same
@@ -262,6 +312,80 @@ async def _org_lock_bounded_conn(
         yield conn
 
 
+async def _park_one_org(
+    async_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    *,
+    window: int,
+    park_margin: int,
+    parked: list[Any],
+) -> None:
+    """Park one org's expired HITL runs inside its bounded transaction.
+
+    A bounded-wait expiry (SQLSTATE 55P03) is SKIPPED with a WARNING (the org
+    transaction rolled back whole); every other failure re-raises into the
+    ``HitlParkError`` contract.
+    """
+    try:
+        async with _org_lock_bounded_conn(async_engine, org_id) as conn:
+            result = await conn.execute(
+                _PARK_RUNS_SQL,
+                {
+                    "oid": str(org_id),
+                    "grace_seconds": window,
+                    "park_margin_seconds": park_margin,
+                    "parked_status": HITL_PARKED_STATUS,
+                    "awaiting_status": AWAITING_HUMAN_STATUS,
+                },
+            )
+            rows = result.all()
+            if not rows:
+                return
+            # qa F6: the count/log is recorded only after the park UPDATE
+            # succeeded — the single write of the org transaction, so a
+            # failure here rolls the park back BEFORE the rows are ever
+            # counted (no phantom "hitl_park.parked" events).
+            parked.extend(rows)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if not is_row_lock_timeout(exc):
+            raise
+        # FAR-1592: bounded-wait expiry (55P03). The org transaction rolled
+        # back whole, so NONE of its runs moved out of ``awaiting_human`` —
+        # every candidate row is still parked-eligible and the next 5-minute
+        # tick re-parks it. A skip, never a lost recovery; WARNING + full
+        # chain with the org and window so it is observable, never a silent
+        # no-op. Other SQLSTATEs re-raise into the HitlParkError contract.
+        _log.warning(
+            "hitl_park.org_lock_timeout org=%s grace_seconds=%d "
+            "park_margin_seconds=%d (SQLSTATE 55P03 from the bounded "
+            "mutation_row_lock_timeout_ms wait) — org transaction "
+            "rolled back with NO rows parked; the expired runs stay "
+            "awaiting_human and are re-parked by the next sweep tick",
+            org_id,
+            window,
+            park_margin,
+            exc_info=True,
+        )
+
+
+def _log_parked_runs(parked: list[Any], window: int) -> None:
+    """Emit the loud per-run + summary park events after a sweep."""
+    # Loud per-run event — the parked run left review state; operators
+    # must see every park (the incident class this prevents is silent).
+    for row in parked:
+        _log.warning(
+            "hitl_park.parked run=%s pipeline=%s org=%s (gate expired unanswered past %ss grace)",
+            row.id,
+            row.pipeline_id,
+            row.organisation_id,
+            window,
+        )
+    if parked:
+        _log.warning("hitl_park.swept parked=%d", len(parked))
+
+
 async def park_expired_hitl_runs(
     async_engine: AsyncEngine,
     *,
@@ -325,68 +449,20 @@ async def park_expired_hitl_runs(
         org_ids = await _sweep_org_ids(async_engine)
 
         for org_id in org_ids:
-            try:
-                async with _org_lock_bounded_conn(async_engine, org_id) as conn:
-                    result = await conn.execute(
-                        _PARK_RUNS_SQL,
-                        {
-                            "oid": str(org_id),
-                            "grace_seconds": window,
-                            "park_margin_seconds": park_margin,
-                            "parked_status": HITL_PARKED_STATUS,
-                            "awaiting_status": AWAITING_HUMAN_STATUS,
-                        },
-                    )
-                    rows = result.all()
-                    if not rows:
-                        continue
-                    # qa F6: the count/log is recorded only after the park UPDATE
-                    # succeeded — the single write of the org transaction, so a
-                    # failure here rolls the park back BEFORE the rows are ever
-                    # counted (no phantom "hitl_park.parked" events).
-                    parked.extend(rows)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                if not is_row_lock_timeout(exc):
-                    raise
-                # FAR-1592: bounded-wait expiry (55P03). The org transaction
-                # rolled back whole, so NONE of its runs moved out of
-                # ``awaiting_human`` — every candidate row is still parked-
-                # eligible and the next 5-minute tick re-parks it. A skip,
-                # never a lost recovery; WARNING + full chain with the org and
-                # window so it is observable, never a silent no-op. Other
-                # SQLSTATEs re-raise into the HitlParkError contract above.
-                _log.warning(
-                    "hitl_park.org_lock_timeout org=%s grace_seconds=%d "
-                    "park_margin_seconds=%d (SQLSTATE 55P03 from the bounded "
-                    "mutation_row_lock_timeout_ms wait) — org transaction "
-                    "rolled back with NO rows parked; the expired runs stay "
-                    "awaiting_human and are re-parked by the next sweep tick",
-                    org_id,
-                    window,
-                    park_margin,
-                    exc_info=True,
-                )
-                continue
+            await _park_one_org(
+                async_engine,
+                org_id,
+                window=window,
+                park_margin=park_margin,
+                parked=parked,
+            )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         sweep_error = exc
         _log.exception("hitl_park.sweep_failed")
     finally:
-        # Loud per-run event — the parked run left review state; operators
-        # must see every park (the incident class this prevents is silent).
-        for row in parked:
-            _log.warning(
-                "hitl_park.parked run=%s pipeline=%s org=%s (gate expired unanswered past %ss grace)",
-                row.id,
-                row.pipeline_id,
-                row.organisation_id,
-                window,
-            )
-        if parked:
-            _log.warning("hitl_park.swept parked=%d", len(parked))
+        _log_parked_runs(parked, window)
 
     if sweep_error is not None:
         # FAR-1549: record the parks that DID land before re-raising — a
@@ -426,6 +502,114 @@ async def _record_parked_run_audits(async_engine: AsyncEngine, parked: list[Any]
         raise
     except Exception:
         _log.exception("hitl_park.audit_failed parked=%d", len(parked))
+
+
+async def _reconcile_one_org(
+    async_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    *,
+    window: int,
+    retry_budget: int,
+    released: list[Any],
+    retried: list[Any],
+) -> None:
+    """Sweep one org's stale ``running`` runs inside its bounded transaction.
+
+    A bounded-wait expiry (SQLSTATE 55P03) is SKIPPED with a WARNING (the org
+    transaction rolled back whole); every other failure re-raises into the
+    ``SlotReconciliationError`` contract.
+    """
+    try:
+        async with _org_lock_bounded_conn(async_engine, org_id) as conn:
+            result = await conn.execute(
+                _RECONCILE_RUNS_SQL,
+                {
+                    "oid": str(org_id),
+                    "stale_seconds": window,
+                    "detail": _SLOT_RELEASE_DETAIL,
+                    "retry_budget": retry_budget,
+                    "first_node_phase": PHASE_FIRST_NODE_DISPATCHED,
+                },
+            )
+            for row in result.all():
+                if getattr(row, "claim_count", 0) <= retry_budget:
+                    retried.append(row)
+                else:
+                    released.append(row)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if not is_row_lock_timeout(exc):
+            raise
+        # FAR-1592: the bounded wait expired (55P03) — a live writer (executor
+        # heartbeat / claim) holds a row this org's sweep needs. The org
+        # transaction rolled back WHOLE, so NOT ONE of its stale ``running``
+        # rows moved: they are still ``running`` with a stale heartbeat and the
+        # next 5-minute sweep tick re-processes them — a skip, never a lost
+        # recovery. WARNING + full chain with the org and window: observable,
+        # never a silent no-op. Other SQLSTATEs are not lock timeouts and
+        # re-raise into the failure contract above.
+        _log.warning(
+            "slot_reconciliation.org_lock_timeout org=%s stale_seconds=%d "
+            "retry_budget=%d (SQLSTATE 55P03 from the bounded "
+            "mutation_row_lock_timeout_ms wait) — org transaction rolled "
+            "back with NO rows swept; the heartbeat-stale runs stay "
+            "``running`` and are re-processed by the next sweep tick",
+            org_id,
+            window,
+            retry_budget,
+            exc_info=True,
+        )
+
+
+async def _finalise_reconciled_runs(
+    async_engine: AsyncEngine,
+    released: list[Any],
+    retried: list[Any],
+    *,
+    window: int,
+    retry_budget: int,
+    per_pipeline: Counter[str],
+) -> None:
+    """Emit the per-run events and advance journeys for released runs."""
+    # Post-release advance — only for terminal-failed runs (FAR-779): retried
+    # runs (reset to pending) are NOT terminal and must NOT get their journeys
+    # + daily facts advanced — they will be re-dispatched by
+    # dispatcher_reconcile.
+    for row in released:
+        per_pipeline[str(row.pipeline_id)] += 1
+        _log.info(
+            "slot_reconciliation.released run=%s pipeline=%s org=%s "
+            "(heartbeat stale past %ss, claim_count=%d exceeded budget %d)",
+            row.id,
+            row.pipeline_id,
+            row.organisation_id,
+            window,
+            getattr(row, "claim_count", 0),
+            retry_budget,
+        )
+        await _advance_released_run(async_engine, row.id, row.organisation_id)
+    for row in retried:
+        per_pipeline[str(row.pipeline_id)] += 1
+        _log.warning(
+            "slot_reconciliation.retried run=%s pipeline=%s org=%s "
+            "(heartbeat stale past %ss, claim_count=%d <= budget %d"
+            " — reset to pending for re-dispatch)",
+            row.id,
+            row.pipeline_id,
+            row.organisation_id,
+            window,
+            getattr(row, "claim_count", 0),
+            retry_budget,
+        )
+    total_swept = len(released) + len(retried)
+    if total_swept:
+        _log.info(
+            "slot_reconciliation.swept released=%d retried=%d pipelines=%d",
+            len(released),
+            len(retried),
+            len(per_pipeline),
+        )
 
 
 async def reconcile_pipeline_slots(
@@ -488,148 +672,28 @@ async def reconcile_pipeline_slots(
         org_ids = await _sweep_org_ids(async_engine)
 
         for org_id in org_ids:
-            try:
-                async with _org_lock_bounded_conn(async_engine, org_id) as conn:
-                    # FAR-779 / FAR-812: auto-retry heartbeat-stale runs instead of
-                    # terminal-failing them immediately.  When claim_count <=
-                    # retry_budget (settings.heartbeat_stale_retry_budget), the run is
-                    # reset to pending (clearing dispatched_at/dispatcher/
-                    # heartbeat_at) so dispatcher_reconcile re-dispatches it on its
-                    # next 60s tick. When claim_count > budget, the run is
-                    # terminal-failed — it has been claimed multiple times and
-                    # still goes heartbeat-stale, meaning it is genuinely stuck.
-                    # FAR-1649 qa iteration 2 (finding 5): the UPDATE's WHERE
-                    # excludes durably node-STARTED rows (first_node_dispatched)
-                    # from the RETRY-RESET arm only — see the SQL comment below;
-                    # over-budget node-started rows are still terminal-failed
-                    # here so their pipeline slot is released promptly.
-                    result = await conn.execute(
-                        text(
-                            "UPDATE runs SET "
-                            "status = CASE "
-                            "  WHEN claim_count <= :retry_budget THEN 'pending' "
-                            "  ELSE 'failed' "
-                            "END, "
-                            "error_code = 'heartbeat_stale', "
-                            "error_detail = :detail, "
-                            "completed_at = CASE "
-                            "  WHEN claim_count <= :retry_budget THEN NULL "
-                            "  ELSE now() "
-                            "END, "
-                            "dispatched_at = NULL, "
-                            "dispatcher = NULL, "
-                            "heartbeat_at = NULL "
-                            "WHERE status = 'running' "
-                            "AND organisation_id = :oid "
-                            "AND cancellation_requested = false "
-                            "AND COALESCE(heartbeat_at, started_at, created_at) "
-                            "    < now() - (:stale_seconds * interval '1 second') "
-                            # FAR-1649 qa iteration 2 (finding 5): the node-started
-                            # exclusion applies to the RETRY-RESET arm only
-                            # (claim_count <= budget). The retry reset clears
-                            # ``dispatched_at``, which would admit the row to the
-                            # reconcile re-dispatch legs and RE-EXECUTE the started
-                            # node (side effects can duplicate) — so an in-budget
-                            # node-started row is left ``running`` for the
-                            # in-process watchdogs and the reconcile age gate's
-                            # truthful ``run.no_progress`` (the generic
-                            # stale-heartbeat leg of the reconcile predicate
-                            # carries the SAME exclusion so nothing re-dispatches
-                            # it in between). The OVER-budget arm (claim_count >
-                            # budget) still terminal-fails the row: terminal-fail
-                            # re-executes nothing, and skipping it there only
-                            # delays the pipeline-slot release until the age gate
-                            # collects the same row much later. A NULL phase = no
-                            # durable node-start evidence (legacy rows) and stays
-                            # fully eligible for both arms.
-                            "AND (claim_count > :retry_budget "
-                            "     OR dispatch_phase IS NULL "
-                            "     OR dispatch_phase <> :first_node_phase) "
-                            "RETURNING id, organisation_id, pipeline_id, claim_count"
-                        ),
-                        {
-                            "oid": str(org_id),
-                            "stale_seconds": window,
-                            "detail": _SLOT_RELEASE_DETAIL,
-                            "retry_budget": retry_budget,
-                            "first_node_phase": PHASE_FIRST_NODE_DISPATCHED,
-                        },
-                    )
-                    for row in result.all():
-                        if getattr(row, "claim_count", 0) <= retry_budget:
-                            retried.append(row)
-                        else:
-                            released.append(row)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                if not is_row_lock_timeout(exc):
-                    raise
-                # FAR-1592: the bounded wait expired (55P03) — a live writer
-                # (executor heartbeat / claim) holds a row this org's sweep
-                # needs. The org transaction rolled back WHOLE, so NOT ONE of
-                # its stale ``running`` rows moved: they are still ``running``
-                # with a stale heartbeat and the next 5-minute sweep tick
-                # re-processes them — a skip, never a lost recovery. WARNING
-                # + full chain with the org and window: observable, never a
-                # silent no-op. Other SQLSTATEs are not lock timeouts and
-                # re-raise into the failure contract above.
-                _log.warning(
-                    "slot_reconciliation.org_lock_timeout org=%s stale_seconds=%d "
-                    "retry_budget=%d (SQLSTATE 55P03 from the bounded "
-                    "mutation_row_lock_timeout_ms wait) — org transaction rolled "
-                    "back with NO rows swept; the heartbeat-stale runs stay "
-                    "``running`` and are re-processed by the next sweep tick",
-                    org_id,
-                    window,
-                    retry_budget,
-                    exc_info=True,
-                )
-                continue
+            await _reconcile_one_org(
+                async_engine,
+                org_id,
+                window=window,
+                retry_budget=retry_budget,
+                released=released,
+                retried=retried,
+            )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         sweep_error = exc
         _log.exception("slot_reconciliation.sweep_failed")
     finally:
-        # Post-release advance — only for terminal-failed runs (FAR-779):
-        # retried runs (reset to pending) are NOT terminal and must NOT get
-        # their journeys + daily facts advanced — they will be re-dispatched
-        # by dispatcher_reconcile.
-        for row in released:
-            per_pipeline[str(row.pipeline_id)] += 1
-            _log.info(
-                "slot_reconciliation.released run=%s pipeline=%s org=%s "
-                "(heartbeat stale past %ss, claim_count=%d exceeded budget %d)",
-                row.id,
-                row.pipeline_id,
-                row.organisation_id,
-                window,
-                getattr(row, "claim_count", 0),
-                retry_budget,
-            )
-            await _advance_released_run(async_engine, row.id, row.organisation_id)
-        for row in retried:
-            per_pipeline[str(row.pipeline_id)] += 1
-            _log.warning(
-                "slot_reconciliation.retried run=%s pipeline=%s org=%s "
-                "(heartbeat stale past %ss, claim_count=%d <= budget %d"
-                " — reset to pending for re-dispatch)",
-                row.id,
-                row.pipeline_id,
-                row.organisation_id,
-                window,
-                getattr(row, "claim_count", 0),
-                retry_budget,
-            )
-        total_swept = len(released) + len(retried)
-        if total_swept:
-            _log.info(
-                "slot_reconciliation.swept released=%d retried=%d pipelines=%d",
-                len(released),
-                len(retried),
-                len(per_pipeline),
-            )
+        await _finalise_reconciled_runs(
+            async_engine,
+            released,
+            retried,
+            window=window,
+            retry_budget=retry_budget,
+            per_pipeline=per_pipeline,
+        )
 
     if sweep_error is not None:
         raise SlotReconciliationError(

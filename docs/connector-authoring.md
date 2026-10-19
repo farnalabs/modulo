@@ -99,10 +99,10 @@ classes exempt from the test is `CIRunnerBase`, `FilesystemConnector`,
 
 Two further optional seams worth knowing:
 
-- `_egress_ssl_context: ssl.SSLContext | None` — the class attribute every
+- `_egress_ssl_context: ssl.SSLContext | None` – the class attribute every
   connector's outbound client is built from; the `None` default means an
   instance that never makes an outbound call pays nothing.
-- `async def close(self) -> None` — duck-typed, not declared on `ConnectorBase`.
+- `async def close(self) -> None` – duck-typed, not declared on `ConnectorBase`.
   The hub awaits it on every held connector at teardown if present, so
   implement it if your connector owns a client or session pool.
 

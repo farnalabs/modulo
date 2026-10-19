@@ -283,8 +283,10 @@ jobs:
           .semgrep/exception-mro-ordering.yml:.semgrep/tests/test_exception_mro_ordering.py
           .semgrep/hitl-review-edge-mutation-outside-guard.yml:.semgrep/tests/hitl-review-edge-mutation-outside-guard.py
           .semgrep/hitl-review-mcp-caller-type.yml:.semgrep/tests/hitl-review-mcp-caller-type-literal.py
+          .semgrep/mcp-human-only-constant-non-browser.yml:.semgrep/tests/mcp-human-only-constant-non-browser.py
           .semgrep/missing-is-privileged.yml:.semgrep/tests/graph-write-missing-is-privileged.py
           .semgrep/missing_session_begin.yml:.semgrep/missing_session_begin.py
+          .semgrep/no-op-except-reraise.yml:.semgrep/tests/no-op-except-reraise.py
           .semgrep/no-raw-httpx-client.yml:.semgrep/tests/no-raw-httpx-client.py
           .semgrep/non_serializable_in_langgraph_state.yml:.semgrep/tests/non-serializable-in-langgraph-state.py
           .semgrep/retry-loop-last-exc.yml:.semgrep/tests/retry-loop-last-exc.py
@@ -709,7 +711,7 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         if: needs.changes.outputs.frontend == 'true'
         with:
-          version: 11.28.5
+          version: 11.28.6
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         if: needs.changes.outputs.frontend == 'true'
         with:
@@ -895,7 +897,7 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         if: needs.changes.outputs.frontend == 'true'
         with:
-          version: 11.28.5
+          version: 11.28.6
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         if: needs.changes.outputs.frontend == 'true'
         with:
@@ -1307,7 +1309,7 @@ jobs:
           enable-cache: true
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.5
+          version: 11.28.6
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"

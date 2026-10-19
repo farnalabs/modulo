@@ -64,10 +64,10 @@ Your infra, your data, no cloud dependency. Runs on Docker Compose or Fly; no te
 **Where:** deployment docs, `docs/architecture.md`.
 **Benefit:** adoption is not blocked by data-residency concerns.
 
-## 10. Capacity is a supported state — the boundary is not an error path
+## 10. Capacity is a supported state – the boundary is not an error path
 
 Reaching a capacity limit is a normal, supported operating state and evidence the
-system is being fully used — never a failure. Modulo's behaviour at the concurrency
+system is being fully used – never a failure. Modulo's behaviour at the concurrency
 boundary must be indistinguishable in quality from its behaviour below it: at the
 limit, work is queued and explained rather than refused; every capacity decision
 names the limit that bound it; nothing recoverable is lost; no pipeline's saturation
@@ -87,7 +87,7 @@ observable and controllable; at the limit it must be the same product.
 `modulo/core/dispatch.py`, `modulo/core/hitl_manager/`, `modulo/core/notifier/`, ADR 057.
 
 **Benefit:** "we are at capacity" is an operational fact an operator reads and acts
-on — not a 429 nobody can explain and a slot nobody can see.
+on – not a 429 nobody can explain and a slot nobody can see.
 
 ## How this doc is used
 

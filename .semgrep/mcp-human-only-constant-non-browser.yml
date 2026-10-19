@@ -1,0 +1,28 @@
+rules:
+  - id: mcp-human-only-constant-non-browser
+    patterns:
+      # NOTE: `True` cannot be written as a bare pattern value — semgrep
+      # treats an ALL-CAPS identifier as a metavariable, so `... = True`
+      # would match ANY expression. Bind the value and constrain it by
+      # regex to the literal `True` instead.
+      - pattern-either:
+          - pattern: non_browser_credential = $V
+          - pattern: $F(..., non_browser_credential=$V, ...)
+      - metavariable-regex:
+          metavariable: $V
+          regex: '^\s*True\s*$'
+    message: >
+      ADR 063 step 1 (FAR-1957): the MCP human_only gate
+      (``mcp_server._check_human_only_gate``) MUST derive
+      ``non_browser_credential`` from the shared authority resolver
+      (``modulo.auth.human_linkage.resolve_human_linkage``), never a hard-coded
+      ``True``. A constant ``True`` denies EVERY MCP caller regardless of
+      credential class — the pre-ADR-063 behaviour that made a human's own
+      MCP harness unable to exercise their own HITL authority. It must not
+      silently return. ``deliver_manual`` stays browser-only via the action
+      check, not via this constant.
+    languages: [python]
+    severity: ERROR
+    paths:
+      include:
+        - "**/backend/src/modulo/api/mcp_server.py"

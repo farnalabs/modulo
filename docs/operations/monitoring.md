@@ -60,9 +60,10 @@ These can be set at build time (`ARG`/`ENV` in Dockerfile) or at runtime via
 
 ## CSP
 
-When third-party monitoring backends are enabled, the backend
-`SecurityHeadersMiddleware` includes the required domains in the
-`Content-Security-Policy` `connect-src` directive.
+The backend `SecurityHeadersMiddleware` puts these domains in the
+`Content-Security-Policy` `connect-src` directive on **every** response,
+whether or not the matching backend is enabled at runtime. A backend whose
+endpoint is not in this list is blocked by CSP until its domain is added.
 
 ### Default allowed domains
 
@@ -70,7 +71,7 @@ When third-party monitoring backends are enabled, the backend
 |---|---|
 | `sentry` | `*.ingest.sentry.io` |
 | `datadog-rum` | `*.datadoghq.com`, `*.dd.dg`, `*.rum.browserevents.com` |
-| `grafana-faro` | User-configured collector URL |
+| `grafana-faro` | None by default – add the collector URL via `MODULO_MONITOR_DOMAINS` |
 
 ### Custom domains
 

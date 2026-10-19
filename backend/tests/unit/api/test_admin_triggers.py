@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes import admin_triggers
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
@@ -42,6 +43,13 @@ def _make_event_result(events: list[MagicMock]) -> MagicMock:
 def _authz_result() -> MagicMock:
     result = MagicMock()
     result.scalar_one_or_none = MagicMock(return_value=True)
+    return result
+
+
+def _counts_result(rows: list[tuple[str, int, int]] | None = None) -> MagicMock:
+    """The FAR-1344 capacity-outcome grouped-count result."""
+    result = MagicMock()
+    result.all = MagicMock(return_value=rows if rows is not None else [])
     return result
 
 
@@ -136,7 +144,9 @@ class TestListTriggerEvents:
             count_result.scalar = MagicMock(return_value=1)
             authz_result = MagicMock()
             authz_result.scalar_one_or_none = MagicMock(return_value=True)
-            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result])
+            session.execute = AsyncMock(
+                side_effect=[authz_result, event_result, count_result, _counts_result([("backpressure_skipped", 2, 1)])]
+            )
 
             async def override_session() -> AsyncGenerator[AsyncMock, None]:
                 yield session
@@ -150,6 +160,11 @@ class TestListTriggerEvents:
         assert body["total"] == 1
         assert body["items"][0]["trigger_type"] == "manual"
         assert body["items"][0]["validation_result"] == "accepted"
+        assert body["result_counts"]["recent"]["backpressure_skipped"] == 2
+        assert body["result_counts"]["previous"]["backpressure_skipped"] == 1
+        assert body["result_counts"]["total_recent"] == 2
+        assert body["result_counts"]["total_previous"] == 1
+        assert body["result_counts"]["direction"] == "up"
 
     def test_returns_200_with_filters(self, client: TestClient) -> None:
         event = _make_mock_event(trigger_type="webhook", validation_result="hmac_failed")
@@ -160,7 +175,7 @@ class TestListTriggerEvents:
             count_result.scalar = MagicMock(return_value=1)
             authz_result = MagicMock()
             authz_result.scalar_one_or_none = MagicMock(return_value=True)
-            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result])
+            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result, _counts_result()])
 
             async def override_session() -> AsyncGenerator[AsyncMock, None]:
                 yield session
@@ -176,6 +191,11 @@ class TestListTriggerEvents:
         assert len(body["items"]) == 1
         assert body["items"][0]["trigger_type"] == "webhook"
         assert body["items"][0]["validation_result"] == "hmac_failed"
+        # An empty grouped-count result still yields the full zeroed vocabulary
+        # and a flat trend (never a missing field).
+        assert body["result_counts"]["recent"]["coalesced"] == 0
+        assert body["result_counts"]["total_recent"] == 0
+        assert body["result_counts"]["direction"] == "flat"
 
     def test_returns_empty_when_no_events(self, client: TestClient) -> None:
         with patch("modulo.api.routes.admin_triggers.set_rls_org"):
@@ -185,7 +205,7 @@ class TestListTriggerEvents:
             count_result.scalar = MagicMock(return_value=0)
             authz_result = MagicMock()
             authz_result.scalar_one_or_none = MagicMock(return_value=True)
-            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result])
+            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result, _counts_result()])
 
             async def override_session() -> AsyncGenerator[AsyncMock, None]:
                 yield session
@@ -237,3 +257,39 @@ class TestListTriggerEvents:
             self._client_with_execute_error(client, RuntimeError("boom"))
             resp = client.get(self.URL)
         assert resp.status_code == 500
+
+
+class TestFetchResultCounts:
+    """Direct coverage for the FAR-1344 capacity-outcome helpers."""
+
+    def test_trend_direction_up_down_flat(self) -> None:
+        assert admin_triggers._trend_direction(5, 1) == "up"
+        assert admin_triggers._trend_direction(1, 5) == "down"
+        assert admin_triggers._trend_direction(3, 3) == "flat"
+
+    async def test_unknown_validation_result_is_ignored(self) -> None:
+        """A row outside the capacity vocabulary is skipped, not counted."""
+        session = _make_mock_session()
+        session.execute = AsyncMock(
+            return_value=_counts_result(
+                [
+                    ("backpressure_skipped", 2, 1),
+                    ("some_future_result", 9, 9),
+                ]
+            )
+        )
+        principal = MagicMock()
+        principal.organisation_id = _ORG_ID
+
+        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+            counts = await admin_triggers._fetch_result_counts(session, principal, now=_NOW)
+
+        assert counts.recent == {
+            "backpressure_skipped": 2,
+            "concurrency_limit_reached": 0,
+            "coalesced": 0,
+        }
+        assert counts.previous["backpressure_skipped"] == 1
+        assert counts.total_recent == 2
+        assert counts.total_previous == 1
+        assert counts.direction == "up"

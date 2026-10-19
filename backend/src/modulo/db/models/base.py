@@ -27,11 +27,17 @@ ONDELETE_SET_NULL: Final[str] = "SET NULL"
 # ``JSON().with_variant(JSONB(), "postgresql")`` expression inline. The
 # architecture gate ``tests/architecture/test_model_jsonb_column_parity.py``
 # enforces this single-definition rule across the whole source tree (migrations
-# excluded) and dialect parity for the columns migration
-# ``0147_json_to_jsonb_standardize`` converted **only**. It is NOT a general
-# jsonb-vs-JSON gate: columns made jsonb by any other migration are outside its
-# scope — see the gate's docstring for the tracked residual.
+# excluded) and dialect parity for **every** column a migration declares
+# ``jsonb`` (the pair set is derived from the migrations themselves, not a
+# hand-maintained inventory).
 JSONB_COL: Final[JSON] = JSON().with_variant(JSONB(), "postgresql")
+
+# ``none_as_null=True`` sibling for a physical-jsonb column whose ORM
+# declaration binds Python ``None`` as SQL NULL rather than the JSON ``null``
+# value (``runs.work_item_refs`` / ``runs.variant_config_snapshot``). The
+# variant carries the same flag so the postgres bind path preserves that
+# semantic; a plain ``JSONB_COL`` would silently change None handling.
+JSONB_COL_NONE_AS_NULL: Final[JSON] = JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
 
 
 class Base(DeclarativeBase):

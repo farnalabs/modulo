@@ -258,7 +258,7 @@
             <div
               v-if="testResults[fwd.forwarder_type]"
               class="rounded-lg border p-3 text-sm"
-              :class="testResults[fwd.forwarder_type]?.ok ? 'border-success/50 bg-success/10 text-success' : 'border-destructive/50 bg-destructive/10 text-destructive'"
+              :class="testResults[fwd.forwarder_type]?.ok ? 'border-success/50 bg-success/10 text-success' : 'border-destructive/50 bg-destructive/10 text-destructive-text'"
             >
               <p class="font-medium">{{ testResults[fwd.forwarder_type]?.ok ? $t('views.SettingsErrorForwardersView.connection_successful') : $t('views.SettingsErrorForwardersView.connection_failed') }}</p>
               <p class="mt-0.5">{{ testResults[fwd.forwarder_type]?.message }}</p>

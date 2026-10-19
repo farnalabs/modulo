@@ -15,9 +15,19 @@
       @update:search-query="searchQuery = $event"
     />
 
+    <!-- FAR-1913: axe `scrollable-region-focusable` requires this scroll region
+         to be reachable by keyboard. The editing form already contains focusable
+         controls; the empty/`:id`-not-found state did not, so it now offers a
+         real CTA button. That is the focusable child the rule wants — putting
+         `tabindex` on `<main>` itself trips SonarCloud Web:S6845 (tabindex
+         belongs on interactive elements). -->
     <main class="flex-1 overflow-y-auto">
       <div v-if="!editingSchema" class="p-6">
-        <EmptyState :title="$t('views.SchemaEditorView.select_or_create')" />
+        <EmptyState :title="$t('views.SchemaEditorView.select_or_create')">
+          <Button data-testid="schema-editor-empty-new" @click="createNewSchema">
+            {{ $t('views.SchemaEditorView.new_schema') }}
+          </Button>
+        </EmptyState>
       </div>
 
       <template v-else>
@@ -39,8 +49,8 @@
           </header>
 
           <div v-if="validationErrors.length > 0" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-            <p class="mb-2 text-sm font-medium text-destructive">{{ $t('views.SchemaEditorView.validation_errors') }}</p>
-            <ul class="list-inside list-disc space-y-1 text-sm text-destructive/90">
+            <p class="mb-2 text-sm font-medium text-destructive-text">{{ $t('views.SchemaEditorView.validation_errors') }}</p>
+            <ul class="list-inside list-disc space-y-1 text-sm text-destructive-text">
               <li v-for="err in validationErrors" :key="err">{{ err }}</li>
             </ul>
           </div>
