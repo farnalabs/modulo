@@ -43,6 +43,7 @@ from modulo.core.cost_controller.finalize import (
     derive_node_type_map,
     finalize_cancelled_run,
     finalize_cost,
+    finalize_failed_run,
 )
 from modulo.db.crud.run_node_outputs import RunBlobs
 
@@ -928,6 +929,138 @@ async def test_finalize_cancelled_run_streamed_with_prior_pause_finalizes() -> N
     mock_finalize.assert_awaited_once()
     kwargs = mock_finalize.await_args.kwargs
     assert kwargs["status"] == "cancelled"
+    assert kwargs["segment_node_token_usage"] == stored_usage
+    assert kwargs["segment_completed_node_outputs"] == stored_outputs
+    assert kwargs["is_terminal"] is True
+
+
+# ---------------------------------------------------------------------------
+# finalize_failed_run — the node-deadline DERIVED cost (FAR-1993)
+# ---------------------------------------------------------------------------
+
+
+async def test_finalize_failed_run_derived_hours_book_run_level_cost() -> None:
+    """An empty segment + derived wall-clock books DERIVED sandbox spend.
+
+    A deadline-killed sandbox node never wrote ``output.json``, so nothing is
+    in the stored sets. With ``derived_sandbox_wall_hours`` the run must still
+    carry a non-zero cost, explicitly marked ``source="derived"``. Without the
+    derived branch the write would be total 0 (or nothing at all).
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()) as mock_facts,
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=0.5,
+        )
+    mock_urs.assert_awaited_once()
+    kwargs = mock_urs.await_args.kwargs
+    assert mock_urs.await_args.args[2] == "failed"
+    assert kwargs["error_code"] == "node_deadline_exceeded"
+    assert kwargs["error_detail"] == "node 'n1' exceeded its deadline"
+    assert kwargs["total_cost_usd"] == Decimal("0.065")
+    entries = kwargs["cost_breakdown"]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["component"] == "sandbox_infra"
+    assert entry["source"] == "derived"
+    assert entry["basis"]["derived_from"] == "node_deadline_watchdog"
+    assert entry["basis"]["wall_clock_hours"] == 0.5
+    mock_facts.assert_awaited_once()
+
+
+async def test_finalize_failed_run_empty_segment_without_derived_hours_invents_no_cost() -> None:
+    """No stored sets AND no derived duration: nothing is attributed to the run.
+
+    Pins the no-regression case — the pre-fix partial-spend-lost outcome is
+    unchanged and no synthetic cost is invented.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=None,
+        )
+    mock_urs.assert_not_awaited()
+    logged = [str(c) for c in mock_log.warning.call_args_list]
+    assert any("cost_components_partial_spend_lost" in line for line in logged)
+
+
+async def test_finalize_failed_run_with_real_segment_ignores_derived_hours() -> None:
+    """A run WITH stored node data routes through the normal component build.
+
+    The derived shortcut must not run (the node's own server-verified
+    wall-clock is the authority) and the failed status + error fields are
+    forwarded to ``finalize_cost``.
+    """
+    stored_usage = {"node-a": {"input_tokens": 5, "output_tokens": 3, "total_tokens": 8}}
+    stored_outputs = {"node-a": {"output": {"status": "completed", "wall_clock_time_ms": 1000}}}
+    stored_telemetry = {"node-a": {"status": "completed", "wall_clock_time_ms": 1000}}
+    run = _make_run(
+        node_token_usage=stored_usage,
+        outputs_json=stored_outputs,
+        node_telemetry_json=stored_telemetry,
+        snapshot_id=uuid.uuid4(),
+    )
+    session = AsyncMock()
+    session.execute = AsyncMock(
+        side_effect=[
+            MagicMock(scalar_one_or_none=MagicMock(return_value=run)),  # the run row
+            MagicMock(scalar_one_or_none=MagicMock(return_value={"nodes": [{"id": "node-a"}]})),  # graph_json
+        ]
+    )
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch(
+            "modulo.core.cost_controller.finalize._write_derived_deadline_terminal",
+            new=AsyncMock(),
+        ) as mock_derived,
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=0.5,
+        )
+    mock_derived.assert_not_awaited()
+    mock_finalize.assert_awaited_once()
+    kwargs = mock_finalize.await_args.kwargs
+    assert kwargs["status"] == "failed"
+    assert kwargs["error_code"] == "node_deadline_exceeded"
+    assert kwargs["error_detail"] == "node 'n1' exceeded its deadline"
     assert kwargs["segment_node_token_usage"] == stored_usage
     assert kwargs["segment_completed_node_outputs"] == stored_outputs
     assert kwargs["is_terminal"] is True

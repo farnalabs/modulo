@@ -257,6 +257,92 @@ async def test_deadline_kill_terminal_fails_without_timeout_coverage():
 
 
 # ---------------------------------------------------------------------------
+# FAR-1993 — a completed deadline-kill books DERIVED sandbox cost
+# ---------------------------------------------------------------------------
+
+
+async def test_deadline_kill_books_derived_cost_after_successful_terminal_write():
+    """A terminal write that LANDED is followed by the derived-cost booking,
+    credited with ``_timeout / 3600.0`` hours.
+
+    Prove-the-fix: without the call site the compensation is never awaited, so
+    the run keeps recording $0 for the node's whole deadline.
+    """
+    fail = AsyncMock(return_value=True)
+    derived = AsyncMock()
+    record = AsyncMock()
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    exec_task = asyncio.create_task(asyncio.sleep(999))
+    stall = asyncio.Event()
+    done = asyncio.Event()
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
+        stack.enter_context(patch("modulo.core.pipeline_execution._record_derived_deadline_cost", derived))
+        await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall)
+    exec_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await exec_task
+    fail.assert_awaited_once()
+    derived.assert_awaited_once()
+    assert derived.await_args.args[1] == "run-1"
+    assert derived.await_args.args[2] == "org-1"
+    assert derived.await_args.kwargs["derived_sandbox_wall_hours"] == 300 / 3600.0
+    assert "n1" in derived.await_args.kwargs["error_detail"]
+    assert "300s" in derived.await_args.kwargs["error_detail"]
+
+
+async def test_deadline_kill_books_no_derived_cost_when_redispatching():
+    """The re-dispatch branch must NOT book a derived cost: the run continues
+    and will be finalised normally by its successor execution."""
+    executor = _make_executor_mock(attempt_count=1)
+    fail = AsyncMock(return_value=True)
+    derived = AsyncMock()
+    record = AsyncMock()
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    exec_task = asyncio.create_task(asyncio.sleep(999))
+    stall = asyncio.Event()
+    done = asyncio.Event()
+    hook, _box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
+    seams = _db_seams({"on": ["timeout"], "max_retries": 1})
+    with contextlib.ExitStack() as stack:
+        for seam in seams:
+            stack.enter_context(seam)
+        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
+        stack.enter_context(patch("modulo.core.pipeline_execution._record_derived_deadline_cost", derived))
+        await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
+    exec_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await exec_task
+    fail.assert_not_awaited()
+    derived.assert_not_awaited()
+
+
+async def test_deadline_kill_books_no_derived_cost_when_terminal_write_rejected():
+    """A fenced terminal write that did NOT land (already terminal / superseded
+    / cancelled) leaves nothing to compensate — no derived cost is booked."""
+    fail = AsyncMock(return_value=False)
+    derived = AsyncMock()
+    record = AsyncMock()
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    exec_task = asyncio.create_task(asyncio.sleep(999))
+    stall = asyncio.Event()
+    done = asyncio.Event()
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
+        stack.enter_context(patch("modulo.core.pipeline_execution._record_derived_deadline_cost", derived))
+        await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall)
+    exec_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await exec_task
+    fail.assert_awaited_once()
+    derived.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
 # FAR-1463 — a watchdog FIRING is recorded whether it re-dispatches or
 # terminal-fails (the re-dispatch path otherwise leaves no fingerprint)
 # ---------------------------------------------------------------------------

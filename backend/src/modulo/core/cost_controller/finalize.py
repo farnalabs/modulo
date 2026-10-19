@@ -143,6 +143,7 @@ __all__ = [
     "derive_node_type_map",
     "finalize_cancelled_run",
     "finalize_cost",
+    "finalize_failed_run",
     "load_live_components",
 ]
 
@@ -3020,3 +3021,185 @@ async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, or
         is_terminal=True,
         session_factory=None,
     )
+
+
+async def _write_derived_deadline_terminal(
+    session: AsyncSession,
+    *,
+    run: Run,
+    run_id: uuid.UUID,
+    error_code: str,
+    error_detail: str,
+    wall_hours: float,
+) -> None:
+    """Write the DERIVED sandbox cost for a node-deadline-killed run (FAR-1993).
+
+    A ``sandbox_agent`` node killed by the node-deadline watchdog never wrote
+    ``output.json``, so it contributes no ``wall_clock_time_ms`` to the cost
+    machinery and the normal finalize computes $0 — while the sandbox really
+    did run for the node's configured deadline. This writer attributes that
+    spend at the RUN level, explicitly marked ``source="derived"`` with
+    ``basis.derived_from = "node_deadline_watchdog"`` so it is never confused
+    with agent-reported (``self_reported``) or component-calculated spend.
+
+    The status/cost write is SHAPE-IDENTICAL to ``_write_empty_terminal`` —
+    total 0 there, the derived total here — so no new raw UPDATE is invented.
+    The terminal analytics fact is recorded the same way every other terminal
+    writer does (``record_run_facts`` inside ``_record_terminal_analytics``),
+    so ``run_daily_facts`` agrees with the run row.
+
+    DELIBERATELY OUT OF SCOPE: the reconcile age-gate path
+    (``cron_helpers`` terminalising ``no_progress`` runs) also records $0, but
+    its wall-clock is NOT evidence a sandbox was alive — the run wedged with no
+    node progress, so the sandbox may have died minutes in and crediting the
+    full age-bound duration would OVERSTATE spend and could falsely trip the
+    spend ceiling. Do not reuse this writer for that path.
+    """
+    rate = _e2b_rate()
+    total = Decimal(str(wall_hours)) * rate
+    if total > COST_COLUMN_CAP:
+        total = COST_COLUMN_CAP
+        clamped = True
+    else:
+        clamped = False
+    breakdown: list[dict[str, Any]] = [
+        {
+            "component": "sandbox_infra",
+            "display_name": "Sandbox Infrastructure",
+            "source": "derived",
+            "amount_usd": _entry_amount(total),
+            "formula_applied": "rate * wall_clock_hours",
+            "rate_usd": str(rate),
+            "basis": {
+                "wall_clock_hours": wall_hours,
+                "derived_from": "node_deadline_watchdog",
+            },
+        }
+    ]
+    if clamped:
+        breakdown.insert(0, dict(TOTAL_CLAMPED_MARKER))
+    _log.warning(
+        "cost_finalize.derived_deadline_cost",
+        extra={
+            "run_id": str(run_id),
+            "wall_clock_hours": wall_hours,
+            "total_cost_usd": str(total),
+        },
+    )
+    await update_run_status(
+        session,
+        run_id,
+        "failed",
+        error_code=error_code,
+        error_detail=error_detail,
+        total_cost_usd=total,
+        cost_breakdown=breakdown,
+        total_tokens=0,
+    )
+    await _record_terminal_analytics(session, run, "failed", {}, writer=_WRITER_EARLY_RETURN)
+
+
+async def _finalize_failed_run(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    error_code: str,
+    error_detail: str,
+    derived_sandbox_wall_hours: float | None,
+) -> None:
+    """Body of :func:`finalize_failed_run` (fail-open envelope lives there)."""
+    run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
+    if run is None:
+        _log.warning("cost_finalize.failed_run_not_found", extra={"run_id": str(run_id)})
+        return
+    stored_blobs = await read_run_blobs(session, run_id=run_id, organisation_id=run.organisation_id)
+    if not (stored_blobs.outputs or run.node_token_usage or stored_blobs.telemetry):
+        if (
+            derived_sandbox_wall_hours is not None
+            and math.isfinite(derived_sandbox_wall_hours)
+            and derived_sandbox_wall_hours > 0
+        ):
+            await _write_derived_deadline_terminal(
+                session,
+                run=run,
+                run_id=run_id,
+                error_code=error_code,
+                error_detail=error_detail,
+                wall_hours=derived_sandbox_wall_hours,
+            )
+            return
+        # No node data AND no derived wall-clock: nothing can be attributed.
+        # Same diagnostic + outcome as the cancel path (accrued spend forfeited).
+        _log.warning("cost_components_partial_spend_lost", extra={"run_id": str(run_id)})
+        return
+    # A run WITH real node data goes through the normal component build — never
+    # the derived shortcut (the node's own server-verified wall-clock wins).
+    node_type_map = await _load_node_type_map(session, run.snapshot_id)
+    await finalize_cost(
+        session,
+        run_id=run_id,
+        org_id=org_id,
+        status="failed",
+        segment_node_token_usage=run.node_token_usage,
+        segment_completed_node_outputs=stored_blobs.outputs,
+        node_type_map=node_type_map,
+        error_code=error_code,
+        error_detail=error_detail,
+        is_terminal=True,
+        session_factory=None,
+    )
+
+
+async def finalize_failed_run(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    error_code: str,
+    error_detail: str,
+    derived_sandbox_wall_hours: float | None = None,
+) -> None:
+    """Finalise a run already terminalised ``failed`` by a raw writer (FAR-1993).
+
+    The node-deadline watchdog cancels the executor and writes the terminal
+    row with a raw UPDATE (no cost columns). This re-reads the stored cumulative
+    sets and finalises through :func:`finalize_cost` exactly like
+    :func:`finalize_cancelled_run`, but with ``status="failed"`` and the error
+    fields.
+
+    When the run has NO stored node data (a deadline-killed sandbox node never
+    wrote ``output.json``) and *derived_sandbox_wall_hours* is a positive finite
+    number, the cost is attributed at the RUN level from that DERIVED duration
+    (the node's configured deadline — the watchdog fired because the node ran to
+    it, so the sandbox really did occupy that time; this is not agent-reported
+    telemetry). See :func:`_write_derived_deadline_terminal` for the provenance
+    marker and the age-gate exclusion.
+
+    FAIL-OPEN: this is a compensating write on a path that has already
+    terminalised the run, so ordinary failures log and are swallowed.
+    ``asyncio.CancelledError`` is re-raised (worker shutdown is not ours to
+    swallow) and a genuine lock abort (40P01 / 55P03) is re-raised too — the
+    caller's ownership layer must own a whole-transaction abort rather than
+    have it silently logged as a lost write (the same convention used by the
+    ledger helpers in this module).
+    """
+    try:
+        await _finalize_failed_run(
+            session,
+            run_id=run_id,
+            org_id=org_id,
+            error_code=error_code,
+            error_detail=error_detail,
+            derived_sandbox_wall_hours=derived_sandbox_wall_hours,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if is_lock_abort(exc):
+            raise
+        _log.warning(
+            "cost_finalize.failed_run_finalize_failed",
+            extra={"run_id": str(run_id), "error_code": error_code},
+            exc_info=True,
+        )
