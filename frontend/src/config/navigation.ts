@@ -70,6 +70,7 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'admin-connectors': { icon: 'Plug', labelKey: 'components.SidebarNav.item_connectors' },
   'admin-model-backends': { icon: 'Cpu', labelKey: 'components.SidebarNav.item_model_backends' },
   'admin-node-categories': { icon: 'Tag', labelKey: 'components.SidebarNav.item_node_categories' },
+  'admin-evidence-redaction': { icon: 'Shield', labelKey: 'components.SidebarNav.item_evidence_redaction' },
   'admin-feature-flags': { icon: 'Flag', labelKey: 'components.SidebarNav.item_feature_flags' },
   'admin-run-retention': { icon: 'Clock', labelKey: 'components.SidebarNav.item_run_retention' },
   // FAR-591 D5: the Runners page replaced the Environment Profiles +
