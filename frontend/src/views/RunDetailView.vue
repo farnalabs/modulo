@@ -1008,9 +1008,11 @@ interface NodeTokenUsage {
   cost_usd?: number
   model_cost_display_usd?: number
   // FAR-1780: the declared model cost the agent itself reported is stamped
-  // "reported" at build time and persisted through node_token_usage. Runs
-  // before that change carry no field — the badge is simply absent for them.
-  provenance?: string
+  // "reported" at build time and persisted through node_token_usage. The
+  // envelope's provenance serializes as a PER-DATUM map ({"model_cost_usd":
+  // "reported", "input_tokens": "reported", ...}); runs before that change
+  // carry no field — the badge is simply absent for them.
+  provenance?: string | Record<string, string>
 }
 
 interface WorkItemRef {
@@ -1068,9 +1070,10 @@ interface NodeEntry {
   inputTokens: number | null
   outputTokens: number | null
   cost: number | null
-  // FAR-1780: true when the declared figure is the agent's own report
-  // (provenance="reported" on the node_token_usage entry) — false/absent for
-  // pre-provenance runs, which render no badge.
+  // FAR-1780: true when the declared figure is the agent's own report (the
+  // node_token_usage entry's provenance stamp carries "reported" — the scalar
+  // string or the per-datum map) — false/absent for pre-provenance runs,
+  // which render no badge.
   costProvenance: boolean
   // FAR-1780: same per-node reported stamp, applied to the envelope figures
   // the telemetry card renders (agent_status, summary) — a sandbox envelope
@@ -1857,13 +1860,28 @@ function formatBreakdownAmount(value: string | number | undefined): string {
 // FAR-1780 (ADR 059, ADR 042 amendment): a declared figure the agent itself
 // reported is provenance "reported" — Modulo observed the dispatch, never the
 // figure. Whichever field shape the backend stamps — the node_token_usage
-// entry's `provenance` or a cost-breakdown entry's `provenance`/`billable`
+// entry's `provenance`, a cost-breakdown entry's `provenance`/`billable`
 // pair (`billable:false` marks a self-reported entry excluded from the run
-// total) — the figure is rendered with a "reported by agent" badge either
-// way. Entries carrying neither field (runs before the change) are the
-// graceful fallback: they show no badge, never a wrong badge.
+// total) or the union's agent-reported envelope values — the figure is
+// rendered with a "reported by agent" badge either way. Entries carrying
+// neither field (runs before the change) are the graceful fallback: they
+// show no badge, never a wrong badge.
+//
+// The runner-token surfaces differ in SHAPE: the run-token-usage union
+// serializes the envelope's provenance as a per-datum MAP
+// ({"model_cost_usd": "reported", ...}) — the envelope stamp lands on the
+// agent-reported datums under the one `provenance` key — while cost-breakdown
+// entries carry the scalar "reported" string. The gate must accept both.
+function provenanceIsReported(provenance: unknown): boolean {
+  if (typeof provenance === 'string') return provenance === 'reported'
+  if (typeof provenance === 'object' && provenance !== null && !Array.isArray(provenance)) {
+    return Object.values(provenance).some(v => v === 'reported')
+  }
+  return false
+}
+
 function figureIsAgentReported(provenance: unknown, billable: unknown = null): boolean {
-  if (provenance === 'reported') return true
+  if (provenanceIsReported(provenance)) return true
   if (billable === false) return true
   return false
 }

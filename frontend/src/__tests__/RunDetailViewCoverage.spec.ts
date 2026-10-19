@@ -775,9 +775,13 @@ describe('RunDetailView coverage — script logic branches', () => {
   // (node_token_usage provenance, breakdown provenance/billable pair) the
   // badge renders; pre-provenance runs carry neither field and show none.
   describe('agent-reported provenance badge (FAR-1780)', () => {
-    it('shows the badge on a per-node cost whose entry carries provenance reported', async () => {
+    it('shows the badge on a per-node cost whose entry carries the reported provenance map', async () => {
+      // The union serializes the envelope's provenance as a PER-DATUM MAP —
+      // the real wire shape, never the scalar string.
       const wrapper = await mountWith(
-        baseRun({ node_token_usage: { 'node-a': { model_cost_display_usd: 0.05, provenance: 'reported' } } }),
+        baseRun({
+          node_token_usage: { 'node-a': { model_cost_display_usd: 0.05, provenance: { model_cost_usd: 'reported', input_tokens: 'reported' } } },
+        }),
       )
       const badge = wrapper.find('[data-testid="run-detail-node-cost-reported"]')
       expect(badge.exists()).toBe(true)
@@ -793,9 +797,9 @@ describe('RunDetailView coverage — script logic branches', () => {
       expect(wrapper.text()).toContain('0.050000')
     })
 
-    it('omits the badge on a provenance value other than reported', async () => {
+    it('omits the badge when the provenance map carries no "reported" values', async () => {
       const wrapper = await mountWith(
-        baseRun({ node_token_usage: { 'node-a': { model_cost_display_usd: 0.05, provenance: 'observed' } } }),
+        baseRun({ node_token_usage: { 'node-a': { model_cost_display_usd: 0.05, provenance: { input_tokens: 'observed' } } } }),
       )
       expect(wrapper.find('[data-testid="run-detail-node-cost-reported"]').exists()).toBe(false)
     })
