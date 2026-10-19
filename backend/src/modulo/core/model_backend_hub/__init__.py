@@ -591,100 +591,190 @@ def _build_backend(
     creds: dict[str, Any],
     default_params: dict[str, Any],
 ) -> ModelBackendBase:
-    if provider == "bedrock":
-        if "aws_access_key_id" not in creds:
-            raise ValueError("Missing 'aws_access_key_id' in credentials for provider 'bedrock'")
-        if "aws_secret_access_key" not in creds:
-            raise ValueError("Missing 'aws_secret_access_key' in credentials for provider 'bedrock'")
-        return _backend_class("bedrock", "BedrockBackend")(
-            aws_access_key_id=creds["aws_access_key_id"],
-            aws_secret_access_key=creds["aws_secret_access_key"],
-            model_id=model_id,
-            region=creds.get("region", "us-east-1"),
-            **default_params,
-        )
-    if provider == "vertexai":
-        if "project" not in creds:
-            raise ValueError("Missing 'project' in credentials for provider 'vertexai'")
-        return _backend_class("vertexai", "VertexAIBackend")(
-            project=creds["project"],
-            model_id=model_id,
-            location=creds.get("location", "us-central-1"),
-            **default_params,
-        )
-    if provider == "custom":
-        return _build_custom_stub_backend(_extract_fixture_map(creds, default_params))
+    # Builders are tried in the historical precedence order; each returns None
+    # when it does not handle this provider.
+    for builder in (
+        _build_bedrock_backend,
+        _build_vertexai_backend,
+        _build_custom_backend,
+        _build_non_openai_compatible_backend,
+        _build_openai_compatible_backend,
+        _build_azure_openai_backend,
+        _build_watsonx_backend,
+        _build_plugin_backend,
+    ):
+        backend = builder(provider, model_id, creds, default_params)
+        if backend is not None:
+            return backend
+    raise ValueError(f"Unknown model backend provider: {provider!r}")
+
+
+def _require_api_key(provider: str, creds: dict[str, Any]) -> None:
+    """Raise when a provider requires an api_key and the credentials omit it."""
     if provider in _API_KEY_REQUIRED_PROVIDERS and "api_key" not in creds:
         raise ValueError(f"Missing 'api_key' in credentials for provider {provider!r}")
 
+
+def _build_bedrock_backend(
+    provider: str,
+    model_id: str,
+    creds: dict[str, Any],
+    default_params: dict[str, Any],
+) -> ModelBackendBase | None:
+    if provider != "bedrock":
+        return None
+    if "aws_access_key_id" not in creds:
+        raise ValueError("Missing 'aws_access_key_id' in credentials for provider 'bedrock'")
+    if "aws_secret_access_key" not in creds:
+        raise ValueError("Missing 'aws_secret_access_key' in credentials for provider 'bedrock'")
+    return _backend_class("bedrock", "BedrockBackend")(
+        aws_access_key_id=creds["aws_access_key_id"],
+        aws_secret_access_key=creds["aws_secret_access_key"],
+        model_id=model_id,
+        region=creds.get("region", "us-east-1"),
+        **default_params,
+    )
+
+
+def _build_vertexai_backend(
+    provider: str,
+    model_id: str,
+    creds: dict[str, Any],
+    default_params: dict[str, Any],
+) -> ModelBackendBase | None:
+    if provider != "vertexai":
+        return None
+    if "project" not in creds:
+        raise ValueError("Missing 'project' in credentials for provider 'vertexai'")
+    return _backend_class("vertexai", "VertexAIBackend")(
+        project=creds["project"],
+        model_id=model_id,
+        location=creds.get("location", "us-central-1"),
+        **default_params,
+    )
+
+
+def _build_custom_backend(
+    provider: str,
+    model_id: str,
+    creds: dict[str, Any],
+    default_params: dict[str, Any],
+) -> ModelBackendBase | None:
+    if provider != "custom":
+        return None
+    return _build_custom_stub_backend(_extract_fixture_map(creds, default_params))
+
+
+def _build_non_openai_compatible_backend(
+    provider: str,
+    model_id: str,
+    creds: dict[str, Any],
+    default_params: dict[str, Any],
+) -> ModelBackendBase | None:
     class_name = _NON_OPENAI_COMPATIBLE.get(provider)
-    if class_name is not None:
-        return _backend_class(provider, class_name)(api_key=creds["api_key"], model_id=model_id, **default_params)
+    if class_name is None:
+        return None
+    _require_api_key(provider, creds)
+    return _backend_class(provider, class_name)(api_key=creds["api_key"], model_id=model_id, **default_params)
 
+
+def _build_openai_compatible_backend(
+    provider: str,
+    model_id: str,
+    creds: dict[str, Any],
+    default_params: dict[str, Any],
+) -> ModelBackendBase | None:
     default_base_url = _OPENAI_COMPATIBLE_BACKENDS.get(provider)
-    if default_base_url is not None or provider == "openai":
-        base_url = creds.get("base_url", default_base_url) if default_base_url is not None else None
+    if default_base_url is None and provider != "openai":
+        return None
+    _require_api_key(provider, creds)
+    base_url = creds.get("base_url", default_base_url) if default_base_url is not None else None
 
-        # FAR-1139: the opencode provider needs custom headers (session ID +
-        # User-Agent) that only OpenCodeBackend sends. All other OpenAI-
-        # compatible providers use the plain base class.
-        if provider == "opencode":
-            from modulo.model_backends.opencode import OpenCodeBackend
+    # FAR-1139: the opencode provider needs custom headers (session ID +
+    # User-Agent) that only OpenCodeBackend sends. All other OpenAI-
+    # compatible providers use the plain base class.
+    if provider == "opencode":
+        from modulo.model_backends.opencode import OpenCodeBackend
 
-            backend: ModelBackendBase = OpenCodeBackend(
-                api_key=creds.get("api_key") or "",
-                model_id=model_id,
-                **default_params,
-            )
-        else:
-            from modulo.model_backends.module import OpenAICompatibleBackend
-
-            backend = OpenAICompatibleBackend(
-                api_key=creds.get("api_key"),
-                model_id=model_id,
-                base_url=base_url,
-                provider=provider,
-                **default_params,
-            )
-        # FIX 3 (FAR-898): disable native structured output for providers
-        # that do not support OpenAI-style response_format json_schema.
-        if provider in _NO_NATIVE_STRUCTURED_OUTPUT_PROVIDERS:
-            backend.supports_native_structured_output = False
-        return backend
-
-    if provider == "azure_openai":
-        azure_endpoint = creds.get("azure_endpoint", "")
-        if not azure_endpoint:
-            raise ValueError("Missing 'azure_endpoint' in credentials for provider 'azure_openai'")
-        api_version = creds.get("api_version", "2024-10-01-preview")
-        return _backend_class("azure_openai", "AzureOpenAIBackend")(
-            api_key=creds["api_key"],
+        backend: ModelBackendBase = OpenCodeBackend(
+            api_key=creds.get("api_key") or "",
             model_id=model_id,
-            azure_endpoint=azure_endpoint,
-            api_version=api_version,
             **default_params,
         )
+    else:
+        from modulo.model_backends.module import OpenAICompatibleBackend
 
-    if provider == "watsonx":
-        if "project_id" not in creds:
-            raise ValueError("Missing 'project_id' in credentials for provider 'watsonx'")
-        return _backend_class("watsonx", "WatsonXBackend")(
-            api_key=creds["api_key"],
+        backend = OpenAICompatibleBackend(
+            api_key=creds.get("api_key"),
             model_id=model_id,
-            project_id=creds["project_id"],
-            url=creds.get("url", "https://us-south.ml.cloud.ibm.com"),
+            base_url=base_url,
+            provider=provider,
             **default_params,
         )
+    # FIX 3 (FAR-898): disable native structured output for providers
+    # that do not support OpenAI-style response_format json_schema.
+    if provider in _NO_NATIVE_STRUCTURED_OUTPUT_PROVIDERS:
+        backend.supports_native_structured_output = False
+    return backend
 
+
+def _build_azure_openai_backend(
+    provider: str,
+    model_id: str,
+    creds: dict[str, Any],
+    default_params: dict[str, Any],
+) -> ModelBackendBase | None:
+    if provider != "azure_openai":
+        return None
+    _require_api_key(provider, creds)
+    azure_endpoint = creds.get("azure_endpoint", "")
+    if not azure_endpoint:
+        raise ValueError("Missing 'azure_endpoint' in credentials for provider 'azure_openai'")
+    api_version = creds.get("api_version", "2024-10-01-preview")
+    return _backend_class("azure_openai", "AzureOpenAIBackend")(
+        api_key=creds["api_key"],
+        model_id=model_id,
+        azure_endpoint=azure_endpoint,
+        api_version=api_version,
+        **default_params,
+    )
+
+
+def _build_watsonx_backend(
+    provider: str,
+    model_id: str,
+    creds: dict[str, Any],
+    default_params: dict[str, Any],
+) -> ModelBackendBase | None:
+    if provider != "watsonx":
+        return None
+    _require_api_key(provider, creds)
+    if "project_id" not in creds:
+        raise ValueError("Missing 'project_id' in credentials for provider 'watsonx'")
+    return _backend_class("watsonx", "WatsonXBackend")(
+        api_key=creds["api_key"],
+        model_id=model_id,
+        project_id=creds["project_id"],
+        url=creds.get("url", "https://us-south.ml.cloud.ibm.com"),
+        **default_params,
+    )
+
+
+def _build_plugin_backend(
+    provider: str,
+    model_id: str,
+    creds: dict[str, Any],
+    default_params: dict[str, Any],
+) -> ModelBackendBase | None:
     registry = get_plugin_registry()
-    if registry.has_model_backend(provider):
-        api_key = creds.get("api_key")
-        if not api_key:
-            raise ValueError(f"Missing 'api_key' in credentials for provider {provider!r}")
-        try:
-            return registry.build_model_backend(provider, model_id, api_key, **default_params)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            raise ValueError(f"Failed to build plugin model backend for provider {provider!r}: {exc}") from exc
-    raise ValueError(f"Unknown model backend provider: {provider!r}")
+    if not registry.has_model_backend(provider):
+        return None
+    api_key = creds.get("api_key")
+    if not api_key:
+        raise ValueError(f"Missing 'api_key' in credentials for provider {provider!r}")
+    try:
+        return registry.build_model_backend(provider, model_id, api_key, **default_params)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"Failed to build plugin model backend for provider {provider!r}: {exc}") from exc
