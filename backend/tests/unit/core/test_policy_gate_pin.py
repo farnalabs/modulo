@@ -230,8 +230,7 @@ def test_fingerprint_corrupt_top_level_value_fails_closed_deterministically() ->
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_verify_case_i_no_pins_no_fingerprint_falls_back_to_live() -> None:
+def test_verify_case_i_no_pins_no_fingerprint_falls_back_to_live() -> None:
     """C6: a legacy snapshot with NO pins + NO fingerprint does not block —
     the replay proceeds against the pipeline's CURRENT live gates."""
     blocked, message = _verify_policy_gate_pin_fingerprint(
@@ -245,8 +244,7 @@ async def test_verify_case_i_no_pins_no_fingerprint_falls_back_to_live() -> None
     assert message == ""
 
 
-@pytest.mark.asyncio
-async def test_verify_case_ii_pins_without_fingerprint_proceed_unverified() -> None:
+def test_verify_case_ii_pins_without_fingerprint_proceed_unverified() -> None:
     """C7a: pins present but NO fingerprint (the middle legacy state) — the
     run must proceed WITHOUT verification. Verifying anyway would spuriously
     block every snapshot created before the fingerprint migration."""
@@ -261,8 +259,7 @@ async def test_verify_case_ii_pins_without_fingerprint_proceed_unverified() -> N
     assert message == ""
 
 
-@pytest.mark.asyncio
-async def test_verify_matching_fingerprint_trusts_the_pins() -> None:
+def test_verify_matching_fingerprint_trusts_the_pins() -> None:
     """C5: pins + matching fingerprint → verified and trusted, no block."""
     pins = _pins(3)
     blocked, message = _verify_policy_gate_pin_fingerprint(
@@ -290,8 +287,7 @@ def _assert_mismatch_message(
     assert recomputed not in block_message, "user-facing message must carry TRUNCATED digests only"
 
 
-@pytest.mark.asyncio
-async def test_verify_added_gate_fails_closed_with_truncated_actionable_message(
+def test_verify_added_gate_fails_closed_with_truncated_actionable_message(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """C4: a gate added to the pins after creation digests differently →
@@ -326,8 +322,7 @@ async def test_verify_added_gate_fails_closed_with_truncated_actionable_message(
     assert record.__dict__["snapshot_id"] == str(snapshot_id)
 
 
-@pytest.mark.asyncio
-async def test_verify_removed_gate_fails_closed() -> None:
+def test_verify_removed_gate_fails_closed() -> None:
     """A REMOVED pin is also a digest breaker — the set is immutable after
     creation, so the mismatch must fail closed in that direction too."""
     pins = _pins(3)
@@ -345,8 +340,7 @@ async def test_verify_removed_gate_fails_closed() -> None:
     assert f"snapshot {snapshot_id}" in message
 
 
-@pytest.mark.asyncio
-async def test_verify_mismatch_message_directs_at_a_new_run_only() -> None:
+def test_verify_mismatch_message_directs_at_a_new_run_only() -> None:
     """C15: the mismatch is NON-RETRYABLE — the remediation is creating a
     NEW run; retrying the same snapshot cannot reconcile pins and digest."""
     pins = _pins(2)
