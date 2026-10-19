@@ -53,7 +53,7 @@ async def _setup_org(engine: AsyncEngine) -> tuple[uuid.UUID, uuid.UUID]:
     return org_id, acc_id
 
 
-async def _insert_eval_definition(
+async def _insert_eval(
     engine: AsyncEngine,
     org_id: uuid.UUID,
     account_id: uuid.UUID,
@@ -174,7 +174,7 @@ class TestC10EvalResultColumnRoundTrip:
         snapshot_id = await _insert_snapshot(db_engine, org_id, pipeline_id)
         run_id = await _insert_run(db_engine, org_id, pipeline_id, snapshot_id)
         node_id = uuid.uuid4()
-        eval_id = await _insert_eval_definition(db_engine, org_id, acc_id, pipeline_id, node_id)
+        eval_id = await _insert_eval(db_engine, org_id, acc_id, pipeline_id, node_id)
 
         eval_result_id = uuid.uuid4()
         expected_version = 3
@@ -239,7 +239,7 @@ class TestC10EvalResultColumnRoundTrip:
         snapshot_id = await _insert_snapshot(db_engine, org_id, pipeline_id)
         run_id = await _insert_run(db_engine, org_id, pipeline_id, snapshot_id)
         node_id = uuid.uuid4()
-        eval_id = await _insert_eval_definition(db_engine, org_id, acc_id, pipeline_id, node_id)
+        eval_id = await _insert_eval(db_engine, org_id, acc_id, pipeline_id, node_id)
 
         eval_result_id = uuid.uuid4()
         async with db_engine.begin() as conn:
@@ -324,7 +324,7 @@ class TestC12BlockingEvalPersistsBeforeHalting:
         node_id = str(uuid.uuid4())
 
         # Insert a real ``evals`` row; the DTO below carries failure_behaviour
-        eval_id = await _insert_eval_definition(
+        eval_id = await _insert_eval(
             db_engine,
             org_id,
             acc_id,
@@ -388,7 +388,7 @@ class TestC12BlockingEvalPersistsBeforeHalting:
         run_id = await _insert_run(db_engine, org_id, pipeline_id, snapshot_id)
         node_id = str(uuid.uuid4())
 
-        eval_id_1 = await _insert_eval_definition(
+        eval_id_1 = await _insert_eval(
             db_engine,
             org_id,
             acc_id,
@@ -396,7 +396,7 @@ class TestC12BlockingEvalPersistsBeforeHalting:
             uuid.UUID(node_id),
             name="first-block",
         )
-        eval_id_2 = await _insert_eval_definition(
+        eval_id_2 = await _insert_eval(
             db_engine,
             org_id,
             acc_id,
@@ -479,7 +479,7 @@ class TestC13WarnEvalPersistsResultAndRunContinues:
         run_id = await _insert_run(db_engine, org_id, pipeline_id, snapshot_id)
         node_id = str(uuid.uuid4())
 
-        eval_id = await _insert_eval_definition(
+        eval_id = await _insert_eval(
             db_engine,
             org_id,
             acc_id,
@@ -539,7 +539,7 @@ class TestC13WarnEvalPersistsResultAndRunContinues:
         run_id = await _insert_run(db_engine, org_id, pipeline_id, snapshot_id)
         node_id = str(uuid.uuid4())
 
-        eval_id_warn = await _insert_eval_definition(
+        eval_id_warn = await _insert_eval(
             db_engine,
             org_id,
             acc_id,
@@ -547,7 +547,7 @@ class TestC13WarnEvalPersistsResultAndRunContinues:
             uuid.UUID(node_id),
             name="warn-fail",
         )
-        eval_id_pass = await _insert_eval_definition(
+        eval_id_pass = await _insert_eval(
             db_engine,
             org_id,
             acc_id,
@@ -621,7 +621,7 @@ class TestC13WarnEvalPersistsResultAndRunContinues:
         run_id = await _insert_run(db_engine, org_id, pipeline_id, snapshot_id)
         node_id = str(uuid.uuid4())
 
-        eval_id_warn = await _insert_eval_definition(
+        eval_id_warn = await _insert_eval(
             db_engine,
             org_id,
             acc_id,
@@ -629,7 +629,7 @@ class TestC13WarnEvalPersistsResultAndRunContinues:
             uuid.UUID(node_id),
             name="warn-pass",
         )
-        eval_id_block = await _insert_eval_definition(
+        eval_id_block = await _insert_eval(
             db_engine,
             org_id,
             acc_id,

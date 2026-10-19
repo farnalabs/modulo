@@ -33,6 +33,7 @@ from modulo.core.feedback_manager import FeedbackManager
 from modulo.core.guardrails.correction import CorrectionDefinition, CorrectionDetectorFamily, CorrectionVerdict
 from modulo.db.rls import set_rls_org
 from modulo.model_backends.stub.backend import StubModelBackend, normalize_input
+from tests.integration.conftest import EvalFixture, insert_eval
 
 pytestmark = pytest.mark.integration
 
@@ -147,21 +148,20 @@ async def correction_rig(
         )
         guardrail_id = uuid.uuid4()
         # Seed the guardrail in ``evals`` — the live store both the loader and
-        # the read-back below use.
-        await conn.execute(
-            text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
-                "eval_type, config_json, account_id) "
-                "VALUES (:id, :oid, :pid, :nid, 'gr_no_secrets', 'guardrail', (:cfg)::json, :aid)"
+        # the read-back below use — through the shared fixture helper so the
+        # eval-insert shape stays single-touch.
+        await insert_eval(
+            conn,
+            EvalFixture(
+                id=guardrail_id,
+                organisation_id=test_org,
+                pipeline_id=pipeline_id,
+                node_id=uuid.UUID(node_id),
+                name="gr_no_secrets",
+                eval_type="guardrail",
+                account_id=test_user,
+                config=_guardrail_config(),
             ),
-            {
-                "id": str(guardrail_id),
-                "oid": str(test_org),
-                "pid": str(pipeline_id),
-                "nid": node_id,
-                "cfg": json.dumps(_guardrail_config()),
-                "aid": str(test_user),
-            },
         )
     return {
         "org_id": test_org,
