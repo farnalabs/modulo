@@ -597,9 +597,19 @@ def restore_guidance(
 
 
 def _temp_owner_pid(name: str) -> int | None:
-    """The trailing pid suffix of a swap/sweep temp name, or None."""
-    match = re.search(r"(\d+)$", name)
-    return int(match.group(1)) if match is not None else None
+    """The trailing pid suffix of a swap/sweep temp name, or None.
+
+    The temp names the callers build always end in the ASCII-decimal
+    ``os.getpid()`` suffix (``.<link>.new.<pid>`` etc.), so only the trailing
+    run of ASCII digits is inspected. Hand-rolled rather than
+    ``re.search(r"(\\d+)$", name)``: that anchored unbounded quantifier makes
+    the engine retry every start position when the string ends in a non-digit,
+    which is super-linear on a long digit run (S8786).
+    """
+    trimmed = name.rstrip("0123456789")
+    if len(trimmed) == len(name):
+        return None
+    return int(name[len(trimmed) :])
 
 
 def sweep_symlink_temps(link_path: Path) -> None:
@@ -1137,7 +1147,6 @@ def run_boot(
     A failing boot / no health inside *timeout* -> UpgradeError; the
     teardown is a GROUP kill (SIGTERM to the group, escalated).
     """
-    import urllib.error
     import urllib.request
 
     launcher = Path(boot_argv[0])
@@ -1162,7 +1171,9 @@ def run_boot(
                         if isinstance(body, dict) and body.get("status") == "ok":
                             healthy = True
                             break
-            except (urllib.error.URLError, urllib.error.HTTPError, ValueError, OSError):
+            except (ValueError, OSError):
+                # urllib.error.URLError / HTTPError are OSError subclasses; the
+                # poll loop wants to retry any probe failure with no logging.
                 pass
             if time.monotonic() - started_at > timeout:
                 break
@@ -1195,7 +1206,7 @@ def _terminate_boot_process_group(process: subprocess.Popen[bytes]) -> None:
             os.killpg(process_group, signal.SIGTERM)
         else:  # pragma: no cover - the platform gate refuses Windows earlier
             process.terminate()
-    except (ProcessLookupError, OSError):
+    except OSError:  # ProcessLookupError is an OSError subclass
         pass
     try:
         process.wait(timeout=30)
@@ -1208,7 +1219,7 @@ def _terminate_boot_process_group(process: subprocess.Popen[bytes]) -> None:
         else:  # pragma: no cover
             process.kill()
         process.wait(timeout=10)
-    except (ProcessLookupError, OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):  # ProcessLookupError is an OSError subclass
         _log.exception("upgrade.boot_group_kill_incomplete pid=%s", process.pid)
 
 
@@ -1319,6 +1330,72 @@ def assert_upgrade_platform() -> None:
         raise UpgradeError("the full modulo upgrade flow is the TODO(P2) macOS launchd seam (FAR-678)")
 
 
+def _resolve_upgrade_assets(
+    *,
+    from_file: Path | None,
+    target_version: str | None,
+    staging_dir: Path,
+    fetch: Callable[[str, Path], None] | None,
+) -> tuple[Path, str, Path, Path]:
+    """(tarball, version, manifest_file, signature_file) — fetch or --from-file.
+
+    ``--from-file`` is the offline escape hatch: the operator-provided tarball
+    must sit beside its SIGNED manifest + ``.sig`` (the same embedded trust
+    store verifies it). Otherwise the pinned ``target_version`` assets are
+    fetched into the staging dir.
+    """
+    if from_file is None:
+        if target_version is None:  # pragma: no cover - CLI-gated
+            raise UpgradeError("a pinned target version is REQUIRED (e.g. bundle-v0.1.0)")
+        downloads = fetch_release_assets(target_version, staging_dir / "downloads", fetch=fetch)
+        return downloads.tarball, downloads.version, downloads.manifest, downloads.signature
+    tarball = Path(from_file)
+    if not tarball.is_file():
+        raise UpgradeError(f"--from-file: no such file: {from_file}")
+    version = _strip_bundle_prefix(
+        tarball.name.removeprefix("modulo-").removesuffix("-linux-amd64.tar.gz").removesuffix("-linux-arm64.tar.gz")
+    )
+    manifest_file = tarball.parent / _RELEASE_MANIFEST_NAME
+    signature_file = tarball.parent / f"{_RELEASE_MANIFEST_NAME}.sig"
+    if not (manifest_file.is_file() and signature_file.is_file()):
+        raise UpgradeError(
+            "--from-file requires the SIGNED manifest beside the tarball: "
+            f"{manifest_file} (+ .sig) - the offline escape hatch verifies against "
+            "the SAME embedded trust store (ADR 031 Decision 3)"
+        )
+    return tarball, version, manifest_file, signature_file
+
+
+def _run_upgrade_preflight(
+    *,
+    skip_backup: bool,
+    data_dir: Path,
+    reserve_target: Path,
+    bundle_dir: Path,
+    release_manifest: ReleaseManifest,
+    tarball: Path,
+) -> Path | None:
+    """Pre-flight refusals + the enforced dump; returns the snapshot dir.
+
+    Runs BEFORE anything version-specific: the PG-major gate, the downgrade
+    check and the quantified disk preflight. On ``skip_backup`` a stopped
+    stack cannot be dumped, so the LIVE alembic probe answers the DB side
+    instead (failing blind when it cannot - see ``check_no_downgrade``;
+    "unknown" is never pass-through).
+    """
+    _check_pg_major(release_manifest.components, data_dir)
+    if skip_backup:
+        db_heads = _alembic_heads()
+        snapshot_dir: Path | None = None
+    else:
+        snapshot = pre_upgrade_dump(data_dir, bin_dir=_prior_pg_bin(reserve_target))
+        snapshot_dir = snapshot.directory
+        db_heads = _snapshot_schema_versions(snapshot_dir)
+    check_no_downgrade(db_heads, snapshot_dir, bundle_dir)
+    _quantified_disk_preflight(tarball, data_dir)
+    return snapshot_dir
+
+
 def perform_upgrade(
     data_dir: Path,
     *,
@@ -1374,32 +1451,12 @@ def perform_upgrade(
 
     with tempfile.TemporaryDirectory(prefix="modulo-upgrade-") as temp:
         staging_dir = Path(temp)
-        if from_file is not None:
-            tarball = Path(from_file)
-            if not tarball.is_file():
-                raise UpgradeError(f"--from-file: no such file: {from_file}")
-            version = _strip_bundle_prefix(
-                tarball.name.removeprefix("modulo-")
-                .removesuffix("-linux-amd64.tar.gz")
-                .removesuffix("-linux-arm64.tar.gz")
-            )
-            manifest_file = tarball.parent / _RELEASE_MANIFEST_NAME
-            signature_file = tarball.parent / f"{_RELEASE_MANIFEST_NAME}.sig"
-            if not (manifest_file.is_file() and signature_file.is_file()):
-                raise UpgradeError(
-                    "--from-file requires the SIGNED manifest beside the tarball: "
-                    f"{manifest_file} (+ .sig) - the offline escape hatch verifies against "
-                    "the SAME embedded trust store (ADR 031 Decision 3)"
-                )
-        else:
-            if target_version is None:  # pragma: no cover - CLI-gated
-                raise UpgradeError("a pinned target version is REQUIRED (e.g. bundle-v0.1.0)")
-            downloads = fetch_release_assets(target_version, staging_dir / "downloads", fetch=fetch)
-            version = downloads.version
-            tarball = downloads.tarball
-            manifest_file = downloads.manifest
-            signature_file = downloads.signature
-
+        tarball, version, manifest_file, signature_file = _resolve_upgrade_assets(
+            from_file=from_file,
+            target_version=target_version,
+            staging_dir=staging_dir,
+            fetch=fetch,
+        )
         release_manifest = _verify_release_stage(manifest_file, signature_file, tarball, version)
 
         _log.info("upgrade.release_manifest_verified release=%s", release_manifest.release)
@@ -1409,21 +1466,15 @@ def perform_upgrade(
         # files as they sit in the REAL bundle, not just the tarball.
         _verify_extracted_bundle_artifacts(bundle_dir, release_manifest, tarball.name)
 
-        # -- Pre-flight refusals (BEFORE anything version-specific) -------
-        _check_pg_major(release_manifest.components, data_dir)
-        if skip_backup:
-            # A stopped stack cannot be dumped: the LIVE probe answers the
-            # DB side instead (failing blind when it cannot - see
-            # check_no_downgrade; "unknown" is never pass-through).
-            snapshot = None
-            snapshot_dir = None
-            db_heads = _alembic_heads()
-        else:
-            snapshot = pre_upgrade_dump(data_dir, bin_dir=_prior_pg_bin(reserve_target))
-            snapshot_dir = snapshot.directory
-            db_heads = _snapshot_schema_versions(snapshot_dir)
-        check_no_downgrade(db_heads, snapshot_dir, bundle_dir)
-        _quantified_disk_preflight(tarball, data_dir)
+        # -- Pre-flight refusals + enforced dump (BEFORE anything version-specific)
+        snapshot_dir = _run_upgrade_preflight(
+            skip_backup=skip_backup,
+            data_dir=data_dir,
+            reserve_target=reserve_target,
+            bundle_dir=bundle_dir,
+            release_manifest=release_manifest,
+            tarball=tarball,
+        )
 
         # -- The DESTRUCTIVE phase (stages 4-8) ---------------------------
         stop_running_stack(data_dir)
