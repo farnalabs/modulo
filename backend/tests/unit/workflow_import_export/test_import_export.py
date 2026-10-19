@@ -1067,6 +1067,47 @@ async def test_export_pipeline_bundle_carries_name_based_runner_bindings(monkeyp
     ]
 
 
+async def test_export_pipeline_bundle_omits_binding_with_invisible_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A binding whose backend row is not visible is omitted with a warning,
+    never silently exported with a dangling backend name."""
+    fakes = _pipeline_fakes()
+    binding_row = SimpleNamespace(
+        model_backend_id=uuid.uuid4(),
+        target_env_var="OPENCODE_API_KEY",
+        source_field="api_key",
+    )
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    warning = Mock()
+    monkeypatch.setattr(mod.logger, "warning", warning)
+    session = AsyncMock()
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = fakes["pipeline"]
+    agents_result = MagicMock()
+    agents_result.scalars.return_value = [fakes["agent"]]
+    bindings_result = MagicMock()
+    bindings_result.scalars.return_value = [binding_row]
+    schemas_result = MagicMock()
+    schemas_result.scalars.return_value = [fakes["schema"]]
+    backends_result = MagicMock()
+    backends_result.scalars.return_value = []
+    edges_result = MagicMock()
+    edges_result.scalars.return_value = [fakes["edge"]]
+    session.execute = AsyncMock(
+        side_effect=[pipeline_result, agents_result, bindings_result, schemas_result, backends_result, edges_result]
+    )
+    session.get = AsyncMock(return_value=None)
+
+    data = await export_pipeline_bundle(session, fakes["pipeline"].id)
+    bundle = extract_bundle_json_from_zip(data)
+
+    assert "model_backend_bindings" not in bundle["agents"][0]
+    assert bundle["model_backends"] == []
+    warning.assert_called_once()
+    assert "invisible model backend" in warning.call_args.args[0]
+
+
 # ---------------------------------------------------------------------------
 # _apply_agent_bindings — name-based rebind at import (FAR-592 / D6)
 # ---------------------------------------------------------------------------

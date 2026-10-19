@@ -470,6 +470,23 @@ async def test_apply_sandbox_policy_scoped_without_allowed_hosts_is_single_host(
 
 
 @pytest.mark.asyncio
+async def test_apply_sandbox_policy_git_credentials_none_installs_refuse_helper() -> None:
+    """``git_credentials="none"`` must install the always-refusing helper, not
+    skip the step: the capability certifies that no inherited credential can
+    reach the agent."""
+    sandbox = _FakeSandbox()
+    await apply_sandbox_policy(
+        sandbox,
+        read_only=False,
+        git_credentials="none",
+        egress_policy="default",
+        egress_allowlist=None,
+    )
+    assert len(sandbox.commands.runs) == 1
+    assert "modulo-git-refuse-helper.sh" in sandbox.commands.runs[0]
+
+
+@pytest.mark.asyncio
 async def test_apply_sandbox_policy_multi_host_invalid_host_raises() -> None:
     """FAR-798 (review finding #3): a host containing shell-case metacharacters
     must fail-closed (raise) rather than emit an injectable helper."""
