@@ -176,114 +176,130 @@ def derive_sandbox_capabilities(
     if node_type is not None and node_type != "sandbox_agent":
         return {}
 
-    caps: dict[str, bool | None] = {}
+    # Build in the historical order so the returned mapping stays stable.
+    return {
+        SANDBOX_CAPABILITY_EGRESS: _derive_egress_capability(
+            node_def,
+            profile_network_policy=profile_network_policy,
+            provider_type=provider_type,
+        ),
+        SANDBOX_CAPABILITY_WRITE_FILES: _derive_write_files_capability(node_def),
+        SANDBOX_CAPABILITY_GIT_CREDENTIALS: _derive_git_credentials_capability(node_def),
+        SANDBOX_CAPABILITY_MULTI_HOST: _derive_multi_host_capability(node_def),
+    }
 
-    # FAR-1085: derive egress capability from the canonical resolution
-    # (node + profile -> effective policy) instead of reading the node
-    # config in isolation.  When profile_network_policy is None (not
-    # plumbed), this falls back to the node-only derivation --
-    # backward-compatible with existing callers.
-    #
-    # FAR-1051: the reference tier follows the profile's RESOLVED provider
-    # (previously hardcoded to "e2b", which could certify an enforcement the
-    # bound provider never performs — e.g. a kubernetes profile with
-    # network_policy=none certified sandbox.egress=False while dispatch
-    # refused the same combination).  Absent provider_type keeps the legacy
-    # "e2b" reference tier; an unrecognised provider type passes through RAW
-    # so resolve_egress refuses it as an unknown tier (fail-closed) instead
-    # of defaulting to an enforceable one.
-    #
-    # Fail-closed guard: an unrecognised egress_policy string (not in the
-    # valid vocabulary) returns None (unknown) regardless of what resolve_egress
-    # maps it to -- the old code returned None for unrecognised values, and a
-    # block guardrail must fail CLOSED on unknown.
+
+def _egress_tier(provider_type: str | None) -> str:
+    """Resolve the enforcement tier for the egress derivation.
+
+    FAR-1051: follows the profile's RESOLVED provider (legacy ``e2b`` when
+    absent). An unrecognised provider type passes through RAW so
+    ``resolve_egress`` refuses it as an unknown tier (fail-closed).
+    """
+    if isinstance(provider_type, str) and provider_type.strip():
+        from modulo.core.runtime_provider import egress_tier_for_provider_type
+
+        normalized = provider_type.strip().lower()
+        return egress_tier_for_provider_type(normalized) or normalized
+    return "e2b"
+
+
+def _egress_capability_from_resolution(resolution: Any) -> bool | None:
+    """Map an egress resolution onto the raw sandbox.egress polarity."""
+    if resolution.refusal is not None:
+        # Tier cannot enforce -- capability is unknown (fail-closed).
+        return None
+    if resolution.policy is None:
+        # Provider default -- egress is allowed.
+        return True
+    if resolution.policy in ("deny_all", "selected"):
+        # Egress is restricted.
+        return False
+    # Unknown resolved policy -- fail-closed.
+    return None
+
+
+def _derive_egress_capability(
+    node_def: dict[str, Any],
+    *,
+    profile_network_policy: str | None,
+    provider_type: str | None,
+) -> bool | None:
+    """Derive ``sandbox.egress`` from the canonical node + profile resolution.
+
+    FAR-1085: derives from ``resolve_egress`` (node + profile -> effective
+    policy) instead of reading the node config in isolation, so the certified
+    capability matches the runtime outcome. An unrecognised ``egress_policy``
+    string returns None (unknown) before resolution -- a block guardrail must
+    fail CLOSED on unknown.
+    """
     raw_egress = node_def.get("egress_policy")
     if isinstance(raw_egress, str) and raw_egress and raw_egress not in _SANDBOX_EGRESS_POLICIES:
-        caps[SANDBOX_CAPABILITY_EGRESS] = None
-    else:
-        from modulo.core.pipeline_engine.egress import resolve_egress
+        return None
 
-        _tier = "e2b"
-        if isinstance(provider_type, str) and provider_type.strip():
-            from modulo.core.runtime_provider import egress_tier_for_provider_type
+    from modulo.core.pipeline_engine.egress import resolve_egress
 
-            _normalized_provider = provider_type.strip().lower()
-            _tier = egress_tier_for_provider_type(_normalized_provider) or _normalized_provider
-        _egress_res = resolve_egress(
-            node_egress_policy=raw_egress,
-            node_egress_allowlist=node_def.get("egress_allowlist"),
-            profile_network_policy=profile_network_policy,
-            tier=_tier,
-        )
-        if _egress_res.refusal is not None:
-            # Tier cannot enforce -- capability is unknown (fail-closed).
-            caps[SANDBOX_CAPABILITY_EGRESS] = None
-        elif _egress_res.policy is None:
-            # Provider default -- egress is allowed.
-            caps[SANDBOX_CAPABILITY_EGRESS] = True
-        elif _egress_res.policy in ("deny_all", "selected"):
-            # Egress is restricted.
-            caps[SANDBOX_CAPABILITY_EGRESS] = False
-        else:
-            # Unknown resolved policy -- fail-closed.
-            caps[SANDBOX_CAPABILITY_EGRESS] = None
+    resolution = resolve_egress(
+        node_egress_policy=raw_egress,
+        node_egress_allowlist=node_def.get("egress_allowlist"),
+        profile_network_policy=profile_network_policy,
+        tier=_egress_tier(provider_type),
+    )
+    return _egress_capability_from_resolution(resolution)
 
-    # FAR-212 PR B: read_only is a REAL validated + enforced PipelineGraphNode
-    # field. Only a genuine bool is read; any other value (smuggled non-bool,
-    # absent) resolves None (unknown) so a block guardrail fails CLOSED and can
-    # never certify a deny-guarantee from an unvalidated key.
+
+def _derive_write_files_capability(node_def: dict[str, Any]) -> bool | None:
+    """Derive ``sandbox.write_files`` from the validated ``read_only`` field.
+
+    Only a genuine bool is read; any other value (smuggled non-bool, absent)
+    resolves None (unknown) so a block guardrail fails CLOSED.
+    """
     read_only = node_def.get("read_only")
     if isinstance(read_only, bool):
-        caps[SANDBOX_CAPABILITY_WRITE_FILES] = not read_only
-    else:
-        caps[SANDBOX_CAPABILITY_WRITE_FILES] = None
+        return not read_only
+    return None
 
-    # FAR-212 PR B: git_credentials is a REAL validated + enforced
-    # PipelineGraphNode field. Only the recognised scopes are read; anything
-    # else (smuggled value, absent) resolves None (unknown) so a block
-    # guardrail can never certify scoped credentials from an unvalidated key.
+
+def _derive_git_credentials_capability(node_def: dict[str, Any]) -> bool | None:
+    """Derive ``sandbox.git_credentials`` from the validated credential scope.
+
+    Only the recognised scopes are read; anything else (smuggled value,
+    absent) resolves None (unknown).
+    """
     git_credentials = node_def.get("git_credentials")
     if isinstance(git_credentials, str) and git_credentials in _SANDBOX_GIT_CREDENTIAL_SCOPES:
-        caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] = git_credentials == "scoped"
-    else:
-        caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] = None
+        return git_credentials == "scoped"
+    return None
 
-    # FAR-798: multi_host is a BOOLEAN capability — True when >1 distinct
-    # host is granted via the ``allowed_hosts`` field on the node definition.
-    # The capability stays boolean; a set-valued capability would break the
-    # ``dict[str, bool | None]`` conformance contract (ADR 033).
-    #
-    # The derivation reads the node config FAIL-CLOSED like the other
-    # capabilities: only a validated ``dict[str, str]`` (host -> env-var name)
-    # is trusted. Any other shape (a smuggled dict whose values are not host/
-    # env-var strings, or a non-dict) resolves ``None`` so a block guardrail
-    # can never certify a deny-guarantee from an unvalidated key — a smuggled
-    # dict with >1 keys must NOT silently certify True with no enforcement
-    # behind it.
+
+def _multi_host_from_dict(allowed_hosts: dict[Any, Any]) -> bool | None:
+    """Derive the boolean multi-host capability from an ``allowed_hosts`` dict."""
+    items = list(allowed_hosts.items())
+    if not items:
+        # Empty dict: no host granted -> multi_host is False (not unknown).
+        return False
+    if any(not isinstance(k, str) or not isinstance(v, str) for k, v in items):
+        # Smuggled / non-string keys/values: fail CLOSED to None so a block
+        # guardrail can never certify a deny-guarantee from an unvalidated key.
+        return None
+    # Validated shape (str keys -> str env-var names): multi-host iff more
+    # than one host is granted.
+    return len(items) > 1
+
+
+def _derive_multi_host_capability(node_def: dict[str, Any]) -> bool | None:
+    """Derive ``sandbox.git_credentials.multi_host`` from ``allowed_hosts``.
+
+    Only a validated ``dict[str, str]`` (host -> env-var name) is trusted.
+    Absent means the normal single-host scoped default (False, not unknown);
+    any other shape fails CLOSED to None.
+    """
     allowed_hosts = node_def.get("allowed_hosts")
     if isinstance(allowed_hosts, dict):
-        items = list(allowed_hosts.items())
-        if not items:
-            # Empty dict: no host granted -> multi_host is False (not unknown).
-            caps[SANDBOX_CAPABILITY_MULTI_HOST] = False
-        elif any(not isinstance(k, str) or not isinstance(v, str) for k, v in items):
-            # Smuggled / non-string keys/values: fail CLOSED to None so a block
-            # guardrail can never certify a deny-guarantee from an unvalidated
-            # key (matches the read_only / git_credentials capabilities).
-            caps[SANDBOX_CAPABILITY_MULTI_HOST] = None
-        else:
-            # Validated shape (str keys -> str env-var names): multi-host iff
-            # more than one host is granted.
-            caps[SANDBOX_CAPABILITY_MULTI_HOST] = len(items) > 1
-    elif allowed_hosts is None:
-        # Absent: no multi-host credential is granted (normal scoped single-host
-        # default) — multi_host is False, not unknown.
-        caps[SANDBOX_CAPABILITY_MULTI_HOST] = False
-    else:
-        # Non-dict shape is unvalidated input: fail CLOSED to None.
-        caps[SANDBOX_CAPABILITY_MULTI_HOST] = None
-
-    return caps
+        return _multi_host_from_dict(allowed_hosts)
+    if allowed_hosts is None:
+        return False
+    return None
 
 
 def _validate_sandbox_mode_config(node_def: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
