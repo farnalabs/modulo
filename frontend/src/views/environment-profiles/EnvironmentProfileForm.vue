@@ -98,7 +98,7 @@
         <output
           v-if="imageRefState === 'pinned'"
           id="envprofile-form-image-state"
-          class="mt-1 flex items-center gap-1 text-xs text-success"
+          class="mt-1 flex items-center gap-1 text-xs text-success-text"
           data-testid="envprofile-form-image-pinned"
         >
           <ShieldCheck :size="14" aria-hidden="true" />

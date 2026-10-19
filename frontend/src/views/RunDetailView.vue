@@ -536,7 +536,7 @@
                   <span
                     v-if="node.costProvenance"
                     data-testid="run-detail-node-cost-reported"
-                    class="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary align-middle"
+                    class="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary-text align-middle"
                     :title="$t('views.RunDetailView.reported_by_agent_tooltip')"
                   >{{ $t('views.RunDetailView.reported_by_agent') }}</span>
                 </template>
@@ -817,7 +817,7 @@
                       <span
                         v-if="entry.agentReported"
                         data-testid="run-detail-cost-reported-badge"
-                        class="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary align-middle"
+                        class="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary-text align-middle"
                         :title="$t('views.RunDetailView.reported_by_agent_tooltip')"
                       >{{ $t('views.RunDetailView.reported_by_agent') }}</span>
                     </template>

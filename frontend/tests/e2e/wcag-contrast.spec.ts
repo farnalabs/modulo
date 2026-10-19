@@ -24,8 +24,10 @@ const SUPPRESS_TRANSITIONS_CSS = '*, *::before, *::after { transition: none !imp
  * `:root` is the dark theme; AppLayout's toggle flips `documentElement` between
  * `.light` and `.dark`. Adding `.light` alone is enough because light mode's
  * variables are a complete override of `:root`'s. Views that opt into
- * `data-theme="agent"` keep the agent theme by design — their tokens are not
- * theme-flipped, so a light scan must not pretend otherwise.
+ * `data-theme="agent"` are flipped too: `.light [data-theme="agent"]` re-declares
+ * the light palette so the user's theme choice wins inside an agent-themed page
+ * (only the agent typography survives), so a light scan audits those views in
+ * their real light-mode colours.
  */
 async function forceLightMode(page: import('@playwright/test').Page) {
   await page.addStyleTag({ content: SUPPRESS_TRANSITIONS_CSS })
@@ -300,16 +302,24 @@ test.describe('authenticated shell — sidebar profile links (FAR-1907)', { tag:
       expect(violations).toEqual([])
     })
   }
+})
 
-  // FAR-1938 — every scan above runs the default (dark) theme, so the light
-  // palette was never asserted. The light theme is a full token override on
-  // `:root`, and several of its text tokens measured below the WCAG AA 4.5:1
-  // floor (`success` at 2.30:1 on white, muted on the light surface at 3.42:1,
-  // `--warning-text` at 4.01:1, primary on its tint at 4.16-4.33:1). Each
-  // route is scanned in BOTH themes: a fix that darkens a light token must not
-  // lighten its dark counterpart below AA, and vice versa.
+// FAR-1938 — every scan above runs the default (dark) theme, so the light
+// palette was never asserted. The light theme is a full token override on
+// `:root`, and several of its text tokens measured below the WCAG AA 4.5:1
+// floor (`success` at 2.30:1 on white, muted on the light surface at 3.42:1,
+// `--warning-text` at 4.01:1, primary on its tint at 4.16-4.33:1). Each route
+// is scanned in BOTH themes: a fix that darkens a light token must not lighten
+// its dark counterpart below AA, and vice versa.
+//
+// Deliberately @regression, unlike the mock-backed tests above: the deployed
+// `--grep @regression` gate is the only CI job that audits the shipped bundle,
+// so the light-theme AA gate must run there (it also runs in the per-PR
+// `Frontend and WCAG` job, which selects this file by name). The mock API only
+// supplies data; the colours under audit come from the deployed stylesheet.
+test.describe('authenticated light-theme contrast (FAR-1938)', { tag: "@regression" }, () => {
   for (const path of AUTHENTICATED_ROUTES) {
-    test(`authenticated ${path} has no unexpected WCAG AA violations (light theme)`, { tag: "@local-mock" }, async ({ page, env }) => {
+    test(`authenticated ${path} has no unexpected WCAG AA violations (light theme)`, { tag: "@regression" }, async ({ page, env }) => {
       const { setupLocalMockApi, loginAsAdmin } = await import('./setup/fixtures')
       await setupLocalMockApi(page)
       await page.addInitScript(() => { try { localStorage.setItem('assistant-panel-state', 'closed') } catch (err) { console.warn(err) } })

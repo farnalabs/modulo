@@ -465,7 +465,9 @@ describe('AdminCostControlsView', () => {
     await wrapper.find('[data-testid="cc-budget-save"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('Budget updated.')
+    const confirmation = wrapper.findAll('p').find((p) => p.text().includes('Budget updated.'))
+    expect(confirmation, 'the saved-budget confirmation must render').toBeDefined()
+    expect(confirmation!.classes()).toContain('text-success-text')
     wrapper.unmount()
   })
 })

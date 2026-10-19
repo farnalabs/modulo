@@ -107,15 +107,17 @@ describe('AdminSpendLimitsView', () => {
     apiState.ceiling = { max_run_cost: 5, spend_ceiling: 100, remaining_budget_usd: 42 }
     const wrapper = await mountWithFeatures()
 
-    if (wrapper.find('[data-testid="admin-spend-limits-org-save"]').exists()) {
-      await wrapper.find('[data-testid="admin-spend-limits-org-save"]').trigger('click')
-      await flushPromises()
-      expect(wrapper.text()).toContain('Org limit updated.')
+    const orgSave = wrapper.find('[data-testid="admin-spend-limits-org-save"]')
+    expect(orgSave.exists(), 'the org-limit save button must render').toBe(true)
+    await orgSave.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Org limit updated.')
 
-      await wrapper.find('[data-testid="admin-spend-limits-ceiling-save"]').trigger('click')
-      await flushPromises()
-      expect(wrapper.text()).toContain('Ceilings updated.')
-    }
+    const ceilingSave = wrapper.find('[data-testid="admin-spend-limits-ceiling-save"]')
+    expect(ceilingSave.exists(), 'the ceiling save button must render').toBe(true)
+    await ceilingSave.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Ceilings updated.')
 
     const remaining = wrapper
       .findAll('span')

@@ -541,9 +541,11 @@
    on a white page whose inherited body ink stayed light-mode dark
    (measured 1.12:1 on the triggers page) and agent-muted text on white
    (2.52:1). Re-declaring the light palette here keeps the agent TYPOGRAPHY
-   (font-family/--focus-ring from the agent block) but uses light colours — the
-   same rule the theme toggle already applies everywhere else. Dark mode is
-   unaffected (this selector requires `.light`). */
+   (font-family from the agent block) and uses light colours — the same rule the
+   theme toggle already applies everywhere else. The one non-colour token it
+   changes is --focus-ring, re-declared below to the dark ring so the agent
+   focus indicator clears the 3:1 non-text contrast floor on a light surface.
+   Dark mode is unaffected (this selector requires `.light`). */
 .light,
 .light [data-theme="agent"] {
   color-scheme: light;
