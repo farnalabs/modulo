@@ -597,7 +597,14 @@ _HUMAN_REVIEW_MINUTES = 23
 # account INSERT binds include the demo user's bcrypt password_hash, so every
 # seed-failure log/print goes through _safe_exc_text — never the raw
 # exception text or repr.
-_PARAMETERS_SECTION_RE = re.compile(r"\[parameters:\s*[^]]*\]", re.DOTALL)
+# The ``\s*`` prefix the previous revision carried was redundant with the
+# ``[^]]*`` tail (both match whitespace, so the two quantifiers competed and
+# gave the pattern super-linear worst-case backtracking — S8786). ``[^]]*``
+# alone matches the identical span: the union of ``\s*`` and ``[^]]*`` is just
+# "zero or more non-``]`` characters". ``re.DOTALL`` is retained (harmless
+# here — a character class matches newlines regardless of the flag) so the
+# compiled pattern's flags are unchanged.
+_PARAMETERS_SECTION_RE = re.compile(r"\[parameters:[^]]*\]", re.DOTALL)
 
 
 def _safe_exc_text(exc: BaseException) -> str:

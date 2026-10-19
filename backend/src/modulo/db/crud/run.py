@@ -4692,23 +4692,21 @@ async def _get_run_stats_postgres(
     # Failure reason breakdown for failed / eval_failed runs carrying an error
     # code. FAR-707: benign (business-expected) rows are excluded so an
     # expected failure never inflates its own error-code cluster.
-    failure_rows = list(
-        (
-            await session.execute(
-                select(Run.error_code, func.count())
-                .select_from(Run)
-                .join(Pipeline, Run.pipeline_id == Pipeline.id)
-                .where(
-                    *base_where,
-                    Run.status.in_(_FAILURE_REASON_STATUSES),
-                    Run.error_code.is_not(None),
-                    Run.error_code != "",
-                    _NOT_BENIGN_PREDICATE,
-                )
-                .group_by(Run.error_code)
+    failure_rows = (
+        await session.execute(
+            select(Run.error_code, func.count())
+            .select_from(Run)
+            .join(Pipeline, Run.pipeline_id == Pipeline.id)
+            .where(
+                *base_where,
+                Run.status.in_(_FAILURE_REASON_STATUSES),
+                Run.error_code.is_not(None),
+                Run.error_code != "",
+                _NOT_BENIGN_PREDICATE,
             )
-        ).all()
-    )
+            .group_by(Run.error_code)
+        )
+    ).all()
 
     success_count = sum(int(row.success) for row in day_rows)
     benign_total = sum(int(row.benign_count or 0) for row in day_rows)
