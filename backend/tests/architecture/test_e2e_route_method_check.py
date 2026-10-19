@@ -712,3 +712,121 @@ def test_catch_all_without_a_method_filter_stays_silent() -> None:
 
     assert not calls
     assert not notes
+
+
+# ---------------------------------------------------------------------------
+# FAR-1847 closing round: non-literal paths and un-modelled filter shapes
+# ---------------------------------------------------------------------------
+
+
+def test_non_literal_api_fetch_path_is_noted() -> None:
+    # A literal method with a variable path names a real request. Dropping it
+    # with no note is the silent failure this guard exists to prevent.
+    notes: list[str] = []
+
+    calls = _checker.extract_http_calls("await apiFetch(b, t, 'DELETE', path)\n", FILENAME, notes)
+
+    assert not calls
+    assert len(notes) == 1
+    assert "non-literal path" in notes[0]
+    assert FILENAME in notes[0]
+
+
+def test_non_literal_request_verb_path_is_noted() -> None:
+    # ``request.delete(path)`` has a resolvable method (the verb) and an
+    # unreadable path - it must leave a note, not disappear.
+    notes: list[str] = []
+
+    calls = _checker.extract_http_calls("await request.delete(path)\n", FILENAME, notes)
+
+    assert not calls
+    assert len(notes) == 1
+    assert "non-literal URL" in notes[0]
+
+
+def test_non_literal_fetch_url_with_explicit_method_is_noted() -> None:
+    notes: list[str] = []
+
+    calls = _checker.extract_http_calls("await fetch(endpoint, { method: 'POST' })\n", FILENAME, notes)
+
+    assert not calls
+    assert len(notes) == 1
+    assert "non-literal URL" in notes[0]
+
+
+def test_destructured_method_filter_is_noted() -> None:
+    # ``const { method } = route.request()`` selects a branch the comparison
+    # passes cannot resolve; the registration must not be silent.
+    notes: list[str] = []
+    source = (
+        "await page.route('**/api/v1/pipelines/abc', (route) => {\n"
+        "  const { method } = route.request()\n"
+        "  if (method === 'PATCH') {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes)
+
+    assert not calls
+    assert len(notes) == 1
+    assert "cannot attribute to a single literal method" in notes[0]
+
+
+def test_includes_method_filter_is_noted() -> None:
+    # An array-membership test is a valid filter the extractor does not model.
+    notes: list[str] = []
+    source = (
+        "await page.route('**/api/v1/pipelines/abc', (route) => {\n"
+        "  if (['PATCH', 'PUT'].includes(route.request().method())) {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes)
+
+    assert not calls
+    assert len(notes) == 1
+    assert "cannot attribute to a single literal method" in notes[0]
+
+
+def test_fetch_method_shorthand_is_not_an_implicit_get() -> None:
+    # ``{ method }`` carries the method but no literal here, so the request is
+    # unresolvable - assuming GET can fail a valid PR.
+    notes: list[str] = []
+    source = "const method = 'POST'\nawait fetch('/api/v1/pipelines', { method })\n"
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes)
+
+    assert not calls
+    assert len(notes) == 1
+    assert "method" in notes[0]
+
+
+def test_fetch_quoted_method_key_is_not_an_implicit_get() -> None:
+    notes: list[str] = []
+
+    calls = _checker.extract_http_calls(
+        "await fetch('/api/v1/pipelines', { \"method\": selected })\n",
+        FILENAME,
+        notes,
+    )
+
+    assert not calls
+    assert len(notes) == 1
+    assert "method" in notes[0]
+
+
+def test_conditional_query_interpolation_is_not_a_path_segment() -> None:
+    # ``${includeArchived ? '?archived=true' : ''}`` toggles a query suffix.
+    # Treating it as a path segment made a live route look stale.
+    live = _checker.build_live_routes({"/api/v1/pipelines": {"get": {}}})
+    source = "await apiFetch(apiBase, token, 'GET', `/api/v1/pipelines${includeArchived ? '?archived=true' : ''}`)\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].path == "/api/v1/pipelines"
+    assert not _checker.find_violations(calls, live)

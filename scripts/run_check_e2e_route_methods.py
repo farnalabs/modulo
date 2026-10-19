@@ -33,8 +33,11 @@ What is scanned (``frontend/tests/e2e/**/*.ts``):
   stripped) and the path as a string/template literal, across multi-line
   argument lists and ``${...}`` interpolation.
 * direct ``fetch(<url>, { method: '<METHOD>' })`` in the setup helpers, plus
-  the implicit-GET ``fetch(<url>)`` / ``fetch(<url>, { headers })`` form (no
-  method option means GET, which is checked like any other method).
+  the implicit-GET ``fetch(<url>)`` / ``fetch(<url>, { headers })`` form (a
+  genuinely absent ``method`` key means GET, which is checked like any other
+  method). A ``method`` property present without a literal value (the
+  ``{ method }`` shorthand, a quoted key, or any other non-literal value) is
+  unresolvable, not an implicit GET, and is reported as a note.
 * ``page.request.<verb>(<url>)`` / ``request.<verb>(<url>)`` calls on a
   Playwright ``APIRequestContext`` (the verb is the method).
 * ``route.request().method() === '<METHOD>'`` interceptor filters (and the
@@ -50,7 +53,11 @@ What is scanned (``frontend/tests/e2e/**/*.ts``):
   URL test (``url.includes`` / ``url.endsWith``) is not guessed - its effective
   path lives in that condition, not in the registration, so it is reported as
   a note. ``!== '<METHOD>'`` and negated-boolean filters are skipped too - they
-  guard a fallback branch rather than selecting a method. A catch-all mock
+  guard a fallback branch rather than selecting a method - and any other method
+  reference the extractor cannot attribute to one literal method (a
+  destructured ``const { method } = route.request()``, an array-membership
+  ``['PATCH', 'PUT'].includes(...)`` test) leaves a note for its registration,
+  so no filter shape is silently dropped. A catch-all mock
   (``**/api/v1/**``) is skipped silently only when it carries no method filter;
   one that mocks specific routes by URL and filters on the method is noted.
   Anything that cannot be resolved safely is reported as one explicit note on
@@ -64,9 +71,10 @@ A leading interpolation before the ``/api/`` segment
 (``${apiBase}/api/v1/...``) is discarded, and a concatenation that ends in a
 genuine path variable (``'/api/v1/pipelines/' + id``) keeps a trailing
 wildcard. A trailing query-string variable (``'/api/v1/pipelines' + query``),
-a TypeScript assertion (``'/api/v1/auth/me' as const``) and a literal that
-already carries a ``?`` add no segment. Query strings and fragments are
-stripped.
+a conditional query interpolation
+(``${includeArchived ? '?archived=true' : ''}``), a TypeScript assertion
+(``'/api/v1/auth/me' as const``) and a literal that already carries a ``?`` add
+no segment. Query strings and fragments are stripped.
 
 Exit codes: 0 clean, 1 stale descriptors (one line each, with file:line, the
 method, the path and the closest live route), 2 setup/tool error - including an
@@ -119,6 +127,11 @@ _QUERY_SUFFIX_NAMES = frozenset(
         "filters",
     }
 )
+#: A ``?`` that is a ternary operator or a literal query fragment - never
+#: optional chaining (``?.``) or nullish coalescing (``??``). An interpolation
+#: carrying one is a conditional query suffix, not a path segment
+#: (``${includeArchived ? '?archived=true' : ''}``).
+_QUERY_OPERATOR_RE = re.compile(r"(?<!\?)\?(?![.?])")
 #: A query-suffix expression: a conventional identifier, optionally chained
 #: through a property/call (``queryParams.toString()``) or defaulted.
 _QUERY_SUFFIX_EXPR_RE = re.compile(
@@ -138,8 +151,16 @@ _COLON_PARAM_RE = re.compile(r"(?<=/):[A-Za-z_][A-Za-z0-9_]*")
 _SQUASH_SLASH_RE = re.compile(r"/{2,}")
 _SEGMENT_RE = re.compile(r"[A-Za-z0-9._~%\-{}]+")
 _API_PREFIX = "/api/"
-_FETCH_INIT_METHOD_RE = re.compile(r"""\bmethod\s*:\s*(['"])([A-Za-z]+)\1""")
+_FETCH_INIT_METHOD_RE = re.compile(r"""(?:(?<![\w$.])method\b|['"]method['"])\s*:\s*(['"])([A-Za-z]+)\1""")
+#: A ``method`` property present WITHOUT a literal value: the shorthand
+#: ``{ method }``, a quoted ``"method"`` key, or any other non-literal value.
+#: Presence alone proves the init is not an implicit GET.
+_FETCH_INIT_METHOD_PRESENT_RE = re.compile(r"""(?:\bmethod\s*:|["']method["']\s*:|[{,]\s*method\s*(?:,|\}))""")
 _METHOD_CALL_RE = re.compile(r"\.\s*method\s*\(")
+#: A ``method`` pulled out of the request object by destructuring
+#: (``const { method } = route.request()``) - a filter form the comparison
+#: passes below cannot attribute to a literal method.
+_DESTRUCTURED_METHOD_RE = re.compile(r"\{[^}]*\bmethod\b[^}]*\}\s*=\s*[^;\n]*\brequest\s*\(\s*\)")
 _ROUTE_CALL_RE = re.compile(r"(?<![\w.])(?:page|context)\s*\.\s*route\s*\(")
 _API_FETCH_RE = re.compile(r"(?<![\w.$])apiFetch\b")
 _FETCH_RE = re.compile(r"(?<![\w.$])fetch\b")
@@ -401,6 +422,10 @@ def _is_query_suffix(expression: str) -> bool:
         # A string/template literal that begins with ``?``/``&`` is a query.
         value, _ = _read_template(text, 0) if text[0] == "`" else _read_quoted(text, 0)
         return value.lstrip().startswith(("?", "&"))
+    if _QUERY_OPERATOR_RE.search(text):
+        # A ternary (or a literal query fragment inside one) switches a query
+        # suffix on/off - it is never a path segment.
+        return True
     match = _QUERY_SUFFIX_EXPR_RE.fullmatch(text)
     if match is None:
         return False
@@ -613,9 +638,10 @@ def _fetch_method(init_arguments: list[str]) -> tuple[str | None, bool]:
 
     Returns ``(method, unresolved)``. No init, or an object literal without a
     ``method`` key, is an implicit GET - that is a real request the guard must
-    check. A ``method`` key whose value is not a single string literal, a spread
-    that may supply one, or a non-literal init object cannot be resolved
-    statically, so the caller notes it rather than assuming GET.
+    check. A ``method`` key whose value is not a single string literal - the
+    ``{ method }`` shorthand, a quoted key, an expression - a spread that may
+    supply one, or a non-literal init object cannot be resolved statically, so
+    the caller notes it rather than assuming GET.
     """
     for argument in init_arguments:
         text = argument.strip()
@@ -625,11 +651,23 @@ def _fetch_method(init_arguments: list[str]) -> tuple[str | None, bool]:
         if literal is not None:
             value = literal.group(2).upper()
             return (value, False) if value in _HTTP_METHODS else (None, True)
-        if re.search(r"\bmethod\s*:", text):
+        if _FETCH_INIT_METHOD_PRESENT_RE.search(text):
             return None, True
         if "..." in text or not text.startswith("{"):
             return None, True
     return None, False
+
+
+def _has_unmodelled_method_reference(masked_body: str) -> bool:
+    """True when a route callback reads the request method in a form we cannot attribute.
+
+    The comparison passes resolve ``x.method() === '<METHOD>'`` and its
+    siblings. Anything else that still reads the method - a destructured
+    ``const { method } = route.request()``, an ``['PATCH', 'PUT'].includes(...)``
+    array test - selects a branch this checker cannot map to one literal
+    method, so the caller emits a note rather than dropping it silently.
+    """
+    return bool(_METHOD_CALL_RE.search(masked_body) or _DESTRUCTURED_METHOD_RE.search(masked_body))
 
 
 def _args_of(text: str, masked: str, open_paren: int) -> list[str]:
@@ -761,7 +799,8 @@ def _extract_route_interceptors(
 
     Only positive filters (``===``/``==``) are checked; ``!==`` compares a
     fallback branch and asserts nothing about which methods the route serves,
-    so it is deliberately skipped. A comparison whose enclosing ``if`` also
+    so it is deliberately skipped - but it still leaves a note, because its
+    method reference is otherwise unattributable. A comparison whose enclosing ``if`` also
     tests the request URL (``url.includes(...)``, ``url.endsWith(...)``) is
     skipped too: the effective path lives in that condition, not in the
     registration, so it cannot be read statically here.
@@ -775,6 +814,13 @@ def _extract_route_interceptors(
     registration whose handler is a bare identifier, or whose API path cannot
     be normalised statically, is reported as an explicit note rather than
     silently skipped.
+
+    A callback that reads the method in a form the comparison passes cannot
+    attribute to one literal method - a destructured
+    ``const { method } = route.request()``, an
+    ``['PATCH', 'PUT'].includes(route.request().method())`` array test, or a
+    ``!==`` fallback guard - produces one note for that registration instead of
+    vanishing silently.
     """
     notes = notes if notes is not None else []
     calls: list[HttpCall] = []
@@ -807,8 +853,8 @@ def _extract_route_interceptors(
             # is silent only when it has no method filter; a catch-all that
             # mocks specific routes by URL and filters on the method CAN hide a
             # stale one, so that shape is noted.
-            handler = text[args[-1][0] : args[-1][1]].strip()
-            if _METHOD_CALL_RE.search(handler):
+            handler_masked = masked[args[-1][0] : args[-1][1]]
+            if _has_unmodelled_method_reference(handler_masked):
                 _add_note(
                     notes,
                     filename,
@@ -829,6 +875,8 @@ def _extract_route_interceptors(
 
     seen: set[tuple[int, str, str]] = set()
     for path, trailing_glob, last_prefix, span_start, span_end, params in registrations:
+        calls_before = len(calls)
+        notes_before = len(notes)
         body = text[span_start:span_end]
         route_parameter = params[0]
         # The Request object: Playwright passes it as the callback's second
@@ -990,6 +1038,22 @@ def _extract_route_interceptors(
                             )
                         )
                         break
+
+        # The callback reads the method, but no comparison resolved to a literal
+        # method and nothing above explained why. Never silence a filter shape
+        # the extractor does not model.
+        if (
+            len(calls) == calls_before
+            and len(notes) == notes_before
+            and _has_unmodelled_method_reference(masked[span_start:span_end])
+        ):
+            _add_note(
+                notes,
+                filename,
+                _line_of(text, span_start),
+                "page.route callback filters on the request method in a form this check cannot "
+                "attribute to a single literal method, so its method filter was not checked",
+            )
     return calls
 
 
@@ -1021,6 +1085,17 @@ def extract_http_calls(source: str, filename: str, notes: list[str] | None = Non
             continue
         method = _literal_method(args[2])
         path_info = extract_path(args[3])
+        if method is not None and path_info is None:
+            # ``apiFetch(b, t, 'DELETE', path)`` names a real request, so its
+            # route must not disappear silently just because the path is a
+            # variable rather than a literal.
+            _add_note(
+                notes,
+                filename,
+                line,
+                "apiFetch call has a resolvable method but a non-literal path argument, so its route was not checked",
+            )
+            continue
         if method is None or path_info is None:
             if any(_API_PREFIX in argument for argument in (args[2], args[3])):
                 reasons: list[str] = []
@@ -1056,9 +1131,17 @@ def extract_http_calls(source: str, filename: str, notes: list[str] | None = Non
         args = _args_of(source, masked, open_paren)
         if not args:
             continue
+        method, unresolved = _fetch_method(args[1:])
         path_info = extract_path(args[0])
         if path_info is None:
-            if _API_PREFIX in args[0]:
+            if method is not None:
+                _add_note(
+                    notes,
+                    filename,
+                    line,
+                    "fetch call has a resolvable method but a non-literal URL argument, so its route was not checked",
+                )
+            elif _API_PREFIX in args[0]:
                 _add_note(
                     notes,
                     filename,
@@ -1066,7 +1149,6 @@ def extract_http_calls(source: str, filename: str, notes: list[str] | None = Non
                     "fetch URL argument names an API path but could not be normalised statically",
                 )
             continue
-        method, unresolved = _fetch_method(args[1:])
         if unresolved:
             if _API_PREFIX in args[0]:
                 _add_note(
@@ -1101,13 +1183,15 @@ def extract_http_calls(source: str, filename: str, notes: list[str] | None = Non
             continue
         path_info = extract_path(args[0])
         if path_info is None:
-            if _API_PREFIX in args[0]:
-                _add_note(
-                    notes,
-                    filename,
-                    _line_of(source, match.start()),
-                    "page.request/request verb call names an API path but could not be normalised statically",
-                )
+            # The verb IS the method, so the method is always resolvable here -
+            # a non-literal URL is an unchecked request, never a silent skip.
+            _add_note(
+                notes,
+                filename,
+                _line_of(source, match.start()),
+                "page.request/request verb call has a resolvable method but a non-literal URL "
+                "argument, so its route was not checked",
+            )
             continue
         path, trailing_glob, last_prefix = path_info
         calls.append(
