@@ -266,14 +266,18 @@ async def rollback_to_snapshot(
     flag; for ``"rest"`` with ``account_id`` the live role is re-read under the
     lock.
 
-    FAR-1515 (MAJOR 3): ``post_lock_gate`` is the caller's hook for running a
-    write gate under THIS row lock, before any write — the REST route passes
-    the connector-team gate (the target snapshot's bindings against the
-    pipeline's CURRENT owner team, raising 409 ``connector_team_mismatch``).
-    The hook receives the resolved ``target`` snapshot and the LOCKED
-    ``pipeline`` row; the callback lives in the route layer so this module
-    never imports ``modulo.core`` (layer contract). A hook that raises rolls
-    the whole rollback back with it.
+    FAR-1515 (MAJOR 3): ``post_lock_gate`` is the caller-owned pre-write hook
+    that runs under THIS row lock and inside the caller's transaction, before
+    any write this function performs. It serves two purposes for the REST
+    route: running a write gate — the connector-team gate (the target
+    snapshot's bindings against the pipeline's CURRENT owner team, raising 409
+    ``connector_team_mismatch``) — and performing the FAR-488a bound-Agent-row
+    sync for the restored graph (see FAR-1845 below). The hook receives the
+    resolved ``target`` snapshot and the LOCKED ``pipeline`` row; the callback
+    lives in the route layer so this module never imports ``modulo.core``
+    (layer contract). Because it runs inside the caller's transaction, a hook
+    that raises (including a gate denial after the sync) rolls the whole
+    rollback — and the sync with it — back atomically.
 
     FAR-1845: the CALLER also owns the FAR-488a bound-Agent-row sync for the
     restored graph. This function writes ``pipeline.graph_nodes_json`` from

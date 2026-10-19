@@ -5827,10 +5827,14 @@ async def rollback_snapshot_endpoint(
             # has no invocation-time visibility gate), so rollbacks are judged
             # on connector bindings only.
             #
-            # FAR-1845: the contract for EVERY node-level ``agent_commands``
-            # writer is "sync the bound Agent rows inside the SAME transaction,
-            # BEFORE the graph write" (FAR-488a: what you save/restore is what
-            # runs). ``rollback_to_snapshot`` rewrites ``pipeline.graph_nodes_json``
+            # FAR-1845: the contract for the pipeline graph-write surfaces
+            # covered by this ticket — the REST full-graph/PATCH writes, the
+            # MCP full-graph write, and this snapshot rollback — is "sync the
+            # bound Agent rows inside the SAME transaction, BEFORE the graph
+            # write" (FAR-488a: what you save/restore is what runs). (Bundle
+            # import/export in ``modulo.core.workflow_import_export`` is a
+            # separate path and out of scope here.) ``rollback_to_snapshot``
+            # rewrites ``pipeline.graph_nodes_json``
             # from the target snapshot verbatim, so without this sync the live
             # graph would claim the restored command while
             # ``_materialize_agent_fields`` let the stale Agent row win at

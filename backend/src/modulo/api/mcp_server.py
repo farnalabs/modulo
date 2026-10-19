@@ -4020,6 +4020,7 @@ async def _replace_pipeline_graph_txn(
         replace_pipeline_graph,
     )
     from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+    from modulo.db.models.pipeline import Pipeline
 
     async with _session(org_id) as s:
         # FAR-1361: bound every row-lock wait in this transaction BEFORE its
@@ -4040,6 +4041,30 @@ async def _replace_pipeline_graph_txn(
             return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
         if _team_scoped_key_mismatch(pipeline.owner_team_id):
             return _team_scope_error("pipeline", pipeline_id)
+        # FAR-1845: standardised Pipeline -> Agent lock order. This transaction
+        # takes the pipeline row lock FIRST, before *any* write path can touch
+        # Agent rows. The FAR-488a sync below UPDATEs Agent rows, and under the
+        # session's default autoflush those locks are flushed before the next
+        # statement — so syncing first and only then letting
+        # ``replace_pipeline_graph`` take the pipeline ``FOR UPDATE`` would
+        # acquire Agent -> Pipeline. That inverts the order every REST graph
+        # write (and the snapshot-rollback hook) uses, and a concurrent write
+        # sharing an Agent row could deadlock (40P01) instead of hitting the
+        # bounded-lock 409/503. The later ``replace_pipeline_graph`` lock is
+        # re-entrant inside this same transaction.
+        locked_pipeline = (
+            await s.execute(
+                select(Pipeline)
+                .where(
+                    Pipeline.id == pid,
+                    Pipeline.organisation_id == org_id,
+                    Pipeline.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if locked_pipeline is None:
+            return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
         # FAR-1181: the graph READ masks env_vars/context_files/parameter
         # values; a full-replace write round-tripping that masked read must
         # not persist the mask literals over the stored secrets. Echoes are

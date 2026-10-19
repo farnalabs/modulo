@@ -705,13 +705,28 @@ async def test_rollback_endpoint_maps_unpinned_ref_sync_to_422(client: TestClien
 
 
 async def test_mcp_graph_writer_syncs_agent_rows_before_the_graph_write() -> None:
-    """The MCP ``_replace_pipeline_graph_txn`` writer runs the same FAR-488a
-    sync BEFORE ``replace_pipeline_graph`` stamps the edit snapshot."""
+    """The MCP ``_replace_pipeline_graph_txn`` writer takes the pipeline row
+    lock BEFORE the FAR-488a Agent-row sync, which in turn runs BEFORE
+    ``replace_pipeline_graph`` stamps the edit snapshot.
+
+    FAR-1845: the standardised order is Pipeline -> Agent. Syncing first (which
+    UPDATEs Agent rows, flushed by autoflush) and only then taking the pipeline
+    ``FOR UPDATE`` would acquire Agent -> Pipeline and could deadlock a
+    concurrent graph write or snapshot rollback sharing an Agent.
+    """
     order: list[str] = []
     nodes = [_node(uuid.uuid4(), agent_id=uuid.uuid4(), agent_commands=["opencode run -- mcp"])]
     pipeline = MagicMock()
     pipeline.owner_team_id = None
     pipeline.graph_nodes_json = []
+
+    class _LockResult:
+        def scalar_one_or_none(self) -> Any:
+            return pipeline
+
+    async def _record_pipeline_lock(*_args: Any, **_kwargs: Any) -> _LockResult:
+        order.append("lock")
+        return _LockResult()
 
     async def _record_sync(*_args: Any, **_kwargs: Any) -> int:
         order.append("sync")
@@ -722,6 +737,7 @@ async def test_mcp_graph_writer_syncs_agent_rows_before_the_graph_write() -> Non
         return (nodes, [])
 
     session = AsyncMock()
+    session.execute = AsyncMock(side_effect=_record_pipeline_lock)
 
     @asynccontextmanager
     async def _fake_session(_org_id: uuid.UUID):
@@ -749,5 +765,5 @@ async def test_mcp_graph_writer_syncs_agent_rows_before_the_graph_write() -> Non
             is_guardrail_admin=False,
         )
 
-    assert order == ["sync", "replace"], order
+    assert order == ["lock", "sync", "replace"], order
     assert result[0] == nodes

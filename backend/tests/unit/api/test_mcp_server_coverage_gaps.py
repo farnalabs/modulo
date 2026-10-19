@@ -1793,8 +1793,11 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         # an empty scalars list (the referenced instance is absent, so the
         # capability check is skipped) rather than an unconfigured AsyncMock
         # child whose ``.scalars()`` yields a coroutine.
+        # FAR-1845: the transaction now also takes the pipeline row lock with a
+        # direct ``session.execute`` SELECT, so the same Result-like object must
+        # return the pipeline from ``scalar_one_or_none``.
         session = _mock_session()
-        session.execute.return_value = _make_execute_result()
+        session.execute.return_value = _make_execute_result(scalar_one_or_none=pipeline)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
