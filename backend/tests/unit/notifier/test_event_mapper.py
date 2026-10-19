@@ -83,6 +83,8 @@ _EXPECTED_MAPPING = {
     "hitl_awaiting": ("info", "org", "hitl.awaiting", "any_scope", True, 72),
     "run_failed": ("error", "org", "run.failed", "any_scope", True, 168),
     "run_stalled": ("warning", "org", "run.stalled", "any_scope", True, 72),
+    # FAR-2006: a non-retryable provider auth/billing refusal pages an admin.
+    "provider_failure": ("error", "admin", "provider.failure", "org_admin", True, 168),
     "budget_exceeded": ("warning", "org", "run.budget_exceeded", "org_admin", True, 168),
     "claim_expired": ("info", "org", "hitl.claim_expired", "any_scope", True, 24),
     "hitl_overdue": ("warning", "admin", "hitl.overdue", "org_admin", True, 168),
@@ -377,6 +379,19 @@ async def test_trigger_streak_alert_copy_claims_no_deactivation(mapper: Notifica
 # ---------------------------------------------------------------------------
 # Template failure resilience
 # ---------------------------------------------------------------------------
+
+
+async def test_provider_failure_copy_names_the_code_and_account_action(
+    mapper: NotificationEventMapper,
+) -> None:
+    """FAR-2006: the alert must say the refusal is NOT retried and where to look."""
+    payload = {**_PAYLOAD, "error_code": "provider.billing"}
+    _, mock_create = await _call(mapper, "provider_failure", payload=payload)
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == "Model provider refused runs — provider.billing"
+    assert "NOT retried" in kwargs["body"]
+    assert "balance/quota" in kwargs["body"]
+    assert kwargs["action_url"] == f"/runs/{payload['run_id']}"
 
 
 async def test_missing_template_key_replaced_with_unknown(mapper: NotificationEventMapper) -> None:
