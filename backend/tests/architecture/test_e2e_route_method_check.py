@@ -1211,9 +1211,17 @@ def test_final_path_converter_matches_a_multi_segment_request() -> None:
 def test_coverage_ledger_flags_an_unmodelled_call_shape() -> None:
     # A call shape neither modelled nor annotated must fail the run, naming the
     # exact line - otherwise a new request silently escapes the deploy gate.
+    # A bracket-accessed ``fetch`` is the unmodelled family here: a plain
+    # ``fetch(<target>)`` with a non-API URL is a NOTE after FAR-1847, not an
+    # unanalysed shape.
     unanalysed: list[str] = []
 
-    calls = _checker.extract_http_calls("const res = await fetch(buildUrl(), init)\n", FILENAME, [], unanalysed)
+    calls = _checker.extract_http_calls(
+        "const res = await globalThis['fetch']('/api/v1/pipelines/1', { method: 'DELETE' })\n",
+        FILENAME,
+        [],
+        unanalysed,
+    )
 
     assert not calls
     assert len(unanalysed) == 1
@@ -1222,26 +1230,30 @@ def test_coverage_ledger_flags_an_unmodelled_call_shape() -> None:
 
 
 def test_coverage_ledger_accepts_a_same_line_suppression() -> None:
+    notes: list[str] = []
     unanalysed: list[str] = []
 
     calls = _checker.extract_http_calls(
-        "await fetch(buildUrl(), init) // e2e-route-check: ignore test fixture\n",
+        "await globalThis['fetch'](buildUrl(), init) // e2e-route-check: ignore test fixture\n",
         FILENAME,
-        [],
+        notes,
         unanalysed,
     )
 
     assert not calls
+    assert not notes
     assert not unanalysed
 
 
 def test_coverage_ledger_accepts_a_preceding_line_suppression() -> None:
+    notes: list[str] = []
     unanalysed: list[str] = []
-    source = "// e2e-route-check: ignore test fixture\nawait fetch(buildUrl(), init)\n"
+    source = "// e2e-route-check: ignore test fixture\nawait globalThis['fetch'](buildUrl(), init)\n"
 
-    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+    calls = _checker.extract_http_calls(source, FILENAME, notes, unanalysed)
 
     assert not calls
+    assert not notes
     assert not unanalysed
 
 
@@ -1385,6 +1397,12 @@ def test_fetch_with_transient_retry_stale_method_is_reported() -> None:
 
 
 def test_transport_helper_declaration_is_not_a_candidate() -> None:
+    # The declaration itself must be excluded structurally. Asserting the NOTE
+    # sink (not just ``unanalysed``) is what gives this test discriminating
+    # power: with ``_is_function_declaration`` forced to ``False`` the retry
+    # marker is treated as an unresolved call and emits a note here, so an
+    # assertion that only inspected ``unanalysed`` passed vacuously.
+    notes: list[str] = []
     unanalysed: list[str] = []
     source = (
         "async function fetchWithTransientRetry(\n"
@@ -1397,18 +1415,20 @@ def test_transport_helper_declaration_is_not_a_candidate() -> None:
         "}\n"
     )
 
-    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+    calls = _checker.extract_http_calls(source, FILENAME, notes, unanalysed)
 
     assert not calls
+    assert not notes
     assert not unanalysed
 
 
 def test_two_calls_on_one_line_do_not_absorb_each_other() -> None:
     # Per-LINE accounting let the modelled ``fetch('/api/v1/pipelines')`` hide
-    # the unmodelled ``fetch(buildUrl(), init)`` beside it. Accounting is now
-    # per call occurrence, so the second one is still a violation.
+    # the unmodelled ``globalThis['fetch'](buildUrl(), init)`` beside it.
+    # Accounting is now per call occurrence, so the second one is still a
+    # violation.
     unanalysed: list[str] = []
-    source = "await Promise.all([fetch('/api/v1/pipelines'), fetch(buildUrl(), init)])\n"
+    source = "await Promise.all([fetch('/api/v1/pipelines'), globalThis['fetch'](buildUrl(), init)])\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
 
@@ -1850,13 +1870,19 @@ def test_external_absolute_url_is_not_an_api_candidate() -> None:
 
 
 def test_external_absolute_url_with_a_method_is_not_an_api_candidate() -> None:
+    # The exclusion must be observed on the NOTE sink too: with
+    # ``_is_external_url_literal`` forced to ``False`` extraction falls through
+    # to the "resolvable method, non-literal URL" note, which a discarded note
+    # sink could never see.
+    notes: list[str] = []
     unanalysed: list[str] = []
 
     calls = _checker.extract_http_calls(
-        "await fetch('https://example.test/healthz', { method: 'POST' })\n", FILENAME, [], unanalysed
+        "await fetch('https://example.test/healthz', { method: 'POST' })\n", FILENAME, notes, unanalysed
     )
 
     assert not calls
+    assert not notes
     assert not unanalysed
 
 
@@ -1875,6 +1901,29 @@ def test_external_url_with_an_api_segment_is_still_a_candidate() -> None:
     assert len(calls) == 1
     assert calls[0].path == "/api/v1/pipelines/1/graph"
     assert not unanalysed
+
+
+def test_documented_callee_with_a_non_api_target_is_not_unanalysed() -> None:
+    # FAR-1847: a documented callee whose target is not an API path names no
+    # live route, so it must be a NOTE (never an unanalysed violation that
+    # fails the deploy gate). A clearly non-call property/type position is
+    # excluded structurally and produces nothing at all.
+    cases = [
+        ("await fetch('/healthz')\n", True),
+        ("await route.fetch()\n", True),
+        ("const mock = { fetch: vi.fn() }\n", False),
+        ("interface Client { fetch(url: string): Promise<Response> }\n", False),
+    ]
+
+    for source, expects_note in cases:
+        notes: list[str] = []
+        unanalysed: list[str] = []
+
+        calls = _checker.extract_http_calls(source, FILENAME, notes, unanalysed)
+
+        assert not calls
+        assert not unanalysed, source
+        assert bool(notes) is expects_note, source
 
 
 def test_mid_path_glob_segment_normalises_to_a_parameter() -> None:
@@ -1908,6 +1957,35 @@ def test_mid_path_glob_interceptor_method_is_checked() -> None:
 
     assert len(violations) == 1
     assert violations[0].call.kind == "interceptor"
+
+
+def test_three_argument_route_registration_uses_the_function_handler() -> None:
+    # ``page.route(url, handler, options)``: the trailing options object is not
+    # the handler. Selecting the last FUNCTION argument means the 3-argument
+    # form is checked exactly like the 2-argument one - the extractor used to
+    # treat ``{ times: 1 }`` as the handler, emit a false "not an inline
+    # function" note and never check the interceptor.
+    notes: list[str] = []
+    source = (
+        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
+        "  if (route.request().method() === 'PATCH') {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "}, { times: 1 })\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes)
+
+    assert [(call.method, call.path) for call in calls] == [("PATCH", "/api/v1/pipelines/abc/graph")]
+    assert not notes
+    violations = _checker.find_violations(calls, LIVE_ROUTES)
+    assert len(violations) == 1
+    assert "not PATCH" in violations[0].detail
+
+    # A live method in the same 3-argument shape stays clean, proving the
+    # handler - not the options object - was read.
+    live_same_shape = _checker.extract_http_calls(source.replace("'PATCH'", "'PUT'"), FILENAME, [])
+    assert not _checker.find_violations(live_same_shape, LIVE_ROUTES)
 
 
 def test_delegation_note_survives_a_direct_method_read_in_the_same_callback() -> None:

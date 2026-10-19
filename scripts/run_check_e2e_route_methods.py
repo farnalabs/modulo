@@ -150,11 +150,17 @@ an accident of the current marker list.
 Contract freeze
 ---------------
 
-The syntax families documented above are FROZEN. A shape outside them is
-reported as a note (or, where an absolute external URL provably names no Modulo
-route, excluded explicitly and by design) - never a hard failure and never
-silence. Adding a family is a deliberate contract change with its own tests, not
-an opportunistic extension of the extractor.
+The syntax families documented above are FROZEN. Within those documented callee
+families, a shape the extractor cannot resolve is reported as a note (or, where
+an absolute external URL provably names no Modulo route, excluded explicitly and
+by design) - never a hard failure and never silence. That guarantee does NOT
+extend to HTTP clients outside the documented families: ``axios``, ``ofetch``,
+``ky`` and custom wrappers/transports that are not spelled as one of the
+documented callees (``fetch``, ``fetchWithTransientRetry``, ``apiFetch``, or a
+Playwright ``page.request`` / ``context.request`` / ``request`` verb) are NOT
+scanned, so a request made only through them is invisible to this guard - no
+descriptor, no note and no violation. Adding a family is a deliberate contract
+change with its own tests, not an opportunistic extension of the extractor.
 
 An absolute external URL (``http://`` / ``https://``) whose literal carries no
 ``/api/`` segment is not a Modulo API candidate: it names another origin, so no
@@ -1051,6 +1057,66 @@ def _add_note(notes: list[str], filename: str, line: int, message: str) -> None:
         notes.append(note)
 
 
+def _is_suppressed(source: str, offset: int) -> bool:
+    """True when a ``// e2e-route-check: ignore`` annotation covers *offset*.
+
+    The annotation is accepted on the occurrence's own line or the line
+    immediately above it, matching the coverage ledger's suppression semantics.
+    Extraction notes honour it too, so annotating an occurrence silences every
+    report for it rather than only the ledger violation.
+    """
+    raw_lines = source.splitlines()
+    line = _line_of(source, offset)
+    current = raw_lines[line - 1] if line - 1 < len(raw_lines) else ""
+    previous = raw_lines[line - 2] if line >= 2 else ""
+    return bool(_LEDGER_IGNORE_RE.search(current) or _LEDGER_IGNORE_RE.search(previous))
+
+
+def _in_type_member_position(masked: str, offset: int) -> bool:
+    """True when *offset* sits in an ``interface``/``type`` literal body.
+
+    ``interface Client { fetch(url: string): Promise<Response> }`` is a TYPE
+    member declaration, not an HTTP call, even though the identifier is
+    followed by a parenthesised parameter list. Only an enclosing brace whose
+    introducer names an interface or a type alias counts, so a normal function
+    body is never excluded.
+    """
+    depth = 0
+    index = offset - 1
+    while index >= 0:
+        char = masked[index]
+        if char == "}":
+            depth += 1
+        elif char == "{":
+            if depth == 0:
+                before = masked[max(0, index - 240) : index]
+                return bool(re.search(r"\binterface\b[^{};]*$|\btype\b[^{};]*=\s*$", before))
+            depth -= 1
+        index -= 1
+    return False
+
+
+def _is_non_call_property_or_type(masked: str, start: int, end: int) -> bool:
+    """True when a ``fetch`` identifier here is clearly NOT a call.
+
+    Two shapes read like a ``fetch`` call to the marker but bind nothing: an
+    object property whose value is another call (``{ fetch: vi.fn() }``) and a
+    type-member signature (``interface Client { fetch(...) }``). They carry no
+    route, so they are excluded structurally rather than reported.
+
+    A destructured alias (``const { fetch: f } = globalThis``) is *not*
+    excluded: it captures the real ``fetch`` and is a genuine (unanalysed)
+    candidate. The ``:`` alone cannot distinguish the two, so only a property
+    value that itself starts a call is treated as a non-call position.
+    """
+    index = end
+    while index < len(masked) and masked[index] in " \t\r\n":
+        index += 1
+    if index < len(masked) and masked[index] == ":":
+        return bool(re.match(r"\s*[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*\(", masked[index + 1 :]))
+    return _in_type_member_position(masked, start)
+
+
 def _has_string_literal(expression: str) -> bool:
     """True when *expression* contains a string or template literal.
 
@@ -1334,6 +1400,23 @@ def _callback_params(handler: str) -> list[str]:
     return []
 
 
+def _route_handler_span(text: str, args: list[tuple[int, int]]) -> tuple[int, int]:
+    """Return the span of a ``page.route`` registration's HANDLER argument.
+
+    Playwright's signature is ``page.route(url, handler, options?)``: a trailing
+    options object (``{ times: 1 }``) is NOT the handler. Picking the last
+    argument blindly treated the options object as the handler, so a
+    three-argument registration's interceptor was never checked. The handler is
+    the last argument that parses as an inline function; a bare-identifier
+    handler (which cannot be resolved statically) falls back to the last
+    argument so it is still noted rather than dropped.
+    """
+    for span in reversed(args[1:]):
+        if _callback_params(text[span[0] : span[1]].strip()):
+            return span
+    return args[-1]
+
+
 def _method_comparison_re(operand: str) -> re.Pattern[str]:
     """Return the regex for ``<operand> === '<METHOD>'`` and its reverse."""
     escaped = re.escape(operand)
@@ -1446,6 +1529,7 @@ def _extract_route_interceptors(
         if not args:
             continue
         first = text[args[0][0] : args[0][1]].strip()
+        handler_span = _route_handler_span(text, args)
         path_info = extract_path(first)
         if path_info is None:
             # Not a statically-readable path. An API-shaped registration that
@@ -1455,8 +1539,8 @@ def _extract_route_interceptors(
             api_shaped = _API_PREFIX in first or (
                 regex_source is not None and _API_PREFIX in _normalise_regex_path(regex_source)
             )
-            handler_masked = masked[args[-1][0] : args[-1][1]]
-            handler_text = text[args[-1][0] : args[-1][1]].strip()
+            handler_masked = masked[handler_span[0] : handler_span[1]]
+            handler_text = text[handler_span[0] : handler_span[1]].strip()
             handler_params = _callback_params(handler_text)
             delegates = _delegates_method_filter(handler_masked, handler_params)
             if not _has_string_literal(first) and (_has_unmodelled_method_reference(handler_masked) or delegates):
@@ -1489,7 +1573,7 @@ def _extract_route_interceptors(
             # is silent only when it has no method filter; a catch-all that
             # mocks specific routes by URL and filters on the method CAN hide a
             # stale one, so that shape is noted.
-            handler_masked = masked[args[-1][0] : args[-1][1]]
+            handler_masked = masked[handler_span[0] : handler_span[1]]
             if _has_unmodelled_method_reference(handler_masked):
                 _add_note(
                     notes,
@@ -1498,10 +1582,12 @@ def _extract_route_interceptors(
                     "page.route catch-all registration mocks specific routes by URL and filters on the HTTP "
                     "method; its method filters cannot be checked against a single route",
                 )
-            elif _delegates_method_filter(handler_masked, _callback_params(text[args[-1][0] : args[-1][1]].strip())):
+            elif _delegates_method_filter(
+                handler_masked, _callback_params(text[handler_span[0] : handler_span[1]].strip())
+            ):
                 _add_note(notes, filename, _line_of(text, match.start()), _LEDGER_DELEGATED_METHOD_NOTE)
             continue
-        handler = text[args[-1][0] : args[-1][1]].strip()
+        handler = text[handler_span[0] : handler_span[1]].strip()
         params = _callback_params(handler)
         if not params:
             notes.append(
@@ -1509,7 +1595,9 @@ def _extract_route_interceptors(
                 f"function; its method filter was not checked"
             )
             continue
-        registrations.append((path, int(trailing_glob), int(last_prefix), match.start(), args[-1][1], tuple(params)))
+        registrations.append(
+            (path, int(trailing_glob), int(last_prefix), match.start(), handler_span[1], tuple(params))
+        )
 
     seen: set[tuple[int, str, str]] = set()
     for path, trailing_glob, last_prefix, span_start, span_end, params in registrations:
@@ -2003,6 +2091,11 @@ def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
     for match in _FETCH_RE.finditer(masked):
         if _is_function_declaration(masked, match.start()):
             continue
+        # A property key (``{ fetch: vi.fn() }``) or an interface member
+        # signature (``interface Client { fetch(...) }``) is not a call and
+        # binds nothing, so it is not a candidate occurrence.
+        if _is_non_call_property_or_type(masked, match.start(), match.end()):
+            continue
         # An ``import``/``export`` specifier is a BINDING, not a call: flagging
         # it would make every spec file that imports ``fetch`` unanalysed.
         if _in_import_or_export_specifier(masked, match.start()):
@@ -2136,6 +2229,10 @@ def _extract_fetch_like(
     for match in pattern.finditer(masked):
         if skip_declaration and _is_function_declaration(masked, match.start()):
             continue
+        # A property key (``{ fetch: vi.fn() }``) or an interface member
+        # signature (``interface Client { fetch(...) }``) is not a call.
+        if _is_non_call_property_or_type(masked, match.start(), match.end()):
+            continue
         open_paren = _find_open_paren(masked, match.end())
         if open_paren is None:
             continue
@@ -2179,6 +2276,21 @@ def _extract_fetch_like(
                     f"{label} call could not be fully resolved: its URL is not a statically readable "
                     f"API path and its method is unknown; its call sites are checked separately",
                 )
+                accounted_offsets.add(offset)
+            else:
+                # A documented callee whose target is not an API path names no
+                # Modulo route (``fetch('/healthz')``, ``route.fetch()``, a
+                # bare URL variable). That is not an unanalysed call shape -
+                # the guard simply has no live route to check it against - so
+                # it is a note, never a hard failure. An explicit ignore
+                # annotation silences the note.
+                if not _is_suppressed(source, offset):
+                    _add_note(
+                        notes,
+                        filename,
+                        line,
+                        f"{label} call targets a non-API path, so no live route applies",
+                    )
                 accounted_offsets.add(offset)
             continue
         if unresolved:
