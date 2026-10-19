@@ -25,7 +25,10 @@ from modulo.core.pipeline_engine.hitl_context import (
     ARTIFACTS_BUDGET_CHARS,
     REASON_ABSENT,
     TRUNCATION_MARKER,
+    _artifact_summary_budget,
+    _bound_artifacts,
     _resolve_consequences,
+    _slice_artifact_to_budget,
     build_hitl_review_context,
     extract_condition_node_ids,
     serialize_value,
@@ -605,6 +608,50 @@ class TestRedactionAndTextBounds:
         context = await _build(_edge_graph(config), completed_node_outputs={})
         assert context is not None
         assert len(context["condition"]) <= _TEXT_FIELD_MAX_CHARS
+
+
+class TestArtifactBudgetHelpers:
+    """The bounding primitives at their boundaries (deterministic, no graph)."""
+
+    def test_summary_budget_measures_serialised_overhead(self):
+        entry = {"node_id": "n1", "summary": "abc"}
+        serialized = json.dumps(entry, sort_keys=True, ensure_ascii=False)
+        remaining, overhead = _artifact_summary_budget(entry, serialized, 5)
+        assert overhead == len(serialized) - len(entry["summary"])
+        assert remaining == ARTIFACTS_BUDGET_CHARS - 5 - overhead
+
+    def test_overflowing_entry_is_sliced_and_admitted(self):
+        entry = {"node_id": "n1", "summary": "x" * (ARTIFACTS_BUDGET_CHARS + 200)}
+        bounded = _bound_artifacts([entry])
+        assert len(bounded) == 1
+        assert bounded[0]["summary"].endswith(TRUNCATION_MARKER)
+        serialised = json.dumps(bounded, sort_keys=True, ensure_ascii=False)
+        assert len(serialised) <= ARTIFACTS_BUDGET_CHARS
+
+    def test_exhausted_budget_drops_the_overflowing_entry(self):
+        # A control character serialises to six characters, so the measured
+        # overhead alone exceeds the whole budget and the walk stops.
+        entry = {"node_id": "n1", "summary": "\x01" * 500}
+        assert not _bound_artifacts([entry])
+
+    def test_entry_is_skipped_when_the_slicer_yields_no_candidate(self, monkeypatch: pytest.MonkeyPatch):
+        """The caller's defensive arm: no candidate means the entry is skipped."""
+        monkeypatch.setattr(hitl_context, "_slice_artifact_to_budget", lambda *_args, **_kwargs: None)
+        entry = {"node_id": "n1", "summary": "x" * (ARTIFACTS_BUDGET_CHARS + 200)}
+        assert not _bound_artifacts([entry])
+
+    def test_slice_returns_none_when_the_slice_is_empty(self):
+        assert _slice_artifact_to_budget({"node_id": "n1", "summary": ""}, 10, 5) is None
+
+    def test_slice_shrinks_past_the_escaping_expansion(self):
+        # JSON quoting doubles each character, so the re-serialised slice still
+        # overflows and the loop shrinks by the measured overshoot.
+        entry = {"node_id": "n1", "summary": '"' * 20}
+        fitted = _slice_artifact_to_budget(entry, 10, 10)
+        assert fitted is not None
+        candidate, length = fitted
+        assert candidate["summary"].endswith(TRUNCATION_MARKER)
+        assert length == len(json.dumps(candidate, sort_keys=True, ensure_ascii=False))
 
 
 class TestExtractConditionNodeIds:

@@ -306,6 +306,13 @@ class TestInitialise:
         with pytest.raises(UnknownProviderTypeError, match="not-a-provider"):
             hub.initialise({"mystery": {"type": "not-a-provider"}})
 
+    def test_known_but_unhandled_provider_type_warns_and_skips(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A vocabulary type with no factory arm warns and skips (never raises)."""
+        hub = RuntimeProviderHub()
+        hub.initialise({"mystery": {"type": "local"}})
+        assert hub.get("mystery") is None
+        assert "Known provider type 'local' not handled" in caplog.text
+
     def test_skips_already_registered_provider(self, caplog: pytest.LogCaptureFixture) -> None:
         hub = RuntimeProviderHub()
         hub.register("sandbox", _StubProvider("sandbox"))
