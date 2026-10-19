@@ -1153,6 +1153,49 @@ def test_pipeline_graph_node_model_class_rejected_off_sandbox_nodes() -> None:
         )
 
 
+def test_pipeline_graph_node_egress_policy_rejected_off_sandbox_nodes() -> None:
+    """FAR-1846: ``egress_policy`` is sandbox-only.
+
+    The egress enforcement surface (workspace egress policy + host:port
+    allowlist) is derived only on the sandbox path, so a non-sandbox node that
+    sets it would carry configuration that looks enforced and enforces nothing.
+    """
+    with pytest.raises(ValidationError, match="Only sandbox_agent nodes can set egress_policy"):
+        PipelineGraphNode.model_validate({**_minimal_node(), "egress_policy": "deny_all"})
+
+
+def test_pipeline_graph_node_egress_allowlist_rejected_off_sandbox_nodes() -> None:
+    """FAR-1846: ``egress_allowlist`` is sandbox-only — its sole reader is the
+    sandbox egress check, which never runs for any other node type."""
+    with pytest.raises(ValidationError, match="Only sandbox_agent nodes can set egress_allowlist"):
+        PipelineGraphNode.model_validate(
+            {**_minimal_node(), "egress_allowlist": [{"host": "example.com", "port": 443}]}
+        )
+
+
+def test_pipeline_graph_node_egress_pair_accepted_on_sandbox_nodes() -> None:
+    """FAR-1846: the sandbox node keeps the coupled pair — the rejection is
+    scoped to non-sandbox nodes, not a blanket ban."""
+    node = PipelineGraphNode.model_validate(
+        {
+            **_sandbox_node_json(),
+            "egress_policy": "selected",
+            "egress_allowlist": [{"host": "example.com", "port": 443}],
+        }
+    )
+    assert node.egress_policy == "selected"
+    assert node.egress_allowlist == [{"host": "example.com", "port": 443}]
+
+
+def test_pipeline_graph_node_egress_null_echo_persists_off_sandbox_nodes() -> None:
+    """FAR-1846: the check is by VALUE, not by presence — a non-sandbox node
+    payload that echoes the defaults as ``null`` (a form that round-trips every
+    key for every node type) must keep saving."""
+    node = PipelineGraphNode.model_validate({**_minimal_node(), "egress_policy": None, "egress_allowlist": None})
+    assert node.egress_policy is None
+    assert node.egress_allowlist is None
+
+
 def test_pipeline_graph_node_idempotent_round_trip() -> None:
     """FAR-295: PipelineGraphNode carries ``idempotent`` on every executor type
     and defaults it to true for legacy nodes."""
