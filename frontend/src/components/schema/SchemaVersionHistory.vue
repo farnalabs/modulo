@@ -21,13 +21,13 @@
           <span class="text-sm font-medium">v{{ version.version }}</span>
           <span
             v-if="version.published"
-            class="rounded bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success"
+            class="rounded bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success-text"
           >{{ $t('views.SchemaEditorView.published') }}</span>
           <span class="text-xs text-muted-foreground">{{ formatDate(version.created_at) }}</span>
         </div>
         <button type="button"
           data-testid="schema-editor-restore-version"
-          class="rounded px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+          class="rounded px-2 py-1 text-xs font-medium text-primary-text hover:bg-primary/10"
           @click="$emit('restore', version)"
         >
           {{ $t('views.SchemaEditorView.restore') }}

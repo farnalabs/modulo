@@ -56,7 +56,7 @@
           <div v-if="selectedPreset" class="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
             <div class="flex items-center justify-between">
               <div>
-                <span class="text-sm font-medium text-primary">{{ selectedPreset.display_name }}</span>
+                <span class="text-sm font-medium text-primary-text">{{ selectedPreset.display_name }}</span>
                 <span class="ml-2 text-xs text-muted-foreground">{{ selectedPreset.default_model_id }}</span>
               </div>
               <button
@@ -73,7 +73,7 @@
               :href="selectedPreset.api_key_docs_url"
               target="_blank"
               rel="noopener noreferrer"
-              class="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+              class="mt-2 inline-flex items-center gap-1 text-xs text-primary-text hover:underline"
               data-testid="admin-model-backends-preset-docs-link"
             >
               {{ $t('views.AdminModelBackendsView.preset_get_api_key') }}
@@ -222,7 +222,7 @@
                 >
                   <td class="table-cell font-medium">{{ backend.name }}</td>
                   <td class="table-cell">
-                    <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                    <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary-text">
                       {{ backend.provider }}
                     </span>
                   </td>
@@ -231,7 +231,7 @@
                   <td class="table-cell">
                     <span
                       class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
-                      :class="backend.has_credentials ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
+                      :class="backend.has_credentials ? 'bg-success/10 text-success-text' : 'bg-muted text-muted-foreground'"
                     >
                       <span
                         aria-hidden="true"
@@ -289,7 +289,7 @@
                                   <td class="table-cell">
                                     <span
                                       class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
-                                      :class="ref.reference_type === 'direct_node' ? 'bg-primary/10 text-primary' : 'bg-warning/10 text-warning-text'"
+                                      :class="ref.reference_type === 'direct_node' ? 'bg-primary/10 text-primary-text' : 'bg-warning/10 text-warning-text'"
                                     >
                                       {{ ref.reference_type === 'direct_node' ? $t('views.AdminModelBackendsView.ref_type_direct') : $t('views.AdminModelBackendsView.ref_type_agent') }}
                                     </span>
@@ -351,7 +351,7 @@
               >
                 <td class="table-cell font-medium">{{ backend.name }}</td>
                 <td class="table-cell">
-                  <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                  <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary-text">
                     {{ backend.provider }}
                   </span>
                 </td>

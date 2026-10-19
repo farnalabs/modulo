@@ -16,7 +16,7 @@
         v-for="(val, ti) in yAxisLabelsDesc"
         :key="'ytick-' + ti"
         class="sparkline-y-label text-[9px] leading-none"
-        :style="{ color: color, opacity: 0.85 }"
+        :style="{ color: color }"
         >{{ val }}</span
       >
     </div>

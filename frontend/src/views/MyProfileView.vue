@@ -10,7 +10,7 @@
         <div>
           <p class="text-lg font-medium">{{ profile.display_name || profile.email }}</p>
           <p class="text-sm text-muted-foreground">{{ profile.email }}</p>
-          <span class="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary mt-1">{{ profile.org_role }}</span>
+          <span class="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary-text mt-1">{{ profile.org_role }}</span>
         </div>
       </div>
 
@@ -35,7 +35,7 @@
         <div v-else class="space-y-2">
           <div v-for="team in myTeams" :key="team.team_id" class="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2" data-testid="my-profile-my-team">
             <span class="font-medium">{{ team.team_name }}</span>
-            <span class="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary">{{ $t('views.SettingsTeamsView.' + team.role) }}</span>
+            <span class="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary-text">{{ $t('views.SettingsTeamsView.' + team.role) }}</span>
           </div>
         </div>
       </div>
@@ -90,7 +90,7 @@
         </div>
 
         <p v-if="hitlSaveError" class="text-sm text-destructive" data-testid="my-profile-hitl-email-error">{{ hitlSaveError }}</p>
-        <p v-if="hitlSaveSuccess" class="text-sm text-success" aria-live="polite" data-testid="my-profile-hitl-email-success">{{ $t('views.MyProfileView.hitl_email_saved') }}</p>
+        <p v-if="hitlSaveSuccess" class="text-sm text-success-text" aria-live="polite" data-testid="my-profile-hitl-email-success">{{ $t('views.MyProfileView.hitl_email_saved') }}</p>
 
         <Button type="button" :disabled="hitlSaving" class="border border-primary/30 w-full sm:w-auto" data-testid="my-profile-hitl-email-save" @click="saveHitlEmailPrefs">
           {{ hitlSaving ? $t('common.saving') : $t('common.save') }}

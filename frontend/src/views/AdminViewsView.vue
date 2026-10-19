@@ -113,7 +113,7 @@
         <a
           href="https://modulo.run/docs/features/saved-views"
           target="_blank"
-          class="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+          class="inline-flex items-center gap-1 text-sm text-primary-text hover:underline"
         >
           {{ $t('views.AdminViewsView.learn_about_saved_views') }}
           <ExternalLink class="h-3.5 w-3.5" />
@@ -139,7 +139,7 @@
             >
               <td class="px-4 py-3 font-medium">{{ v.name }}</td>
               <td class="px-4 py-3">
-                <span class="inline-flex rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary capitalize">{{ v.view_type }}</span>
+                <span class="inline-flex rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary-text capitalize">{{ v.view_type }}</span>
               </td>
               <td class="px-4 py-3 text-muted-foreground max-w-[200px] truncate font-mono text-xs" v-tooltip.top="filtersSummary(v.filters)">{{ filtersSummary(v.filters) }}</td>
               <td class="px-4 py-3 text-muted-foreground">{{ v.created_by || '—' }}</td>

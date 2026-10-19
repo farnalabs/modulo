@@ -139,7 +139,7 @@
             >
               <td class="table-cell font-medium">{{ connector.name }}</td>
               <td class="table-cell">
-                <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary-text">
                   {{ connector.connector_type }}
                 </span>
               </td>
@@ -147,7 +147,7 @@
               <td class="table-cell">
                 <span
                   class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
-                  :class="connector.enabled ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
+                  :class="connector.enabled ? 'bg-success/10 text-success-text' : 'bg-muted text-muted-foreground'"
                 >
                   <span
                     class="h-1.5 w-1.5 rounded-full"
@@ -187,7 +187,7 @@
               >
                 <td class="table-cell font-medium">{{ connector.name }}</td>
                 <td class="table-cell">
-                  <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                  <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary-text">
                     {{ connector.connector_type }}
                   </span>
                 </td>

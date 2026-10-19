@@ -22,7 +22,7 @@ describe('RunErrorTag', () => {
     const agent = mount(RunErrorTag, { props: { code: 'agent.failed' } })
     expect(agent.classes()).toContain('text-destructive-text')
     const capacity = mount(RunErrorTag, { props: { code: 'capacity.org' } })
-    expect(capacity.classes()).toContain('text-primary')
+    expect(capacity.classes()).toContain('text-primary-text')
   })
 
   it('sets the detail title tooltip', () => {

@@ -27,7 +27,7 @@
             :href="pricingUrl"
             target="_blank"
             rel="noopener noreferrer"
-            class="mt-2 inline-block text-xs font-semibold text-primary hover:underline"
+            class="mt-2 inline-block text-xs font-semibold text-primary-text hover:underline"
           >
             {{ $t('components.FeatureGate.view_plans') }}
           </a>

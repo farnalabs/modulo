@@ -18,6 +18,49 @@ import { WCAG_TAGS, filterViolations } from './setup/wcag'
 // theme flip and audit the settled colours.
 const SUPPRESS_TRANSITIONS_CSS = '*, *::before, *::after { transition: none !important; }'
 
+/**
+ * Force the light theme and audit the settled colours (see SUPPRESS_TRANSITIONS_CSS).
+ *
+ * `:root` is the dark theme; AppLayout's toggle flips `documentElement` between
+ * `.light` and `.dark`. Adding `.light` alone is enough because light mode's
+ * variables are a complete override of `:root`'s. Views that opt into
+ * `data-theme="agent"` keep the agent theme by design — their tokens are not
+ * theme-flipped, so a light scan must not pretend otherwise.
+ */
+async function forceLightMode(page: import('@playwright/test').Page) {
+  await page.addStyleTag({ content: SUPPRESS_TRANSITIONS_CSS })
+  await page.evaluate(() => {
+    document.documentElement.classList.add('light')
+    document.documentElement.classList.remove('dark')
+  })
+  await page.evaluate(() => new Promise(r => requestAnimationFrame(r)))
+}
+
+/** Minimal shape of an axe violation, enough to log the failing nodes and their ratios. */
+interface LoggableViolation {
+  id: string
+  impact?: string | null
+  help: string
+  nodes: { target: unknown[]; any: { message: string }[] }[]
+}
+
+/**
+ * Log every violation with per-node detail. A rule-level count alone cannot be
+ * diagnosed (which element, which colour pair, which ratio); the node's `any`
+ * messages carry the measured foreground/background and the actual ratio, so a
+ * CI failure is actionable without reproducing it locally.
+ */
+function logViolations(label: string, violations: LoggableViolation[]) {
+  if (violations.length === 0) return
+  console.log(`\n=== ${label} ===`)
+  for (const v of violations) {
+    console.log(`[${v.impact}] ${v.id} (${v.nodes.length} nodes): ${v.help}`)
+    for (const node of v.nodes) {
+      console.log(`  - ${node.target.map(String).join(' ')} :: ${node.any.map(a => a.message).join(' | ')}`)
+    }
+  }
+}
+
 test.describe('PrimeVue Select overlay WCAG + keyboard nav', { tag: "@regression" }, () => {
   test('open filter-bar-status overlay has no unexpected WCAG AA violations', { tag: "@regression" }, async ({ page, env }) => {
     test.skip(env.name !== 'local', 'Uses setupLocalMockApi — only runs locally')
@@ -254,6 +297,38 @@ test.describe('authenticated shell — sidebar profile links (FAR-1907)', { tag:
           console.log(`[${v.impact}] ${v.id} (${v.nodes.length} nodes): ${v.help}`)
         }
       }
+      expect(violations).toEqual([])
+    })
+  }
+
+  // FAR-1938 — every scan above runs the default (dark) theme, so the light
+  // palette was never asserted. The light theme is a full token override on
+  // `:root`, and several of its text tokens measured below the WCAG AA 4.5:1
+  // floor (`success` at 2.30:1 on white, muted on the light surface at 3.42:1,
+  // `--warning-text` at 4.01:1, primary on its tint at 4.16-4.33:1). Each
+  // route is scanned in BOTH themes: a fix that darkens a light token must not
+  // lighten its dark counterpart below AA, and vice versa.
+  for (const path of AUTHENTICATED_ROUTES) {
+    test(`authenticated ${path} has no unexpected WCAG AA violations (light theme)`, { tag: "@local-mock" }, async ({ page, env }) => {
+      const { setupLocalMockApi, loginAsAdmin } = await import('./setup/fixtures')
+      await setupLocalMockApi(page)
+      await page.addInitScript(() => { try { localStorage.setItem('assistant-panel-state', 'closed') } catch (err) { console.warn(err) } })
+      await loginAsAdmin(page, env)
+
+      await page.goto(path)
+      await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
+      await forceLightMode(page)
+
+      // Guard the harness itself: if the theme did not actually flip, the scan
+      // below would silently re-audit dark and this test would prove nothing.
+      expect(
+        await page.evaluate(() => document.documentElement.classList.contains('light')),
+        'the light theme must be active before scanning',
+      ).toBe(true)
+
+      const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze()
+      const violations = filterViolations(results.violations)
+      logViolations(`${path} (authenticated, light)`, violations)
       expect(violations).toEqual([])
     })
   }

@@ -337,7 +337,7 @@
               </div>
 
               <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
-              <div v-if="formSuccess" class="text-sm text-success">{{ formSuccess }}</div>
+              <div v-if="formSuccess" class="text-sm text-success-text">{{ formSuccess }}</div>
             </div>
           </div>
         </div>
@@ -373,7 +373,7 @@
                 <div class="min-w-0 flex-1">
                   <p class="truncate font-medium">{{ ev.name }}</p>
                   <div class="mt-1 flex flex-wrap items-center gap-2">
-                    <span class="inline-block rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">{{ ev.eval_type }}</span>
+                    <span class="inline-block rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary-text">{{ ev.eval_type }}</span>
                     <span
                       v-if="evalGateActions[ev.id]"
                       class="inline-block rounded px-2 py-0.5 text-xs font-medium"
