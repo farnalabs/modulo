@@ -1724,7 +1724,17 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         ``model_class``: the class is resolved at mint only for sandbox_agent
         nodes and consumed through the sandbox ``{{ model }}`` template
         variable, so on any other node type it would be a declared-but-unread
-        reference to a mechanism that never runs.
+        reference to a mechanism that never runs. FAR-1846 adds
+        ``egress_policy`` / ``egress_allowlist`` for the same reason: the egress
+        enforcement surface (the workspace egress policy plus the host:port
+        allowlist) is only derived for sandbox_agent nodes —
+        ``_check_sandbox_egress`` runs only in the sandbox branch of the graph
+        validator, and the node → ``WorkspaceSpec`` mapping is performed only by
+        the sandbox dispatch sites (``node_runner``, ``sandbox_mode`` and
+        ``bundled_runner/runner_dispatch``) against the resolver in
+        ``pipeline_engine/egress.py`` (itself a pure resolver, not a caller) —
+        so on any other node type the pair would be declared-but-unread
+        configuration that looks enforced and enforces nothing.
         """
         if self.node_type == "sandbox_agent":
             return
@@ -1740,6 +1750,10 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             raise ValueError("Only sandbox_agent nodes can set commands_concatenation_string")
         if self.model_class is not None:
             raise ValueError("Only sandbox_agent nodes can set model_class")
+        if self.egress_policy is not None:
+            raise ValueError("Only sandbox_agent nodes can set egress_policy")
+        if self.egress_allowlist is not None:
+            raise ValueError("Only sandbox_agent nodes can set egress_allowlist")
 
     def _validate_agent_only_fields(self) -> None:
         if self.node_type != "agent" and self.parameter_set_id is not None:
