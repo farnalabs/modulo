@@ -921,9 +921,6 @@ async def resolve_sso_unrestricted_provisioning(*, org_id: uuid.UUID | None) -> 
         return False
 
 
-MCP_HUMAN_LINKED_HITL_AUTHORITY_FLAG = "mcp_human_linked_hitl_authority"
-
-
 async def resolve_mcp_human_linked_hitl_authority(*, org_id: uuid.UUID | None, flag_name: str) -> bool:
     """Resolve the org-wide human-linked MCP authority flag (ADR 063 step 1).
 
