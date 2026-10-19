@@ -2428,6 +2428,7 @@ export default {
       "capacity_backpressure": "Capacity Backpressure",
       "capacity_saturation": "Capacity Saturation",
       "capacity_recovered": "Capacity Recovered",
+      "capacity_redis_pressure": "Queue Store Memory Pressure",
       "response_body": "Response Body",
       "admin_view_of_all_webhook_notification_deliveries": "Admin view of all webhook notification deliveries",
       "failed_to_load_delivery_logs": "Failed to load delivery logs:",
@@ -4537,7 +4538,8 @@ export default {
       "queue_pressure_critical": "Queue Pressure (Critical)",
       "capacity_backpressure": "Capacity Backpressure",
       "capacity_saturation": "Capacity Saturation",
-      "capacity_recovered": "Capacity Recovered"
+      "capacity_recovered": "Capacity Recovered",
+      "capacity_redis_pressure": "Queue Store Memory Pressure"
     },
     "NotificationBell": {
       "notifications": "Notifications",

@@ -16,7 +16,8 @@ and the subscribable webhook subset in ``api/routes.admin_notifications.py``
                       guardrail_unexpected_skip
   - Capacity:         queue_pressure_notice, queue_pressure_warning,
                       queue_pressure_critical, capacity_backpressure,
-                      capacity_saturation, capacity_recovered (FAR-1344)
+                      capacity_saturation, capacity_recovered (FAR-1344),
+                      capacity_redis_pressure (FAR-2002)
   (event_mapper additionally configures the two HITL gate-removal events
   hitl_review_removed / hitl_review_removal_denied, which are AuditEvent-only.)
 

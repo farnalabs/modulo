@@ -48,7 +48,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.connectors.base import ConnectorPermissionError
-from modulo.core.dispatch import SAQ_RUN_TIMEOUT
+from modulo.core.dispatch import SAQ_RUN_TIMEOUT, _apply_queued_ttl
 
 # FAR-1649: the durable "first node STARTED" phase label. It lives in the
 # dependency-free leaf ``modulo.core.dispatch_phases`` (a module import with NO
@@ -3132,6 +3132,13 @@ async def _enqueue_fire_job_async(
     Returns the job id, or ``None`` when SAQ deduped it (a concurrent machine
     already enqueued the same epoch — the atomic next_fire_at advance makes this
     the exceptional path).
+
+    FAR-2002: the job hash gets the same status-gated queued TTL as a run
+    dispatch. This path previously carried only SAQ's finish-origin TTL, so a
+    wedged runs worker (with the system worker still alive) let these hashes
+    accumulate with no TTL - which ``volatile-lru`` cannot evict. On the dedupe
+    path the existing hash is bounded too; the status gate means an ACTIVE job
+    is never expired.
     """
     job = await q.enqueue(
         function,
@@ -3142,6 +3149,8 @@ async def _enqueue_fire_job_async(
         ttl=FIRE_JOB_TTL,
         **kwargs,
     )
+    job_id = job.id if job is not None else q.job_id(key)
+    await _apply_queued_ttl(q.redis, job_id)
     return job.id if job is not None else None
 
 

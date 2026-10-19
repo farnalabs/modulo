@@ -28,6 +28,7 @@ the webhook-subscribable subset is ``AVAILABLE_EVENTS`` in
   - capacity_backpressure → level: warning, scope: org (FAR-1344)
   - capacity_saturation → level: warning, scope: admin (FAR-1344)
   - capacity_recovered → level: info, scope: org (FAR-1344)
+  - capacity_redis_pressure → level: warning, scope: admin (FAR-2002)
 """
 
 from __future__ import annotations

@@ -293,6 +293,8 @@ executor – only in-memory rate limiting and an in-memory event broker.
 
 *Deployment side.* The shipped Compose runs Redis with
 `--maxmemory ${REDIS_MAXMEMORY:-256mb} --maxmemory-policy volatile-lru`.
+The Helm chart's embedded Redis (`redis.embedded=true`) passes the same pair
+(`--maxmemory 256mb --maxmemory-policy volatile-lru`).
 Previously it set no bound at all, so Redis ran `noeviction`: under a worker
 wedge (nothing defers, every accepted trigger fire is enqueued) the queue grew
 until every enqueue write failed with `OOM command not allowed`, leaving runs
@@ -307,8 +309,11 @@ structural key drops queued work with no job hash for `dispatcher_reconcile` to
 detect and repair.
 
 *Code side.* `core.dispatch` applies a 3600s TTL (`SAQ_QUEUED_JOB_TTL`) to each
-job hash it enqueues, so stale queue entries self-bound regardless of the
-deployment's Redis config. The TTL is applied only while the stored job status
+job hash it enqueues: run dispatch (`_enqueue_saq`), per-item trigger fires
+(`core.cron_helpers._enqueue_fire_job_async`) and suite-run execution jobs
+(`core.saq_worker._enqueue_suite_run_execution`). Stale queue entries therefore
+self-bound regardless of the deployment's Redis config. The TTL is applied only
+while the stored job status
 is `queued` (atomic, status-gated); the worker's dequeue transition to `active`
 clears it, so an in-flight job is never expired. A queued job whose hash is
 evicted or expired is not lost: `dispatcher_reconcile` sees `q.job()` absent on

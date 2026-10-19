@@ -69,6 +69,7 @@ from saq.queue.redis import RedisQueue
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from modulo.core.cron_helpers import CRON_LIVENESS_STATS_TTL_SECONDS, SAQ_TASK_FIRE_SUITE_RUN
+from modulo.core.dispatch import _apply_queued_ttl
 from modulo.core.logging_config import org_id_var
 from modulo.settings import get_settings, resolve_instance_identity
 
@@ -913,6 +914,13 @@ async def _enqueue_suite_run_execution(suite_run_id: str, org_id: str) -> str | 
     ``Run`` and checks pipeline/org capacity) does not apply. The job key is
     deterministic so SAQ dedupe never double-runs a suite, and a re-fire uses a
     fresh suite_run anyway (each fire is a distinct SuiteRun row).
+
+    FAR-2002: the job hash gets the same status-gated queued TTL as a run
+    dispatch. This path previously carried only SAQ's finish-origin TTL, so a
+    wedged runs worker let suite jobs accumulate with no TTL - which
+    ``volatile-lru`` cannot evict. On the dedupe path (``enqueue`` returns
+    ``None``) the existing hash is bounded too; the status gate means an ACTIVE
+    job is never expired.
     """
     from saq.queue.redis import RedisQueue
 
@@ -925,9 +933,10 @@ async def _enqueue_suite_run_execution(suite_run_id: str, org_id: str) -> str | 
     )
     queue = RedisQueue(redis_client, name=settings.saq_runs_queue)
     try:
+        job_key = f"suite_run:{suite_run_id}"
         job = await queue.enqueue(
             "modulo.core.saq_worker.execute_suite_run",
-            key=f"suite_run:{suite_run_id}",
+            key=job_key,
             timeout=300,
             heartbeat=30,
             retries=2,
@@ -935,6 +944,8 @@ async def _enqueue_suite_run_execution(suite_run_id: str, org_id: str) -> str | 
             suite_run_id=suite_run_id,
             org_id=org_id,
         )
+        job_id = job.id if job is not None else queue.job_id(job_key)
+        await _apply_queued_ttl(redis_client, job_id)
         return job.id if job is not None else None
     finally:
         with contextlib.suppress(Exception):
