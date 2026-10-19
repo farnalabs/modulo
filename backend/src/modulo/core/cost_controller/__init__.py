@@ -127,10 +127,7 @@ FROM (
 CROSS JOIN LATERAL jsonb_array_elements(r.cost_breakdown::jsonb) AS elem
 WHERE jsonb_typeof(elem->'component') = 'string'
   AND elem->>'component' <> ''
-  AND NOT (
-      jsonb_typeof(elem->'billable') = 'boolean'
-      AND elem->'billable' = 'false'::jsonb
-  )
+  AND elem->'billable' IS DISTINCT FROM 'false'::jsonb
 GROUP BY r.owner_team_id, elem->>'component'
 HAVING SUM(
     CASE
@@ -233,10 +230,7 @@ CROSS JOIN LATERAL jsonb_array_elements(r.cost_breakdown::jsonb) AS elem
 WHERE elem->>'source' = 'self_reported'
   AND jsonb_typeof(elem->'component') = 'string'
   AND elem->>'component' <> ''
-  AND NOT (
-      jsonb_typeof(elem->'billable') = 'boolean'
-      AND elem->'billable' = 'false'::jsonb
-  )
+  AND elem->'billable' IS DISTINCT FROM 'false'::jsonb
 GROUP BY elem->>'component'
 """
 

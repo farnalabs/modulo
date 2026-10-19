@@ -68,7 +68,7 @@ def _freeze_datetime() -> Any:
 def _is_billable_excluded(entry: dict[str, Any]) -> bool:
     """FAR-1780: the per-entry billable filter (shared by reference + SQL).
 
-    Matches the buckets SQL's ``NOT (typeof boolean AND = 'false')`` WHERE:
+    Matches the buckets SQL's ``IS DISTINCT FROM 'false'`` WHERE:
     an explicit JSON-boolean ``false`` ``billable`` excludes the entry;
     every other value (``True``, absent, non-boolean, null) defaults to
     billable, mirroring ``entry.get("billable", True)`` in the in-process
@@ -485,7 +485,7 @@ async def test_billable_false_component_is_excluded_from_buckets() -> None:
     buckets = await build_cost_report_buckets(session, org_id=_ORG_ID, period="month")
 
     assert str(_TEAM_A) not in buckets["components_by_team"]
-    assert buckets["components_by_team"] == {}
+    assert not buckets["components_by_team"]
     assert buckets["org_total"] == "0.000000"
 
 
@@ -493,9 +493,9 @@ async def test_billable_true_and_absent_key_entries_are_still_summed() -> None:
     """The billable filter only excludes JSON-boolean false; everything else stays.
 
     Guards the filter against over-matching: an explicit ``billable: true``
-    and a pre-FAR-1780 entry with NO ``billable`` key (whose ``typeof`` is
-    not ``boolean``) must both keep contributing — they mirror the Python
-    aggregator's ``entry.get("billable", True)`` default.
+    and a pre-FAR-1780 entry with NO ``billable`` key (which is DISTINCT FROM
+    JSON-boolean ``false``) must both keep contributing — they mirror the
+    Python aggregator's ``entry.get("billable", True)`` default.
     """
     rows = [
         {
@@ -631,11 +631,10 @@ async def test_component_buckets_statement_expands_and_groups_in_sql() -> None:
     assert "total_clamped" in components_sql
     assert ":org_id" in components_sql
     assert ":since" in components_sql
-    # FAR-1780: the per-entry billable filter rides the lateral WHERE, so the
-    # buckets sum billable money only (declared self_reported entries are the
-    # non-billable agents' claims).
-    assert "jsonb_typeof(elem->'billable') = 'boolean'" in components_sql
-    assert "elem->'billable' = 'false'::jsonb" in components_sql
+    # FAR-1780: the per-entry billable filter rides the lateral WHERE as the
+    # null-safe IS DISTINCT FROM predicate, so the buckets sum billable money
+    # only (declared self_reported entries are the non-billable agents' claims).
+    assert "elem->'billable' IS DISTINCT FROM 'false'::jsonb" in components_sql
     # self-contained fragment: only the runs table is named in its own FROM
     assert "FROM runs" in components_sql
     assert "org_daily_run_counts" not in components_sql
@@ -677,9 +676,9 @@ async def test_export_model_statement_applies_the_billable_filter() -> None:
     drives the /admin/costs export CSV; summing the agent's DECLARED unbilled
     ``billable: false`` self_reported entries there would drift the CSV's
     ``total_spend_usd`` above the billed components the buckets now sum. The
-    filter rides the lateral WHERE with the same typeof-gated fragment as the
-    buckets SQL, so an absent key, a JSON-null or any non-boolean value
-    defaults to billable.
+    filter rides the lateral WHERE as the null-safe ``IS DISTINCT FROM``
+    predicate, so an absent key, a JSON-null or any non-boolean value defaults
+    to billable while only a JSON-boolean ``false`` is excluded.
     """
     session = AsyncMock()
     session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[])))
@@ -688,26 +687,25 @@ async def test_export_model_statement_applies_the_billable_filter() -> None:
 
     assert rows == []
     export_sql = str(session.execute.await_args_list[0].args[0])
-    assert "jsonb_typeof(elem->'billable') = 'boolean'" in export_sql
-    assert "elem->'billable' = 'false'::jsonb" in export_sql
+    assert "elem->'billable' IS DISTINCT FROM 'false'::jsonb" in export_sql
     assert "elem->>'source' = 'self_reported'" in export_sql
     params = session.execute.await_args_list[0].args[1]
     assert params["org_id"] == _ORG_ID
     assert "pattern" in params
 
 
-async def test_export_model_billable_filter_mirrors_the_buckets_filter() -> None:
+def test_export_model_billable_filter_mirrors_the_buckets_filter() -> None:
     """The export SQL's per-entry billable filter is the BUCKETS filter, verbatim.
 
     Mirrored-semantics pin: both static literals must carry the exact same
-    typeof-gated ``NOT (boolean AND false)`` fragment, so a drift on one
+    null-safe ``IS DISTINCT FROM 'false'`` predicate, so a drift on one
     surface (buckets vs /admin/costs export) cannot ship silently. A mock
     cannot execute SQL — the DB-level proof of the filter is the real-Postgres
     integration run in ``tests/integration/test_cost_buckets_sql_execution.py``.
     """
-    for fragment in ("jsonb_typeof(elem->'billable') = 'boolean'", "elem->'billable' = 'false'::jsonb"):
-        assert fragment in _SQL_COST_COMPONENT_BUCKETS
-        assert fragment in _SQL_EXPORT_MODEL
+    fragment = "elem->'billable' IS DISTINCT FROM 'false'::jsonb"
+    assert fragment in _SQL_COST_COMPONENT_BUCKETS
+    assert fragment in _SQL_EXPORT_MODEL
 
 
 async def test_queries_are_scoped_to_org_and_period() -> None:
