@@ -309,6 +309,57 @@ def test_boot_order_smoke_with_mocked_children(monkeypatch: pytest.MonkeyPatch, 
     assert serve_calls == [("127.0.0.1", 18000)]
 
 
+def test_serve_phase_exception_becomes_booterror(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A serve-phase failure must reach the operator as an actionable BootError.
+
+    The S3776 decomposition moved the serve phase into a helper; its call site
+    must stay inside the boot try/except so a bind/startup error is still
+    converted (main's behaviour) instead of escaping as a raw traceback.
+    """
+    order: list[str] = []
+    _install_boot_mocks(monkeypatch, order)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
+    def serve(host: str, port: int, stop_event: threading.Event) -> None:
+        raise OSError("address already in use")
+
+    with pytest.raises(BootError, match="address already in use"):
+        run_start(tmp_path / "data", serve=serve)
+
+
+def test_serve_phase_base_exception_tears_down_supervisor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A serve-phase SystemExit must tear the bundled children down first.
+
+    uvicorn exits with ``sys.exit(STARTUP_FAILURE)`` on a bind/startup failure;
+    SystemExit is a BaseException, so it bypasses the BootError conversion and
+    the supervisor must still be shut down before it propagates - otherwise the
+    bundled Postgres/Redis/SAQ children are orphaned.
+    """
+    import modulo.launcher.supervisor as supervisor_mod
+
+    order: list[str] = []
+    _install_boot_mocks(monkeypatch, order)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    shutdowns: list[str] = []
+
+    class SpySupervisor(supervisor_mod.Supervisor):
+        def shutdown(self) -> None:
+            shutdowns.append("shutdown")
+            super().shutdown()
+
+    monkeypatch.setattr(supervisor_mod, "Supervisor", SpySupervisor)
+
+    def serve(host: str, port: int, stop_event: threading.Event) -> None:
+        raise SystemExit(3)
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_start(tmp_path / "data", serve=serve)
+    assert exc_info.value.code == 3
+    assert shutdowns == ["shutdown"]
+
+
 def test_lock_refusal_propagates_naming_holder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import modulo.launcher.supervisor as supervisor_mod
 

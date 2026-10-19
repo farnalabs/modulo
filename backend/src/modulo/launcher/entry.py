@@ -431,6 +431,15 @@ def _run_foreground(
             _prepare_database_env(composed)
             settings = _build_settings()
             _add_saq_children(supervisor, settings, composed)
+            return _serve_until_shutdown(
+                supervisor,
+                run_state,
+                launcher_state,
+                serve=serve,
+                ready_fd=ready_fd,
+                degraded_path=degraded_path,
+                data_dir=data_dir,
+            )
         except (BootError, LauncherError, env_safety.AmbientEnvironmentError):
             raise
         except Exception as exc:
@@ -443,15 +452,6 @@ def _run_foreground(
             if supervisor is not None:
                 _shutdown_supervisor_after_boot_error(supervisor)
             raise
-        return _serve_until_shutdown(
-            supervisor,
-            run_state,
-            launcher_state,
-            serve=serve,
-            ready_fd=ready_fd,
-            degraded_path=degraded_path,
-            data_dir=data_dir,
-        )
     finally:
         lock.release()
 
