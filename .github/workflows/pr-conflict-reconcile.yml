@@ -186,6 +186,32 @@ jobs:
               fi
             fi
 
+            # headSha: enables the engine's CI-failure coalescing, which the
+            # Branch Fixer's webhook trigger keys on (prNumber, headSha) -
+            # exactly what ci.yml's notify-pr-failure sends. This dispatch path
+            # sent no headSha, so it could never coalesce and every 15-minute
+            # cycle minted a brand-new full fixer run for an unchanged PR
+            # (PR #1773 accumulated 148 runs in a week). With the PR's own head
+            # SHA a repeated dispatch for the SAME commit folds into the run
+            # already created for it, while a new commit changes the SHA and
+            # still dispatches fresh. The 30-minute fixer-recency guard above
+            # remains the retry gate; this only removes identical duplicates.
+            #
+            # FAIL OPEN: an unresolvable SHA leaves HEAD_SHA empty and the
+            # payload omits the key, so the delivery behaves exactly as it did
+            # before (an absent headSha derives no coalesce key) and the
+            # dispatch is never blocked or skipped. Explicit REST path because
+            # this job has no actions/checkout step, so `gh` has no remote to
+            # infer the repository from.
+            HEAD_SHA=""
+            SHA_RC=0
+            HEAD_SHA=$(gh api "/repos/farnalabs/modulo/pulls/${PR_NUM}" --jq '.head.sha' 2>/tmp/pr_head_sha_stderr.txt) || SHA_RC=$?
+            if [ "$SHA_RC" -ne 0 ] || [ -z "$HEAD_SHA" ]; then
+              ERR=$(head -c 300 /tmp/pr_head_sha_stderr.txt 2>/dev/null | tr '\n' ' ' || true)
+              echo "::warning::Could not resolve the head SHA for PR #$PR_NUM (rc=$SHA_RC) — dispatching without headSha, so this delivery will not coalesce.${ERR:+ gh api stderr: $ERR}"
+              HEAD_SHA=""
+            fi
+
             # Deterministic dedupe key for this conflict (mirrors ci.yml's
             # notify-pr-failure payload shape). An unchanged tip of main means
             # the SAME merge to reconcile, so an identical repeat collapses to
@@ -202,11 +228,13 @@ jobs:
             BODY=$(jq -n \
               --arg branchName "$BRANCH" \
               --argjson prNumber "$PR_NUM" \
+              --arg headSha "$HEAD_SHA" \
               --arg failureDescription "PR conflicts with origin/main (mergeable=CONFLICTING). merge origin/main into the branch (a MERGE commit — do NOT rebase or force-push a shared/reviewed branch). Resolve conflicts by reading all three versions (base/ours/theirs) and satisfying both intents. Do NOT re-run the test suites in the sandbox — resolve, commit, and push. The node budget is too small for a full conflict resolution plus a suite run, and the push re-arms the pull_request pipeline, which is the authoritative gate. Push — which re-arms the pull_request pipeline (CI + sonarcloud-scan)." \
               --arg repo "farnalabs/modulo" \
               --arg fingerprint "${FINGERPRINT}" \
               --arg taskKind "conflict" \
-              '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo, fingerprint: $fingerprint, taskKind: $taskKind}')
+              '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo, fingerprint: $fingerprint, taskKind: $taskKind}
+               + (if $headSha == "" then {} else {headSha: $headSha} end)')
 
             # Retry with exponential backoff on network failures (curl HTTP 000) and 429/5xx (max 5 attempts).
             # TIMESTAMP and HMAC are recomputed per attempt: the server
