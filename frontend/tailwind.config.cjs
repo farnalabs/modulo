@@ -35,6 +35,13 @@ module.exports = {
         'accent-foreground': 'hsl(var(--accent-foreground))',
         destructive: 'hsl(var(--destructive))',
         'destructive-foreground': 'hsl(var(--destructive-foreground))',
+        // Fill-safe counterpart of `destructive` for text-bearing SOLID fills
+        // (badges, destructive buttons). `--destructive` is an accent hue, so
+        // `--destructive-foreground` on it is only 3.22:1 (dark) / 3.30:1
+        // (agent) - below the WCAG AA 4.5:1 floor. Use `bg-destructive-fill`
+        // with `text-destructive-foreground` on every solid destructive
+        // surface that carries text.
+        'destructive-fill': 'hsl(var(--destructive-fill))',
         success: 'hsl(var(--success))',
         warning: 'hsl(var(--warning))',
         // FAR-1530/FAR-1587: text-safe counterpart of `warning`. `--warning` is

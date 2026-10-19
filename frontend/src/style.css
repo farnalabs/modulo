@@ -465,6 +465,17 @@
   --accent-foreground: 210 28% 93%;
   --destructive: 0 84% 60%;
   --destructive-foreground: 210 28% 93%;
+  /* Fill-safe counterpart of --destructive for text-bearing SOLID fills
+     (badges, destructive buttons). --destructive is tuned as an accent hue, so
+     --destructive-foreground on it measures only 3.22:1 here (and 3.30:1 in the
+     agent theme) - below the WCAG AA 4.5:1 floor for normal-size text, which is
+     what the 10px notification unread badge is. --destructive-fill keeps the
+     hue and darkens the fill so the existing foreground clears AA, including
+     the common hover:bg-destructive-fill/90 state. Measured (normal / hover):
+       dark  #ce1212  4.78:1 / 5.57:1
+       light #cf1212  5.37:1 / 4.84:1
+       agent #df0c0c  5.01:1 / 5.88:1 */
+  --destructive-fill: 0 84% 44%;
   /* FAR-1913: text-safe counterpart of --destructive. --destructive is tuned as
      a FILL/accent hue, so destructive COLOURED TEXT on a bg-destructive/* tint
      only reaches 4.32:1 here (dark) and 3.46:1 in light mode - both below the
@@ -524,6 +535,8 @@
   --accent-foreground: 220 29% 6%;
   --destructive: 0 84.2% 48%;
   --destructive-foreground: 210 40% 98%;
+  /* Fill-safe destructive fill - see the measured ratios in :root. */
+  --destructive-fill: 0 84.2% 44%;
   /* FAR-1913: see --destructive-text in :root. Light mode's tint is darker
      (.light .bg-destructive\/10 = 20% alpha), so the text-safe token darkens to
      36% instead - 5.41:1 on the tint, 7.61:1 on white. */
@@ -572,6 +585,8 @@
   --accent-foreground: 210 30% 96%;
   --destructive: 0 90% 65%;
   --destructive-foreground: 0 0% 100%;
+  /* Fill-safe destructive fill - see the measured ratios in :root. */
+  --destructive-fill: 0 90% 46%;
   /* FAR-1913: see --destructive-text in :root - lightened to 68% so the agent
      theme's wider card tint also clears AA (5.10:1 on the tint). */
   --destructive-text: 0 90% 68%;
