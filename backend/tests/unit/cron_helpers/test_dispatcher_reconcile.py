@@ -2974,6 +2974,39 @@ class TestHitlReviewExpiryTerminalizerWiring:
         session.review_expiry.assert_awaited_once()
         assert session.review_expiry.await_args.args[1] == [(expired_run, ORG)]
 
+    @pytest.mark.asyncio
+    async def test_expiry_recorder_failure_is_logged_and_does_not_fail_the_tick(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The cancellations have committed: a recorder error must not undo them."""
+        expired_run = uuid.uuid4()
+        terminalizer = AsyncMock(return_value=[expired_run])
+        review_expiry = AsyncMock(side_effect=RuntimeError("recorder down"))
+
+        with caplog.at_level(logging.WARNING):
+            summary, _reenqueue, _ingest, _redis, _awaiting, _session = await _run_reconcile(
+                monkeypatch,
+                [],
+                terminalizer=terminalizer,
+                review_expiry=review_expiry,
+            )
+
+        assert summary["hitl_review_expired_terminalized"] == 1
+        assert any("cron_helpers.review_expiry_outcomes_failed" in record.message for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_expiry_recorder_cancellation_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Cancellation is never converted into a swallowed tick failure."""
+        review_expiry = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with pytest.raises(asyncio.CancelledError):
+            await _run_reconcile(
+                monkeypatch,
+                [],
+                terminalizer=AsyncMock(return_value=[uuid.uuid4()]),
+                review_expiry=review_expiry,
+            )
+
 
 class TestTerminalizeHitlReviewMissing:
     """FAR-721: the zero-claim-``awaiting_human`` terminalizer's SQL contract.

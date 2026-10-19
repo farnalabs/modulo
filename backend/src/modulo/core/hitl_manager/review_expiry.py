@@ -110,6 +110,90 @@ async def _select_expiry_gates(
         return list(result.all())
 
 
+async def _read_expiry_gates(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    org_id: uuid.UUID,
+    run_ids: Sequence[uuid.UUID],
+) -> list[Any]:
+    """Read the expiry gates, failing OPEN (with a log) on any read error.
+
+    The cancellation this records has already committed, so a failed read is
+    logged under :data:`EXPIRY_AUDIT_LOG_KEY` and treated as "no gates" —
+    never allowed to undo the sweep. ``CancelledError`` always propagates.
+    """
+    try:
+        return await _select_expiry_gates(factory, org_id=org_id, run_ids=run_ids)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # The read failed: log loudly and keep going — the cancellation is
+        # already committed and must never be undone by its own record.
+        _log.warning(
+            EXPIRY_AUDIT_LOG_KEY,
+            extra={"org_id": str(org_id), "run_count": len(run_ids), "stage": "select"},
+            exc_info=True,
+        )
+        return []
+
+
+async def _append_expiry_event(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    org_id: uuid.UUID,
+    claim_id: uuid.UUID,
+    run_id: uuid.UUID,
+    review_id: str,
+    cancel_reason: str,
+) -> bool:
+    """Append one ``hitl.review_expired`` event; False when it fails open.
+
+    ``append_background_audit_event`` already fails open with a log; this
+    wrapper is defensive so an unexpected raise can never turn the record of a
+    completed cancellation into a tick failure. ``CancelledError`` always
+    propagates.
+    """
+    payload: dict[str, Any] = {
+        "summary": _SUMMARY,
+        "pipeline_run_id": str(run_id),
+        "node_id": review_id,
+        "outcome": EXPIRY_OUTCOME,
+        # Explicit NULL: no verdict was recorded. This key must be
+        # present so a reader can tell "no decision" from "field
+        # omitted" without inferring it.
+        "decision": None,
+        "cancel_reason": cancel_reason,
+    }
+    try:
+        return await append_background_audit_event(
+            factory,
+            org_id=org_id,
+            event_type=EXPIRY_EVENT_TYPE,
+            resource_type="hitl_claim",
+            resource_id=claim_id,
+            actor_source=_EXPIRY_ACTOR_SOURCE,
+            payload_json=payload,
+            log_key=EXPIRY_AUDIT_LOG_KEY,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Defensive: append_background_audit_event already fails open with a
+        # log. If it ever raises instead, never let the record of a completed
+        # cancellation become a tick failure.
+        _log.warning(
+            EXPIRY_AUDIT_LOG_KEY,
+            extra={
+                "org_id": str(org_id),
+                "run_id": str(run_id),
+                "review_id": review_id,
+                "stage": "append",
+            },
+            exc_info=True,
+        )
+        return False
+
+
 async def record_review_expiry_outcomes(
     factory: async_sessionmaker[AsyncSession],
     cancelled: Sequence[tuple[uuid.UUID, uuid.UUID]],
@@ -138,61 +222,17 @@ async def record_review_expiry_outcomes(
 
     recorded = 0
     for org_id, run_ids in by_org.items():
-        try:
-            gates = await _select_expiry_gates(factory, org_id=org_id, run_ids=run_ids)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            # The read failed: log loudly and keep going — the cancellation is
-            # already committed and must never be undone by its own record.
-            _log.warning(
-                EXPIRY_AUDIT_LOG_KEY,
-                extra={"org_id": str(org_id), "run_count": len(run_ids), "stage": "select"},
-                exc_info=True,
-            )
-            continue
-
+        gates = await _read_expiry_gates(factory, org_id=org_id, run_ids=run_ids)
         for claim_id, run_id, review_id, cancel_reason in gates:
-            payload: dict[str, Any] = {
-                "summary": _SUMMARY,
-                "pipeline_run_id": str(run_id),
-                "node_id": review_id,
-                "outcome": EXPIRY_OUTCOME,
-                # Explicit NULL: no verdict was recorded. This key must be
-                # present so a reader can tell "no decision" from "field
-                # omitted" without inferring it.
-                "decision": None,
-                "cancel_reason": cancel_reason,
-            }
-            try:
-                appended = await append_background_audit_event(
+            recorded += int(
+                await _append_expiry_event(
                     factory,
                     org_id=org_id,
-                    event_type=EXPIRY_EVENT_TYPE,
-                    resource_type="hitl_claim",
-                    resource_id=claim_id,
-                    actor_source=_EXPIRY_ACTOR_SOURCE,
-                    payload_json=payload,
-                    log_key=EXPIRY_AUDIT_LOG_KEY,
+                    claim_id=claim_id,
+                    run_id=run_id,
+                    review_id=review_id,
+                    cancel_reason=cancel_reason,
                 )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                # Defensive: append_background_audit_event already fails open
-                # with a log. If it ever raises instead, never let the record
-                # of a completed cancellation become a tick failure.
-                _log.warning(
-                    EXPIRY_AUDIT_LOG_KEY,
-                    extra={
-                        "org_id": str(org_id),
-                        "run_id": str(run_id),
-                        "review_id": review_id,
-                        "stage": "append",
-                    },
-                    exc_info=True,
-                )
-                continue
-            if appended:
-                recorded += 1
+            )
 
     return recorded

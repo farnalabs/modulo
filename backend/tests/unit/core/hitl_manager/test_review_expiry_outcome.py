@@ -18,6 +18,7 @@ evidence. These tests pin the recorder's contract without a database:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -166,3 +167,46 @@ async def test_empty_input_opens_no_session() -> None:
 
     assert recorded == 0
     factory.assert_not_called()
+
+
+async def test_cancelled_error_during_selection_propagates() -> None:
+    """Cancellation is never swallowed — the tick is being torn down."""
+    factory = _factory([])
+    factory.return_value.__aenter__.return_value.execute = AsyncMock(side_effect=asyncio.CancelledError)
+
+    with (
+        patch.object(review_expiry, "set_rls_org", new=AsyncMock()),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await record_review_expiry_outcomes(factory, [(_RUN, _ORG)])
+
+
+async def test_cancelled_error_during_append_propagates() -> None:
+    """Cancellation on the append path propagates for the same reason."""
+    factory = _factory([_undecided_gate()])
+
+    with (
+        patch.object(review_expiry, "set_rls_org", new=AsyncMock()),
+        patch.object(
+            review_expiry,
+            "append_background_audit_event",
+            AsyncMock(side_effect=asyncio.CancelledError),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await record_review_expiry_outcomes(factory, [(_RUN, _ORG)])
+
+
+async def test_append_returning_false_is_not_counted() -> None:
+    """A fail-open append that records nothing is not reported as recorded."""
+    factory = _factory([_undecided_gate()])
+    append = AsyncMock(return_value=False)
+
+    with (
+        patch.object(review_expiry, "set_rls_org", new=AsyncMock()),
+        patch.object(review_expiry, "append_background_audit_event", append),
+    ):
+        recorded = await record_review_expiry_outcomes(factory, [(_RUN, _ORG)])
+
+    assert recorded == 0
+    append.assert_awaited_once()
