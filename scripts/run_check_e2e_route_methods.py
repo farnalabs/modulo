@@ -78,7 +78,10 @@ What is scanned (``frontend/tests/e2e/**/*.ts``):
   explicit note on stderr (never a failure, never dropped silently).
 
 Template placeholders (``${expr}``, ``:param``, ``{param}``) and glob
-wildcards normalise to one path-parameter segment, and an anchored
+wildcards normalise to one path-parameter segment: a whole ``*`` segment
+mid-path (``**/api/v1/pipelines/*/graph``) becomes ``{param}`` and is checked
+like any other route, while a leading ``**/`` stays prefix-glob semantics. An
+anchored
 regex-literal registration (``/\\/api\\/v1\\/plan$/``) is normalised the same
 way (anchors stripped, parameter-ish groups/classes collapsed to ``{param}``).
 A leading interpolation before the ``/api/`` segment
@@ -143,6 +146,20 @@ indirection is not enumerated at all - it is not a descriptor, not a note and
 not an unanalysed entry. That boundary is intentional and tested (see
 ``test_documented_limitation_dynamic_property_access_is_not_enumerated``), not
 an accident of the current marker list.
+
+Contract freeze
+---------------
+
+The syntax families documented above are FROZEN. A shape outside them is
+reported as a note (or, where an absolute external URL provably names no Modulo
+route, excluded explicitly and by design) - never a hard failure and never
+silence. Adding a family is a deliberate contract change with its own tests, not
+an opportunistic extension of the extractor.
+
+An absolute external URL (``http://`` / ``https://``) whose literal carries no
+``/api/`` segment is not a Modulo API candidate: it names another origin, so no
+live route could ever match it. It needs no suppression annotation and is never
+a hard failure.
 
 Known limitations
 -----------------
@@ -285,10 +302,14 @@ _LEDGER_IGNORE_RE = re.compile(r"//\s*e2e-route-check:\s*ignore\b")
 _LEDGER_BRACKET_REQUEST_RE = re.compile(
     r"(?:(?:page|context)\s*(?:\.\s*context\s*\(\s*\))?\s*\.\s*request|(?<![\w.$])request)\s*\["
 )
-#: A ``request`` binding introduced by destructuring or rename
-#: (``async ({ request: api }) => api.get(...)``). The alias itself is not
-#: resolvable, so the binding occurrence is the candidate the ledger reports.
-_LEDGER_REQUEST_ALIAS_RE = re.compile(r"(?<![\w$.])request\s*:\s*(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)")
+#: A ``request`` binding introduced by DESTRUCTURING or rename
+#: (``async ({ request: api }) => api.get(...)``, ``const { request: api } =
+#: ctx``). The alias itself is not resolvable, so the binding occurrence is the
+#: candidate the ledger reports. The marker is anchored to an actual binding
+#: context by :func:`_request_binding_offsets` - a plain object/type property
+#: (``type Ctx = { request: any }``, ``const opts = { request: apiContext }``)
+#: is not a binding and must never be flagged.
+_REQUEST_BINDING_ALIAS_RE = re.compile(r"\brequest\s*:\s*(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)")
 #: A member-qualified ``apiFetch`` (``helpers.apiFetch(...)``). ``_API_FETCH_RE``
 #: excludes a ``.``-preceded identifier, so this form was neither extracted nor
 #: enumerated - a silent ledger gap.
@@ -788,6 +809,10 @@ def normalise_path(raw: str) -> tuple[str, bool, bool] | None:
     if "${" in text:
         return None
     text = _COLON_PARAM_RE.sub(_WILDCARD, text)
+    # A whole ``*`` segment mid-path (``**/api/v1/pipelines/*/graph``) is one
+    # path parameter under Playwright glob semantics. Leaving it unnormalised
+    # made the registration unreadable, so its method filter was never checked.
+    text = re.sub(r"(?<=/)\*(?=/|$)", _WILDCARD, text)
     text = _SQUASH_SLASH_RE.sub("/", text)
     if len(text) > 1:
         text = text.rstrip("/")
@@ -1037,6 +1062,24 @@ def _has_string_literal(expression: str) -> bool:
     return any(quote in expression for quote in ("'", '"', "`"))
 
 
+def _is_external_url_literal(expression: str) -> bool:
+    """True when *expression* is a literal absolute URL naming another origin.
+
+    A ``fetch``/``request`` target of ``'http://localhost:8000/healthz'`` (or an
+    ``https://`` sibling) is not a Modulo API path, so no live route could ever
+    match it - it must not require a suppression annotation. Only a WHOLE
+    string/template literal counts: a relative path, a variable, or a URL with
+    an ``/api/`` segment stays a candidate and keeps its existing handling.
+    """
+    text = _unwrap_parens(_strip_ts_assertion(expression.strip()))
+    if not text or text[0] not in ("'", '"', "`"):
+        return False
+    literal, end = _read_template(text, 0) if text[0] == "`" else _read_quoted(text, 0)
+    if text[end:].strip():
+        return False
+    return literal.startswith(("http://", "https://")) and _API_PREFIX not in literal
+
+
 def _skip_literal_or_comment(text: str, index: int) -> int | None:
     """Skip a string/template literal or comment at *index*; ``None`` if neither."""
     char = text[index]
@@ -1202,23 +1245,42 @@ def _delegates_method_filter(masked_body: str, params: list[str]) -> bool:
     ``if (isMethod(route, 'PATCH'))`` reads no ``.method()`` here - the filter
     lives in the helper - so the comparison passes see nothing and the
     registration was silent. Full alias/helper resolution is out of scope; the
-    occurrence is noted instead. A property call (``route.fulfill(...)``) is not
-    a helper, and a bare call that never receives the route/request cannot be a
-    method filter on this registration.
+    occurrence is noted instead. A property call ROOTED at a callback parameter
+    (``route.fulfill(...)``, ``request.headers()``) is a Playwright API read,
+    not a helper. A member-qualified helper (``helpers.isPatch(route)``) is a
+    delegation just like the bare form. A bare call that never receives the
+    route/request cannot be a method filter on this registration.
     """
     if not params:
         return False
-    param_pattern = "|".join(re.escape(name) for name in dict.fromkeys(params))
-    for match in re.finditer(r"(?<![\w.$])([A-Za-z_$][\w$]*)\s*\(", masked_body):
-        if match.group(1) in _NON_HELPER_CALL_NAMES:
+    # The chain is matched from its ROOT (a preceding ``.`` means the real root
+    # is outside the match, e.g. ``['PATCH'].includes(...)``), so a property or
+    # array method is never mistaken for a helper.
+    for match in re.finditer(
+        r"(?<![\w$.])(?P<chain>[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*\(",
+        masked_body,
+    ):
+        chain = re.sub(r"\s+", "", match.group("chain"))
+        root = chain.split(".", 1)[0]
+        if root in params:
+            # A Playwright route/request member call, not a delegated helper.
+            continue
+        if chain.rsplit(".", 1)[-1] in _NON_HELPER_CALL_NAMES:
             continue
         if re.search(r"\bnew\s+$", masked_body[max(0, match.start() - 8) : match.start()]):
             # A constructor call (``new URL(route.request().url())``) is not a
             # delegated method filter.
             continue
         for start, end in _split_args(masked_body, match.end() - 1):
-            argument = masked_body[start:end]
-            if re.search(rf"(?<![\w$.])(?:{param_pattern})(?![\w$])", argument):
+            # The helper must receive the route/request OBJECT itself (or the
+            # Request derived from the route via ``route.request()``). A further
+            # derived value (``graphPuts.push(route.request().url())``) is not a
+            # filter handed to a helper, so requiring the object keeps ordinary
+            # callback bookkeeping out of the delegation note.
+            argument = _strip_ts_assertion(masked_body[start:end].strip())
+            if argument in params:
+                return True
+            if re.fullmatch(rf"(?:{'|'.join(re.escape(name) for name in params)})\s*\.\s*request\s*\(\s*\)", argument):
                 return True
     return False
 
@@ -1636,12 +1698,13 @@ def _extract_route_interceptors(
 
         # A callback that hands the route/request to a helper
         # (``if (isMethod(route, 'PATCH'))``) reads no ``.method()`` here, so
-        # every pass above sees nothing and the registration was silent. The
-        # helper's filter is not resolvable in this checker; it is noted.
+        # every pass above sees nothing and the registration was silent. That
+        # stays true when the SAME callback also reads the method directly for
+        # another branch, and for a member-qualified helper
+        # (``helpers.isPatch(route)``): one resolved comparison does not validate
+        # a different, delegated filter.
         handler_masked = masked[span_start:span_end]
-        if not _has_unmodelled_method_reference(handler_masked) and _delegates_method_filter(
-            handler_masked, list(params)
-        ):
+        if _delegates_method_filter(handler_masked, list(params)):
             _add_note(notes, filename, _line_of(text, span_start), _LEDGER_DELEGATED_METHOD_NOTE)
     return calls
 
@@ -1811,6 +1874,40 @@ def _destructured_request_offsets(masked: str) -> list[int]:
     return offsets
 
 
+#: Contexts in which ``{ ... }`` is a destructuring PATTERN (a binding), not a
+#: plain object or type literal. A parameter list is matched for arrow functions
+#: (``async ({ request: api }) =>``) and ``function`` declarations; a
+#: declaration pattern is matched for ``const|let|var { ... } = <expr>``.
+_ARROW_PARAM_LIST_RE = re.compile(r"(?:async\s+)?\(([^()]*)\)\s*(?::[^=()]*)?=>")
+_FUNCTION_PARAM_LIST_RE = re.compile(r"function\s*\w*\s*\(([^()]*)\)")
+_DESTRUCTURING_DECLARATION_RE = re.compile(r"(?:const|let|var)\s*\{([^{}]*)\}\s*=")
+
+
+def _request_binding_offsets(masked: str) -> list[int]:
+    """Return offsets of ``request: alias`` occurrences that are real BINDINGS.
+
+    Only two contexts bind an alias:
+
+    * a destructuring declaration (``const { request: api } = ctx``);
+    * a destructuring PARAMETER (``async ({ request: api }) => ...``).
+
+    A ``request`` property on a type or object literal
+    (``type Ctx = { request: any }``, ``const opts = { request: apiContext }``)
+    reads like the marker but binds nothing, so it is not a candidate. A
+    PascalCase alias is skipped too: it reads as a type annotation in practice.
+    """
+    spans: list[tuple[int, int]] = []
+    for pattern in (_DESTRUCTURING_DECLARATION_RE, _ARROW_PARAM_LIST_RE, _FUNCTION_PARAM_LIST_RE):
+        spans.extend((match.start(1), match.end(1)) for match in pattern.finditer(masked))
+    offsets: list[int] = []
+    for start, end in spans:
+        for match in _REQUEST_BINDING_ALIAS_RE.finditer(masked, start, end):
+            if match.group("alias")[:1].isupper():
+                continue
+            offsets.append(match.start())
+    return offsets
+
+
 def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
     """Return ``(offset, line)`` for every HTTP-call CANDIDATE occurrence.
 
@@ -1898,11 +1995,17 @@ def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
     for match in _RETRY_FETCH_RE.finditer(masked):
         if _is_function_declaration(masked, match.start()):
             continue
+        if _in_import_or_export_specifier(masked, match.start()):
+            continue
         if _find_open_paren(masked, match.end()) is None:
             continue
         add(match.start())
     for match in _FETCH_RE.finditer(masked):
         if _is_function_declaration(masked, match.start()):
+            continue
+        # An ``import``/``export`` specifier is a BINDING, not a call: flagging
+        # it would make every spec file that imports ``fetch`` unanalysed.
+        if _in_import_or_export_specifier(masked, match.start()):
             continue
         is_call = _find_open_paren(masked, match.end()) is not None
         if is_call or _is_fetch_value_reference(masked, match.start(), match.end()):
@@ -1918,12 +2021,10 @@ def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
         add(offset)
     for match in _LEDGER_BRACKET_REQUEST_RE.finditer(masked):
         add(match.start())
-    for match in _LEDGER_REQUEST_ALIAS_RE.finditer(masked):
-        # A PascalCase name after ``request:`` is a TYPE annotation
-        # (``(route, request: Request)``), not a renamed binding.
-        if match.group("alias")[:1].isupper():
-            continue
-        add(match.start())
+    for offset in _request_binding_offsets(masked):
+        # Only a real destructuring BINDING is a candidate. A plain object/type
+        # property (``{ request: any }``) binds nothing and is not enumerated.
+        add(offset)
     return occurrences
 
 
@@ -2048,6 +2149,11 @@ def _extract_fetch_like(
         method, unresolved = _fetch_method(args[1:] + request_init_arguments)
         path_info = extract_path(target)
         if path_info is None:
+            if _is_external_url_literal(target):
+                # A literal absolute URL on another origin is not a Modulo API
+                # call: no annotation is required and it is never a violation.
+                accounted_offsets.add(offset)
+                continue
             if method is not None:
                 _add_note(
                     notes,
@@ -2228,6 +2334,10 @@ def extract_http_calls(
             continue
         path_info = extract_path(args[0])
         if path_info is None:
+            if _is_external_url_literal(args[0]):
+                # A literal absolute URL on another origin - not an API route.
+                accounted_offsets.add(offset)
+                continue
             # The verb IS the method, so the method is always resolvable here -
             # a non-literal URL is an unchecked request, reported as a note.
             _add_note(

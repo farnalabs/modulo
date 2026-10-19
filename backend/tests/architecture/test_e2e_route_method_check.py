@@ -1830,6 +1830,182 @@ def test_unrelated_bracket_keys_and_destructuring_are_not_candidates() -> None:
     assert not unanalysed
 
 
+# ---------------------------------------------------------------------------
+# FAR-1847 precision pass: external URLs, mid-path globs, delegation notes and
+# import/export bindings (contract frozen after this round)
+# ---------------------------------------------------------------------------
+
+
+def test_external_absolute_url_is_not_an_api_candidate() -> None:
+    # ``fetch('http://localhost:8000/healthz')`` names another origin, not a
+    # Modulo route. It must be neither a hard failure nor an annotation burden.
+    notes: list[str] = []
+    unanalysed: list[str] = []
+
+    calls = _checker.extract_http_calls("await fetch('http://localhost:8000/healthz')\n", FILENAME, notes, unanalysed)
+
+    assert not calls
+    assert not notes
+    assert not unanalysed
+
+
+def test_external_absolute_url_with_a_method_is_not_an_api_candidate() -> None:
+    unanalysed: list[str] = []
+
+    calls = _checker.extract_http_calls(
+        "await fetch('https://example.test/healthz', { method: 'POST' })\n", FILENAME, [], unanalysed
+    )
+
+    assert not calls
+    assert not unanalysed
+
+
+def test_external_url_with_an_api_segment_is_still_a_candidate() -> None:
+    # Boundary: only a URL with NO ``/api/`` segment is excluded. An external
+    # URL that spells an API path stays subject to the normal check.
+    unanalysed: list[str] = []
+
+    calls = _checker.extract_http_calls(
+        "await fetch('https://example.test/api/v1/pipelines/1/graph', { method: 'PATCH' })\n",
+        FILENAME,
+        [],
+        unanalysed,
+    )
+
+    assert len(calls) == 1
+    assert calls[0].path == "/api/v1/pipelines/1/graph"
+    assert not unanalysed
+
+
+def test_mid_path_glob_segment_normalises_to_a_parameter() -> None:
+    # The docstring says a glob wildcard normalises to one path segment; a
+    # single-``*`` segment used to return ``None``.
+    assert _checker.normalise_path("**/api/v1/pipelines/*/graph") == (
+        "/api/v1/pipelines/{param}/graph",
+        False,
+        False,
+    )
+
+
+def test_mid_path_glob_interceptor_method_is_checked() -> None:
+    # The same ``*`` registration used to be only a NOTE, so its PATCH filter
+    # was never validated against the live route.
+    notes: list[str] = []
+    source = (
+        "await page.route('**/api/v1/pipelines/*/graph', (route) => {\n"
+        "  if (route.request().method() === 'PATCH') {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes)
+
+    assert [(call.method, call.path) for call in calls] == [("PATCH", "/api/v1/pipelines/{param}/graph")]
+    assert not notes
+
+    violations = _checker.find_violations(calls, LIVE_ROUTES)
+
+    assert len(violations) == 1
+    assert violations[0].call.kind == "interceptor"
+
+
+def test_delegation_note_survives_a_direct_method_read_in_the_same_callback() -> None:
+    # A resolved PUT comparison does not validate a SECOND, delegated filter in
+    # the same callback - the note must still be emitted.
+    notes: list[str] = []
+    source = (
+        "await page.route('**/api/v1/pipelines/1/graph', (route) => {\n"
+        "  if (route.request().method() === 'PUT') {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "  if (isPatch(route)) {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes)
+
+    assert [(call.method, call.path) for call in calls] == [("PUT", "/api/v1/pipelines/1/graph")]
+    assert any("delegates its method filter" in note for note in notes)
+
+
+def test_member_qualified_delegate_is_noted() -> None:
+    # ``helpers.isPatch(route)`` is the same delegation as the bare form; the
+    # marker used to require a bare identifier, so this was silent.
+    notes: list[str] = []
+    source = (
+        "await page.route('**/api/v1/pipelines/1/graph', (route) => {\n"
+        "  if (helpers.isPatch(route)) {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes)
+
+    assert not calls
+    assert len(notes) == 1
+    assert "delegates its method filter" in notes[0]
+
+
+def test_fetch_import_and_export_bindings_are_not_candidates() -> None:
+    # ``import { fetch } from 'undici'`` is a binding, not a call - the same
+    # structural exclusion apiFetch already had.
+    unanalysed: list[str] = []
+    source = "import { fetch } from 'undici'\nimport { fetch as f } from './fetch-impl'\nexport { fetch }\n"
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert not calls
+    assert not unanalysed
+
+
+def test_retry_fetch_import_and_export_bindings_are_not_candidates() -> None:
+    unanalysed: list[str] = []
+    source = (
+        "import { fetchWithTransientRetry } from './realstack-api'\n"
+        "import { fetchWithTransientRetry as retryFetch } from './other'\n"
+        "export { fetchWithTransientRetry }\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert not calls
+    assert not unanalysed
+
+
+def test_request_property_on_types_and_object_literals_is_not_a_binding() -> None:
+    # Precision: ``request:`` in a type or object literal is a property, not a
+    # destructured fixture rename, so it must not be an unanalysed candidate.
+    for source in (
+        "type Ctx = { request: any }\n",
+        "interface Ctx { request: any }\n",
+        "const opts = { request: apiContext }\n",
+    ):
+        unanalysed: list[str] = []
+
+        calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+        assert not calls
+        assert not unanalysed
+
+
+def test_destructuring_declaration_request_binding_is_unanalysed() -> None:
+    # ``const { request: api } = ctx`` IS a binding: the alias loses the
+    # ``request`` marker, so the binding is the only visible occurrence.
+    unanalysed: list[str] = []
+
+    calls = _checker.extract_http_calls(
+        "const { request: api } = ctx\nawait api.get('/api/v1/pipelines')\n", FILENAME, [], unanalysed
+    )
+
+    assert not calls
+    assert len(unanalysed) == 1
+    assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
+
+
 def test_documented_limitation_dynamic_property_access_is_not_enumerated() -> None:
     # KNOWN LIMITATION, see the module docstring's "Known limitations" section;
     # the AST rewrite is tracked separately.
