@@ -1003,9 +1003,10 @@ interface NodeTokenUsage {
   model_cost_display_usd?: number
   // FAR-1780: the declared model cost the agent itself reported is stamped
   // "reported" at build time and persisted through node_token_usage. The
-  // envelope's provenance serializes as a PER-DATUM map ({"model_cost_usd":
-  // "reported", "input_tokens": "reported", ...}); runs before that change
-  // carry no field — the badge is simply absent for them.
+  // union's provenance serializes as a PER-DATUM map over the folded union
+  // keys ({"model_cost_usd": "reported", "reported_input_tokens":
+  // "reported", ...}); runs before that change carry no field — the badge is
+  // simply absent for them.
   provenance?: string | Record<string, string>
 }
 
