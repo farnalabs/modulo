@@ -1248,10 +1248,11 @@ jobs:
           FRONTEND_CHANGED: ${{ needs.changes.outputs.frontend }}
           # FAR-1317 reviewer opt-in: a deletion-only production diff is a
           # deliberate human decision (retiring / subtracting code) that leaves
-          # nothing new to cover. The gate stays fail-closed by default; this
-          # flag — set ONLY by the reviewer-applied
-          # `coverage: deletion-only-approved` label — authorises the
-          # deletion-only skip-as-pass.
+          # nothing new to cover. Such a diff already passes under the
+          # no-added-lines exemption, so this flag does not change the exit
+          # code; set ONLY by the reviewer-applied
+          # `coverage: deletion-only-approved` label, it renders the pass as an
+          # explicit reviewer authorisation in the summary.
           DELETION_ONLY_APPROVED: "${{ contains(github.event.pull_request.labels.*.name, 'coverage: deletion-only-approved') }}"
         run: |
           # Provision an isolated venv with ONLY the gate's dependency
@@ -1276,9 +1277,11 @@ jobs:
           if [ "$FRONTEND_CHANGED" != "true" ]; then
             EXTRA_ARGS+=(--allow-missing-js-report)
           fi
-          # FAR-1317: authorise a reviewer-approved deletion-only diff only when
-          # the PR carries the label. The flag is opt-in; absent the label the
-          # gate still fails closed on a deletion-only production change.
+          # FAR-1317: apply the reviewer-authorisation rendering only when the
+          # PR carries the label. The flag is opt-in and affects only the
+          # summary status/wording; absent the label a deletion-only change
+          # still passes under the no-added-lines exemption, with no
+          # reviewer-authorisation trail.
           if [ "$DELETION_ONLY_APPROVED" = "true" ]; then
             EXTRA_ARGS+=(--allow-deletion-only-approved)
           fi
