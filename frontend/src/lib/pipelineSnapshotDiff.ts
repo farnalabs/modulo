@@ -42,7 +42,6 @@
  */
 
 import type { components } from './api/schema'
-import { shortId } from '../utils/format'
 
 /** The generated `POST /snapshots/diff` response body. */
 export type SnapshotDiffResponse = components['schemas']['SnapshotDiffResponse']
@@ -410,4 +409,4 @@ export function isBlockingSeverity(severity: string | null | undefined): boolean
  * an em-dash for an absent id. The implementation stays in `utils/format.ts` —
  * one copy, not a third.
  */
-export { shortId }
+export { shortId } from '../utils/format'
