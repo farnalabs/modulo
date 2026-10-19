@@ -21,6 +21,14 @@ Digest contract (ADR 029 / plan D4):
   lifecycle): a divergent row surfaces "shipped template updated - apply"
   on the Runners page. Operator-owned fields are surfaced, never silently
   re-applied.
+- ``image_ref`` ownership is PLACEHOLDER-SCOPED (the ownership decision made
+  in the FAR-1779 delivery, not an ADR rule): while a row still
+  carries the release placeholder digest (or no image at all), the template
+  owns it — it participates in drift and an apply writes
+  ``BUNDLED_RUNNER_IMAGE_REF``, so an advanced release constant reaches
+  placeholder-seeded rows. Once the operator sets their own image the
+  reference is operator-owned: it is not reported as drift and apply never
+  overwrites it, so a BYO image can never be silently reverted.
 """
 
 from __future__ import annotations
@@ -54,6 +62,18 @@ def is_placeholder_bundled_runner_image_ref(image_ref: str | None) -> bool:
     return image_ref is not None and image_ref.endswith(BUNDLED_RUNNER_PLACEHOLDER_DIGEST)
 
 
+def is_template_owned_image_ref(image_ref: str | None) -> bool:
+    """True while the template still owns ``image_ref`` for this row.
+
+    Ownership is deterministic and needs no extra state: a row that carries no
+    image at all, or still carries the release placeholder digest, has not been
+    claimed by the operator. In that state the reference participates in drift
+    and an apply writes the release constant. Any other reference is
+    operator-set (BYO) and is neither drift nor an apply target.
+    """
+    return not image_ref or is_placeholder_bundled_runner_image_ref(image_ref)
+
+
 # Template-owned fields (drift-keyed): provider, digest, hardening, and
 # network defaults. Operator-owned fields (name/description beyond the
 # template defaults) are NEVER part of drift.
@@ -78,9 +98,15 @@ TEMPLATE_CONFIG_JSON: dict[str, Any] = {
 }
 
 #: The complete shipped template of template-owned fields (drift source).
+#:
+#: ``image_ref`` is conditional rather than listed here: while a row carries
+#: no image or the release placeholder digest the template owns it (see
+#: ``is_template_owned_image_ref``), so an advanced ``BUNDLED_RUNNER_IMAGE_REF``
+#: reaches placeholder-seeded rows through drift + apply. A row the operator
+#: has pointed at their own image is operator-owned and is never a drift key
+#: or an apply target.
 TEMPLATE_OWNED_FIELDS: dict[str, Any] = {
     "provider_type": BUNDLED_RUNNER_PROVIDER_TYPE,
-    "image_ref": BUNDLED_RUNNER_IMAGE_REF,
     "network_policy": "outbound",
     "persistence_policy": "ephemeral",
     "config_json": TEMPLATE_CONFIG_JSON,
@@ -121,12 +147,16 @@ def template_drift_fields(
     Lives in the DB layer so the crud apply helper (FAR-591 D5) and the
     core-side live drift helper share ONE implementation — the core
     ``template_drift_status`` delegates here.
+
+    ``image_ref`` participates only while the template still owns it (empty or
+    the release placeholder digest). An operator-set BYO image is not drift
+    and is never reported as a "shipped template updated" state.
     """
     if provider_type != BUNDLED_RUNNER_PROVIDER_TYPE:
         # Only template-shaped runner_docker rows participate in drift.
         return {"is_seeded": False, "drifted": False, "drifted_fields": []}
     drifted_fields: list[str] = []
-    if (image_ref or "") != BUNDLED_RUNNER_IMAGE_REF:
+    if is_template_owned_image_ref(image_ref) and image_ref != BUNDLED_RUNNER_IMAGE_REF:
         drifted_fields.append("image_ref")
     if network_policy != TEMPLATE_OWNED_FIELDS["network_policy"]:
         drifted_fields.append("network_policy")

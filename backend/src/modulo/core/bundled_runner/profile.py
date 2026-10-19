@@ -48,6 +48,8 @@ def template_drift_status(profile_row: Any) -> dict[str, Any]:
     the drift logic has ONE implementation shared with the crud apply
     helper — the core module owns the LIVE profile-row access.
     """
+    # image_ref participates only while the template still owns it (empty or
+    # the release placeholder digest); an operator-set BYO image is not drift.
     return template_drift_fields(
         provider_type=getattr(profile_row, "provider_type", None),
         image_ref=getattr(profile_row, "image_ref", None),
