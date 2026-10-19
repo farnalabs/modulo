@@ -12386,9 +12386,16 @@ def _render_snapshot_node_details(nodes: list[dict[str, Any]]) -> str:
 async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
-    # FAR-1976: returns the masked pipeline graph — duplicates
-    # get_pipeline_graph, so it carries the same node-scope gate.
+    # FAR-1976: the payload is a HISTORICAL SNAPSHOT's graph (nodes/edges plus
+    # connector bindings), so this resource needs BOTH capabilities: the
+    # live-graph capability (get_pipeline_graph) and the snapshot/diff
+    # capability (get_pipeline_diff). Requiring both is fail-closed — a node
+    # allowed one but not the other must not read snapshot content through
+    # resources/read.
     denied = _resource_node_scope_error("get_pipeline_graph")
+    if denied is not None:
+        return denied
+    denied = _resource_node_scope_error("get_pipeline_diff")
     if denied is not None:
         return denied
     from modulo.db.crud.pipeline_snapshot_versioning import get_snapshot_detail

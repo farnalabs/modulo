@@ -602,20 +602,27 @@ _TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT: dict[str, str] = {
 # FAR-1976: every ``@mcp.resource`` that exposes the same data as a gated tool
 # must gate under that TOOL's name, or a run-scoped node whose ``allowed_tools``
 # excludes the tool can still read it through ``resources/read``. Mapping value
-# is the duplicated tool name the resource enforces (its "twin").
-_RESOURCE_TOOL_TWIN: dict[str, str] = {
-    "modulo://pipelines": "list_pipelines",
-    "modulo://pipelines/{pipeline_id}": "list_pipelines",
-    "modulo://pipelines/{pipeline_id}/runs": "list_runs",
-    "modulo://pipelines/{pipeline_id}/snapshots/{snapshot_id}": "get_pipeline_graph",
-    "modulo://runs/{run_id}": "get_run_status",
-    "modulo://runs/{run_id}/hitl/{review_id}": "get_hitl_review",
-    "modulo://schemas": "list_schemas",
-    "modulo://schemas/{schema_id}@{version}": "get_schema_versions",
-    "modulo://connectors": "list_connectors",
-    "modulo://model-backends": "list_model_backends",
-    "modulo://library": "search_library",
-    "modulo://library/{primitive_type}/{slug}": "search_library",
+# is the SET of duplicated tool names the resource enforces (its "twins") — a
+# resource whose payload spans more than one capability must require ALL of
+# them, which is fail-closed: granting one twin is not enough.
+_RESOURCE_TOOL_TWIN: dict[str, tuple[str, ...]] = {
+    "modulo://pipelines": ("list_pipelines",),
+    "modulo://pipelines/{pipeline_id}": ("list_pipelines",),
+    "modulo://pipelines/{pipeline_id}/runs": ("list_runs",),
+    # The snapshot-detail resource returns a HISTORICAL SNAPSHOT's graph, so it
+    # needs both the live-graph capability and the snapshot/diff capability.
+    "modulo://pipelines/{pipeline_id}/snapshots/{snapshot_id}": (
+        "get_pipeline_graph",
+        "get_pipeline_diff",
+    ),
+    "modulo://runs/{run_id}": ("get_run_status",),
+    "modulo://runs/{run_id}/hitl/{review_id}": ("get_hitl_review",),
+    "modulo://schemas": ("list_schemas",),
+    "modulo://schemas/{schema_id}@{version}": ("get_schema_versions",),
+    "modulo://connectors": ("list_connectors",),
+    "modulo://model-backends": ("list_model_backends",),
+    "modulo://library": ("search_library",),
+    "modulo://library/{primitive_type}/{slug}": ("search_library",),
 }
 
 # Resources deliberately left un-narrowed, each with the reason. A new resource
@@ -856,27 +863,42 @@ def test_tool_twins_reference_registered_tools() -> None:
     """A resource may only gate under a tool that actually exists — a typo
     would otherwise silently gate under a name no node can ever allow.
     """
-    unknown = sorted(set(_RESOURCE_TOOL_TWIN.values()) - _registered_tool_names())
+    declared = {tool for tools in _RESOURCE_TOOL_TWIN.values() for tool in tools}
+    unknown = sorted(declared - _registered_tool_names())
     assert not unknown, f"resource gate names that are not registered tools: {unknown}"
+
+
+def test_every_resource_declares_at_least_one_tool_twin() -> None:
+    """A resource mapped to an empty twin set would vacuously pass the guard
+    below while enforcing nothing. Every mapped resource names at least one
+    gated tool."""
+    empty = sorted(uri for uri, tools in _RESOURCE_TOOL_TWIN.items() if not tools)
+    assert not empty, f"resources mapped to an empty tool-twin set: {empty}"
 
 
 def test_every_tool_backed_resource_enforces_node_allowed_tools() -> None:
     """FAR-1976: every tool-backed resource applies the node ``allowed_tools``
-    narrowing leg under its duplicated tool's name.
+    narrowing leg under EACH of its duplicated tools' names.
 
     ``resources/read`` reaches the same tenant data as the tool, so a resource
     that omits the helper is a full node-scope bypass even when every tool is
-    correctly gated. The guard walks the real handler for each URI, so dropping
-    one resource's helper call fails here as well as at runtime.
+    correctly gated. A resource whose payload spans several capabilities (the
+    snapshot-detail resource returns a historical snapshot's graph) must gate
+    under every twin: missing one is a bypass in that direction. The guard
+    walks the real handler for each URI, so dropping one resource's helper call
+    fails here as well as at runtime.
     """
     graph = _build_call_graph()
     missing = [
-        uri for uri, tool in sorted(_RESOURCE_TOOL_TWIN.items()) if not graph.resource_enforces_node_scope(uri, tool)
+        f"{uri} (missing {tool})"
+        for uri, tools in sorted(_RESOURCE_TOOL_TWIN.items())
+        for tool in tools
+        if not graph.resource_enforces_node_scope(uri, tool)
     ]
     assert not missing, (
-        f"tool-backed resources that do not enforce their duplicated tool's node "
+        f"tool-backed resources that do not enforce a duplicated tool's node "
         f"allowed_tools scope: {missing} — call {_NODE_SCOPE_HELPER}(<tool name>) "
-        f"at the top of the resource handler"
+        f"at the top of the resource handler for EVERY declared twin"
     )
 
 
