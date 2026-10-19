@@ -513,3 +513,72 @@ class TestBatchDeleteLanggraphCheckpoints:
         assert any("FROM runs r" in stmt for stmt in session.executed)
         # every delete targets (organisation_id, thread_id), never ctid
         assert all("ctid" not in stmt for stmt in session.executed)
+
+    async def test_created_at_path_consults_stale_selects_and_dedups_run_candidates(self) -> None:
+        """created_at-present path: all three stale selects run and dedup keeps the stronger class.
+
+        A thread found by BOTH the run-expired select and a stale select must stay
+        run-expired (whole-thread purge), not be downgraded to stale-only by the
+        second sighting — so the thread is deleted by the whole-thread template
+        even though a stale select also returned it.
+        """
+        session = _FakeSweepSession(
+            [
+                _column_result(True),  # created_at present -> stale selects run
+                _rows_result((_ORG_ID, "t-run")),  # run-expired candidate
+                _rows_result((_ORG_ID, "t-stale"), (_ORG_ID, "t-run")),  # stale checkpoints (t-run dup)
+                _rows_result((_ORG_ID, "t-stale")),  # stale writes (t-stale dup)
+                _rows_result((_ORG_ID, "t-blob")),  # stale blobs (new)
+                # run-expired group (t-run): whole-thread delete, no age predicate
+                _rowcount_result(5),
+                _rowcount_result(4),
+                _rowcount_result(3),
+                # stale-only group (t-stale, t-blob): age-filtered delete
+                _rowcount_result(2),
+                _rowcount_result(2),
+                _rowcount_result(1),
+            ]
+        )
+        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+
+        result = await batch_delete_langgraph_checkpoints(session, batch_size=4)
+        assert result == 5 + 4 + 3 + 2 + 2 + 1
+        # introspection transaction + one committed batch (short batch ends it)
+        assert session.begins == 2
+        # all three stale candidate selects are issued on the created_at path
+        assert sum("FROM checkpoints t" in stmt for stmt in session.executed) == 1
+        assert sum("FROM checkpoint_writes t" in stmt for stmt in session.executed) == 1
+        assert sum("FROM checkpoint_blobs t" in stmt for stmt in session.executed) == 1
+        # the stale-only group is deleted with the age predicate ...
+        assert any("created_at < :cutoff" in stmt for stmt in session.executed)
+        # ... and the thread seen by both sources keeps the stronger whole-thread delete
+        assert any(stmt.startswith("DELETE FROM checkpoints") and "created_at" not in stmt for stmt in session.executed)
+
+    async def test_saturated_limit_skips_stale_selects_and_empty_batch_stops(self) -> None:
+        """A run-candidate batch that spends the whole limit skips the stale selects.
+
+        Once ``remaining`` reaches 0 the stale-select loop breaks before issuing
+        its first query; the next fetch then returns no candidates and the sweep
+        stops (the empty-batch guard).
+        """
+        session = _FakeSweepSession(
+            [
+                _column_result(True),
+                _rows_result((_ORG_ID, "r1"), (_ORG_ID, "r2")),  # full batch: remaining == 0
+                _rowcount_result(1),
+                _rowcount_result(1),
+                _rowcount_result(1),
+                _rows_result(),  # next fetch: no candidates -> stop
+                _rows_result(),  # stale checkpoints (remaining refilled, all empty)
+                _rows_result(),  # stale writes
+                _rows_result(),  # stale blobs
+            ]
+        )
+        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+
+        result = await batch_delete_langgraph_checkpoints(session, batch_size=2)
+        assert result == 3
+        # introspection transaction + the full batch + the empty batch
+        assert session.begins == 3
+        # the saturated batch skipped its stale selects; only the empty batch issued one
+        assert sum("FROM checkpoints t" in stmt for stmt in session.executed) == 1
