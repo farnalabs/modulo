@@ -777,10 +777,11 @@ describe('RunDetailView coverage — script logic branches', () => {
   describe('agent-reported provenance badge (FAR-1780)', () => {
     it('shows the badge on a per-node cost whose entry carries the reported provenance map', async () => {
       // The union serializes the envelope's provenance as a PER-DATUM MAP —
-      // the real wire shape, never the scalar string.
+      // the real wire shape: cost under model_cost_usd, tokens under the
+      // distinct reported_* family, never bare input_tokens keys.
       const wrapper = await mountWith(
         baseRun({
-          node_token_usage: { 'node-a': { model_cost_display_usd: 0.05, provenance: { model_cost_usd: 'reported', input_tokens: 'reported' } } },
+          node_token_usage: { 'node-a': { model_cost_display_usd: 0.05, provenance: { model_cost_usd: 'reported', reported_input_tokens: 'reported' } } },
         }),
       )
       const badge = wrapper.find('[data-testid="run-detail-node-cost-reported"]')
@@ -799,7 +800,14 @@ describe('RunDetailView coverage — script logic branches', () => {
 
     it('omits the badge when the provenance map carries no "reported" values', async () => {
       const wrapper = await mountWith(
-        baseRun({ node_token_usage: { 'node-a': { model_cost_display_usd: 0.05, provenance: { input_tokens: 'observed' } } } }),
+        baseRun({ node_token_usage: { 'node-a': { model_cost_display_usd: 0.05, provenance: { reported_input_tokens: 'observed' } } } }),
+      )
+      expect(wrapper.find('[data-testid="run-detail-node-cost-reported"]').exists()).toBe(false)
+    })
+
+    it('omits the badge when only TOKEN datums are reported (token-only report is not a cost attestation)', async () => {
+      const wrapper = await mountWith(
+        baseRun({ node_token_usage: { 'node-a': { model_cost_display_usd: 0.05, provenance: { reported_input_tokens: 'reported', reported_output_tokens: 'reported' } } } }),
       )
       expect(wrapper.find('[data-testid="run-detail-node-cost-reported"]').exists()).toBe(false)
     })

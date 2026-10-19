@@ -3548,13 +3548,16 @@ describe('RunDetailView agent-reported provenance badges', () => {
         ...baseDetail(),
         // The union serializes the envelope's provenance as a PER-DATUM MAP
         // (agent-reported datums under the one `provenance` key) — the real
-        // wire shape this view receives, never the scalar string.
+        // wire shape this view receives: cost under model_cost_usd, tokens
+        // under the distinct reported_* family (finalize.py fold destinations),
+        // never the scalar string and never bare input_tokens/output_tokens
+        // keys.
         node_token_usage: {
           'agent-1': {
             input_tokens: 10,
             output_tokens: 20,
             model_cost_display_usd: 0.25,
-            provenance: { model_cost_usd: 'reported', input_tokens: 'reported', output_tokens: 'reported' },
+            provenance: { model_cost_usd: 'reported', reported_input_tokens: 'reported', reported_output_tokens: 'reported' },
           },
         },
       },
@@ -3638,18 +3641,21 @@ describe('RunDetailView agent-reported provenance badges', () => {
     wrapper.unmount()
   })
 
-  it('shows the badge beside the envelope summary line when the node usage is stamped reported', async () => {
+  it('renders the envelope summary WITHOUT any provenance badge (summary is deliberately unstamped on the union)', async () => {
     const wrapper = await mountProvenanceDetail(
       {
         ...baseDetail(),
-        // Real wire shape: the envelope's provenance arrives as the per-datum
-        // map (see the node-cost badge test above).
+        // The union NEVER carries a summary stamp: finalize.py's
+        // `_UNION_PROVENANCE_DATUM_KEYS` deliberately excludes summary/output_json
+        // (the union summary can be engine-substituted on failure, so a blanket
+        // stamp would over-attest). Even a fully-reported usage-entry map must
+        // render no summary badge — no truthful signal exists on this surface.
         node_token_usage: {
           'agent-1': {
             input_tokens: 10,
             output_tokens: 20,
             model_cost_display_usd: 0.25,
-            provenance: { summary: 'reported', output_json: 'reported' },
+            provenance: { model_cost_usd: 'reported', reported_input_tokens: 'reported' },
           },
         },
       },
@@ -3659,11 +3665,7 @@ describe('RunDetailView agent-reported provenance badges', () => {
     const summary = wrapper.find('[data-testid="run-detail-node-summary"]')
     expect(summary.exists()).toBe(true)
     expect(summary.text()).toContain('deployed the branch')
-    const badge = wrapper.find('[data-testid="run-detail-node-summary-reported"]')
-    expect(badge.exists()).toBe(true)
-    expect(badge.text()).toContain('reported by agent')
-    // The badge lives INSIDE the summary paragraph it qualifies.
-    expect(summary.element.contains(badge.element)).toBe(true)
+    expect(wrapper.find('[data-testid="run-detail-node-summary-reported"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -3676,19 +3678,64 @@ describe('RunDetailView agent-reported provenance badges', () => {
             input_tokens: 10,
             output_tokens: 20,
             model_cost_display_usd: 0.25,
-            provenance: { model_cost_usd: 'observed', input_tokens: 'observed' },
+            provenance: { model_cost_usd: 'observed', reported_input_tokens: 'observed' },
           },
         },
       },
       { outputs_json: {}, node_telemetry: { 'agent-1': { status: 'complete', exit_code: 0, summary: 'deployed the branch' } } },
     )
 
-    // A map that reports nothing agent-claimed renders no badge on EITHER
-    // gated surface — the node cost figure and the envelope summary line.
+    // A map that reports nothing agent-claimed renders no badge — the node
+    // cost figure and the envelope summary line both stay unlabeled.
     expect(wrapper.find('[data-testid="run-detail-node-cost-reported"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="run-detail-node-summary-reported"]').exists()).toBe(false)
     // The figure itself still renders — only the badge is absent.
     expect(wrapper.text()).toContain('0.25')
+    wrapper.unmount()
+  })
+
+  it('renders NO cost badge when ONLY token datums are stamped reported (token-only report is not a cost attestation)', async () => {
+    const wrapper = await mountProvenanceDetail(
+      {
+        ...baseDetail(),
+        node_token_usage: {
+          'agent-1': {
+            input_tokens: 10,
+            output_tokens: 20,
+            model_cost_display_usd: 0.25,
+            // Token-only stamps under the reported_* family — the agent
+            // reported tokens but NO model cost. The cost badge must not
+            // attest what was never a cost report.
+            provenance: { reported_input_tokens: 'reported', reported_output_tokens: 'reported' },
+          },
+        },
+      },
+      { outputs_json: {} },
+    )
+
+    expect(wrapper.find('[data-testid="run-detail-node-cost-reported"]').exists()).toBe(false)
+    // The figure itself still renders — only the badge is absent.
+    expect(wrapper.text()).toContain('0.25')
+    wrapper.unmount()
+  })
+
+  it('keys the cost badge to the raw-cost datum too (model_cost_raw_usd alone)', async () => {
+    const wrapper = await mountProvenanceDetail(
+      {
+        ...baseDetail(),
+        node_token_usage: {
+          'agent-1': {
+            input_tokens: 10,
+            output_tokens: 20,
+            model_cost_display_usd: 0.25,
+            provenance: { model_cost_raw_usd: 'reported' },
+          },
+        },
+      },
+      { outputs_json: {} },
+    )
+
+    expect(wrapper.find('[data-testid="run-detail-node-cost-reported"]').exists()).toBe(true)
     wrapper.unmount()
   })
 

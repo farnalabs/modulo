@@ -648,12 +648,6 @@
                   </div>
                   <p v-if="nodeSummary(node)" class="text-xs whitespace-pre-wrap text-muted-foreground" data-testid="run-detail-node-summary">
                     <span class="font-medium text-foreground">{{ $t('views.RunDetailView.summary') }}:</span> {{ nodeSummary(node) }}
-                    <span
-                      v-if="node.summaryReported"
-                      data-testid="run-detail-node-summary-reported"
-                      class="ml-1 inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary align-middle whitespace-normal"
-                      :title="$t('views.RunDetailView.reported_by_agent_tooltip')"
-                    >{{ $t('views.RunDetailView.reported_by_agent') }}</span>
                   </p>
                 </div>
                 <div v-if="getNodeLog(node.name, 'agent_stdout')" class="rounded-lg border bg-muted p-4">
@@ -1070,16 +1064,15 @@ interface NodeEntry {
   inputTokens: number | null
   outputTokens: number | null
   cost: number | null
-  // FAR-1780: true when the declared figure is the agent's own report (the
-  // node_token_usage entry's provenance stamp carries "reported" — the scalar
-  // string or the per-datum map) — false/absent for pre-provenance runs,
-  // which render no badge.
+  // FAR-1780 (QA round 2): true only when the node_token_usage entry's
+  // per-datum provenance map stamps "reported" on a COST datum
+  // (model_cost_usd / model_cost_raw_usd) — false/absent for pre-provenance
+  // runs and token-only maps, which render no badge. The union surface
+  // carries NO envelope-summary badge: the backend deliberately propagates
+  // no summary stamp on the union (finalize.py's datum map excludes
+  // summary/output_json — the union summary can be engine-substituted on
+  // failure), so no truthful summary signal exists here.
   costProvenance: boolean
-  // FAR-1780: same per-node reported stamp, applied to the envelope figures
-  // the telemetry card renders (agent_status, summary) — a sandbox envelope
-  // is the agent's own report by construction, so the card carries the
-  // provenance badge where one of its rendered values needs it.
-  summaryReported: boolean
   traceId: string | null
   isNodeSpanId: boolean
   io: { input: unknown; output: unknown } | null
@@ -1871,13 +1864,30 @@ function formatBreakdownAmount(value: string | number | undefined): string {
 // serializes the envelope's provenance as a per-datum MAP
 // ({"model_cost_usd": "reported", ...}) — the envelope stamp lands on the
 // agent-reported datums under the one `provenance` key — while cost-breakdown
-// entries carry the scalar "reported" string. The gate must accept both.
+// entries carry the scalar "reported" string. `figureIsAgentReported` (the
+// breakdown-surface gate) accepts both shapes; the union cost badge keys
+// per-datum through `costDatumReported` above.
 function provenanceIsReported(provenance: unknown): boolean {
   if (typeof provenance === 'string') return provenance === 'reported'
   if (typeof provenance === 'object' && provenance !== null && !Array.isArray(provenance)) {
     return Object.values(provenance).some(v => v === 'reported')
   }
   return false
+}
+
+// FAR-1780 (QA round 2): the union's per-datum provenance map names the
+// datums whose produced value SURVIVED the envelope folds — tokens land in
+// the `reported_*` family, model cost under `model_cost_usd` /
+// `model_cost_raw_usd` (`_UNION_PROVENANCE_DATUM_KEYS`, finalize.py).
+// The union cost badge must attest the COST datums only — a token-only
+// stamp is not a cost attestation, so this check keys strictly to the two
+// cost datums, never an any-value some() over the whole map.
+const UNION_COST_DATUM_KEYS: readonly string[] = ['model_cost_usd', 'model_cost_raw_usd']
+
+function costDatumReported(provenance: unknown): boolean {
+  if (typeof provenance !== 'object' || provenance === null || Array.isArray(provenance)) return false
+  const map = provenance as Record<string, unknown>
+  return UNION_COST_DATUM_KEYS.some(k => map[k] === 'reported')
 }
 
 function figureIsAgentReported(provenance: unknown, billable: unknown = null): boolean {
@@ -2150,8 +2160,9 @@ const nodeEntries = computed<NodeEntry[]>(() => {
       inputTokens: usage?.input_tokens ?? null,
       outputTokens: usage?.output_tokens ?? null,
       cost: usage?.model_cost_display_usd ?? usage?.cost_usd ?? null,
-      costProvenance: figureIsAgentReported(usage?.provenance),
-      summaryReported: figureIsAgentReported(usage?.provenance),
+      // FAR-1780 (QA round 2): keyed strictly to the union map's COST datums —
+      // a token-only report never attests cost.
+      costProvenance: costDatumReported(usage?.provenance),
       traceId: nodeSpanId ?? nodeTraceId ?? run.value?.trace_id ?? null,
       isNodeSpanId: nodeSpanId !== null,
       io: resolveNodeIO(nodeOutput),
