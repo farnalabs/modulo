@@ -1004,6 +1004,10 @@ def test_parameters_section_regex_equivalence_on_realistic_forms() -> None:
     """
     reference = re.compile(r"\[parameters:\s*[^]]*\]", re.DOTALL)
     rewritten = seed_demo_module._PARAMETERS_SECTION_RE
+    # Discriminating guard: a revert to the old ``\s*[^]]*`` form would make the
+    # corpus comparisons below pass while reintroducing the super-linear prefix.
+    assert r"\s*" not in rewritten.pattern
+    assert rewritten.pattern != reference.pattern
     corpus = [
         "[parameters: ('a',)] trailing",
         "[parameters: ('a',\n  'b')] x",
