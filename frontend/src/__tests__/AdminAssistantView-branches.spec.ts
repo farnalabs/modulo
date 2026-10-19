@@ -666,3 +666,18 @@ describe('AdminAssistantView branches — configSaving guard', () => {
     wrapper.unmount()
   })
 })
+
+// ── inactive skill toggle class branch ──────────────────────────────────
+describe('AdminAssistantView branches — inactive skill toggle', () => {
+  it('renders an inactive skill toggle with the muted token class', async () => {
+    const wrapper = await mountAssistant({
+      skills: [{ id: 's1', name: 'Inactive Skill', description: 'd', triggers: ['t'], active: false }],
+    })
+
+    const toggle = wrapper.find('[data-testid="assistant-skill-toggle"]')
+    expect(toggle.exists()).toBe(true)
+    expect(toggle.classes()).toContain('bg-muted')
+    expect(toggle.classes()).toContain('text-muted-foreground')
+    wrapper.unmount()
+  })
+})
