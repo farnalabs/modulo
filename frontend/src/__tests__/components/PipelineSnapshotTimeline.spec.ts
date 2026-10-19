@@ -370,8 +370,9 @@ describe('PipelineSnapshotTimeline', () => {
     }))
     const result = wrapper.find('[data-testid="snapshot-timeline-diff-result"]')
     expect(result.exists()).toBe(true)
-    // impactedLabel truncates each node id to 8 characters.
-    expect(result.text()).toContain('node-aaa, node-bbb')
+    // FAR-1893: impacted ids use the shared id-shortening rule (`#` + the
+    // first 8 characters), the same rule the compare view uses.
+    expect(result.text()).toContain('#node-aaa, #node-bbb')
     expect(result.text()).toContain('Input port removed')
   })
 

@@ -200,7 +200,7 @@ async function detectPlaceholders() {
             <span class="text-sm font-medium">{{ port.label }}</span>
             <span
               v-if="port.required"
-              class="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive"
+              class="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive-text"
               >required</span
             >
             <span

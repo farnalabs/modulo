@@ -20,7 +20,7 @@ describe('RunErrorTag', () => {
 
   it('applies the class for the code class group (agent destructive vs capacity primary)', () => {
     const agent = mount(RunErrorTag, { props: { code: 'agent.failed' } })
-    expect(agent.classes()).toContain('text-destructive')
+    expect(agent.classes()).toContain('text-destructive-text')
     const capacity = mount(RunErrorTag, { props: { code: 'capacity.org' } })
     expect(capacity.classes()).toContain('text-primary')
   })

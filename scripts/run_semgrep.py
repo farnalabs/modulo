@@ -186,30 +186,31 @@ def _semgrep_skipped_files(output: str) -> bool:
     return any(pattern.search(output) for pattern in _SEMGREP_TIMEOUT_PATTERNS)
 
 
-def _semgrep_error_type(err: object) -> str | None:
-    """Return an ``errors`` entry's ``type`` tag normalised to a hashable string.
+def _json_error_type_is_fatal(error: object) -> bool:
+    """True when a JSON error entry's ``type`` names a fatal (incomplete) class.
 
-    Semgrep does NOT encode every tag as a string. On the pinned semgrep a
-    ``Timeout`` entry's tag is the plain string ``"Timeout"``, but a
-    ``PartialParsing`` entry's tag is a **list** whose first element is the
-    type name:
-    ``["PartialParsing", [{"start": {...}, "end": {...}, ...}]]``. That list
-    is unhashable, so testing it directly against a ``frozenset`` raised
-    ``TypeError: unhashable type: 'list'`` and — because the JSON detector runs
-    FIRST in ``_semgrep_scan_incomplete`` — killed the whole detection path
-    before the anchored text net was ever consulted. This helper exists so that
-    can never happen again.
+    Semgrep serialises ``errors[].type`` as EITHER a string OR a LIST of
+    strings (observed on 1.175.0 for an error carrying several type labels,
+    e.g. a ``PartialParsing`` entry on the large ``mcp_server.py``). A bare
+    ``in frozenset`` membership test on a list raises
+    ``TypeError: unhashable type: 'list'`` — and because it sits in the
+    incomplete-scan detector, it crashed the whole gate on a partial parse
+    instead of reporting the intended "not fatal" verdict. The gate must
+    survive the error it guards, so both shapes are handled.
 
-    It NEVER raises: a non-dict entry, a missing/``None`` tag, an empty list,
-    or any other unexpected shape degrades to ``None``, which simply does not
-    match ``_SEMGREP_JSON_FATAL_ERROR_TYPES`` (so a non-fatal / unknown tag
-    keeps the scan's verdict with the text net, as documented on
-    ``_semgrep_json_timeout``).
+    A list tag is fatal when ANY of its string items names a fatal class:
+    ``["PartialParsing", "Timeout"]`` is an incomplete scan even though its
+    first element is non-fatal, so inspecting only ``tag[0]`` would fail OPEN
+    in exactly the direction this detector exists to prevent.
     """
-    tag = err.get("type") if isinstance(err, dict) else None
-    if isinstance(tag, list):
-        tag = tag[0] if tag else None
-    return tag if isinstance(tag, str) else None
+    if not isinstance(error, dict):
+        return False
+    error_type = error.get("type")
+    if isinstance(error_type, str):
+        return error_type in _SEMGREP_JSON_FATAL_ERROR_TYPES
+    if isinstance(error_type, list):
+        return any(isinstance(item, str) and item in _SEMGREP_JSON_FATAL_ERROR_TYPES for item in error_type)
+    return False
 
 
 def _semgrep_json_timeout(json_path: str | os.PathLike[str]) -> bool:
@@ -222,7 +223,7 @@ def _semgrep_json_timeout(json_path: str | os.PathLike[str]) -> bool:
     — the anchored text net still covers the missing-payload case, and a
     genuine tool failure is handled by the fail-open branches.
 
-    Error tags are read through ``_semgrep_error_type`` because semgrep
+    Error tags are read through ``_json_error_type_is_fatal`` because semgrep
     serialises some of them as a list (see that helper); reading them raw
     raised, which is the fail-open this function must never have had.
     """
@@ -234,7 +235,7 @@ def _semgrep_json_timeout(json_path: str | os.PathLike[str]) -> bool:
     errors = payload.get("errors") if isinstance(payload, dict) else None
     if not isinstance(errors, list):
         return False
-    return any(_semgrep_error_type(err) in _SEMGREP_JSON_FATAL_ERROR_TYPES for err in errors)
+    return any(_json_error_type_is_fatal(err) for err in errors)
 
 
 def _semgrep_scan_incomplete(output: str, json_path: str | os.PathLike[str] | None = None) -> bool:

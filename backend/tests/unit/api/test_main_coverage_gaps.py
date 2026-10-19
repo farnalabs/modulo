@@ -457,7 +457,7 @@ async def test_start_and_teardown_background_tasks_with_watchdog(monkeypatch: py
     monkeypatch.setattr("modulo.core.events.redis_broker.RedisEventBroker", MagicMock())
 
     expiry_instance = MagicMock()
-    expiry_instance.start = AsyncMock()
+    expiry_instance.start = MagicMock()
     expiry_instance.stop = AsyncMock()
     monkeypatch.setattr(main, "ClaimExpiryJob", MagicMock(return_value=expiry_instance))
 
@@ -466,7 +466,7 @@ async def test_start_and_teardown_background_tasks_with_watchdog(monkeypatch: py
 
     tasks = await main._start_background_tasks(settings)
     assert tasks["watchdog_task"] is not None
-    assert expiry_instance.start.await_count == 1
+    assert expiry_instance.start.call_count == 1
     await main._teardown_tasks(tasks)
     assert expiry_instance.stop.await_count == 1
 
@@ -493,7 +493,7 @@ def _patch_lifespan_seams(monkeypatch: pytest.MonkeyPatch, settings: Settings) -
     monkeypatch.setattr(main, "configure_event_bus", AsyncMock())
     monkeypatch.setattr("modulo.core.events.redis_broker.RedisEventBroker", MagicMock())
     expiry_instance = MagicMock()
-    expiry_instance.start = AsyncMock()
+    expiry_instance.start = MagicMock()
     expiry_instance.stop = AsyncMock()
     monkeypatch.setattr("modulo.core.hitl_manager.expiry_job.ClaimExpiryJob", MagicMock(return_value=expiry_instance))
     monkeypatch.setattr("sqlalchemy.ext.asyncio.AsyncSession", _FakeAsyncSession)

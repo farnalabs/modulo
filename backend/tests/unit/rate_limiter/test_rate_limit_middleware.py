@@ -134,6 +134,23 @@ class TestDispatch:
         assert resp.status_code == 200
         registry.check.assert_not_awaited()
 
+    def test_get_sso_providers_uses_its_60_per_minute_get_rule(self):
+        """FAR-1978: the anonymous SSO discovery GET is throttled 60/min/IP.
+
+        Drives the real middleware dispatch, so it proves the rule APPLIES —
+        not merely that it was declared.
+        """
+        registry = _registry(allowed=False)
+        app = _make_app(registry=registry)
+        with TestClient(app) as client:
+            resp = client.get("/api/v1/auth/sso/providers")
+        assert resp.status_code == 429
+        assert resp.headers["Retry-After"] == "60"
+        args, kwargs = registry.check.await_args
+        assert args[0] == "ip:testclient:/api/v1/auth/sso/providers"
+        assert kwargs["max_requests"] == 60
+        assert kwargs["window_s"] == 60
+
     def test_bypass_token_skips_limit(self):
         registry = _registry(allowed=False)
         settings = make_settings(modulo_ratelimit_bypass_token="bypass-secret")
@@ -182,8 +199,12 @@ class TestShouldRateLimit:
 
     @pytest.mark.parametrize(
         "path",
-        ["/api/v1/auth/login-context", "/api/v1/auth/org-login/acme"],
-        ids=["login-context", "org-login"],
+        [
+            "/api/v1/auth/login-context",
+            "/api/v1/auth/org-login/acme",
+            "/api/v1/auth/sso/providers",
+        ],
+        ids=["login-context", "org-login", "sso-providers"],
     )
     def test_rate_limits_anonymous_get_endpoints(self, path):
         """FAR-856: pre-auth anonymous GET endpoints are gated by GET_RULES (enumeration defence)."""

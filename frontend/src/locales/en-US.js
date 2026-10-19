@@ -4576,6 +4576,10 @@ export default {
       "failed_to_dismiss_all": "Failed to dismiss all notifications",
       "nothing_to_dismiss": "Nothing to dismiss"
     },
+    "SnapshotDiffSeverity": {
+      "block": "block",
+      "warning": "warning"
+    },
     "PipelineSnapshotTimeline": {
       "version_timeline": "Version timeline",
       "no_snapshots_yet": "No snapshots yet.",
@@ -4626,8 +4630,6 @@ export default {
       "summary_impacted_none": "no downstream nodes are impacted",
       "breaking_title": "Breaking changes",
       "no_breaking": "No breaking port changes.",
-      "severity_block": "block",
-      "severity_warning": "warning",
       "impacted_title": "Impacted downstream nodes ({count})",
       "impacted_none": "None",
       "structural_title": "Structural changes",

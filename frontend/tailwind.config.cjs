@@ -45,6 +45,14 @@ module.exports = {
         // themes. Use `text-warning-text` - never `text-warning` - for warning
         // COLOURED TEXT (see style.css for the measured ratios).
         'warning-text': 'hsl(var(--warning-text))',
+        // FAR-1913: text-safe counterpart of `destructive`. `--destructive` is
+        // tuned as a FILL/accent hue, so destructive COLOURED TEXT on a
+        // bg-destructive/* tint is only 4.32:1 (dark) / 3.46:1 (light) - below
+        // the WCAG AA 4.5:1 floor. `--destructive-text` keeps the hue and shifts
+        // the lightness so every destructive-text-on-tint pairing clears AA (see
+        // style.css for the measured ratios). Use `text-destructive-text` -
+        // never `text-destructive` - for destructive COLOURED TEXT on a tint.
+        'destructive-text': 'hsl(var(--destructive-text))',
         pending: 'hsl(var(--pending))',
         preview: 'hsl(var(--preview))',
         border: 'hsl(var(--border))',
