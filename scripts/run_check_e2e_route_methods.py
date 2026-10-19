@@ -67,7 +67,10 @@ What is scanned (``frontend/tests/e2e/**/*.ts``):
   reference the extractor cannot attribute to one literal method (a
   destructured ``const { method } = route.request()``, an array-membership
   ``['PATCH', 'PUT'].includes(...)`` test) leaves a note for its registration,
-  so no filter shape is silently dropped. A catch-all mock
+  so no filter shape is silently dropped. A callback that DELEGATES its filter
+  to a helper (``if (isMethod(route, 'PATCH'))``) reads no ``.method()`` in the
+  callback, so it is noted against its registration too (the helper is not
+  resolved). A catch-all mock
   (``**/api/v1/**``) is skipped silently only when it carries no method filter;
   one that mocks specific routes by URL and filters on the method is noted.
   Anything that cannot be resolved safely is reported as one explicit note on
@@ -84,7 +87,11 @@ wildcard. A trailing query-string variable (``'/api/v1/pipelines' + query``),
 a conditional query interpolation
 (``${includeArchived ? '?archived=true' : ''}``), a TypeScript assertion
 (``'/api/v1/auth/me' as const``) and a literal that already carries a ``?`` add
-no segment. Query strings and fragments are stripped.
+no segment. A literal passed as a WHOLE argument of a wrapper call
+(``buildUrl('/api/v1/runners/status')``) adds no trailing segment - the wrapper's
+own tail is not path text - and a whole-path ternary
+(``cond ? '/api/v1/plan' : '/api/v1/runs'``) is reported as a note rather than
+spliced into a fabricated route. Query strings and fragments are stripped.
 
 Coverage ledger (the guard's invariant - no silent skips)
 --------------------------------------------------------
@@ -99,12 +106,16 @@ property-qualified form (``globalThis.fetch(``, ``page.request.fetch(``),
 (``.request().method(``, ``request.method(``, and HTTP-method literals compared
 against a method expression: ``=== 'PATCH'``, ``!== 'GET'``, ``includes(...)``).
 Aliasing forms are candidates even though they cannot be modelled, because a
-miss there is silent: a ``fetch`` identifier READ as a value
+miss there is silent: a ``fetch`` OR ``apiFetch`` identifier READ as a value
 (``const f = window.fetch``, ``= fetch.bind(...)``, ``const { fetch: f } =
-globalThis``), bracket access to a request context
-(``page.request['post'](...)``), and a renamed ``request`` binding
-(``async ({ request: api }) => api.get(...)``). Assignment targets and
-``typeof`` type references are not calls and are excluded.
+globalThis``, ``const call = apiFetch``, ``const { apiFetch: af } = helpers``),
+a member-qualified ``*.apiFetch(...)``, bracket access to a request context
+(``page.request['post'](...)``) or to ``fetch`` (``globalThis['fetch'](...)``),
+a request context captured into an identifier (``const api = page.request``,
+``const api = await request.newContext()``), and a renamed ``request`` binding
+(``async ({ request: api }) => api.get(...)``). Assignment targets, ``typeof``
+type references and ``import``/``export`` specifier bindings are not calls and
+are excluded.
 Every candidate CALL occurrence MUST be accounted for individually on the same
 ``file:line`` by exactly one of:
 
@@ -120,8 +131,9 @@ naming the line: a new call shape fails loudly instead of passing. A
 method-reference line is reported as a note when unaccounted - it names no route
 this checker can validate, but it is never silently dropped. A candidate is only
 excluded structurally when it is provably not a call (an ``apiFetch`` /
-``fetchWithTransientRetry`` function declaration, or an identifier with no
-argument list), never by a pattern that happens to miss.
+``fetchWithTransientRetry`` function declaration, an ``import``/``export``
+binding, or a ``typeof`` type reference / assignment target), never by a
+pattern that happens to miss.
 
 Exit codes: 0 clean, 1 stale descriptors or unanalysed call shapes (one line
 each, with file:line, the method, the path and the closest live route), 2
@@ -253,12 +265,64 @@ _LEDGER_BRACKET_REQUEST_RE = re.compile(
 #: (``async ({ request: api }) => api.get(...)``). The alias itself is not
 #: resolvable, so the binding occurrence is the candidate the ledger reports.
 _LEDGER_REQUEST_ALIAS_RE = re.compile(r"(?<![\w$.])request\s*:\s*(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)")
+#: A member-qualified ``apiFetch`` (``helpers.apiFetch(...)``). ``_API_FETCH_RE``
+#: excludes a ``.``-preceded identifier, so this form was neither extracted nor
+#: enumerated - a silent ledger gap.
+_LEDGER_QUALIFIED_API_FETCH_RE = re.compile(r"(?<![\w$])[A-Za-z_$][\w$]*\s*\.\s*apiFetch\b")
+#: An identifier CAPTURED from a Playwright request context
+#: (``const api = page.request``, ``const api = await request.newContext()``).
+#: The captured identifier's later verb calls cannot be followed statically, so
+#: the capture itself is the candidate occurrence.
+_LEDGER_REQUEST_CONTEXT_ALIAS_RE = re.compile(
+    r"(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*(?:await\s+)?"
+    r"(?:"
+    r"(?:page|context)\s*(?:\.\s*context\s*\(\s*\))?\s*\.\s*request\b(?!\s*[.\[])"
+    r"|(?:[A-Za-z_$][\w$]*\s*\.\s*)*request\s*\.\s*newContext\s*\("
+    r"|request\b(?!\s*[.(\[])"
+    r")"
+)
+#: A bracket string-key index (``globalThis['fetch']``). The key is blanked in
+#: the masked source, so the KEY TEXT is re-read from the original source.
+_LEDGER_BRACKET_INDEX_RE = re.compile(r"(?<![\w$])[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*\[\s*\]")
+#: Bare identifiers that are language keywords/constructs, never a delegated
+#: helper function.
+_NON_HELPER_CALL_NAMES = frozenset(
+    {
+        "async",
+        "await",
+        "catch",
+        "delete",
+        "do",
+        "else",
+        "for",
+        "function",
+        "if",
+        "in",
+        "instanceof",
+        "new",
+        "of",
+        "return",
+        "super",
+        "switch",
+        "this",
+        "throw",
+        "try",
+        "typeof",
+        "void",
+        "while",
+        "with",
+        "yield",
+    }
+)
 _LEDGER_COMPARISON_RE = re.compile(r"===?|!==?|includes\s*\(")
 _LEDGER_METHOD_WORD_RE = re.compile(r"\bmethod\b")
 _LEDGER_METHOD_CALL_RE = re.compile(r"\.\s*method\s*\(|(?<![\w.$])request\s*\.\s*method\s*\(")
 _LEDGER_UNMODELLED_METHOD_NOTE = (
     "page.route callback filters on the request method in a form this check cannot "
     "attribute to a single literal method, so its method filter was not checked"
+)
+_LEDGER_DELEGATED_METHOD_NOTE = (
+    "page.route callback delegates its method filter to a helper function, so the filter was not checked"
 )
 _UNANALYSED_CALL_MESSAGE = (
     "unanalysed E2E HTTP call shape - model it, or annotate with // e2e-route-check: ignore <reason>"
@@ -800,8 +864,60 @@ def _extract_path_from_concat(expr: str) -> tuple[str, bool, bool] | None:
     return normalise_path(joined)
 
 
+def _has_top_level_ternary(expression: str) -> bool:
+    """True when *expression* is selected by a top-level ``cond ? a : b``.
+
+    A whole-path ternary (``cond ? '/api/v1/plan' : '/api/v1/runs'``) has two
+    equally valid routes and no single path; splicing its branches produced
+    ``/api/v1/plan{param}/api/v1/runs`` - a fabricated route, reported as stale.
+    The branches are alternatives, so the caller must note the call instead.
+    A ternary nested in parentheses (``'/api/v1/users/' + (role ? 'a' : 'b')``)
+    is one path SEGMENT and is handled by the concatenation renderer.
+    """
+    depth = 0
+    index = 0
+    length = len(expression)
+    while index < length:
+        char = expression[index]
+        if char in ("'", '"'):
+            _, index = _read_quoted(expression, index)
+            continue
+        if char == "`":
+            _, index = _read_template(expression, index)
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "?" and depth == 0:
+            following = expression[index + 1] if index + 1 < length else ""
+            if following in (".", "?"):
+                # Optional chaining / nullish coalescing, not a ternary.
+                index += 2
+                continue
+            return True
+        index += 1
+    return False
+
+
+def _is_wrapper_tail(tail: str) -> bool:
+    """True when the source after the last literal closes the enclosing call.
+
+    A path literal passed to a wrapper (``buildUrl('/api/v1/runners/status')``)
+    is followed by ``)``; a literal that is one argument among several is
+    followed by ``,``. Neither is path text to append, so the fragment fallback
+    must not fabricate a ``{param}`` segment from it.
+    """
+    text = re.sub(r"//[^\n]*|/\*.*?\*/", "", tail, flags=re.DOTALL).lstrip()
+    return bool(text) and text[0] in ")]},;"
+
+
 def _extract_path_from_fragments(expr: str) -> tuple[str, bool, bool] | None:
     """Original fragment-scan fallback: join every literal, wildcard the gaps."""
+    if _has_top_level_ternary(expr):
+        # Alternatives, not one path: report as unreadable (the caller notes it)
+        # rather than splice both branches into a fabricated route.
+        return None
     fragments: list[tuple[str, int, int]] = []
     index = 0
     length = len(expr)
@@ -839,7 +955,15 @@ def _extract_path_from_fragments(expr: str) -> tuple[str, bool, bool] | None:
     # (``'/api/v1/auth/me' as const``) and a literal that already carries a
     # ``?`` add NO segment.
     tail = re.sub(r"//[^\n]*|/\*.*?\*/", "", expr[previous_end:], flags=re.DOTALL)
-    if "?" not in joined and _tail_adds_path_segment(tail):
+    if (
+        "?" not in joined
+        and _tail_adds_path_segment(tail)
+        # A wrapper tail is not path text: whatever the wrapper appends is not
+        # statically known, and a trailing ``{param}`` fabricated a stale path
+        # (``buildUrl('/api/v1/runners/status')`` -> ``.../status/{param}``).
+        # A literal ending in ``/`` is mid-segment, so the wildcard still fits.
+        and (not _is_wrapper_tail(tail) or joined.endswith("/"))
+    ):
         joined = joined.rstrip("/") + "/" + _WILDCARD
     return normalise_path(joined)
 
@@ -1025,6 +1149,33 @@ def _has_unmodelled_method_reference(masked_body: str) -> bool:
     return bool(_METHOD_CALL_RE.search(masked_body) or _DESTRUCTURED_METHOD_RE.search(masked_body))
 
 
+def _delegates_method_filter(masked_body: str, params: list[str]) -> bool:
+    """True when a route callback hands its route/request to a helper function.
+
+    ``if (isMethod(route, 'PATCH'))`` reads no ``.method()`` here - the filter
+    lives in the helper - so the comparison passes see nothing and the
+    registration was silent. Full alias/helper resolution is out of scope; the
+    occurrence is noted instead. A property call (``route.fulfill(...)``) is not
+    a helper, and a bare call that never receives the route/request cannot be a
+    method filter on this registration.
+    """
+    if not params:
+        return False
+    param_pattern = "|".join(re.escape(name) for name in dict.fromkeys(params))
+    for match in re.finditer(r"(?<![\w.$])([A-Za-z_$][\w$]*)\s*\(", masked_body):
+        if match.group(1) in _NON_HELPER_CALL_NAMES:
+            continue
+        if re.search(r"\bnew\s+$", masked_body[max(0, match.start() - 8) : match.start()]):
+            # A constructor call (``new URL(route.request().url())``) is not a
+            # delegated method filter.
+            continue
+        for start, end in _split_args(masked_body, match.end() - 1):
+            argument = masked_body[start:end]
+            if re.search(rf"(?<![\w$.])(?:{param_pattern})(?![\w$])", argument):
+                return True
+    return False
+
+
 def _args_of(text: str, masked: str, open_paren: int) -> list[str]:
     """Return the original source text of each top-level argument of a call."""
     return [text[start:end] for start, end in _split_args(masked, open_paren)]
@@ -1196,7 +1347,10 @@ def _extract_route_interceptors(
                 regex_source is not None and _API_PREFIX in _normalise_regex_path(regex_source)
             )
             handler_masked = masked[args[-1][0] : args[-1][1]]
-            if not _has_string_literal(first) and _has_unmodelled_method_reference(handler_masked):
+            handler_text = text[args[-1][0] : args[-1][1]].strip()
+            handler_params = _callback_params(handler_text)
+            delegates = _delegates_method_filter(handler_masked, handler_params)
+            if not _has_string_literal(first) and (_has_unmodelled_method_reference(handler_masked) or delegates):
                 # A hoisted URL variable (``const pattern = '**/api/...'``;
                 # ``page.route(pattern, ...)``) carries the real path, and the
                 # callback still filters on the method. Skipping it means the
@@ -1216,6 +1370,8 @@ def _extract_route_interceptors(
                     "page.route registration uses an API path that could not be normalised statically; "
                     "its method filter was not checked",
                 )
+            elif delegates:
+                _add_note(notes, filename, _line_of(text, match.start()), _LEDGER_DELEGATED_METHOD_NOTE)
             continue
         path, trailing_glob, last_prefix = path_info
         if trailing_glob and path in ("/api", "/api/v1"):
@@ -1233,6 +1389,8 @@ def _extract_route_interceptors(
                     "page.route catch-all registration mocks specific routes by URL and filters on the HTTP "
                     "method; its method filters cannot be checked against a single route",
                 )
+            elif _delegates_method_filter(handler_masked, _callback_params(text[args[-1][0] : args[-1][1]].strip())):
+                _add_note(notes, filename, _line_of(text, match.start()), _LEDGER_DELEGATED_METHOD_NOTE)
             continue
         handler = text[args[-1][0] : args[-1][1]].strip()
         params = _callback_params(handler)
@@ -1428,6 +1586,16 @@ def _extract_route_interceptors(
         # the callback does not make this shape checked.
         if _DESTRUCTURED_METHOD_RE.search(masked[span_start:span_end]):
             _add_note(notes, filename, _line_of(text, span_start), _LEDGER_UNMODELLED_METHOD_NOTE)
+
+        # A callback that hands the route/request to a helper
+        # (``if (isMethod(route, 'PATCH'))``) reads no ``.method()`` here, so
+        # every pass above sees nothing and the registration was silent. The
+        # helper's filter is not resolvable in this checker; it is noted.
+        handler_masked = masked[span_start:span_end]
+        if not _has_unmodelled_method_reference(handler_masked) and _delegates_method_filter(
+            handler_masked, list(params)
+        ):
+            _add_note(notes, filename, _line_of(text, span_start), _LEDGER_DELEGATED_METHOD_NOTE)
     return calls
 
 
@@ -1504,6 +1672,51 @@ def _is_fetch_value_reference(masked: str, start: int, end: int) -> bool:
     return True
 
 
+def _in_import_or_export_specifier(masked: str, offset: int) -> bool:
+    """True when *offset* is inside an ``import``/``export`` specifier list.
+
+    An imported ``apiFetch`` is a binding, not an HTTP call; flagging it would
+    make every spec file unanalysed. The enclosing ``{`` is located by scanning
+    backwards (so a multi-line import list is handled) and its statement keyword
+    is read from the text before it.
+    """
+    depth = 0
+    index = offset - 1
+    while index >= 0:
+        char = masked[index]
+        if char == "}":
+            depth += 1
+        elif char == "{":
+            if depth == 0:
+                before = masked[max(0, index - 240) : index]
+                return bool(re.search(r"\b(?:import|export)\b[^{};]*$", before))
+            depth -= 1
+        elif char == ";" and depth == 0:
+            return False
+        index -= 1
+    return False
+
+
+def _bracket_fetch_offsets(source: str, masked: str) -> list[int]:
+    """Return offsets of bracket-accessed ``fetch`` (``globalThis['fetch']``).
+
+    The masked source blanks the key, so only a bracket index whose ORIGINAL
+    text is exactly a quoted ``fetch`` is a candidate - ordinary string-key
+    indexing (``form['name']``) is not an HTTP call.
+    """
+    offsets: list[int] = []
+    for match in _LEDGER_BRACKET_INDEX_RE.finditer(masked):
+        raw = source[match.start() : match.end()]
+        opening = raw.find("[")
+        closing = raw.rfind("]")
+        if opening < 0 or closing < opening:
+            continue
+        key = raw[opening + 1 : closing].strip()
+        if len(key) >= 2 and key[0] in ("'", '"', "`") and key[-1] == key[0] and key[1:-1].strip() == "fetch":
+            offsets.append(match.start())
+    return offsets
+
+
 def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
     """Return ``(offset, line)`` for every HTTP-call CANDIDATE occurrence.
 
@@ -1540,9 +1753,29 @@ def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
     for match in _API_FETCH_RE.finditer(masked):
         if _is_api_fetch_declaration(masked, match.start()):
             continue
-        if _find_open_paren(masked, match.end()) is None:
+        if _find_open_paren(masked, match.end()) is not None:
+            add(match.start())
             continue
+        # An ``apiFetch`` identifier READ as a value is an alias capture
+        # (``const call = apiFetch``, ``const { apiFetch: af } = helpers``).
+        # Resolving it is out of scope; the occurrence must not vanish. An
+        # imported binding is not a call and is excluded structurally.
+        if _is_fetch_value_reference(masked, match.start(), match.end()) and not _in_import_or_export_specifier(
+            masked, match.start()
+        ):
+            add(match.start())
+    for match in _LEDGER_QUALIFIED_API_FETCH_RE.finditer(masked):
+        # ``helpers.apiFetch(...)`` is not matched by the bare extractor (it
+        # excludes a ``.``-preceded identifier), so it is unanalysed here.
+        is_call = _find_open_paren(masked, match.end()) is not None
+        if is_call or _is_fetch_value_reference(masked, match.start(), match.end()):
+            add(match.start())
+    for match in _LEDGER_REQUEST_CONTEXT_ALIAS_RE.finditer(masked):
+        # An identifier captured from the request context: its later verb calls
+        # cannot be followed, so the capture is the candidate occurrence.
         add(match.start())
+    for offset in _bracket_fetch_offsets(source, masked):
+        add(offset)
     for match in _RETRY_FETCH_RE.finditer(masked):
         if _is_function_declaration(masked, match.start()):
             continue

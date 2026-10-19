@@ -160,20 +160,28 @@ def test_query_string_interpolation_is_not_a_path_segment() -> None:
     assert calls[0].path == "/api/v1/pipelines"
 
 
-def test_interceptor_combined_with_url_condition_is_not_guessed() -> None:
-    # The effective path lives in ``url.includes(...)``, not in the broad
-    # route registration, so the checker must stay silent rather than invent a
-    # stale descriptor from ``/api/v1/**``.
-    source = (
-        "await page.route('**/api/v1/**', (route) => {\n"
+def test_interceptor_url_condition_leaves_an_explicit_note() -> None:
+    # The effective path lives in ``url.includes(...)``, not in the broad route
+    # registration, so the checker must not invent a descriptor from the
+    # registration - and must SAY so. This discriminates on the note: without
+    # ``_URL_CONDITION_RE`` a stale PATCH descriptor is emitted here. (The
+    # catch-all form is covered separately; a catch-all is skipped before any
+    # method filter is read, so it cannot pin this guard.)
+    notes: list[str] = []
+
+    calls = _checker.extract_http_calls(
+        "await page.route('**/api/v1/pipelines', (route) => {\n"
         "  const url = route.request().url()\n"
         "  if (route.request().method() === 'PATCH' && url.includes('/review')) {\n"
         "    return route.fulfill({ status: 200 })\n"
         "  }\n"
-        "})\n"
+        "})\n",
+        FILENAME,
+        notes,
     )
 
-    assert not _calls(source)
+    assert not calls
+    assert any("combined with an in-callback URL test" in note for note in notes)
 
 
 def test_reversed_interceptor_comparison_is_detected() -> None:
@@ -498,6 +506,35 @@ def test_concatenated_query_suffix_does_not_add_a_path_segment() -> None:
     assert not _checker.find_violations(calls, live)
 
 
+def test_wrapper_call_argument_does_not_fabricate_a_path_segment() -> None:
+    # ``buildUrl('/api/v1/runners/status')`` passes the literal as a WHOLE
+    # argument; the fragment fallback read the closing ``)`` as a path variable
+    # and invented ``.../status/{param}`` - a hard false violation.
+    live = _checker.build_live_routes({"/api/v1/runners/status": {"get": {}}})
+    source = "await apiFetch(apiBase, token, 'GET', buildUrl('/api/v1/runners/status'))\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].path == "/api/v1/runners/status"
+    assert not _checker.find_violations(calls, live)
+
+
+def test_whole_path_ternary_is_noted_not_spliced() -> None:
+    # Both ternary branches are complete routes. Splicing them produced
+    # ``/api/v1/plan{param}/api/v1/runs``; alternatives must be a note.
+    notes: list[str] = []
+
+    calls = _checker.extract_http_calls(
+        "await apiFetch(b, t, 'GET', cond ? '/api/v1/plan' : '/api/v1/runs')\n", FILENAME, notes
+    )
+
+    assert not calls
+    assert len(notes) == 1
+    assert "non-literal path" in notes[0]
+    assert all("/api/v1/plan{param}/api/v1/runs" not in note for note in notes)
+
+
 def test_concatenated_ts_assertion_does_not_add_a_path_segment() -> None:
     # ``'/api/v1/auth/me' as const`` is the same literal - no trailing variable.
     live = _checker.build_live_routes({"/api/v1/auth/me": {"get": {}}})
@@ -727,6 +764,60 @@ def test_catch_all_without_a_method_filter_stays_silent() -> None:
 
     calls = _checker.extract_http_calls(
         "await page.route('**/api/v1/**', (route) => route.fulfill({ status: 200 }))\n",
+        FILENAME,
+        notes,
+    )
+
+    assert not calls
+    assert not notes
+
+
+def test_delegated_interceptor_filter_is_noted() -> None:
+    # ``if (isMethod(route, 'PATCH'))`` reads no ``.method()`` in the callback:
+    # the filter lives in the helper. That registration used to be completely
+    # silent - no descriptor, no note, no unanalysed.
+    notes: list[str] = []
+    source = (
+        "await page.route('**/api/v1/x', (route) => {\n"
+        "  if (isMethod(route, 'PATCH')) return route.fulfill({ status: 200 })\n"
+        "})\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes)
+
+    assert not calls
+    assert len(notes) == 1
+    assert notes[0].startswith(f"{FILENAME}:1:")
+    assert "delegates its method filter to a helper function" in notes[0]
+
+
+def test_locally_defined_delegated_helper_is_noted() -> None:
+    # The helper's own method filter is a separate unmodelled reference (noted
+    # on its line); the registration must ALSO be named, not left silent.
+    notes: list[str] = []
+    source = (
+        "function isMethod(route: Route) { return route.request().method() === 'PATCH' }\n"
+        "await page.route('**/api/v1/x', (route) => {\n"
+        "  if (isMethod(route, 'PATCH')) return route.fulfill({ status: 200 })\n"
+        "})\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes)
+
+    assert not calls
+    assert any(note.startswith(f"{FILENAME}:2:") and "delegates its method filter" in note for note in notes)
+
+
+def test_constructor_call_is_not_a_delegated_method_filter() -> None:
+    # ``new URL(route.request().url())`` receives the route but is not a helper
+    # method filter - noting it would flood the real tree with noise.
+    notes: list[str] = []
+
+    calls = _checker.extract_http_calls(
+        "await page.route('**/api/v1/notifications/in-app*', (route) => {\n"
+        "  const url = new URL(route.request().url())\n"
+        "  return route.fulfill({ status: 200, json: { items: [] } })\n"
+        "})\n",
         FILENAME,
         notes,
     )
@@ -1434,9 +1525,89 @@ def test_renamed_request_fixture_binding_is_unanalysed() -> None:
     # Playwright fixtures are destructured by name: ``async ({ request: api })
     # => api.get(...)`` - the binding, not the call, is the only visible marker.
     unanalysed: list[str] = []
-    source = "test('x', async ({ request: api }) => { await api.get('/api/v1/pipelines') })\n"
+
+    calls = _checker.extract_http_calls(
+        "test('x', async ({ request: api }) => { await api.get('/api/v1/pipelines') })\n", FILENAME, [], unanalysed
+    )
+
+    assert not calls
+    assert len(unanalysed) == 1
+    assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
+
+
+def test_api_fetch_alias_forms_are_unanalysed() -> None:
+    # The fetch alias handling was not mirrored onto ``apiFetch``, so these real
+    # requests vanished with no descriptor, note or unanalysed entry.
+    for source in (
+        "const call = apiFetch\nawait call(b, t, 'PATCH', '/api/v1/pipelines/1/graph')\n",
+        "const { apiFetch: af } = helpers\nawait af(b, t, 'PATCH', '/api/v1/pipelines/1/graph')\n",
+        "const af = helpers.apiFetch\nawait af(b, t, 'PATCH', '/api/v1/pipelines/1/graph')\n",
+        "await helpers.apiFetch(b, t, 'PATCH', '/api/v1/pipelines/1/graph')\n",
+    ):
+        unanalysed: list[str] = []
+
+        calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+        assert not calls
+        assert len(unanalysed) == 1
+        assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
+
+
+def test_api_fetch_import_and_export_are_not_candidates() -> None:
+    # An imported/re-exported binding is not a call; flagging it would make
+    # every spec file that imports the helper unanalysed.
+    unanalysed: list[str] = []
+    source = (
+        "import { apiBaseFor, apiFetch } from './realstack-api'\n"
+        "import {\n"
+        "  apiFetch as fetchApi,\n"
+        "} from './other'\n"
+        "export { apiFetch }\n"
+    )
 
     calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert not calls
+    assert not unanalysed
+
+
+def test_request_context_alias_forms_are_unanalysed() -> None:
+    # A captured APIRequestContext loses the ``page.request`` marker, so its
+    # later ``api.patch(...)`` calls are invisible. The capture is flagged.
+    for source in (
+        "const api = page.request\nawait api.patch('/api/v1/pipelines/1/graph')\n",
+        "const api = await request.newContext()\nawait api.patch('/api/v1/pipelines/1/graph')\n",
+        "const api = page.context().request\nawait api.patch('/api/v1/pipelines/1/graph')\n",
+    ):
+        unanalysed: list[str] = []
+
+        calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+        assert not calls
+        assert len(unanalysed) == 1
+        assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
+
+
+def test_direct_request_verb_is_not_an_alias_candidate() -> None:
+    # ``page.request.post(...)`` is extracted, not an alias capture - the
+    # lookahead must not turn every direct verb call into a false candidate.
+    unanalysed: list[str] = []
+    source = "const createResp = await page.request.post('/api/v1/sso/providers', { data })\n"
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert [(call.method, call.path) for call in calls] == [("POST", "/api/v1/sso/providers")]
+    assert not unanalysed
+
+
+def test_bracket_fetch_is_unanalysed() -> None:
+    # ``globalThis['fetch']`` places the callee behind a blanked string key, so
+    # the extractor sees no ``fetch`` identifier at all.
+    unanalysed: list[str] = []
+
+    calls = _checker.extract_http_calls(
+        "await globalThis['fetch']('/api/v1/pipelines/1', { method: 'DELETE' })\n", FILENAME, [], unanalysed
+    )
 
     assert not calls
     assert len(unanalysed) == 1
