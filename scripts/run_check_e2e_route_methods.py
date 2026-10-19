@@ -21,10 +21,13 @@ to ``PUT`` and two callers were invisible to a path-based grep:
 
 The check deliberately does not grep for ``'PATCH'``: legitimate PATCH routes
 exist (``/api/v1/pipelines/{id}``, ``.../snapshots/{id}``,
-``.../folder``). It builds the live route table from the backend's OpenAPI
-document (in-process, template env, no network or database - the same import
-the schema-freshness job uses) and matches every extracted (method, path) pair
-against it.
+``.../folder``). It builds the live route table from the app's ACTUAL route
+objects (in-process, template env, no network or database - the same import the
+schema-freshness job uses) and matches every extracted (method, path) pair
+against it. ``app.openapi()['paths']`` is not enough: it omits
+``include_in_schema=False`` routes and renders a ``{param:path}`` converter as a
+single segment, so valid requests were reported as stale. A path converter is
+matched as a multi-segment (``.*``) tail instead.
 
 What is scanned (``frontend/tests/e2e/**/*.ts``):
 
@@ -148,6 +151,12 @@ _REGEX_CHAR_CLASS_RE = re.compile(r"\[[^\]]*\](?:[+*?]|\{\d+(?:,\d*)?\})?")
 _REGEX_SHORTHAND_RE = re.compile(r"\\[dDwWsS](?:[+*?]|\{\d+(?:,\d*)?\})?")
 _REGEX_ESCAPE_RE = re.compile(r"\\([^A-Za-z0-9])")
 _COLON_PARAM_RE = re.compile(r"(?<=/):[A-Za-z_][A-Za-z0-9_]*")
+#: A Starlette/FastAPI path-converter parameter (``{slug:path}``). Unlike a
+#: plain ``{param}`` it consumes one OR MORE segments, so it needs its own
+#: marker: normalising it to ``{param}`` would make a multi-segment request
+#: look stale. Rendered by the LiveRoute as a multi-segment tail.
+_PATH_CONVERTER_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\s*:\s*path\}")
+_MULTI_WILDCARD = "{param:path}"
 _SQUASH_SLASH_RE = re.compile(r"/{2,}")
 _SEGMENT_RE = re.compile(r"[A-Za-z0-9._~%\-{}]+")
 _API_PREFIX = "/api/"
@@ -294,7 +303,10 @@ def _find_open_paren(masked: str, start: int) -> int | None:
     """Find the ``(`` that opens a call following an identifier at *start*.
 
     Skips an optional TypeScript generic argument list (tracking ``<``/``>``
-    depth) so ``apiFetch<PendingReviewsResponse>(`` is handled.
+    depth) so ``apiFetch<PendingReviewsResponse>(`` is handled. A ``>`` that
+    closes a function type arrow (``<{ onSave: () => void }>``) is not a
+    generic bracket - counting it ended the generic early and dropped the
+    whole call, so the arrow is skipped instead.
     """
     length = len(masked)
     index = start
@@ -307,6 +319,12 @@ def _find_open_paren(masked: str, start: int) -> int | None:
             if char == "<":
                 depth += 1
             elif char == ">":
+                previous = index - 1
+                while previous >= 0 and masked[previous] in " \t\r\n":
+                    previous -= 1
+                if previous >= 0 and masked[previous] == "=":
+                    index += 1
+                    continue
                 depth -= 1
                 if depth == 0:
                     index += 1
@@ -633,6 +651,17 @@ def _add_note(notes: list[str], filename: str, line: int, message: str) -> None:
         notes.append(note)
 
 
+def _has_string_literal(expression: str) -> bool:
+    """True when *expression* contains a string or template literal.
+
+    Used to tell a hoisted variable (``page.route(pattern, ...)``) from a
+    literal that merely failed to normalise (``page.route('**/*.png', ...)``):
+    only the former is an unreadable API registration that must be noted when
+    its callback filters on the method.
+    """
+    return any(quote in expression for quote in ("'", '"', "`"))
+
+
 def _fetch_method(init_arguments: list[str]) -> tuple[str | None, bool]:
     """Resolve a ``fetch`` init's method, or report that it is unreadable.
 
@@ -840,10 +869,26 @@ def _extract_route_interceptors(
             api_shaped = _API_PREFIX in first or (
                 regex_source is not None and _API_PREFIX in _normalise_regex_path(regex_source)
             )
-            if api_shaped:
-                notes.append(
-                    f"{filename}:{_line_of(text, match.start())}: page.route registration uses an API path "
-                    f"that could not be normalised statically; its method filter was not checked"
+            handler_masked = masked[args[-1][0] : args[-1][1]]
+            if not _has_string_literal(first) and _has_unmodelled_method_reference(handler_masked):
+                # A hoisted URL variable (``const pattern = '**/api/...'``;
+                # ``page.route(pattern, ...)``) carries the real path, and the
+                # callback still filters on the method. Skipping it means the
+                # filter is never checked - so it is never silent.
+                _add_note(
+                    notes,
+                    filename,
+                    _line_of(text, match.start()),
+                    "page.route registration URL is a non-literal expression, so its method filter "
+                    "cannot be checked against a single route",
+                )
+            elif api_shaped:
+                _add_note(
+                    notes,
+                    filename,
+                    _line_of(text, match.start()),
+                    "page.route registration uses an API path that could not be normalised statically; "
+                    "its method filter was not checked",
                 )
             continue
         path, trailing_glob, last_prefix = path_info
@@ -1068,20 +1113,26 @@ def extract_http_calls(source: str, filename: str, notes: list[str] | None = Non
     calls: list[HttpCall] = []
 
     for match in _API_FETCH_RE.finditer(masked):
+        # A function DECLARATION (``export async function apiFetch<T>(...)``)
+        # is the helper itself, not a call: its typed parameters are not a
+        # method/path pair and must not be noted as an unresolved request.
+        if re.search(r"(?:\basync\s+)?\bfunction\s*$", masked[max(0, match.start() - 40) : match.start()]):
+            continue
         open_paren = _find_open_paren(masked, match.end())
         if open_paren is None:
             continue
         line = _line_of(source, match.start())
         args = _args_of(source, masked, open_paren)
         if len(args) < 4:
-            if any(_API_PREFIX in argument for argument in args):
-                _add_note(
-                    notes,
-                    filename,
-                    line,
-                    "apiFetch call carries an API path but fewer than four arguments, so its method and "
-                    "path were not checked",
-                )
+            # ``apiFetch`` is inherently an API call, so a call shape this
+            # checker cannot read is noted regardless of whether any argument
+            # happens to spell ``/api/`` (a hoisted variable does not).
+            _add_note(
+                notes,
+                filename,
+                line,
+                "apiFetch call has fewer than four arguments, so its method and path were not checked",
+            )
             continue
         method = _literal_method(args[2])
         path_info = extract_path(args[3])
@@ -1097,18 +1148,20 @@ def extract_http_calls(source: str, filename: str, notes: list[str] | None = Non
             )
             continue
         if method is None or path_info is None:
-            if any(_API_PREFIX in argument for argument in (args[2], args[3])):
-                reasons: list[str] = []
-                if method is None:
-                    reasons.append("the method argument is not a single string-literal HTTP verb")
-                if path_info is None:
-                    reasons.append("the path argument could not be normalised to an API path")
-                _add_note(
-                    notes,
-                    filename,
-                    line,
-                    "apiFetch call could not be fully resolved: " + "; ".join(reasons),
-                )
+            # ``apiFetch`` IS the API call - both arguments may be hoisted
+            # variables (``apiFetch(b, t, verb, endpoint)``), so a ``/api/``
+            # literal is not a precondition for reporting the skip.
+            reasons: list[str] = []
+            if method is None:
+                reasons.append("the method argument is not a single string-literal HTTP verb")
+            if path_info is None:
+                reasons.append("the path argument could not be normalised to an API path")
+            _add_note(
+                notes,
+                filename,
+                line,
+                "apiFetch call could not be fully resolved: " + "; ".join(reasons),
+            )
             continue
         path, trailing_glob, last_prefix = path_info
         calls.append(
@@ -1220,14 +1273,70 @@ def _split_segments(path: str) -> tuple[str, ...]:
     return tuple(segment for segment in path.split("/") if segment)
 
 
+def _normalise_template(template: str) -> str:
+    """Normalise a route template's parameters into the matcher's vocabulary.
+
+    ``{param:path}`` is preserved (as ``{param:path}``) because it consumes one
+    or more path segments; every other parameter form collapses to the single
+    segment ``{param}``.
+    """
+    with_path_converters = _PATH_CONVERTER_RE.sub(_MULTI_WILDCARD, template)
+    return _TEMPLATE_EXPR_RE.sub(_WILDCARD, _COLON_PARAM_RE.sub(_WILDCARD, with_path_converters))
+
+
 def build_live_routes(openapi_paths: dict[str, Any]) -> list[LiveRoute]:
-    """Build the normalised live route table from ``app.openapi()['paths']``."""
+    """Build the normalised live route table from a ``path -> operations`` map.
+
+    Kept as the OpenAPI-shaped entry point for callers (and tests) that supply
+    their own table; the real tree is built from the app's route objects by
+    :func:`build_live_routes_from_routes`.
+    """
     routes: list[LiveRoute] = []
     for template, operations in openapi_paths.items():
-        normalised = _TEMPLATE_EXPR_RE.sub(_WILDCARD, _COLON_PARAM_RE.sub(_WILDCARD, template))
+        normalised = _normalise_template(template)
         methods = frozenset(method.upper() for method in operations if method.upper() in _HTTP_METHODS)
         routes.append(LiveRoute(template=normalised, segments=_split_segments(normalised), methods=methods))
     return routes
+
+
+def _iter_route_objects(routes: Any) -> Any:
+    """Yield the leaf route objects from a FastAPI/Starlette route list.
+
+    FastAPI 0.146 wraps each ``include_router`` in a lazy ``_IncludedRouter``
+    whose inner routes live on ``original_router.routes`` (already prefixed).
+    Older versions flatten the list, in which case every entry is a leaf. A
+    ``Mount`` is skipped: its siblings are not API route objects.
+    """
+    for route in routes:
+        original_router = getattr(route, "original_router", None)
+        if original_router is not None:
+            yield from _iter_route_objects(getattr(original_router, "routes", ()) or ())
+            continue
+        yield route
+
+
+def build_live_routes_from_routes(routes: Any) -> list[LiveRoute]:
+    """Build the live route table from the app's actual route objects.
+
+    Unlike ``app.openapi()['paths']`` this includes ``include_in_schema=False``
+    routes (e.g. the workspace-lease read model) and retains the
+    ``{param:path}`` converter, so a multi-segment path is not reported stale.
+    """
+    table: dict[str, set[str]] = {}
+    for route in _iter_route_objects(routes):
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None)
+        if not isinstance(path, str) or not methods:
+            continue
+        normalised = _normalise_template(path)
+        table.setdefault(normalised, set()).update(
+            method.upper() for method in methods if method.upper() in _HTTP_METHODS
+        )
+    return [
+        LiveRoute(template=template, segments=_split_segments(template), methods=frozenset(methods))
+        for template, methods in table.items()
+        if methods
+    ]
 
 
 def load_live_routes() -> list[LiveRoute]:
@@ -1238,7 +1347,7 @@ def load_live_routes() -> list[LiveRoute]:
     os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{temp_db.as_posix()}"
     from modulo.api.main import app
 
-    return build_live_routes(app.openapi()["paths"])
+    return build_live_routes_from_routes(app.routes)
 
 
 def _segments_match(extracted: str, live: str, *, last_prefix: bool) -> bool:
@@ -1251,10 +1360,29 @@ def _segments_match(extracted: str, live: str, *, last_prefix: bool) -> bool:
     return extracted == live
 
 
+def _matches_path_converter(extracted: tuple[str, ...], prefix: tuple[str, ...], call: HttpCall) -> bool:
+    """Match a path that ends in a ``{param:path}`` converter.
+
+    The converter consumes one OR MORE remaining segments, so a non-glob call
+    needs strictly more segments than the converter's prefix. A glob call (a
+    Playwright prefix pattern) needs only its literal segments to match - the
+    ``**`` covers the rest, including the converter's segments.
+    """
+    if not call.trailing_glob and len(extracted) <= len(prefix):
+        return False
+    for index, (extracted_segment, live_segment) in enumerate(zip(extracted, prefix, strict=False)):
+        is_last = index == len(extracted) - 1
+        if not _segments_match(extracted_segment, live_segment, last_prefix=is_last and call.last_segment_prefix):
+            return False
+    return True
+
+
 def path_matches(call: HttpCall, route: LiveRoute) -> bool:
     """Does *route* match *call*'s path under Playwright-glob semantics?"""
     extracted = _split_segments(call.path)
     live = route.segments
+    if live and live[-1] == _MULTI_WILDCARD:
+        return _matches_path_converter(extracted, live[:-1], call)
     if call.trailing_glob:
         if len(extracted) > len(live):
             return False

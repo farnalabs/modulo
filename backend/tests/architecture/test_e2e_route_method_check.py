@@ -450,7 +450,10 @@ def test_real_feedback_inbox_regex_registration_still_contributes() -> None:
         and call.path == "/api/v1/feedback/inbox"
     ]
 
-    assert len(calls) == 1
+    # Presence and shape, not an exact count: a legitimate second identical
+    # call in the spec must not turn a behavioural pin into a brittle one.
+    assert calls
+    assert {call.kind for call in calls} == {"interceptor"}
 
 
 def test_api_shaped_route_that_cannot_be_normalised_is_noted() -> None:
@@ -572,7 +575,10 @@ def test_real_tenancy_rbac_leading_interpolation_is_resolved() -> None:
         and call.path == "/api/v1/pipelines"
     ]
 
-    assert len(calls) == 1
+    # Presence and shape, not an exact count: a legitimate second identical
+    # call in the spec must not turn a behavioural pin into a brittle one.
+    assert calls
+    assert {(call.kind, call.method, call.path) for call in calls} == {("fetch", "POST", "/api/v1/pipelines")}
 
 
 # ---------------------------------------------------------------------------
@@ -817,6 +823,150 @@ def test_fetch_quoted_method_key_is_not_an_implicit_get() -> None:
     assert not calls
     assert len(notes) == 1
     assert "method" in notes[0]
+
+
+def test_live_route_table_is_built_from_route_objects_not_openapi() -> None:
+    # ``app.openapi()['paths']`` omits ``include_in_schema=False`` routes and
+    # flattens ``{param:path}`` to one segment. The real table must come from
+    # the route objects so both shapes resolve.
+    class Leaf:
+        def __init__(self, path: str, methods: set[str], include_in_schema: bool) -> None:
+            self.path = path
+            self.methods = methods
+            self.include_in_schema = include_in_schema
+
+    class Included:
+        def __init__(self, routes: list[Leaf]) -> None:
+            self.original_router = type("Router", (), {"routes": routes})()
+
+    routes = _checker.build_live_routes_from_routes(
+        [
+            Included(
+                [
+                    Leaf("/api/v1/registry/primitives/{slug:path}", {"GET"}, True),
+                    Leaf("/api/v1/runs/{run_id}/workspace-lease", {"GET"}, False),
+                ]
+            )
+        ]
+    )
+
+    calls = [
+        _checker.HttpCall(FILENAME, 1, "GET", "/api/v1/registry/primitives/acme/widgets", "apiFetch"),
+        _checker.HttpCall(FILENAME, 2, "GET", "/api/v1/runs/abc/workspace-lease", "apiFetch"),
+    ]
+
+    assert sorted(route.template for route in routes) == [
+        "/api/v1/registry/primitives/{param:path}",
+        "/api/v1/runs/{run_id}/workspace-lease",
+    ]
+    assert not _checker.find_violations(calls, routes)
+
+
+def test_path_converter_matches_a_broad_glob_prefix() -> None:
+    # A Playwright prefix glob (``**/api/v1/registry/**``) covers the
+    # converter's remaining segments; only its literal segments must match.
+    routes = _checker.build_live_routes({"/api/v1/registry/primitives/{slug:path}": {"get": {}}})
+    call = _checker.HttpCall(
+        FILENAME,
+        1,
+        "GET",
+        "/api/v1/registry",
+        "interceptor",
+        trailing_glob=True,
+        last_segment_prefix=True,
+    )
+
+    assert _checker.path_matches(call, routes[0])
+
+
+def test_real_route_table_resolves_path_converter_and_non_schema_routes(monkeypatch) -> None:
+    # The two shapes the OpenAPI table rejected: a multi-segment registry slug
+    # and an ``include_in_schema=False`` read model. Both are live requests.
+    for key, value in _checker._TEMPLATE_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite://")
+
+    routes = _checker.load_live_routes()
+    calls = [
+        _checker.HttpCall(FILENAME, 1, "GET", "/api/v1/registry/primitives/acme/widgets", "apiFetch"),
+        _checker.HttpCall(FILENAME, 2, "GET", "/api/v1/runs/abc/workspace-lease", "apiFetch"),
+    ]
+
+    assert not _checker.find_violations(calls, routes)
+
+
+def test_generic_type_with_a_function_type_does_not_drop_the_call() -> None:
+    # ``=>`` inside a generic argument list: its ``>`` is not the generic
+    # close, so counting it ended the generic scan early and dropped the call.
+    source = "await apiFetch<{ onSave: () => void }>(b, t, 'PATCH', '/api/v1/pipelines/abc/graph')\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].kind == "apiFetch"
+    assert calls[0].method == "PATCH"
+    assert calls[0].path == "/api/v1/pipelines/abc/graph"
+
+
+def test_api_fetch_with_variable_method_and_path_is_noted() -> None:
+    # ``apiFetch`` is inherently an API call: a hoisted method AND path must
+    # leave one explicit note, never disappear because no argument spells
+    # ``/api/``.
+    notes: list[str] = []
+    source = (
+        "const endpoint = '/api/v1/pipelines/x/graph'\nconst verb = 'PATCH'\nawait apiFetch(b, t, verb, endpoint)\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes)
+
+    assert not calls
+    assert len(notes) == 1
+    assert "could not be fully resolved" in notes[0]
+    assert "method argument" in notes[0]
+
+
+def test_api_fetch_declaration_is_not_treated_as_a_call() -> None:
+    # The helper's own signature has typed parameters, not a method/path pair.
+    # Noting it as an unresolved request would report the definition itself on
+    # every real run (realstack-api.ts:166).
+    notes: list[str] = []
+    source = (
+        "export async function apiFetch<T>(\n"
+        "  apiBase: string,\n"
+        "  token: string,\n"
+        "  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',\n"
+        "  path: string,\n"
+        "  body?: unknown,\n"
+        "): Promise<T> {\n"
+        "  return request(apiBase, token, method, path, body)\n"
+        "}\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes)
+
+    assert not calls
+    assert not notes
+
+
+def test_hoisted_route_pattern_with_method_filter_is_noted() -> None:
+    # A registration whose URL is a hoisted variable cannot be matched to one
+    # route, but its callback filters on the method - so it must be noted.
+    notes: list[str] = []
+    source = (
+        "const pattern = '**/api/v1/pipelines/abc/graph'\n"
+        "await page.route(pattern, (route) => {\n"
+        "  if (route.request().method() === 'PATCH') {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes)
+
+    assert not calls
+    assert len(notes) == 1
+    assert "non-literal expression" in notes[0]
+    assert FILENAME in notes[0]
 
 
 def test_conditional_query_interpolation_is_not_a_path_segment() -> None:
