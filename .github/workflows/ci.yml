@@ -1592,7 +1592,13 @@ jobs:
           if [ "$FIX_COUNT" -ge 3 ]; then
             echo "exhausted=true" >> "$GITHUB_OUTPUT"
             echo "::warning::Branch fixer exhausted after $FIX_COUNT attempts against PR #${PR_NUM}."
-            gh pr comment "$PR_NUM" --body "## Branch Fixer Exhausted
+            # FAR-1997: this job is dispatch-only — it has NO actions/checkout
+            # step — so `gh` cannot infer the repository from a git remote and
+            # an unqualified `gh pr comment` dies with "fatal: not a git
+            # repository" before reaching the API. Pass the repository
+            # explicitly. (Same fix, same class, as the dispatch-failure notice
+            # below.)
+            gh pr comment "$PR_NUM" --repo "${{ github.repository }}" --body "## Branch Fixer Exhausted
 
             The automated branch fixer has attempted $FIX_COUNT fixes against this PR but CI is still failing. Manual intervention is required.
 
@@ -1798,14 +1804,28 @@ jobs:
           if [ "$DISPATCHED" != "true" ]; then
             DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
             echo "::error::Branch Fixer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — CI failure was not handed to the autonomous fix loop."
-            gh pr comment "$PR_NUM" --body "## Branch Fixer Dispatch Failed
+            # FAR-1997: this job is dispatch-only — it has NO actions/checkout
+            # step — so `gh` cannot infer the repository from a git remote, and
+            # `gh pr comment "$PR_NUM"` alone dies with "fatal: not a git
+            # repository" before it reaches the API. Passing the repository
+            # explicitly is the whole fix; it is also why no checkout is added.
+            #
+            # A dispatch failure whose notice cannot be posted leaves a stalled
+            # fix loop indistinguishable from a working one, so an unpostable
+            # notice is a HARD error (its own non-zero exit code), never a
+            # warning annotation: exit 1 = dispatch failed but the PR was told,
+            # exit 2 = dispatch failed AND the PR could not be told.
+            if ! gh pr comment "$PR_NUM" --repo "${{ github.repository }}" --body "## Branch Fixer Dispatch Failed
 
             The CI failure notification could not be delivered to the Branch Fixer pipeline after multiple retries.
 
             **HTTP status:** \`${LAST_HTTP}\`
             **Detail:** ${DETAIL}
 
-            The automated fix loop is **not active** for this PR. Manual investigation may be needed." || echo "::warning::Failed to post dispatch-failure comment on PR #${PR_NUM}"
+            The automated fix loop is **not active** for this PR. Manual investigation may be needed."; then
+              echo "::error::Failed to post dispatch-failure comment on PR #${PR_NUM} — the stalled fix loop could not be announced."
+              exit 2
+            fi
             exit 1
           fi
 
