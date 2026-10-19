@@ -1362,7 +1362,10 @@ async def retention_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
 
     checkpoints_deleted = 0
     try:
-        async with _make_system_session_factory()() as session, session.begin():
+        # No outer ``session.begin()`` here: the checkpoint sweep owns its own
+        # per-batch transactions and commits each one (FAR-1971b), so a mid-tick
+        # cancellation cannot roll back batches that already succeeded.
+        async with _make_system_session_factory()() as session:
             checkpoints_deleted = await batch_delete_langgraph_checkpoints(session)
     except ProgrammingError:
         _log.warning(
