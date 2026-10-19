@@ -84,7 +84,9 @@ const DIFF = {
   edges_removed: [],
   edges_modified: [],
   semantic: {
-    port_changes: [{ node_id: 'n1', direction: 'output', port: 'out', change: 'removed', old: 'x', new: null }],
+    port_changes: [
+      { kind: 'node_signature', node_id: 'n1', direction: 'output', port: 'out', change: 'removed', old: 'x', new: null },
+    ],
     impacted_nodes: ['n3', 'n4'],
     breaking_changes: [
       { severity: 'block', node_id: 'n1', direction: 'output', port: 'out', reason: 'output port removed' },
@@ -357,11 +359,16 @@ describe('PipelineSnapshotCompare', () => {
         ...DIFF,
         semantic: {
           port_changes: [
-            { node_id: 'n1', direction: 'output', port: 'out', change: 'removed' },
-            // Added-node artefact the backend emits with the literal id "None".
-            { node_id: 'None', direction: 'input', port: 'in', change: 'added' },
-            // A node present only in the newer version (also an added-node port).
-            { node_id: 'n4', direction: 'input', port: 'new', change: 'added' },
+            // A genuine signature change on a node in both versions.
+            { kind: 'node_signature', node_id: 'n1', direction: 'output', port: 'out', change: 'removed' },
+            // An edge's port binding names a node present in BOTH graphs, so
+            // ONLY the `kind` discriminator excludes it — this test would fail
+            // if the kind filter were deleted. (n2 would have passed for the
+            // wrong reason: it exists only in snapshot_a, so the both-graphs
+            // check alone would already exclude it.)
+            { kind: 'edge_port', node_id: 'n3', direction: 'output', port: 'out', change: 'edge_source' },
+            // A node present only in the newer version has no signature delta.
+            { kind: 'node_signature', node_id: 'n4', direction: 'input', port: 'in', change: 'added' },
           ],
           impacted_nodes: [],
           breaking_changes: [],
