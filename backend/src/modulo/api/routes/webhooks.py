@@ -15,7 +15,8 @@ import logging
 import os
 import time
 import uuid
-from typing import Any, Literal
+from dataclasses import dataclass
+from typing import Any, Literal, NoReturn
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import select
@@ -83,6 +84,7 @@ from modulo.core.trigger_engine import (  # noqa: F401
 )
 from modulo.core.trigger_engine.pre_guardrail import GuardrailBlockedAtIntakeError
 from modulo.core.trigger_secrets import resolve_trigger_secret_scoped
+from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.crud.trigger import load_trigger_and_org_global
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.trigger import Trigger
@@ -731,6 +733,666 @@ def _replay_ack(
     return {"run_id": str(run_id), "status": "accepted"}
 
 
+#: Intake errors that map one-to-one to a fixed HTTP status/detail pair.
+_INTAKE_ERROR_RESPONSES: dict[type[Exception], tuple[int, str]] = {
+    TriggerNotFoundError: (status.HTTP_404_NOT_FOUND, MSG_TRIGGER_NOT_FOUND),
+    TriggerInactiveError: (status.HTTP_404_NOT_FOUND, MSG_TRIGGER_NOT_FOUND),
+    TriggerConfigInvalidError: (status.HTTP_400_BAD_REQUEST, "Trigger configuration is invalid"),
+    TimestampExpiredError: (status.HTTP_400_BAD_REQUEST, "X-Modulo-Timestamp is outside the ±300s replay window"),
+    HmacValidationError: (status.HTTP_401_UNAUTHORIZED, "HMAC signature verification failed"),
+    DuplicateWebhookError: (status.HTTP_400_BAD_REQUEST, "Duplicate webhook payload"),
+    ReplayNotFoundError: (status.HTTP_404_NOT_FOUND, "Trigger event not found"),
+}
+
+
+@dataclass
+class _WebhookState:
+    """Per-delivery state shared between the intake helper and the ladder."""
+
+    trigger: Trigger | None = None
+    org_id: uuid.UUID | None = None
+    run: Any = None
+    paused_ack: dict[str, Any] | None = None
+    ci_failure_coalesced: bool = False
+    event_not_accepted: bool = False
+    guardrail_block_detail: str | None = None
+
+
+async def _parse_webhook_body(request: Request) -> dict[str, Any]:
+    """Parse the request body as a JSON object, or raise the 400 contract."""
+    try:
+        raw_payload: dict[str, Any] = await request.json()
+        if not isinstance(raw_payload, dict):
+            raise TypeError("not a JSON object")
+    except Exception as exc:
+        _log.exception(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Request body must be a JSON object",
+        ) from exc
+    return raw_payload
+
+
+def _require_system_engine(code: str) -> None:
+    """Refuse the delivery when the BYPASSRLS bootstrap session is unavailable."""
+    if not system_engine_is_fallback():
+        return
+    # No modulo_system role provisioned: the BYPASSRLS bootstrap read would
+    # silently match zero rows and every delivery would 404. Refuse loudly
+    # (same contract as admin_rotation's system-role check) — 503 is
+    # distinguishable from a genuine 404.
+    log_service_unavailable(
+        "system_bootstrap_degraded",
+        route=code,
+        detail="system database not provisioned; trigger delivery unavailable",
+        level=logging.ERROR,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="System database not provisioned; trigger delivery unavailable",
+    )
+
+
+async def _write_receive_paused_event(
+    session: AsyncSession,
+    *,
+    trigger: Trigger,
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID,
+    raw_body: bytes,
+) -> None:
+    """Commit the ``paused`` TriggerEvent (skipped when the org row is gone)."""
+    if not await _org_row_exists(session, org_id):
+        _log.warning(
+            "webhooks.receive_webhook: org %s missing — skipping paused event write for trigger %s",
+            org_id,
+            trigger_id,
+        )
+        return
+    paused_event = TriggerEvent(
+        organisation_id=org_id,
+        trigger_id=trigger.id,
+        trigger_type="webhook",
+        raw_payload_hash=sha256_hex(raw_body),
+        validation_result="paused",
+    )
+    session.add(paused_event)
+    await session.flush()
+
+
+async def _receive_webhook_intake(
+    *,
+    session: AsyncSession,
+    system_session: AsyncSession,
+    principal: TenantPrincipal | None,
+    trigger_id: uuid.UUID,
+    request: Request,
+    raw_body: bytes,
+    raw_payload: dict[str, Any],
+    hmac_signature: str | None,
+    modulo_timestamp: str,
+    state: _WebhookState,
+) -> None:
+    """The receive route's in-transaction intake (bootstrap → auth → engine)."""
+    # Bootstrap via the shared system-session helper (FAR-523): the trigger
+    # read must precede any RLS org context on Postgres; the helper 404s a
+    # principal referencing another org's trigger.
+    trigger, org_id = await load_trigger_and_org_global(
+        system_session, trigger_id, principal.organisation_id if principal else None
+    )
+    state.trigger = trigger
+    state.org_id = org_id
+
+    # FAR-1484: the org is resolved HERE (derived from the trigger row, so it
+    # always exists once the bootstrap returned). Bind before any further work
+    # so every ERROR from this point on — HMAC decrypt, snapshot, DB — is
+    # attributed instead of dropped.
+    _bind_webhook_org_context(request, org_id)
+    await set_rls_org(session, org_id)
+    await set_rls_execution_context(session)
+
+    # Route-level timestamp + HMAC validation (see _verify_webhook_auth; raises
+    # the same typed errors). Ordered after the bootstrap and BEFORE the
+    # snapshot/dedup work so an unauthenticated delivery never touches
+    # pipeline_snapshots or webhook_dedup_hashes.
+    await _verify_webhook_auth(
+        request=request,
+        trigger_id=trigger_id,
+        trigger=trigger,
+        session=session,
+        org_id=org_id,
+        raw_body=raw_body,
+        hmac_signature=hmac_signature,
+        modulo_timestamp=modulo_timestamp,
+    )
+
+    try:
+        # Pause pre-check BEFORE the snapshot and dedup work — a paused
+        # delivery must not touch pipeline_snapshots, webhook_dedup_hashes,
+        # or create a run. The inner catch is the SINGLE writer of the
+        # ``paused`` TriggerEvent; it commits with this transaction.
+        if trigger.active:
+            await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="webhook")
+
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, account_id=None)
+        if snapshot is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create pipeline snapshot for webhook trigger",
+            )
+
+        state.run, _, _input_payload = await _trigger_engine.handle_webhook(
+            session,
+            trigger_id=trigger_id,
+            org_id=org_id,
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+            hmac_signature=hmac_signature,
+            modulo_timestamp=modulo_timestamp,
+            snapshot_id=snapshot.id,
+        )
+    except TriggersPausedError:
+        # Safe event write: an orphan trigger whose org row was HARD-deleted
+        # must not attempt the TriggerEvent INSERT (it would violate the
+        # organisations FK -> 503). Fail-closed with no event row and no crash.
+        await _write_receive_paused_event(
+            session,
+            trigger=trigger,
+            trigger_id=trigger_id,
+            org_id=org_id,
+            raw_body=raw_body,
+        )
+        state.paused_ack = {"status": "paused"}
+    except CiFailureCoalescedError:
+        # FAR-1034: the engine wrote the ``coalesced`` TriggerEvent (and the
+        # coalesce dedup marker row) INSIDE this transaction and then raised,
+        # because the delivery was HANDLED as a no-op — NOT rejected. Catching
+        # here (mirroring the GuardrailBlockedAtIntakeError pattern) lets the
+        # transaction COMMIT so the audit event and the suppression marker
+        # survive, then the 202 handled-ack is returned AFTER the transaction.
+        state.ci_failure_coalesced = True
+    except GuardrailBlockedAtIntakeError as exc:
+        # The engine wrote the ``guardrail_blocked`` TriggerEvent and stored
+        # the raw payload INSIDE this transaction. Catch here (mirroring the
+        # paused pattern) so the transaction COMMITS and the event survives,
+        # then surface the 400 after the transaction — the delivery is
+        # reject-and-retry, NOT acked-as-accepted, and no run was created.
+        state.guardrail_block_detail = exc.detail
+    except EventNotAcceptedError:
+        # The engine wrote the ``event_type_not_accepted`` TriggerEvent INSIDE
+        # this transaction. Catch here so the transaction COMMITS and the audit
+        # event survives — an invisible rejection is worse than a typed 400.
+        state.event_not_accepted = True
+
+
+async def _replay_webhook_intake(
+    *,
+    session: AsyncSession,
+    system_session: AsyncSession,
+    principal: TenantPrincipal | None,
+    trigger_id: uuid.UUID,
+    event_id: uuid.UUID,
+    request: Request,
+    state: _WebhookState,
+) -> None:
+    """The replay route's in-transaction intake (bootstrap → auth → engine)."""
+    # Bootstrap via the shared system-session helper (FAR-523): the trigger
+    # read must precede any RLS org context on Postgres; the helper 404s a
+    # principal referencing another org's trigger.
+    trigger, org_id = await load_trigger_and_org_global(
+        system_session, trigger_id, principal.organisation_id if principal else None
+    )
+    state.trigger = trigger
+    state.org_id = org_id
+
+    # FAR-1484: the org is resolved HERE (derived from the trigger row, so it
+    # always exists once the bootstrap returned). Bind before any further work
+    # so every ERROR from this point on — HMAC decrypt, snapshot, DB — is
+    # attributed instead of dropped.
+    _bind_webhook_org_context(request, org_id)
+    await set_rls_org(session, org_id)
+    await set_rls_execution_context(session)
+
+    if principal is None:
+        # ADR 047: unauthenticated replay requires a valid HMAC signature over
+        # the STORED payload (see _verify_replay_auth; raises the same typed
+        # errors).
+        await _verify_replay_auth(
+            request=request,
+            trigger_id=trigger_id,
+            trigger=trigger,
+            session=session,
+            org_id=org_id,
+            event_id=event_id,
+        )
+
+    try:
+        # Pause pre-check AFTER principal auth / trigger load, BEFORE the
+        # snapshot — a paused org's replay is dropped with a committed
+        # ``paused`` TriggerEvent reusing the ORIGINAL event's hash.
+        if trigger.active:
+            await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="webhook")
+
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, account_id=None)
+        if snapshot is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create pipeline snapshot for webhook replay",
+            )
+
+        state.run, _, _input_payload = await _trigger_engine.replay_event(
+            session,
+            event_id=event_id,
+            org_id=org_id,
+            snapshot_id=snapshot.id,
+        )
+    except TriggersPausedError:
+        # The paused event write commits with THIS transaction (the helper is
+        # called from inside the begin-block); see _replay_paused_path for the
+        # safe-event-write contract.
+        state.paused_ack = await _replay_paused_path(
+            session=session,
+            trigger_id=trigger_id,
+            trigger=trigger,
+            org_id=org_id,
+            event_id=event_id,
+        )
+    except EventNotAcceptedError:
+        # The engine wrote the ``event_type_not_accepted`` TriggerEvent INSIDE
+        # this transaction. Catch here so the transaction COMMITS and the audit
+        # event survives — an invisible rejection is worse than a typed 400.
+        state.event_not_accepted = True
+
+
+def _raise_intake_http_error(exc: Exception, *, trigger_id: uuid.UUID, code: str) -> NoReturn:
+    """Map one of the fixed intake errors to its HTTP contract."""
+    if isinstance(exc, TriggerConfigInvalidError):
+        _log.warning(f"{code}.trigger_config_invalid", extra={"trigger_id": str(trigger_id)})
+    status_code, detail = _INTAKE_ERROR_RESPONSES[type(exc)]
+    raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+def _raise_webhook_db_error(exc: ProgrammingError | SQLAlchemyError, *, code: str, detail: str) -> NoReturn:
+    """Map a DB failure to 501 (missing column) or the 503 contract."""
+    if isinstance(exc, ProgrammingError):
+        _log.exception(code)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    raise_session_contract_error(exc, code)
+    log_service_unavailable("db_transient", exc, route=code, detail=detail)
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=MSG_DB_OPERATION_FAILED,
+    ) from None
+
+
+def _raise_snapshot_lock_unavailable(
+    exc: SnapshotLockNotAvailableError,
+    *,
+    trigger_id: uuid.UUID,
+    trigger: Trigger | None,
+    log_event: str,
+    code: str,
+) -> NoReturn:
+    """Map the snapshot advisory-lock refusal to its 503 contract."""
+    from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS
+
+    _log.warning(
+        "%s trigger=%s pipeline=%s attempts=%s (FAR-527)",
+        log_event,
+        trigger_id,
+        trigger.pipeline_id if trigger is not None else None,
+        SNAPSHOT_LOCK_ATTEMPTS,
+    )
+    log_service_unavailable(
+        "snapshot_lock_unavailable",
+        exc,
+        route=code,
+        detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
+    )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=(
+            f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the webhook delivery"
+        ),
+    ) from exc
+
+
+def _raise_pipeline_not_runnable(
+    exc: PipelineNotRunnableError,
+    *,
+    trigger_id: uuid.UUID,
+    log_event: str,
+) -> NoReturn:
+    """Map a not-runnable pipeline refusal to its 409 contract."""
+    _log.info(
+        "%s trigger=%s pipeline=%s state=%s",
+        log_event,
+        trigger_id,
+        exc.pipeline_id,
+        exc.state,
+    )
+    raise pipeline_not_runnable_http(exc) from None
+
+
+async def _raise_receive_refusal(
+    exc: ConcurrentRunLimitError | PipelineBackpressureError | PipelineRateLimitError,
+    *,
+    trigger_id: uuid.UUID,
+    state: _WebhookState,
+    raw_body: bytes,
+    raw_payload: dict[str, Any],
+) -> NoReturn:
+    """Re-record a refused receive delivery post-unwind, then raise its 429."""
+    if isinstance(exc, ConcurrentRunLimitError):
+        # FAR-1863: at the trigger's declared cap the delivery is REFUSED (no
+        # run), never accepted-and-queued. The engine's in-transaction
+        # ``concurrency_limit_reached`` write rolls back with the unwound main
+        # transaction (the PipelineBackpressureError pattern), so re-record the
+        # refusal + raw payload in a FRESH transaction AFTER the unwind — the
+        # delivery stays auditable and replayable, never silent. The 429 is
+        # reject-and-retry, so it carries a Retry-After (mirroring the busy
+        # refusal) and the sender re-delivers once a slot frees.
+        _log.info(
+            "webhooks.receive_webhook.concurrent_limit_refused trigger=%s limit=%s",
+            trigger_id,
+            exc.limit,
+        )
+        await _record_rejected_delivery(
+            kind="concurrency",
+            trigger_id=trigger_id,
+            org_id=state.org_id,
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Concurrent run limit of {exc.limit} reached",
+            headers={"Retry-After": "5"},
+        ) from exc
+    if isinstance(exc, PipelineBackpressureError):
+        # FAR-604: the pipeline's pending queue is over the depth/age
+        # backpressure limits — refuse the delivery so the sender retries
+        # instead of ratcheting the queue further. The engine's
+        # ``backpressure_skipped`` event write rolled back with the refusal —
+        # re-record it in a FRESH transaction BEFORE raising the 429.
+        _log.info(
+            "webhooks.receive_webhook.backpressure_refused trigger=%s pipeline=%s reason=%s",
+            trigger_id,
+            state.trigger.pipeline_id if state.trigger is not None else None,
+            exc.reason,
+        )
+        await _record_rejected_delivery(
+            kind="backpressure",
+            trigger_id=trigger_id,
+            org_id=state.org_id,
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+            reason=exc.reason,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
+        ) from exc
+    # FAR-1916 (receive mirror): the pipeline's configured rate limit refused
+    # the delivery. Re-record the refusal + raw payload in a FRESH transaction
+    # AFTER the unwind, or a rate-limited delivery is refused but invisible in
+    # the event log. The 429 status/detail contract is unchanged; unlike the
+    # busy and concurrency refusals this arm has never carried a Retry-After.
+    _log.info(
+        "webhooks.receive_webhook.rate_limited trigger=%s pipeline=%s",
+        trigger_id,
+        exc.pipeline_id,
+    )
+    await _record_rejected_delivery(
+        kind="rate_limited",
+        trigger_id=trigger_id,
+        org_id=state.org_id,
+        raw_body=raw_body,
+        raw_payload=raw_payload,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=str(exc),
+    ) from exc
+
+
+async def _raise_replay_refusal(
+    exc: ConcurrentRunLimitError | PipelineRateLimitError,
+    *,
+    trigger_id: uuid.UUID,
+    state: _WebhookState,
+    event_id: uuid.UUID,
+) -> NoReturn:
+    """Re-record a refused replay delivery post-unwind, then raise its 429."""
+    if isinstance(exc, ConcurrentRunLimitError):
+        # FAR-1904: the replay mirror of receive_webhook's FAR-1863 post-unwind
+        # re-record. The engine's in-transaction ``concurrency_limit_reached``
+        # write rolls back with the unwound main transaction, so re-record the
+        # refusal in a FRESH transaction AFTER the unwind — the refused replay
+        # stays auditable, never silent. The original event's payload already
+        # exists, so the re-record carries its hash via ``source_event_id``
+        # (the _replay_busy_path busy-replay shape) and stores no duplicate
+        # payload row. The 429 is reject-and-retry, so it carries a
+        # Retry-After (the receive path's shape).
+        _log.info(
+            "webhooks.replay_webhook.concurrent_limit_refused trigger=%s limit=%s",
+            trigger_id,
+            exc.limit,
+        )
+        await _record_rejected_delivery(
+            kind="concurrency",
+            trigger_id=trigger_id,
+            org_id=state.org_id,
+            source_event_id=event_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Concurrent run limit of {exc.limit} reached",
+            headers={"Retry-After": "5"},
+        ) from exc
+    # FAR-1916: the pipeline's configured rate limit refused the replay. The
+    # engine's in-transaction ``rate_limited`` write rolls back with the
+    # unwound main transaction, so re-record the refusal + the original
+    # event's payload hash in a FRESH transaction AFTER the unwind (the
+    # _replay_busy_path shape: no duplicate payload row) — the refused replay
+    # stays auditable, never silent. 429 reject-and-retry, so it carries a
+    # Retry-After consistent with the receive path's refusals.
+    _log.info(
+        "webhooks.replay_webhook.rate_limited trigger=%s pipeline=%s",
+        trigger_id,
+        exc.pipeline_id,
+    )
+    await _record_rejected_delivery(
+        kind="rate_limited",
+        trigger_id=trigger_id,
+        org_id=state.org_id,
+        source_event_id=event_id,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=str(exc),
+        headers={"Retry-After": "5"},
+    ) from exc
+
+
+async def _receive_busy_ack(
+    *,
+    trigger_id: uuid.UUID,
+    state: _WebhookState,
+    raw_body: bytes,
+    raw_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Record a busy receive delivery post-unwind and return its queued ack."""
+    # Concurrent same-trigger deliveries serialize on the engine's advisory
+    # lock. The loser is NOT executed and NOT auto-queued: the engine raises
+    # BEFORE any TriggerEvent is written and the main transaction rolls back,
+    # so the busy delivery is recorded here — AFTER the unwind — in a fresh
+    # transaction (_record_rejected_delivery: a ``concurrency_limit_reached``
+    # event + the raw payload, making it visible in the event log and
+    # replayable). The 2xx ack is honest because of that recording: 2xx
+    # suppresses sender retries (Slack) BY DESIGN, and replay is the recovery
+    # path, not a sender retry.
+    _log.info(
+        "webhooks.receive_webhook.trigger_busy trigger=%s pipeline=%s",
+        trigger_id,
+        state.trigger.pipeline_id if state.trigger is not None else None,
+    )
+    recorded = await _record_rejected_delivery(
+        kind="busy",
+        trigger_id=trigger_id,
+        org_id=state.org_id,
+        raw_body=raw_body,
+        raw_payload=raw_payload,
+    )
+    if recorded:
+        return {"run_id": None, "status": "queued", "detail": BUSY_ACK_DETAIL}
+    # Defensive: TriggerBusyError can only fire after the bootstrap helper
+    # resolved the org. If it somehow did not, there is nothing to record
+    # against — refuse so the sender retries (never a false ack).
+    _log.error("webhooks.receive_webhook.trigger_busy_unresolvable trigger=%s", trigger_id)
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Pipeline busy — delivery not accepted; retry",
+        headers={"Retry-After": "5"},
+    ) from None
+
+
+async def _handle_receive_dispatch_failure(
+    exc: PipelineNotRunnableError | SnapshotLockNotAvailableError | TriggerBusyError,
+    *,
+    trigger_id: uuid.UUID,
+    state: _WebhookState,
+    raw_body: bytes,
+    raw_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Map the receive route's post-unwind dispatch failures (409 / 503 / ack)."""
+    if isinstance(exc, PipelineNotRunnableError):
+        # FAR-1528: the delivery is refused at the create_run choke point when
+        # the target pipeline is archived/soft-deleted — 409 Conflict, never a
+        # generic 500. Deliberately caught OUTSIDE the begin-block (the
+        # PipelineBackpressureError pattern): the snapshot created above rolls
+        # back with the refusal, and the sender gets a clear, non-retryable
+        # answer instead of a crash.
+        _raise_pipeline_not_runnable(
+            exc,
+            trigger_id=trigger_id,
+            log_event="webhooks.receive_webhook.pipeline_not_runnable",
+        )
+    if isinstance(exc, SnapshotLockNotAvailableError):
+        _raise_snapshot_lock_unavailable(
+            exc,
+            trigger_id=trigger_id,
+            trigger=state.trigger,
+            log_event="webhooks.receive_webhook.snapshot_lock_busy",
+            code=_CODE_WEBHOOKS_RECEIVE_WEBHOOK,
+        )
+    return await _receive_busy_ack(
+        trigger_id=trigger_id,
+        state=state,
+        raw_body=raw_body,
+        raw_payload=raw_payload,
+    )
+
+
+async def _handle_replay_dispatch_failure(
+    exc: PipelineNotRunnableError | SnapshotLockNotAvailableError | TriggerBusyError,
+    *,
+    trigger_id: uuid.UUID,
+    state: _WebhookState,
+    event_id: uuid.UUID,
+) -> dict[str, Any]:
+    """Map the replay route's post-unwind dispatch failures (409 / 503 / ack)."""
+    if isinstance(exc, PipelineNotRunnableError):
+        # FAR-1528: the replay is refused at the create_run choke point when
+        # the target pipeline has since been archived/soft-deleted — 409
+        # Conflict, never a generic 500. Caught outside the begin-block so the
+        # snapshot rolls back with the refusal.
+        _raise_pipeline_not_runnable(
+            exc,
+            trigger_id=trigger_id,
+            log_event="webhooks.replay_webhook.pipeline_not_runnable",
+        )
+    if isinstance(exc, SnapshotLockNotAvailableError):
+        _raise_snapshot_lock_unavailable(
+            exc,
+            trigger_id=trigger_id,
+            trigger=state.trigger,
+            log_event="webhooks.replay_webhook.snapshot_lock_busy",
+            code=_CODE_WEBHOOKS_REPLAY_WEBHOOK,
+        )
+    # Concurrent same-trigger replays serialize on the engine's advisory lock;
+    # the loser is recorded AFTER the unwind in a fresh transaction (see
+    # _replay_busy_path) and only then acked 2xx.
+    ack = await _replay_busy_path(
+        trigger_id=trigger_id,
+        trigger=state.trigger,
+        org_id=state.org_id,
+        event_id=event_id,
+    )
+    if ack is not None:
+        return ack
+    # Defensive: TriggerBusyError can only fire after the bootstrap helper
+    # resolved the org — refuse loudly rather than false-ack.
+    _log.error("webhooks.replay_webhook.trigger_busy_unresolvable trigger=%s", trigger_id)
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Pipeline busy — delivery not accepted; retry",
+        headers={"Retry-After": "5"},
+    ) from None
+
+
+async def _raise_unexpected_delivery_error(
+    exc: Exception,
+    *,
+    trigger_id: uuid.UUID,
+    state: _WebhookState,
+    event_prefix: str,
+    log_label: str,
+    code: str,
+    db_detail: str,
+    raw_body: bytes | None = None,
+    raw_payload: dict[str, Any] | None = None,
+    source_event_id: uuid.UUID | None = None,
+) -> NoReturn:
+    """The shared tail of both routes' ladders (refs refusal, DB map, 500)."""
+    if isinstance(exc, WorkItemRefsRequiredHTTPError):
+        # FAR-1916: a ``work_item_refs_required`` pipeline refused the
+        # delivery. The engine's in-transaction ``required_refs_missing``
+        # write rolls back with the unwinding 422, so re-record the refusal in
+        # a FRESH transaction AFTER the unwind — the rejected delivery stays
+        # auditable, never silent. The typed 422 is re-raised for the sender.
+        #
+        # This is a thin subclass of ``HTTPException`` (422) so it MUST be
+        # handled BEFORE the generic HTTPException passthrough below.
+        _log.info(
+            "%s.required_refs_missing trigger=%s pipeline=%s",
+            event_prefix,
+            trigger_id,
+            exc.pipeline_id,
+        )
+        await _record_rejected_delivery(
+            kind="required_refs_missing",
+            trigger_id=trigger_id,
+            org_id=state.org_id,
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+            source_event_id=source_event_id,
+        )
+        raise
+    if isinstance(exc, (ProgrammingError, SQLAlchemyError)):
+        _raise_webhook_db_error(exc, code=code, detail=db_detail)
+    if isinstance(exc, HTTPException):
+        raise
+    _log.exception(f"{log_label} failed")
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=MSG_INTERNAL_SERVER_ERROR,
+    ) from None
+
+
 # FAR-1472 exemption (kept in audit_coverage_baseline.txt): the principal here
 # is OPTIONAL - HMAC-less triggers accept unauthenticated calls by design, and
 # an HMAC-verified caller carries no Modulo credential. audited() takes a
@@ -784,401 +1446,75 @@ async def receive_webhook(
     raw_body = await request.body()
     hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
     modulo_timestamp = request.headers.get("X-Modulo-Timestamp") or str(int(time.time()))
-    trigger: Trigger | None = None
-    org_id: uuid.UUID | None = None
-    guardrail_block_detail: str | None = None
-    ci_failure_coalesced = False
-    event_not_accepted = False
-    # Declared here so the post-transaction helper call can reference it; it
-    # stays None exactly when one of the in-transaction catches fired (no run
-    # was created) — those paths return/raise before it is read.
-    run: Any = None
-
-    try:
-        raw_payload: dict[str, Any] = await request.json()
-        if not isinstance(raw_payload, dict):
-            raise TypeError("not a JSON object")
-    except Exception as exc:
-        _log.exception(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Request body must be a JSON object",
-        ) from exc
-
-    if system_engine_is_fallback():
-        # No modulo_system role provisioned: the BYPASSRLS bootstrap read
-        # would silently match zero rows and every delivery would 404. Refuse
-        # loudly (same contract as admin_rotation's system-role check) — 503
-        # is distinguishable from a genuine 404.
-        log_service_unavailable(
-            "system_bootstrap_degraded",
-            route=_CODE_WEBHOOKS_RECEIVE_WEBHOOK,
-            detail="system database not provisioned; trigger delivery unavailable",
-            level=logging.ERROR,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="System database not provisioned; trigger delivery unavailable",
-        )
+    raw_payload = await _parse_webhook_body(request)
+    _require_system_engine(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
+    state = _WebhookState()
 
     try:
         async with session.begin():
-            from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
-
-            # Bootstrap via the shared system-session helper (FAR-523): the
-            # trigger read must precede any RLS org context on Postgres; the
-            # helper 404s a principal referencing another org's trigger.
-            trigger, org_id = await load_trigger_and_org_global(
-                system_session, trigger_id, principal.organisation_id if principal else None
-            )
-
-            # FAR-1484: the org is resolved HERE (derived from the trigger row,
-            # so it always exists once the bootstrap returned). Bind before any
-            # further work so every ERROR from this point on — HMAC decrypt,
-            # snapshot, DB — is attributed instead of dropped.
-            _bind_webhook_org_context(request, org_id)
-            await set_rls_org(session, org_id)
-            await set_rls_execution_context(session)
-
-            # Route-level timestamp + HMAC validation (see
-            # _verify_webhook_auth; raises the same typed errors). Ordered
-            # after the bootstrap and BEFORE the snapshot/dedup work so an
-            # unauthenticated delivery never touches pipeline_snapshots or
-            # webhook_dedup_hashes.
-            await _verify_webhook_auth(
-                request=request,
-                trigger_id=trigger_id,
-                trigger=trigger,
+            await _receive_webhook_intake(
                 session=session,
-                org_id=org_id,
+                system_session=system_session,
+                principal=principal,
+                trigger_id=trigger_id,
+                request=request,
                 raw_body=raw_body,
+                raw_payload=raw_payload,
                 hmac_signature=hmac_signature,
                 modulo_timestamp=modulo_timestamp,
+                state=state,
             )
-
-            try:
-                # Pause pre-check BEFORE the snapshot and dedup work — a paused
-                # delivery must not touch pipeline_snapshots, webhook_dedup_hashes,
-                # or create a run. The inner catch is the SINGLE writer of the
-                # ``paused`` TriggerEvent; it commits with this transaction.
-                if trigger.active:
-                    await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="webhook")
-
-                snapshot = await create_snapshot_from_live_graph(
-                    session, pipeline_id=trigger.pipeline_id, account_id=None
-                )
-                if snapshot is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail="Failed to create pipeline snapshot for webhook trigger",
-                    )
-
-                run, _, _input_payload = await _trigger_engine.handle_webhook(
-                    session,
-                    trigger_id=trigger_id,
-                    org_id=org_id,
-                    raw_body=raw_body,
-                    raw_payload=raw_payload,
-                    hmac_signature=hmac_signature,
-                    modulo_timestamp=modulo_timestamp,
-                    snapshot_id=snapshot.id,
-                )
-            except TriggersPausedError:
-                # Safe event write: an orphan trigger whose org row was
-                # HARD-deleted must not attempt the TriggerEvent INSERT (it
-                # would violate the organisations FK -> 503). Fail-closed with
-                # no event row and no crash.
-                if not await _org_row_exists(session, org_id):
-                    _log.warning(
-                        "webhooks.receive_webhook: org %s missing — skipping paused event write for trigger %s",
-                        org_id,
-                        trigger_id,
-                    )
-                    return {"status": "paused"}
-                paused_event = TriggerEvent(
-                    organisation_id=org_id,
-                    trigger_id=trigger.id,
-                    trigger_type="webhook",
-                    raw_payload_hash=sha256_hex(raw_body),
-                    validation_result="paused",
-                )
-                session.add(paused_event)
-                await session.flush()
-                return {"status": "paused"}
-            except CiFailureCoalescedError:
-                # FAR-1034: the engine wrote the ``coalesced`` TriggerEvent
-                # (and the coalesce dedup marker row) INSIDE this transaction
-                # and then raised, because the delivery was HANDLED as a no-op
-                # — NOT rejected. Catching here (mirroring the
-                # GuardrailBlockedAtIntakeError pattern) lets the transaction
-                # COMMIT so the audit event and the suppression marker survive,
-                # then the 202 handled-ack below is returned AFTER the
-                # transaction. This is deliberate: unlike the canonical
-                # byte-dedup path (DuplicateWebhookError, rolled back so a
-                # truly identical re-send re-evaluates), the coalesce marker is
-                # the whole point — it MUST persist to keep suppressing within
-                # the window.
-                ci_failure_coalesced = True
-            except GuardrailBlockedAtIntakeError as exc:
-                # The engine wrote the ``guardrail_blocked`` TriggerEvent and
-                # stored the raw payload INSIDE this transaction. Catch here
-                # (mirroring the paused pattern) so the transaction COMMITS and
-                # the event survives, then surface the 400 after the
-                # transaction — the delivery is reject-and-retry, NOT
-                # acked-as-accepted, and no run was created.
-                guardrail_block_detail = exc.detail
-            except EventNotAcceptedError:
-                # The engine wrote the ``event_type_not_accepted``
-                # TriggerEvent INSIDE this transaction. Catch here (mirroring
-                # the GuardrailBlockedAtIntakeError pattern) so the
-                # transaction COMMITS and the audit event survives — an
-                # invisible rejection is worse than a typed 400. The 400 is
-                # surfaced AFTER the transaction (reject-and-retry, not ack).
-                event_not_accepted = True
-    except TriggerNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND) from exc
-    except TriggerInactiveError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND) from exc
-    except TriggerConfigInvalidError as exc:
-        _log.warning(
-            "webhooks.receive_webhook.trigger_config_invalid",
-            extra={"trigger_id": str(trigger_id)},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Trigger configuration is invalid",
-        ) from exc
-    except TimestampExpiredError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="X-Modulo-Timestamp is outside the ±300s replay window",
-        ) from exc
-    except HmacValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="HMAC signature verification failed",
-        ) from exc
-    except DuplicateWebhookError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Duplicate webhook payload",
-        ) from exc
-    except ConcurrentRunLimitError as exc:
-        # FAR-1863: at the trigger's declared cap the delivery is REFUSED (no
-        # run), never accepted-and-queued. The engine's in-transaction
-        # ``concurrency_limit_reached`` write rolls back with the unwound main
-        # transaction (the PipelineBackpressureError pattern), so re-record the
-        # refusal + raw payload in a FRESH transaction AFTER the unwind — the
-        # delivery stays auditable and replayable, never silent. The 429 is
-        # reject-and-retry, so it carries a Retry-After (mirroring the busy
-        # refusal) and the sender re-delivers once a slot frees.
-        _log.info(
-            "webhooks.receive_webhook.concurrent_limit_refused trigger=%s limit=%s",
-            trigger_id,
-            exc.limit,
-        )
-        await _record_rejected_delivery(
-            kind="concurrency",
-            trigger_id=trigger_id,
-            org_id=org_id,
-            raw_body=raw_body,
-            raw_payload=raw_payload,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Concurrent run limit of {exc.limit} reached",
-            headers={"Retry-After": "5"},
-        ) from exc
-    except PipelineBackpressureError as exc:
-        # FAR-604: the pipeline's pending queue is over the depth/age
-        # backpressure limits — refuse the delivery so the sender retries
-        # instead of ratcheting the queue further.
-        #
-        # The engine's ``backpressure_skipped`` event write happened INSIDE the
-        # (now unwound) main transaction, so it rolled back with the refusal —
-        # re-record the event + raw payload in a FRESH transaction
-        # (_record_rejected_delivery, the TriggerBusyError post-unwind pattern)
-        # BEFORE raising the 429, or the skip is invisible, contradicting the
-        # "auditable, never silent" contract. Deliberately NOT caught inside
-        # the begin-block: swallowing there would COMMIT the dedup insert, so
-        # a byte-identical sender retry would be deduped instead of
-        # re-evaluated.
-        _log.info(
-            "webhooks.receive_webhook.backpressure_refused trigger=%s pipeline=%s reason=%s",
-            trigger_id,
-            trigger.pipeline_id if trigger is not None else None,
-            exc.reason,
-        )
-        await _record_rejected_delivery(
-            kind="backpressure",
-            trigger_id=trigger_id,
-            org_id=org_id,
-            raw_body=raw_body,
-            raw_payload=raw_payload,
-            reason=exc.reason,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=str(exc),
-        ) from exc
-    except PipelineRateLimitError as exc:
-        # FAR-1916 (receive mirror): the pipeline's configured rate limit
-        # refused the delivery. The engine writes the ``rate_limited``
-        # TriggerEvent INSIDE the main transaction (both raise sites), so that
-        # write rolls back with the unwound transaction — re-record the refusal
-        # + raw payload in a FRESH transaction AFTER the unwind
-        # (_record_rejected_delivery, the concurrency/backpressure pattern), or
-        # a rate-limited delivery is refused but invisible in the event log.
-        # The 429 status/detail contract is unchanged; unlike the busy and
-        # concurrency refusals this arm has never carried a Retry-After, and
-        # this fix deliberately does not add one.
-        _log.info(
-            "webhooks.receive_webhook.rate_limited trigger=%s pipeline=%s",
-            trigger_id,
-            exc.pipeline_id,
-        )
-        await _record_rejected_delivery(
-            kind="rate_limited",
-            trigger_id=trigger_id,
-            org_id=org_id,
-            raw_body=raw_body,
-            raw_payload=raw_payload,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=str(exc),
-        ) from exc
-    except PipelineNotRunnableError as exc:
-        # FAR-1528: the delivery is refused at the create_run choke point when
-        # the target pipeline is archived/soft-deleted — 409 Conflict, never a
-        # generic 500. Deliberately caught OUTSIDE the
-        # begin-block (the PipelineBackpressureError pattern): the snapshot
-        # created above rolls back with the refusal, and the sender gets a
-        # clear, non-retryable answer instead of a crash.
-        _log.info(
-            "webhooks.receive_webhook.pipeline_not_runnable trigger=%s pipeline=%s state=%s",
-            trigger_id,
-            exc.pipeline_id,
-            exc.state,
-        )
-        raise pipeline_not_runnable_http(exc) from None
-    except SnapshotLockNotAvailableError as exc:
-        from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS
-
-        _log.warning(
-            "webhooks.receive_webhook.snapshot_lock_busy trigger=%s pipeline=%s attempts=%s (FAR-527)",
-            trigger_id,
-            trigger.pipeline_id if trigger is not None else None,
-            SNAPSHOT_LOCK_ATTEMPTS,
-        )
-        log_service_unavailable(
-            "snapshot_lock_unavailable",
+    except (
+        TriggerNotFoundError,
+        TriggerInactiveError,
+        TriggerConfigInvalidError,
+        TimestampExpiredError,
+        HmacValidationError,
+        DuplicateWebhookError,
+    ) as exc:
+        _raise_intake_http_error(exc, trigger_id=trigger_id, code=_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
+    except (ConcurrentRunLimitError, PipelineBackpressureError, PipelineRateLimitError) as exc:
+        await _raise_receive_refusal(
             exc,
-            route=_CODE_WEBHOOKS_RECEIVE_WEBHOOK,
-            detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — "
-                "retry the webhook delivery"
-            ),
-        ) from exc
-    except TriggerBusyError:
-        # Concurrent same-trigger deliveries serialize on the engine's
-        # advisory lock. The loser is NOT executed and NOT auto-queued: the
-        # engine raises BEFORE any TriggerEvent is written and the main
-        # transaction rolls back, so the busy delivery is recorded here —
-        # AFTER the unwind — in a fresh transaction
-        # (_record_rejected_delivery: a ``concurrency_limit_reached`` event +
-        # the raw payload, making it visible in the event log and replayable).
-        # The 2xx ack is honest because of that recording: 2xx suppresses
-        # sender retries (Slack) BY DESIGN, and replay is the recovery path,
-        # not a sender retry.
-        _log.info(
-            "webhooks.receive_webhook.trigger_busy trigger=%s pipeline=%s",
-            trigger_id,
-            trigger.pipeline_id if trigger is not None else None,
-        )
-        recorded = await _record_rejected_delivery(
-            kind="busy",
             trigger_id=trigger_id,
-            org_id=org_id,
+            state=state,
             raw_body=raw_body,
             raw_payload=raw_payload,
         )
-        if recorded:
-            return {"run_id": None, "status": "queued", "detail": BUSY_ACK_DETAIL}
-        # Defensive: TriggerBusyError can only fire after the bootstrap
-        # helper resolved the org. If it somehow did not, there is nothing to
-        # record against — refuse so the sender retries (never a false ack).
-        _log.error("webhooks.receive_webhook.trigger_busy_unresolvable trigger=%s", trigger_id)
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Pipeline busy — delivery not accepted; retry",
-            headers={"Retry-After": "5"},
-        ) from None
-    except ProgrammingError:
-        _log.exception(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "webhooks.receive_webhook")
-        log_service_unavailable(
-            "db_transient",
+    except (PipelineNotRunnableError, SnapshotLockNotAvailableError, TriggerBusyError) as exc:
+        return await _handle_receive_dispatch_failure(
             exc,
-            route=_CODE_WEBHOOKS_RECEIVE_WEBHOOK,
-            detail="transient database error; webhook delivery failed closed",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_OPERATION_FAILED,
-        ) from None
-    except WorkItemRefsRequiredHTTPError as exc:
-        # FAR-1916: a ``work_item_refs_required`` pipeline refused the delivery.
-        # The engine's in-transaction ``required_refs_missing`` write rolls back
-        # with the unwinding 422, so re-record the refusal (with the raw body)
-        # in a FRESH transaction AFTER the unwind — the rejected delivery stays
-        # auditable, never silent. The typed 422 is re-raised for the sender.
-        #
-        # This is a thin subclass of ``HTTPException`` (422) so it MUST be
-        # caught BEFORE the generic passthrough arm below; the pass-through
-        # contract for every other HTTPException is unchanged.
-        _log.info(
-            "webhooks.receive_webhook.required_refs_missing trigger=%s pipeline=%s",
-            trigger_id,
-            exc.pipeline_id,
-        )
-        await _record_rejected_delivery(
-            kind="required_refs_missing",
             trigger_id=trigger_id,
-            org_id=org_id,
+            state=state,
             raw_body=raw_body,
             raw_payload=raw_payload,
         )
-        raise
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("receive_webhook failed")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_INTERNAL_SERVER_ERROR,
-        ) from None
+    except Exception as exc:
+        await _raise_unexpected_delivery_error(
+            exc,
+            trigger_id=trigger_id,
+            state=state,
+            event_prefix="webhooks.receive_webhook",
+            log_label="receive_webhook",
+            code=_CODE_WEBHOOKS_RECEIVE_WEBHOOK,
+            db_detail="transient database error; webhook delivery failed closed",
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+        )
 
+    if state.paused_ack is not None:
+        return state.paused_ack
     # Post-transaction outcome: the three commit-then-reject/handle paths
     # (guardrail-blocked 400, FAR-1034 coalesced 202 ack, event-type 400),
     # the FAR-213 guardrail-blocked 422, or the background dispatch + 202 ack.
     return _dispatch_or_ack(
-        run=run,
+        run=state.run,
         trigger_id=trigger_id,
-        org_id=org_id,
+        org_id=state.org_id,
         background_tasks=background_tasks,
-        guardrail_block_detail=guardrail_block_detail,
-        ci_failure_coalesced=ci_failure_coalesced,
-        event_not_accepted=event_not_accepted,
+        guardrail_block_detail=state.guardrail_block_detail,
+        ci_failure_coalesced=state.ci_failure_coalesced,
+        event_not_accepted=state.event_not_accepted,
     )
 
 
@@ -1247,294 +1583,60 @@ async def replay_webhook(
         # principal (recorded before the org is resolved, read at teardown).
         bind_audit_actor_source(request, "authenticated")
 
-    trigger: Trigger | None = None
-    org_id: uuid.UUID | None = None
-    event_not_accepted = False
-    # Declared here so the post-transaction helper call can reference it; it
-    # stays None exactly when event_not_accepted fired (no run was created) —
-    # that path raises before it is read.
-    run: Any = None
-    if system_engine_is_fallback():
-        # No modulo_system role provisioned: the BYPASSRLS bootstrap read
-        # would silently match zero rows and every delivery would 404. Refuse
-        # loudly (same contract as admin_rotation's system-role check) — 503
-        # is distinguishable from a genuine 404.
-        log_service_unavailable(
-            "system_bootstrap_degraded",
-            route=_CODE_WEBHOOKS_REPLAY_WEBHOOK,
-            detail="system database not provisioned; trigger delivery unavailable",
-            level=logging.ERROR,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="System database not provisioned; trigger delivery unavailable",
-        )
+    _require_system_engine(_CODE_WEBHOOKS_REPLAY_WEBHOOK)
+    state = _WebhookState()
 
     try:
         async with session.begin():
-            from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
-
-            # Bootstrap via the shared system-session helper (FAR-523): the
-            # trigger read must precede any RLS org context on Postgres; the
-            # helper 404s a principal referencing another org's trigger.
-            trigger, org_id = await load_trigger_and_org_global(
-                system_session, trigger_id, principal.organisation_id if principal else None
+            await _replay_webhook_intake(
+                session=session,
+                system_session=system_session,
+                principal=principal,
+                trigger_id=trigger_id,
+                event_id=event_id,
+                request=request,
+                state=state,
             )
-
-            # FAR-1484: the org is resolved HERE (derived from the trigger row,
-            # so it always exists once the bootstrap returned). Bind before any
-            # further work so every ERROR from this point on — HMAC decrypt,
-            # snapshot, DB — is attributed instead of dropped.
-            _bind_webhook_org_context(request, org_id)
-            await set_rls_org(session, org_id)
-            await set_rls_execution_context(session)
-
-            if principal is None:
-                # ADR 047: unauthenticated replay requires a valid HMAC
-                # signature over the STORED payload (see _verify_replay_auth;
-                # raises the same typed errors).
-                await _verify_replay_auth(
-                    request=request,
-                    trigger_id=trigger_id,
-                    trigger=trigger,
-                    session=session,
-                    org_id=org_id,
-                    event_id=event_id,
-                )
-
-            try:
-                # Pause pre-check AFTER principal auth / trigger load, BEFORE the
-                # snapshot — a paused org's replay is dropped with a committed
-                # ``paused`` TriggerEvent reusing the ORIGINAL event's hash.
-                if trigger.active:
-                    await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="webhook")
-
-                snapshot = await create_snapshot_from_live_graph(
-                    session, pipeline_id=trigger.pipeline_id, account_id=None
-                )
-                if snapshot is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail="Failed to create pipeline snapshot for webhook replay",
-                    )
-
-                run, _, _input_payload = await _trigger_engine.replay_event(
-                    session,
-                    event_id=event_id,
-                    org_id=org_id,
-                    snapshot_id=snapshot.id,
-                )
-            except TriggersPausedError:
-                # The paused event write commits with THIS transaction (the
-                # helper is called from inside the begin-block); see
-                # _replay_paused_path for the safe-event-write contract.
-                return await _replay_paused_path(
-                    session=session,
-                    trigger_id=trigger_id,
-                    trigger=trigger,
-                    org_id=org_id,
-                    event_id=event_id,
-                )
-            except EventNotAcceptedError:
-                # The engine wrote the ``event_type_not_accepted``
-                # TriggerEvent INSIDE this transaction. Catch here (mirroring
-                # the GuardrailBlockedAtIntakeError / TriggersPausedError
-                # patterns) so the transaction COMMITS and the audit event
-                # survives — an invisible rejection is worse than a typed 400.
-                # The 400 is surfaced AFTER the transaction (reject-and-retry,
-                # not ack).
-                event_not_accepted = True
-    except TimestampExpiredError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="X-Modulo-Timestamp is outside the ±300s replay window",
-        ) from exc
-    except HmacValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="HMAC signature verification failed",
-        ) from exc
-    except ReplayNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger event not found") from exc
-    except TriggerNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND) from exc
-    except TriggerInactiveError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND) from exc
-    except PipelineNotRunnableError as exc:
-        # FAR-1528: the replay is refused at the create_run choke point when
-        # the target pipeline has since been archived/soft-deleted — 409
-        # Conflict, never a generic 500. Caught outside the
-        # begin-block so the snapshot rolls back with the refusal.
-        _log.info(
-            "webhooks.replay_webhook.pipeline_not_runnable trigger=%s pipeline=%s state=%s",
-            trigger_id,
-            exc.pipeline_id,
-            exc.state,
-        )
-        raise pipeline_not_runnable_http(exc) from None
-    except TriggerConfigInvalidError as exc:
-        _log.warning(
-            "webhooks.replay_webhook.trigger_config_invalid",
-            extra={"trigger_id": str(trigger_id)},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Trigger configuration is invalid",
-        ) from exc
-    except DuplicateWebhookError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Duplicate webhook payload",
-        ) from exc
-    except ConcurrentRunLimitError as exc:
-        # FAR-1904: the replay mirror of receive_webhook's FAR-1863 post-unwind
-        # re-record. The engine's in-transaction ``concurrency_limit_reached``
-        # write rolls back with the unwound main transaction, so re-record the
-        # refusal in a FRESH transaction AFTER the unwind — the refused replay
-        # stays auditable, never silent (a bare 429 left no trace at all). The
-        # original event's payload already exists, so the re-record carries its
-        # hash via ``source_event_id`` (the _replay_busy_path busy-replay shape)
-        # and stores no duplicate payload row. The 429 is reject-and-retry, so
-        # it carries a Retry-After (the receive path's shape) and the caller
-        # re-fires once a slot frees.
-        _log.info(
-            "webhooks.replay_webhook.concurrent_limit_refused trigger=%s limit=%s",
-            trigger_id,
-            exc.limit,
-        )
-        await _record_rejected_delivery(
-            kind="concurrency",
-            trigger_id=trigger_id,
-            org_id=org_id,
-            source_event_id=event_id,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Concurrent run limit of {exc.limit} reached",
-            headers={"Retry-After": "5"},
-        ) from exc
-    except SnapshotLockNotAvailableError as exc:
-        from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS
-
-        _log.warning(
-            "webhooks.replay_webhook.snapshot_lock_busy trigger=%s pipeline=%s attempts=%s (FAR-527)",
-            trigger_id,
-            trigger.pipeline_id if trigger is not None else None,
-            SNAPSHOT_LOCK_ATTEMPTS,
-        )
-        log_service_unavailable(
-            "snapshot_lock_unavailable",
+    except (
+        TimestampExpiredError,
+        HmacValidationError,
+        ReplayNotFoundError,
+        TriggerNotFoundError,
+        TriggerInactiveError,
+        TriggerConfigInvalidError,
+        DuplicateWebhookError,
+    ) as exc:
+        _raise_intake_http_error(exc, trigger_id=trigger_id, code=_CODE_WEBHOOKS_REPLAY_WEBHOOK)
+    except (PipelineNotRunnableError, SnapshotLockNotAvailableError, TriggerBusyError) as exc:
+        return await _handle_replay_dispatch_failure(
             exc,
-            route=_CODE_WEBHOOKS_REPLAY_WEBHOOK,
-            detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — "
-                "retry the webhook delivery"
-            ),
-        ) from exc
-    except TriggerBusyError:
-        # Concurrent same-trigger replays serialize on the engine's advisory
-        # lock; the loser is recorded AFTER the unwind in a fresh transaction
-        # (see _replay_busy_path) and only then acked 2xx.
-        ack = await _replay_busy_path(
             trigger_id=trigger_id,
-            trigger=trigger,
-            org_id=org_id,
+            state=state,
             event_id=event_id,
         )
-        if ack is not None:
-            return ack
-        # Defensive: TriggerBusyError can only fire after the bootstrap
-        # helper resolved the org — refuse loudly rather than false-ack.
-        _log.error("webhooks.replay_webhook.trigger_busy_unresolvable trigger=%s", trigger_id)
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Pipeline busy — delivery not accepted; retry",
-            headers={"Retry-After": "5"},
-        ) from None
-    except ProgrammingError:
-        _log.exception(_CODE_WEBHOOKS_REPLAY_WEBHOOK)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, _CODE_WEBHOOKS_REPLAY_WEBHOOK)
-        log_service_unavailable(
-            "db_transient",
+    except (ConcurrentRunLimitError, PipelineRateLimitError) as exc:
+        await _raise_replay_refusal(exc, trigger_id=trigger_id, state=state, event_id=event_id)
+    except Exception as exc:
+        await _raise_unexpected_delivery_error(
             exc,
-            route=_CODE_WEBHOOKS_REPLAY_WEBHOOK,
-            detail="transient database error; webhook replay failed closed",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_OPERATION_FAILED,
-        ) from None
-    except PipelineRateLimitError as exc:
-        # FAR-1916: the pipeline's configured rate limit refused the replay.
-        # The engine's in-transaction ``rate_limited`` write rolls back with the
-        # unwound main transaction, so re-record the refusal + the original
-        # event's payload hash in a FRESH transaction AFTER the unwind (the
-        # _replay_busy_path shape: no duplicate payload row) — the refused
-        # replay stays auditable, never silent. 429 reject-and-retry, so it
-        # carries a Retry-After consistent with the receive path's refusals.
-        _log.info(
-            "webhooks.replay_webhook.rate_limited trigger=%s pipeline=%s",
-            trigger_id,
-            exc.pipeline_id,
-        )
-        await _record_rejected_delivery(
-            kind="rate_limited",
             trigger_id=trigger_id,
-            org_id=org_id,
+            state=state,
+            event_prefix="webhooks.replay_webhook",
+            log_label="replay_webhook",
+            code=_CODE_WEBHOOKS_REPLAY_WEBHOOK,
+            db_detail="transient database error; webhook replay failed closed",
             source_event_id=event_id,
         )
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=str(exc),
-            headers={"Retry-After": "5"},
-        ) from exc
-    except WorkItemRefsRequiredHTTPError as exc:
-        # FAR-1916: a ``work_item_refs_required`` pipeline refused the replay.
-        # The engine's in-transaction ``required_refs_missing`` write rolls back
-        # with the unwinding 422, so re-record the refusal AFTER the unwind in a
-        # fresh transaction — carrying the ORIGINAL event's payload hash via
-        # ``source_event_id`` (the _replay_busy_path busy-replay shape, no
-        # duplicate payload row). The typed 422 is re-raised for the sender.
-        #
-        # A thin subclass of ``HTTPException`` (422), so it MUST be caught
-        # BEFORE the generic passthrough arm below.
-        _log.info(
-            "webhooks.replay_webhook.required_refs_missing trigger=%s pipeline=%s",
-            trigger_id,
-            exc.pipeline_id,
-        )
-        await _record_rejected_delivery(
-            kind="required_refs_missing",
-            trigger_id=trigger_id,
-            org_id=org_id,
-            source_event_id=event_id,
-        )
-        raise
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("replay_webhook failed")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_INTERNAL_SERVER_ERROR,
-        ) from None
 
+    if state.paused_ack is not None:
+        return state.paused_ack
     # Post-transaction outcome: the event-type 400, the FAR-213
     # guardrail-blocked 422, or the background dispatch + 202 ack.
     return _replay_ack(
-        run=run,
-        org_id=org_id,
+        run=state.run,
+        org_id=state.org_id,
         background_tasks=background_tasks,
-        event_not_accepted=event_not_accepted,
+        event_not_accepted=state.event_not_accepted,
     )
 
 
