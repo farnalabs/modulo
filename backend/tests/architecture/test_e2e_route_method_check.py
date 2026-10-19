@@ -320,14 +320,233 @@ def test_main_reports_setup_error_when_a_required_file_yields_nothing(monkeypatc
     assert _checker.main() == 2
 
 
+def test_second_callback_parameter_method_filter_is_detected() -> None:
+    # FAR-1847 round 2: ``page.route(url, async (route, request) => ...)`` is a
+    # real shape (frontend/tests/e2e/view-modes-admin.spec.ts). The Request is
+    # the SECOND parameter, so filtering only on the first silently missed it.
+    source = (
+        "await page.route('**/api/v1/views**', async (route, request) => {\n"
+        "  if (request.method() === 'GET') {\n"
+        "    await route.fulfill({ status: 200 })\n"
+        "  } else if (request.method() === 'POST') {\n"
+        "    await route.fulfill({ status: 201 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _calls(source)
+
+    assert [(call.method, call.path) for call in calls] == [
+        ("GET", "/api/v1/views"),
+        ("POST", "/api/v1/views"),
+    ]
+    assert all(call.kind == "interceptor" for call in calls)
+
+
+def test_hoisted_request_object_method_filter_is_detected() -> None:
+    # FAR-1847 round 2: ``const request = route.request(); if
+    # (request.method() === 'POST')`` is the shape in
+    # frontend/tests/e2e/settings-mcp-oauth.spec.ts:93,106.
+    source = (
+        "await page.route('**/api/v1/mcp/oauth/clients**', async (route) => {\n"
+        "  const request = route.request()\n"
+        "  if (request.method() === 'POST') {\n"
+        "    return route.fulfill({ status: 201 })\n"
+        "  }\n"
+        "  if (request.method() === 'DELETE') {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _calls(source)
+
+    assert [(call.method, call.path) for call in calls] == [
+        ("POST", "/api/v1/mcp/oauth/clients"),
+        ("DELETE", "/api/v1/mcp/oauth/clients"),
+    ]
+
+
+def test_reversed_second_callback_parameter_comparison_is_detected() -> None:
+    # The reversed form of the second-parameter filter must resolve too.
+    source = (
+        "await page.route('**/api/v1/views**', async (route, request) => {\n"
+        "  if ('GET' === request.method()) {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].method == "GET"
+    assert calls[0].path == "/api/v1/views"
+
+
+def test_anchored_regex_route_is_normalised_and_checked() -> None:
+    # FAR-1847 round 2: ``$`` was rejected by normalise_path, so an anchored
+    # regex registration was silently skipped - a stale PATCH would pass.
+    source = (
+        "await page.route(/\\/api\\/v1\\/pipelines\\/abc$/, (route) => {\n"
+        "  if (route.request().method() === 'PATCH') {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].path == "/api/v1/pipelines/abc"
+
+    violations = _violations(source)
+
+    assert len(violations) == 1
+    assert violations[0].call.method == "PATCH"
+
+
+def test_character_class_regex_route_is_normalised() -> None:
+    # The anchored + character-class form collapses to the same ``{param}``
+    # shape a string registration produces, and is checked like one.
+    source = (
+        "await page.route(/^\\/api\\/v1\\/pipelines\\/([^/]+)\\/graph$/, (route) => {\n"
+        "  if (route.request().method() === 'PATCH') {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].path == "/api/v1/pipelines/{param}/graph"
+
+    violations = _violations(source)
+
+    assert len(violations) == 1
+    assert "GET, PUT" in violations[0].detail
+
+
+def test_anchored_regex_plan_path_normalises() -> None:
+    # The REAL registration in feedback-inbox.spec.ts:23. It carries no method
+    # filter, so it yields no descriptor - but its path must resolve, proving it
+    # is no longer dropped before the filter is even considered.
+    path_info = _checker.extract_path("/\\/api\\/v1\\/plan$/")
+
+    assert path_info is not None
+    assert path_info[0] == "/api/v1/plan"
+
+
+def test_real_feedback_inbox_regex_registration_still_contributes() -> None:
+    # feedback-inbox.spec.ts registers ``/\/api\/v1\/feedback\/inbox/`` and has
+    # a bare ``if (method === 'GET')`` branch; normalising the anchored plan
+    # regex must not disturb that descriptor.
+    calls = [
+        call
+        for call in _checker.collect_calls()
+        if call.filename.endswith("feedback-inbox.spec.ts")
+        and call.method == "GET"
+        and call.path == "/api/v1/feedback/inbox"
+    ]
+
+    assert len(calls) == 1
+
+
+def test_api_shaped_route_that_cannot_be_normalised_is_noted() -> None:
+    # FAR-1847 round 2: a route registration the checker cannot normalise must
+    # leave an explicit note, never disappear silently.
+    notes: list[str] = []
+
+    calls = _checker.extract_http_calls(
+        "await page.route('/api/v1/bad path', (route) => {\n"
+        "  if (route.request().method() === 'GET') { return route.fulfill({ status: 200 }) }\n"
+        "})\n",
+        FILENAME,
+        notes,
+    )
+
+    assert not calls
+    assert len(notes) == 1
+    assert "could not be normalised statically" in notes[0]
+
+
+def test_concatenated_query_suffix_does_not_add_a_path_segment() -> None:
+    # FAR-1847 round 2: ``'/api/v1/runners/status' + query`` became
+    # ``.../status/{param}`` - a hard false positive.
+    live = _checker.build_live_routes({"/api/v1/runners/status": {"get": {}}})
+    source = "await apiFetch(apiBase, token, 'GET', '/api/v1/runners/status' + query)\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].path == "/api/v1/runners/status"
+    assert not _checker.find_violations(calls, live)
+
+
+def test_concatenated_ts_assertion_does_not_add_a_path_segment() -> None:
+    # ``'/api/v1/auth/me' as const`` is the same literal - no trailing variable.
+    live = _checker.build_live_routes({"/api/v1/auth/me": {"get": {}}})
+    source = "await apiFetch(apiBase, token, 'GET', '/api/v1/auth/me' as const)\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].path == "/api/v1/auth/me"
+    assert not _checker.find_violations(calls, live)
+
+
+def test_conventional_query_interpolation_names_are_not_path_segments() -> None:
+    # FAR-1847 round 2: ``${queryParams}`` (and the conventional siblings) were
+    # counted as a path segment because the allowlist only knew ``query``.
+    calls = []
+    for expression in ("queryParams", "params", "searchQuery", "queryString", "searchParams"):
+        source = f"await apiFetch(apiBase, token, 'GET', `/api/v1/pipelines${{{expression}}}`)\n"
+        extracted = _calls(source)
+        assert len(extracted) == 1
+        calls.append(extracted[0].path)
+
+    assert calls == ["/api/v1/pipelines"] * 5
+
+
+def test_query_interpolation_predicate_is_shared_with_concatenation() -> None:
+    # One predicate must govern both paths, so the concatenation form of the
+    # same conventional name resolves identically.
+    source = "await apiFetch(apiBase, token, 'GET', '/api/v1/pipelines' + queryParams)\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].path == "/api/v1/pipelines"
+
+
+def test_interceptor_combined_with_url_condition_on_a_specific_route_is_not_guessed() -> None:
+    # FAR-1847 round 2: the previous test used the catch-all ``**/api/v1/**``,
+    # which is skipped BEFORE method filters are read - it stayed green with
+    # ``_URL_CONDITION_RE`` deleted. This non-catch-all registration would be
+    # reported as a stale PATCH without the URL-condition guard.
+    source = (
+        "await page.route('**/api/v1/pipelines', (route) => {\n"
+        "  const url = route.request().url()\n"
+        "  if (route.request().method() === 'PATCH' && url.includes('/review')) {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    assert not _calls(source)
+
+
 def test_real_tree_scan_yields_plausible_descriptor_floor() -> None:
     # FAR-1847: the check must be pinned against the REAL tree, not only
     # synthetic sources. The floor is a MINIMUM, not an exact figure - it
     # guards against the extractor silently collapsing, so raise it when shapes
-    # are added; 113 were observed at green on this branch.
+    # are added; 119 were observed at green on this branch (113 before the
+    # round-2 shapes: the second callback parameter, the hoisted request
+    # object, and the anchored/character-class regex registrations).
     calls = _checker.collect_calls()
 
-    assert len(calls) >= 113
+    assert len(calls) >= 119
 
 
 def test_ticket_named_files_contribute_descriptors() -> None:

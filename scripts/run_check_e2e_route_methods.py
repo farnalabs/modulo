@@ -37,10 +37,13 @@ What is scanned (``frontend/tests/e2e/**/*.ts``):
 * ``route.request().method() === '<METHOD>'`` interceptor filters (and the
   reversed ``'<METHOD>' === route.request().method()`` form), resolved against
   the ``page.route('<url>', ...)`` registration that encloses them in the same
-  file/scope. The callback's parameter may be renamed, and a local variable
-  holding ``route.request().method()`` is resolved too. A comparison combined
-  with an in-callback URL test (``url.includes`` / ``url.endsWith``) is
-  skipped: its effective path lives in that condition, not in the
+  file/scope. The callback's parameters may be renamed and both are read: the
+  first is the route, the second is the request (``async (route, request) =>
+  ... request.method() === 'GET'``). A local variable holding the request
+  object (``const request = route.request()``) or the method result
+  (``const m = route.request().method()``) is resolved too. A comparison
+  combined with an in-callback URL test (``url.includes`` / ``url.endsWith``)
+  is skipped: its effective path lives in that condition, not in the
   registration, so the guard reports only what it can prove statically.
   ``!== '<METHOD>'`` filters are skipped too - they guard a fallback branch
   rather than selecting a method. Anything that cannot be resolved safely is
@@ -48,10 +51,16 @@ What is scanned (``frontend/tests/e2e/**/*.ts``):
   failure).
 
 Template placeholders (``${expr}``, ``:param``, ``{param}``) and glob
-wildcards normalise to one path-parameter segment; a leading interpolation
-before the ``/api/`` segment (``${apiBase}/api/v1/...``) is discarded, and a
-concatenation that ends in a variable (``'/api/v1/pipelines/' + id``) keeps a
-trailing wildcard. Query strings and fragments are stripped.
+wildcards normalise to one path-parameter segment, and an anchored
+regex-literal registration (``/\\/api\\/v1\\/plan$/``) is normalised the same
+way (anchors stripped, parameter-ish groups/classes collapsed to ``{param}``).
+A leading interpolation before the ``/api/`` segment
+(``${apiBase}/api/v1/...``) is discarded, and a concatenation that ends in a
+genuine path variable (``'/api/v1/pipelines/' + id``) keeps a trailing
+wildcard. A trailing query-string variable (``'/api/v1/pipelines' + query``),
+a TypeScript assertion (``'/api/v1/auth/me' as const``) and a literal that
+already carries a ``?`` add no segment. Query strings and fragments are
+stripped.
 
 Exit codes: 0 clean, 1 stale descriptors (one line each, with file:line, the
 method, the path and the closest live route), 2 setup/tool error - including an
@@ -85,8 +94,40 @@ _TEMPLATE_ENV = {
 _HTTP_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
 _WILDCARD = "{param}"
 _TEMPLATE_EXPR_RE = re.compile(r"\$\{[^{}]*\}")
-#: Interpolation names conventionally holding a query string, not a path segment.
-_QUERY_INTERPOLATION_RE = re.compile(r"(?:query|queryString|qs|search|searchParams)")
+#: Names conventionally holding a query string, not a path segment. Shared by
+#: the template-literal (``${queryParams}``) and concatenation-tail
+#: (``'/api/v1/pipelines' + query``) paths so the two cannot disagree.
+_QUERY_SUFFIX_NAMES = frozenset(
+    {
+        "query",
+        "queryobject",
+        "queryobj",
+        "queryparams",
+        "querystring",
+        "qs",
+        "params",
+        "search",
+        "searchparams",
+        "searchquery",
+        "searchterm",
+        "filters",
+    }
+)
+#: A query-suffix expression: a conventional identifier, optionally chained
+#: through a property/call (``queryParams.toString()``) or defaulted.
+_QUERY_SUFFIX_EXPR_RE = re.compile(
+    r"(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)"
+    r"(?:\s*(?:\?\.|\.)\s*[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\([^()]*\))?)*"
+    r"(?:\s*(?:\?\?|\|\|)\s*(?:''|\"\"|``))?"
+)
+#: A trailing TypeScript assertion (``as const``, ``as string``, ``satisfies X``).
+_TS_ASSERTION_RE = re.compile(r"(?:^|\s)(?:as|satisfies)\s+[^+\n]+$")
+#: Regex-literal route registrations: parameter-ish constructs.
+_REGEX_NAMED_GROUP_RE = re.compile(r"\(\?(?:[:=!]|<[A-Za-z_][A-Za-z0-9_]*>)[^()]*\)(?:[+*?]|\{\d+(?:,\d*)?\})?")
+_REGEX_GROUP_RE = re.compile(r"\((?:[^()\\]|\\.)*\)(?:[+*?]|\{\d+(?:,\d*)?\})?")
+_REGEX_CHAR_CLASS_RE = re.compile(r"\[[^\]]*\](?:[+*?]|\{\d+(?:,\d*)?\})?")
+_REGEX_SHORTHAND_RE = re.compile(r"\\[dDwWsS](?:[+*?]|\{\d+(?:,\d*)?\})?")
+_REGEX_ESCAPE_RE = re.compile(r"\\([^A-Za-z0-9])")
 _COLON_PARAM_RE = re.compile(r"(?<=/):[A-Za-z_][A-Za-z0-9_]*")
 _SQUASH_SLASH_RE = re.compile(r"/{2,}")
 _SEGMENT_RE = re.compile(r"[A-Za-z0-9._~%\-{}]+")
@@ -323,12 +364,58 @@ def _read_template(text: str, start: int) -> tuple[str, int]:
             # ``${query}`` / ``${searchParams}`` is conventionally a query-string
             # suffix, not a path segment - counting it as a segment would make a
             # live path look stale (``/api/v1/triggers${query}``).
-            if not _QUERY_INTERPOLATION_RE.fullmatch(expression):
+            if not _is_query_suffix(expression):
                 buffer.append(_WILDCARD)
             continue
         buffer.append(char)
         index += 1
     return "".join(buffer), length
+
+
+def _strip_ts_assertion(expression: str) -> str:
+    """Drop a trailing TypeScript assertion (``as const``, ``satisfies X``)."""
+    return _TS_ASSERTION_RE.sub("", expression.strip()).strip()
+
+
+def _is_query_suffix(expression: str) -> bool:
+    """True when *expression* is a conventional query-string suffix, not a path segment.
+
+    One predicate for BOTH the template-literal path (``${queryParams}``) and
+    the string-concatenation tail (``'/api/v1/pipelines' + query``), so the two
+    code paths cannot disagree about what counts as a query string.
+    """
+    text = _strip_ts_assertion(expression)
+    while text.startswith("(") and text.endswith(")"):
+        text = text[1:-1].strip()
+    text = text.lstrip("?&").strip()
+    if not text:
+        return False
+    if text.startswith(("`", "'", '"')):
+        # A string/template literal that begins with ``?``/``&`` is a query.
+        value, _ = _read_template(text, 0) if text[0] == "`" else _read_quoted(text, 0)
+        return value.lstrip().startswith(("?", "&"))
+    match = _QUERY_SUFFIX_EXPR_RE.fullmatch(text)
+    if match is None:
+        return False
+    return match.group("name").lower() in _QUERY_SUFFIX_NAMES
+
+
+def _tail_adds_path_segment(tail: str) -> bool:
+    """True when a non-literal concatenation tail appends a genuine path segment.
+
+    The tail is the source after the last string/template literal. A tail that
+    is only a TypeScript assertion adds no variable, and a tail whose appended
+    operands are all conventional query suffixes adds no path segment.
+    """
+    text = re.sub(r"//[^\n]*|/\*.*?\*/", "", tail, flags=re.DOTALL).strip()
+    operands: list[str] = []
+    for part in text.split("+"):
+        operand = _strip_ts_assertion(part.strip())
+        if operand:
+            operands.append(operand)
+    if not operands:
+        return False
+    return not all(_is_query_suffix(operand) for operand in operands)
 
 
 def _literal_method(expr: str) -> str | None:
@@ -347,10 +434,40 @@ def _regex_path(expr: str) -> str | None:
     stripped = expr.strip()
     if not stripped.startswith("/") or stripped.startswith("//"):
         return None
-    end = stripped.rfind("/")
-    if end <= 0:
+    match = re.fullmatch(r"/(.*)/([dgimsuvy]*)", stripped, flags=re.DOTALL)
+    if match is None:
         return None
-    return stripped[1:end].replace("\\/", "/")
+    return match.group(1).replace("\\/", "/")
+
+
+def _normalise_regex_path(source: str) -> str:
+    """Turn a regex-literal path into a matchable path.
+
+    Playwright accepts a RegExp for ``page.route``; the anchored and
+    character-class forms (``/\\/api\\/v1\\/plan$/``,
+    ``/\\/api\\/v1\\/pipelines\\/([^/]+)$/``) are common. Stripping the anchors
+    and collapsing parameter-ish constructs (groups, character classes,
+    shorthand classes) to one ``{param}`` segment lets the registration be
+    checked exactly like a string-registered route instead of being dropped.
+    """
+    text = source.strip()
+    text = text.removeprefix("^")
+    text = text.removeprefix("\\A")
+    text = text.removesuffix("$")
+    text = text.removesuffix("\\z")
+    text = text.removesuffix("\\Z")
+    text = text.replace("\\/", "/")
+    text = _REGEX_NAMED_GROUP_RE.sub(_WILDCARD, text)
+    text = _REGEX_GROUP_RE.sub(_WILDCARD, text)
+    text = _REGEX_CHAR_CLASS_RE.sub(_WILDCARD, text)
+    text = _REGEX_SHORTHAND_RE.sub(_WILDCARD, text)
+    # A trailing ``.*`` / ``.+`` is a prefix glob, not a path segment.
+    trailing = re.search(r"\.\s*[*+]\s*$", text)
+    if trailing is not None:
+        text = text[: trailing.start()] + "*"
+    # A bare wildcard that is a whole segment is a path parameter.
+    text = re.sub(r"(?<=/)\.(?=/|$)", _WILDCARD, text)
+    return _REGEX_ESCAPE_RE.sub(r"\1", text)
 
 
 def normalise_path(raw: str) -> tuple[str, bool, bool] | None:
@@ -412,8 +529,10 @@ def extract_path(expr: str) -> tuple[str, bool, bool] | None:
     Returns ``None`` for anything without a statically readable ``/api/`` path.
     """
     regex = _regex_path(expr)
-    if regex is not None and _API_PREFIX in regex:
-        return normalise_path(regex)
+    if regex is not None:
+        normalised_regex = _normalise_regex_path(regex)
+        if _API_PREFIX in normalised_regex:
+            return normalise_path(normalised_regex)
 
     fragments: list[tuple[str, int, int]] = []
     index = 0
@@ -444,11 +563,15 @@ def extract_path(expr: str) -> tuple[str, bool, bool] | None:
             joined += _WILDCARD
         joined += value
         previous_end = end
-    # A concatenation that ENDS in a variable (``'/api/v1/pipelines/' + id``)
-    # has a non-literal tail; truncating would collide the item route with the
-    # collection route, so keep the variable as a trailing path parameter.
+    # A concatenation that ENDS in a genuine path variable
+    # (``'/api/v1/pipelines/' + id``) has a non-literal tail; truncating would
+    # collide the item route with the collection route, so keep the variable as
+    # a trailing path parameter. A query-suffix variable
+    # (``'/api/v1/pipelines' + query``), a TypeScript assertion
+    # (``'/api/v1/auth/me' as const``) and a literal that already carries a
+    # ``?`` add NO segment.
     tail = re.sub(r"//[^\n]*|/\*.*?\*/", "", expr[previous_end:], flags=re.DOTALL)
-    if tail.strip():
+    if "?" not in joined and _tail_adds_path_segment(tail):
         joined = joined.rstrip("/") + "/" + _WILDCARD
     return normalise_path(joined)
 
@@ -476,25 +599,34 @@ def _enclosing_if_condition(text: str, masked: str, offset: int) -> str | None:
     return best[1] if best else None
 
 
-def _callback_param(handler: str) -> str | None:
-    """Return an inline callback's first parameter name (``None`` if not inline).
+def _callback_params(handler: str) -> list[str]:
+    """Return an inline callback's parameter names (``[]`` if not inline).
 
-    Handles ``(route) =>``, ``async (route, request) =>``, ``route =>``,
-    ``async function (route)`` and a renamed parameter such as ``(r) =>``.
+    Handles ``(route) =>``, ``async (route, request) =>``, typed params
+    (``(route: Route, request: Request) =>``), ``route =>``,
+    ``async function (route)`` and renamed parameters such as ``(r) =>``.
+
+    Both Playwright ``page.route`` parameters matter: the first is the route,
+    the second is the request, and either may carry the method filter.
     """
     parenthesised = re.search(
-        r"(?:async\s+)?(?:function\s*\w*\s*)?\(\s*([A-Za-z_$][A-Za-z0-9_$]*)",
+        r"(?:async\s+)?(?:function\s*\w*\s*)?\(([^()]*)\)\s*(?::[^=]*)?(?:=>|\{)",
         handler,
     )
-    if parenthesised is not None and "=>" in handler:
-        return parenthesised.group(1)
+    if parenthesised is None:
+        parenthesised = re.search(r"function\s*(?:\w+\s*)?\(([^()]*)\)", handler)
+    if parenthesised is not None:
+        names: list[str] = []
+        for piece in parenthesised.group(1).split(","):
+            name = piece.split(":", 1)[0].split("=", 1)[0].strip()
+            if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", name):
+                names.append(name)
+        if names:
+            return names
     bare = re.search(r"(?:async\s+)?([A-Za-z_$][A-Za-z0-9_$]*)\s*=>", handler)
     if bare is not None:
-        return bare.group(1)
-    function_word = re.search(r"function\s*(?:\w+\s*)?\(\s*([A-Za-z_$][A-Za-z0-9_$]*)", handler)
-    if function_word is not None:
-        return function_word.group(1)
-    return None
+        return [bare.group(1)]
+    return []
 
 
 def _method_comparison_re(operand: str) -> re.Pattern[str]:
@@ -512,6 +644,20 @@ def _variable_comparison_re(variable: str) -> re.Pattern[str]:
     return re.compile(
         rf"(?<![\w.$]){escaped}\s*(?:===?)\s*(['\"])([A-Za-z]+)\1"
         rf"|(['\"])([A-Za-z]+)\3\s*(?:===?)\s*{escaped}(?![\w$])"
+    )
+
+
+def _request_method_comparison_re(operand: str) -> re.Pattern[str]:
+    """Return the regex for ``<requestObject>.method() === '<METHOD>'`` and its reverse.
+
+    The second ``page.route`` callback parameter is the Request itself, so its
+    method is read directly (``request.method()``) rather than through
+    ``request().method()`` on the route.
+    """
+    escaped = re.escape(operand)
+    return re.compile(
+        rf"(?<![\w.$]){escaped}\s*\.\s*method\s*\(\s*\)\s*===?\s*(['\"])([A-Za-z]+)\1"
+        rf"|(['\"])([A-Za-z]+)\3\s*===\s*{escaped}\s*\.\s*method\s*\(\s*\)"
     )
 
 
@@ -553,14 +699,18 @@ def _extract_route_interceptors(
     registration, so it cannot be read statically here.
 
     Resolvable shapes: the inline receiver (``route.request().method()``,
-    including a renamed callback parameter and the reversed operand order) and
-    a local variable assigned from it (``const m = r.request().method();
-    if (m === 'PATCH')``). A registration whose handler is a bare identifier
-    is reported as an explicit note rather than silently skipped.
+    including a renamed callback parameter and the reversed operand order), the
+    second callback parameter (the Request: ``async (route, request) =>
+    request.method()``), a local variable holding the request object
+    (``const request = route.request()``), and a local variable holding the
+    method result (``const m = r.request().method(); if (m === 'PATCH')``). A
+    registration whose handler is a bare identifier, or whose API path cannot
+    be normalised statically, is reported as an explicit note rather than
+    silently skipped.
     """
     notes = notes if notes is not None else []
     calls: list[HttpCall] = []
-    registrations: list[tuple[str, int, int, int, int, str]] = []
+    registrations: list[tuple[str, int, int, int, int, tuple[str, ...]]] = []
     for match in _ROUTE_CALL_RE.finditer(masked):
         open_paren = match.end() - 1
         args = [span for span in _split_args(masked, open_paren) if text[span[0] : span[1]].strip()]
@@ -569,8 +719,18 @@ def _extract_route_interceptors(
         first = text[args[0][0] : args[0][1]].strip()
         path_info = extract_path(first)
         if path_info is None:
-            # Not a statically-readable path (e.g. the generic
-            # ``**/api/v1/**`` mock) - nothing specific to validate.
+            # Not a statically-readable path. An API-shaped registration that
+            # failed normalisation is noted (never silently dropped); a
+            # non-API mock (``**/*.png``) has nothing specific to validate.
+            regex_source = _regex_path(first)
+            api_shaped = _API_PREFIX in first or (
+                regex_source is not None and _API_PREFIX in _normalise_regex_path(regex_source)
+            )
+            if api_shaped:
+                notes.append(
+                    f"{filename}:{_line_of(text, match.start())}: page.route registration uses an API path "
+                    f"that could not be normalised statically; its method filter was not checked"
+                )
             continue
         path, trailing_glob, last_prefix = path_info
         if trailing_glob and path in ("/api", "/api/v1"):
@@ -578,41 +738,66 @@ def _extract_route_interceptors(
             # to validate - resolving its fallback branch would invent one.
             continue
         handler = text[args[-1][0] : args[-1][1]].strip()
-        parameter = _callback_param(handler)
-        if parameter is None:
+        params = _callback_params(handler)
+        if not params:
             notes.append(
                 f"{filename}:{_line_of(text, match.start())}: page.route handler is not an inline "
                 f"function; its method filter was not checked"
             )
             continue
-        registrations.append((path, int(trailing_glob), int(last_prefix), match.start(), args[-1][1], parameter))
+        registrations.append((path, int(trailing_glob), int(last_prefix), match.start(), args[-1][1], tuple(params)))
 
     seen: set[tuple[int, str, str]] = set()
-    for path, trailing_glob, last_prefix, span_start, span_end, parameter in registrations:
-        # A variable holding the request method, resolved within this handler.
-        variable_matches: dict[str, list[re.Match[str]]] = {}
-        for assignment in re.finditer(
-            rf"(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
-            rf"(?<![\w.$]){re.escape(parameter)}\s*\.\s*request\s*\(\s*\)\s*\.\s*method\s*\(\s*\)",
-            text[span_start:span_end],
-        ):
-            variable_matches[assignment.group(1)] = _resolved_method_comparisons(
-                text,
-                masked,
-                span_start,
-                span_end,
-                assignment.group(1),
-                _variable_comparison_re(assignment.group(1)),
+    for path, trailing_glob, last_prefix, span_start, span_end, params in registrations:
+        body = text[span_start:span_end]
+        route_parameter = params[0]
+        # The Request object: Playwright passes it as the callback's second
+        # parameter, and it is also commonly hoisted from ``route.request()``.
+        request_objects: list[str] = list(params[1:])
+        param_alternation = "|".join(re.escape(name) for name in dict.fromkeys(params))
+        request_objects.extend(
+            assignment.group(1)
+            for assignment in re.finditer(
+                rf"(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+                rf"(?<![\w.$])(?:{param_alternation})\s*\.\s*request\s*\(\s*\)",
+                body,
+            )
+        )
+        request_objects = list(dict.fromkeys(request_objects))
+
+        resolved: list[re.Match[str]] = list(
+            _resolved_method_comparisons(
+                text, masked, span_start, span_end, route_parameter, _method_comparison_re(route_parameter)
+            )
+        )
+        for request_object in request_objects:
+            resolved.extend(
+                _resolved_method_comparisons(
+                    text,
+                    masked,
+                    span_start,
+                    span_end,
+                    request_object,
+                    _request_method_comparison_re(request_object),
+                )
             )
 
-        direct = _resolved_method_comparisons(
-            text, masked, span_start, span_end, parameter, _method_comparison_re(parameter)
-        )
-        resolved = [(parameter, match) for match in direct]
-        for variable, matches in variable_matches.items():
-            resolved.extend((variable, match) for match in matches)
+        # A variable holding the request method, resolved within this handler.
+        receivers = list(dict.fromkeys([route_parameter, *request_objects]))
+        receiver_alternation = "|".join(re.escape(name) for name in receivers)
+        for assignment in re.finditer(
+            rf"(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+            rf"(?<![\w.$])(?:{receiver_alternation})(?:\s*\.\s*request\s*\(\s*\))?\s*\.\s*method\s*\(\s*\)",
+            body,
+        ):
+            variable = assignment.group(1)
+            resolved.extend(
+                _resolved_method_comparisons(
+                    text, masked, span_start, span_end, variable, _variable_comparison_re(variable)
+                )
+            )
 
-        for _, match in resolved:
+        for match in resolved:
             method = match.group(2) or match.group(4)
             if method is None or method.upper() not in _HTTP_METHODS:
                 continue
