@@ -618,8 +618,13 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
     # --- provider (model backend) codes -----------------------------------
     # Raw exception class names that executor's generic catch publishes
     # (``type(exc).__name__``) for LLM-node failures. ``provider.authentication``
-    # is permanent (a bad API key); the others are transient infra states and
-    # match the analogous connector.transient retryable conventions.
+    # and ``provider.billing`` are permanent (a bad/expired key, or an unfunded
+    # account); the others are transient infra states and match the analogous
+    # connector.transient retryable conventions. FAR-2006: a 401/402 from the
+    # provider gateway is detected from the retained sandbox output (opencode
+    # reports it as an error event / stderr line) — never as an
+    # ``AgentReturnContract`` failure, so without these two codes a whole night
+    # of provider refusals presented as a retryable ``sandbox.no_output_json``.
     "provider.unavailable": ErrorCodeSpec(
         error_class="provider",
         retryable=True,
@@ -630,7 +635,16 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="provider",
         retryable=False,
         alert_severity="critical",
-        guidance="The model provider rejected the API key.",
+        guidance="The model provider rejected the API key (invalid, expired, or revoked).",
+    ),
+    "provider.billing": ErrorCodeSpec(
+        error_class="provider",
+        retryable=False,
+        alert_severity="critical",
+        guidance=(
+            "The model provider refused the request for billing reasons (402 — insufficient funds, "
+            "quota exhausted, or payment required)."
+        ),
     ),
     "provider.rate_limited": ErrorCodeSpec(
         error_class="provider",

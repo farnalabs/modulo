@@ -14,7 +14,11 @@ from modulo.core.pipeline_engine.error_codes import (
     known_error_codes,
     map_legacy_code,
 )
-from modulo.core.pipeline_engine.model_backend_errors import classify_provider_error
+from modulo.core.pipeline_engine.model_backend_errors import (
+    NON_RETRYABLE_PROVIDER_CODES,
+    classify_provider_error,
+    non_retryable_provider_code,
+)
 
 # ---------------------------------------------------------------------------
 # Signature scan tests
@@ -70,6 +74,43 @@ class TestClassifyProviderError:
         """429 status code → model.rate_limited."""
         stdout = '{"type":"error","error":{"name":"HTTPError","data":{"message":"Too many requests","statusCode":429}}}'
         assert classify_provider_error(stdout) == "model.rate_limited"
+
+    def test_expired_api_key_plain_line_is_provider_authentication(self):
+        """FAR-2006 measured shape: a plain stderr line, not JSONL."""
+        stderr = 'HTTP 401 "This API key has expired"'
+        assert classify_provider_error(stderr) == "provider.authentication"
+
+    def test_incorrect_api_key_message_is_provider_authentication(self):
+        """The OpenAI-style message spelling also maps to provider.authentication."""
+        stdout = '{"type":"error","error":{"name":"APIError","data":{"message":"Incorrect API key","statusCode":401}}}'
+        assert classify_provider_error(stdout) == "provider.authentication"
+
+    def test_status_401_error_event_is_provider_authentication(self):
+        """A JSONL error event with statusCode 401 is an auth refusal."""
+        stdout = '{"type":"error","error":{"name":"APIError","data":{"message":"Unauthorized","statusCode":401}}}'
+        assert classify_provider_error(stdout) == "provider.authentication"
+
+    def test_insufficient_account_funds_plain_line_is_provider_billing(self):
+        """FAR-2006 measured shape: HTTP 402 'Insufficient account funds'."""
+        stderr = 'HTTP 402 "Insufficient account funds"'
+        assert classify_provider_error(stderr) == "provider.billing"
+
+    def test_status_402_error_event_is_provider_billing(self):
+        stdout = '{"type":"error","error":{"name":"APIError","data":{"message":"Payment required","statusCode":402}}}'
+        assert classify_provider_error(stdout) == "provider.billing"
+
+    def test_insufficient_quota_is_provider_billing(self):
+        """The provider-neutral quota spelling also maps to provider.billing."""
+        stdout = '{"type":"error","error":{"name":"APIError","data":{"message":"insufficient_quota"}}}'
+        assert classify_provider_error(stdout) == "provider.billing"
+
+    def test_unrelated_401_is_not_a_provider_refusal(self):
+        """A non-provider 401 (e.g. GitHub 'Bad credentials') must not match."""
+        assert classify_provider_error("HTTP 401 Bad credentials") is None
+
+    def test_agent_prose_is_not_a_provider_refusal(self):
+        """A phrase match needs an HTTP/JSON error context, not bare prose."""
+        assert classify_provider_error("My guess is the API key has expired, but the call never ran") is None
 
     def test_no_match_returns_none(self):
         """Unrecognised error signature → None (fail open)."""
@@ -154,6 +195,40 @@ class TestModelBackendErrorRegistry:
         assert spec.retryable is True
         assert is_retryable("model.rate_limited") is True
         assert map_legacy_code("model.rate_limited") == "model.rate_limited"
+
+    def test_provider_authentication_and_billing_are_known_non_retryable(self):
+        """FAR-2006: both provider refusals are registered and never retried."""
+        known = known_error_codes()
+        for code in ("provider.authentication", "provider.billing"):
+            assert code in known
+            spec = ERROR_CODE_REGISTRY[code]
+            assert spec.error_class == "provider"
+            assert spec.retryable is False
+            assert spec.alert_severity == "critical"
+            assert is_retryable(code) is False
+            assert map_legacy_code(code) == code
+            assert class_for(code) == "provider"
+            # The canonical dotted spelling is always among the variants.
+            assert code in expand_code_variants(code)
+        # The pre-existing auth alias still resolves to the same canonical code.
+        assert expand_code_variants("AuthenticationError") == {"provider.authentication", "AuthenticationError"}
+
+    def test_non_retryable_provider_code_helper(self):
+        """The shared helper returns only the permanent provider refusals."""
+        assert non_retryable_provider_code('HTTP 401 "This API key has expired"') == "provider.authentication"
+        assert non_retryable_provider_code('HTTP 402 "Insufficient account funds"') == "provider.billing"
+        # Transient provider codes keep their retry behaviour.
+        timeout = '{"type":"error","error":{"name":"UnknownError","data":{"message":"The operation timed out."}}}'
+        assert non_retryable_provider_code(timeout) is None
+        assert non_retryable_provider_code("some unrelated failure") is None
+        assert non_retryable_provider_code("") is None
+        assert non_retryable_provider_code(None) is None
+
+    def test_non_retryable_provider_codes_constant_matches_registry(self):
+        """The shipped constant and the registry cannot drift apart."""
+        assert {"provider.authentication", "provider.billing"} == NON_RETRYABLE_PROVIDER_CODES
+        for code in NON_RETRYABLE_PROVIDER_CODES:
+            assert ERROR_CODE_REGISTRY[code].retryable is False
 
     def test_legacy_aliases_resolve(self):
         """Legacy snake_case spellings map to the canonical dotted codes."""

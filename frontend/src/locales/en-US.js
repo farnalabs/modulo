@@ -4893,6 +4893,7 @@ export default {
     "provider": {
       "unavailable": "Provider unavailable",
       "authentication": "Authentication failed",
+      "billing": "Provider account unfunded",
       "rate_limited": "Provider rate limited",
       "connection": "Provider connection error"
     },
@@ -4972,6 +4973,7 @@ export default {
     "provider": {
       "unavailable": "The LLM provider is currently unavailable.",
       "authentication": "Authentication with the LLM provider failed.",
+      "billing": "The LLM provider refused the request for billing reasons (402 — insufficient funds, quota exhausted, or payment required). This failure is not retried.",
       "rate_limited": "The LLM provider returned a rate-limit error.",
       "connection": "A network error occurred while calling the LLM provider."
     },

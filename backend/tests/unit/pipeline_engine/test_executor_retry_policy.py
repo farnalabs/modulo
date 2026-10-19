@@ -226,6 +226,18 @@ def test_retry_after_policy_absent_on_excludes_hang_death():
     assert _retry_after_policy({"max_retries": 2}, "failed", "node_cancelled", hang_detail) is None
 
 
+def test_retry_after_policy_never_retries_provider_refusals():
+    """FAR-2006: a 401/402 provider refusal is excluded from EVERY policy shape.
+
+    A whole night ran at zero throughput because a 402 was retried three times
+    per run; the retry_policy must not re-enable that waste.
+    """
+    for code in ("provider.authentication", "provider.billing"):
+        assert _retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", code) is None
+        # Absent `on` (all events) coverage is equally excluded.
+        assert _retry_after_policy({"max_retries": 3}, "failed", code) is None
+
+
 def test_retry_after_policy_null_on_is_all_events():
     # An explicitly-null `on` behaves like an absent key (defensive: the write
     # sites reject null, but legacy/hand-edited rows may carry it).

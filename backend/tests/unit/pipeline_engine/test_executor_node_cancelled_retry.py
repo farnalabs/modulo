@@ -303,6 +303,119 @@ async def test_execute_reraises_sandbox_node_failed_error():
     registry.close.assert_called_once_with(run.id)
 
 
+async def test_execute_provider_billing_refusal_is_not_retried():
+    """FAR-2006: a 402 provider refusal is terminal on the FIRST attempt.
+
+    It arrives as the normally-retryable ``SandboxNodeFailedError``, but the
+    retained sandbox output carries HTTP 402 "Insufficient account funds" — a
+    permanent refusal. The executor must NOT reset the run to pending (retry
+    budget remains) and must record ``provider.billing``, not
+    ``sandbox.no_output_json``.
+    """
+    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
+    final_run = _make_run(
+        run_id=run.id,
+        status="failed",
+        claim_count=10,
+        node_attempt_count=1,
+        claim_token="tok-claim-abc",
+    )
+    snapshot = _make_snapshot()
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(SandboxNodeFailedError('HTTP 402 "Insufficient account funds"', node_id="node-a"))
+    registry = _mock_registry()
+    broker = registry.get_or_create.return_value
+    settings = MagicMock(saq_run_retries=5)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(
+            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
+        )
+
+    # Terminal on attempt 1 — the retry budget (5) is irrelevant.
+    assert result is final_run
+    assert not any("status='pending'" in s for s in statements)
+    call = mock_finalize.await_args
+    assert call is not None
+    assert call.kwargs["status"] == "failed"
+    assert call.kwargs["error_code"] == "provider.billing"
+    assert "not retried" in call.kwargs["error_detail"]
+    assert "Insufficient account funds" in call.kwargs["error_detail"]
+    run_failed = [c.args for c in broker.publish.call_args_list if c.args and c.args[0] == "run_failed"]
+    assert run_failed
+    assert run_failed[0][1]["error"] == "provider.billing"
+
+
+async def test_execute_provider_auth_refusal_dispatches_the_alert():
+    """FAR-2006: a 401 refusal reaches the existing Notifier alert path.
+
+    The alert is the whole point of the ticket — a whole night ran at zero
+    throughput with nothing surfaced. A dedicated ``provider_failure`` event is
+    dispatched (admin scope) with the run and pipeline identity.
+    """
+    from modulo.core.notifier import EVENT_PROVIDER_FAILURE
+    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
+    final_run = _make_run(
+        run_id=run.id,
+        pipeline_id=run.pipeline_id,
+        status="failed",
+        claim_count=10,
+        node_attempt_count=1,
+        claim_token="tok-claim-abc",
+    )
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(SandboxNodeFailedError('HTTP 401 "This API key has expired"', node_id="node-a"))
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5)
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("modulo.core.pipeline_engine.executor._safe_pipeline_name", new=AsyncMock(return_value="Branch Fixer")),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock(), notifier=notifier)
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
+
+    assert mock_finalize.await_args is not None
+    assert mock_finalize.await_args.kwargs["error_code"] == "provider.authentication"
+    notifier.dispatch_event.assert_awaited_once()
+    kwargs = notifier.dispatch_event.await_args.kwargs
+    assert kwargs["event_type"] == EVENT_PROVIDER_FAILURE
+    assert kwargs["run_id"] == run.id
+    assert kwargs["payload"]["error_code"] == "provider.authentication"
+    assert kwargs["payload"]["pipeline_name"] == "Branch Fixer"
+
+
 async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted():
     """Once the node-attempt count reaches the SAQ retry cap the run
     terminal-fails with error_code 'node_cancelled' (NOT the raw langgraph

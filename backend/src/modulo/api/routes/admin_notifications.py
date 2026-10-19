@@ -33,6 +33,7 @@ from modulo.core.notifier import (
     EVENT_CAPACITY_SATURATION,
     EVENT_CIRCUIT_BREAKER_TRIPPED,
     EVENT_HITL_DEADLINE_WARNING,
+    EVENT_PROVIDER_FAILURE,
     EVENT_QUEUE_PRESSURE_CRITICAL,
     EVENT_QUEUE_PRESSURE_NOTICE,
     EVENT_QUEUE_PRESSURE_WARNING,
@@ -70,6 +71,8 @@ AVAILABLE_EVENTS = [
     "hitl_awaiting",
     "run_failed",
     EVENT_RUN_STALLED,
+    # FAR-2006 — non-retryable provider auth/billing refusal (401/402).
+    EVENT_PROVIDER_FAILURE,
     "claim_expired",
     "hitl_overdue",
     EVENT_HITL_DEADLINE_WARNING,
