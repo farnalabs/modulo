@@ -297,6 +297,68 @@ def _normalize_hitl_node(node: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _weakening_reason(legacy_snapshot: bool, otherwise: str) -> str:
+    """Plan §5 reason code: an ambiguous legacy snapshot always wins."""
+    return REASON_LEGACY_SNAPSHOT_AMBIGUOUS if legacy_snapshot else otherwise
+
+
+def _index_hitl_nodes(nodes: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    """Map ``node_id -> normalized hitl node`` over the participating nodes.
+
+    Non-hitl nodes and nodes with no id are dropped by
+    :func:`_normalize_hitl_node`; the result is the matching corpus for the
+    node-level diff.
+    """
+    indexed: dict[str, dict[str, Any]] = {}
+    for node in nodes or []:
+        normalized = _normalize_hitl_node(node)
+        if normalized is not None:
+            indexed[normalized["node_id"]] = normalized
+    return indexed
+
+
+def _node_weakening_types(old_cfg: dict[str, Any] | None, new_cfg: dict[str, Any] | None) -> list[str]:
+    """Weakening categories a matched node gained (empty list = silent).
+
+    The per-node arm of :func:`_weakening_types`: effective human-only -> not
+    (FAR-609), a switch to ``on_reject: proceed``, and an added truthy
+    ``correction_target`` (both FAR-1532).
+    """
+    types: list[str] = []
+    if human_only_effective(old_cfg) and not human_only_effective(new_cfg):
+        types.append("human_only")
+    if _on_reject_weakened(old_cfg, new_cfg):
+        types.append("on_reject")
+    if _correction_target_weakened(old_cfg, new_cfg):
+        types.append("correction_target")
+    return types
+
+
+def _removed_hitl_node_detections(
+    old_by_id: dict[str, dict[str, Any]],
+    matched_ids: set[str],
+    legacy_snapshot: bool,
+) -> list[EdgeWeakening]:
+    """Old hitl nodes absent from the new list -> structural-removal detections.
+
+    A node that was dropped (or down-typed off ``node_type == "hitl"``) has no
+    compiler-injected gate any more — the one structural weakening the
+    edge-level diff cannot see.
+    """
+    detections: list[EdgeWeakening] = []
+    for node_id in old_by_id:
+        if node_id in matched_ids:
+            continue
+        detections.append(
+            EdgeWeakening(
+                correlation_key=(node_id, node_id, "hitl_node"),
+                weakening_types=["structural:hitl_node_removed"],
+                reason_code=_weakening_reason(legacy_snapshot, REASON_CORRELATION_KEY_MISMATCH),
+            )
+        )
+    return detections
+
+
 def _hitl_node_weakenings(
     old_nodes: list[dict[str, Any]] | None,
     new_nodes: list[dict[str, Any]] | None,
@@ -336,52 +398,30 @@ def _hitl_node_weakenings(
 
     The comparison is pure — it never mutates its inputs.
     """
-    old_by_id: dict[str, dict[str, Any]] = {}
-    for node in old_nodes or []:
-        normalized = _normalize_hitl_node(node)
-        if normalized is not None:
-            old_by_id[normalized["node_id"]] = normalized
+    old_by_id = _index_hitl_nodes(old_nodes)
     detections: list[EdgeWeakening] = []
     matched_ids: set[str] = set()
     for node in new_nodes or []:
         normalized = _normalize_hitl_node(node)
         if normalized is None:
             continue
-        matching_old = old_by_id.get(normalized["node_id"])
+        node_id = normalized["node_id"]
+        matching_old = old_by_id.get(node_id)
         if matching_old is None:
             continue
-        matched_ids.add(normalized["node_id"])
-        old_effective = human_only_effective(matching_old["hitl_config"])
-        new_effective = human_only_effective(normalized["hitl_config"])
-        node_types: list[str] = []
-        if old_effective and not new_effective:
-            node_types.append("human_only")
-        # FAR-1532: switching the node's gate to ``on_reject: proceed``.
-        if _on_reject_weakened(matching_old["hitl_config"], normalized["hitl_config"]):
-            node_types.append("on_reject")
-        # FAR-1532: adding a ``correction_target`` is the automated parallel vector.
-        if _correction_target_weakened(matching_old["hitl_config"], normalized["hitl_config"]):
-            node_types.append("correction_target")
+        matched_ids.add(node_id)
+        node_types = _node_weakening_types(matching_old["hitl_config"], normalized["hitl_config"])
         if node_types:
             detections.append(
                 EdgeWeakening(
-                    correlation_key=(normalized["node_id"], normalized["node_id"], "hitl_node"),
+                    correlation_key=(node_id, node_id, "hitl_node"),
                     weakening_types=node_types,
-                    reason_code=(REASON_LEGACY_SNAPSHOT_AMBIGUOUS if legacy_snapshot else REASON_INSUFFICIENT_ROLE),
+                    reason_code=_weakening_reason(legacy_snapshot, REASON_INSUFFICIENT_ROLE),
                 )
             )
     # Old hitl nodes deleted (or down-typed to a non-gate node type): the
     # compiler no longer injects any gate for them — structural weakening.
-    for node_id in old_by_id:
-        if node_id in matched_ids:
-            continue
-        detections.append(
-            EdgeWeakening(
-                correlation_key=(node_id, node_id, "hitl_node"),
-                weakening_types=["structural:hitl_node_removed"],
-                reason_code=REASON_LEGACY_SNAPSHOT_AMBIGUOUS if legacy_snapshot else REASON_CORRELATION_KEY_MISMATCH,
-            )
-        )
+    detections.extend(_removed_hitl_node_detections(old_by_id, matched_ids, legacy_snapshot))
     return detections
 
 
