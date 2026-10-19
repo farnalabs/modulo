@@ -3436,6 +3436,105 @@ _DUAL_WRITE_RETRYABLE_SQLSTATES = DUAL_WRITE_RETRYABLE_SQLSTATES
 _sqlstate_of = sqlstate_of
 
 
+def _resolve_store_org(
+    session_org: uuid.UUID | None,
+    organisation_id: uuid.UUID | None,
+    *,
+    origin: str,
+    run_id: uuid.UUID,
+    claim_token: str | None,
+) -> uuid.UUID:
+    """Resolve the org for the store write, failing loudly on an RLS mismatch.
+
+    qa iteration 1 (Major 1): the org-context precheck failures are wrapped as
+    DualWriteError (origin='rls_precheck') so the guardDualWrite-style
+    catch/rollback/orchestrate contract covers them exactly like an
+    in-savepoint store failure. The OutputsRlsMismatch is chained as
+    ``__cause__`` for diagnostics; both orgs are carried in the message.
+    """
+    if session_org is None:
+        raise DualWriteError(
+            f"run_node_outputs store write requires a bound RLS organisation context "
+            f"(origin={origin}); wrap the call in an org-bound transaction",
+            run_id=run_id,
+            organisation_id=organisation_id,
+            claim_token=claim_token,
+            sqlstate=None,
+            origin="rls_precheck",
+        ) from OutputsRlsMismatch(
+            "run_node_outputs store write requires a bound RLS organisation context; "
+            "wrap the call in `async with session.begin():` + set_rls_org(session, org)"
+        )
+    if organisation_id is None:
+        return session_org
+    if session_org != organisation_id:
+        raise DualWriteError(
+            f"run_node_outputs org mismatch on run {run_id}: session org {session_org} != row org "
+            f"{organisation_id} (origin={origin})",
+            run_id=run_id,
+            organisation_id=organisation_id,
+            claim_token=claim_token,
+            sqlstate=None,
+            origin="rls_precheck",
+        ) from OutputsRlsMismatch(
+            f"run_node_outputs org mismatch on run {run_id}: session org {session_org} != row org {organisation_id}"
+        )
+    return organisation_id
+
+
+def _dual_write_sqlstate(exc: BaseException) -> str | None:
+    """The failing statement's SQLSTATE, or None for a non-SQLAlchemy error."""
+    return _sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
+
+
+async def _store_run_outputs_with_retry(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    outputs: dict[str, Any] | None,
+    telemetry: dict[str, Any] | None,
+    claim_token: str | None,
+    origin: str,
+    inherited_outputs: dict[str, Any] | None,
+    inherited_telemetry: dict[str, Any] | None,
+) -> None:
+    """ONE bounded in-session retry of the REPLACE store write.
+
+    Only the statement-timeout SQLSTATE is savepoint-recoverable (see
+    ``_DUAL_WRITE_RETRYABLE_SQLSTATES``); everything else, and a second
+    failure, raises :class:`DualWriteError` with the savepoint rolled back.
+    """
+    for attempt in (1, 2):
+        savepoint = session.begin_nested()
+        try:
+            async with savepoint:
+                await replace_run_node_outputs(
+                    session,
+                    run_id=run_id,
+                    organisation_id=organisation_id,
+                    outputs=outputs,
+                    telemetry=telemetry,
+                    inherited_outputs=inherited_outputs,
+                    inherited_telemetry=inherited_telemetry,
+                )
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            state = _dual_write_sqlstate(exc)
+            if attempt == 1 and state in _DUAL_WRITE_RETRYABLE_SQLSTATES:
+                continue
+            raise DualWriteError(
+                f"run_node_outputs store write failed (origin={origin}, sqlstate={state}): {exc}",
+                run_id=run_id,
+                organisation_id=organisation_id,
+                claim_token=claim_token,
+                sqlstate=state,
+                origin=origin,
+            ) from exc
+
+
 async def write_run_outputs_from_run(
     session: AsyncSession,
     *,
@@ -3494,67 +3593,24 @@ async def write_run_outputs_from_run(
         return
 
     session_org = await read_rls_org(session)
-    # qa iteration 1 (Major 1): the org-context precheck failures are wrapped
-    # as DualWriteError (origin='rls_precheck') so the guardDualWrite-style
-    # catch/rollback/orchestrate contract covers them exactly like an
-    # in-savepoint store failure. The OutputsRlsMismatch is chained as
-    # __cause__ for diagnostics; both orgs are carried in the message.
-    if session_org is None:
-        raise DualWriteError(
-            f"run_node_outputs store write requires a bound RLS organisation context "
-            f"(origin={origin}); wrap the call in an org-bound transaction",
-            run_id=run_id,
-            organisation_id=organisation_id,
-            claim_token=claim_token,
-            sqlstate=None,
-            origin="rls_precheck",
-        ) from OutputsRlsMismatch(
-            "run_node_outputs store write requires a bound RLS organisation context; "
-            "wrap the call in `async with session.begin():` + set_rls_org(session, org)"
-        )
-    if organisation_id is None:
-        organisation_id = session_org
-    if session_org != organisation_id:
-        raise DualWriteError(
-            f"run_node_outputs org mismatch on run {run_id}: session org {session_org} != row org "
-            f"{organisation_id} (origin={origin})",
-            run_id=run_id,
-            organisation_id=organisation_id,
-            claim_token=claim_token,
-            sqlstate=None,
-            origin="rls_precheck",
-        ) from OutputsRlsMismatch(
-            f"run_node_outputs org mismatch on run {run_id}: session org {session_org} != row org {organisation_id}"
-        )
-
-    for attempt in (1, 2):
-        savepoint = session.begin_nested()
-        try:
-            async with savepoint:
-                await replace_run_node_outputs(
-                    session,
-                    run_id=run_id,
-                    organisation_id=organisation_id,
-                    outputs=outputs,
-                    telemetry=telemetry,
-                    inherited_outputs=inherited_outputs,
-                    inherited_telemetry=inherited_telemetry,
-                )
-            return
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            state = _sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
-            if attempt == 1 and state in _DUAL_WRITE_RETRYABLE_SQLSTATES:
-                continue
-            raise DualWriteError(
-                f"run_node_outputs store write failed (origin={origin}, sqlstate={state}): {exc}",
-                run_id=run_id,
-                organisation_id=organisation_id,
-                claim_token=claim_token,
-                sqlstate=state,
-                origin=origin,
-            ) from exc
+    organisation_id = _resolve_store_org(
+        session_org,
+        organisation_id,
+        origin=origin,
+        run_id=run_id,
+        claim_token=claim_token,
+    )
+    await _store_run_outputs_with_retry(
+        session,
+        run_id=run_id,
+        organisation_id=organisation_id,
+        outputs=outputs,
+        telemetry=telemetry,
+        claim_token=claim_token,
+        origin=origin,
+        inherited_outputs=inherited_outputs,
+        inherited_telemetry=inherited_telemetry,
+    )
 
 
 async def update_run_status(
