@@ -8,6 +8,7 @@
       <Button
         class="border-primary/30 hover:border-primary/60"
         data-testid="admin-evidence-redaction-add"
+        :disabled="loading || loadError !== null || saving"
         @click="openCreate"
       >
         {{ $t('views.AdminEvidenceRedaction.add_rule') }}
@@ -37,11 +38,23 @@
       <span>{{ $t('views.AdminEvidenceRedaction.loading') }}</span>
     </div>
 
-    <div v-else-if="loadError" aria-live="assertive" data-testid="admin-evidence-redaction-load-error">
-      <ErrorAlert :message="loadError" :on-retry="loadRules" />
+    <div v-else-if="initialLoadError" aria-live="assertive" data-testid="admin-evidence-redaction-load-error">
+      <ErrorAlert :message="initialLoadError" :on-retry="loadRules" />
     </div>
 
     <template v-else>
+      <!-- A failed REFETCH (after a successful first load) must not replace the
+           page: the last-good table and the success message stay rendered, and
+           the failure surfaces here as a non-fatal, retry-able banner. -->
+      <div
+        v-if="refetchLoadError"
+        aria-live="assertive"
+        class="mb-4"
+        data-testid="admin-evidence-redaction-refetch-error"
+      >
+        <ErrorAlert :message="refetchLoadError" :on-retry="loadRules" />
+      </div>
+
       <div v-if="formOpen" class="card mb-4 p-6">
         <h2 class="mb-4 text-base font-semibold" data-testid="admin-evidence-redaction-form-title">
           {{ editingRule ? $t('views.AdminEvidenceRedaction.edit_rule') : $t('views.AdminEvidenceRedaction.new_rule') }}
@@ -78,10 +91,17 @@
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-60"
               data-testid="admin-evidence-redaction-role"
             >
-              <option v-for="roleOption in ROLES" :key="roleOption" :value="roleOption">
+              <option v-for="roleOption in formRoleOptions" :key="roleOption" :value="roleOption">
                 {{ roleLabel(roleOption) }}
               </option>
             </select>
+            <p
+              v-if="!roleIsKnown"
+              class="mt-1 text-xs text-destructive-text"
+              data-testid="admin-evidence-redaction-role-unrecognised"
+            >
+              {{ $t('views.AdminEvidenceRedaction.role_unrecognised', { role: form.role }) }}
+            </p>
           </div>
 
           <fieldset>
@@ -90,7 +110,7 @@
             </legend>
             <div class="space-y-2">
               <label
-                v-for="redactionClass in REDACTION_CLASSES"
+                v-for="redactionClass in classOptions"
                 :key="redactionClass"
                 class="flex items-start gap-2 text-sm"
               >
@@ -126,12 +146,17 @@
           </p>
 
           <div class="flex items-center gap-2">
-            <Button type="submit" :disabled="saving" data-testid="admin-evidence-redaction-save">
+            <Button
+              type="submit"
+              :disabled="saving || !roleIsKnown"
+              data-testid="admin-evidence-redaction-save"
+            >
               {{ saving ? $t('views.AdminEvidenceRedaction.saving') : $t('views.AdminEvidenceRedaction.save') }}
             </Button>
             <button
               type="button"
-              class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+              class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-60"
+              :disabled="saving"
               data-testid="admin-evidence-redaction-cancel"
               @click="closeForm"
             >
@@ -143,7 +168,6 @@
 
       <p
         v-if="statusMessage"
-        role="status"
         aria-live="polite"
         class="mb-4 rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success"
         data-testid="admin-evidence-redaction-status"
@@ -208,11 +232,12 @@
                   </span>
                 </span>
               </td>
-              <td class="px-4 py-3 text-muted-foreground">{{ formatDate(rule.updated_at) }}</td>
+              <td class="px-4 py-3 text-muted-foreground">{{ formatDateShort(rule.updated_at) }}</td>
               <td class="px-4 py-3 text-right">
                 <button
                   type="button"
-                  class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent"
+                  class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-60"
+                  :disabled="saving"
                   data-testid="admin-evidence-redaction-edit"
                   @click="openEdit(rule)"
                 >
@@ -244,24 +269,18 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { api } from '../lib/api/client'
+import type { components } from '../lib/api/schema'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { formatDateShort } from '../lib/formatDate'
 
 /**
- * The redaction rule wire shape, mirroring the backend Pydantic models
- * (``RedactionRuleUpsert`` / ``RedactionRuleResponse`` in
- * ``backend/src/modulo/api/routes/evidence.py``). Snake_case is deliberate —
- * the API does not alias these fields.
+ * The redaction-rule wire shapes come from the generated OpenAPI schema, never
+ * a hand-rolled mirror: ``RedactionRuleResponse`` is what GET returns and
+ * ``RedactionRuleUpsert`` is the PUT body (snake_case, unaliased on the API).
  */
-interface RedactionRule {
-  id: string
-  key_pattern: string
-  role: string
-  redacted_fields: string[]
-  created_at: string
-  updated_at: string
-}
+type RedactionRule = components['schemas']['RedactionRuleResponse']
+type RedactionRuleUpsert = components['schemas']['RedactionRuleUpsert']
 
 type Role = 'admin' | 'operator' | 'viewer'
 
@@ -281,17 +300,45 @@ const REDACTION_CLASSES: readonly string[] = ['sensitive_output', 'internal_meta
 const CATCH_ALL_PATTERN = '*'
 const CATCH_ALL_ROLE = 'viewer'
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 
-const { data: rulesData, loading, error: loadError, load: loadRules } = useDataFetch(
+const {
+  data: rulesData,
+  loading,
+  error: loadError,
+  fetched,
+  load: fetchRules,
+} = useDataFetch(
   async () => {
     const res = await api.GET('/api/v1/evidence/redaction-rules')
     return { data: res.data, error: res.error }
   },
-  { initialValue: [] as RedactionRule[] },
+  // silentRefetch: only the FIRST load flips `loading`. A post-save refetch
+  // must not unmount the table (and the success message), so its failure is
+  // split out below into a non-fatal inline banner.
+  { initialValue: [] as RedactionRule[], silentRefetch: true },
 )
 
 const rules = computed(() => rulesData.value ?? [])
+
+/**
+ * Split the fetch failure by WHEN it happened. Before the first successful
+ * load there is nothing to preserve, so it stays page-fatal; after one
+ * (`fetched` only ever flips true) the last-good table stays rendered and the
+ * failure surfaces as a retry-able inline banner instead.
+ */
+const initialLoadError = computed(() => (fetched.value ? null : loadError.value))
+const refetchLoadError = computed(() => (fetched.value ? loadError.value : null))
+
+async function loadRules(): Promise<void> {
+  try {
+    await fetchRules()
+  } catch (e: unknown) {
+    // vue-query usually reports a failure through its error state rather than
+    // by rejecting; record a rejection the same way instead of swallowing it.
+    loadError.value = formatApiError(e)
+  }
+}
 
 const formOpen = ref(false)
 const editingRule = ref<RedactionRule | null>(null)
@@ -299,10 +346,42 @@ const saving = ref(false)
 const formError = ref<string | null>(null)
 const statusMessage = ref('')
 
-const form = ref<{ key_pattern: string; role: Role; redacted_fields: string[] }>({
+const form = ref<{ key_pattern: string; role: string; redacted_fields: string[] }>({
   key_pattern: '',
   role: 'viewer',
   redacted_fields: [],
+})
+
+/**
+ * A stored role this page does not recognise (e.g. a future role) must stay
+ * visible and block Save — coercing it to `viewer` would silently rewrite the
+ * rule's identity on the next upsert.
+ */
+const roleIsKnown = computed(() => (ROLES as readonly string[]).includes(form.value.role))
+
+const formRoleOptions = computed(() => {
+  const options: string[] = [...ROLES]
+  if (form.value.role && !options.includes(form.value.role)) options.push(form.value.role)
+  return options
+})
+
+/**
+ * Backend classes plus any stored class this build does not know about. An
+ * unknown class stays visible (and removable) instead of being a hidden value
+ * that makes the rule unsaveable.
+ */
+const classOptions = computed(() => {
+  const extras = form.value.redacted_fields.filter(item => !REDACTION_CLASSES.includes(item))
+  return [...REDACTION_CLASSES, ...extras]
+})
+
+/** The existing rule that a CREATE would silently overwrite via the upsert. */
+const conflictingRule = computed(() => {
+  const keyPattern = form.value.key_pattern.trim()
+  return (
+    rules.value.find(rule => rule.key_pattern === keyPattern && rule.role === form.value.role) ??
+    null
+  )
 })
 
 const hasCatchAll = computed(() =>
@@ -315,22 +394,12 @@ function isCatchAll(rule: RedactionRule): boolean {
 
 function roleLabel(role: string): string {
   const key = `views.AdminEvidenceRedaction.role_${role}`
-  const label = t(key)
-  return label === key ? role : label
+  return te(key) ? t(key) : role
 }
 
 function classLabel(redactionClass: string): string {
   const key = `views.AdminEvidenceRedaction.class_${redactionClass}`
-  const label = t(key)
-  return label === key ? redactionClass : label
-}
-
-function formatDate(value: string): string {
-  try {
-    return formatDateShort(new Date(value))
-  } catch {
-    return value
-  }
+  return te(key) ? t(key) : redactionClass
 }
 
 function resetForm(): void {
@@ -349,7 +418,7 @@ function openEdit(rule: RedactionRule): void {
   editingRule.value = rule
   form.value = {
     key_pattern: rule.key_pattern,
-    role: (ROLES as readonly string[]).includes(rule.role) ? (rule.role as Role) : 'viewer',
+    role: rule.role,
     redacted_fields: [...rule.redacted_fields],
   }
   formError.value = null
@@ -364,8 +433,8 @@ function closeForm(): void {
 }
 
 async function saveRule(): Promise<void> {
+  if (saving.value) return
   formError.value = null
-  statusMessage.value = ''
 
   const keyPattern = form.value.key_pattern.trim()
   if (!keyPattern) {
@@ -376,21 +445,44 @@ async function saveRule(): Promise<void> {
     formError.value = t('views.AdminEvidenceRedaction.key_pattern_too_long')
     return
   }
+  if (!roleIsKnown.value) {
+    formError.value = t('views.AdminEvidenceRedaction.role_unrecognised', { role: form.value.role })
+    return
+  }
+  // An empty class set resolves to "redact nothing" on the server, which would
+  // silently turn the boundary OFF for the matched keys (and empty the seeded
+  // '*' / viewer catch-all). Never allow it.
+  if (form.value.redacted_fields.length === 0) {
+    formError.value = t('views.AdminEvidenceRedaction.select_at_least_one_class')
+    return
+  }
+  // The PUT is an upsert keyed on (key_pattern, role), so a create that
+  // collides with an existing pair would silently overwrite it.
+  if (editingRule.value === null && conflictingRule.value) {
+    formError.value = t('views.AdminEvidenceRedaction.rule_exists', {
+      pattern: keyPattern,
+      role: roleLabel(form.value.role),
+    })
+    return
+  }
+
+  const role = form.value.role as Role
+  const payload: RedactionRuleUpsert = {
+    key_pattern: keyPattern,
+    role,
+    redacted_fields: [...form.value.redacted_fields],
+  }
 
   saving.value = true
+  statusMessage.value = ''
   try {
-    const role = form.value.role
-    const { error: err } = await api.PUT('/api/v1/evidence/redaction-rules', {
-      body: {
-        key_pattern: keyPattern,
-        role,
-        redacted_fields: [...form.value.redacted_fields],
-      },
-    })
+    const { error: err } = await api.PUT('/api/v1/evidence/redaction-rules', { body: payload })
     if (err) {
       formError.value = formatApiError(err)
       return
     }
+    // Set AFTER the write and before the refetch: a failed refetch must not
+    // erase the confirmation of the save that actually succeeded.
     statusMessage.value = t('views.AdminEvidenceRedaction.saved', {
       pattern: keyPattern,
       role: roleLabel(role),
