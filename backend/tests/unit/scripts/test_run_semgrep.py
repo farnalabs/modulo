@@ -247,6 +247,16 @@ def test_json_detector_false_for_list_typed_partial_parsing(tmp_path: Path) -> N
     assert not mod._semgrep_json_timeout(path)
 
 
+def test_json_detector_true_for_list_typed_timeout(tmp_path: Path) -> None:
+    """A fatal class inside a list-typed ``type`` is still fatal."""
+    path = tmp_path / "timeout-list.json"
+    _write_json(
+        path,
+        {"errors": [{"type": ["PartialParsing", "Timeout"], "message": "timeout"}], "results": []},
+    )
+    assert mod._semgrep_json_timeout(path)
+
+
 def test_json_detector_never_raises_on_unexpected_error_shapes(tmp_path: Path) -> None:
     """T1: the detector must NEVER raise, whatever an ``errors[]`` entry holds."""
     unexpected: list[object] = [
@@ -374,6 +384,44 @@ def test_run_windows_wall_clock_kill_with_captured_skip_fails(capsys: pytest.Cap
     captured = capsys.readouterr()
     assert rc == 1
     assert "reported as a FAILURE" in captured.err
+
+
+def test_run_windows_wall_clock_kill_with_captured_skip_as_bytes_fails(capsys: pytest.CaptureFixture[str]) -> None:
+    """A captured skip delivered as ``bytes`` still fails CLOSED, without crashing.
+
+    ``subprocess.TimeoutExpired.stdout``/``.stderr`` are typed ``bytes | str |
+    None`` — ``bytes`` is the shape when the child was not run with ``text=True``.
+    The captured streams are normalised with ``_as_text`` before the detector
+    runs, so a byte-typed capture is matched, not silently discarded (FAR-1985).
+    """
+    exc = subprocess.TimeoutExpired(
+        cmd="semgrep",
+        timeout=mod._SEMGREP_TIMEOUT,
+        output=_TIMEOUT_WARNING.encode("utf-8"),
+        stderr=b"",
+    )
+    with (
+        mock.patch.object(mod, "_get_changed_py_files", return_value=(_CHANGED, None)),
+        mock.patch.object(mod.subprocess, "run", side_effect=exc),
+    ):
+        rc = mod._run_windows()
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "reported as a FAILURE" in captured.err
+
+
+def test_as_text_normalises_bytes_str_and_none() -> None:
+    """``_as_text`` maps ``None``->``""``, decodes ``bytes``, passes ``str`` through.
+
+    The ``bytes`` decode uses ``errors="replace"`` so a non-UTF-8 capture cannot
+    raise while the gate is reporting a failure — the helper must never crash.
+    """
+    assert isinstance(mod._as_text(None), str)
+    assert not mod._as_text(None)
+    assert mod._as_text("already text") == "already text"
+    assert mod._as_text(b"decoded") == "decoded"
+    # Invalid UTF-8 must not raise, and the ASCII remainder survives.
+    assert "semgrep" in mod._as_text(b"\xff\xfe semgrep timeout")
 
 
 def test_run_windows_wall_clock_kill_with_captured_non_skip_stays_open(

@@ -71,7 +71,7 @@ const iconBgClass = computed(() => {
     primary: "bg-primary/10 text-primary",
     success: "bg-success/10 text-success",
     warning: "bg-warning/10 text-warning-text",
-    destructive: "bg-destructive/10 text-destructive",
+    destructive: "bg-destructive/10 text-destructive-text",
     muted: "bg-muted text-muted-foreground",
   };
   return map[props.color ?? "primary"];

@@ -177,7 +177,7 @@ describe('RunnerStatusStrip', () => {
   it('renders the unavailable state when the status fetch failed (qa F11)', () => {
     const wrapper = mount(RunnerStatusStrip, { props: { status: null, errored: true } })
     expect(wrapper.find('[data-testid="runner-status-strip-state"]').text()).toBe('runner status unavailable')
-    expect(wrapper.find('[data-testid="runner-status-strip"]').classes().join(' ')).toContain('text-destructive')
+    expect(wrapper.find('[data-testid="runner-status-strip"]').classes().join(' ')).toContain('text-destructive-text')
   })
 
   it('renders an unknown probe state AS ITSELF, never as an empty label (qa F17)', () => {

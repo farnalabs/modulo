@@ -180,7 +180,7 @@ onMounted(() => {
   pointer-events: auto;
 }
 .assistant-stop-btn {
-  background: hsl(var(--destructive));
+  background: hsl(var(--destructive-fill));
   color: hsl(var(--destructive-foreground));
   border: none;
   border-radius: 6px;

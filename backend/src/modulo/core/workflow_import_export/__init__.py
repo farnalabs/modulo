@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.graph_validator import GraphValidator
+from modulo.core.graph_validator import GraphValidator, check_sandbox_only_field_placement
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.pipeline_engine.git_content import GitContentRefError, validate_agent_git_content_values
 from modulo.core.runner_bindings import BindingValidationError, validate_binding_pair
@@ -1377,6 +1377,22 @@ async def materialize_import(
     )
     sections = _resolve_bundle_sections(bundle, pipeline_name_override)
 
+    # FAR-1846: reject a bundle that smuggles a sandbox-only field onto a
+    # non-sandbox node BEFORE anything is materialised. The schema and agent
+    # steps below INSERT + flush, and a collection install has already written
+    # its ``CollectionInstall`` row before it calls in — so validating inside
+    # the pipeline step (the original placement) left nothing persisted only
+    # because every HTTP caller happens to wrap the import in one transaction.
+    # The guarantee must not depend on each caller remembering to do that.
+    #
+    # Checking the raw nodes here is equivalent to the old post-processing
+    # check: nothing between this point and the pipeline step can add or remove
+    # one of the checked fields — ``_rewire_graph_nodes`` only rewrites
+    # ``agent_id`` / ``output_schema_id`` / the connector instance id, and
+    # ``strip_declared_policy_gates`` only pops ``policy_gate``.
+    graph_nodes = _normalize_graph_nodes(sections.pipeline_info, ctx.warnings)
+    _reject_sandbox_only_fields_off_sandbox(graph_nodes)
+
     existing_agent_names = await get_existing_agent_names(session, org_id)
     existing_pipeline_names = await get_existing_pipeline_names(session, org_id)
 
@@ -1397,6 +1413,7 @@ async def materialize_import(
     pipeline, pipeline_edges_added, prim = await _materialize_pipeline_and_edges(
         ctx,
         sections,
+        graph_nodes,
         pname,
         existing_pipeline_names,
         agent_id_map,
@@ -1427,9 +1444,32 @@ def _log_import_start(pname: str, sections: _ImportSections) -> None:
     )
 
 
+def _reject_sandbox_only_fields_off_sandbox(graph_nodes: list[dict[str, Any]]) -> None:
+    """Fail an import whose graph declares a sandbox-only field elsewhere.
+
+    FAR-1846: the shared graph-validator rule (also applied on the save and
+    run paths) rejects ``read_only`` / ``git_credentials`` /
+    ``single_pr_per_run`` / ``egress_policy`` / ``egress_allowlist`` on a node
+    that is not a ``sandbox_agent``. A bundle bypasses the Pydantic node model,
+    so the importer must apply the same check itself or persist a declared
+    control nothing enforces.
+
+    Raises:
+        ValueError: the bundle's graph carries one of those fields on a
+            non-sandbox_agent node. The message names every offending node and
+            field so an operator can repair the bundle.
+    """
+    placement = check_sandbox_only_field_placement({"nodes": graph_nodes, "edges": []})
+    if placement.is_valid:
+        return
+    problems = "; ".join(issue.message for issue in placement.issues if issue.severity == "error")
+    raise ValueError("Invalid bundle: sandbox-only node fields are set on non-sandbox_agent nodes — " + problems)
+
+
 async def _materialize_pipeline_and_edges(
     ctx: _ImportContext,
     sections: _ImportSections,
+    graph_nodes: list[dict[str, Any]],
     pname: str,
     existing_pipeline_names: set[str],
     agent_id_map: dict[str, str],
@@ -1439,7 +1479,7 @@ async def _materialize_pipeline_and_edges(
     """Create the imported pipeline, its edges, and the library primitive."""
     _warn_redacted_credentials(bundle, ctx.warnings)
     graph_nodes = _rewire_graph_nodes(
-        _normalize_graph_nodes(sections.pipeline_info, ctx.warnings),
+        graph_nodes,
         agent_id_map,
         schema_id_map,
         ctx.overrides.connector_instances,

@@ -864,21 +864,14 @@ def _in_fleet_boot_grace() -> bool:
     return _uptime_seconds() < _FLEET_BOOT_GRACE_SECONDS
 
 
-async def _check_fleet_saq_workers() -> CheckResult:
-    """Fleet-wide SAQ worker gate — the sole readiness path (ADR 043 / FAR-1158).
+async def _collect_fleet_queues() -> tuple[dict[str, set[str]], list[str]]:
+    """Gather live worker hostnames per configured SAQ queue.
 
-    Deployment-scoped: ANY live worker on EACH configured queue covers
-    readiness, wherever in the deployment it runs — there is no co-location
-    requirement and no process-role routing. Determination contract (module
-    docstring): confirmed non-empty resets the probe counter; a confirmed-
-    empty queue forces the failed-closed path even when a sibling queue's
-    read failed; undeterminable shares the same counter (bounded fail-open);
-    boot grace reports ok without advancing the counter; and
-    ``SAQ_HARD_GATE=false`` is the operator's alert-only relaxation.
+    A queue-config read failure is recorded as the ``<queue-config>`` sentinel;
+    a per-queue read failure lands in ``failed_queues`` so the aggregation can
+    classify the probe as undeterminable (never masking a confirmed-empty
+    sibling).
     """
-    global _consecutive_stale_probes
-    settings = get_settings()
-
     live_by_queue: dict[str, set[str]] = {}
     failed_queues: list[str] = []
     try:
@@ -897,37 +890,87 @@ async def _check_fleet_saq_workers() -> CheckResult:
         except Exception as exc:
             _log.warning("health._check_fleet_saq_workers queue=%s read failed: %s", qname, exc)
             failed_queues.append(qname)
+    return live_by_queue, failed_queues
 
-    empty_queues = sorted(qname for qname, live in live_by_queue.items() if not live)
-    if not empty_queues and not failed_queues:
-        _consecutive_stale_probes = 0
-        return CheckResult(status="ok", detail=f"saq workers live on all queues (fleet: {live_by_queue})")
 
-    # Aggregation precedence (ADR 043 Decision 3): a confirmed-empty queue
-    # forces the failed-closed path regardless of sibling read failures —
-    # it is never masked into the undeterminable classification.
-    probe_host = resolve_instance_identity()
+def _saq_fleet_problem(
+    empty_queues: list[str],
+    failed_queues: list[str],
+    live_by_queue: dict[str, set[str]],
+) -> str:
+    """Compose the SAQ fleet problem string under the ADR 043 precedence rules.
+
+    A confirmed-empty queue forces the failed-closed wording regardless of
+    sibling read failures — it is never masked into the undeterminable
+    classification.
+    """
     if empty_queues:
         problem = f"no live saq workers on queue(s) {empty_queues}"
         if failed_queues:
             problem += f" (sibling read failed for {sorted(failed_queues)})"
     else:
         problem = f"saq worker check undeterminable: read failed for queue(s) {sorted(failed_queues)}"
-    problem += f", live_by_queue={live_by_queue}, probe_host={probe_host}"
+    return f"{problem}, live_by_queue={live_by_queue}, probe_host={resolve_instance_identity()}"
+
+
+def _stale_probe_result(
+    problem: str,
+    probes: int,
+    *,
+    saq_hard_gate: bool,
+    relaxed_event: str,
+) -> CheckResult:
+    """Resolve a stale-probe fleet gate outcome (ADR 043 Decision 3).
+
+    Under ``SAQ_HARD_GATE=true`` an exhausted probe budget is ``unavailable``
+    and a partial one ``degraded``. Under ``SAQ_HARD_GATE=false`` the gate is
+    alert-only: it logs ``relaxed_event`` and never gates readiness.
+    """
+    if saq_hard_gate:
+        if probes >= _STALE_PROBE_LIMIT:
+            return CheckResult(status="unavailable", detail=f"{problem} ({probes} consecutive probes)")
+        return CheckResult(status="degraded", detail=f"{problem} ({probes}/{_STALE_PROBE_LIMIT} probes)")
+    _log.warning("%s probes=%d %s", relaxed_event, probes, problem)
+    return CheckResult(status="ok", detail=f"{problem} (SAQ_HARD_GATE=false, alert-only)")
+
+
+async def _check_fleet_saq_workers() -> CheckResult:
+    """Fleet-wide SAQ worker gate — the sole readiness path (ADR 043 / FAR-1158).
+
+    Deployment-scoped: ANY live worker on EACH configured queue covers
+    readiness, wherever in the deployment it runs — there is no co-location
+    requirement and no process-role routing. Determination contract (module
+    docstring): confirmed non-empty resets the probe counter; a confirmed-
+    empty queue forces the failed-closed path even when a sibling queue's
+    read failed; undeterminable shares the same counter (bounded fail-open);
+    boot grace reports ok without advancing the counter; and
+    ``SAQ_HARD_GATE=false`` is the operator's alert-only relaxation.
+    """
+    global _consecutive_stale_probes
+    settings = get_settings()
+
+    live_by_queue, failed_queues = await _collect_fleet_queues()
+
+    empty_queues = sorted(qname for qname, live in live_by_queue.items() if not live)
+    if not empty_queues and not failed_queues:
+        _consecutive_stale_probes = 0
+        return CheckResult(status="ok", detail=f"saq workers live on all queues (fleet: {live_by_queue})")
+
+    problem = _saq_fleet_problem(empty_queues, failed_queues, live_by_queue)
 
     if _in_fleet_boot_grace():
         return CheckResult(status="ok", detail=f"{problem} (within {_FLEET_BOOT_GRACE_SECONDS}s boot grace)")
 
     _consecutive_stale_probes += 1
     probes = _consecutive_stale_probes
-    if settings.saq_hard_gate:
-        if probes >= _STALE_PROBE_LIMIT:
-            return CheckResult(status="unavailable", detail=f"{problem} ({probes} consecutive probes)")
-        return CheckResult(status="degraded", detail=f"{problem} ({probes}/{_STALE_PROBE_LIMIT} probes)")
     # SAQ_HARD_GATE=false (post-hold): alert-only — never 503s; alerting
     # continues permanently (plan F7).
-    _log.warning("health.saq_workers_fleet_relaxed probes=%d %s", probes, problem)
-    return CheckResult(status="ok", detail=f"{problem} (SAQ_HARD_GATE=false, alert-only)")
+    return _stale_probe_result(
+        problem,
+        probes,
+        saq_hard_gate=settings.saq_hard_gate,
+        relaxed_event="health.saq_workers_fleet_relaxed",
+    )
 
 
 async def _check_saq_workers() -> CheckResult:
@@ -1051,6 +1094,12 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
     read as ``claimed_but_never_dispatched``. FAR-1803 adds
     ``node_started_executor_lost`` (node-started rows whose executor heartbeat
     is stale - the zero-node class that used to be invisible to every counter).
+    FAR-1914 adds ``nodeless_fresh_premise_deferred`` - the nodeless repair /
+    early-detect deferrals after a FRESH re-verify proved a node had started.
+    This is a ROUTINE signal (the scan snapshot legitimately races the
+    executor's first-node dispatch), NOT a regression alarm; it is kept
+    separate from ``node_started_deferred`` so that counter keeps its
+    belt-hit-only alarm meaning.
     Every counter defaults to 0 so a
     pre-D worker's payload renders without error.
 
@@ -1074,6 +1123,10 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
         f"claimed_but_never_dispatched={stats.get('claimed_but_never_dispatched', 0)}, "
         f"node_started_terminalized={stats.get('node_started_terminalized', 0)}, "
         f"node_started_deferred={stats.get('node_started_deferred', 0)}, "
+        # FAR-1914: fresh-premise deferrals — a ROUTINE signal (the scan
+        # snapshot racing the executor's first-node dispatch), kept separate
+        # from the belt-hit alarm above.
+        f"nodeless_fresh_premise_deferred={stats.get('nodeless_fresh_premise_deferred', 0)}, "
         # FAR-1803: the node-started / executor-lost gauge — a running row with
         # a durable first-node-start phase whose executor heartbeat is stale.
         # Rendered unconditionally so the readiness detail can NEVER report 0
@@ -1393,26 +1446,15 @@ async def _check_legacy_agent_return_sweep() -> CheckResult:
     )
 
 
-async def _check_fleet_system_crons() -> CheckResult:
-    """Fleet-wide system-cron liveness — the sole readiness path (ADR 043 / FAR-1158).
+async def _read_cron_heartbeat_freshness(settings: Settings) -> tuple[bool, bool]:
+    """Scan the fleet's ``fire_due_triggers`` cron heartbeats.
 
-    Deployment-scoped: readiness gates on ANY machine in the deployment
-    having a fresh ``fire_due_triggers`` heartbeat — a fleet-wide scheduler
-    death fails readiness, a single dead worker machine (or a backend pod on
-    a different node) does not. Heartbeat keys are enumerated with SCAN, never
-    KEYS (KEYS blocks Redis on large keyspaces).
-
-    Determination contract (module docstring): a fresh heartbeat read resets
-    the probe counter; a confirmed-stale store (read succeeded, no fresh
-    heartbeat anywhere) and an unreadable store (undeterminable) both advance
-    the SAME counter — degraded during probe grace, ``unavailable`` after the
-    grace tier under the default ``SAQ_HARD_GATE=true``; boot grace reports
-    ok; ``SAQ_HARD_GATE=false`` is alert-only.
+    Returns ``(fresh, read_failed)``: ``fresh`` when at least one heartbeat is
+    within ``_CRON_STALE_SECONDS``; ``read_failed`` when the Redis store could
+    not be read (undeterminable). Heartbeat keys are enumerated with SCAN, never
+    KEYS (KEYS blocks Redis on large keyspaces). An unparseable heartbeat value
+    is treated as not-fresh (the store WAS read), never as a read failure.
     """
-    global _consecutive_cron_stale_probes
-    settings = get_settings()
-    probe_host = resolve_instance_identity()
-
     r: aioredis.Redis | None = None
     read_failed = False
     fresh = False
@@ -1442,6 +1484,30 @@ async def _check_fleet_system_crons() -> CheckResult:
         if r is not None:
             with contextlib.suppress(Exception):
                 await r.aclose()
+    return fresh, read_failed
+
+
+async def _check_fleet_system_crons() -> CheckResult:
+    """Fleet-wide system-cron liveness — the sole readiness path (ADR 043 / FAR-1158).
+
+    Deployment-scoped: readiness gates on ANY machine in the deployment
+    having a fresh ``fire_due_triggers`` heartbeat — a fleet-wide scheduler
+    death fails readiness, a single dead worker machine (or a backend pod on
+    a different node) does not. Heartbeat keys are enumerated with SCAN, never
+    KEYS (KEYS blocks Redis on large keyspaces).
+
+    Determination contract (module docstring): a fresh heartbeat read resets
+    the probe counter; a confirmed-stale store (read succeeded, no fresh
+    heartbeat anywhere) and an unreadable store (undeterminable) both advance
+    the SAME counter — degraded during probe grace, ``unavailable`` after the
+    grace tier under the default ``SAQ_HARD_GATE=true``; boot grace reports
+    ok; ``SAQ_HARD_GATE=false`` is alert-only.
+    """
+    global _consecutive_cron_stale_probes
+    settings = get_settings()
+    probe_host = resolve_instance_identity()
+
+    fresh, read_failed = await _read_cron_heartbeat_freshness(settings)
 
     if fresh:
         _consecutive_cron_stale_probes = 0
@@ -1457,13 +1523,13 @@ async def _check_fleet_system_crons() -> CheckResult:
 
     _consecutive_cron_stale_probes += 1
     probes = _consecutive_cron_stale_probes
-    if settings.saq_hard_gate:
-        if probes >= _STALE_PROBE_LIMIT:
-            return CheckResult(status="unavailable", detail=f"{problem} ({probes} consecutive probes)")
-        return CheckResult(status="degraded", detail=f"{problem} ({probes}/{_STALE_PROBE_LIMIT} probes)")
     # SAQ_HARD_GATE=false: alert-only — never gates readiness (plan F7/F8).
-    _log.warning("health.system_cron_fleet_relaxed probes=%d %s", probes, problem)
-    return CheckResult(status="ok", detail=f"{problem} (SAQ_HARD_GATE=false, alert-only)")
+    return _stale_probe_result(
+        problem,
+        probes,
+        saq_hard_gate=settings.saq_hard_gate,
+        relaxed_event="health.system_cron_fleet_relaxed",
+    )
 
 
 async def _check_system_crons() -> CheckResult:

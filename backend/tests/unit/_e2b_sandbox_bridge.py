@@ -396,7 +396,10 @@ def install_bridge(monkeypatch: Any, bridge: RuntimeProvider | None = None) -> M
     shared = bridge if bridge is not None else MockSandboxBridge()
     _CURRENT = shared
 
-    async def _seam(*_args: Any, **_kwargs: Any) -> Any:
+    def _sync_seam(*_args: Any, **_kwargs: Any) -> Any:
+        return shared
+
+    async def _async_seam(*_args: Any, **_kwargs: Any) -> Any:
         return shared
 
     for name in (
@@ -406,7 +409,8 @@ def install_bridge(monkeypatch: Any, bridge: RuntimeProvider | None = None) -> M
         "_build_isolation_provider",
     ):
         ORIGINAL_SEAMS.setdefault(name, getattr(nr, name))
-        monkeypatch.setattr(nr, name, _seam)
+        seam = _async_seam if name == "_build_dispatch_provider" else _sync_seam
+        monkeypatch.setattr(nr, name, seam)
     return shared
 
 

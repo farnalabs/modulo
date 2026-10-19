@@ -169,7 +169,7 @@ Runs on-save (via the REST API's `PUT /{pipeline_id}/graph` endpoint) and pre-ru
 | `SANDBOX_RESOURCE_LIMITS_UNKNOWN_KEY` | Error | `resource_limits` contains unknown keys (fail-closed, never silently dropped) |
 | `SANDBOX_READ_ONLY_INVALID` | Error | `read_only` is not a genuine boolean (FAR-212) |
 | `SANDBOX_GIT_CREDENTIALS_INVALID` | Error | `git_credentials` scope is not recognised (FAR-212) |
-| `SANDBOX_POLICY_FIELD_ON_NON_SANDBOX` | Error | `read_only` / `git_credentials` set on a non-`sandbox_agent` node |
+| `SANDBOX_POLICY_FIELD_ON_NON_SANDBOX` | Error | `read_only` / `git_credentials` / `single_pr_per_run` / `egress_policy` / `egress_allowlist` set on a non-`sandbox_agent` node |
 | `SANDBOX_WALLCLOCK_BUDGET_INVALID` | Error | `wallclock_budget_seconds` is not a valid positive budget (FAR-296) |
 | `SANDBOX_LOOP_INTERCEPT_MALFORMED` | Error | `loop_intercept` config is not a valid object (FAR-211) |
 | `SANDBOX_LOOP_INTERCEPT_EMPTY_PATTERNS` | Warning | `loop_intercept.intercepted_tool_patterns` is empty; no tool calls will be intercepted |

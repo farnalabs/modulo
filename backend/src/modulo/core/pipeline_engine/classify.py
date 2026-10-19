@@ -584,12 +584,9 @@ def _collect_node_run_pr_urls(
     unchanged from the pre-FAR-1336 code.
     """
     for node_id in sorted(_node_id_union(outputs_json, telemetry_json)):
-        url = _extract_pr_url_from_node(node_return(outputs_json, telemetry_json, node_id))
-        if url:
-            _note_provenance(provenance, url, PR_URL_PROVENANCE_DECLARED)
-            if url not in seen:
-                seen.add(url)
-                urls.append(url)
+        declared_url = _extract_pr_url_from_node(node_return(outputs_json, telemetry_json, node_id))
+        if declared_url:
+            _admit_pr_url(declared_url, seen, urls, provenance, PR_URL_PROVENANCE_DECLARED)
         # Provenance by SOURCE (FAR-1376): ``matched`` only for a GENUINE
         # telemetry entry. With no entry the accessor returns the legacy inner
         # output of ``outputs_json`` — the node's structured return — so the
@@ -598,18 +595,29 @@ def _collect_node_run_pr_urls(
         # ``has_telemetry_entry`` is node_output_split's own dispatch
         # predicate — never re-derived here (the FAR-1336 lockstep hazard).
         telemetry_value = node_telemetry(telemetry_json, outputs_json, node_id)
-        if telemetry_value is not None:
-            telemetry_url = _extract_pr_url_from_node(telemetry_value)
-            if telemetry_url:
-                route = (
-                    PR_URL_PROVENANCE_MATCHED
-                    if has_telemetry_entry(telemetry_json, node_id)
-                    else PR_URL_PROVENANCE_DECLARED
-                )
-                _note_provenance(provenance, telemetry_url, route)
-                if telemetry_url not in seen:
-                    seen.add(telemetry_url)
-                    urls.append(telemetry_url)
+        if telemetry_value is None:
+            continue
+        telemetry_url = _extract_pr_url_from_node(telemetry_value)
+        if not telemetry_url:
+            continue
+        route = (
+            PR_URL_PROVENANCE_MATCHED if has_telemetry_entry(telemetry_json, node_id) else PR_URL_PROVENANCE_DECLARED
+        )
+        _admit_pr_url(telemetry_url, seen, urls, provenance, route)
+
+
+def _admit_pr_url(
+    url: str,
+    seen: set[str],
+    urls: list[str],
+    provenance: dict[str, str],
+    route: str,
+) -> None:
+    """Note *url*'s provenance and append it once, in first-seen order."""
+    _note_provenance(provenance, url, route)
+    if url not in seen:
+        seen.add(url)
+        urls.append(url)
 
 
 def _collect_marker_pr_url(marker: Any, seen: set[str], urls: list[str], provenance: dict[str, str]) -> None:
@@ -831,27 +839,9 @@ def classify_run(
     # status keeps its own reason so analytics/reporting never mislabels a
     # router_no_match run as a budget attribution (FAR-415).
     if status in _EXCLUDED_STATUSES:
-        if status == "cancelled":
-            # FAR-1257: discriminate a review-window timeout from a deliberate
-            # operator/HITL cancel on the run's OWN terminalization facts (the
-            # reason never changes the excluded verdict — see FAR-415's
-            # sibling: one status, its own reason, no cross-bucket leakage).
-            reason = REASON_HITL_TIMEOUT if _is_hitl_timeout(error_code, cancel_reason) else REASON_CANCELLED
-        elif status == "router_no_match":
-            reason = REASON_ROUTER_NO_MATCH
-        elif status == "rejected":
-            if error_code == _QUEUE_EXPIRED_ERROR_CODE:
-                # FAR-1883: a queue expiry is a supersession, not a reviewer "no".
-                reason = REASON_QUEUE_EXPIRED
-            elif error_code == _HITL_SUPERSEDED_ERROR_CODE:
-                reason = REASON_HITL_SUPERSEDED
-            else:
-                reason = REASON_HITL_REJECTED
-        else:
-            reason = REASON_BUDGET_EXCEEDED
-        return ClassificationResult(
+        return _classification(
             RunClassificationValue.excluded,
-            reason,
+            _excluded_reason(status, error_code, cancel_reason),
             computed_at=computed_at,
             work_intact=work_intact,
             declared_success_nodes=declared_success_nodes,
@@ -863,31 +853,12 @@ def classify_run(
     # genuine delivery failure (the watched node AND its compensation path both
     # failed) — explicit reason, counted as no_delivery (never fail-safe).
     if status in _COUNTABLE_NO_DELIVERY_STATUSES:
-        # FAR-707 FIRST: an explicitly configured business-expected outcome
-        # (rebase conflict, superseded-by-design, empty-workload no-op, ...)
-        # classifies benign instead of counting as a failure. Checked before
-        # reason derivation because it REPLACES the countable verdict, not
-        # merely its reason label.
-        if matches_benign_signature(
+        return _countable_result(
+            status,
+            error_code,
+            error_detail,
+            raw_output_markers,
             benign_signatures,
-            error_code=error_code,
-            error_detail=error_detail,
-        ):
-            return ClassificationResult(
-                RunClassificationValue.benign,
-                REASON_BENIGN,
-                computed_at=computed_at,
-                work_intact=work_intact,
-                declared_success_nodes=declared_success_nodes,
-            )
-        reason = (
-            REASON_COMPENSATION_FAILED
-            if status == "compensation_failed"
-            else _derive_no_delivery_reason(error_code, raw_output_markers)
-        )
-        return ClassificationResult(
-            RunClassificationValue.no_delivery,
-            reason,
             computed_at=computed_at,
             work_intact=work_intact,
             declared_success_nodes=declared_success_nodes,
@@ -896,13 +867,7 @@ def classify_run(
     # Non-terminal / unrecognized status — guard. The hook only fires for
     # terminal statuses, so this protects against a mis-wired caller.
     if status not in TERMINAL_STATUSES:
-        return ClassificationResult(
-            RunClassificationValue.excluded,
-            f"unrecognized_status:{status}",
-            computed_at=computed_at,
-            work_intact=work_intact,
-            declared_success_nodes=declared_success_nodes,
-        )
+        return _unrecognized_status_result(status, computed_at, work_intact, declared_success_nodes)
 
     # complete -> delivered iff >= 1 valid pr_url (from node returns, node
     # telemetry values, or raw_output_markers) OR any raw-output marker carries
@@ -910,40 +875,10 @@ def classify_run(
     # (empty-backlog, PO). Explicit branch — the deliverable must never be
     # reached via set-arithmetic fall-through.
     if status in _DELIVERABLE_STATUSES:
-        # FAR-1336: the SAME collection walk fills the per-URL provenance map —
-        # a URL found ONLY in a real telemetry entry or a marker is
-        # ``matched`` — and the verdict is UNCHANGED: matched-only still
-        # classifies ``delivered`` (deliberate; the delivery rule is not
-        # tightened by provenance).
-        pr_url_provenance: dict[str, str] = {}
-        pr_urls = collect_pr_urls(outputs_json, telemetry_json, raw_output_markers, pr_url_provenance)
-        if pr_urls:
-            return ClassificationResult(
-                RunClassificationValue.delivered,
-                REASON_DELIVERED,
-                delivered_pr_urls=tuple(pr_urls),
-                # FAR-1377: hold the provenance as an immutable, hashable
-                # TUPLE (the tuple is what confers both); sort by URL so
-                # content equality is order-insensitive and ``to_dict``
-                # re-materialises the JSON object in canonical order.
-                pr_url_provenance=tuple(sorted(pr_url_provenance.items())),
-                computed_at=computed_at,
-                work_intact=work_intact,
-                declared_success_nodes=declared_success_nodes,
-            )
-        # FAR-228: a delivered fact recorded on the marker is a real delivery
-        # even when the node then failed/retried (pr_url still wins above).
-        if _any_marker_delivery_done(raw_output_markers):
-            return ClassificationResult(
-                RunClassificationValue.delivered,
-                REASON_DELIVERED_EMAIL,
-                computed_at=computed_at,
-                work_intact=work_intact,
-                declared_success_nodes=declared_success_nodes,
-            )
-        return ClassificationResult(
-            RunClassificationValue.no_delivery,
-            REASON_NO_WORK,
+        return _deliverable_result(
+            outputs_json,
+            telemetry_json,
+            raw_output_markers,
             computed_at=computed_at,
             work_intact=work_intact,
             declared_success_nodes=declared_success_nodes,
@@ -952,7 +887,151 @@ def classify_run(
     # Fail-safe: a terminal status that is neither excluded, countable, nor
     # 'complete' (a NEW status added to TERMINAL_STATUSES) classifies as
     # excluded — loud in tests, never a silent complete.
+    return _unrecognized_status_result(status, computed_at, work_intact, declared_success_nodes)
+
+
+def _classification(
+    value: RunClassificationValue,
+    reason: str,
+    *,
+    computed_at: datetime,
+    work_intact: bool | None,
+    declared_success_nodes: int,
+    delivered_pr_urls: tuple[str, ...] = (),
+    pr_url_provenance: tuple[tuple[str, str], ...] = (),
+) -> ClassificationResult:
+    """Build a :class:`ClassificationResult` carrying the shared run facts."""
     return ClassificationResult(
+        value,
+        reason,
+        delivered_pr_urls=delivered_pr_urls,
+        computed_at=computed_at,
+        work_intact=work_intact,
+        declared_success_nodes=declared_success_nodes,
+        pr_url_provenance=pr_url_provenance,
+    )
+
+
+def _excluded_reason(status: str, error_code: str | None, cancel_reason: str | None) -> str:
+    """The per-status reason for an EXCLUDED terminal status (FAR-415)."""
+    if status == "cancelled":
+        # FAR-1257: discriminate a review-window timeout from a deliberate
+        # operator/HITL cancel on the run's OWN terminalization facts (the
+        # reason never changes the excluded verdict — see FAR-415's
+        # sibling: one status, its own reason, no cross-bucket leakage).
+        return REASON_HITL_TIMEOUT if _is_hitl_timeout(error_code, cancel_reason) else REASON_CANCELLED
+    if status == "router_no_match":
+        return REASON_ROUTER_NO_MATCH
+    if status == "rejected":
+        if error_code == _QUEUE_EXPIRED_ERROR_CODE:
+            # FAR-1883: a queue expiry is a supersession, not a reviewer "no".
+            return REASON_QUEUE_EXPIRED
+        return REASON_HITL_SUPERSEDED if error_code == _HITL_SUPERSEDED_ERROR_CODE else REASON_HITL_REJECTED
+    return REASON_BUDGET_EXCEEDED
+
+
+def _countable_result(
+    status: str,
+    error_code: str | None,
+    error_detail: str | None,
+    raw_output_markers: Any,
+    benign_signatures: Iterable[BenignSignature] | None,
+    *,
+    computed_at: datetime,
+    work_intact: bool | None,
+    declared_success_nodes: int,
+) -> ClassificationResult:
+    """Classify a COUNTABLE terminal failure (benign signature or no_delivery).
+
+    FAR-707 FIRST: an explicitly configured business-expected outcome (rebase
+    conflict, superseded-by-design, empty-workload no-op, ...) classifies benign
+    instead of counting as a failure. Checked before reason derivation because
+    it REPLACES the countable verdict, not merely its reason label.
+    """
+    if matches_benign_signature(
+        benign_signatures,
+        error_code=error_code,
+        error_detail=error_detail,
+    ):
+        return _classification(
+            RunClassificationValue.benign,
+            REASON_BENIGN,
+            computed_at=computed_at,
+            work_intact=work_intact,
+            declared_success_nodes=declared_success_nodes,
+        )
+    reason = (
+        REASON_COMPENSATION_FAILED
+        if status == "compensation_failed"
+        else _derive_no_delivery_reason(error_code, raw_output_markers)
+    )
+    return _classification(
+        RunClassificationValue.no_delivery,
+        reason,
+        computed_at=computed_at,
+        work_intact=work_intact,
+        declared_success_nodes=declared_success_nodes,
+    )
+
+
+def _deliverable_result(
+    outputs_json: Any,
+    telemetry_json: Any,
+    raw_output_markers: Any,
+    *,
+    computed_at: datetime,
+    work_intact: bool | None,
+    declared_success_nodes: int,
+) -> ClassificationResult:
+    """Classify a ``complete`` run: delivered, delivered-by-email, or no_work."""
+    # FAR-1336: the SAME collection walk fills the per-URL provenance map —
+    # a URL found ONLY in a real telemetry entry or a marker is
+    # ``matched`` — and the verdict is UNCHANGED: matched-only still
+    # classifies ``delivered`` (deliberate; the delivery rule is not
+    # tightened by provenance).
+    pr_url_provenance: dict[str, str] = {}
+    pr_urls = collect_pr_urls(outputs_json, telemetry_json, raw_output_markers, pr_url_provenance)
+    if pr_urls:
+        return _classification(
+            RunClassificationValue.delivered,
+            REASON_DELIVERED,
+            delivered_pr_urls=tuple(pr_urls),
+            # FAR-1377: hold the provenance as an immutable, hashable
+            # TUPLE (the tuple is what confers both); sort by URL so
+            # content equality is order-insensitive and ``to_dict``
+            # re-materialises the JSON object in canonical order.
+            pr_url_provenance=tuple(sorted(pr_url_provenance.items())),
+            computed_at=computed_at,
+            work_intact=work_intact,
+            declared_success_nodes=declared_success_nodes,
+        )
+    # FAR-228: a delivered fact recorded on the marker is a real delivery
+    # even when the node then failed/retried (pr_url still wins above).
+    if _any_marker_delivery_done(raw_output_markers):
+        return _classification(
+            RunClassificationValue.delivered,
+            REASON_DELIVERED_EMAIL,
+            computed_at=computed_at,
+            work_intact=work_intact,
+            declared_success_nodes=declared_success_nodes,
+        )
+    return _classification(
+        RunClassificationValue.no_delivery,
+        REASON_NO_WORK,
+        computed_at=computed_at,
+        work_intact=work_intact,
+        declared_success_nodes=declared_success_nodes,
+    )
+
+
+def _unrecognized_status_result(
+    status: str,
+    computed_at: datetime,
+    work_intact: bool | None,
+    declared_success_nodes: int,
+) -> ClassificationResult:
+    """The fail-loud excluded result for a non-terminal/unknown status."""
+    return _classification(
         RunClassificationValue.excluded,
         f"unrecognized_status:{status}",
         computed_at=computed_at,

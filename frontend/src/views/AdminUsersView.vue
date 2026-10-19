@@ -76,7 +76,7 @@
                 <span class="h-1.5 w-1.5 rounded-full bg-success" aria-hidden="true" />
                 {{ $t('views.AdminUsersView.active') }}
               </span>
-              <span v-else class="inline-flex items-center gap-1.5 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive">
+              <span v-else class="inline-flex items-center gap-1.5 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive-text">
                 <span class="h-1.5 w-1.5 rounded-full bg-destructive" aria-hidden="true" />
                 {{ $t('views.AdminUsersView.inactive') }}
               </span>
@@ -185,7 +185,7 @@
       </div>
     </section>
 
-    <div v-if="flashMessage" :class="['rounded-lg border px-4 py-3 text-sm', flashMessage.type === 'success' ? 'border-success/50 bg-success/10 text-success' : 'border-destructive/50 bg-destructive/10 text-destructive']">
+    <div v-if="flashMessage" :class="['rounded-lg border px-4 py-3 text-sm', flashMessage.type === 'success' ? 'border-success/50 bg-success/10 text-success' : 'border-destructive/50 bg-destructive/10 text-destructive-text']">
       {{ flashMessage.text }}
     </div>
 

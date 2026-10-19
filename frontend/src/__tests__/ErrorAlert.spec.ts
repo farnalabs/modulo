@@ -86,7 +86,7 @@ describe('ErrorAlert', () => {
     expect(wrapper.classes()).not.toContain('p-4')
     // The shared destructive shell is unchanged.
     expect(wrapper.classes()).toEqual(expect.arrayContaining([
-      'rounded-lg', 'border', 'border-destructive/50', 'bg-destructive/10', 'text-destructive',
+      'rounded-lg', 'border', 'border-destructive/50', 'bg-destructive/10', 'text-destructive-text',
     ]))
     expect(wrapper.text()).toContain('boom')
   })
@@ -100,7 +100,7 @@ describe('ErrorAlert', () => {
     expect(wrapper.classes()).not.toContain('p-3')
     expect(wrapper.classes()).not.toContain('text-sm')
     expect(wrapper.classes()).toEqual(expect.arrayContaining([
-      'rounded-lg', 'border', 'border-destructive/50', 'bg-destructive/10', 'text-destructive',
+      'rounded-lg', 'border', 'border-destructive/50', 'bg-destructive/10', 'text-destructive-text',
     ]))
     expect(wrapper.text()).toContain('boom')
   })

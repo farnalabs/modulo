@@ -85,8 +85,8 @@
       </div>
 
       <div v-if="deleteConfirmCategoryId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-        <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
-        <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminNodeCategoriesView.this_action_cannot_be_undone') }}</p>
+        <p class="text-sm font-medium text-destructive-text">Delete "{{ deleteConfirmName }}"?</p>
+        <p class="mt-1 text-sm text-destructive-text">{{ $t('views.AdminNodeCategoriesView.this_action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
           <Button :disabled="deleting" severity="danger" data-testid="admin-node-categories-delete-confirm" @click="deleteCategory">
             {{ deleting ? 'Deleting...' : 'Delete' }}
@@ -99,7 +99,7 @@
             Cancel
           </button>
         </div>
-        <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
+        <div v-if="deleteError" class="mt-2 text-sm text-destructive-text">{{ deleteError }}</div>
       </div>
     </template>
   </div>

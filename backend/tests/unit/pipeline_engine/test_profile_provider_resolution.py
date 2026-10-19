@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -103,7 +103,7 @@ def _patch_profile_provider(monkeypatch: pytest.MonkeyPatch, provider: Any) -> A
 def _forbid_legacy_builder(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fail loudly if the E2B key-based seam is used for a non-E2B profile."""
 
-    async def _boom(*_args: Any, **_kwargs: Any) -> Any:
+    def _boom(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("the legacy E2B key-based builder must not run for a profile-declared provider type")
 
     monkeypatch.setattr(nr, "_build_isolation_provider", _boom)
@@ -247,12 +247,12 @@ async def test_isolation_legacy_route_keeps_the_e2b_refusal(monkeypatch: pytest.
     E2B remediation message it has always raised."""
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
-    builder = AsyncMock(side_effect=AssertionError("must not build a provider without a key"))
+    builder = MagicMock(side_effect=AssertionError("must not build a provider without a key"))
     monkeypatch.setattr(nr, "_build_isolation_provider", builder)
 
     with pytest.raises(SandboxTierRefusedError, match="MODULO_E2B_API_KEY"):
         await _apply_isolation_via_provider("modulo-ws-1", **_isolation_kwargs())
-    builder.assert_not_awaited()
+    builder.assert_not_called()
 
 
 async def test_isolation_capability_refusal_still_maps_to_the_terminal_code(
@@ -432,7 +432,7 @@ async def test_legacy_e2b_arm_keeps_its_unclosed_per_call_provider(
     here, exactly as before the FAR-1051 follow-up."""
     provider = _CloseTrackingProvider()
     monkeypatch.setenv("MODULO_E2B_API_KEY", "test-key")
-    monkeypatch.setattr(nr, "_build_file_io_provider", AsyncMock(return_value=provider))
+    monkeypatch.setattr(nr, "_build_file_io_provider", MagicMock(return_value=provider))
 
     await _write_file_via_provider("sbx-1", "/home/user/prompt.md", "hi")
 

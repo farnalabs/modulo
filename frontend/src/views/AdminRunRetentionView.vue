@@ -498,7 +498,7 @@ function pipelineName(id: string): string {
 
 function statusBadge(status: string): string {
   if (status === 'complete') return 'bg-success/15 text-success'
-  if (status === 'failed') return 'bg-destructive/15 text-destructive'
+  if (status === 'failed') return 'bg-destructive/15 text-destructive-text'
   if (status === 'cancelled' || status === 'stalled' || status === 'rejected') return 'bg-muted text-muted-foreground'
   return 'bg-secondary text-secondary-foreground'
 }

@@ -201,7 +201,7 @@
                     <button
                       type="button"
                       data-testid="policy-gate-confirm-toggle-disable"
-                      class="rounded bg-destructive px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
+                      class="rounded bg-destructive-fill px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive-fill/90"
                       @click="confirmToggleGate"
                       ref="gateToggleConfirmBtnRef"
                     >
@@ -250,7 +250,7 @@
                         <button
                           type="button"
                           data-testid="policy-gate-confirm-delete"
-                          class="rounded bg-destructive px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
+                          class="rounded bg-destructive-fill px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive-fill/90"
                           @click="deletePolicyGate"
                           ref="gateDeleteConfirmBtnRef"
                         >
@@ -274,14 +274,14 @@
                     role="alert"
                     aria-live="assertive"
                     data-testid="policy-gate-error"
-                    class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive"
+                    class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive-text"
                   >
                     <span>{{ $t('views.EvalEditorView.policyGate.errorState') }}</span>
                     <button
                       type="button"
                       data-testid="policy-gate-retry"
                       :aria-label="$t('views.EvalEditorView.policyGate.retryAriaLabel')"
-                      class="rounded bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive hover:bg-destructive/20"
+                      class="rounded bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive-text hover:bg-destructive/20"
                       @click="retryPolicyGate"
                     >
                       {{ $t('views.EvalEditorView.policyGate.retry') }}
@@ -305,7 +305,7 @@
                 <button
                   type="button"
                   data-testid="dirty-confirm-proceed"
-                  class="rounded bg-destructive px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
+                  class="rounded bg-destructive-fill px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive-fill/90"
                   @click="resolveDirtyConfirm(true)"
                   ref="dirtyConfirmProceedBtnRef"
                 >
@@ -377,7 +377,7 @@
                     <span
                       v-if="evalGateActions[ev.id]"
                       class="inline-block rounded px-2 py-0.5 text-xs font-medium"
-                      :class="evalGateActions[ev.id] === 'block' ? 'bg-destructive/10 text-destructive' : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'"
+                      :class="evalGateActions[ev.id] === 'block' ? 'bg-destructive/10 text-destructive-text' : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'"
                       data-testid="policy-gate-badge"
                     >
                       {{ evalGateActions[ev.id] === 'block' ? $t('views.EvalEditorView.policyGate.badgeBlock') : $t('views.EvalEditorView.policyGate.badgeWarn') }}
@@ -417,7 +417,7 @@
                       type="button"
                       :disabled="deleting"
                       data-testid="eval-editor-confirm-delete"
-                      class="rounded bg-destructive px-2 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+                      class="rounded bg-destructive-fill px-2 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive-fill/90 disabled:opacity-50"
                       @click="deleteEval(ev.id)"
                     >
                       {{ deleting ? $t('common.deleting') : $t('common.confirm') }}

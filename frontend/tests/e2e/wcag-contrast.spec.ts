@@ -1,6 +1,22 @@
+// FAR-1913 — this spec's name promises a contrast gate; until now the shared
+// `filterViolations()` allowlist dropped `color-contrast` from every scan, so it
+// could not see one. That rule id is no longer tolerated: the failed-status
+// badge it found (destructive text on a destructive tint) is fixed via the
+// `--destructive-text` token, and every destructive-text-on-tint pairing in the
+// app was swept to it — including the tinted delete-confirm blocks and the
+// run-detail diagnostics cards, which render only after interaction and so are
+// not reached by the route scans below. The only entry still filtered is
+// `aria-hidden-focus` (documented, PrimeVue-internal) — see tests/e2e/setup/wcag.ts.
 import { test, expect, systemAdminJwt } from './setup/fixtures'
 import AxeBuilder from '@axe-core/playwright'
 import { WCAG_TAGS, filterViolations } from './setup/wcag'
+
+// Flipping the theme triggers PrimeVue's 0.2s colour transition on every
+// control. A cross-fade between the two themes passes through a low-contrast
+// midpoint, so an axe scan that lands mid-transition reports a `color-contrast`
+// violation the settled theme does not have. Suppress transitions before any
+// theme flip and audit the settled colours.
+const SUPPRESS_TRANSITIONS_CSS = '*, *::before, *::after { transition: none !important; }'
 
 test.describe('PrimeVue Select overlay WCAG + keyboard nav', { tag: "@regression" }, () => {
   test('open filter-bar-status overlay has no unexpected WCAG AA violations', { tag: "@regression" }, async ({ page, env }) => {
@@ -87,6 +103,15 @@ test.describe('WCAG AA audit (CI — Vite dev server)', { tag: "@regression" }, 
       // Wait for the Vue app to mount before running axe
       await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
 
+      // Flipping the theme triggers PrimeVue's 0.2s colour transition on every
+      // control. A cross-fade between the two themes passes through a
+      // low-contrast midpoint (dark ink on a bright fill fading to light ink
+      // on a dark fill), so an axe scan that lands mid-transition reports a
+      // `color-contrast` violation the settled theme does not have (observed:
+      // the login submit button measures 4.33:1 mid-transition, 4.60:1 once
+      // settled). The settled colours are what the theme actually ships, so
+      // suppress transitions before the flip and audit those.
+      await page.addStyleTag({ content: SUPPRESS_TRANSITIONS_CSS })
       await page.evaluate(() => {
         document.documentElement.classList.add('light')
         document.documentElement.classList.remove('dark')
@@ -121,6 +146,10 @@ test.describe('WCAG AA audit (CI — Vite dev server)', { tag: "@regression" }, 
       // Wait for the Vue app to mount before running axe
       await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
 
+      // Same transition-suppression guard as the light-mode test: a stored
+      // theme that differs from the default means this class-flip cross-fades,
+      // and an axe scan landing mid-transition reports a false positive.
+      await page.addStyleTag({ content: SUPPRESS_TRANSITIONS_CSS })
       await page.evaluate(() => {
         document.documentElement.classList.remove('light')
         document.documentElement.classList.remove('dark')

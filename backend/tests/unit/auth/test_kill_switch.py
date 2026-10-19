@@ -246,24 +246,22 @@ class TestRequirePermissionKillSwitch:
 
 
 class TestSystemOrOrgAdminKillSwitch:
-    @pytest.mark.asyncio
-    async def test_org_delete_not_lifted_by_enforce_false(self) -> None:
+    def test_org_delete_not_lifted_by_enforce_false(self) -> None:
         """Destructive mutations are NEVER lifted by the kill switch."""
         dep = require_system_or_org_admin("org.delete")
         token = set_authz_enforce(False)
         try:
             with pytest.raises(HTTPException) as excinfo:
-                await dep.dependency(principal=_tenant("viewer"))
+                dep.dependency(principal=_tenant("viewer"))
             assert excinfo.value.status_code == 403
         finally:
             reset_authz_enforce(token)
 
-    @pytest.mark.asyncio
-    async def test_org_admin_still_allowed_with_enforce_false(self) -> None:
+    def test_org_admin_still_allowed_with_enforce_false(self) -> None:
         dep = require_system_or_org_admin("org.delete")
         token = set_authz_enforce(False)
         try:
-            result = await dep.dependency(principal=_tenant("admin"))
+            result = dep.dependency(principal=_tenant("admin"))
             assert result.org_role == "admin"
         finally:
             reset_authz_enforce(token)

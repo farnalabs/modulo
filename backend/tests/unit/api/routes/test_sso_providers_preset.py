@@ -101,7 +101,11 @@ class TestSsoProvidersDiscovery:
 
         with (
             patch("modulo.api.routes.sso._anonymous_plan_context", new=AsyncMock(return_value=mock_plan)),
-            patch("modulo.api.routes.sso._list_enabled_oidc_global", new=AsyncMock(return_value=[provider])),
+            patch(
+                "modulo.api.routes.sso._single_login_active_org",
+                new=AsyncMock(return_value=MagicMock(id="00000000-0000-0000-0000-000000000001")),
+            ),
+            patch("modulo.api.routes.sso._list_enabled_oidc_for_org", new=AsyncMock(return_value=[provider])),
             patch("modulo.api.routes.sso._get_enabled_saml_global", new=AsyncMock(return_value=None)),
             patch("modulo.api.routes.sso.parse_oidc_providers", return_value=[]),
         ):
@@ -125,7 +129,11 @@ class TestSsoProvidersDiscovery:
 
         with (
             patch("modulo.api.routes.sso._anonymous_plan_context", new=AsyncMock(return_value=mock_plan)),
-            patch("modulo.api.routes.sso._list_enabled_oidc_global", new=AsyncMock(return_value=[provider])),
+            patch(
+                "modulo.api.routes.sso._single_login_active_org",
+                new=AsyncMock(return_value=MagicMock(id="00000000-0000-0000-0000-000000000001")),
+            ),
+            patch("modulo.api.routes.sso._list_enabled_oidc_for_org", new=AsyncMock(return_value=[provider])),
             patch("modulo.api.routes.sso._get_enabled_saml_global", new=AsyncMock(return_value=None)),
             patch("modulo.api.routes.sso.parse_oidc_providers", return_value=[]),
         ):
@@ -162,7 +170,11 @@ class TestSsoProvidersDiscovery:
 
         with (
             patch("modulo.api.routes.sso._anonymous_plan_context", new=AsyncMock(return_value=mock_plan)),
-            patch("modulo.api.routes.sso._list_enabled_oidc_global", new=AsyncMock(return_value=[provider])),
+            patch(
+                "modulo.api.routes.sso._single_login_active_org",
+                new=AsyncMock(return_value=MagicMock(id="00000000-0000-0000-0000-000000000001")),
+            ),
+            patch("modulo.api.routes.sso._list_enabled_oidc_for_org", new=AsyncMock(return_value=[provider])),
             patch("modulo.api.routes.sso._get_enabled_saml_global", new=AsyncMock(return_value=None)),
             patch("modulo.api.routes.sso.parse_oidc_providers", return_value=[]),
         ):

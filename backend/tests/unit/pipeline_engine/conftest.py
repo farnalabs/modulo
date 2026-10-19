@@ -16,7 +16,7 @@ os.environ.setdefault("MODULO_ADMIN_PASSWORD", "test")
 os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langgraph.errors import GraphInterrupt
@@ -248,7 +248,7 @@ def fake_file_io(monkeypatch: pytest.MonkeyPatch) -> FakeFileIOProvider:
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_file_io_provider",
-        AsyncMock(return_value=provider),
+        MagicMock(return_value=provider),
     )
     return provider
 

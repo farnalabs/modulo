@@ -115,7 +115,7 @@
                     data-testid="settings-triggers-deactivated-badge"
                     aria-live="polite"
                     :aria-label="$t('views.SettingsTriggersView.deactivated_badge', { reason: deactivatedReasonLabel(t) })"
-                    class="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive"
+                    class="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive-text"
                   >
                     {{ $t('views.SettingsTriggersView.deactivated_badge', { reason: deactivatedReasonLabel(t) }) }}
                   </div>
@@ -823,7 +823,7 @@ function streakBadgeClass(trigger: TriggerItem): string {
   // the tier reads as "tripped / needs attention". Colour only — no copy here
   // claims deactivation; that wording lives on the state-driven badge above.
   if (s.enabled && threshold > 0 && streak > 0 && streak >= threshold - 1) {
-    if (streak >= threshold) return 'bg-destructive/10 text-destructive'
+    if (streak >= threshold) return 'bg-destructive/10 text-destructive-text'
     return 'bg-amber-500/10 text-amber-600'
   }
   return 'bg-muted text-muted-foreground'

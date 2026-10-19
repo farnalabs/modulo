@@ -200,12 +200,17 @@ async def apply_bundled_runner_template(session: AsyncSession, profile_id: uuid.
     """Apply the shipped Bundled Runner template (FAR-591 D5 "template updated — apply").
 
     Refreshes ONLY the template-owned fields the live drift helper reports as
-    diverged — top-level ``image_ref`` / ``network_policy`` /
-    ``persistence_policy`` and the drifted keys WITHIN ``config_json`` — so
-    operator-owned fields (name, description, secret refs, capabilities,
-    timeout tweaks the operator made) survive the refresh. Only
-    template-shaped ``runner_docker`` rows participate (drift helper's
-    ``is_seeded`` gate); a non-template row returns None.
+    diverged — top-level ``network_policy`` / ``persistence_policy`` and the
+    drifted keys WITHIN ``config_json`` — so operator-owned fields survive the
+    refresh. ``image_ref`` is refreshed only while the row still carries the
+    release placeholder digest (or no image): in that state the template owns
+    it, so an advanced ``BUNDLED_RUNNER_IMAGE_REF`` reaches a placeholder-seeded
+    row. Once the operator points the profile at their own image it is
+    operator-owned, so it is neither reported as drift nor reset back to the
+    bundled placeholder by an apply. Other operator-owned fields (name,
+    description, secret refs, capabilities, timeout tweaks the operator made)
+    survive too. Only template-shaped ``runner_docker`` rows participate
+    (drift helper's ``is_seeded`` gate); a non-template row returns None.
 
     Revalidates the runner_docker persistence policy after the merge — the
     template always applies ``ephemeral``, so a previously-locked row stays
@@ -215,6 +220,7 @@ async def apply_bundled_runner_template(session: AsyncSession, profile_id: uuid.
         BUNDLED_RUNNER_IMAGE_REF,
         TEMPLATE_CONFIG_JSON,
         TEMPLATE_OWNED_FIELDS,
+        is_template_owned_image_ref,
         template_drift_fields,
     )
 
@@ -231,7 +237,10 @@ async def apply_bundled_runner_template(session: AsyncSession, profile_id: uuid.
     if not drift["is_seeded"]:
         return None
 
-    profile.image_ref = BUNDLED_RUNNER_IMAGE_REF
+    # Placeholder-scoped ownership: refresh the image ONLY while the template
+    # still owns it. An operator-set BYO image is never clobbered.
+    if is_template_owned_image_ref(profile.image_ref):
+        profile.image_ref = BUNDLED_RUNNER_IMAGE_REF
     profile.network_policy = TEMPLATE_OWNED_FIELDS["network_policy"]
     profile.persistence_policy = TEMPLATE_OWNED_FIELDS["persistence_policy"]
 
