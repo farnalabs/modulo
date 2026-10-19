@@ -3,6 +3,7 @@
 import json
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any, ClassVar, cast
 
@@ -25,7 +26,12 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.line_diff import iter_line_diffs
-from modulo.core.prompt_optimizer import OptimizationFailedError, PromptOptimizer
+from modulo.core.prompt_optimizer import (
+    LLMCallable,
+    OptimizationFailedError,
+    OptimizationResult,
+    PromptOptimizer,
+)
 from modulo.core.schema_registry.rendering import SchemaProfile
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.agent import (
@@ -44,6 +50,7 @@ from modulo.db.crud.agent_runner_binding import (
     list_bindings_for_agent,
     replace_agent_bindings,
 )
+from modulo.db.models.agent import Agent
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.schema import SchemaVersion
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -535,16 +542,43 @@ async def get_agent_endpoint(
     return AgentResponse.model_validate(agent)
 
 
-@router.patch(
-    "/{agent_id}", dependencies=[Depends(audited("agent_updated", "agent", principal_dep=get_current_tenant_user))]
-)
-@handle_db_errors(_CODE_AGENTS_UPDATE_AGENT_ENDPOINT)
-async def update_agent_endpoint(
+async def _run_org_scoped_query[T](
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    op: Callable[[], Awaitable[T]],
+    *,
+    code: str,
+    with_user_context: bool = False,
+) -> T:
+    """Run ``op`` inside an org-scoped transaction, mapping DB failures."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            if with_user_context:
+                await set_rls_user_context(session, principal.account_id, principal.org_role)
+            return await op()
+    except ProgrammingError:
+        _log.exception(code)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, code)
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
+        ) from None
+
+
+async def _load_owned_agent_for_update(
+    session: AsyncSession,
+    *,
     agent_id: uuid.UUID,
-    req: AgentUpdate,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_AGENT_UPDATE),
-) -> AgentResponse:
+    principal: TenantPrincipal,
+) -> Agent:
+    """Load the agent for a PATCH, enforcing the caller's org ownership."""
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -574,54 +608,51 @@ async def update_agent_endpoint(
         ) from None
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
+    return agent
 
-    merged_name = req.name if req.name is not None else agent.name
-    merged_is_executable = req.is_executable if req.is_executable is not None else agent.is_executable
-    merged_description = req.description if req.description is not None else agent.description
-    merged_evals = req.evals if req.evals is not None else (agent.evals or [])
-    _validate_generic_agent(
-        name=merged_name,
-        is_executable=merged_is_executable,
-        description=merged_description,
-        evals=merged_evals,
-        library_id=agent.library_id,
-    )
 
-    updates = req.model_dump(exclude_unset=True)
-    _normalise_schema_updates(updates)
-    # FAR-220: validate whichever content fields this PATCH actually sets.
-    # Previously persisted values are re-checked only when re-saved (a PATCH of
-    # an unrelated field must not retroactively fail because an OLD prompt
-    # carried a ref); run-time rendering stays fail-closed regardless.
-    if "prompt_template" in updates or "agent_commands" in updates:
-        _validate_agent_git_content(
-            prompt_template=updates.get("prompt_template"),
-            agent_commands=updates.get("agent_commands"),
-        )
+async def _apply_schema_binding_updates(
+    session: AsyncSession,
+    updates: dict[str, Any],
+    *,
+    org_id: uuid.UUID,
+) -> None:
+    """Validate and resolve the PATCH's explicit schema-id keys in place."""
+    # Schema (re)assignment / detachment on PATCH (feat-schemas): an explicit
+    # schema-id key is validated and resolved before the write so a bad ref is
+    # a 422, not a 409 FK collision.
+    for id_key, version_key in (
+        ("input_schema_id", "input_schema_version"),
+        ("output_schema_id", "output_schema_version"),
+    ):
+        if id_key in updates:
+            schema_id, resolved_version = await _resolve_schema_binding(
+                session,
+                schema_id=updates[id_key],
+                version=updates.get(version_key),
+                org_id=org_id,
+            )
+            updates[id_key] = schema_id
+            updates[version_key] = resolved_version
+
+
+async def _write_agent_patch(
+    session: AsyncSession,
+    *,
+    agent_id: uuid.UUID,
+    updates: dict[str, Any],
+    principal: TenantPrincipal,
+) -> AgentResponse:
+    """Apply the PATCH and return the response, mapping write-path failures."""
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            # Schema (re)assignment / detachment on PATCH (feat-schemas): an
-            # explicit schema-id key is validated and resolved before the write
-            # so a bad ref is a 422, not a 409 FK collision.
-            for id_key, version_key in (
-                ("input_schema_id", "input_schema_version"),
-                ("output_schema_id", "output_schema_version"),
-            ):
-                if id_key in updates:
-                    schema_id, resolved_version = await _resolve_schema_binding(
-                        session,
-                        schema_id=updates[id_key],
-                        version=updates.get(version_key),
-                        org_id=principal.organisation_id,
-                    )
-                    updates[id_key] = schema_id
-                    updates[version_key] = resolved_version
+            await _apply_schema_binding_updates(session, updates, org_id=principal.organisation_id)
             updated = await update_agent(session, agent_id, updates)
             if updated is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
             await session.refresh(updated)
-            response = AgentResponse.model_validate(updated)
+            return AgentResponse.model_validate(updated)
     except IntegrityError:
         _log.exception(_CODE_AGENTS_UPDATE_AGENT_ENDPOINT)
         raise HTTPException(
@@ -649,7 +680,77 @@ async def update_agent_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
-    return response
+
+
+@router.patch(
+    "/{agent_id}", dependencies=[Depends(audited("agent_updated", "agent", principal_dep=get_current_tenant_user))]
+)
+@handle_db_errors(_CODE_AGENTS_UPDATE_AGENT_ENDPOINT)
+async def update_agent_endpoint(
+    agent_id: uuid.UUID,
+    req: AgentUpdate,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_AGENT_UPDATE),
+) -> AgentResponse:
+    agent = await _load_owned_agent_for_update(session, agent_id=agent_id, principal=principal)
+
+    merged_name = req.name if req.name is not None else agent.name
+    merged_is_executable = req.is_executable if req.is_executable is not None else agent.is_executable
+    merged_description = req.description if req.description is not None else agent.description
+    merged_evals = req.evals if req.evals is not None else (agent.evals or [])
+    _validate_generic_agent(
+        name=merged_name,
+        is_executable=merged_is_executable,
+        description=merged_description,
+        evals=merged_evals,
+        library_id=agent.library_id,
+    )
+
+    updates = req.model_dump(exclude_unset=True)
+    _normalise_schema_updates(updates)
+    # FAR-220: validate whichever content fields this PATCH actually sets.
+    # Previously persisted values are re-checked only when re-saved (a PATCH of
+    # an unrelated field must not retroactively fail because an OLD prompt
+    # carried a ref); run-time rendering stays fail-closed regardless.
+    if "prompt_template" in updates or "agent_commands" in updates:
+        _validate_agent_git_content(
+            prompt_template=updates.get("prompt_template"),
+            agent_commands=updates.get("agent_commands"),
+        )
+    return await _write_agent_patch(session, agent_id=agent_id, updates=updates, principal=principal)
+
+
+def _flatten_message_content(content: Any) -> str:
+    """Flatten a LangChain message's list-or-scalar content to plain text."""
+    if isinstance(content, list):
+        texts = [p.get("text", "") if isinstance(p, dict) else str(p) for p in content]
+        return "".join(texts)
+    return str(content)
+
+
+async def _run_prompt_optimization(
+    source_template: str,
+    eval_results: list[dict[str, Any]] | None,
+    eval_defs: dict[str, Any] | None,
+    llm_call: LLMCallable,
+) -> OptimizationResult:
+    """Run the optimizer, mapping its failure modes to HTTP responses."""
+    try:
+        optimizer = PromptOptimizer(llm_call)
+        return await optimizer.optimize(source_template, eval_results, eval_defs)
+    except OptimizationFailedError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Prompt optimization failed: LLM call failed after retries",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Unexpected error during prompt optimization")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Prompt optimization failed unexpectedly",
+        ) from None
 
 
 @router.post("/{agent_id}/prompts/{version}/optimize")
@@ -667,23 +768,12 @@ async def optimize_prompt(
             detail="At least one eval_result_id is required",
         )
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            agent = await get_agent(session, agent_id)
-    except ProgrammingError:
-        _log.exception(_CODE_AGENTS_OPTIMIZE_PROMPT)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, _CODE_AGENTS_OPTIMIZE_PROMPT)
-        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
-        ) from None
+    agent = await _run_org_scoped_query(
+        session,
+        principal,
+        lambda: get_agent(session, agent_id),
+        code=_CODE_AGENTS_OPTIMIZE_PROMPT,
+    )
 
     if agent is None or agent.organisation_id != principal.organisation_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
@@ -695,25 +785,12 @@ async def optimize_prompt(
             detail=f"Prompt version {version} not found",
         )
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            eval_results, eval_defs = await get_eval_results_with_defs(
-                session, req.eval_result_ids, principal.organisation_id
-            )
-    except ProgrammingError:
-        _log.exception(_CODE_AGENTS_OPTIMIZE_PROMPT)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, _CODE_AGENTS_OPTIMIZE_PROMPT)
-        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
-        ) from None
+    eval_results, eval_defs = await _run_org_scoped_query(
+        session,
+        principal,
+        lambda: get_eval_results_with_defs(session, req.eval_result_ids, principal.organisation_id),
+        code=_CODE_AGENTS_OPTIMIZE_PROMPT,
+    )
 
     if not eval_results:
         raise HTTPException(
@@ -723,29 +800,18 @@ async def optimize_prompt(
 
     backend_id = req.model_backend_id or agent.model_backend_id
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            mb_result = await session.execute(
-                select(ModelBackend).where(
-                    ModelBackend.id == backend_id,
-                    ModelBackend.organisation_id == principal.organisation_id,
-                )
+    mb_result = await _run_org_scoped_query(
+        session,
+        principal,
+        lambda: session.execute(
+            select(ModelBackend).where(
+                ModelBackend.id == backend_id,
+                ModelBackend.organisation_id == principal.organisation_id,
             )
-    except ProgrammingError:
-        _log.exception(_CODE_AGENTS_OPTIMIZE_PROMPT)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, _CODE_AGENTS_OPTIMIZE_PROMPT)
-        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
-        ) from None
+        ),
+        code=_CODE_AGENTS_OPTIMIZE_PROMPT,
+        with_user_context=True,
+    )
     mb = mb_result.scalar_one_or_none()
     if mb is None:
         raise HTTPException(
@@ -770,28 +836,9 @@ async def optimize_prompt(
 
     async def _llm_call(messages: list[BaseMessage]) -> str:
         reply = await backend.invoke(messages)
-        content = reply.content
-        if isinstance(content, list):
-            texts = [p.get("text", "") if isinstance(p, dict) else str(p) for p in content]
-            return "".join(texts)
-        return str(content)
+        return _flatten_message_content(reply.content)
 
-    try:
-        optimizer = PromptOptimizer(_llm_call)
-        result = await optimizer.optimize(source_template, eval_results, eval_defs)
-    except OptimizationFailedError:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Prompt optimization failed: LLM call failed after retries",
-        ) from None
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("Unexpected error during prompt optimization")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Prompt optimization failed unexpectedly",
-        ) from None
+    result = await _run_prompt_optimization(source_template, eval_results, eval_defs, _llm_call)
 
     history = list(agent.prompt_version_history or [])
     next_version = f"v{len(history) + 1}"
