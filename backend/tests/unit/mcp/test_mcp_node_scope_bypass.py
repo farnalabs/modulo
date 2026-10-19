@@ -13,7 +13,6 @@ removed:
 * no node scope (``None``) is unrestricted/legacy.
 """
 
-import uuid
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -22,16 +21,41 @@ import pytest
 
 from modulo.api.mcp_server import (
     _ctx_node_allowed_tools,
+    get_available_features,
+    get_integration_status,
+    get_pipeline_graph_tool,
     get_run_status,
     list_pipelines_tool,
+    list_schemas,
     resource_pipeline_snapshot_detail,
+    search_documentation,
+    validate_payload,
 )
 from tests.unit.mcp.helpers import AuthContext, make_session_context
 
 # A pipeline list page shaped like ``modulo.db.crud.base.PageResult``.
 _PAGE = SimpleNamespace(items=[], total=0, next_cursor=None, has_more=False)
 _PIPELINE_ID = "11111111-1111-1111-1111-111111111111"
+_RUN_ID = "33333333-3333-3333-3333-333333333333"
 _SNAPSHOT_ID = "22222222-2222-2222-2222-222222222222"
+
+#: Every pinned chokepoint-bypassing tool: the tool name it enforces under
+#: (the ``@mcp.tool(name=...)`` value, not the Python symbol), the REAL handler,
+#: and the arguments needed to reach its scope check. The structural guard
+#: pins this exact set in
+#: ``tests/unit/test_mcp_structural_coverage._TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT``;
+#: a new bypass tool added there without a case here leaves its denial arm
+#: unexecuted, which the changed-lines coverage gate then fails.
+_BYPASS_TOOL_CASES = [
+    ("get_available_features", get_available_features, {}),
+    ("get_integration_status", get_integration_status, {}),
+    ("get_pipeline_graph", get_pipeline_graph_tool, {"pipeline_id": _PIPELINE_ID}),
+    ("get_run_status", get_run_status, {"run_id": _RUN_ID}),
+    ("list_pipelines", list_pipelines_tool, {}),
+    ("list_schemas", list_schemas, {}),
+    ("search_documentation", search_documentation, {"query": "pipelines"}),
+    ("validate_payload", validate_payload, {"schema_id": _PIPELINE_ID, "payload": {}}),
+]
 
 
 @contextmanager
@@ -61,17 +85,72 @@ class TestBypassToolNodeScopeEnforcement(AuthContext):
         }
 
     @pytest.mark.asyncio
-    async def test_out_of_scope_second_bypass_tool_is_denied(self) -> None:
-        """A second pinned bypass tool is denied by the same leg."""
+    @pytest.mark.parametrize(
+        ("tool", "handler", "kwargs"),
+        _BYPASS_TOOL_CASES,
+        ids=[case[0] for case in _BYPASS_TOOL_CASES],
+    )
+    async def test_every_bypass_tool_denies_when_out_of_node_scope(
+        self, tool: str, handler, kwargs: dict[str, object]
+    ) -> None:
+        """FAR-1976: EVERY pinned bypass tool's node-scope denial arm executes.
+
+        One case per tool in the pinned bypass set, so a tool whose handler
+        drops ``_check_node_allowed_tools`` (or whose ``except
+        MCPAuthorizationError`` arm is removed) fails here rather than only in
+        the changed-lines coverage gate.
+
+        ``_session`` raises if entered, proving the refusal happens on the
+        node-scope leg (before any DB work), not as a caught DB error.
+        """
         with (
             patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            _node_scope(["list_pipelines"]),
+            patch("modulo.api.mcp_server._session", side_effect=AssertionError(f"DB reached for {tool}")),
+            _node_scope(["create_pipeline"]),
         ):
-            result = await get_run_status(run_id=str(uuid.uuid4()))
+            result = await handler(**kwargs)
         assert result == {
             "error": "insufficient_scope",
-            "detail": "Tool 'get_run_status' is outside the node's allowed_tools scope",
+            "detail": f"Tool '{tool}' is outside the node's allowed_tools scope",
         }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool", "handler", "kwargs"),
+        _BYPASS_TOOL_CASES,
+        ids=[case[0] for case in _BYPASS_TOOL_CASES],
+    )
+    async def test_every_bypass_tool_allows_with_no_node_scope(
+        self, tool: str, handler, kwargs: dict[str, object]
+    ) -> None:
+        """``None`` (legacy: no node scope) leaves EVERY bypass tool unrestricted.
+
+        The discriminating property is the ABSENCE of the scope refusal on the
+        scope leg: with the DB unavailable (``_session`` raises), a tool that
+        had wrongly refused would return the ``insufficient_scope`` envelope,
+        while an unrestricted tool proceeds past the gate (its later DB error
+        surfaces as a generic tool error, never a scope refusal).
+        """
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("modulo.api.mcp_server._session", side_effect=AssertionError(f"DB reached for {tool}")),
+            _node_scope(None),
+        ):
+            result = await handler(**kwargs)
+        assert not (isinstance(result, dict) and result.get("error") == "insufficient_scope")
+        assert "insufficient_scope" not in str(result)
+
+    @pytest.mark.asyncio
+    async def test_in_scope_search_documentation_is_allowed(self) -> None:
+        """The included case for a bypass tool that needs no DB: naming it on
+        the node scope lets the real handler return its own result."""
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            _node_scope(["search_documentation"]),
+        ):
+            result = await search_documentation(query="pipeline")
+        assert "insufficient_scope" not in result
+        assert "count" in result
 
     @pytest.mark.asyncio
     async def test_in_scope_list_pipelines_is_allowed(self) -> None:
