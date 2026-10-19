@@ -87,17 +87,15 @@ class TestRequireSystemPermission:
         assert dep.permission == "org.email.manage"
         assert dep.permission_kind == "system"
 
-    @pytest.mark.asyncio
-    async def test_system_admin_allowed(self) -> None:
+    def test_system_admin_allowed(self) -> None:
         dep = require_system_permission("org.email.manage")
-        result = await dep.dependency(current_user=_auth(is_system_admin=True))
+        result = dep.dependency(current_user=_auth(is_system_admin=True))
         assert result.is_system_admin is True
 
-    @pytest.mark.asyncio
-    async def test_org_admin_denied_no_fall_through(self) -> None:
+    def test_org_admin_denied_no_fall_through(self) -> None:
         dep = require_system_permission("org.email.manage")
         with pytest.raises(HTTPException) as excinfo:
-            await dep.dependency(current_user=_auth(is_system_admin=False))
+            dep.dependency(current_user=_auth(is_system_admin=False))
         assert excinfo.value.status_code == 403
 
 
@@ -109,23 +107,20 @@ class TestRequireSystemOrOrgAdmin:
         assert dep.permission == "org.delete"
         assert dep.permission_kind == "system_or_org"
 
-    @pytest.mark.asyncio
-    async def test_org_admin_allowed(self) -> None:
+    def test_org_admin_allowed(self) -> None:
         dep = require_system_or_org_admin("org.delete")
-        result = await dep.dependency(principal=_tenant("admin"))
+        result = dep.dependency(principal=_tenant("admin"))
         assert result.org_role == "admin"
 
-    @pytest.mark.asyncio
-    async def test_system_admin_allowed(self) -> None:
+    def test_system_admin_allowed(self) -> None:
         dep = require_system_or_org_admin("org.delete")
-        result = await dep.dependency(principal=_tenant("operator", is_system_admin=True))
+        result = dep.dependency(principal=_tenant("operator", is_system_admin=True))
         assert result.is_system_admin is True
 
-    @pytest.mark.asyncio
-    async def test_operator_denied(self) -> None:
+    def test_operator_denied(self) -> None:
         dep = require_system_or_org_admin("org.delete")
         with pytest.raises(HTTPException) as excinfo:
-            await dep.dependency(principal=_tenant("operator"))
+            dep.dependency(principal=_tenant("operator"))
         assert excinfo.value.status_code == 403
 
 
