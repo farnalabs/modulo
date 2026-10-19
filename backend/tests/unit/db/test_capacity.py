@@ -34,9 +34,12 @@ def _hermetic_capacity_sources(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pin the ambient state the source chain reads.
 
     ``_none_source_warned`` is a module-global warn-once latch, so it is pinned
-    per test to stop one test's warning from suppressing another's.
+    per test to stop one test's warning from suppressing another's. The injected
+    platform probe (FAR-1992) is process-global too, so it is cleared here and a
+    test opts in by installing a fake.
     """
     monkeypatch.setattr(capacity, "_none_source_warned", False)
+    capacity.set_platform_capacity_probe(None)
 
 
 def _fake_settings(
@@ -82,6 +85,23 @@ def _fake_engine(*, used_bytes: int | None = 42_000_000, raise_on_connect: bool 
 
     engine.connect.return_value = conn_ctx
     return engine
+
+
+class _FakePlatformProbe:
+    """Structural fake for the injected provider/platform probe (FAR-1992)."""
+
+    name = "fake-platform"
+
+    def __init__(self, capacity: int | None, *, raises: bool = False) -> None:
+        self._capacity = capacity
+        self._raises = raises
+        self.calls = 0
+
+    async def probe_capacity_bytes(self) -> int | None:
+        self.calls += 1
+        if self._raises:
+            raise RuntimeError("provider API down")
+        return self._capacity
 
 
 # --- alert level boundaries (80 / 90 / 98) ---------------------------------
@@ -135,7 +155,7 @@ async def test_status_percent_clamped_to_100() -> None:
     resolved = capacity._ResolvedCapacity(100_000_000, 150_000_000, "env")
     with (
         patch("modulo.db.capacity.get_settings", return_value=_fake_settings(capacity_bytes=100_000_000)),
-        patch("modulo.db.capacity._resolve_capacity", new=MagicMock(return_value=resolved)),
+        patch("modulo.db.capacity._resolve_capacity", new=AsyncMock(return_value=resolved)),
     ):
         status = await db_capacity_status(engine)
     assert status["capacity_percent"] == 100.0
@@ -441,6 +461,175 @@ async def test_enforce_allows_when_auto_detection_resolves_nothing() -> None:
     assert result is None
 
 
+# --- the provider/platform source (FAR-1992) -------------------------------
+
+
+async def test_source_platform_resolves_after_filesystem() -> None:
+    # The filesystem path is absent, so the chain falls through to the injected
+    # platform probe; its capacity is paired with the measured DB size (the
+    # platform API exposes capacity, not consumption).
+    engine = _fake_engine(used_bytes=50_000_000)
+    probe = _FakePlatformProbe(100_000_000)
+    capacity.set_platform_capacity_probe(probe)
+    disk_usage = MagicMock(side_effect=OSError("absent"))
+    settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
+    with (
+        patch("modulo.db.capacity.get_settings", return_value=settings),
+        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+    ):
+        status = await db_capacity_status(engine)
+    assert status["source"] == "platform"
+    assert status["capacity_bytes"] == 100_000_000
+    assert status["used_bytes"] == 50_000_000
+    assert status["capacity_percent"] == 50.0
+    assert status["alert_level"] == "ok"
+    assert probe.calls == 1
+
+
+async def test_filesystem_wins_over_platform_in_auto_order() -> None:
+    # Order is env -> filesystem -> platform: a mountable volume resolves first
+    # and the provider probe is never even consulted.
+    engine = _fake_engine(used_bytes=50_000_000)
+    probe = _FakePlatformProbe(100_000_000)
+    capacity.set_platform_capacity_probe(probe)
+    disk_usage = MagicMock(return_value=SimpleNamespace(total=100_000_000, free=20_000_000))
+    settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
+    with (
+        patch("modulo.db.capacity.get_settings", return_value=settings),
+        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+    ):
+        status = await db_capacity_status(engine)
+    assert status["source"] == "filesystem"
+    assert probe.calls == 0
+
+
+async def test_env_override_wins_over_platform_and_probe_is_not_consulted() -> None:
+    engine = _fake_engine(used_bytes=50_000_000)
+    probe = _FakePlatformProbe(100_000_000)
+    capacity.set_platform_capacity_probe(probe)
+    settings = _fake_settings(capacity_bytes=200_000_000, capacity_path=_ABSENT_PATH)
+    with patch("modulo.db.capacity.get_settings", return_value=settings):
+        status = await db_capacity_status(engine)
+    assert status["source"] == "env"
+    assert status["capacity_bytes"] == 200_000_000
+    assert probe.calls == 0
+
+
+async def test_platform_probe_absent_stays_inert() -> None:
+    # No probe installed (a deployment that never configured one): nothing
+    # resolves, `none` is reported, the alert stays "ok" and the gate never
+    # raises - `none` is inert, never guessed.
+    engine = _fake_engine(used_bytes=50_000_000)
+    disk_usage = MagicMock(side_effect=OSError("absent"))
+    settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
+    with (
+        patch("modulo.db.capacity.get_settings", return_value=settings),
+        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+    ):
+        status = await db_capacity_status(engine)
+    assert status["source"] == "none"
+    assert status["capacity_percent"] is None
+    assert status["alert_level"] == "ok"
+    assert capacity_hard_stop(settings, status) is False
+    with (
+        patch("modulo.db.capacity.get_settings", return_value=settings),
+        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+    ):
+        assert await enforce_capacity_gate(settings=settings, engine=engine) is None
+
+
+async def test_platform_probe_returning_none_stays_inert() -> None:
+    # A built-but-unresolvable probe (credentials present, API resolves no
+    # volume) behaves exactly like an absent one.
+    engine = _fake_engine(used_bytes=50_000_000)
+    capacity.set_platform_capacity_probe(_FakePlatformProbe(None))
+    disk_usage = MagicMock(side_effect=OSError("absent"))
+    settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
+    with (
+        patch("modulo.db.capacity.get_settings", return_value=settings),
+        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+    ):
+        status = await db_capacity_status(engine)
+    assert status["source"] == "none"
+    assert status["alert_level"] == "ok"
+
+
+async def test_platform_probe_raising_is_swallowed_and_stays_inert() -> None:
+    # Defence in depth: even though the port contract is fail-open, a probe that
+    # raises must never crash a dispatch or a health probe.
+    engine = _fake_engine(used_bytes=50_000_000)
+    capacity.set_platform_capacity_probe(_FakePlatformProbe(None, raises=True))
+    disk_usage = MagicMock(side_effect=OSError("absent"))
+    settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
+    with (
+        patch("modulo.db.capacity.get_settings", return_value=settings),
+        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+    ):
+        status = await db_capacity_status(engine)
+    assert status["source"] == "none"
+    assert status["capacity_percent"] is None
+    assert status["alert_level"] == "ok"
+
+
+async def test_platform_capacity_at_98_percent_refuses_a_new_run() -> None:
+    # The resolved platform source actually gates: >=98% raises
+    # StorageExhaustedError (which the API maps to a 503).
+    engine = _fake_engine(used_bytes=98_000_000)
+    capacity.set_platform_capacity_probe(_FakePlatformProbe(100_000_000))
+    disk_usage = MagicMock(side_effect=OSError("absent"))
+    settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
+    with (
+        patch("modulo.db.capacity.get_settings", return_value=settings),
+        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+    ):
+        status = await db_capacity_status(engine)
+    assert status["source"] == "platform"
+    assert status["capacity_percent"] == 98.0
+    assert capacity_hard_stop(settings, status) is True
+    with (
+        patch("modulo.db.capacity.get_settings", return_value=settings),
+        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        pytest.raises(StorageExhaustedError),
+    ):
+        await enforce_capacity_gate(settings=settings, engine=engine)
+
+
+async def test_platform_reading_smaller_than_the_database_is_discarded() -> None:
+    # The impossibility guard applies to the platform source too: a volume
+    # smaller than the DB it holds is the wrong volume, so it is discarded -
+    # and the chain falls through to "none" (fail-open, never raising).
+    engine = _fake_engine(used_bytes=200_000_000)
+    capacity.set_platform_capacity_probe(_FakePlatformProbe(100_000_000))
+    disk_usage = MagicMock(side_effect=OSError("absent"))
+    settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
+    with (
+        patch("modulo.db.capacity.get_settings", return_value=settings),
+        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+    ):
+        status = await db_capacity_status(engine)
+    assert status["source"] == "none"
+    assert status["capacity_bytes"] is None
+    assert status["capacity_percent"] is None
+    assert capacity_hard_stop(settings, status) is False
+
+
+async def test_platform_is_not_discarded_when_the_database_size_is_unknown() -> None:
+    # No measurement to compare against: the platform reading is trusted
+    # (fail-open), but with no numerator no percent is reported.
+    engine = _fake_engine(raise_on_connect=True)
+    capacity.set_platform_capacity_probe(_FakePlatformProbe(100_000_000))
+    disk_usage = MagicMock(side_effect=OSError("absent"))
+    settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
+    with (
+        patch("modulo.db.capacity.get_settings", return_value=settings),
+        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+    ):
+        status = await db_capacity_status(engine)
+    assert status["source"] == "platform"
+    assert status["capacity_bytes"] == 100_000_000
+    assert status["capacity_percent"] is None
+
+
 # --- _probe_filesystem_capacity --------------------------------------------
 
 
@@ -468,11 +657,12 @@ def test_filesystem_probe_clamps_a_negative_free_to_zero() -> None:
 # --- _try_source / _warn_no_capacity_source --------------------------------
 
 
-def test_try_source_returns_none_for_an_unknown_candidate() -> None:
-    # Defensive fall-through: a candidate that is neither ``env`` nor
-    # ``filesystem`` resolves nothing (fail-open) rather than raising, so a
-    # future source name cannot crash a dispatch by being unhandled.
-    assert capacity._try_source("bogus", _fake_settings(capacity_bytes=100_000_000), None) is None
+async def test_try_source_returns_none_for_an_unknown_candidate() -> None:
+    # Defensive fall-through: a candidate that is neither ``env``,
+    # ``filesystem`` nor ``platform`` resolves nothing (fail-open) rather than
+    # raising, so a future source name cannot crash a dispatch by being
+    # unhandled.
+    assert await capacity._try_source("bogus", _fake_settings(capacity_bytes=100_000_000), None) is None
 
 
 def test_warn_no_capacity_source_is_warn_once() -> None:
