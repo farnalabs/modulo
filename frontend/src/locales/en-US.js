@@ -1566,6 +1566,7 @@ export default {
       "status_compensation_failed": "Compensation Failed",
       "status_rejected": "Rejected",
       "status_superseded": "Superseded by a newer version",
+      "status_queue_expired": "Expired while queued",
       "trigger_manual": "Manual",
       "trigger_webhook": "Webhook",
       "trigger_cron": "Cron",

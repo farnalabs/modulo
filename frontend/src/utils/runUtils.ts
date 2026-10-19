@@ -68,6 +68,26 @@ export function runStatusLabel(status: string | null | undefined, errorCode?: st
 }
 
 /**
+ * Visible short label for a run status badge, shared by the runs list and the
+ * run detail so the two surfaces can never disagree. Both supersession variants
+ * carry their own locale copy instead of the generic status: FAR-1487's
+ * `hitl.superseded` ("Superseded by a newer version") and FAR-1883's
+ * `queue.expired` ("Expired while queued"). Every other status is rendered by
+ * the caller's `fallback` — the runs list shows the raw value and the detail
+ * view uses `runStatusLabel` — preserving each surface's existing wording.
+ */
+export function runStatusShortLabel(
+  status: string | null | undefined,
+  errorCode: string | null | undefined,
+  t: (key: string) => string,
+  fallback: string,
+): string {
+  if (isQueueExpiredRun(status, errorCode)) return t('views.RunsListView.status_queue_expired')
+  if (isSupersededRun(status, errorCode)) return t('views.RunsListView.status_superseded')
+  return fallback
+}
+
+/**
  * Full explanatory description for a run status, surfaced as a hover tooltip
  * and accessible name on the status badge. Looked up in the locale's
  * `statusDescriptions` section (mirroring the `errorCodeDescriptions` pattern
