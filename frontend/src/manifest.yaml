@@ -1780,6 +1780,12 @@ elements:
       - testid: admin-model-backends-preset-docs-link
         type: link
         dynamic_testid: false
+      - testid: admin-model-backends-loading
+        type: element
+        dynamic_testid: false
+      - testid: admin-model-backends-presets-error
+        type: element
+        dynamic_testid: false
     /admin/my-profile:
       - testid: feature-gate
         type: element
