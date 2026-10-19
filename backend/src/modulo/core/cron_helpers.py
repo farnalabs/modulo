@@ -48,7 +48,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.connectors.base import ConnectorPermissionError
-from modulo.core.dispatch import SAQ_RUN_TIMEOUT, _apply_queued_ttl
+from modulo.core.dispatch import SAQ_QUEUED_JOB_TTL, SAQ_RUN_TIMEOUT, _apply_queued_ttl
 
 # FAR-1649: the durable "first node STARTED" phase label. It lives in the
 # dependency-free leaf ``modulo.core.dispatch_phases`` (a module import with NO
@@ -3121,10 +3121,39 @@ def _suppress_aclose() -> Any:
 # ---------------------------------------------------------------------------
 
 
+# A shed cron fire hash is first visible to the catch-up scan roughly one cadence
+# plus the queued TTL after the previous fire (the hash expires TTL seconds after
+# the enqueue). ``_fire_missed_cron_epochs`` abandons a miss older than
+# ``min(CATCHUP_BOUND_SECONDS, cadence * 3)``, so a cadence longer than the
+# difference below falls outside the repair window on the very first scan: the
+# lost occurrence would not be re-fired until the NEXT scheduled fire (up to a
+# week or a month away). Such long-cadence cron fires must therefore not take
+# the queued TTL — a lost slot would be silent, exactly like a report.
+_CATCHUP_REPAIRABLE_MAX_CADENCE = CATCHUP_BOUND_SECONDS - SAQ_QUEUED_JOB_TTL
+
+
+def _cron_fire_ttl_is_repairable(row: Any, now: datetime) -> bool:
+    """Whether a shed hash for this cron row is re-fired by the catch-up scan.
+
+    ``True`` when the row's cadence is short enough that the catch-up scan can
+    still see a TTL-shed job (``cadence <= CATCHUP_BOUND_SECONDS - TTL``). A
+    shorter cadence is also self-healing: the next scheduled fire follows within
+    one cadence. ``False`` for a long-cadence (weekly/monthly) row or an
+    uncomputable cadence — those must keep an unbounded queued hash rather than
+    risk silently losing an occurrence.
+    """
+    cadence = _cron_cadence_seconds(row.cron_expression, getattr(row, "cron_timezone", None), now)
+    if cadence is None:
+        return False
+    return cadence <= _CATCHUP_REPAIRABLE_MAX_CADENCE
+
+
 async def _enqueue_fire_job_async(
     q: RedisQueue,
     function: str,
     key: str,
+    *,
+    repairable: bool = True,
     **kwargs: Any,
 ) -> str | None:
     """Enqueue a per-item fire job with bounded knobs and a per-epoch dedupe key.
@@ -3133,12 +3162,26 @@ async def _enqueue_fire_job_async(
     already enqueued the same epoch — the atomic next_fire_at advance makes this
     the exceptional path).
 
-    FAR-2002: the job hash gets the same status-gated queued TTL as a run
-    dispatch. This path previously carried only SAQ's finish-origin TTL, so a
-    wedged runs worker (with the system worker still alive) let these hashes
-    accumulate with no TTL - which ``volatile-lru`` cannot evict. On the dedupe
-    path the existing hash is bounded too; the status gate means an ACTIVE job
-    is never expired.
+    FAR-2002: a job hash may only take the status-gated queued TTL where a lost
+    hash is RECOVERABLE — otherwise the TTL silently drops work that nothing
+    re-creates (the pre-fix run-dispatch TTL was safe because a ``runs`` row
+    exists for the reconciler to re-enqueue; a report fire has no such row).
+    ``repairable`` encodes that classification:
+
+    * ``True`` (default) — catch-up, polling, ongoing and suite fire jobs, and
+      cron fires whose cadence is inside the catch-up window
+      (``_cron_fire_ttl_is_repairable``). A shed cron/catch-up hash is re-fired
+      by ``_fire_missed_cron_epochs`` (the marker's 960s TTL is shorter than the
+      3600s job TTL, and the 48h catch-up bound is longer); polling/ongoing are
+      continuous scans that enqueue an equivalent job at the next interval, so a
+      shed hash delays one scan instead of losing a slot.
+    * ``False`` — the report fire, and a long-cadence (weekly/monthly) cron
+      fire whose miss would fall outside the catch-up bound. ``next_send_at`` is
+      advanced BEFORE the report enqueue and there is no rollback and no
+      missed-report scan, so an expired hash is a silently lost report slot; a
+      long-cadence cron's next fire is too far away for the catch-up scan to
+      reach. Both stay unbounded while queued (the ``maxmemory`` bound and the
+      capacity alert are the backstop) but are never silently dropped.
     """
     job = await q.enqueue(
         function,
@@ -3149,8 +3192,9 @@ async def _enqueue_fire_job_async(
         ttl=FIRE_JOB_TTL,
         **kwargs,
     )
-    job_id = job.id if job is not None else q.job_id(key)
-    await _apply_queued_ttl(q.redis, job_id)
+    if repairable:
+        job_id = job.id if job is not None else q.job_id(key)
+        await _apply_queued_ttl(q.redis, job_id)
     return job.id if job is not None else None
 
 
@@ -3388,11 +3432,13 @@ async def _enqueue_catchup_fire(
     unchanged from ``_fire_missed_cron_epochs`` (complexity bound).
     """
     try:
+        repairable = _cron_fire_ttl_is_repairable(row, now)
         if getattr(row, "run_kind", "run") == "suite_run":
             job_id = await _enqueue_fire_job_async(
                 q,
                 SAQ_TASK_FIRE_SUITE_RUN,
                 f"suite_catchup:{row.id}:{int(now.timestamp())}",
+                repairable=repairable,
                 trigger_id=str(row.id),
                 org_id=str(org_id),
                 pipeline_id=str(row.pipeline_id),
@@ -3402,6 +3448,7 @@ async def _enqueue_catchup_fire(
                 q,
                 "modulo.core.saq_worker.fire_cron_trigger",
                 f"fire:{row.id}:{int(now.timestamp())}",
+                repairable=repairable,
                 trigger_id=str(row.id),
                 org_id=str(org_id),
                 pipeline_id=str(row.pipeline_id),
@@ -4032,11 +4079,13 @@ async def _enqueue_cron_fire(
     ``fire_cron_trigger``.
     """
     try:
+        repairable = _cron_fire_ttl_is_repairable(row, now)
         if getattr(row, "run_kind", "run") == "suite_run":
             job_id = await _enqueue_fire_job_async(
                 q,
                 SAQ_TASK_FIRE_SUITE_RUN,
                 f"suite_fire:{row.id}:{int(now.timestamp())}",
+                repairable=repairable,
                 trigger_id=str(row.id),
                 org_id=str(org_id),
                 pipeline_id=str(row.pipeline_id),
@@ -4046,6 +4095,7 @@ async def _enqueue_cron_fire(
                 q,
                 "modulo.core.saq_worker.fire_cron_trigger",
                 f"fire:{row.id}:{int(now.timestamp())}",
+                repairable=repairable,
                 trigger_id=str(row.id),
                 org_id=str(org_id),
                 pipeline_id=str(row.pipeline_id),
@@ -4409,6 +4459,12 @@ async def _process_one_due_report_row(
             q,
             "modulo.core.saq_worker.fire_report_trigger",
             f"fire:report:{row.id}:{int(now.timestamp())}",
+            # FAR-2002: NOT repairable. ``next_send_at`` was advanced above and
+            # there is no rollback or missed-report scan, so a queued TTL on this
+            # hash would silently drop the report slot when the runs worker is
+            # wedged. It stays unbounded while queued instead (the deployment's
+            # maxmemory bound plus the capacity alert is the backstop).
+            repairable=False,
             report_id=str(row.id),
             org_id=str(org_id),
             # The enqueue tick is the fire's EPOCH: SAQ replays it verbatim on a

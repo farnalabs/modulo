@@ -20,10 +20,24 @@ from unittest.mock import AsyncMock
 
 import fakeredis.aioredis as fakeredis
 import pytest
+from saq.job import Status
+from saq.queue.redis import RedisQueue
 
 from modulo.core import dispatch
 
 _QUEUED_JOB_ID = "saq:job:runs:run:abc"
+
+
+class _FakeRedisWithInfo(fakeredis.FakeRedis):
+    """FakeRedis plus the one command ``RedisQueue.version()`` needs.
+
+    fakeredis 2.40 does not implement ``INFO``; ``RedisQueue.dequeue`` calls it
+    to choose between ``BRPOPLPUSH`` and ``BLMOVE``, so a real queue on the fake
+    needs a version answer. Reporting 7.2 exercises the modern ``BLMOVE`` path.
+    """
+
+    async def info(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"redis_version": "7.2.4"}
 
 
 def _redis() -> fakeredis.FakeRedis:
@@ -61,6 +75,39 @@ async def test_queued_ttl_is_a_noop_for_an_absent_job() -> None:
     await dispatch._apply_queued_ttl(redis, _QUEUED_JOB_ID)  # type: ignore[arg-type]
 
     assert await redis.exists(_QUEUED_JOB_ID) == 0
+
+
+async def test_dequeue_then_active_clears_the_queued_ttl() -> None:
+    """Pin the real enqueue -> TTL -> dequeue -> ACTIVE transition (FAR-2002).
+
+    The safety argument rests on SAQ writing the job hash with a plain ``SET``
+    when the worker marks it ``active``: ``SET`` clears the TTL. If that ever
+    became ``SET ... KEEPTTL``, every in-flight job would inherit the 3600s
+    queued TTL and could expire mid-run — a run's timeout is 7200s. This drives
+    a REAL ``RedisQueue`` (not a stub) through the exact production sequence.
+    """
+    redis = _FakeRedisWithInfo()
+    queue = RedisQueue(redis, name="runs")
+
+    job = await queue.enqueue(
+        "modulo.core.saq_worker.execute_run",
+        key="run:abc",
+        timeout=dispatch.SAQ_RUN_TIMEOUT,
+    )
+    assert job is not None
+    await dispatch._apply_queued_ttl(redis, job.id)  # type: ignore[arg-type]
+    assert await redis.ttl(job.id) == dispatch.SAQ_QUEUED_JOB_TTL
+
+    dequeued = await queue.dequeue(timeout=0.0)
+    assert dequeued is not None
+    assert dequeued.id == job.id
+    # ``dequeue`` only moves the id between the queue lists; the hash — and its
+    # queued TTL — is untouched until the worker marks the job active.
+    assert await redis.ttl(job.id) == dispatch.SAQ_QUEUED_JOB_TTL
+
+    await dequeued.update(status=Status.ACTIVE)
+
+    assert await redis.ttl(job.id) == -1
 
 
 async def test_queued_ttl_failure_is_logged_not_raised(caplog: pytest.LogCaptureFixture) -> None:

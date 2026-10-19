@@ -43,19 +43,32 @@ SAQ_RUN_TTL = 300
 # Redis ``noeviction``, so once the host filled, every further enqueue raised
 # ``OOM command not allowed`` and the run was left ``enqueue_failed``.
 #
-# This TTL bounds the key space from the code side, independently of the
-# deployment's Redis config. 3600s is deliberately longer than
-# ``SAQ_REENQUEUE_WINDOW`` (600s default, 3600s max) so an expired job hash is
-# always past the reconciler's job-absent re-dispatch window; a job that has
-# waited an hour has not started, so re-enqueueing it cannot double-execute
-# anything (``dispatcher_reconcile``'s ``pending`` + ``dispatcher='saq'`` leg
-# does exactly that once ``q.job()`` returns None).
+# THE RULE (FAR-2002 review, M1): a queued TTL may only be applied where a lost
+# hash is RECOVERABLE. ``_apply_queued_ttl`` is therefore used for the RUN
+# dispatch below — a ``runs`` row exists and ``dispatcher_reconcile``'s
+# ``pending`` + ``dispatcher='saq'`` leg re-enqueues once ``q.job()`` is absent —
+# and for trigger fire jobs that have a repair path (see
+# ``cron_helpers._enqueue_fire_job_async``'s ``repairable``). It is NOT applied
+# to a scheduled-report fire (``next_send_at`` is advanced before the enqueue
+# with no rollback and no missed-report scan) or to a suite-run execution job
+# (nothing reconciles a stranded ``pending`` SuiteRun): those hashes stay
+# unbounded while queued — the deployment's ``maxmemory`` bound and the capacity
+# alert are the backstop — precisely so they are never silently dropped.
+#
+# 3600s is deliberately longer than ``SAQ_REENQUEUE_WINDOW`` (600s default,
+# 3600s max) so an expired run job hash is always past the reconciler's
+# job-absent re-dispatch window; a job that has waited an hour has not started,
+# so re-enqueueing it cannot double-execute anything (``dispatcher_reconcile``'s
+# ``pending`` + ``dispatcher='saq'`` leg does exactly that once ``q.job()``
+# returns None).
 #
 # Dequeue semantics are preserved: the worker's ``job.update(status=ACTIVE)``
 # is a plain ``SET`` (saq/queue/redis.py:278-284), which CLEARS the TTL — so an
 # in-flight job is never expired. ``_apply_queued_ttl`` only applies the TTL
 # while the stored status is ``queued`` (atomic status-gated Lua), closing the
-# enqueue/dequeue race.
+# enqueue/dequeue race. ``test_dispatch_queued_ttl.py`` pins the real
+# enqueue → TTL → dequeue → ACTIVE transition against a real ``RedisQueue`` so a
+# SAQ change to ``SET ... KEEPTTL`` fails a test instead of expiring live runs.
 SAQ_QUEUED_JOB_TTL = 3600
 
 # Status-gated EXPIRE. Atomic in Redis: the status read and the EXPIRE cannot
@@ -404,6 +417,11 @@ async def _expire_webhook_dedup(session: AsyncSession, run_id: uuid.UUID) -> Non
 
 async def _apply_queued_ttl(redis_client: AsyncRedis, job_id: str) -> None:
     """Bound a still-QUEUED SAQ job hash's lifetime (FAR-2002).
+
+    Call this ONLY where a lost hash is recoverable — see the ``SAQ_QUEUED_JOB_TTL``
+    block for the rule and the exempted paths (report fires, suite-run execution
+    jobs). Applying it to an unrecoverable job silently drops work instead of
+    rebuilding the queue.
 
     Best-effort by design: the job is already enqueued, so failing the dispatch
     here would report ``enqueue_failed`` for work that will actually run. A

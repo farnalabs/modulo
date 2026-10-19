@@ -308,17 +308,26 @@ and are never evicted. Do not switch to an `allkeys-*` policy: losing a
 structural key drops queued work with no job hash for `dispatcher_reconcile` to
 detect and repair.
 
-*Code side.* `core.dispatch` applies a 3600s TTL (`SAQ_QUEUED_JOB_TTL`) to each
-job hash it enqueues: run dispatch (`_enqueue_saq`), per-item trigger fires
-(`core.cron_helpers._enqueue_fire_job_async`) and suite-run execution jobs
-(`core.saq_worker._enqueue_suite_run_execution`). Stale queue entries therefore
-self-bound regardless of the deployment's Redis config. The TTL is applied only
-while the stored job status
-is `queued` (atomic, status-gated); the worker's dequeue transition to `active`
-clears it, so an in-flight job is never expired. A queued job whose hash is
-evicted or expired is not lost: `dispatcher_reconcile` sees `q.job()` absent on
-its `pending` + `dispatcher='saq'` leg and re-enqueues it after
-`SAQ_REENQUEUE_WINDOW` (600s).
+*Code side.* `core.dispatch` applies a 3600s TTL (`SAQ_QUEUED_JOB_TTL`) to a
+still-`queued` job hash **only where a lost hash is recoverable** — a TTL on a
+job nothing re-creates would silently drop work. The TTL is applied only while
+the stored job status is `queued` (atomic, status-gated); the worker's dequeue
+transition to `active` clears it, so an in-flight job is never expired. The
+paths and their repair guarantee:
+
+| Enqueue path | Queued TTL | What happens if the hash is shed |
+|---|---|---|
+| Run dispatch (`dispatch._enqueue_saq`) | yes | `dispatcher_reconcile` sees `q.job()` absent on its `pending` + `dispatcher='saq'` leg and re-enqueues the run after `SAQ_REENQUEUE_WINDOW` (600s default). |
+| Cron fire and cron catch-up fire jobs (`cron_helpers._enqueue_fire_job_async`) | yes, when the cadence is inside the catch-up window | `_fire_missed_cron_epochs` re-fires the consumed epoch once the epoch's 960s marker expires. A **weekly/monthly** cadence is exempt (no TTL): the miss would fall outside the 48-hour catch-up bound, so a shed hash would be lost silently until the next scheduled fire. A trigger that has **never** fired is the other exception: its first epoch cannot be distinguished from an upcoming first fire, so a shed first-fire hash is skipped and the trigger resumes at its next cadence. |
+| Polling and ongoing fire jobs, and their `suite_run` variants | yes | Continuous scans: the next interval enqueues an equivalent job, so a shed hash delays one scan rather than losing a slot. |
+| Scheduled-report fires (`fire_report_trigger`) | **no** | `next_send_at` is advanced *before* the enqueue and there is no rollback and no missed-report scan, so a TTL here would silently drop the report slot. The hash stays unbounded while queued; the deployment `maxmemory` bound and the capacity alert below are the backstop. |
+| Suite-run execution jobs (`_enqueue_suite_run_execution`) | **no** | Nothing reconciles a stranded `pending` `SuiteRun`, so an expired hash would strand the run forever. The hash stays unbounded while queued; the `maxmemory` bound and the capacity alert are the backstop. |
+
+So for run dispatch the guarantee is: a queued run job whose hash is evicted or
+expired is not lost — `dispatcher_reconcile` re-enqueues it. For trigger fires
+it is the catch-up scan / next interval. The two un-TTL'd paths remain bounded
+once SAQ finishes them (SAQ's finish-origin `ttl`), and are protected while
+queued by the deployment bound rather than by silent expiry.
 
 **The bound is alerted, not silent.** The capacity alert sweep
 (`core/capacity_alerts.py`, wired into `dispatcher_reconcile`) reads `INFO
