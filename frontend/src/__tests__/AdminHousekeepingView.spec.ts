@@ -187,6 +187,17 @@ describe('AdminHousekeepingView — failed scanners (FAR-1977)', () => {
     expect(card.text()).not.toContain('No candidates found.')
   })
 
+  it('falls back to an unknown reason when a failed category carries no error detail', async () => {
+    mockGet.mockResolvedValue(scanPayload([failedCategory('stale_pipelines', { error: null })]))
+    const wrapper = mountView()
+    await nextTick()
+
+    const card = wrapper.find('[data-testid="hk-category"]')
+    expect(card.text()).toContain('This category could not be scanned')
+    expect(card.text()).toContain('Reason: unknown')
+    expect(card.text()).not.toContain('Error:')
+  })
+
   it('keeps the clean empty state for a category that genuinely found nothing', async () => {
     mockGet.mockResolvedValue(scanPayload([category('stale_pipelines', [])]))
     const wrapper = mountView()
