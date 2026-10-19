@@ -1386,6 +1386,65 @@ async def _ensure_daily_fact(
         )
 
 
+async def _find_demo_agent(session: AsyncSession, org: Organisation, name: str) -> Agent | None:
+    """The existing demo agent with this ``name``, or None."""
+    result = await session.execute(select(Agent).where(Agent.organisation_id == org.id, Agent.name == name))
+    return result.scalar_one_or_none()
+
+
+async def _create_demo_agent(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    name: str,
+    spec: Mapping[str, object],
+) -> Agent:
+    """Insert a demo agent; adopt the winner row on a concurrent-boot conflict.
+
+    Race-safe: the insert runs in a savepoint keyed on the ``(org, name)``
+    natural key, so a concurrent boot that already committed only rolls back
+    this savepoint and the seed adopts the winner row.
+    """
+    agent = Agent(
+        organisation_id=org.id,
+        name=name,
+        description=str(spec["description"]),
+        prompt_template=str(spec["prompt_template"]),
+        account_id=account.id,
+        is_executable=True,
+        prompt_version_history=[],
+        connector_type_refs=[],
+        required_environment_capabilities=[],
+        retry_policy={},
+    )
+    try:
+        async with session.begin_nested():
+            session.add(agent)
+            await session.flush()
+    except IntegrityError:
+        result = await session.execute(select(Agent).where(Agent.organisation_id == org.id, Agent.name == name))
+        adopted = result.scalar_one_or_none()
+        if adopted is None:
+            raise
+        _log.info("demo_seed.agent_recovered_after_conflict", extra={"agent_name": name})
+        return adopted
+    _log.info("demo_seed.agent_created", extra={"agent_name": name})
+    return agent
+
+
+def _converge_demo_agent(agent: Agent, name: str, spec: Mapping[str, object]) -> None:
+    """Converge spec-owned fields on an existing demo agent row."""
+    changed = False
+    if agent.description != str(spec["description"]):
+        agent.description = str(spec["description"])
+        changed = True
+    if agent.prompt_template != str(spec["prompt_template"]):
+        agent.prompt_template = str(spec["prompt_template"])
+        changed = True
+    if changed:
+        _log.info("demo_seed.agent_converged", extra={"agent_name": name})
+
+
 async def _seed_demo_agents(session: AsyncSession, org: Organisation, account: Account) -> dict[str, uuid.UUID]:
     """Idempotent demo agents (FAR-977).
 
@@ -1397,44 +1456,11 @@ async def _seed_demo_agents(session: AsyncSession, org: Organisation, account: A
     agent_ids: dict[str, uuid.UUID] = {}
     for spec in _DEMO_AGENT_SPECS:
         name = str(spec["name"])
-        result = await session.execute(select(Agent).where(Agent.organisation_id == org.id, Agent.name == name))
-        agent = result.scalar_one_or_none()
+        agent = await _find_demo_agent(session, org, name)
         if agent is None:
-            agent = Agent(
-                organisation_id=org.id,
-                name=name,
-                description=str(spec["description"]),
-                prompt_template=str(spec["prompt_template"]),
-                account_id=account.id,
-                is_executable=True,
-                prompt_version_history=[],
-                connector_type_refs=[],
-                required_environment_capabilities=[],
-                retry_policy={},
-            )
-            try:
-                async with session.begin_nested():
-                    session.add(agent)
-                    await session.flush()
-            except IntegrityError:
-                result = await session.execute(select(Agent).where(Agent.organisation_id == org.id, Agent.name == name))
-                agent = result.scalar_one_or_none()
-                if agent is None:
-                    raise
-                _log.info("demo_seed.agent_recovered_after_conflict", extra={"agent_name": name})
-            else:
-                _log.info("demo_seed.agent_created", extra={"agent_name": name})
+            agent = await _create_demo_agent(session, org, account, name, spec)
         else:
-            # Converge spec-owned fields on existing rows.
-            changed = False
-            if agent.description != str(spec["description"]):
-                agent.description = str(spec["description"])
-                changed = True
-            if agent.prompt_template != str(spec["prompt_template"]):
-                agent.prompt_template = str(spec["prompt_template"])
-                changed = True
-            if changed:
-                _log.info("demo_seed.agent_converged", extra={"agent_name": name})
+            _converge_demo_agent(agent, name, spec)
         agent_ids[name] = agent.id
     return agent_ids
 
@@ -2002,6 +2028,144 @@ async def _seed_demo_team(session: AsyncSession, org: Organisation, account: Acc
             _log.info("demo_seed.team_membership_created", extra={"team_id": str(team.id)})
 
 
+async def _find_demo_schema(session: AsyncSession, org: Organisation, name: str) -> Schema | None:
+    """The existing demo schema with this ``name``, or None."""
+    result = await session.execute(select(Schema).where(Schema.organisation_id == org.id, Schema.name == name))
+    return result.scalar_one_or_none()
+
+
+def _converge_demo_schema(schema: Schema, spec: Mapping[str, object]) -> None:
+    """Converge the spec-owned description on an existing demo schema row."""
+    if schema.description != str(spec["description"]):
+        schema.description = str(spec["description"])
+        _log.info("demo_seed.schema_converged", extra={"schema_name": spec["name"]})
+
+
+async def _create_demo_schema(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    spec: Mapping[str, object],
+) -> Schema:
+    """Insert a demo schema; adopt the winner row on a concurrent-boot conflict.
+
+    Race-safe: the insert runs in a savepoint keyed on the
+    ``(organisation, name)`` natural key, so a concurrent boot that already
+    committed only rolls back this insert.
+    """
+    name = spec["name"]
+    schema = Schema(
+        organisation_id=org.id,
+        name=name,
+        account_id=account.id,
+        description=spec["description"],
+    )
+    try:
+        # Savepoint: a concurrent boot that committed the same
+        # (organisation, name) only rolls back this insert.
+        async with session.begin_nested():
+            session.add(schema)
+            await session.flush()
+    except IntegrityError:
+        adopted = await _find_demo_schema(session, org, str(name))
+        if adopted is None:
+            raise
+        _log.info("demo_seed.schema_recovered_after_conflict", extra={"schema_name": name})
+        return adopted
+    _log.info("demo_seed.schema_created", extra={"schema_name": name})
+    return schema
+
+
+async def _get_or_create_demo_schema(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    spec: Mapping[str, object],
+) -> Schema:
+    """Find the demo schema, converging an existing row or creating a new one."""
+    schema = await _find_demo_schema(session, org, str(spec["name"]))
+    if schema is not None:
+        _converge_demo_schema(schema, spec)
+        return schema
+    return await _create_demo_schema(session, org, account, spec)
+
+
+async def _find_demo_schema_version(
+    session: AsyncSession,
+    org: Organisation,
+    schema_id: uuid.UUID,
+) -> SchemaVersion | None:
+    """The ``v1`` SchemaVersion of a demo schema, or None."""
+    result = await session.execute(
+        select(SchemaVersion).where(
+            SchemaVersion.schema_id == schema_id,
+            SchemaVersion.version == "v1",
+            SchemaVersion.organisation_id == org.id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+def _converge_demo_schema_version(existing: SchemaVersion, spec: Mapping[str, object]) -> None:
+    """Converge ``definition_json`` on an existing published demo version."""
+    desired_def = spec["definition"]
+    if existing.definition_json != desired_def:
+        existing.definition_json = desired_def  # type: ignore[assignment]
+        _log.info(
+            "demo_seed.schema_version_converged",
+            extra={"schema_name": spec["name"], "version": "v1"},
+        )
+
+
+async def _create_demo_schema_version(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    schema: Schema,
+    spec: Mapping[str, object],
+) -> None:
+    """Insert the ``v1`` SchemaVersion; adopt the winner on a boot conflict.
+
+    Race-safe: the insert runs in a savepoint (same multi-boot protection as
+    the schema row).
+    """
+    try:
+        async with session.begin_nested():
+            session.add(
+                SchemaVersion(
+                    organisation_id=org.id,
+                    schema_id=schema.id,
+                    version="v1",
+                    version_number=1,
+                    definition_json=spec["definition"],
+                    published=True,
+                    account_id=account.id,
+                )
+            )
+            await session.flush()
+    except IntegrityError:
+        if await _find_demo_schema_version(session, org, schema.id) is None:
+            raise
+        _log.info("demo_seed.schema_version_recovered_after_conflict", extra={"schema_name": spec["name"]})
+        return
+    _log.info("demo_seed.schema_version_created", extra={"schema_name": spec["name"], "version": "v1"})
+
+
+async def _ensure_demo_schema_version(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    schema: Schema,
+    spec: Mapping[str, object],
+) -> None:
+    """Converge the schema's ``v1`` version, creating it when absent."""
+    existing = await _find_demo_schema_version(session, org, schema.id)
+    if existing is not None:
+        _converge_demo_schema_version(existing, spec)
+        return
+    await _create_demo_schema_version(session, org, account, schema, spec)
+
+
 async def _seed_demo_schemas(session: AsyncSession, org: Organisation, account: Account) -> None:
     """Published demo schemas (idempotent by (organisation, name)).
 
@@ -2012,83 +2176,8 @@ async def _seed_demo_schemas(session: AsyncSession, org: Organisation, account: 
     current spec (description + SchemaVersion definition_json).
     """
     for spec in _DEMO_SCHEMA_SPECS:
-        result = await session.execute(
-            select(Schema).where(Schema.organisation_id == org.id, Schema.name == spec["name"])
-        )
-        schema = result.scalar_one_or_none()
-        if schema is None:
-            schema = Schema(
-                organisation_id=org.id,
-                name=spec["name"],
-                account_id=account.id,
-                description=spec["description"],
-            )
-            try:
-                # Savepoint: a concurrent boot that committed the same
-                # (organisation, name) only rolls back this insert.
-                async with session.begin_nested():
-                    session.add(schema)
-                    await session.flush()
-            except IntegrityError:
-                result = await session.execute(
-                    select(Schema).where(Schema.organisation_id == org.id, Schema.name == spec["name"])
-                )
-                schema = result.scalar_one_or_none()
-                if schema is None:
-                    raise
-                _log.info("demo_seed.schema_recovered_after_conflict", extra={"schema_name": spec["name"]})
-            else:
-                _log.info("demo_seed.schema_created", extra={"schema_name": spec["name"]})
-        elif schema.description != str(spec["description"]):
-            schema.description = str(spec["description"])
-            _log.info("demo_seed.schema_converged", extra={"schema_name": spec["name"]})
-
-        version_result = await session.execute(
-            select(SchemaVersion).where(
-                SchemaVersion.schema_id == schema.id,
-                SchemaVersion.version == "v1",
-                SchemaVersion.organisation_id == org.id,
-            )
-        )
-        existing_version = version_result.scalar_one_or_none()
-        if existing_version is not None:
-            # Converge definition_json on existing published versions.
-            desired_def = spec["definition"]
-            if existing_version.definition_json != desired_def:
-                existing_version.definition_json = desired_def  # type: ignore[assignment]
-                _log.info(
-                    "demo_seed.schema_version_converged",
-                    extra={"schema_name": spec["name"], "version": "v1"},
-                )
-            continue
-        try:
-            # Savepoint: same multi-boot protection for the version row.
-            async with session.begin_nested():
-                session.add(
-                    SchemaVersion(
-                        organisation_id=org.id,
-                        schema_id=schema.id,
-                        version="v1",
-                        version_number=1,
-                        definition_json=spec["definition"],
-                        published=True,
-                        account_id=account.id,
-                    )
-                )
-                await session.flush()
-        except IntegrityError:
-            version_result = await session.execute(
-                select(SchemaVersion).where(
-                    SchemaVersion.schema_id == schema.id,
-                    SchemaVersion.version == "v1",
-                    SchemaVersion.organisation_id == org.id,
-                )
-            )
-            if version_result.scalar_one_or_none() is None:
-                raise
-            _log.info("demo_seed.schema_version_recovered_after_conflict", extra={"schema_name": spec["name"]})
-        else:
-            _log.info("demo_seed.schema_version_created", extra={"schema_name": spec["name"], "version": "v1"})
+        schema = await _get_or_create_demo_schema(session, org, account, spec)
+        await _ensure_demo_schema_version(session, org, account, schema, spec)
 
 
 async def seed_demo(session: AsyncSession) -> str | None:
