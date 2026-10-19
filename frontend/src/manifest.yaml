@@ -176,6 +176,12 @@ routes:
         sidebar_group: build
         sidebar_order: 4
         type: list_page
+        query_params:
+          cursor: Keyset pagination cursor
+          status: Exact run-status filter
+          trigger_type: Trigger-type filter
+          search: Free-text run search
+          pipeline_id: Restrict the list to one pipeline
         <<: *community
         deprecated: false
 
@@ -213,6 +219,10 @@ routes:
         pattern: /pipelines/:id/editor
         dynamic_params:
           - id
+        query_params:
+          snapshot: Saved-version UUID that opens that version read-only; wins over version when both are present
+          version: Saved-version number alias for snapshot, resolved against the version-descending snapshot list
+          compare: Snapshot UUID to diff the viewed version against, opening the read-only semantic compare mode
         <<: *community
         deprecated: false
 
@@ -227,6 +237,8 @@ routes:
         pattern: /runs/:id
         dynamic_params:
           - id
+        query_params:
+          warn: "Scrolls the warnings strip into view when set (the #warnings hash anchor does the same)"
         <<: *community
         deprecated: false
 
@@ -4009,6 +4021,75 @@ elements:
       - testid: pipeline-compare-raw-toggle
         type: button
         dynamic_testid: false
+      - testid: pipeline-compare-breaking
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-breaking-item
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-breaking-none
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-edges-added
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-edges-modified
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-edges-removed
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-error
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-impacted
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-loading
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-no-target
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-node-modified
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-nodes-added
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-nodes-modified
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-nodes-removed
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-raw
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-raw-section
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-self
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-semantic
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-structural
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-structural-none
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-summary
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-unchanged
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-compare-unchanged-list
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-version-missing
         type: element
         dynamic_testid: false
@@ -4123,6 +4204,9 @@ elements:
       - testid: runs-list-loading
         type: element
         dynamic_testid: false
+      - testid: run-pipeline-version-chip
+        type: element
+        dynamic_testid: false
       - testid: runs-list-aggregate-cost
         type: element
         dynamic_testid: false
@@ -4144,6 +4228,9 @@ elements:
     /runs/:id:
       - testid: run-detail-breadcrumb-runs
         type: link
+        dynamic_testid: false
+      - testid: run-pipeline-version-chip
+        type: element
         dynamic_testid: false
       - testid: run-detail-pipeline-version-link
         type: link
@@ -6382,7 +6469,7 @@ features:
             - "[x] The pipeline editor creates, edits, and saves pipeline graphs with nodes and edges"
             - "[x] Composite editor supports expand-only composite nodes"
             - "[x] Node categories are configurable for pipeline organization"
-            - "[x] Pipeline save creates an immutable snapshot tagged version_kind='edit'"
+            - "[x] An explicit pipeline graph save records an immutable version_kind='edit' / created_kind='edit' snapshot in the SAME transaction as the write, AFTER the graph rows and the policy-gate reconciliation — on every explicit-save path (PUT /api/v1/pipelines/{pipeline_id}/graph, PATCH /api/v1/pipelines/{pipeline_id} carrying graph_json, the node-targeted PATCH /api/v1/pipelines/{pipeline_id}/graph/nodes/{node_id}, the two node-conversion saves, and the MCP update_pipeline_graph tool). A save whose incoming graph is semantically identical to the live one records no snapshot (no-op suppression), and a snapshot that cannot be allocated fails the whole save closed — a save never commits without its history (backend/src/modulo/db/crud/pipeline.py replace_pipeline_graph + _record_edit_snapshot_if_needed, backend/src/modulo/db/crud/pipeline_snapshot.py create_snapshot_edit, backend/src/modulo/api/routes/pipelines.py, backend/src/modulo/api/mcp_server.py)"
             - "[x] release_channel support allows triggers to bind to stable/canary channels"
             - "[x] diff_snapshots surfaces port-signature deltas with impact oracle"
             - "[x] Run recovery and retry are shipped across the run surface: checkpoint/resume replays a failed run from its last checkpoint (pipelines/checkpoint_resume.feature), a terminal run re-runs via POST /api/v1/runs/{run_id}/rerun, and a failed node recovers via POST /api/v1/runs/{run_id}/nodes/{node_id}/recover (run-level details under feat-runs, docs/product-map/pipelines/pipelines.md)"
