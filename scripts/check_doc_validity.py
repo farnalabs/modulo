@@ -124,14 +124,15 @@ API_BASE_URLS: frozenset[str] = frozenset(
 # References that live in the workspace, outside this repository.
 CROSS_REPO_PREFIXES: tuple[str, ...] = ("Repos/",)
 
-PLACEHOLDER_RE = re.compile(r"[*{}<>]|::|\.\.\.|\$\(|\{")
-ANCHOR_RE = re.compile(r"(?:#|§).*$")
+PLACEHOLDER_RE = re.compile(r"[*{}<>]|::|\.\.\.|\$\(")
+ANCHOR_RE = re.compile(r"[#§].*$")
 LINE_SUFFIX_RE = re.compile(r":\d+(?:-\d+)?$")
 URL_RE = re.compile(r"""https?://[^\s<>"')\]]+""")
 
 SKIPPED_URL_HOSTS = frozenset(
     {
-        "0.0.0.0",  # noqa: S104 - a host to skip in docs, never a socket binding
+        # A host to skip in docs, never a socket binding.
+        "0.0.0.0",  # noqa: S104
         "127.0.0.1",
         "backend",
         "docker-socket-proxy",
@@ -391,6 +392,18 @@ def _report_self_test(failures: list[str]) -> int:
     return 0
 
 
+def _scan_and_report_urls(files: list[Path], timeout: float, max_urls: int) -> tuple[list[UrlResult], int]:
+    results, base_urls, unchecked_urls = scan_urls(files, timeout, max_urls)
+    failed = [result for result in results if not result.ok]
+    print(f"\nURL status ({len(results)} checked, {unchecked_urls} over the cap):")
+    for result in results:
+        marker = "ok" if result.ok else "FAIL"
+        print(f"  {marker:4} {result.status:>16}  {result.url}")
+    for url in base_urls:
+        print(f"  SKIP {'(API base URL)':>16}  {url}")
+    return failed, unchecked_urls
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     if args.self_test:
@@ -414,14 +427,7 @@ def main(argv: list[str] | None = None) -> int:
     url_findings: list[UrlResult] = []
     unchecked_urls = 0
     if not args.no_urls:
-        results, base_urls, unchecked_urls = scan_urls(files, args.timeout, args.max_urls)
-        url_findings = [result for result in results if not result.ok]
-        print(f"\nURL status ({len(results)} checked, {unchecked_urls} over the cap):")
-        for result in results:
-            marker = "ok" if result.ok else "FAIL"
-            print(f"  {marker:4} {result.status:>16}  {result.url}")
-        for url in base_urls:
-            print(f"  SKIP {'(API base URL)':>16}  {url}")
+        url_findings, unchecked_urls = _scan_and_report_urls(files, args.timeout, args.max_urls)
 
     stale_count = len(token_findings) + len(path_findings)
     failed_count = len(url_findings)
