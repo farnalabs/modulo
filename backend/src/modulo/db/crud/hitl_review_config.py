@@ -289,6 +289,75 @@ def config_from_graph(graph_json: dict[str, Any], review_id: str) -> dict[str, A
     return None
 
 
+def _edge_source_target(edge: Any) -> tuple[str, str] | None:
+    """``(source, target)`` for a dict edge with both endpoints, else None."""
+    if not isinstance(edge, dict):
+        return None
+    source = edge_source_or_target(edge, "source")
+    target = edge_source_or_target(edge, "target")
+    if source is None or target is None:
+        return None
+    return source, target
+
+
+def _edge_hitl_config(edge: Any) -> dict[str, Any] | None:
+    """The edge-level ``hitl_review_config`` dict, or None."""
+    if not isinstance(edge, dict):
+        return None
+    config = edge.get("hitl_review_config")
+    return config if isinstance(config, dict) else None
+
+
+def _hitl_node_gate(node: Any) -> tuple[str, dict[str, Any]] | None:
+    """``(node_id, hitl_config)`` for a HITL node with both present, else None."""
+    if not isinstance(node, dict) or node.get("node_type") != "hitl":
+        return None
+    config = node.get("hitl_config")
+    node_id = node.get("id")
+    if not isinstance(config, dict) or node_id is None:
+        return None
+    return str(node_id), config
+
+
+def _hitl_node_targets(node_id: str, edges: Any) -> list[str]:
+    """Targets of the node's outgoing edges (source == ``node_id``)."""
+    targets: list[str] = []
+    for edge in edges:
+        endpoints = _edge_source_target(edge)
+        if endpoints is not None and endpoints[0] == node_id:
+            targets.append(endpoints[1])
+    return targets
+
+
+def _edge_gate_entries(graph_json: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """``(review_id, config)`` for every edge-level gate in the graph."""
+    entries: list[tuple[str, dict[str, Any]]] = []
+    for edge in graph_json.get("edges", []):
+        endpoints = _edge_source_target(edge)
+        config = _edge_hitl_config(edge)
+        if endpoints is not None and config is not None:
+            entries.append((make_review_id(*endpoints), config))
+    return entries
+
+
+def _hitl_node_gate_entries(graph_json: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """``(review_id, config)`` for every FAR-402 node-level gate in the graph.
+
+    Walks each HITL node's outgoing edges, the same derivation the compiler
+    uses. Order is node-major then edge-major, so the first match for a
+    review id is the same gate the single-review walker resolves.
+    """
+    entries: list[tuple[str, dict[str, Any]]] = []
+    edges = graph_json.get("edges", [])
+    for node in graph_json.get("nodes", []):
+        gate = _hitl_node_gate(node)
+        if gate is None:
+            continue
+        node_id, config = gate
+        entries.extend((make_review_id(node_id, target), config) for target in _hitl_node_targets(node_id, edges))
+    return entries
+
+
 def config_from_hitl_nodes(graph_json: dict[str, Any], review_id: str) -> dict[str, Any] | None:
     """Resolve a FAR-402 HITL-NODE gate's config from a graph's nodes.
 
@@ -302,24 +371,9 @@ def config_from_hitl_nodes(graph_json: dict[str, Any], review_id: str) -> dict[s
     node type is inert at runtime (the compiler ignores it), so honouring it
     here could over-block. Public (FAR-688): see :func:`config_from_graph`.
     """
-    edges = graph_json.get("edges", [])
-    for node in graph_json.get("nodes", []):
-        if not isinstance(node, dict) or node.get("node_type") != "hitl":
-            continue
-        config = node.get("hitl_config")
-        if not isinstance(config, dict):
-            continue
-        node_id = node.get("id")
-        if node_id is None:
-            continue
-        node_id = str(node_id)
-        for edge in edges:
-            if not isinstance(edge, dict):
-                continue
-            source = edge_source_or_target(edge, "source")
-            target = edge_source_or_target(edge, "target")
-            if source == node_id and target is not None and make_review_id(node_id, target) == review_id:
-                return dict(config)
+    for candidate_id, config in _hitl_node_gate_entries(graph_json):
+        if candidate_id == review_id:
+            return dict(config)
     return None
 
 
@@ -332,35 +386,9 @@ def snapshot_review_config_map(graph_json: dict[str, Any]) -> dict[str, dict[str
     this to resolve labels and descriptions for a whole run in ONE walk
     instead of a per-gate config resolution.
     """
-    configs: dict[str, dict[str, Any]] = {}
-    edges = graph_json.get("edges", [])
-    for edge in edges:
-        if not isinstance(edge, dict):
-            continue
-        config = edge.get("hitl_review_config")
-        if not isinstance(config, dict):
-            continue
-        source = edge_source_or_target(edge, "source")
-        target = edge_source_or_target(edge, "target")
-        if source is not None and target is not None:
-            configs[make_review_id(source, target)] = config
-    for node in graph_json.get("nodes", []):
-        if not isinstance(node, dict) or node.get("node_type") != "hitl":
-            continue
-        config = node.get("hitl_config")
-        if not isinstance(config, dict):
-            continue
-        node_id = node.get("id")
-        if node_id is None:
-            continue
-        node_id = str(node_id)
-        for edge in edges:
-            if not isinstance(edge, dict):
-                continue
-            target = edge_source_or_target(edge, "target")
-            source = edge_source_or_target(edge, "source")
-            if source == node_id and target is not None:
-                configs.setdefault(make_review_id(node_id, target), dict(config))
+    configs: dict[str, dict[str, Any]] = dict(_edge_gate_entries(graph_json))
+    for review_id, config in _hitl_node_gate_entries(graph_json):
+        configs.setdefault(review_id, dict(config))
     return configs
 
 
@@ -443,6 +471,27 @@ async def _batch_load_snapshot_graphs(
     return snapshot_id_by_run, graph_by_snapshot
 
 
+def _gate_snapshot_config(
+    config_map_by_snapshot: dict[uuid.UUID, dict[str, dict[str, Any]]],
+    graph_by_snapshot: dict[uuid.UUID, dict[str, Any]],
+    snapshot_id: uuid.UUID | None,
+    review_id: str,
+) -> dict[str, Any] | None:
+    """One gate's config from its run's snapshot, memoised per snapshot id.
+
+    The snapshot config map is built at most once per snapshot within a call
+    (several pending reviews often share one run/snapshot — one walk per
+    snapshot, not per review). A missing snapshot leaves the review without a
+    snapshot config (None).
+    """
+    if snapshot_id is None:
+        return None
+    if snapshot_id not in config_map_by_snapshot:
+        graph = graph_by_snapshot.get(snapshot_id)
+        config_map_by_snapshot[snapshot_id] = snapshot_review_config_map(graph) if isinstance(graph, dict) else {}
+    return config_map_by_snapshot[snapshot_id].get(review_id)
+
+
 async def resolve_review_descriptions(
     session: AsyncSession,
     *,
@@ -472,17 +521,36 @@ async def resolve_review_descriptions(
     )
     config_map_by_snapshot: dict[uuid.UUID, dict[str, dict[str, Any]]] = {}
     for gate in gates:
-        snapshot_id = snapshot_id_by_run.get(gate.run_id)
-        if snapshot_id is not None and snapshot_id not in config_map_by_snapshot:
-            graph = graph_by_snapshot.get(snapshot_id)
-            config_map_by_snapshot[snapshot_id] = snapshot_review_config_map(graph) if isinstance(graph, dict) else {}
         # A missing snapshot (or an unlisted run) leaves the review without a
         # snapshot config — context-first still applies from the claim row.
-        config = config_map_by_snapshot.get(snapshot_id, {}).get(gate.review_id) if snapshot_id is not None else None
+        config = _gate_snapshot_config(
+            config_map_by_snapshot, graph_by_snapshot, snapshot_id_by_run.get(gate.run_id), gate.review_id
+        )
         description_by_review[(gate.run_id, gate.review_id)] = resolve_review_description(
             gate.context_json if isinstance(gate.context_json, dict) else None, config
         )
     return description_by_review
+
+
+def _stamped_human_only_map(
+    gates: Sequence[HitlClaim],
+) -> tuple[dict[tuple[uuid.UUID, str], bool], set[uuid.UUID]]:
+    """Split the FAR-634 stamp fast path out of the snapshot walk.
+
+    Returns ``(human_only_by_review, unstamped_run_ids)``: the reviews whose
+    already-loaded claim row carries a stamped ``gate_config_json`` (resolved
+    with zero extra queries), and the run ids still needing the snapshot
+    lookup.
+    """
+    stamped_map: dict[tuple[uuid.UUID, str], bool] = {}
+    unstamped_run_ids: set[uuid.UUID] = set()
+    for gate in gates:
+        stamped = getattr(gate, "gate_config_json", None)
+        if isinstance(stamped, dict):
+            stamped_map[(gate.run_id, gate.review_id)] = human_only_effective(stamped)
+        else:
+            unstamped_run_ids.add(gate.run_id)
+    return stamped_map, unstamped_run_ids
 
 
 async def resolve_review_human_only_map(
@@ -514,13 +582,8 @@ async def resolve_review_human_only_map(
     human_only_by_review: dict[tuple[uuid.UUID, str], bool] = {}
     if not gates:
         return human_only_by_review
-    unstamped_run_ids: set[uuid.UUID] = set()
-    for gate in gates:
-        stamped = getattr(gate, "gate_config_json", None)
-        if isinstance(stamped, dict):
-            human_only_by_review[(gate.run_id, gate.review_id)] = human_only_effective(stamped)
-        else:
-            unstamped_run_ids.add(gate.run_id)
+    stamped_map, unstamped_run_ids = _stamped_human_only_map(gates)
+    human_only_by_review.update(stamped_map)
     snapshot_id_by_run, graph_by_snapshot = await _batch_load_snapshot_graphs(
         session, run_ids=unstamped_run_ids, org_id=org_id
     )
@@ -528,11 +591,9 @@ async def resolve_review_human_only_map(
     for gate in gates:
         if (gate.run_id, gate.review_id) in human_only_by_review:
             continue
-        snapshot_id = snapshot_id_by_run.get(gate.run_id)
-        if snapshot_id is not None and snapshot_id not in config_map_by_snapshot:
-            graph = graph_by_snapshot.get(snapshot_id)
-            config_map_by_snapshot[snapshot_id] = snapshot_review_config_map(graph) if isinstance(graph, dict) else {}
-        config = config_map_by_snapshot.get(snapshot_id, {}).get(gate.review_id) if snapshot_id is not None else None
+        config = _gate_snapshot_config(
+            config_map_by_snapshot, graph_by_snapshot, snapshot_id_by_run.get(gate.run_id), gate.review_id
+        )
         human_only_by_review[(gate.run_id, gate.review_id)] = human_only_effective(config)
     return human_only_by_review
 
@@ -612,6 +673,80 @@ async def _config_from_live_nodes(
     return None
 
 
+async def _stamped_gate_config(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    review_id: str,
+    org_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """FAR-634 claim-stamped config for a gate (None for manual/unstamped ids).
+
+    The stamp check runs only for parseable gate ids
+    (``hitl_review_<source>_<target>``) — manual-node ids never have a claim
+    row, so they skip the lookup entirely. The org filter is defence in depth
+    (callers already set the RLS org context).
+    """
+    if parse_hitl_review_id(review_id) is None:
+        return None
+    stamped = (
+        await session.execute(
+            select(HitlClaim.gate_config_json).where(
+                HitlClaim.run_id == run_id,
+                HitlClaim.review_id == review_id,
+                HitlClaim.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    return dict(stamped) if isinstance(stamped, dict) else None
+
+
+async def _snapshot_gate_config(
+    session: AsyncSession,
+    run: Run,
+    review_id: str,
+    org_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """The gate's config from its run's immutable snapshot graph (or None).
+
+    Edge-level ``hitl_review_config`` first, then FAR-402 node-level
+    ``hitl_config`` (their config lives on the NODE, not the edge).
+    """
+    snapshot_id = run.snapshot_id
+    if snapshot_id is None:
+        return None
+    snapshot = (
+        await session.execute(
+            select(PipelineSnapshot).where(
+                PipelineSnapshot.id == snapshot_id,
+                PipelineSnapshot.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if snapshot is None or not isinstance(snapshot.graph_json, dict):
+        return None
+    config = config_from_graph(snapshot.graph_json, review_id)
+    if config is None:
+        config = config_from_hitl_nodes(snapshot.graph_json, review_id)
+    return config
+
+
+async def _live_gate_config(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+    review_id: str,
+) -> dict[str, Any] | None:
+    """Live-edge fallback, then the live node graph for a node-gate id."""
+    config = await _config_from_live_edges(session, pipeline_id, org_id, review_id)
+    if config is not None:
+        return config
+    parsed = parse_hitl_review_id(review_id)
+    if parsed is None:
+        return None
+    return await _config_from_live_nodes(session, pipeline_id, org_id, parsed[0])
+
+
 async def resolve_hitl_review_config(
     session: AsyncSession,
     *,
@@ -641,53 +776,20 @@ async def resolve_hitl_review_config(
     ``hitl_review_exists_but_unresolved`` semantics unchanged.
     """
     # FAR-634: claim-stamped config first (O(1) — the row is one indexed
-    # lookup on the unique (run_id, review_id) pair). The org filter is defence
-    # in depth (callers already set the RLS org context).
-    if parse_hitl_review_id(review_id) is not None:
-        stamped = (
-            await session.execute(
-                select(HitlClaim.gate_config_json).where(
-                    HitlClaim.run_id == run_id,
-                    HitlClaim.review_id == review_id,
-                    HitlClaim.organisation_id == org_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if isinstance(stamped, dict):
-            return dict(stamped)
+    # lookup on the unique (run_id, review_id) pair).
+    config = await _stamped_gate_config(session, run_id=run_id, review_id=review_id, org_id=org_id)
+    if config is not None:
+        return config
 
     if run is None:
         run = await get_run(session, run_id, organisation_id=org_id)
         if run is None:
             return None
 
-    snapshot_id = run.snapshot_id
-    if snapshot_id is not None:
-        snapshot = (
-            await session.execute(
-                select(PipelineSnapshot).where(
-                    PipelineSnapshot.id == snapshot_id,
-                    PipelineSnapshot.organisation_id == org_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if snapshot is not None and isinstance(snapshot.graph_json, dict):
-            config = config_from_graph(snapshot.graph_json, review_id)
-            if config is None:
-                # FAR-402 node-level gates carry their config on the NODE, not
-                # the edge — consult the snapshot's HITL nodes before falling
-                # back to the live definition.
-                config = config_from_hitl_nodes(snapshot.graph_json, review_id)
-            if config is not None:
-                return config
-
-    config = await _config_from_live_edges(session, run.pipeline_id, org_id, review_id)
+    config = await _snapshot_gate_config(session, run, review_id, org_id)
     if config is not None:
         return config
-    parsed = parse_hitl_review_id(review_id)
-    if parsed is None:
-        return None
-    return await _config_from_live_nodes(session, run.pipeline_id, org_id, parsed[0])
+    return await _live_gate_config(session, run.pipeline_id, org_id, review_id)
 
 
 async def hitl_review_exists_but_unresolved(
