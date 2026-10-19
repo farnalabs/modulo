@@ -9155,6 +9155,43 @@ _SANDBOX_AGENT_EXTRACTION_DATUM_FIELDS: tuple[str, ...] = tuple(
 )
 
 
+def _sandbox_summary_is_reported(output: _SandboxNodeOutput, report: dict[str, Any]) -> bool:
+    """True when the envelope summary IS the producer's reported summary.
+
+    The engine rewrites ``summary`` for a failed command or a generic
+    exception, and an extraction over an empty / missing report summary is
+    engine-authored — neither is an agent claim.
+    """
+    producer_summary = report.get("summary", "")
+    return bool(producer_summary) and output.summary == producer_summary
+
+
+def _sandbox_extracted_datum_is_reported(output: _SandboxNodeOutput, key: str) -> bool:
+    """True when an extracted datum reflects the producer's absorbed report.
+
+    ``agent_status`` / ``agent_outcome`` are stamped only when the extraction
+    actually absorbed a string (a non-string report value, or a session-lost
+    echo, leaves the engine-authored ``None``). The other extraction datums
+    have no engine placeholder that can masquerade as a claim once their
+    source key is present.
+    """
+    if key not in {"agent_status", "agent_outcome"}:
+        return True
+    return isinstance(getattr(output, key), str)
+
+
+def _sandbox_reported_extraction_datums(output: _SandboxNodeOutput, report: dict[str, Any]) -> dict[str, Any]:
+    """The extraction datums the producer's ``output.json`` actually supplied."""
+    reported: dict[str, Any] = {}
+    for key, source_key in _EXTRACTED_DATUM_SOURCE_KEYS.items():
+        if key == "summary":
+            if _sandbox_summary_is_reported(output, report):
+                reported[key] = PROVENANCE_REPORTED
+        elif source_key in report and _sandbox_extracted_datum_is_reported(output, key):
+            reported[key] = PROVENANCE_REPORTED
+    return reported
+
+
 def _sandbox_reported_datum_provenance(
     inner: dict[str, Any], output: _SandboxNodeOutput, *, sandbox_mode: str
 ) -> dict[str, Any]:
@@ -9209,32 +9246,8 @@ def _sandbox_reported_datum_provenance(
     if output.output_json is not _UNSET:
         reported["output_json"] = PROVENANCE_REPORTED
     if sandbox_mode == "llm" and isinstance(output.output_json, dict):
-        for key, source_key in _EXTRACTED_DATUM_SOURCE_KEYS.items():
-            if key == "summary":
-                # The envelope's summary is agent-reported ONLY when it IS the
-                # one extracted verbatim from the producer's ``output.json``.
-                # The engine overwrites ``summary`` in two places subclassed
-                # below — the failed-node substitution (``command_error`` or a
-                # generic command text) and the exception envelope's
-                # ``SANDBOX_AGENT_FAILED_SUMMARY`` — and engine text is never
-                # an agent report. An extraction over a report with an empty
-                # or missing summary (the builder emits ``summary=""`` by
-                # default) is likewise engine-authored.
-                producer_summary = output.output_json.get("summary", "")
-                if bool(producer_summary) and output.summary == producer_summary:
-                    reported["summary"] = PROVENANCE_REPORTED
-            elif source_key in output.output_json:
-                # The producer's report wrote the key verbatim. For the two
-                # absorbed-status keys the extraction also runs an engine
-                # absorption gate (a non-string report value, or a
-                # session-lost echo, leaves the envelope value as the
-                # engine-authored ``None``) — the stamp follows the ABSORBED
-                # string, never the suppressed placeholder.
-                if key in {"agent_status", "agent_outcome"} and not isinstance(getattr(output, key), str):
-                    continue
-                reported[key] = PROVENANCE_REPORTED
-    for key in _SANDBOX_AGENT_COST_DATUM_FIELDS & set(inner):
-        reported[key] = PROVENANCE_REPORTED
+        reported.update(_sandbox_reported_extraction_datums(output, output.output_json))
+    reported.update(dict.fromkeys(_SANDBOX_AGENT_COST_DATUM_FIELDS & set(inner), PROVENANCE_REPORTED))
     return reported
 
 
