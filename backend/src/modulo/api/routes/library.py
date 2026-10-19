@@ -2755,10 +2755,25 @@ async def install_collection_endpoint(
             # nothing to gate.
             installed_pipeline_id = (install.resolved_manifest or {}).get("pipeline_id")
             if installed_pipeline_id:
+                # The manifest is SERVER data written by the install itself, so
+                # a malformed id is a server-side defect, not caller input.
+                # Parse it HERE (its own try/except) rather than letting the
+                # bundle-validation ``except ValueError`` arm below remap it:
+                # that arm exists for invalid *caller* bundles, and answering a
+                # corrupt manifest with a 422 would blame the caller for a 500.
                 # str() accepts both the real str id and a UUID instance.
-                installed_pipeline = await get_pipeline(
-                    session, uuid.UUID(str(installed_pipeline_id)), organisation_id=org_id
-                )
+                try:
+                    installed_pipeline_uuid = uuid.UUID(str(installed_pipeline_id))
+                except ValueError:
+                    _log.exception(
+                        "install_collection_endpoint: resolved manifest carries a malformed pipeline_id %r",
+                        installed_pipeline_id,
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Collection install manifest is corrupt: pipeline_id is not a valid UUID.",
+                    ) from None
+                installed_pipeline = await get_pipeline(session, installed_pipeline_uuid, organisation_id=org_id)
                 await _enforce_imported_connector_team_gate(
                     session,
                     org_id=org_id,

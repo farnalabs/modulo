@@ -1371,6 +1371,22 @@ async def materialize_import(
     )
     sections = _resolve_bundle_sections(bundle, pipeline_name_override)
 
+    # FAR-1846: reject a bundle that smuggles a sandbox-only field onto a
+    # non-sandbox node BEFORE anything is materialised. The schema and agent
+    # steps below INSERT + flush, and a collection install has already written
+    # its ``CollectionInstall`` row before it calls in — so validating inside
+    # the pipeline step (the original placement) left nothing persisted only
+    # because every HTTP caller happens to wrap the import in one transaction.
+    # The guarantee must not depend on each caller remembering to do that.
+    #
+    # Checking the raw nodes here is equivalent to the old post-processing
+    # check: nothing between this point and the pipeline step can add or remove
+    # one of the checked fields — ``_rewire_graph_nodes`` only rewrites
+    # ``agent_id`` / ``output_schema_id`` / the connector instance id, and
+    # ``strip_declared_policy_gates`` only pops ``policy_gate``.
+    graph_nodes = _normalize_graph_nodes(sections.pipeline_info, ctx.warnings)
+    _reject_sandbox_only_fields_off_sandbox(graph_nodes)
+
     existing_agent_names = await get_existing_agent_names(session, org_id)
     existing_pipeline_names = await get_existing_pipeline_names(session, org_id)
 
@@ -1391,6 +1407,7 @@ async def materialize_import(
     pipeline, pipeline_edges_added, prim = await _materialize_pipeline_and_edges(
         ctx,
         sections,
+        graph_nodes,
         pname,
         existing_pipeline_names,
         agent_id_map,
@@ -1446,6 +1463,7 @@ def _reject_sandbox_only_fields_off_sandbox(graph_nodes: list[dict[str, Any]]) -
 async def _materialize_pipeline_and_edges(
     ctx: _ImportContext,
     sections: _ImportSections,
+    graph_nodes: list[dict[str, Any]],
     pname: str,
     existing_pipeline_names: set[str],
     agent_id_map: dict[str, str],
@@ -1455,7 +1473,7 @@ async def _materialize_pipeline_and_edges(
     """Create the imported pipeline, its edges, and the library primitive."""
     _warn_redacted_credentials(bundle, ctx.warnings)
     graph_nodes = _rewire_graph_nodes(
-        _normalize_graph_nodes(sections.pipeline_info, ctx.warnings),
+        graph_nodes,
         agent_id_map,
         schema_id_map,
         ctx.overrides.connector_instances,
@@ -1474,16 +1492,6 @@ async def _materialize_pipeline_and_edges(
         )
         ctx.warnings.append(warning)
         logger.warning("Import stripped declared policy gates: %s", "; ".join(dropped_policy_gates))
-
-    # FAR-1846: a bundle is raw JSON — there is no Pydantic node model in the
-    # import path to reject a sandbox-only field on a non-sandbox_agent node
-    # (the REST/MCP save paths do). Apply the SAME shared graph-validator rule
-    # to the graph about to be persisted and fail the import closed. Unlike the
-    # manual-node schema check below (which tolerates legacy bundles with a
-    # warning), a smuggled egress/read-only/single-PR declaration can never do
-    # anything on another node type, so accepting it would persist a control
-    # that looks enforced and enforces nothing.
-    _reject_sandbox_only_fields_off_sandbox(graph_nodes)
 
     pipeline = await _create_imported_pipeline(
         ctx,

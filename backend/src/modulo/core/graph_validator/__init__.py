@@ -1109,8 +1109,9 @@ def _check_sandbox_policy_fields_only_on_sandbox_nodes(graph_json: dict[str, Any
 
     FAR-1846: ``egress_policy`` / ``egress_allowlist`` join the same set. The
     egress enforcement surface (the workspace egress policy plus the host:port
-    allowlist) is derived ONLY for sandbox_agent nodes:
-    ``_check_sandbox_egress`` short-circuits for every other node type, and the
+    allowlist) is derived ONLY for sandbox_agent nodes: ``_check_sandbox_egress``
+    runs only in the sandbox branch of this validator (it has no node_type guard
+    of its own — it is simply never called for another node type), and the
     node → ``WorkspaceSpec`` mapping happens only on the sandbox path. On an
     agent/manual/composite node the pair is declared configuration that looks
     enforced and enforces nothing, so it is rejected rather than dropped.
