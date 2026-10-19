@@ -60,6 +60,7 @@ __all__ = [
     "EVENT_BUDGET_EXCEEDED",
     "EVENT_CAPACITY_BACKPRESSURE",
     "EVENT_CAPACITY_RECOVERED",
+    "EVENT_CAPACITY_REDIS_PRESSURE",
     "EVENT_CAPACITY_SATURATION",
     "EVENT_CIRCUIT_BREAKER_TRIPPED",
     "EVENT_CLAIM_EXPIRED",
@@ -284,6 +285,14 @@ EVENT_CAPACITY_SATURATION = "capacity_saturation"
 # open alert is closed with this one event, so an operator is not left holding a
 # stale "critical" with no resolution signal.
 EVENT_CAPACITY_RECOVERED = "capacity_recovered"
+# FAR-2002 — the Redis store backing the SAQ queue is at its configured
+# ``maxmemory`` bound. This is the instance-wide infrastructure signal that the
+# queue is about to shed (``volatile-lru`` evicts queued job hashes) or, on an
+# ``noeviction`` Redis, start REFUSING enqueues. Scope ``admin``: it is raised
+# for every org whose pending work is at risk, and the operator action is a
+# deployment change (raise ``REDIS_MAXMEMORY`` / the Redis tier), not a
+# pipeline fix.
+EVENT_CAPACITY_REDIS_PRESSURE = "capacity_redis_pressure"
 
 
 @dataclass

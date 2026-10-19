@@ -23,6 +23,20 @@ services:
 
   redis:
     image: redis:8-alpine
+    # FAR-2002 — a self-hosted deployment must not be able to OOM its Redis
+    # silently. Without maxmemory Redis runs `noeviction`, so a worker wedge
+    # grows the SAQ queue until enqueue writes fail; with `volatile-lru` the
+    # store instead sheds TTL-bearing job hashes (the dispatcher TTLs queued
+    # ones for 1h), which `dispatcher_reconcile` re-enqueues, while the queue's
+    # persistent structural keys are never evicted. Set REDIS_MAXMEMORY in
+    # deploy/compose/.env to raise the bound for a larger queue budget; the
+    # policy should stay `volatile-lru`.
+    command:
+      - redis-server
+      - "--maxmemory"
+      - "${REDIS_MAXMEMORY:-256mb}"
+      - "--maxmemory-policy"
+      - "volatile-lru"
     volumes:
       - redis_data:/data
     healthcheck:

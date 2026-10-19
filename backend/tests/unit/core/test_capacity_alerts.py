@@ -37,6 +37,13 @@ class FakeRedis:
         self.kv: dict[str, str] = {}
         self.sets: dict[str, set[str]] = {}
         self.expires: dict[str, int] = {}
+        # FAR-2002 — `INFO memory`. Defaults to an unbounded store (the
+        # pre-FAR-2002 shape) so unrelated sweep tests see no pressure.
+        self.memory: dict[str, Any] = {"used_memory": 0, "maxmemory": 0}
+
+    async def info(self, section: str | None = None) -> dict[str, Any]:
+        assert section in (None, "memory")
+        return dict(self.memory)
 
     async def get(self, key: str) -> str | None:
         return self.kv.get(key)
@@ -437,6 +444,43 @@ def test_recovered_payload_renders_without_unknown_placeholder() -> None:
 
 
 # ---------------------------------------------------------------------------
+# FAR-2002 — Redis memory-bound rung
+# ---------------------------------------------------------------------------
+
+
+def test_redis_memory_rung_unbounded_store_is_clear() -> None:
+    """maxmemory=0 is an externally-managed/unbounded store — no percentage to judge."""
+    assert ca.redis_memory_rung({"used_memory": 10**9, "maxmemory": 0}) == ca.CLEAR_RUNG
+
+
+def test_redis_memory_rung_below_watermark_is_clear() -> None:
+    assert ca.redis_memory_rung({"used_memory": 100, "maxmemory": 1000}) == ca.CLEAR_RUNG
+
+
+def test_redis_memory_rung_at_or_above_watermark_is_warning() -> None:
+    assert ca.redis_memory_rung({"used_memory": 850, "maxmemory": 1000}) == ca.WARNING_RUNG
+    assert ca.redis_memory_rung({"used_memory": 999, "maxmemory": 1000}) == ca.WARNING_RUNG
+
+
+def test_redis_memory_rung_missing_or_garbage_is_clear() -> None:
+    assert ca.redis_memory_rung(None) == ca.CLEAR_RUNG
+    assert ca.redis_memory_rung({}) == ca.CLEAR_RUNG
+    assert ca.redis_memory_rung({"used_memory": "x", "maxmemory": "y"}) == ca.CLEAR_RUNG
+
+
+def test_redis_pressure_payload_renders_without_unknown_placeholder() -> None:
+    payload = ca._redis_pressure_payload(
+        {"used_memory": 900 * 1024 * 1024, "maxmemory": 1024 * 1024 * 1024, "maxmemory_policy": "volatile-lru"}
+    )
+    title, body = _render("capacity_redis_pressure", payload)
+    assert "[unknown]" not in title
+    assert "[unknown]" not in body
+    assert "87.9" in title
+    assert "volatile-lru" in body
+    assert "REDIS_MAXMEMORY" in body
+
+
+# ---------------------------------------------------------------------------
 # Sweep end-to-end
 # ---------------------------------------------------------------------------
 
@@ -533,6 +577,60 @@ async def test_sweep_auto_clears_on_drain(
     await _run(redis, notifier, org_id, _NOW + timedelta(minutes=1))
 
     assert [e[1] for e in notifier.events] == ["queue_pressure_warning", "capacity_recovered"]
+
+
+async def test_sweep_redis_pressure_warns_at_the_bound_then_recovers(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+) -> None:
+    """FAR-2002: crossing the Redis watermark with pending work alerts, then clears."""
+    redis, notifier, state = sweep_env
+    pid = uuid.uuid4()
+    org_id = uuid.uuid4()
+    state["report"] = _report(pending_by_pipeline=[_pipeline(pid, count=1, oldest=0.0)], pending_total=1)
+    redis.memory = {"used_memory": 900, "maxmemory": 1000, "maxmemory_policy": "volatile-lru"}
+
+    await _run(redis, notifier, org_id, _NOW)
+    assert [e[1] for e in notifier.events] == ["capacity_redis_pressure"]
+
+    # Same tick observation must not re-notify (one open alert per subject).
+    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=1))
+    assert [e[1] for e in notifier.events] == ["capacity_redis_pressure"]
+
+    # Below the watermark the subject is absent -> auto-clear.
+    redis.memory = {"used_memory": 100, "maxmemory": 1000, "maxmemory_policy": "volatile-lru"}
+    await _run(redis, notifier, org_id, _NOW + timedelta(minutes=2))
+    assert [e[1] for e in notifier.events] == ["capacity_redis_pressure", "capacity_recovered"]
+
+
+async def test_sweep_redis_pressure_needs_pending_work(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+) -> None:
+    """An over-bound store with nothing queued has no work at risk to alert about."""
+    redis, notifier, state = sweep_env
+    state["report"] = _report(pending_total=0)
+    redis.memory = {"used_memory": 900, "maxmemory": 1000, "maxmemory_policy": "volatile-lru"}
+
+    await _run(redis, notifier, uuid.uuid4(), _NOW)
+    assert not notifier.events
+
+
+async def test_sweep_redis_pressure_read_failure_does_not_recover(
+    sweep_env: tuple[FakeRedis, FakeNotifier, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed INFO read is UNKNOWN: never a spurious capacity_recovered."""
+    redis, notifier, state = sweep_env
+    pid = uuid.uuid4()
+    org_id = uuid.uuid4()
+    state["report"] = _report(pending_by_pipeline=[_pipeline(pid, count=1, oldest=0.0)], pending_total=1)
+    redis.memory = {"used_memory": 900, "maxmemory": 1000, "maxmemory_policy": "volatile-lru"}
+    await _run(redis, notifier, org_id, _NOW)
+
+    monkeypatch.setattr(redis, "info", AsyncMock(side_effect=RuntimeError("INFO unavailable")))
+    summary = await _run(redis, notifier, org_id, _NOW + timedelta(minutes=1))
+
+    assert [e[1] for e in notifier.events] == ["capacity_redis_pressure"]
+    assert summary["redis_memory_unavailable"] == 1
 
 
 async def test_sweep_backpressure_candidate_notifies(

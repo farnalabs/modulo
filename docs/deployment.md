@@ -525,6 +525,19 @@ bash modulo-install.sh
 
 Redis is required: the dispatcher enqueues every run to SAQ's Redis queue and cron/polling triggers run as Redis-backed SAQ system crons, and `api/main.py` refuses to boot if `REDIS_URL` is empty. `REDIS_URL` defaults to `redis://localhost:6379/0`; if it is explicitly set to an empty value, startup aborts with a `RuntimeError` (see `api/main.py`) instead of a silent fallback.
 
+The bundled Redis is **bounded and evicts safely** (FAR-2002): the compose runs
+it with `--maxmemory ${REDIS_MAXMEMORY:-256mb} --maxmemory-policy
+volatile-lru`. Without a bound Redis ran `noeviction`, so a worker wedge could
+grow the SAQ queue until every enqueue failed. `volatile-lru` evicts only
+TTL-bearing job hashes; the queue's structural keys are persistent and a
+shed/expired queued job is re-dispatched by `dispatcher_reconcile`. Raise
+`REDIS_MAXMEMORY` in `deploy/compose/.env` for a larger queue budget; keep the
+policy. The capacity alert sweep raises a `capacity_redis_pressure` admin
+notification at 85% of the bound, so the operator sees the pressure before any
+enqueue is refused. If you point `REDIS_URL` at an external/managed Redis, that
+instance's bound and eviction policy are yours to set — see
+[`docs/configuration-reference.md`](./configuration-reference.md#redis--task-queue).
+
 The two queue workers are **not** separate compose services here - they are
 supervisord programs inside the `modulo` container
 (`deploy/supervisor/supervisord.conf`), which is what keeps the deployment

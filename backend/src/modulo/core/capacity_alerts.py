@@ -21,6 +21,12 @@ org/team webhook subscriptions and the per-category in-app opt-out both apply):
 * **capacity saturation** — an ORG-level limit (org run concurrency or org
   sandbox concurrency) has been fully held, with work queued, for longer than
   the sustain threshold.
+* **Redis pressure** (FAR-2002) — the Redis store backing the SAQ queue is at
+  its configured ``maxmemory`` bound. The shipped Compose default is now
+  bounded and evicting (``volatile-lru`` over the TTL-bearing job hashes only),
+  so this alert fires while there is still headroom to act rather than after
+  enqueues start failing. It is attached to every org with pending work at
+  risk — the fix is an operator/deployment change, not a pipeline fix.
 
 The org layer is **signal + alert, never a refusal**: nothing here gates
 admission. The alert fires whether or not ``queue_timeout`` is configured — it
@@ -72,6 +78,7 @@ from modulo.core.analytics.capacity import CapacityParams, read_capacity_report
 from modulo.core.notifier import (
     EVENT_CAPACITY_BACKPRESSURE,
     EVENT_CAPACITY_RECOVERED,
+    EVENT_CAPACITY_REDIS_PRESSURE,
     EVENT_CAPACITY_SATURATION,
     EVENT_QUEUE_PRESSURE_CRITICAL,
     EVENT_QUEUE_PRESSURE_NOTICE,
@@ -93,6 +100,7 @@ __all__ = [
     "evaluate_capacity_alerts",
     "pipeline_trend",
     "queue_pressure_rung",
+    "redis_memory_rung",
     "resolve_alert_action",
     "saturation_rung",
 ]
@@ -111,6 +119,9 @@ CRITICAL_RUNG = 3
 _SUBJECT_QUEUE = "queue"
 _SUBJECT_BACKPRESSURE = "backpressure"
 _SUBJECT_SATURATION = "saturation"
+# FAR-2002 — the SAQ queue's Redis store, evaluated once per tick from
+# ``INFO memory`` and attached to every org with pending work at risk.
+_SUBJECT_REDIS = "redis"
 
 # Rung → event type. The in-app severity of each rung comes from the EVENT's
 # own render config (event_mapper), which is why the rungs are distinct events.
@@ -135,6 +146,11 @@ NOTICE_MIN_DEPTH = 1
 # Saturation must be continuously held this long before it alerts — a momentary
 # full cap during a healthy burst is not saturation.
 SATURATION_SUSTAIN_SECONDS = 300
+# FAR-2002 — Redis memory watermark. Alert while there is still headroom to act
+# (and while ``volatile-lru`` can still shed cleanly); a Redis already past this
+# bound is one host-OOM away from refusing every enqueue, which is precisely the
+# failure FAR-2002 removes from the shipped Compose default.
+REDIS_MEMORY_WARNING_PCT = 85.0
 
 # Sweep bounds. The sweep shares the 60s ``dispatcher_reconcile`` slot with the
 # other compensating sweeps, so it is wall-clock bounded and per-org bounded.
@@ -292,6 +308,44 @@ def saturation_rung(report: dict[str, Any], *, bound_since: datetime | None, now
     if bound_since is None or (now - bound_since).total_seconds() < SATURATION_SUSTAIN_SECONDS:
         return CLEAR_RUNG
     return SATURATION_RUNG
+
+
+def redis_memory_rung(info: dict[str, Any] | None) -> int:
+    """The Redis pressure rung from ``INFO memory`` (FAR-2002).
+
+    ``maxmemory == 0`` means Redis is unbounded — the deployment is not using
+    the shipped bound (an externally-managed Redis, or a hand-written compose).
+    There is no percentage to compare, and a managed instance may report 0
+    while enforcing its own server-side eviction, so treating it as pressure
+    would be pure noise. The shipped Compose files set the bound instead, and
+    ``docs/configuration-reference.md`` documents it. So: clear.
+
+    A bounded Redis at/over :data:`REDIS_MEMORY_WARNING_PCT` is a WARNING — the
+    queue is already shedding (``volatile-lru`` evicts queued job hashes) or, on
+    ``noeviction``, about to refuse every enqueue.
+    """
+    if not info:
+        return CLEAR_RUNG
+    try:
+        used = int(info.get("used_memory") or 0)
+        maximum = int(info.get("maxmemory") or 0)
+    except (TypeError, ValueError):
+        return CLEAR_RUNG
+    if used <= 0 or maximum <= 0:
+        return CLEAR_RUNG
+    if used * 100 >= maximum * REDIS_MEMORY_WARNING_PCT:
+        return WARNING_RUNG
+    return CLEAR_RUNG
+
+
+def _bytes_label(value: int) -> str:
+    """Humanise a byte count for the alert body (``256 MB`` / ``900 B``)."""
+    size = float(max(value, 0))
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
 
 
 def resolve_alert_action(prev_rung: int | None, rung: int) -> tuple[str, int | None]:
@@ -514,6 +568,25 @@ def _saturation_payload(*, report: dict[str, Any]) -> dict[str, Any]:
         "pending_depth": int((report.get("pending") or {}).get("total") or 0),
         "sustained_minutes": SATURATION_SUSTAIN_SECONDS // 60,
         **_binding_fields(report),
+    }
+
+
+def _redis_pressure_payload(info: dict[str, Any]) -> dict[str, Any]:
+    """Payload for the FAR-2002 Redis-pressure alert.
+
+    Every placeholder the render templates use is present, so the notification
+    never falls back to ``[unknown]``.
+    """
+    used = int(info.get("used_memory") or 0)
+    maximum = int(info.get("maxmemory") or 0)
+    used_percent = round(used * 100 / maximum, 1) if maximum else 0.0
+    return {
+        "used_memory_bytes": used,
+        "maxmemory_bytes": maximum,
+        "used_memory_label": _bytes_label(used),
+        "maxmemory_label": _bytes_label(maximum),
+        "used_percent": used_percent,
+        "policy": str(info.get("maxmemory_policy") or "unknown"),
     }
 
 
@@ -864,6 +937,30 @@ def _merge_org_sources(open_alert_orgs: list[uuid.UUID], pending_orgs: list[uuid
     return merged
 
 
+async def _read_redis_memory(redis_client: AsyncRedis, summary: dict[str, Any]) -> dict[str, Any] | None:
+    """Read ``INFO memory`` once per tick (FAR-2002).
+
+    Returns ``None`` when the read fails — the caller must treat that as
+    UNKNOWN (never auto-clear an open Redis alert on a failed read) and says so
+    in the summary + a WARNING log. The read is deliberately separate from the
+    dedup state store: ``INFO`` still answers on a Redis that is refusing
+    writes at ``maxmemory``, which is exactly when the signal matters.
+    """
+    try:
+        info = await redis_client.info("memory")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["redis_memory_unavailable"] = 1
+        _log.warning("capacity_alerts.redis_memory_read_failed", exc_info=True)
+        return None
+    if not isinstance(info, dict):
+        summary["redis_memory_unavailable"] = 1
+        _log.warning("capacity_alerts.redis_memory_unreadable type=%s", type(info).__name__)
+        return None
+    return info
+
+
 async def _sweep_org(
     *,
     factory: async_sessionmaker[AsyncSession],
@@ -873,6 +970,7 @@ async def _sweep_org(
     notifier: Any,
     now: datetime,
     summary: dict[str, Any],
+    redis_memory: dict[str, Any] | None = None,
 ) -> None:
     """Evaluate one org's ladder and act on it. Isolated — never raises."""
     try:
@@ -907,6 +1005,20 @@ async def _sweep_org(
     candidates = build_candidates(report, bound_since=bound_since, now=now)
     unverified_subjects: set[str] = set()
     unverified_kinds: set[str] = set()
+    # FAR-2002 — the Redis bound is instance-wide, but it is attached per org
+    # only when that org has pending work at risk (an empty queue has nothing to
+    # shed). A failed INFO read is UNKNOWN, never "clear".
+    if redis_memory is None:
+        unverified_kinds.add(_SUBJECT_REDIS)
+    elif int((report.get("pending") or {}).get("total") or 0) > 0:
+        redis_rung = redis_memory_rung(redis_memory)
+        if redis_rung != CLEAR_RUNG:
+            candidates[_SUBJECT_REDIS] = Candidate(
+                subject=_SUBJECT_REDIS,
+                rung=redis_rung,
+                event_type=EVENT_CAPACITY_REDIS_PRESSURE,
+                payload=_redis_pressure_payload(redis_memory),
+            )
     try:
         unverified_subjects = await _add_backpressure_candidates(factory, report, org_id=org_id, candidates=candidates)
     except asyncio.CancelledError:
@@ -942,6 +1054,7 @@ async def _run_orgs(
     now: datetime,
     summary: dict[str, Any],
     budget_seconds: float,
+    redis_memory: dict[str, Any] | None = None,
 ) -> None:
     """Evaluate every candidate org, checking the wall-clock budget between orgs."""
     started = time.monotonic()
@@ -959,6 +1072,7 @@ async def _run_orgs(
                 notifier=notifier,
                 now=now,
                 summary=summary,
+                redis_memory=redis_memory,
             )
         except asyncio.CancelledError:
             raise
@@ -997,6 +1111,7 @@ async def evaluate_capacity_alerts(
         "notify_failed": 0,
         "org_errors": 0,
         "state_unavailable": 0,
+        "redis_memory_unavailable": 0,
         "budget_exhausted": False,
     }
     if redis_client is None:
@@ -1009,6 +1124,19 @@ async def evaluate_capacity_alerts(
     settings = settings or get_settings()
     now = now or datetime.now(UTC)
     notifier = notifier or _build_notifier(settings)
+    # FAR-2002 — read the queue store's memory bound once per tick. A failed
+    # read is UNKNOWN (see _read_redis_memory), never "clear".
+    redis_memory = await _read_redis_memory(redis_client, summary)
+    if redis_memory is not None and redis_memory_rung(redis_memory) >= WARNING_RUNG:
+        # One alert-grade log per tick in addition to the (deduped) notification,
+        # so the condition is visible even when no org is evaluated this tick.
+        _log.warning(
+            "capacity_alerts.redis_pressure used=%s maxmemory=%s policy=%s — the queue store is "
+            "shedding/at risk of refusing enqueues (FAR-2002)",
+            redis_memory.get("used_memory"),
+            redis_memory.get("maxmemory"),
+            redis_memory.get("maxmemory_policy"),
+        )
 
     try:
         if org_ids is not None:
@@ -1038,6 +1166,7 @@ async def evaluate_capacity_alerts(
                 now=now,
                 summary=summary,
                 budget_seconds=budget_seconds,
+                redis_memory=redis_memory,
             ),
             timeout=budget_seconds + _HARD_TIMEOUT_SLACK_SECONDS,
         )

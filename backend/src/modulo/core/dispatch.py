@@ -34,6 +34,42 @@ SAQ_RESUME_RUN_FUNCTION = "modulo.core.saq_worker.resume_run"
 SAQ_RUN_TIMEOUT = 7200
 SAQ_RUN_TTL = 300
 
+# FAR-2002 — bounded lifetime for a job hash that is still QUEUED.
+#
+# Before this, an enqueued job hash had NO TTL until the worker picked it up
+# (saq/queue/redis.py:447-471, plain SET), so a worker wedge — nothing defers,
+# every accepted trigger fire is enqueued — grew Redis without bound. The
+# self-hosted Compose default was worse still: no ``maxmemory`` at all, i.e.
+# Redis ``noeviction``, so once the host filled, every further enqueue raised
+# ``OOM command not allowed`` and the run was left ``enqueue_failed``.
+#
+# This TTL bounds the key space from the code side, independently of the
+# deployment's Redis config. 3600s is deliberately longer than
+# ``SAQ_REENQUEUE_WINDOW`` (600s default, 3600s max) so an expired job hash is
+# always past the reconciler's job-absent re-dispatch window; a job that has
+# waited an hour has not started, so re-enqueueing it cannot double-execute
+# anything (``dispatcher_reconcile``'s ``pending`` + ``dispatcher='saq'`` leg
+# does exactly that once ``q.job()`` returns None).
+#
+# Dequeue semantics are preserved: the worker's ``job.update(status=ACTIVE)``
+# is a plain ``SET`` (saq/queue/redis.py:278-284), which CLEARS the TTL — so an
+# in-flight job is never expired. ``_apply_queued_ttl`` only applies the TTL
+# while the stored status is ``queued`` (atomic status-gated Lua), closing the
+# enqueue/dequeue race.
+SAQ_QUEUED_JOB_TTL = 3600
+
+# Status-gated EXPIRE. Atomic in Redis: the status read and the EXPIRE cannot
+# interleave with the worker's ACTIVE ``SET``, so an in-flight job hash can
+# never acquire a TTL. Returns 1 when the TTL was applied, 0 otherwise.
+_QUEUED_TTL_LUA = """
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local ok, job = pcall(cjson.decode, raw)
+if not ok or type(job) ~= 'table' then return 0 end
+if job['status'] ~= 'queued' then return 0 end
+return redis.call('EXPIRE', KEYS[1], ARGV[1])
+"""
+
 _shared_redis: AsyncRedis | None = None
 _shared_redis_lock = asyncio.Lock()
 
@@ -366,6 +402,33 @@ async def _expire_webhook_dedup(session: AsyncSession, run_id: uuid.UUID) -> Non
     )
 
 
+async def _apply_queued_ttl(redis_client: AsyncRedis, job_id: str) -> None:
+    """Bound a still-QUEUED SAQ job hash's lifetime (FAR-2002).
+
+    Best-effort by design: the job is already enqueued, so failing the dispatch
+    here would report ``enqueue_failed`` for work that will actually run. A
+    failure is LOGGED (never silent) and the dispatch proceeds — the hard
+    ``maxmemory`` bound in the shipped Compose files remains the host
+    protection.
+
+    The Lua script only expires a hash whose stored status is ``queued``; the
+    worker's dequeue transition to ``active`` does a plain ``SET`` that clears
+    any TTL, so an in-flight job is never expired.
+    """
+    try:
+        await redis_client.eval(_QUEUED_TTL_LUA, 1, job_id, SAQ_QUEUED_JOB_TTL)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "dispatch_run: could not apply the %ss queued-job TTL to %s — job already enqueued, "
+            "dispatch proceeds; the Redis maxmemory bound remains the backstop",
+            SAQ_QUEUED_JOB_TTL,
+            job_id,
+            exc_info=True,
+        )
+
+
 async def _enqueue_saq(
     run_id: str,
     org_id: str,
@@ -398,7 +461,9 @@ async def _enqueue_saq(
         kwargs["resume_data"] = resume_data
     # Re-check AFTER the decision and before enqueue — skip if a job now exists.
     if await q.job(key) is not None:
-        return q.job_id(key), True
+        job_id = q.job_id(key)
+        await _apply_queued_ttl(redis_client, job_id)
+        return job_id, True
     job = await q.enqueue(
         function,
         key=key,
@@ -411,9 +476,12 @@ async def _enqueue_saq(
         **kwargs,
     )
     if job is not None:
+        await _apply_queued_ttl(redis_client, job.id)
         return job.id, False
     # Already enqueued with the same key — deterministic job id.
-    return q.job_id(key), True
+    job_id = q.job_id(key)
+    await _apply_queued_ttl(redis_client, job_id)
+    return job_id, True
 
 
 async def _mark_enqueue_failed_session(run_id: uuid.UUID, org_id: uuid.UUID) -> None:

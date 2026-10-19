@@ -283,10 +283,44 @@ Team-tier feature (requires valid `MODULO_LICENSE_KEY`). Configurable via env va
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `REDIS_URL` | No | `redis://localhost:6379/0` | `redis://host:port/db` for the SAQ broker and rate limiting |
+| `REDIS_MAXMEMORY` | No | `256mb` | Compose only: the `maxmemory` bound passed to the bundled `redis` service in `docker-compose.yml`, `docker-compose.local.yml` and `deploy/compose/docker-compose.prod.yml`. Raise it (e.g. `1gb`) for a larger queue budget. Ignored when `REDIS_URL` points at an external/managed Redis — bound that instance yourself. |
 
 Redis is **required** for production: the SAQ workers (runs + system) provide
 run dispatch, cron firing, and the scheduler. Without Redis there is no
 executor – only in-memory rate limiting and an in-memory event broker.
+
+**The queue store is bounded on both sides.**
+
+*Deployment side.* The shipped Compose runs Redis with
+`--maxmemory ${REDIS_MAXMEMORY:-256mb} --maxmemory-policy volatile-lru`.
+Previously it set no bound at all, so Redis ran `noeviction`: under a worker
+wedge (nothing defers, every accepted trigger fire is enqueued) the queue grew
+until every enqueue write failed with `OOM command not allowed`, leaving runs
+`enqueue_failed`. The bound means the host is protected and the store sheds
+instead of failing. `volatile-lru` is deliberate: it evicts **only keys
+carrying a TTL**. In the SAQ key space that is the job hashes — queued ones are
+TTL'd by the dispatcher (below), completed ones by SAQ — while the queue's
+structural keys (`queued` / `active` lists, `incomplete` zset) are persistent
+and are never evicted. Do not switch to an `allkeys-*` policy: losing a
+structural key drops queued work with no job hash for `dispatcher_reconcile` to
+detect and repair.
+
+*Code side.* `core.dispatch` applies a 3600s TTL (`SAQ_QUEUED_JOB_TTL`) to each
+job hash it enqueues, so stale queue entries self-bound regardless of the
+deployment's Redis config. The TTL is applied only while the stored job status
+is `queued` (atomic, status-gated); the worker's dequeue transition to `active`
+clears it, so an in-flight job is never expired. A queued job whose hash is
+evicted or expired is not lost: `dispatcher_reconcile` sees `q.job()` absent on
+its `pending` + `dispatcher='saq'` leg and re-enqueues it after
+`SAQ_REENQUEUE_WINDOW` (600s).
+
+**The bound is alerted, not silent.** The capacity alert sweep
+(`core/capacity_alerts.py`, wired into `dispatcher_reconcile`) reads `INFO
+memory` once per tick. When a bounded Redis is at or above 85% of its
+`maxmemory` and the org has pending work, it raises the admin-scoped
+`capacity_redis_pressure` in-app notification (with the used/limit figures and
+the configured policy), and `capacity_recovered` when it drops back. If the
+`INFO` read fails, an open alert is left open (unknown is not clear).
 
 ---
 
