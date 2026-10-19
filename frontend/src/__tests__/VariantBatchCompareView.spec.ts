@@ -199,6 +199,23 @@ describe('VariantBatchCompareView', () => {
     expect(wrapper.text()).toContain('Some variants failed')
   })
 
+  it('renders the batch-failed notice when the batch status is failed', async () => {
+    batchMocks.fetchVariantBatch.mockResolvedValue({
+      data: mockBatch({ status: 'failed' }),
+      error: undefined,
+    })
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="variant-batch-failed"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="variant-batch-failed"]').text()).toContain(
+      'This batch finished with failures',
+    )
+  })
+
   it('shows the server-computed completion signal', async () => {
     batchMocks.fetchVariantBatch.mockResolvedValue({ data: mockBatch({ status: 'complete' }), error: undefined })
     const wrapper = mount(VariantBatchCompareView, {

@@ -283,6 +283,7 @@ jobs:
           .semgrep/exception-mro-ordering.yml:.semgrep/tests/test_exception_mro_ordering.py
           .semgrep/hitl-review-edge-mutation-outside-guard.yml:.semgrep/tests/hitl-review-edge-mutation-outside-guard.py
           .semgrep/hitl-review-mcp-caller-type.yml:.semgrep/tests/hitl-review-mcp-caller-type-literal.py
+          .semgrep/mcp-human-only-constant-non-browser.yml:.semgrep/tests/mcp-human-only-constant-non-browser.py
           .semgrep/missing-is-privileged.yml:.semgrep/tests/graph-write-missing-is-privileged.py
           .semgrep/missing_session_begin.yml:.semgrep/missing_session_begin.py
           .semgrep/no-op-except-reraise.yml:.semgrep/tests/no-op-except-reraise.py

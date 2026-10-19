@@ -17,6 +17,14 @@ logger = logging.getLogger(__name__)
 
 JsonObject = dict[str, Any]
 
+# Wire-protocol wait bounds. These are fixed protocol constants, not per-call
+# knobs: the wait is always bounded with ``asyncio.timeout`` inside the
+# subscribe helper (S7483 — async functions must not accept a ``timeout``
+# parameter).
+_PERMISSION_RESPONSE_TIMEOUT = 60.0
+_UI_RESULTS_TIMEOUT = 120.0
+_RESUME_TIMEOUT = 300.0
+
 
 @overload
 async def _redis_result[T](result: Awaitable[T]) -> T: ...
@@ -157,12 +165,11 @@ class AssistantRedisRegistry:
     async def subscribe_permission_response(
         self,
         request_id: str,
-        timeout: float = 60.0,  # noqa: ASYNC109
     ) -> JsonObject | None:
         pubsub = self._redis.pubsub()
         await pubsub.subscribe(f"assistant:channel:permission:{request_id}")
         try:
-            async with asyncio.timeout(timeout):
+            async with asyncio.timeout(_PERMISSION_RESPONSE_TIMEOUT):
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=None)
                 if message and message.get("data"):
                     try:
@@ -183,12 +190,11 @@ class AssistantRedisRegistry:
     async def subscribe_ui_results(
         self,
         session_id: str,
-        timeout: float = 120.0,  # noqa: ASYNC109
     ) -> bool:
         pubsub = self._redis.pubsub()
         await pubsub.subscribe(f"assistant:channel:ui_results:{session_id}")
         try:
-            async with asyncio.timeout(timeout):
+            async with asyncio.timeout(_UI_RESULTS_TIMEOUT):
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=None)
                 return message is not None
         except TimeoutError:
@@ -203,12 +209,11 @@ class AssistantRedisRegistry:
     async def subscribe_resume(
         self,
         session_id: str,
-        timeout: float = 300.0,  # noqa: ASYNC109
     ) -> bool:
         pubsub = self._redis.pubsub()
         await pubsub.subscribe(f"assistant:channel:resume:{session_id}")
         try:
-            async with asyncio.timeout(timeout):
+            async with asyncio.timeout(_RESUME_TIMEOUT):
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=None)
                 return message is not None
         except TimeoutError:

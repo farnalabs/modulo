@@ -223,7 +223,7 @@
             :key="i"
             class="rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-[10px]"
           >
-            <span :class="isBlockingSeverity(b.severity) ? 'font-medium text-destructive' : 'text-warning-text'">
+            <span :class="isBlockingSeverity(b.severity) ? 'font-medium text-destructive-text' : 'text-warning-text'">
               {{ severityText(b.severity) }}
             </span>
             — {{ b.reason }}

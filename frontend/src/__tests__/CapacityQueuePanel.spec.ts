@@ -152,7 +152,10 @@ describe('CapacityQueuePanel', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="capacity-stall-alert"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="capacity-verdict"]').text()).toContain('Stalled')
+    expect(wrapper.find('[data-testid="capacity-stall-alert"]').classes()).toContain('text-destructive-text')
+    const verdict = wrapper.find('[data-testid="capacity-verdict"]')
+    expect(verdict.text()).toContain('Stalled')
+    expect(verdict.classes()).toContain('text-destructive-text')
   })
 
   it('scopes the request to the selected pipeline', async () => {
@@ -174,6 +177,7 @@ describe('CapacityQueuePanel', () => {
 
     expect(wrapper.find('[data-testid="capacity-error"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="capacity-error"]').text()).toContain('Capacity unavailable')
+    expect(wrapper.find('[data-testid="capacity-error"]').classes()).toContain('text-destructive-text')
   })
 
   it('renders neutral labels when optional fields are absent', async () => {

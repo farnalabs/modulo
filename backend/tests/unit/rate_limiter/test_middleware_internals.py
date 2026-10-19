@@ -94,8 +94,9 @@ class TestRuleFor:
         [
             ("/api/v1/auth/login-context", "/api/v1/auth/login-context"),
             ("/api/v1/auth/org-login/acme", "/api/v1/auth/org-login/"),
+            ("/api/v1/auth/sso/providers", "/api/v1/auth/sso/providers"),
         ],
-        ids=["login-context", "org-login"],
+        ids=["login-context", "org-login", "sso-providers"],
     )
     def test_anonymous_get_paths_resolve_to_get_rules(self, middleware, path, prefix):
         """FAR-856: _rule_for must resolve pre-auth anonymous GET endpoints to

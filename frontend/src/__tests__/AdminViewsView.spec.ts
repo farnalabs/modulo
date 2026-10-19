@@ -173,4 +173,26 @@ describe('AdminViewsView', () => {
     } as any)
     expect(vm.form.filters).toBe('status=active')
   })
+
+  it('shows the delete error when the DELETE request fails', async () => {
+    const wrapper = mount(AdminViewsView, {
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' }, LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
+      },
+    })
+    await flush()
+    const deleteBtns = wrapper.findAll('button').filter(button => button.text() === 'Delete')
+    await deleteBtns[0].trigger('click')
+    await flush()
+
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: () => Promise.resolve({ detail: 'view delete exploded' }),
+    })
+    await wrapper.find('[data-testid="admin-views-delete-confirm"]').trigger('click')
+    await flush()
+
+    expect(wrapper.text()).toContain('view delete exploded')
+  })
 })

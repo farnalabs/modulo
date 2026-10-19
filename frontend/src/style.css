@@ -316,9 +316,15 @@
     background-color: hsl(var(--warning));
   }
 
+  /* FAR-1913: destructive TEXT on the destructive tint uses --destructive-text,
+     not --destructive. Measured WCAG ratios for this pairing (normal text, AA
+     floor 4.5:1):
+       dark  #f15f5f on tinted card #291c24   5.10:1  (was #ef4343 = 4.32:1)
+       light #a90f0f on tinted card #f9d0d0   5.41:1  (was #e11313 = 3.46:1)
+     The ::before dot stays --destructive - it is a decorative marker, not text. */
   .badge-status-destructive {
     background-color: hsla(var(--destructive) / 0.1);
-    color: hsl(var(--destructive));
+    color: hsl(var(--destructive-text));
   }
 
   .badge-status-destructive::before {
@@ -459,6 +465,14 @@
   --accent-foreground: 210 28% 93%;
   --destructive: 0 84% 60%;
   --destructive-foreground: 210 28% 93%;
+  /* FAR-1913: text-safe counterpart of --destructive. --destructive is tuned as
+     a FILL/accent hue, so destructive COLOURED TEXT on a bg-destructive/* tint
+     only reaches 4.32:1 here (dark) and 3.46:1 in light mode - both below the
+     WCAG AA 4.5:1 floor for normal-size text (axe rule `color-contrast`, which
+     the wcag-contrast spec now asserts). --destructive-text keeps the hue and
+     lightens to 66% so every destructive-text-on-tint pairing clears AA. See
+     the .badge-status-destructive rule for the measured ratios. */
+  --destructive-text: 0 84% 66%;
   --success: 142 71% 45%;
   --warning: 38 92% 50%;
   --warning-text: 38 92% 50%;
@@ -510,6 +524,10 @@
   --accent-foreground: 220 29% 6%;
   --destructive: 0 84.2% 48%;
   --destructive-foreground: 210 40% 98%;
+  /* FAR-1913: see --destructive-text in :root. Light mode's tint is darker
+     (.light .bg-destructive\/10 = 20% alpha), so the text-safe token darkens to
+     36% instead - 5.41:1 on the tint, 7.61:1 on white. */
+  --destructive-text: 0 84.2% 36%;
   --success: 142 71% 45%;
   --warning: 38 92% 50%;
   --warning-text: 38 92% 30%;
@@ -554,6 +572,9 @@
   --accent-foreground: 210 30% 96%;
   --destructive: 0 90% 65%;
   --destructive-foreground: 0 0% 100%;
+  /* FAR-1913: see --destructive-text in :root - lightened to 68% so the agent
+     theme's wider card tint also clears AA (5.10:1 on the tint). */
+  --destructive-text: 0 90% 68%;
   --success: 142 80% 50%;
   --warning: 38 95% 55%;
   --warning-text: 38 95% 55%;

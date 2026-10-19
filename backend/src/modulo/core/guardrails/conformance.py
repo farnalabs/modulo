@@ -373,6 +373,161 @@ def _add_sandbox_surface(registered: dict[str, bool | None], sandbox_caps: dict[
             registered[capability] = value
 
 
+def _add_true(registered: dict[str, bool | None], surface: set[str]) -> None:
+    """Mark every capability in *surface* as confirmed present."""
+    for capability in surface:
+        registered[capability] = True
+
+
+async def _register_connector_surfaces(
+    session: AsyncSession,
+    registered: dict[str, bool | None],
+    connector_instance_ids: list[uuid.UUID],
+    org_id: uuid.UUID,
+) -> None:
+    """Register the live capability surfaces of the bound connector instances."""
+    from modulo.db.models.connector_instance import ConnectorInstance
+
+    try:
+        stmt = select(ConnectorInstance).where(ConnectorInstance.id.in_(connector_instance_ids))
+        rows = (await session.execute(stmt)).scalars().all()
+        found = {str(r.id) for r in rows}
+        for r in rows:
+            # A deactivated/archived connector no longer grants its scopes —
+            # the capability is absent from the live surface even though the
+            # row still exists. Never read credential material here.
+            if getattr(r, "status", "active") != "active":
+                _log.warning(
+                    "guardrail.conformance.connector_inactive",
+                    extra={"org_id": str(org_id), "connector_instance_id": str(r.id)},
+                )
+                continue
+            _register_connector_surface(registered, r, _capabilities_for_connector(r))
+        for cid in connector_instance_ids:
+            if str(cid) not in found:
+                _log.warning(
+                    "guardrail.conformance.connector_missing",
+                    extra={"org_id": str(org_id), "connector_instance_id": str(cid)},
+                )
+    except Exception:
+        _log.exception("guardrail.conformance.connector_surface_unreadable", extra={"org_id": str(org_id)})
+
+
+async def _register_profile_surface(
+    session: AsyncSession,
+    registered: dict[str, bool | None],
+    environment_profile_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> None:
+    """Register the live capability surface of the bound environment profile."""
+    from modulo.db.models.environment_profile import EnvironmentProfile
+
+    try:
+        profile = (
+            await session.execute(select(EnvironmentProfile).where(EnvironmentProfile.id == environment_profile_id))
+        ).scalar_one_or_none()
+        if profile is None:
+            _log.warning(
+                "guardrail.conformance.profile_missing",
+                extra={"org_id": str(org_id), "environment_profile_id": str(environment_profile_id)},
+            )
+        elif getattr(profile, "status", "active") != "active":
+            # A deactivated profile no longer grants its capabilities.
+            _log.warning(
+                "guardrail.conformance.profile_inactive",
+                extra={"org_id": str(org_id), "environment_profile_id": str(environment_profile_id)},
+            )
+        else:
+            _add_true(registered, _capabilities_for_profile(profile))
+    except Exception:
+        _log.exception("guardrail.conformance.profile_surface_unreadable", extra={"org_id": str(org_id)})
+
+
+async def _register_agent_surface(
+    session: AsyncSession,
+    registered: dict[str, bool | None],
+    agent_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> None:
+    """Register the live capability surface of the bound agent."""
+    from modulo.db.models.agent import Agent
+
+    try:
+        agent = (await session.execute(select(Agent).where(Agent.id == agent_id))).scalar_one_or_none()
+        if agent is None:
+            _log.warning("guardrail.conformance.agent_missing", extra={"org_id": str(org_id)})
+        else:
+            _add_true(registered, _capabilities_for_agent(agent))
+    except Exception:
+        _log.exception("guardrail.conformance.agent_surface_unreadable", extra={"org_id": str(org_id)})
+
+
+async def _sandbox_profile_params(
+    session: AsyncSession,
+    environment_profile_id: uuid.UUID | None,
+) -> tuple[str | None, str | None]:
+    """Read the profile's network policy and provider type for sandbox certification.
+
+    Both are ``None`` when the profile is absent or unreadable — the derivation
+    then falls back to its legacy reference defaults (unchanged behaviour).
+    """
+    if environment_profile_id is None:
+        return None, None
+
+    from modulo.db.models.environment_profile import EnvironmentProfile as EpModel
+
+    try:
+        _ep_row = (
+            await session.execute(select(EpModel).where(EpModel.id == environment_profile_id))
+        ).scalar_one_or_none()
+        if _ep_row is None:
+            return None, None
+        profile_network_policy: str | None = getattr(_ep_row, "network_policy", None)
+        # FAR-1051: the provider the profile resolves to decides the TIER the
+        # egress capability is certified under, so the certificate matches what
+        # dispatch actually enforces for this profile (previously the reference
+        # tier was hardcoded to e2b regardless of the bound provider). Only a
+        # genuine str is read — a row that does not carry one (including a
+        # MagicMock test double, whose auto-attribute is not a str) keeps the
+        # legacy reference tier.
+        provider_type: str | None = None
+        _row_provider_type = getattr(_ep_row, "provider_type", None)
+        if isinstance(_row_provider_type, str):
+            provider_type = _row_provider_type
+        return profile_network_policy, provider_type
+    except Exception:
+        _log.debug(
+            "guardrail.conformance.profile_network_policy_read_failed",
+            extra={"environment_profile_id": str(environment_profile_id)},
+            exc_info=True,
+        )
+        return None, None
+
+
+async def _register_sandbox_surface(
+    session: AsyncSession,
+    registered: dict[str, bool | None],
+    node_def: dict[str, Any],
+    environment_profile_id: uuid.UUID | None,
+) -> None:
+    """Stamp the mechanically-derived sandbox surface for a sandbox_agent node."""
+    # Lazy import keeps this module's import surface light: sandbox_mode itself
+    # is dependency-free, but the pipeline_engine package init (LangGraph,
+    # executor, DB) is heavy and must not be pulled in by guardrail consumers
+    # that never build a sandbox manifest.
+    from modulo.core.pipeline_engine.sandbox_mode import derive_sandbox_capabilities
+
+    profile_network_policy, provider_type = await _sandbox_profile_params(session, environment_profile_id)
+    _add_sandbox_surface(
+        registered,
+        derive_sandbox_capabilities(
+            node_def,
+            profile_network_policy=profile_network_policy,
+            provider_type=provider_type,
+        ),
+    )
+
+
 async def build_live_manifest(
     session: AsyncSession,
     *,
@@ -409,123 +564,22 @@ async def build_live_manifest(
     """
     registered: dict[str, bool | None] = {}
 
-    def _add(surface: set[str]) -> None:
-        for cap in surface:
-            registered[cap] = True
-
     if connector_instance_ids:
-        from modulo.db.models.connector_instance import ConnectorInstance
-
-        try:
-            stmt = select(ConnectorInstance).where(ConnectorInstance.id.in_(connector_instance_ids))
-            rows = (await session.execute(stmt)).scalars().all()
-            found = {str(r.id) for r in rows}
-            for r in rows:
-                # A deactivated/archived connector no longer grants its scopes —
-                # the capability is absent from the live surface even though the
-                # row still exists. Never read credential material here.
-                if getattr(r, "status", "active") != "active":
-                    _log.warning(
-                        "guardrail.conformance.connector_inactive",
-                        extra={"org_id": str(org_id), "connector_instance_id": str(r.id)},
-                    )
-                    continue
-                _register_connector_surface(registered, r, _capabilities_for_connector(r))
-            for cid in connector_instance_ids:
-                if str(cid) not in found:
-                    _log.warning(
-                        "guardrail.conformance.connector_missing",
-                        extra={"org_id": str(org_id), "connector_instance_id": str(cid)},
-                    )
-        except Exception:
-            _log.exception("guardrail.conformance.connector_surface_unreadable", extra={"org_id": str(org_id)})
+        await _register_connector_surfaces(session, registered, connector_instance_ids, org_id)
 
     if environment_profile_id is not None:
-        from modulo.db.models.environment_profile import EnvironmentProfile
-
-        try:
-            profile = (
-                await session.execute(select(EnvironmentProfile).where(EnvironmentProfile.id == environment_profile_id))
-            ).scalar_one_or_none()
-            if profile is None:
-                _log.warning(
-                    "guardrail.conformance.profile_missing",
-                    extra={"org_id": str(org_id), "environment_profile_id": str(environment_profile_id)},
-                )
-            elif getattr(profile, "status", "active") != "active":
-                # A deactivated profile no longer grants its capabilities.
-                _log.warning(
-                    "guardrail.conformance.profile_inactive",
-                    extra={"org_id": str(org_id), "environment_profile_id": str(environment_profile_id)},
-                )
-            else:
-                _add(_capabilities_for_profile(profile))
-        except Exception:
-            _log.exception("guardrail.conformance.profile_surface_unreadable", extra={"org_id": str(org_id)})
+        await _register_profile_surface(session, registered, environment_profile_id, org_id)
 
     if agent_id is not None:
-        from modulo.db.models.agent import Agent
-
-        try:
-            agent = (await session.execute(select(Agent).where(Agent.id == agent_id))).scalar_one_or_none()
-            if agent is None:
-                _log.warning("guardrail.conformance.agent_missing", extra={"org_id": str(org_id)})
-            else:
-                _add(_capabilities_for_agent(agent))
-        except Exception:
-            _log.exception("guardrail.conformance.agent_surface_unreadable", extra={"org_id": str(org_id)})
+        await _register_agent_surface(session, registered, agent_id, org_id)
 
     # FAR-212 PR A: the sandbox capability surface for a sandbox_agent node —
     # mechanically derived from the node's ACTUAL config (egress_policy, the
     # read-only workspace flag, git-credential scope), not a declared claim.
     # FAR-1085: plumb the profile's network_policy so the certified capability
     # matches the runtime outcome for every (node, profile, tier) combination.
-    # Lazy import keeps this module's import surface light: sandbox_mode itself
-    # is dependency-free, but the pipeline_engine package init (LangGraph,
-    # executor, DB) is heavy and must not be pulled in by guardrail consumers
-    # that never build a sandbox manifest.
     if node_def is not None:
-        from modulo.core.pipeline_engine.sandbox_mode import derive_sandbox_capabilities
-
-        # Resolve profile_network_policy + provider_type from the loaded
-        # profile row (if any).
-        _profile_network_policy: str | None = None
-        _profile_provider_type: str | None = None
-        if environment_profile_id is not None:
-            from modulo.db.models.environment_profile import EnvironmentProfile as EpModel
-
-            try:
-                _ep_row = (
-                    await session.execute(select(EpModel).where(EpModel.id == environment_profile_id))
-                ).scalar_one_or_none()
-                if _ep_row is not None:
-                    _profile_network_policy = getattr(_ep_row, "network_policy", None)
-                    # FAR-1051: the provider the profile resolves to decides the
-                    # TIER the egress capability is certified under, so the
-                    # certificate matches what dispatch actually enforces for
-                    # this profile (previously the reference tier was hardcoded
-                    # to e2b regardless of the bound provider). Only a genuine
-                    # str is read — a row that does not carry one (including a
-                    # MagicMock test double, whose auto-attribute is not a str)
-                    # keeps the legacy reference tier.
-                    _row_provider_type = getattr(_ep_row, "provider_type", None)
-                    if isinstance(_row_provider_type, str):
-                        _profile_provider_type = _row_provider_type
-            except Exception:
-                _log.debug(
-                    "guardrail.conformance.profile_network_policy_read_failed",
-                    extra={"environment_profile_id": str(environment_profile_id)},
-                    exc_info=True,
-                )
-
-        _add_sandbox_surface(
-            registered,
-            derive_sandbox_capabilities(
-                node_def,
-                profile_network_policy=_profile_network_policy,
-                provider_type=_profile_provider_type,
-            ),
-        )
+        await _register_sandbox_surface(session, registered, node_def, environment_profile_id)
 
     return registered
 
@@ -683,6 +737,48 @@ def find_type_qualified_claim_guardrails(guardrails: Iterable[Any]) -> dict[str,
     return out
 
 
+def _log_unsatisfied_type_qualified(gr: Any, derivation: ConformanceDerivation) -> None:
+    """Log a legacy type-qualified claim that no bound surface satisfies.
+
+    FAR-1617: a type-qualified claim that no bound surface of that type
+    satisfies is usually a LEGACY claim which loose-matched before FAR-1594 —
+    log it so a rollout surfaces such claims without altering any stored data
+    (detection only).
+    """
+    unsatisfied_qualified = [
+        name for name in (*derivation.missing, *derivation.unreadable) if qualified_capability(name) is not None
+    ]
+    if unsatisfied_qualified:
+        _log.warning(
+            "guardrail.conformance.type_qualified_claim_unsatisfied",
+            extra={"guardrail": gr.name, "state": derivation.state, "claims": unsatisfied_qualified},
+        )
+
+
+def _record_guardrail_gap(
+    gr: Any,
+    required: list[str],
+    derivation: ConformanceDerivation,
+    action: str,
+    blocking_guardrails: list[str],
+    blocked_detail_parts: list[str],
+) -> bool:
+    """Record a non-present derivation; return True when the gap is advisory."""
+    if action == GuardrailAction.BLOCK.value:
+        blocking_guardrails.append(gr.name)
+        blocked_detail_parts.append(
+            f"guardrail {gr.name!r} requires capabilities {required} which are no longer present "
+            f"(state={derivation.state})"
+        )
+        return False
+    # warn / observe / redact-as-non-blocking: advisory only.
+    _log.warning(
+        "guardrail.conformance.advisory_gap",
+        extra={"guardrail": gr.name, "state": derivation.state, "missing": list(derivation.missing)},
+    )
+    return True
+
+
 def evaluate_conformance(
     guardrails: list[Any],
     registered: dict[str, bool | None],
@@ -703,37 +799,20 @@ def evaluate_conformance(
         required = _required_of(config)
         if not required:
             continue
-        action = _action_of(config)
         derivation = decide_conformance(required, registered)
         claimed.append(derivation)
-        if derivation.state != "present":
-            # FAR-1617: a type-qualified claim that no bound surface of that
-            # type satisfies is usually a LEGACY claim which loose-matched
-            # before FAR-1594 — log it so a rollout surfaces such claims
-            # without altering any stored data (detection only).
-            unsatisfied_qualified = [
-                name for name in (*derivation.missing, *derivation.unreadable) if qualified_capability(name) is not None
-            ]
-            if unsatisfied_qualified:
-                _log.warning(
-                    "guardrail.conformance.type_qualified_claim_unsatisfied",
-                    extra={"guardrail": gr.name, "state": derivation.state, "claims": unsatisfied_qualified},
-                )
         if derivation.state == "present":
             continue
-        if action == GuardrailAction.BLOCK.value:
-            blocking_guardrails.append(gr.name)
-            blocked_detail_parts.append(
-                f"guardrail {gr.name!r} requires capabilities {required} which are no longer present "
-                f"(state={derivation.state})"
-            )
-        else:
-            # warn / observe / redact-as-non-blocking: advisory only.
+        _log_unsatisfied_type_qualified(gr, derivation)
+        if _record_guardrail_gap(
+            gr,
+            required,
+            derivation,
+            _action_of(config),
+            blocking_guardrails,
+            blocked_detail_parts,
+        ):
             advisory_warned = True
-            _log.warning(
-                "guardrail.conformance.advisory_gap",
-                extra={"guardrail": gr.name, "state": derivation.state, "missing": list(derivation.missing)},
-            )
 
     if not claimed:
         return ConformanceRecheckResult(blocked=False, review_id=None, detail="", state="present", warned=False)

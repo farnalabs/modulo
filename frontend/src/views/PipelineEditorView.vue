@@ -751,7 +751,7 @@
             <Button size="small" type="button" class="text-xs" @click="openRenameDialog">{{ $t('views.PipelineEditorView.rename') }}</Button>
             <button v-if="!pipeline?.archived_at" type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" data-testid="pipeline-editor-empty-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
             <button v-else type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" data-testid="pipeline-editor-empty-unarchive" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
-            <button v-if="planStore.featureEnabled('pipeline_delete')" type="button" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" data-testid="pipeline-editor-empty-delete" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
+            <button v-if="planStore.featureEnabled('pipeline_delete')" type="button" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive-text hover:bg-destructive/20" data-testid="pipeline-editor-empty-delete" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
             <Select
               v-model="newNodeType"
               :options="nodeTypeOptions"
@@ -2068,7 +2068,7 @@ const { fitView, onPaneReady } = useVueFlow()
 const btnToolbarBase = 'inline-flex h-7 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50'
 const btnToolbarSecondary = `${btnToolbarBase} border border-input bg-background hover:bg-accent`
 const btnToolbarPrimary = `${btnToolbarBase} bg-indigo-600 text-white hover:bg-indigo-500`
-const btnToolbarDestructive = `${btnToolbarBase} border border-destructive/50 bg-destructive/10 text-destructive hover:bg-destructive/20`
+const btnToolbarDestructive = `${btnToolbarBase} border border-destructive/50 bg-destructive/10 text-destructive-text hover:bg-destructive/20`
 const btnToolbarIcon = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground'
 const groupDividerClass = 'mx-0.5 hidden h-5 w-px shrink-0 bg-border md:block'
 

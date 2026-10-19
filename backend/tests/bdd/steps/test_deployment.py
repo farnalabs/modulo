@@ -21,13 +21,15 @@ def check_required_fields(request):
     assert "python_version" in body
     assert "environment" in body
     assert "git_sha" in body
-    assert "git_branch" in body
     assert "git_commit_timestamp" in body
-    assert "git_commit_message" in body
     assert "build_timestamp" in body
     # hostname / ci_job_url are deliberately absent (FAR-880).
     assert "hostname" not in body
     assert "ci_job_url" not in body
+    # git_branch / git_commit_message are deliberately absent (FAR-1975):
+    # free text from the deployment's source repo, and no consumer reads them.
+    assert "git_branch" not in body
+    assert "git_commit_message" not in body
 
 
 @then(parsers.parse('the "{field}" field is a non-empty string'))
@@ -55,9 +57,7 @@ def check_build_metadata_types(request):
     body = request.node._body
     for field in (
         "git_sha",
-        "git_branch",
         "git_commit_timestamp",
-        "git_commit_message",
         "build_timestamp",
     ):
         assert isinstance(body[field], str), f"{field} should be a string"
