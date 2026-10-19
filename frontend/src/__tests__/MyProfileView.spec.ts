@@ -514,8 +514,14 @@ describe('MyProfileView loading placeholders and fallbacks', () => {
     const hitlLoading = wrapper.find('[data-testid="my-profile-hitl-email-loading"]')
     expect(teamsLoading.exists()).toBe(true)
     expect(hitlLoading.exists()).toBe(true)
-    expect(teamsLoading.attributes('role')).toBe('status')
-    expect(hitlLoading.attributes('role')).toBe('status')
+    // Native <output> elements carry the implicit `status` role, so the live
+    // regions are announced without an explicit role attribute (which
+    // SonarCloud Web:S6819 rejects). Mirrors the AdminHousekeepingView and
+    // NotificationsPage skeleton pattern.
+    expect(teamsLoading.element.tagName).toBe('OUTPUT')
+    expect(hitlLoading.element.tagName).toBe('OUTPUT')
+    expect(teamsLoading.attributes('aria-busy')).toBe('true')
+    expect(hitlLoading.attributes('aria-busy')).toBe('true')
     expect(teamsLoading.attributes('aria-label')).toBe('Loading')
     expect(hitlLoading.attributes('aria-label')).toBe('Loading')
   })

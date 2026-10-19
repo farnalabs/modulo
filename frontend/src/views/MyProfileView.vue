@@ -22,9 +22,9 @@
     <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
       <div class="card p-6">
         <h2 class="text-base font-semibold mb-4">{{ $t('views.MyProfileView.my_teams') }}</h2>
-        <div v-if="myTeamsLoading" class="space-y-2" role="status" :aria-label="$t('common.loading')" data-testid="my-profile-my-teams-loading">
+        <output v-if="myTeamsLoading" class="block space-y-2" aria-busy="true" :aria-label="$t('common.loading')" data-testid="my-profile-my-teams-loading">
           <SkeletonBlock v-for="n in 2" :key="'my-team-skeleton-' + n" height-class="h-10 w-full" />
-        </div>
+        </output>
         <div v-else-if="myTeamsError" class="py-2 text-sm text-destructive">
           {{ myTeamsError }}
           <button type="button" class="ml-2 underline" data-testid="my-profile-my-teams-retry" @click="loadMyTeams">{{ $t('views.SettingsTeamsView.retry') }}</button>
@@ -45,11 +45,11 @@
       <h2 class="text-base font-semibold mb-1">{{ $t('views.MyProfileView.hitl_email_alerts') }}</h2>
       <p class="text-sm text-muted-foreground mb-4">{{ $t('views.MyProfileView.hitl_email_alerts_description') }}</p>
 
-      <div v-if="hitlPrefsLoading" class="space-y-4" role="status" :aria-label="$t('common.loading')" data-testid="my-profile-hitl-email-loading">
+      <output v-if="hitlPrefsLoading" class="block space-y-4" aria-busy="true" :aria-label="$t('common.loading')" data-testid="my-profile-hitl-email-loading">
         <SkeletonBlock height-class="h-4 w-2/3" />
         <SkeletonBlock height-class="h-10 w-full" />
         <SkeletonBlock height-class="h-9 w-28" />
-      </div>
+      </output>
       <div v-else-if="hitlPrefsLoadError" class="py-2 text-sm text-destructive" data-testid="my-profile-hitl-email-load-error">
         {{ hitlPrefsLoadError }}
         <button type="button" class="ml-2 underline" data-testid="my-profile-hitl-email-retry" @click="loadHitlEmailPrefs">{{ $t('views.SettingsTeamsView.retry') }}</button>
