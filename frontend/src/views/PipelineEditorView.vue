@@ -3256,16 +3256,23 @@ async function loadGraph() {
 // entirely `run` rows on a long-lived scheduled pipeline. The chip therefore
 // asks the server for the newest version directly — an `exclude_created_kind`
 // filter plus `exclude_drafts` — a query that cannot be starved by history
-// size. It is resolved in loadCurrentVersionSnapshot BELOW, separately from
-// this catalog load, so its failure degrades the chip instead of the whole
-// catalog.
+// size. It is resolved by loadCurrentVersionSnapshot BELOW, on a request that
+// is STARTED alongside this catalog load but is NOT awaited by it: its failure
+// and its latency (including its own deadline) degrade the chip, never the
+// whole catalog.
 async function loadCatalog() {
   pageError.value = null
-  // Resolve the chip's candidate CONCURRENTLY with the catalog: it is an
-  // independent auxiliary request, so its latency (including its deadline on a
-  // failing endpoint) must not extend the editor's load, and its failure must
-  // neither blank the rest of the catalog nor blank the chip (see below).
-  const versionRequest = loadCurrentVersionSnapshot()
+  // FAR-1895: start the chip's candidate request CONCURRENTLY with the catalog
+  // and DO NOT await it. It is an independent auxiliary request; a stalled
+  // filtered query sits until its own request deadline, and awaiting it here
+  // (as this previously did) carried that deadline onto the editor's load —
+  // loadCatalog is one leg of the useDataFetch Promise.all, so the whole-page
+  // spinner waited on it. The catalog below resolves and the editor paints
+  // without this request; the chip resolves or degrades when it settles.
+  // loadCurrentVersionSnapshot records its own failure in `versionChipError`
+  // and never rejects, so this can neither blank the catalog nor produce an
+  // unhandled rejection.
+  void loadCurrentVersionSnapshot()
   try {
     const [a, c, mb, s, snaps, ps] = await Promise.all([
       withTimeout((signal) => api.GET('/api/v1/agents', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
@@ -3287,11 +3294,6 @@ async function loadCatalog() {
   } catch (e) {
     console.warn('Failed to load pipeline data', e)
   }
-  // Await the auxiliary chip request started above. Its failure is recorded in
-  // `versionChipError` (never thrown out of loadCurrentVersionSnapshot), so it
-  // neither blanks the catalog nor blanks the chip — the chip falls back to
-  // the catalog page assigned just above.
-  await versionRequest
 }
 
 /**
