@@ -28,10 +28,13 @@ against it.
 
 What is scanned (``frontend/tests/e2e/**/*.ts``):
 
-* ``apiFetch(<base>, <token>, '<METHOD>', <path>)`` with the method as a
-  string literal and the path as a string/template literal, across multi-line
+* ``apiFetch(<base>, <token>, <method>, <path>)`` with the method as a
+  string literal (a trailing ``as const`` / ``as HttpMethod`` assertion is
+  stripped) and the path as a string/template literal, across multi-line
   argument lists and ``${...}`` interpolation.
-* direct ``fetch(<url>, { method: '<METHOD>' })`` in the setup helpers.
+* direct ``fetch(<url>, { method: '<METHOD>' })`` in the setup helpers, plus
+  the implicit-GET ``fetch(<url>)`` / ``fetch(<url>, { headers })`` form (no
+  method option means GET, which is checked like any other method).
 * ``page.request.<verb>(<url>)`` / ``request.<verb>(<url>)`` calls on a
   Playwright ``APIRequestContext`` (the verb is the method).
 * ``route.request().method() === '<METHOD>'`` interceptor filters (and the
@@ -40,15 +43,18 @@ What is scanned (``frontend/tests/e2e/**/*.ts``):
   file/scope. The callback's parameters may be renamed and both are read: the
   first is the route, the second is the request (``async (route, request) =>
   ... request.method() === 'GET'``). A local variable holding the request
-  object (``const request = route.request()``) or the method result
-  (``const m = route.request().method()``) is resolved too. A comparison
-  combined with an in-callback URL test (``url.includes`` / ``url.endsWith``)
-  is skipped: its effective path lives in that condition, not in the
-  registration, so the guard reports only what it can prove statically.
-  ``!== '<METHOD>'`` filters are skipped too - they guard a fallback branch
-  rather than selecting a method. Anything that cannot be resolved safely is
-  reported as an explicit note on stderr (never silently dropped, and never a
-  failure).
+  object (``const request = route.request()``), the method result
+  (``const m = route.request().method()``) or a boolean holding a positive
+  method comparison (``const isPatch = route.request().method() === 'PATCH';
+  if (isPatch)``) is resolved too. A comparison combined with an in-callback
+  URL test (``url.includes`` / ``url.endsWith``) is not guessed - its effective
+  path lives in that condition, not in the registration, so it is reported as
+  a note. ``!== '<METHOD>'`` and negated-boolean filters are skipped too - they
+  guard a fallback branch rather than selecting a method. A catch-all mock
+  (``**/api/v1/**``) is skipped silently only when it carries no method filter;
+  one that mocks specific routes by URL and filters on the method is noted.
+  Anything that cannot be resolved safely is reported as one explicit note on
+  stderr (never silently dropped, and never a failure).
 
 Template placeholders (``${expr}``, ``:param``, ``{param}``) and glob
 wildcards normalise to one path-parameter segment, and an anchored
@@ -133,6 +139,7 @@ _SQUASH_SLASH_RE = re.compile(r"/{2,}")
 _SEGMENT_RE = re.compile(r"[A-Za-z0-9._~%\-{}]+")
 _API_PREFIX = "/api/"
 _FETCH_INIT_METHOD_RE = re.compile(r"""\bmethod\s*:\s*(['"])([A-Za-z]+)\1""")
+_METHOD_CALL_RE = re.compile(r"\.\s*method\s*\(")
 _ROUTE_CALL_RE = re.compile(r"(?<![\w.])(?:page|context)\s*\.\s*route\s*\(")
 _API_FETCH_RE = re.compile(r"(?<![\w.$])apiFetch\b")
 _FETCH_RE = re.compile(r"(?<![\w.$])fetch\b")
@@ -418,9 +425,23 @@ def _tail_adds_path_segment(tail: str) -> bool:
     return not all(_is_query_suffix(operand) for operand in operands)
 
 
+def _unwrap_parens(expression: str) -> str:
+    """Strip redundant balanced parentheses around *expression*."""
+    text = expression.strip()
+    while text.startswith("(") and text.endswith(")"):
+        text = text[1:-1].strip()
+    return text
+
+
 def _literal_method(expr: str) -> str | None:
-    """Return the HTTP method when *expr* is exactly one quoted method literal."""
-    stripped = expr.strip()
+    """Return the HTTP method when *expr* is exactly one quoted method literal.
+
+    A TypeScript assertion on the argument (``'PATCH' as const`` /
+    ``'PATCH' as HttpMethod``) still names one literal method, so it is
+    stripped before the "nothing but the literal" test rather than dropping the
+    call.
+    """
+    stripped = _unwrap_parens(_strip_ts_assertion(_unwrap_parens(expr)))
     if len(stripped) < 2 or stripped[0] not in ("'", '"'):
         return None
     value, end = _read_quoted(stripped, 0)
@@ -580,6 +601,37 @@ def _line_of(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
+def _add_note(notes: list[str], filename: str, line: int, message: str) -> None:
+    """Record one explicit "not checked" note, deduplicated by its full text."""
+    note = f"{filename}:{line}: {message}"
+    if note not in notes:
+        notes.append(note)
+
+
+def _fetch_method(init_arguments: list[str]) -> tuple[str | None, bool]:
+    """Resolve a ``fetch`` init's method, or report that it is unreadable.
+
+    Returns ``(method, unresolved)``. No init, or an object literal without a
+    ``method`` key, is an implicit GET - that is a real request the guard must
+    check. A ``method`` key whose value is not a single string literal, a spread
+    that may supply one, or a non-literal init object cannot be resolved
+    statically, so the caller notes it rather than assuming GET.
+    """
+    for argument in init_arguments:
+        text = argument.strip()
+        if not text:
+            continue
+        literal = _FETCH_INIT_METHOD_RE.search(text)
+        if literal is not None:
+            value = literal.group(2).upper()
+            return (value, False) if value in _HTTP_METHODS else (None, True)
+        if re.search(r"\bmethod\s*:", text):
+            return None, True
+        if "..." in text or not text.startswith("{"):
+            return None, True
+    return None, False
+
+
 def _args_of(text: str, masked: str, open_paren: int) -> list[str]:
     """Return the original source text of each top-level argument of a call."""
     return [text[start:end] for start, end in _split_args(masked, open_paren)]
@@ -661,6 +713,22 @@ def _request_method_comparison_re(operand: str) -> re.Pattern[str]:
     )
 
 
+def _boolean_assignment_res(receiver: str) -> list[re.Pattern[str]]:
+    """Return regexes for ``const <var> = <receiver>.method() === '<METHOD>'``.
+
+    Both operand orders are covered. The variable is group 1 and the method
+    literal is group 3. The receiver is either the route (``route.request()``)
+    or the request object (``request``), so the ``.request()`` hop is optional.
+    """
+    escaped = re.escape(receiver)
+    call = rf"(?<![\w.$]){escaped}(?:\s*\.\s*request\s*\(\s*\))?\s*\.\s*method\s*\(\s*\)"
+    prefix = r"(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+    return [
+        re.compile(prefix + call + r"\s*===?\s*(['\"])([A-Za-z]+)\2"),
+        re.compile(prefix + r"(['\"])([A-Za-z]+)\2\s*===\s*" + call + r"(?![\w$])"),
+    ]
+
+
 def _match_is_code(text: str, masked: str, match: re.Match[str], token: str) -> bool:
     """True when *token* occurs as code inside *match* (not in a comment/string).
 
@@ -735,7 +803,19 @@ def _extract_route_interceptors(
         path, trailing_glob, last_prefix = path_info
         if trailing_glob and path in ("/api", "/api/v1"):
             # A catch-all API mock (``**/api/v1/**``) carries no specific route
-            # to validate - resolving its fallback branch would invent one.
+            # to validate - resolving its fallback branch would invent one. It
+            # is silent only when it has no method filter; a catch-all that
+            # mocks specific routes by URL and filters on the method CAN hide a
+            # stale one, so that shape is noted.
+            handler = text[args[-1][0] : args[-1][1]].strip()
+            if _METHOD_CALL_RE.search(handler):
+                _add_note(
+                    notes,
+                    filename,
+                    _line_of(text, match.start()),
+                    "page.route catch-all registration mocks specific routes by URL and filters on the HTTP "
+                    "method; its method filters cannot be checked against a single route",
+                )
             continue
         handler = text[args[-1][0] : args[-1][1]].strip()
         params = _callback_params(handler)
@@ -799,13 +879,47 @@ def _extract_route_interceptors(
 
         for match in resolved:
             method = match.group(2) or match.group(4)
-            if method is None or method.upper() not in _HTTP_METHODS:
+            if method is None:
+                continue
+            normalised_method = method.upper()
+            if normalised_method not in _HTTP_METHODS:
+                _add_note(
+                    notes,
+                    filename,
+                    _line_of(text, match.start()),
+                    f"interceptor method filter names {method!r}, which is not an HTTP method this check models",
+                )
                 continue
             condition = _enclosing_if_condition(text, masked, match.start())
-            if condition is None or _URL_CONDITION_RE.search(condition):
-                # The effective path (or the branch) lives in that condition.
+            if condition is None:
+                # A comparison assigned to a boolean variable is resolved by the
+                # dedicated pass below; anything else outside an if/ternary is
+                # not a branch selector this checker can attribute.
+                if re.search(
+                    r"(?:const|let|var)\s+[A-Za-z_$][A-Za-z0-9_$]*\s*=\s*$",
+                    text[span_start : match.start()],
+                ):
+                    continue
+                _add_note(
+                    notes,
+                    filename,
+                    _line_of(text, match.start()),
+                    "interceptor method comparison is not inside an if/ternary branch, so it selects no "
+                    "route branch this check can attribute",
+                )
                 continue
-            key = (_line_of(text, match.start()), method.upper(), path)
+            if _URL_CONDITION_RE.search(condition):
+                # The effective path lives in that condition, not in the
+                # registration - report the skip rather than guess a route.
+                _add_note(
+                    notes,
+                    filename,
+                    _line_of(text, match.start()),
+                    "interceptor method filter is combined with an in-callback URL test, so its effective "
+                    "route cannot be attributed to the registration",
+                )
+                continue
+            key = (_line_of(text, match.start()), normalised_method, path)
             if key in seen:
                 continue
             seen.add(key)
@@ -813,13 +927,69 @@ def _extract_route_interceptors(
                 HttpCall(
                     filename=filename,
                     line=key[0],
-                    method=method.upper(),
+                    method=normalised_method,
                     path=path,
                     kind="interceptor",
                     trailing_glob=bool(trailing_glob),
                     last_segment_prefix=bool(last_prefix),
                 )
             )
+
+        # A boolean variable holding a positive method comparison:
+        # ``const isPatch = route.request().method() === 'PATCH'; if (isPatch)``.
+        # The comparison itself is not inside an ``if``, so the pass above
+        # leaves it alone; resolve the branch that tests the variable.
+        for receiver in receivers:
+            for assignment_re in _boolean_assignment_res(receiver):
+                for assignment in assignment_re.finditer(body):
+                    variable = assignment.group(1)
+                    method = assignment.group(3)
+                    if method is None:
+                        continue
+                    normalised_method = method.upper()
+                    assignment_line = _line_of(text, span_start + assignment.start())
+                    if normalised_method not in _HTTP_METHODS:
+                        _add_note(
+                            notes,
+                            filename,
+                            assignment_line,
+                            f"interceptor method filter names {method!r}, which is not an HTTP method "
+                            f"this check models",
+                        )
+                        continue
+                    usage_re = re.compile(rf"(?<![\w$.]){re.escape(variable)}(?![\w$])")
+                    for usage in usage_re.finditer(masked, span_start + assignment.end(), span_end):
+                        if re.search(r"!\s*$", masked[max(span_start, usage.start() - 2) : usage.start()]):
+                            continue  # negated: guards the fallback branch, like ``!==``
+                        condition = _enclosing_if_condition(text, masked, usage.start())
+                        if condition is not None:
+                            if _URL_CONDITION_RE.search(condition):
+                                _add_note(
+                                    notes,
+                                    filename,
+                                    _line_of(text, usage.start()),
+                                    "interceptor method filter is combined with an in-callback URL test, so "
+                                    "its effective route cannot be attributed to the registration",
+                                )
+                                break
+                        elif not re.match(r"\s*\?", masked[usage.end() : span_end]):
+                            continue
+                        key = (assignment_line, normalised_method, path)
+                        if key in seen:
+                            break
+                        seen.add(key)
+                        calls.append(
+                            HttpCall(
+                                filename=filename,
+                                line=assignment_line,
+                                method=normalised_method,
+                                path=path,
+                                kind="interceptor",
+                                trailing_glob=bool(trailing_glob),
+                                last_segment_prefix=bool(last_prefix),
+                            )
+                        )
+                        break
     return calls
 
 
@@ -829,6 +999,7 @@ def extract_http_calls(source: str, filename: str, notes: list[str] | None = Non
     *notes* (when given) collects explicit explanations for shapes the checker
     cannot resolve safely, so a skip is visible rather than silent.
     """
+    notes = notes if notes is not None else []
     masked = mask_non_code(source)
     calls: list[HttpCall] = []
 
@@ -836,18 +1007,39 @@ def extract_http_calls(source: str, filename: str, notes: list[str] | None = Non
         open_paren = _find_open_paren(masked, match.end())
         if open_paren is None:
             continue
+        line = _line_of(source, match.start())
         args = _args_of(source, masked, open_paren)
         if len(args) < 4:
+            if any(_API_PREFIX in argument for argument in args):
+                _add_note(
+                    notes,
+                    filename,
+                    line,
+                    "apiFetch call carries an API path but fewer than four arguments, so its method and "
+                    "path were not checked",
+                )
             continue
         method = _literal_method(args[2])
         path_info = extract_path(args[3])
         if method is None or path_info is None:
+            if any(_API_PREFIX in argument for argument in (args[2], args[3])):
+                reasons: list[str] = []
+                if method is None:
+                    reasons.append("the method argument is not a single string-literal HTTP verb")
+                if path_info is None:
+                    reasons.append("the path argument could not be normalised to an API path")
+                _add_note(
+                    notes,
+                    filename,
+                    line,
+                    "apiFetch call could not be fully resolved: " + "; ".join(reasons),
+                )
             continue
         path, trailing_glob, last_prefix = path_info
         calls.append(
             HttpCall(
                 filename=filename,
-                line=_line_of(source, match.start()),
+                line=line,
                 method=method,
                 path=path,
                 kind="apiFetch",
@@ -860,26 +1052,36 @@ def extract_http_calls(source: str, filename: str, notes: list[str] | None = Non
         open_paren = _find_open_paren(masked, match.end())
         if open_paren is None:
             continue
+        line = _line_of(source, match.start())
         args = _args_of(source, masked, open_paren)
         if not args:
             continue
         path_info = extract_path(args[0])
         if path_info is None:
+            if _API_PREFIX in args[0]:
+                _add_note(
+                    notes,
+                    filename,
+                    line,
+                    "fetch URL argument names an API path but could not be normalised statically",
+                )
             continue
-        method: str | None = None
-        for argument in args[1:]:
-            init_match = _FETCH_INIT_METHOD_RE.search(argument)
-            if init_match is not None and init_match.group(2).upper() in _HTTP_METHODS:
-                method = init_match.group(2).upper()
-                break
-        if method is None:
-            continue  # implicit GET (or an init we cannot read) - not asserted
+        method, unresolved = _fetch_method(args[1:])
+        if unresolved:
+            if _API_PREFIX in args[0]:
+                _add_note(
+                    notes,
+                    filename,
+                    line,
+                    "fetch init does not expose a single readable method option, so the request method is unknown",
+                )
+            continue
         path, trailing_glob, last_prefix = path_info
         calls.append(
             HttpCall(
                 filename=filename,
-                line=_line_of(source, match.start()),
-                method=method,
+                line=line,
+                method=method or "GET",  # no method option means an implicit GET
                 path=path,
                 kind="fetch",
                 trailing_glob=trailing_glob,
@@ -899,6 +1101,13 @@ def extract_http_calls(source: str, filename: str, notes: list[str] | None = Non
             continue
         path_info = extract_path(args[0])
         if path_info is None:
+            if _API_PREFIX in args[0]:
+                _add_note(
+                    notes,
+                    filename,
+                    _line_of(source, match.start()),
+                    "page.request/request verb call names an API path but could not be normalised statically",
+                )
             continue
         path, trailing_glob, last_prefix = path_info
         calls.append(

@@ -541,12 +541,11 @@ def test_real_tree_scan_yields_plausible_descriptor_floor() -> None:
     # FAR-1847: the check must be pinned against the REAL tree, not only
     # synthetic sources. The floor is a MINIMUM, not an exact figure - it
     # guards against the extractor silently collapsing, so raise it when shapes
-    # are added; 119 were observed at green on this branch (113 before the
-    # round-2 shapes: the second callback parameter, the hoisted request
-    # object, and the anchored/character-class regex registrations).
+    # are added; 122 were observed at green on this branch (119 before the
+    # implicit-GET fetch shape: ``fetch(url)`` / ``fetch(url, { headers })``).
     calls = _checker.collect_calls()
 
-    assert len(calls) >= 119
+    assert len(calls) >= 122
 
 
 def test_ticket_named_files_contribute_descriptors() -> None:
@@ -559,17 +558,157 @@ def test_ticket_named_files_contribute_descriptors() -> None:
 
 
 def test_real_tenancy_rbac_leading_interpolation_is_resolved() -> None:
-    # FAR-1847: frontend/tests/e2e/journeys/tenancy-rbac.spec.ts:168 posts to
-    # ``${apiBase}/api/v1/pipelines``. That line is what pins the
-    # leading-interpolation shape against the real tree (the other
-    # POST /api/v1/pipelines in the file is a plain literal apiFetch).
+    # FAR-1847: frontend/tests/e2e/journeys/tenancy-rbac.spec.ts has a direct
+    # ``fetch(`${apiBase}/api/v1/pipelines`, ...)``. That call is what pins the
+    # leading-interpolation shape against the real tree. Assert on the shape
+    # (kind/method/path), never on a line number - the spec moves and a line pin
+    # turns a behavioural test into a brittle one.
     calls = [
         call
         for call in _checker.collect_calls()
         if call.filename.endswith("journeys/tenancy-rbac.spec.ts")
-        and call.line == 168
+        and call.kind == "fetch"
         and call.method == "POST"
         and call.path == "/api/v1/pipelines"
     ]
 
     assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# FAR-1847 final pass: silent drops and unresolvable shapes
+# ---------------------------------------------------------------------------
+
+
+def test_implicit_get_fetch_is_extracted_and_checked() -> None:
+    # ``fetch(url)`` / ``fetch(url, { headers })`` with no method option is a
+    # real GET - skipping it hid the request from the check entirely.
+    for source in (
+        "await fetch('/api/v1/pipelines')\n",
+        "await fetch('/api/v1/pipelines', { headers })\n",
+    ):
+        calls = _calls(source)
+        assert len(calls) == 1
+        assert calls[0].kind == "fetch"
+        assert calls[0].method == "GET"
+        assert calls[0].path == "/api/v1/pipelines"
+
+
+def test_implicit_get_fetch_stale_method_is_reported() -> None:
+    # A route that only serves PUT makes an implicit GET stale - proving the
+    # implicit method is checked, not merely extracted.
+    live = _checker.build_live_routes({"/api/v1/pipelines/abc/graph": {"put": {}}})
+    source = "await fetch('/api/v1/pipelines/abc/graph')\n"
+
+    violations = _checker.find_violations(_calls(source), live)
+
+    assert len(violations) == 1
+    assert violations[0].call.method == "GET"
+
+
+def test_ts_asserted_method_argument_is_resolved() -> None:
+    # ``'PATCH' as const`` / ``as HttpMethod`` still names one literal method.
+    for expression in ("'PATCH' as const", "'PATCH' as HttpMethod"):
+        source = f"await apiFetch(apiBase, token, {expression}, '/api/v1/pipelines/abc/graph')\n"
+
+        calls = _calls(source)
+
+        assert len(calls) == 1
+        assert calls[0].method == "PATCH"
+        assert calls[0].path == "/api/v1/pipelines/abc/graph"
+
+
+def test_boolean_holding_method_comparison_is_resolved() -> None:
+    # ``const isPatch = route.request().method() === 'PATCH'; if (isPatch)`` -
+    # the comparison is not itself inside the ``if``, so it was dropped.
+    source = (
+        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
+        "  const isPatch = route.request().method() === 'PATCH'\n"
+        "  if (isPatch) {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].kind == "interceptor"
+    assert calls[0].method == "PATCH"
+    assert calls[0].path == "/api/v1/pipelines/abc/graph"
+
+
+def test_negated_boolean_method_comparison_guards_the_fallback_branch() -> None:
+    # ``if (!isPatch)`` selects the fallback branch, like ``!==`` - it must not
+    # invent a method descriptor.
+    source = (
+        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
+        "  const isPut = route.request().method() === 'PUT'\n"
+        "  if (!isPut) {\n"
+        "    return route.fallback()\n"
+        "  }\n"
+        "})\n"
+    )
+
+    assert not _calls(source)
+
+
+def test_unresolvable_api_fetch_method_is_noted() -> None:
+    # A method expression the extractor cannot read must leave an explicit note
+    # instead of disappearing.
+    notes: list[str] = []
+
+    calls = _checker.extract_http_calls(
+        "await apiFetch(apiBase, token, pickMethod(), '/api/v1/pipelines')\n",
+        FILENAME,
+        notes,
+    )
+
+    assert not calls
+    assert len(notes) == 1
+    assert "method argument" in notes[0]
+    assert FILENAME in notes[0]
+
+
+def test_unreadable_fetch_init_is_noted() -> None:
+    # An init object (or spread) that may carry a method is not an implicit GET.
+    notes: list[str] = []
+
+    calls = _checker.extract_http_calls("await fetch('/api/v1/plan', init)\n", FILENAME, notes)
+
+    assert not calls
+    assert len(notes) == 1
+    assert "method" in notes[0]
+
+
+def test_catch_all_with_a_method_filter_is_noted() -> None:
+    # A catch-all that mocks specific routes by URL and filters on the method
+    # can hide a stale one, so it must not be silent.
+    notes: list[str] = []
+
+    calls = _checker.extract_http_calls(
+        "await page.route('**/api/v1/**', (route) => {\n"
+        "  if (route.request().method() === 'PATCH') { return route.fulfill({ status: 200 }) }\n"
+        "})\n",
+        FILENAME,
+        notes,
+    )
+
+    assert not calls
+    assert len(notes) == 1
+    assert "catch-all" in notes[0]
+
+
+def test_catch_all_without_a_method_filter_stays_silent() -> None:
+    # A catch-all mock with no method filter asserts nothing about a method, so
+    # it carries no route to validate and no note.
+    notes: list[str] = []
+
+    calls = _checker.extract_http_calls(
+        "await page.route('**/api/v1/**', (route) => route.fulfill({ status: 200 }))\n",
+        FILENAME,
+        notes,
+    )
+
+    assert not calls
+    assert not notes
