@@ -535,51 +535,103 @@ def _append_pipeline_template_pin(
     template_nodes = content.get("graph_nodes", [])
     template_edges = content.get("edges", [])
 
+    export_agent_ids = _append_template_agents(template_agents, agents, schema_ids_by_slug)
+    node_id_map = _append_template_nodes(template_nodes, graph_nodes, export_agent_ids, schema_ids_by_slug)
+    _append_template_edges(template_edges, edges, node_id_map)
+
+
+def _append_template_agents(
+    template_agents: list[dict[str, Any]],
+    agents: list[dict[str, Any]],
+    schema_ids_by_slug: dict[str, str],
+) -> list[str]:
+    """Append the template's embedded agents; return their fresh export ids."""
     export_agent_ids = [str(uuid.uuid4()) for _ in template_agents]
     for tmpl_agent, export_id in zip(template_agents, export_agent_ids, strict=True):
-        entry: dict[str, Any] = {
-            "id": export_id,
-            "name": tmpl_agent.get("name", ""),
-            "description": tmpl_agent.get("description"),
-            "prompt_template": tmpl_agent.get("prompt_template", ""),
-            "connector_type_refs": tmpl_agent.get("connector_type_refs", []),
-            "evals": tmpl_agent.get("evals"),
-            "retry_policy": tmpl_agent.get("retry_policy"),
-            "token_budget": tmpl_agent.get("token_budget"),
-        }
-        for slug_key, id_key in (("input_schema", "input_schema_id"), ("output_schema", "output_schema_id")):
-            slug_ref = tmpl_agent.get(slug_key)
-            if isinstance(slug_ref, str) and slug_ref in schema_ids_by_slug:
-                entry[id_key] = schema_ids_by_slug[slug_ref]
-        agents.append(entry)
+        agents.append(_template_agent_entry(tmpl_agent, export_id, schema_ids_by_slug))
+    return export_agent_ids
 
+
+def _template_agent_entry(
+    tmpl_agent: dict[str, Any],
+    export_id: str,
+    schema_ids_by_slug: dict[str, str],
+) -> dict[str, Any]:
+    """Build one bundle agent entry from a template's embedded agent."""
+    entry: dict[str, Any] = {
+        "id": export_id,
+        "name": tmpl_agent.get("name", ""),
+        "description": tmpl_agent.get("description"),
+        "prompt_template": tmpl_agent.get("prompt_template", ""),
+        "connector_type_refs": tmpl_agent.get("connector_type_refs", []),
+        "evals": tmpl_agent.get("evals"),
+        "retry_policy": tmpl_agent.get("retry_policy"),
+        "token_budget": tmpl_agent.get("token_budget"),
+    }
+    for slug_key, id_key in (("input_schema", "input_schema_id"), ("output_schema", "output_schema_id")):
+        slug_ref = tmpl_agent.get(slug_key)
+        if isinstance(slug_ref, str) and slug_ref in schema_ids_by_slug:
+            entry[id_key] = schema_ids_by_slug[slug_ref]
+    return entry
+
+
+def _append_template_nodes(
+    template_nodes: list[dict[str, Any]],
+    graph_nodes: list[dict[str, Any]],
+    export_agent_ids: list[str],
+    schema_ids_by_slug: dict[str, str],
+) -> dict[str, str]:
+    """Append the template's graph nodes; return the old->new node id map."""
     node_id_map = {node.get("id", ""): str(uuid.uuid4()) for node in template_nodes}
-    for node in template_nodes:
-        new_node: dict[str, Any] = {
-            "id": node_id_map.get(node.get("id", ""), node.get("id", "")) or str(uuid.uuid4()),
-            "node_type": node.get("node_type", "agent"),
-            "position": node.get("position", {"x": 0, "y": 0}),
-            "label": node.get("label", ""),
-        }
-        agent_index = node.get("agent_index")
-        if agent_index is not None and 0 <= agent_index < len(export_agent_ids):
-            new_node["agent_id"] = export_agent_ids[agent_index]
-        if node.get("output_schema_id") and node["output_schema_id"] in schema_ids_by_slug:
-            new_node["output_schema_id"] = schema_ids_by_slug[node["output_schema_id"]]
-        graph_nodes.append(new_node)
+    graph_nodes.extend(
+        _template_node_entry(node, node_id_map, export_agent_ids, schema_ids_by_slug) for node in template_nodes
+    )
+    return node_id_map
 
-    for edge in template_edges:
-        source = edge.get("source_node_id", edge.get("source", ""))
-        target = edge.get("target_node_id", edge.get("target", ""))
-        new_edge: dict[str, Any] = {
-            "id": str(uuid.uuid4()),
-            "source_node_id": node_id_map.get(source, source),
-            "target_node_id": node_id_map.get(target, target),
-            "edge_type": edge.get("edge_type", "normal"),
-        }
-        if edge.get("hitl_review_config"):
-            new_edge["hitl_review_config"] = edge["hitl_review_config"]
-        edges.append(new_edge)
+
+def _template_node_entry(
+    node: dict[str, Any],
+    node_id_map: dict[str, str],
+    export_agent_ids: list[str],
+    schema_ids_by_slug: dict[str, str],
+) -> dict[str, Any]:
+    """Build one bundle graph node from a template graph node."""
+    new_node: dict[str, Any] = {
+        "id": node_id_map.get(node.get("id", ""), node.get("id", "")) or str(uuid.uuid4()),
+        "node_type": node.get("node_type", "agent"),
+        "position": node.get("position", {"x": 0, "y": 0}),
+        "label": node.get("label", ""),
+    }
+    agent_index = node.get("agent_index")
+    if agent_index is not None and 0 <= agent_index < len(export_agent_ids):
+        new_node["agent_id"] = export_agent_ids[agent_index]
+    if node.get("output_schema_id") and node["output_schema_id"] in schema_ids_by_slug:
+        new_node["output_schema_id"] = schema_ids_by_slug[node["output_schema_id"]]
+    return new_node
+
+
+def _append_template_edges(
+    template_edges: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    node_id_map: dict[str, str],
+) -> None:
+    """Append the template's edges as real pipeline edges."""
+    edges.extend(_template_edge_entry(edge, node_id_map) for edge in template_edges)
+
+
+def _template_edge_entry(edge: dict[str, Any], node_id_map: dict[str, str]) -> dict[str, Any]:
+    """Build one bundle pipeline edge from a template edge."""
+    source = edge.get("source_node_id", edge.get("source", ""))
+    target = edge.get("target_node_id", edge.get("target", ""))
+    new_edge: dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "source_node_id": node_id_map.get(source, source),
+        "target_node_id": node_id_map.get(target, target),
+        "edge_type": edge.get("edge_type", "normal"),
+    }
+    if edge.get("hitl_review_config"):
+        new_edge["hitl_review_config"] = edge["hitl_review_config"]
+    return new_edge
 
 
 async def _stamp_install_id(
