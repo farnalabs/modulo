@@ -1935,6 +1935,34 @@ def _is_non_retryable_error_code(code: str | None) -> bool:
     return not spec.retryable
 
 
+def _non_retryable_failure_detail(
+    non_retryable_code: str,
+    exc: Exception,
+    node_attempt_count: int,
+    retries: int,
+) -> str:
+    """Terminal detail for a failure whose error class cannot be retried (FAR-1800).
+
+    A billing/credential refusal (HTTP 402 -> ``model.insufficient_funds``)
+    re-hits the same wall on every attempt, so the requeue gate refuses it. The
+    wording must not claim a retry was attempted when budget remained: the run
+    is a FIRST-attempt terminal in that case, and a retries-exhausted terminal
+    only when the budget was already spent.
+    """
+    if node_attempt_count < retries:
+        return _sanitize_detail(
+            f"Sandbox node failed with non-retryable error {non_retryable_code}; "
+            "not retried because a retry re-hits the same fault: " + str(exc),
+            limit=5000,
+        )
+    return _sanitize_detail(
+        "Sandbox node failed after retries exhausted; the last failure is "
+        f"non-retryable ({non_retryable_code}) and a further retry would "
+        "re-hit the same fault: " + str(exc),
+        limit=5000,
+    )
+
+
 def _can_fenced_requeue(
     node_attempt_count: int,
     retries: int,
@@ -6300,13 +6328,12 @@ class PipelineExecutor:
             # requeue — a script process may have run, so the side-effect
             # state is unknown. Terminal (never retried) with the
             # needs-human ``script.side_effect_unknown`` code.
-            error_code = _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN
-            error_detail = _sanitize_detail(
+            return _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN, _sanitize_detail(
                 "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
                 "not retried — needs human review: " + str(exc),
                 limit=5000,
             )
-        elif non_retryable_code is not None:
+        if non_retryable_code is not None:
             # FAR-1800: a retry cannot succeed for this class (e.g. an HTTP 402
             # billing refusal), so the requeue gate refused it. The WORDING
             # depends on whether any retry budget ever existed: with budget
@@ -6314,73 +6341,61 @@ class PipelineExecutor:
             # attempted); with the budget already exhausted, claiming "not
             # retried" would be false — the retries DID run, and the last
             # failure happens to be non-retryable.
-            error_code = non_retryable_code
-            if node_attempt_count < retries:
-                error_detail = _sanitize_detail(
-                    f"Sandbox node failed with non-retryable error {non_retryable_code}; "
-                    "not retried because a retry re-hits the same fault: " + str(exc),
-                    limit=5000,
-                )
-            else:
-                error_detail = _sanitize_detail(
-                    "Sandbox node failed after retries exhausted; the last failure is "
-                    f"non-retryable ({non_retryable_code}) and a further retry would "
-                    "re-hit the same fault: " + str(exc),
-                    limit=5000,
-                )
+            return non_retryable_code, _non_retryable_failure_detail(
+                non_retryable_code, exc, node_attempt_count, retries
+            )
+        error_code = "node_cancelled"
+        if not graph_idempotent and node_attempt_count < retries:
+            # FAR-295: the run was NOT retried because a node in the
+            # graph is non-idempotent (idempotent=false) — a retry
+            # would re-execute a side-effecting step. Distinguish
+            # this from the retries-exhausted message so the run
+            # detail readout explains WHY it terminal-failed on the
+            # first attempt.
+            error_detail = _sanitize_detail(
+                "Sandbox node failed (transient); retry suppressed because a node in the "
+                "graph is non-idempotent (idempotent=false) and re-running could double-execute "
+                "a side effect: " + str(exc),
+                limit=5000,
+            )
+        elif isinstance(exc, NodeCancelledError):
+            error_detail = _sanitize_detail(
+                "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=5000
+            )
         else:
-            error_code = "node_cancelled"
-            if not graph_idempotent and node_attempt_count < retries:
-                # FAR-295: the run was NOT retried because a node in the
-                # graph is non-idempotent (idempotent=false) — a retry
-                # would re-execute a side-effecting step. Distinguish
-                # this from the retries-exhausted message so the run
-                # detail readout explains WHY it terminal-failed on the
-                # first attempt.
-                error_detail = _sanitize_detail(
-                    "Sandbox node failed (transient); retry suppressed because a node in the "
-                    "graph is non-idempotent (idempotent=false) and re-running could double-execute "
-                    "a side effect: " + str(exc),
-                    limit=5000,
-                )
-            elif isinstance(exc, NodeCancelledError):
-                error_detail = _sanitize_detail(
-                    "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=5000
-                )
-            else:
-                # SandboxNodeFailedError: the FAR-197 no-output diagnostic
-                # is a fully bounded message designed to survive this
-                # surface in full — keep the limit at the sanitizer/column
-                # cap (5000), not the 500 used for the short
-                # NodeCancelledError string, or the kill-reason log tail
-                # would be the first thing truncated (FAR-197 review).
-                error_detail = _sanitize_detail(
-                    "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
-                )
-                # FAR-1526: a SandboxNodeFailedError (no-output stall / stream
-                # drop) used to terminal-fail under the GENERIC
-                # ``node_cancelled`` code — whose registry guidance reads "Node
-                # was cancelled." — so a stall was bucketed as a cancellation in
-                # the error dashboard and daily facts, while the SAME exception
-                # escaping through the executor's generic catch canonicalises to
-                # ``sandbox.no_output_json`` (LEGACY_ALIASES). Surface the
-                # exception's own canonical code here too: one failure class, one
-                # code. EXCEPTION: the FAR-136 hang death carries "likely hung"
-                # in the detail and is excluded from ``failure`` retries ONLY
-                # while its code resolves to ``node.cancelled`` — that marker
-                # keeps the generic code.
-                if isinstance(exc, SandboxNodeFailedError) and "likely hung" not in error_detail:
-                    error_code = _CODE_SANDBOX_NO_OUTPUT_JSON
-                # FAR-734: scan the retained stdout (embedded in the
-                # exception message) for terminal provider-error
-                # signatures.  When a signature matches, upgrade the
-                # generic ``node_cancelled`` code to the specific
-                # ``model.*`` code so the Error Dashboard and daily facts
-                # bucket it as a first-class failure dimension.  Fail
-                # open: when no signature matches the generic code stays.
-                _provider_code = classify_provider_error(str(exc))
-                if _provider_code is not None:
-                    error_code = _provider_code
+            # SandboxNodeFailedError: the FAR-197 no-output diagnostic
+            # is a fully bounded message designed to survive this
+            # surface in full — keep the limit at the sanitizer/column
+            # cap (5000), not the 500 used for the short
+            # NodeCancelledError string, or the kill-reason log tail
+            # would be the first thing truncated (FAR-197 review).
+            error_detail = _sanitize_detail(
+                "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
+            )
+            # FAR-1526: a SandboxNodeFailedError (no-output stall / stream
+            # drop) used to terminal-fail under the GENERIC
+            # ``node_cancelled`` code — whose registry guidance reads "Node
+            # was cancelled." — so a stall was bucketed as a cancellation in
+            # the error dashboard and daily facts, while the SAME exception
+            # escaping through the executor's generic catch canonicalises to
+            # ``sandbox.no_output_json`` (LEGACY_ALIASES). Surface the
+            # exception's own canonical code here too: one failure class, one
+            # code. EXCEPTION: the FAR-136 hang death carries "likely hung"
+            # in the detail and is excluded from ``failure`` retries ONLY
+            # while its code resolves to ``node.cancelled`` — that marker
+            # keeps the generic code.
+            if isinstance(exc, SandboxNodeFailedError) and "likely hung" not in error_detail:
+                error_code = _CODE_SANDBOX_NO_OUTPUT_JSON
+            # FAR-734: scan the retained stdout (embedded in the
+            # exception message) for terminal provider-error
+            # signatures.  When a signature matches, upgrade the
+            # generic ``node_cancelled`` code to the specific
+            # ``model.*`` code so the Error Dashboard and daily facts
+            # bucket it as a first-class failure dimension.  Fail
+            # open: when no signature matches the generic code stays.
+            _provider_code = classify_provider_error(str(exc))
+            if _provider_code is not None:
+                error_code = _provider_code
         return error_code, error_detail
 
     async def _read_retry_attempt_state(

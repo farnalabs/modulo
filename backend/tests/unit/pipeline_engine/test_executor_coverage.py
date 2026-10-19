@@ -9,6 +9,7 @@ code under test were deleted or altered.
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -50,6 +51,7 @@ from modulo.core.pipeline_engine.executor import (
     _node_output_agent_failure,
     _node_output_has_idempotency_gate,
     _node_output_sandbox_session_lost,
+    _node_output_sandbox_session_lost_text,
     _node_output_stall_reason,
     _reclassify_after_work_intact,
     _record_chain_end_output,
@@ -692,6 +694,55 @@ def test_session_lost_non_dict_inner():
 def test_session_lost_non_string_error():
     result = _node_output_sandbox_session_lost({"output": {"sandbox_session_lost": True, "error": 42}})
     assert result == "No output from agent - session interrupted"
+
+
+# ---------------------------------------------------------------------------
+# _node_output_sandbox_session_lost_text
+# ---------------------------------------------------------------------------
+
+
+async def test_chain_end_returns_early_without_envelope():
+    """A node event carrying no ``output`` envelope (or no capture dict) must
+    return before marker extraction — there is nothing to stamp or latch."""
+    executor = PipelineExecutor(MagicMock())
+    state = _StreamState()
+    ctx = SimpleNamespace(node_ids={"node-a"}, guard=None, completed_node_outputs=None, run_trace_id=None)
+    await executor._handle_chain_end_event(
+        state=state, ctx=ctx, lg_event={"name": "node-a", "data": {"output": {"status": "completed"}}}
+    )
+    assert state.stall_reason is None
+    assert state.session_lost_reason is None
+
+
+def test_session_lost_text_non_dict_returns_empty():
+    assert _node_output_sandbox_session_lost_text(None) == ""
+    assert _node_output_sandbox_session_lost_text("str") == ""
+
+
+def test_session_lost_text_skips_non_dict_views():
+    output = {"output": "str", "artifacts": [None, {"output": "str"}]}
+    assert _node_output_sandbox_session_lost_text(output) == ""
+
+
+def test_session_lost_text_collects_retained_surfaces():
+    """FAR-1800: both envelope views and their output_json members are scanned."""
+    output = {
+        "output": {
+            "summary": "No output from agent - session interrupted",
+            "output_json": {"no_output_reason": "402 body", "count": 3},
+        },
+        "artifacts": [
+            {"output": {"no_output_reason": "Insufficient account funds", "agent_stdout": "stdout tail"}},
+            {"output": {"error_message": "boom"}},
+        ],
+    }
+    text = _node_output_sandbox_session_lost_text(output)
+    assert "No output from agent - session interrupted" in text
+    assert "402 body" in text
+    assert "Insufficient account funds" in text
+    assert "stdout tail" in text
+    assert "boom" in text
+    assert "\n3" not in text
 
 
 # ---------------------------------------------------------------------------

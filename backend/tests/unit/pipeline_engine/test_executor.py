@@ -5026,6 +5026,19 @@ class TestTransientFailureDetail:
         assert "retry suppressed because a node in the graph is non-idempotent" in detail
         assert "idempotent=false" in detail
 
+    def test_provider_signature_in_sandbox_failure_upgrades_code(self) -> None:
+        """FAR-734: a retries-exhausted SandboxNodeFailedError whose retained
+        stdout carries a provider signature surfaces that specific code rather
+        than the generic ``node_cancelled``."""
+        exc = SandboxNodeFailedError(
+            '{"type":"error","error":{"name":"RateLimitError","data":{"statusCode":429}}}',
+            node_id="node-a",
+        )
+        code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=exc, script_lease_ok=True, graph_idempotent=True, node_attempt_count=1, retries=1
+        )
+        assert code == "model.rate_limited"
+
     def test_non_retryable_code_detail_names_the_class_not_exhaustion(self) -> None:
         """FAR-1800: when requeue was REFUSED because the failure class is
         non-retryable, the terminal detail must name that class — the retries
