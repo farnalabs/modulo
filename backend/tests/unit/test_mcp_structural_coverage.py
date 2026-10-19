@@ -132,6 +132,19 @@ def _registered_tool_names() -> set[str]:
     return set(mcp._tool_manager._tools.keys())
 
 
+def _registered_resource_uris() -> set[str]:
+    """Every registered MCP resource URI (fixed resources + templates).
+
+    FAR-1976: resources are a second read surface over the same tenant data as
+    the gated tools, so the structural guard must enumerate them alongside
+    tools.
+    """
+    from modulo.api.mcp_server import mcp
+
+    manager = mcp._resource_manager
+    return set(manager._resources.keys()) | set(manager._templates.keys())
+
+
 def test_registered_tool_names_equal_pinned_list() -> None:
     assert _registered_tool_names() == _EXPECTED_TOOLS
 
@@ -526,6 +539,10 @@ _CHOKEPOINT = "_check_agent_tool_scope"
 # FAR-1976: the node-allowed_tools-leg helper the chokepoint-bypassing handlers
 # call at their top (the only control they can reach).
 _NODE_SCOPE_HELPER = "_check_node_allowed_tools"
+# FAR-1976: resource handlers return plain text, so they apply the same leg
+# through this adapter (which must itself call ``_NODE_SCOPE_HELPER`` — pinned
+# by ``test_resource_scope_adapter_routes_through_the_node_scope_leg``).
+_RESOURCE_SCOPE_HELPER = "_resource_node_scope_error"
 
 # Registered MCP tools whose handler does NOT route through the shared
 # chokepoint (verified by ``_tools_not_reaching_chokepoint``). This is a
@@ -582,24 +599,56 @@ _TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT: dict[str, str] = {
 }
 
 
+# FAR-1976: every ``@mcp.resource`` that exposes the same data as a gated tool
+# must gate under that TOOL's name, or a run-scoped node whose ``allowed_tools``
+# excludes the tool can still read it through ``resources/read``. Mapping value
+# is the duplicated tool name the resource enforces (its "twin").
+_RESOURCE_TOOL_TWIN: dict[str, str] = {
+    "modulo://pipelines": "list_pipelines",
+    "modulo://pipelines/{pipeline_id}": "list_pipelines",
+    "modulo://pipelines/{pipeline_id}/runs": "list_runs",
+    "modulo://pipelines/{pipeline_id}/snapshots/{snapshot_id}": "get_pipeline_graph",
+    "modulo://runs/{run_id}": "get_run_status",
+    "modulo://runs/{run_id}/hitl/{review_id}": "get_hitl_review",
+    "modulo://schemas": "list_schemas",
+    "modulo://schemas/{schema_id}@{version}": "get_schema_versions",
+    "modulo://connectors": "list_connectors",
+    "modulo://model-backends": "list_model_backends",
+    "modulo://library": "search_library",
+    "modulo://library/{primitive_type}/{slug}": "search_library",
+}
+
+# Resources deliberately left un-narrowed, each with the reason. A new resource
+# must join one of these two maps — an unclassified resource fails the guard,
+# so a future duplicate of a gated tool cannot silently skip the helper.
+_RESOURCES_WITHOUT_TOOL_TWIN: dict[str, str] = {
+    "modulo://pipelines/{pipeline_id}/snapshots": (
+        "no gated tool lists a pipeline's snapshots: get_pipeline_diff only diffs "
+        "two identified snapshots and get_pipeline_graph returns the live graph; "
+        "this resource exposes snapshot ids/versions/tags, never graph content"
+    ),
+}
+
+
 @dataclass(frozen=True)
 class _CallGraph:
     """The ``api/mcp_server.py`` call graph used by the wired-chain guard.
 
     ``tool_to_func`` maps a registered tool name to its handler function;
-    ``func_callees`` maps a function to the names/attrs it calls;
+    ``resource_to_func`` maps a registered resource URI to its handler
+    function; ``func_callees`` maps a function to the names/attrs it calls;
     ``func_chokepoint_literals`` maps a function to the tool-name literals it
     passes to ``_check_agent_tool_scope``; ``func_node_scope_literals`` maps a
     function to the tool-name literals it passes to ``_check_node_allowed_tools``.
     """
 
     tool_to_func: dict[str, str]
+    resource_to_func: dict[str, str]
     func_callees: dict[str, set[str]]
     func_chokepoint_literals: dict[str, set[str]]
     func_node_scope_literals: dict[str, set[str]]
 
-    def _reachable_functions(self, tool: str) -> set[str]:
-        start = self.tool_to_func.get(tool)
+    def _reachable_from(self, start: str | None) -> set[str]:
         if start is None:
             return set()
         reached: set[str] = set()
@@ -611,6 +660,9 @@ class _CallGraph:
                     reached.add(callee)
                     stack.append(callee)
         return reached | {start}
+
+    def _reachable_functions(self, tool: str) -> set[str]:
+        return self._reachable_from(self.tool_to_func.get(tool))
 
     def reaches_chokepoint(self, tool: str) -> bool:
         """True when ANY reachable function calls the chokepoint (including a
@@ -628,10 +680,20 @@ class _CallGraph:
         first argument equals the tool name). FAR-1976."""
         return any(tool in self.func_node_scope_literals.get(func, set()) for func in self._reachable_functions(tool))
 
+    def resource_enforces_node_scope(self, resource_uri: str, tool: str) -> bool:
+        """True when the handler for *resource_uri* applies the node
+        allowed_tools leg for *tool* by name. FAR-1976: a tool-backed
+        ``@mcp.resource`` must gate under the duplicated tool's name, or the
+        same data is readable through ``resources/read`` by a node whose
+        ``allowed_tools`` excludes that tool."""
+        start = self.resource_to_func.get(resource_uri)
+        return any(tool in self.func_node_scope_literals.get(func, set()) for func in self._reachable_from(start))
+
 
 def _build_call_graph() -> _CallGraph:
     tree = ast.parse(_MCP_SERVER_SRC.read_text(encoding="utf-8"), filename=str(_MCP_SERVER_SRC))
     tool_to_func: dict[str, str] = {}
+    resource_to_func: dict[str, str] = {}
     func_callees: dict[str, set[str]] = {}
     func_chokepoint_literals: dict[str, set[str]] = {}
     func_node_scope_literals: dict[str, set[str]] = {}
@@ -650,7 +712,7 @@ def _build_call_graph() -> _CallGraph:
                 if sub.args and isinstance(sub.args[0], ast.Constant) and isinstance(sub.args[0].value, str):
                     if callee.id == _CHOKEPOINT:
                         literals.add(sub.args[0].value)
-                    elif callee.id == _NODE_SCOPE_HELPER:
+                    elif callee.id in (_NODE_SCOPE_HELPER, _RESOURCE_SCOPE_HELPER):
                         node_scope_literals.add(sub.args[0].value)
             elif isinstance(callee, ast.Attribute):
                 callees.add(callee.attr)
@@ -664,6 +726,14 @@ def _build_call_graph() -> _CallGraph:
             is_mcp_tool = (isinstance(deco, ast.Attribute) and deco.attr == "tool") or (
                 isinstance(deco, ast.Name) and deco.id == "tool"
             )
+            is_mcp_resource = (isinstance(deco, ast.Attribute) and deco.attr == "resource") or (
+                isinstance(deco, ast.Name) and deco.id == "resource"
+            )
+            if is_mcp_resource:
+                uri = dec.args[0].value if dec.args and isinstance(dec.args[0], ast.Constant) else None
+                if isinstance(uri, str):
+                    resource_to_func[uri] = node.name
+                continue
             if not is_mcp_tool:
                 continue
             name = node.name
@@ -673,6 +743,7 @@ def _build_call_graph() -> _CallGraph:
             tool_to_func[name] = node.name
     return _CallGraph(
         tool_to_func=tool_to_func,
+        resource_to_func=resource_to_func,
         func_callees=func_callees,
         func_chokepoint_literals=func_chokepoint_literals,
         func_node_scope_literals=func_node_scope_literals,
@@ -749,6 +820,102 @@ def test_node_scope_guard_catches_a_handler_without_the_helper_call() -> None:
     # ``create_pipeline`` routes through the full chokepoint and never calls
     # the node-scope helper.
     assert not graph.enforces_node_scope_under_own_name("create_pipeline")
+
+
+def test_call_graph_covers_every_registered_resource() -> None:
+    """The AST-derived resource map must match the live registry — otherwise
+    the resource guard below could pass vacuously for a resource it never
+    found (FAR-1976: resources are a second read surface over gated tool data).
+    """
+    graph = _build_call_graph()
+    assert set(graph.resource_to_func) == _registered_resource_uris()
+
+
+def test_every_resource_is_mapped_or_explicitly_unmapped() -> None:
+    """Every registered resource is classified exactly once: either it gates
+    under a duplicated tool, or it records why no such tool exists.
+
+    FAR-1976: this is the forward-looking half of the guard — a NEW resource
+    that duplicates a gated tool but is left unclassified fails here instead of
+    shipping as an ungated read surface.
+    """
+    classified = set(_RESOURCE_TOOL_TWIN) | set(_RESOURCES_WITHOUT_TOOL_TWIN)
+    overlap = set(_RESOURCE_TOOL_TWIN) & set(_RESOURCES_WITHOUT_TOOL_TWIN)
+    assert not overlap, f"resources both gated and exempted (ambiguous): {sorted(overlap)}"
+    unclassified = _registered_resource_uris() - classified
+    stale = classified - _registered_resource_uris()
+    assert not unclassified, (
+        f"unclassified MCP resources: {sorted(unclassified)} — map each to the "
+        f"gated tool whose data it exposes in _RESOURCE_TOOL_TWIN, or record why "
+        f"it has no tool twin in _RESOURCES_WITHOUT_TOOL_TWIN"
+    )
+    assert not stale, f"classification entries for resources that no longer exist: {sorted(stale)}"
+
+
+def test_tool_twins_reference_registered_tools() -> None:
+    """A resource may only gate under a tool that actually exists — a typo
+    would otherwise silently gate under a name no node can ever allow.
+    """
+    unknown = sorted(set(_RESOURCE_TOOL_TWIN.values()) - _registered_tool_names())
+    assert not unknown, f"resource gate names that are not registered tools: {unknown}"
+
+
+def test_every_tool_backed_resource_enforces_node_allowed_tools() -> None:
+    """FAR-1976: every tool-backed resource applies the node ``allowed_tools``
+    narrowing leg under its duplicated tool's name.
+
+    ``resources/read`` reaches the same tenant data as the tool, so a resource
+    that omits the helper is a full node-scope bypass even when every tool is
+    correctly gated. The guard walks the real handler for each URI, so dropping
+    one resource's helper call fails here as well as at runtime.
+    """
+    graph = _build_call_graph()
+    missing = [
+        uri for uri, tool in sorted(_RESOURCE_TOOL_TWIN.items()) if not graph.resource_enforces_node_scope(uri, tool)
+    ]
+    assert not missing, (
+        f"tool-backed resources that do not enforce their duplicated tool's node "
+        f"allowed_tools scope: {missing} — call {_NODE_SCOPE_HELPER}(<tool name>) "
+        f"at the top of the resource handler"
+    )
+
+
+def test_resource_scope_adapter_routes_through_the_node_scope_leg() -> None:
+    """The resource adapter must actually apply the node-scope leg.
+
+    A resource handler calling ``_resource_node_scope_error`` is only gated if
+    that adapter itself calls ``_check_node_allowed_tools`` — otherwise the
+    guard above would pass while nothing was enforced.
+    """
+    graph = _build_call_graph()
+    assert _RESOURCE_SCOPE_HELPER in graph.func_callees, "resource scope adapter not found"
+    assert _NODE_SCOPE_HELPER in graph.func_callees[_RESOURCE_SCOPE_HELPER]
+
+
+def test_resource_scope_guard_catches_an_unwired_resource() -> None:
+    """Can-fail proof for the resource guard: a handler with no node-scope call
+    is reported (and one with the matching literal is accepted).
+
+    Without this, the guard could pass vacuously if the AST scan silently
+    stopped finding resource decorators or the helper literals.
+    """
+    unwired = _CallGraph(
+        tool_to_func={},
+        resource_to_func={"modulo://fake": "fake_resource"},
+        func_callees={"fake_resource": set()},
+        func_chokepoint_literals={},
+        func_node_scope_literals={},
+    )
+    assert not unwired.resource_enforces_node_scope("modulo://fake", "list_pipelines")
+
+    wired = _CallGraph(
+        tool_to_func={},
+        resource_to_func={"modulo://fake": "fake_resource"},
+        func_callees={"fake_resource": {_NODE_SCOPE_HELPER}},
+        func_chokepoint_literals={},
+        func_node_scope_literals={"fake_resource": {"list_pipelines"}},
+    )
+    assert wired.resource_enforces_node_scope("modulo://fake", "list_pipelines")
 
 
 def test_every_declared_system_admin_tool_routes_through_the_chokepoint() -> None:

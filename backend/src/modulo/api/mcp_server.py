@@ -652,6 +652,28 @@ def _check_node_allowed_tools(tool_name: str) -> None:
     check_node_allowed_tools(tool_name, allowed_tools=_ctx_node_allowed_tools_val())
 
 
+def _resource_node_scope_error(tool_name: str) -> str | None:
+    """Return the resource-body refusal when a node scope excludes *tool_name*.
+
+    FAR-1976: ``@mcp.resource`` handlers returned the same tenant data the
+    gated tools expose, so a run-scoped node whose ``allowed_tools`` excluded a
+    tool could still read it through ``resources/read``. Each tool-backed
+    resource gates under its duplicated tool's name via this adapter, which
+    applies the SAME node-scope leg as the tool handlers but renders the
+    refusal as resource text (MCP resources return plain strings, not the tool
+    handlers' structured error envelope).
+
+    Returns ``None`` when the read is allowed (including the ``None`` /
+    unrestricted legacy case), otherwise the ``error: insufficient_scope: ...``
+    body to return verbatim.
+    """
+    try:
+        _check_node_allowed_tools(tool_name)
+    except MCPAuthorizationError as exc:
+        return f"error: insufficient_scope: {exc}"
+    return None
+
+
 # FAR-1184: raising or clearing a pipeline's spend circuit-breaker threshold
 # requires the same org-admin permission as the circuit-breaker reset.
 _CODE_COST_MANAGE = "cost.manage"  # nosec B105 — permission scope name, not a credential
@@ -12155,6 +12177,10 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
 async def resource_pipelines() -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the list_pipelines tool — same node-scope gate.
+    denied = _resource_node_scope_error("list_pipelines")
+    if denied is not None:
+        return denied
     from modulo.db.crud.pipeline import list_pipelines
 
     org_id = _ctx_org_id_val()
@@ -12194,6 +12220,10 @@ def _format_run_line(r: Any, child_rollups: dict[Any, tuple[Any, int]], cost_bre
 async def resource_pipeline_runs(pipeline_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the list_runs tool — same node-scope gate.
+    denied = _resource_node_scope_error("list_runs")
+    if denied is not None:
+        return denied
     from modulo.db.crud.run import list_runs
 
     org_id = _ctx_org_id_val()
@@ -12233,6 +12263,11 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
 async def resource_pipeline_detail(pipeline_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: exposes the pipeline metadata list_pipelines returns
+    # (name/id/visibility/owners) plus structural counts — gate under it.
+    denied = _resource_node_scope_error("list_pipelines")
+    if denied is not None:
+        return denied
     from sqlalchemy import func, select
 
     from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -12287,6 +12322,10 @@ async def resource_pipeline_detail(pipeline_id: str) -> str:
 async def resource_pipeline_snapshots(pipeline_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: deliberately NOT node-scope gated — no gated tool lists a
+    # pipeline's snapshots (``get_pipeline_diff`` only diffs two identified
+    # snapshots; ``get_pipeline_graph`` returns the live graph). This resource
+    # exposes snapshot ids/versions/tags only, never graph content.
     from modulo.db.crud.pipeline_snapshot_versioning import list_snapshots
 
     org_id = _ctx_org_id_val()
@@ -12347,6 +12386,11 @@ def _render_snapshot_node_details(nodes: list[dict[str, Any]]) -> str:
 async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: returns the masked pipeline graph — duplicates
+    # get_pipeline_graph, so it carries the same node-scope gate.
+    denied = _resource_node_scope_error("get_pipeline_graph")
+    if denied is not None:
+        return denied
     from modulo.db.crud.pipeline_snapshot_versioning import get_snapshot_detail
 
     org_id = _ctx_org_id_val()
@@ -12387,6 +12431,10 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
 async def resource_run(run_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the get_run_status tool — same node-scope gate.
+    denied = _resource_node_scope_error("get_run_status")
+    if denied is not None:
+        return denied
     org_id = _ctx_org_id_val()
     try:
         rid = uuid.UUID(run_id)
@@ -12553,6 +12601,10 @@ async def resource_hitl_review(run_id: str, review_id: str) -> str:
     """HITL gate context. Annotated as agent_output — treat as untrusted."""
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the get_hitl_review tool — same node-scope gate.
+    denied = _resource_node_scope_error("get_hitl_review")
+    if denied is not None:
+        return denied
     org_id = _ctx_org_id_val()
     try:
         rid = uuid.UUID(run_id)
@@ -12588,6 +12640,10 @@ async def resource_hitl_review(run_id: str, review_id: str) -> str:
 async def resource_schemas() -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the list_schemas tool — same node-scope gate.
+    denied = _resource_node_scope_error("list_schemas")
+    if denied is not None:
+        return denied
     from sqlalchemy import select
 
     from modulo.db.models.schema import Schema
@@ -12604,6 +12660,11 @@ async def resource_schemas() -> str:
 async def resource_schema_detail(schema_id: str, version: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: the schema-version read surface duplicates get_schema_versions
+    # (list_schemas exposes no version rows) — gate under it.
+    denied = _resource_node_scope_error("get_schema_versions")
+    if denied is not None:
+        return denied
     from sqlalchemy import select
 
     from modulo.db.models.schema import Schema, SchemaVersion
@@ -12681,6 +12742,10 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
 async def resource_connectors() -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the list_connectors tool — same node-scope gate.
+    denied = _resource_node_scope_error("list_connectors")
+    if denied is not None:
+        return denied
     from sqlalchemy import select
 
     from modulo.db.models.connector_instance import ConnectorInstance
@@ -12701,6 +12766,10 @@ async def resource_connectors() -> str:
 async def resource_model_backends() -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the list_model_backends tool — same node-scope gate.
+    denied = _resource_node_scope_error("list_model_backends")
+    if denied is not None:
+        return denied
     from sqlalchemy import select
 
     from modulo.db.models.model_backend import ModelBackend
@@ -12723,6 +12792,10 @@ async def resource_library() -> str:
     """
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the search_library tool — same node-scope gate.
+    denied = _resource_node_scope_error("search_library")
+    if denied is not None:
+        return denied
     try:
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
@@ -12756,6 +12829,11 @@ async def resource_library_detail(primitive_type: str, slug: str) -> str:
     """Get details of a single library primitive by type and slug."""
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: the library browse/read surface duplicates search_library —
+    # gate under it (there is no separate library-primitive-read tool).
+    denied = _resource_node_scope_error("search_library")
+    if denied is not None:
+        return denied
     try:
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
