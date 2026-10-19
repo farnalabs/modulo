@@ -116,7 +116,7 @@ _GATE = {
 async def test_field_weakening_detection(old_cfg: dict, new_cfg: dict, expected: list[str]) -> None:
     old_cfg = {**_GATE, **old_cfg}
     new_cfg = {**_GATE, **new_cfg}
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=old_cfg)],
         [_new_edge("a", "b", cfg=new_cfg)],
@@ -136,7 +136,7 @@ async def test_claim_expiry_minutes_field_removed_is_weakening() -> None:
     drops the expiry requirement and is flagged as weakening."""
     old_cfg = {**_GATE, "claim_expiry_minutes": 60}
     new_cfg = {k: v for k, v in _GATE.items() if k != "claim_expiry_minutes"}
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=old_cfg)],
         [_new_edge("a", "b", cfg=new_cfg)],
@@ -152,7 +152,7 @@ async def test_condition_weakening_on_human_only_false_edge() -> None:
     evaluates them before human_only is consulted — plan §1)."""
     old_cfg = {**_GATE, "human_only": False, "condition": "x == 1"}
     new_cfg = {**_GATE, "human_only": False, "condition": None}
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=old_cfg)],
         [_new_edge("a", "b", cfg=new_cfg)],
@@ -169,7 +169,7 @@ async def test_condition_weakening_on_human_only_false_edge() -> None:
 
 
 async def test_edge_deletion_is_structural_weakening() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=_GATE)],
         [],  # old gated edge's topology key absent
@@ -183,7 +183,7 @@ async def test_edge_deletion_is_structural_weakening() -> None:
 
 
 async def test_gate_removal_via_explicit_null_is_structural_weakening() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=_GATE)],
         [_new_edge("a", "b", cfg=None)],
@@ -195,7 +195,7 @@ async def test_gate_removal_via_explicit_null_is_structural_weakening() -> None:
 
 
 async def test_structural_weakening_reason_for_unprivileged_is_correlation_mismatch() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=_GATE)],
         [],
@@ -229,7 +229,7 @@ async def test_correlation_uses_topology_key_not_client_id() -> None:
         "hitl_review_config": None,
         "hitl_review_config_present": True,
     }
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [old_edge],
         [new_edge],
@@ -248,7 +248,7 @@ async def test_correlation_uses_topology_key_not_client_id() -> None:
 async def test_presence_signal_false_preserves_existing_value() -> None:
     """hitl_review_config_present=False on a matching topology key means preserve
     the stored value — not weakening even with an explicit null value."""
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=_GATE)],
         [
@@ -269,7 +269,7 @@ async def test_presence_signal_false_preserves_existing_value() -> None:
 async def test_new_edge_with_omitted_key_is_preserved() -> None:
     """An edge dict that omits the hitl_review_config key entirely (untouched by
     the client) defaults to preserve — no weakening."""
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=_GATE)],
         [{"source_node_id": "a", "target_node_id": "b", "edge_type": "normal"}],
@@ -281,7 +281,7 @@ async def test_new_edge_with_omitted_key_is_preserved() -> None:
 
 async def test_empty_old_edge_set_is_noop() -> None:
     """Edge creation with no prior row is never weakening (plan §1)."""
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [],
         [_new_edge("a", "b", cfg=_GATE)],
@@ -301,7 +301,7 @@ async def test_primitive_does_not_mutate_inputs() -> None:
     old_cfg = {**_GATE, "human_only": True}
     old_edges = [_old_edge("a", "b", cfg=old_cfg)]
     snapshot_before = [dict(e) for e in old_edges]
-    await apply_gated_edge_diff(
+    apply_gated_edge_diff(
         _SESSION,
         old_edges,
         [_new_edge("a", "b", cfg={**_GATE, "human_only": False})],
@@ -314,7 +314,7 @@ async def test_primitive_does_not_mutate_inputs() -> None:
 async def test_deepcopy_isolates_mutable_config_after_call() -> None:
     old_cfg = {**_GATE, "human_only": True}
     old_edges = [_old_edge("a", "b", cfg=old_cfg)]
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         old_edges,
         [_new_edge("a", "b", cfg={**_GATE, "human_only": False})],
@@ -347,7 +347,7 @@ def test_is_privileged_role(role: str | None, expected: bool) -> None:
 
 
 async def test_non_privileged_weakening_is_denied_with_insufficient_role() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=_GATE)],
         [_new_edge("a", "b", cfg={**_GATE, "human_only": False})],
@@ -360,7 +360,7 @@ async def test_non_privileged_weakening_is_denied_with_insufficient_role() -> No
 
 async def test_mcp_caller_type_forces_denial_even_when_is_privileged_true() -> None:
     """caller_type == 'mcp' hardcodes is_privileged False (plan §3 item 5)."""
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=_GATE)],
         [_new_edge("a", "b", cfg={**_GATE, "human_only": False})],
@@ -372,7 +372,7 @@ async def test_mcp_caller_type_forces_denial_even_when_is_privileged_true() -> N
 
 
 async def test_mcp_denied_for_structural_removal() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=_GATE)],
         [],
@@ -391,7 +391,7 @@ async def test_mcp_denied_for_structural_removal() -> None:
 async def test_legacy_snapshot_missing_gate_is_fail_closed() -> None:
     """A historical snapshot edge with a missing/None gate field is treated as
     weakening with the distinct reason code (plan §1 / §3)."""
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=_GATE)],
         [
@@ -412,7 +412,7 @@ async def test_legacy_snapshot_missing_gate_is_fail_closed() -> None:
 
 
 async def test_legacy_snapshot_field_weakening_fail_closed() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=_GATE)],
         [_new_edge("a", "b", cfg={**_GATE, "human_only": False})],
@@ -425,7 +425,7 @@ async def test_legacy_snapshot_field_weakening_fail_closed() -> None:
 
 
 async def test_legacy_snapshot_no_change_is_allowed_for_privileged() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=_GATE)],
         [_new_edge("a", "b", cfg=dict(_GATE))],
@@ -518,7 +518,7 @@ def test_hitl_review_weakening_denied_carries_payload() -> None:
 async def test_topology_bypass_same_edge_different_edge_type_is_structural() -> None:
     """Old (a,b,'normal') gated edge vs new (a,b,'reject') — the old gated
     topology key is absent → structural weakening, not silently preserved."""
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=_GATE)],
         [_new_edge("a", "b", edge_type="reject", cfg=None)],
@@ -551,7 +551,7 @@ def _new_nodes(*nodes: dict) -> list[dict]:
 async def test_node_level_human_only_false_write_is_weakening() -> None:
     """An explicit human_only: false write on an existing hitl node is the
     same runtime relaxation as the edge-level one — detected and audited."""
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [],
         [],
@@ -572,7 +572,7 @@ async def test_node_level_absent_hitl_config_is_effectively_human_only() -> None
     effectively human-only at runtime (fail-safe default), so re-saving it
     with an explicit human_only: false is a weakening write."""
     for old_cfg, include_key in ((None, True), (None, False), ({"human_only": None}, True)):
-        diff = await apply_gated_edge_diff(
+        diff = apply_gated_edge_diff(
             _SESSION,
             [],
             [],
@@ -588,7 +588,7 @@ async def test_node_level_absent_hitl_config_is_effectively_human_only() -> None
 async def test_node_level_false_to_false_is_silent() -> None:
     """Explicit false -> explicit false is not a relaxation — no detection,
     so nothing is audited and nothing denied."""
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [],
         [],
@@ -606,7 +606,7 @@ async def test_node_level_false_then_removed_config_is_a_tightening() -> None:
     becomes effectively human-only (the fail-safe default) — a TIGHTENING,
     never denied."""
     for include_key in (True, False):
-        diff = await apply_gated_edge_diff(
+        diff = apply_gated_edge_diff(
             _SESSION,
             [],
             [],
@@ -620,7 +620,7 @@ async def test_node_level_false_then_removed_config_is_a_tightening() -> None:
 
 
 async def test_node_level_non_privileged_weakening_is_denied() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [],
         [],
@@ -634,7 +634,7 @@ async def test_node_level_non_privileged_weakening_is_denied() -> None:
 
 
 async def test_node_level_weakening_denied_for_mcp() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [],
         [],
@@ -650,7 +650,7 @@ async def test_node_level_weakening_denied_for_mcp() -> None:
 async def test_node_removal_is_structural_weakening() -> None:
     """Deleting a hitl node removes the runtime gate entirely — the one way a
     node-level gate vanishes that the edge diff cannot see."""
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [],
         [],
@@ -668,7 +668,7 @@ async def test_node_removal_is_structural_weakening() -> None:
 async def test_node_down_typed_off_hitl_is_structural_weakening() -> None:
     """A same-id node that is no longer node_type='hitl' no longer compiles a
     gate — treated as removal."""
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [],
         [],
@@ -684,7 +684,7 @@ async def test_node_down_typed_off_hitl_is_structural_weakening() -> None:
 async def test_node_creation_with_opt_out_is_not_weakening() -> None:
     """A NEW hitl node (no prior row) with human_only: false creates a gate
     with no prior value to weaken — mirroring the edge-level noop."""
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [],
         [],
@@ -700,7 +700,7 @@ async def test_node_creation_with_opt_out_is_not_weakening() -> None:
 async def test_non_hitl_node_configs_are_not_guarded() -> None:
     """hitl_config on a non-hitl node is inert at runtime (the compiler
     ignores it) — a human_only: false write there is never flagged."""
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [],
         [],
@@ -715,7 +715,7 @@ async def test_non_hitl_node_configs_are_not_guarded() -> None:
 async def test_node_level_weakening_co_detected_with_edge_detection() -> None:
     """The full graph-save shape: simultaneous edge-level and node-level
     relaxations both surface as weakening in ONE diff result."""
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=_GATE)],
         [_new_edge("a", "b", cfg={**_GATE, "human_only": False})],
@@ -733,7 +733,7 @@ async def test_node_level_weakening_co_detected_with_edge_detection() -> None:
 async def test_node_level_no_nodes_passed_keeps_legacy_behavior() -> None:
     """Callers that do not pass node lists (older call sites, edge-only
     contexts) must behave identically to before."""
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg=_GATE)],
         [_new_edge("a", "b", cfg={**_GATE, "human_only": False})],
@@ -745,7 +745,7 @@ async def test_node_level_no_nodes_passed_keeps_legacy_behavior() -> None:
 
 
 async def test_node_level_legacy_snapshot_fail_closed() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [],
         [],
@@ -762,7 +762,7 @@ async def test_node_level_legacy_snapshot_fail_closed() -> None:
 async def test_primitive_does_not_mutate_node_inputs() -> None:
     old_nodes = [_hitl_node("n1", {"human_only": True})]
     snapshot_before = [dict(n) for n in old_nodes]
-    await apply_gated_edge_diff(
+    apply_gated_edge_diff(
         _SESSION,
         [],
         [],
@@ -885,7 +885,7 @@ def test_denial_detail_names_affected_node() -> None:
     ],
 )
 async def test_edge_level_on_reject_transitions(old_cfg: dict, new_cfg: dict, expected: list[str]) -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg={**_GATE, **old_cfg})],
         [_new_edge("a", "b", cfg={**_GATE, **new_cfg})],
@@ -900,7 +900,7 @@ async def test_edge_level_on_reject_transitions(old_cfg: dict, new_cfg: dict, ex
 
 
 async def test_edge_level_on_reject_proceed_denied_for_non_privileged() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg={**_GATE, "on_reject": "terminate"})],
         [_new_edge("a", "b", cfg={**_GATE, "on_reject": "proceed"})],
@@ -912,7 +912,7 @@ async def test_edge_level_on_reject_proceed_denied_for_non_privileged() -> None:
 
 
 async def test_edge_level_on_reject_proceed_denied_for_mcp() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg={**_GATE})],
         [_new_edge("a", "b", cfg={**_GATE, "on_reject": "proceed"})],
@@ -924,7 +924,7 @@ async def test_edge_level_on_reject_proceed_denied_for_mcp() -> None:
 
 
 async def test_edge_level_on_reject_combined_with_human_only() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg={**_GATE})],
         [_new_edge("a", "b", cfg={**_GATE, "human_only": False, "on_reject": "proceed"})],
@@ -958,7 +958,7 @@ async def test_edge_level_on_reject_combined_with_human_only() -> None:
 async def test_node_level_on_reject_transitions(
     old_cfg: dict | None, new_cfg: dict | None, expected: list[str]
 ) -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [],
         [],
@@ -976,7 +976,7 @@ async def test_node_level_on_reject_transitions(
 
 
 async def test_node_level_on_reject_proceed_denied_for_non_privileged() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [],
         [],
@@ -990,7 +990,7 @@ async def test_node_level_on_reject_proceed_denied_for_non_privileged() -> None:
 
 
 async def test_node_creation_with_on_reject_proceed_is_not_weakening() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [],
         [],
@@ -1038,7 +1038,7 @@ async def test_node_creation_with_on_reject_proceed_is_not_weakening() -> None:
     ],
 )
 async def test_edge_level_correction_target_transitions(old_cfg: dict, new_cfg: dict, expected: list[str]) -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg={**_GATE, **old_cfg})],
         [_new_edge("a", "b", cfg={**_GATE, **new_cfg})],
@@ -1053,7 +1053,7 @@ async def test_edge_level_correction_target_transitions(old_cfg: dict, new_cfg: 
 
 
 async def test_edge_level_correction_target_added_denied_for_non_privileged() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg={**_GATE})],
         [_new_edge("a", "b", cfg={**_GATE, "correction_target": "n2"})],
@@ -1065,7 +1065,7 @@ async def test_edge_level_correction_target_added_denied_for_non_privileged() ->
 
 
 async def test_edge_level_correction_target_added_denied_for_mcp() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg={**_GATE})],
         [_new_edge("a", "b", cfg={**_GATE, "correction_target": "n2"})],
@@ -1077,7 +1077,7 @@ async def test_edge_level_correction_target_added_denied_for_mcp() -> None:
 
 
 async def test_edge_level_correction_target_combined_with_on_reject() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [_old_edge("a", "b", cfg={**_GATE})],
         [_new_edge("a", "b", cfg={**_GATE, "on_reject": "proceed", "correction_target": "n2"})],
@@ -1111,7 +1111,7 @@ async def test_edge_level_correction_target_combined_with_on_reject() -> None:
 async def test_node_level_correction_target_transitions(
     old_cfg: dict | None, new_cfg: dict | None, expected: list[str]
 ) -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [],
         [],
@@ -1129,7 +1129,7 @@ async def test_node_level_correction_target_transitions(
 
 
 async def test_node_level_correction_target_added_denied_for_non_privileged() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [],
         [],
@@ -1143,7 +1143,7 @@ async def test_node_level_correction_target_added_denied_for_non_privileged() ->
 
 
 async def test_node_creation_with_correction_target_is_not_weakening() -> None:
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         _SESSION,
         [],
         [],
