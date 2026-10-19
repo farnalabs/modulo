@@ -729,7 +729,7 @@ async def test_seed_sample_data_inserts_recover_after_conflict(
     assert await _count(session, count_model) == counts_before
 
 
-@pytest.mark.parametrize("entity", [Pipeline, PipelineSnapshot, Run, Agent, Team])
+@pytest.mark.parametrize("entity", [Schema, SchemaVersion, Pipeline, PipelineSnapshot, Run, Agent, Team])
 async def test_seed_reraises_when_recovery_finds_no_winner(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch, entity: type
 ) -> None:
