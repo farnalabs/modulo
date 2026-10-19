@@ -85,9 +85,24 @@ async def _insert_run(
     snapshot_id: uuid.UUID,
     batch_id: uuid.UUID,
     variant_config_snapshot: dict[str, Any],
-    run_number: int,
+    run_number: int | None = None,
 ) -> uuid.UUID:
+    """Insert a run, allocating ``run_number`` when the caller does not pin one.
+
+    ``test_org`` is session-scoped and shared across the whole integration
+    suite, so a hardcoded low literal (1/2/…) can collide with a run an earlier
+    module committed into the same org — the order-dependent
+    ``uq_runs_org_run_number`` violation (the FAR-1968 flake class). Allocating
+    through the production atomic per-org counter (``_allocate_run_number``, the
+    same one ``create_run`` uses) is collision-free by construction. A caller
+    may still pass ``run_number`` for a dedicated (fresh) org where no collision
+    is possible.
+    """
+    from modulo.db.crud.run import _allocate_run_number
+
     run_id = uuid.uuid4()
+    if run_number is None:
+        run_number = await _allocate_run_number(session, org_id)
     await session.execute(
         sa_insert(Run).values(
             id=run_id,
@@ -414,7 +429,6 @@ async def test_batch_runs_load_by_batch_id_org_scoped(
                     "run_context_overrides": {"model_backend_id": f"backend-{i}"},
                     "batch_id": str(batch_id),
                 },
-                run_number=i + 1,
             )
         )
 
@@ -448,7 +462,6 @@ async def test_batch_compare_exposes_frozen_snapshot_status_cost_tokens(
             "run_context_overrides": {"model_backend_id": "backend-a"},
             "batch_id": str(batch_id),
         },
-        run_number=1,
     )
     await _insert_run(
         rls_session,
@@ -463,7 +476,6 @@ async def test_batch_compare_exposes_frozen_snapshot_status_cost_tokens(
             "run_context_overrides": {"model_backend_id": "backend-b"},
             "batch_id": str(batch_id),
         },
-        run_number=2,
     )
 
     entries = await get_batch_compare(rls_session, org_id=test_org, batch_id=batch_id)

@@ -36,10 +36,12 @@ class _FakeCounter:
 class _FakeMeter:
     def __init__(self) -> None:
         self.counters: list[_FakeCounter] = []
+        self.created_kwargs: list[dict[str, str]] = []
 
     def create_counter(self, *, name: str, description: str, unit: str) -> _FakeCounter:
         counter = _FakeCounter(name)
         self.counters.append(counter)
+        self.created_kwargs.append({"name": name, "description": description, "unit": unit})
         return counter
 
     def counter(self, name: str) -> _FakeCounter | None:
@@ -71,6 +73,13 @@ class TestRecordOwnerReadFailure:
         assert counter is not None
         assert counter.adds == [(1, None)]
         assert notifier_mod._owner_read_failures_total is counter
+        assert meter.created_kwargs == [
+            {
+                "name": "modulo_notifier_break_glass_owner_read_failures_total",
+                "description": "Fail-closed webhook dispatch suppressions from break-glass owner-read DB errors",
+                "unit": "1",
+            }
+        ]
 
     def test_records_again_without_reinitialising(self, monkeypatch: pytest.MonkeyPatch) -> None:
         meter = _FakeMeter()

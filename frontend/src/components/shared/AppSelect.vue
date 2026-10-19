@@ -19,6 +19,7 @@
       :placeholder="placeholder"
       :append-to="resolvedAppendTo"
       :aria-label="resolvedAriaLabel"
+      :pt="mergedPt"
       @update:model-value="emit('update:modelValue', $event)"
       @blur="emit('blur', $event)"
       @focus="emit('focus', $event)"
@@ -210,6 +211,21 @@ onMounted(() => {
   isInClippingAncestor.value = hasClippingAncestor(rootEl.value)
 })
 
+// Decision (FAR-1946, accepting FAR-1920): the general predicate below sends
+// EVERY page-level Select to `'body'`, because the app layout's
+// `<main class="overflow-auto">` is itself a computed clipping ancestor. That
+// is accepted deliberately:
+//   - `c12307ea7` (FAR-851, "anchor filter dropdown overlays beneath their
+//     trigger") shows the intent was ANCHORING the overlay to its trigger;
+//     `'self'` was the means, not the end.
+//   - The FAR-851 anchoring pin passes with body-portalling (#1960), so the
+//     end is preserved.
+//   - `'body'` is PrimeVue's own default, so this moves toward the library
+//     default rather than away from it.
+//   - Keeping `'self'` for the page scroll region would reintroduce exactly the
+//     container-specific branch FAR-1920 deleted.
+//   - It is reversible if a real regression appears.
+//
 // Precedence: explicit prop → clipping-ancestor-derived → FAR-851 'self'. An
 // empty-string prop is treated as absent (PrimeVue cannot use '' as an append
 // target, and passing it through would silently bypass the derived default).
@@ -224,4 +240,31 @@ const resolvedAppendTo = computed(() => {
 const resolvedAriaLabel = computed(
   () => props.label || (attrs['aria-label'] as string | undefined) || 'Select',
 )
+
+// FAR-1913: axe's `scrollable-region-focusable` flags PrimeVue's
+// `.p-select-list-container` (the overlay's `overflow: auto` scroll box) because
+// it has no keyboard entry point. Making the container focusable is the fix. It
+// is applied here, in the single Select wrapper, so every Select inherits it.
+//
+// `pt` may also arrive from a consumer through `$attrs` (e.g. FilterBar's
+// per-option spacing, the environment-profile form's `aria-describedby`), so
+// this MERGES with the consumer's `pt` rather than replacing it - an explicit
+// `:pt` after `v-bind="$attrs"` would silently drop the consumer's config.
+type PtSection = Record<string, unknown> | ((opts: unknown) => Record<string, unknown>)
+
+function withFocusableListContainer(existing: unknown): PtSection {
+  if (typeof existing === 'function') {
+    const existingFn = existing as (opts: unknown) => Record<string, unknown>
+    return (opts) => ({ ...existingFn(opts), tabindex: '0' })
+  }
+  return { ...(existing as Record<string, unknown> | undefined), tabindex: '0' }
+}
+
+const mergedPt = computed(() => {
+  const consumerPt = attrs.pt as Record<string, unknown> | undefined
+  return {
+    ...consumerPt,
+    listContainer: withFocusableListContainer(consumerPt?.listContainer),
+  }
+})
 </script>

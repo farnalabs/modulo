@@ -179,7 +179,7 @@
         v-else
         data-testid="hitl-gate-choice-fallback"
         role="status"
-        class="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+        class="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive-text"
       >
         {{ $t('hitl.gate.choice_no_options') }}
       </p>
@@ -249,7 +249,7 @@
     <div v-if="status === 'approved'" class="rounded-lg bg-success/10 p-3 text-sm text-success">
       {{ $t('hitl.gate.approved_banner') }}
     </div>
-    <div v-if="status === 'rejected'" class="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+    <div v-if="status === 'rejected'" class="rounded-lg bg-destructive/10 p-3 text-sm text-destructive-text">
       {{ rejectedBannerText }}
     </div>
     <div v-if="status === 'claimed' && claimToken" class="rounded-lg bg-muted p-3 text-xs">

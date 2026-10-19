@@ -96,14 +96,14 @@ rate-limited by the `TriggerEngine`.
       respecting `max_concurrent_runs` and the org daily spend limit
 - [x] Agent-signal triggers fire a child pipeline when a watched node
       completes (`trigger_type agent_signal`), respecting the concurrency limit.
-      The child's `node_output` is the watched node's **PURE RETURN** — never the
-      legacy mixed envelope — for any splittable type (`sandbox_agent`, `agent`,
+      The child's `node_output` is the watched node's **PURE RETURN** – never the
+      legacy mixed envelope – for any splittable type (`sandbox_agent`, `agent`,
       `connector`, `dispatch`, `manual`, `gate`), whatever the return's shape
       (dict, scalar, list, or absent), resolved through the SAME
       `split_node_output` the write-side splitter uses. The node-type map is
       EXTENDED from the snapshot edges, so an edge-synthesized HITL gate node
       (absent from `graph_json.nodes`) resolves to `gate`. An unknown/unsplittable
-      type — or a caller that supplies no type — keeps the value verbatim
+      type – or a caller that supplies no type – keeps the value verbatim
       (pre-split legacy behaviour), and a splittable type with no contract output
       OMITS the `node_output` key (never a bare `None`) (FAR-131)
 - [x] Org-wide pause kill-switch (`PUT /api/v1/admin/orgs/{org}/triggers/pause`):

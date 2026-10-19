@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, Numeric, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import JSONB_COL, OrgScoped
 
 # Reserved ``legacy_suite_id`` for eval definitions that had a NULL legacy
 # ``suite_id`` string. The backfill migration (0126) creates ONE such sentinel
@@ -57,7 +57,9 @@ class EvalSuite(OrgScoped):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     # Denormalised list of eval_definitions.id belonging to this suite.
-    eval_definition_ids: Mapped[list[uuid.UUID]] = mapped_column(JSON, nullable=False, default=list)
+    # Physical jsonb (0130); JSONB_COL keeps the ORM declaration honest while
+    # preserving SQLite/MariaDB parity.
+    eval_definition_ids: Mapped[list[uuid.UUID]] = mapped_column(JSONB_COL, nullable=False, default=list)
     # Optional reference to an input set / dataset (Phase 2 concept). NULL in
     # Phase 1 — reserved column so later phases don't need a migration.
     input_set_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)

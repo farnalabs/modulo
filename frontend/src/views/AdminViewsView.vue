@@ -152,8 +152,8 @@
         </table>
       </div>
       <div v-if="deleteConfirmId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-        <p class="text-sm font-medium text-destructive">{{ $t('views.AdminViewsView.confirm_delete', { name: deleteConfirmName }) }}</p>
-        <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminViewsView.this_action_cannot_be_undone') }}</p>
+        <p class="text-sm font-medium text-destructive-text">{{ $t('views.AdminViewsView.confirm_delete', { name: deleteConfirmName }) }}</p>
+        <p class="mt-1 text-sm text-destructive-text">{{ $t('views.AdminViewsView.this_action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
           <Button :disabled="deleting" severity="danger" data-testid="admin-views-delete-confirm" @click="deleteView">
             {{ deleting ? $t('common.deleting') : $t('common.delete') }}
@@ -166,7 +166,7 @@
             {{ $t('common.cancel') }}
           </button>
         </div>
-        <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
+        <div v-if="deleteError" class="mt-2 text-sm text-destructive-text">{{ deleteError }}</div>
       </div>
     </template>
     </FeatureGate>

@@ -178,26 +178,27 @@ async def _create_feedback_record(
     account_id: uuid.UUID,
     *,
     run_id: uuid.UUID | None = None,
-    run_number: int | None = None,
 ) -> uuid.UUID:
-    """Insert a real FeedbackRecord row bound to the rig's run/pipeline."""
+    """Insert a real FeedbackRecord row bound to the rig's run/pipeline.
+
+    ``run_number`` is allocated through the production atomic per-org counter
+    (``_allocate_run_number``) rather than a hardcoded literal. ``test_org`` is
+    session-scoped and shared by every integration module in one invocation, so
+    any fixed low number (e.g. 1/2/3) may already belong to a run created by an
+    earlier module — the direct insert then violates
+    ``uq_runs_org_run_number`` order-dependently (FAR-1968). Allocating from the
+    same counter production uses makes the fixture order-independent, and stays
+    collision-free against pre-existing runs.
+    """
+    from modulo.db.crud.run import _allocate_run_number
+
     record_id = uuid.uuid4()
     run_id = run_id or uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        if run_number is None:
-            # ``run_number`` is unique per organisation and this org is shared
-            # by every module in the session, so allocate above the current
-            # maximum — a literal would collide with a run an earlier module
-            # already created (e.g. the production ``create_run`` counter).
-            run_number = int(
-                (
-                    await conn.execute(
-                        text("SELECT COALESCE(MAX(run_number), 0) + 1 FROM runs WHERE organisation_id = :oid"),
-                        {"oid": str(rig["org_id"])},
-                    )
-                ).scalar_one()
-            )
-        await conn.execute(
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, rig["org_id"])
+        run_number = await _allocate_run_number(session, uuid.UUID(str(rig["org_id"])))
+        await session.execute(
             text(
                 "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
                 "trigger_type, status, input_payload, input_hash, langgraph_thread_id, "
@@ -215,7 +216,7 @@ async def _create_feedback_record(
                 "rnum": run_number,
             },
         )
-        await conn.execute(
+        await session.execute(
             text(
                 "INSERT INTO feedback_records (id, organisation_id, run_id, review_id, account_id, "
                 "rejection_reason, rejected_output, producing_node_id, feedback_status, "

@@ -36,6 +36,15 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
+# FAR-1894: discriminator written onto every semantic-layer ``port_changes``
+# entry. The array mixes two semantically different things — a port-signature
+# delta on a node present in BOTH snapshots, and an edge's port binding — and a
+# consumer must be able to tell them apart without decoding the ``change``
+# vocabulary. Additive field: it does not alter the existing keys, so consumers
+# that only read ``node_id``/``change`` keep working unchanged.
+_PORT_CHANGE_KIND_NODE_SIGNATURE = "node_signature"
+_PORT_CHANGE_KIND_EDGE_PORT = "edge_port"
+
 
 async def delete_snapshot(
     session: AsyncSession,
@@ -558,7 +567,6 @@ def _diff_entity_layer(
 
 def _compute_semantic_layer(
     graph_b: dict[str, Any],
-    added_nodes: list[dict[str, Any]],
     modified_nodes: list[dict[str, Any]],
     added_edges: list[dict[str, Any]],
     modified_edges: list[dict[str, Any]],
@@ -569,22 +577,41 @@ def _compute_semantic_layer(
     the downstream reachability projection (which nodes a port change breaks);
     ``breaking_changes`` flags port changes that would drop/alter data read by
     a downstream edge (severity ``block`` vs ``warning``).
+
+    Every ``port_changes`` entry carries a ``kind`` discriminator:
+    ``node_signature`` for a node whose port signature changed between the two
+    snapshots, ``edge_port`` for an edge's port binding. An ADDED node is
+    deliberately absent (FAR-1894): it has no "before" signature to diff
+    against, and it is already reported in full — port declarations included —
+    under ``nodes_added``.
     """
     port_changes: list[dict[str, Any]] = []
     for m in modified_nodes:
-        port_changes += m.get("changes", {}).get("ports", [])
+        # ``changes["ports"]`` is a ``diff_node_ports`` delta over the SAME node
+        # in both snapshots, i.e. a genuine signature change.
+        port_changes.extend(
+            {**entry, "kind": _PORT_CHANGE_KIND_NODE_SIGNATURE} for entry in m.get("changes", {}).get("ports", [])
+        )
     for m in modified_edges:
         # ``changes["ports"]`` is a ``diff_edge_ports`` delta dict (no node_id),
         # so normalise it to the node-change shape the oracle can consume.
         edge_port_delta: Any = m.get("changes", {}).get("ports")
         if edge_port_delta:
-            port_changes += normalise_edge_port_delta(m["edge"], edge_port_delta)
-    for node in added_nodes:
-        port_changes += diff_node_ports({}, node)
+            port_changes.extend(
+                {**entry, "kind": _PORT_CHANGE_KIND_EDGE_PORT}
+                for entry in normalise_edge_port_delta(m["edge"], edge_port_delta)
+            )
+    # FAR-1894: added nodes are NOT diffed here. Diffing one against an empty
+    # placeholder produced a "port changed" claim for a node that never existed
+    # (with the literal node_id "None"), polluting the array and collapsing N
+    # added nodes into one bogus entry. ``nodes_added`` already carries every
+    # port declaration, so nothing is lost.
     for edge in added_edges:
         delta = diff_edge_ports({}, edge)
         if delta:
-            port_changes += normalise_edge_port_delta(edge, delta)
+            port_changes.extend(
+                {**entry, "kind": _PORT_CHANGE_KIND_EDGE_PORT} for entry in normalise_edge_port_delta(edge, delta)
+            )
 
     graph_b_for_impact: dict[str, Any] = {
         "nodes": graph_b.get("nodes", []),
@@ -680,7 +707,6 @@ async def diff_snapshots(
 
     semantic = _compute_semantic_layer(
         b.graph_json,
-        added_nodes,
         modified_nodes,
         added_edges,
         modified_edges,

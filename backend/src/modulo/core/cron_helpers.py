@@ -8643,6 +8643,35 @@ async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any
         raise
     except Exception:
         _log.warning("dispatcher_reconcile.streak_sweep_failed", exc_info=True)
+    # FAR-1344 — capacity alerting: the queue-pressure ladder, per-pipeline
+    # backpressure and org capacity saturation. Signal + alert only (never a
+    # refusal); the numbers come from FAR-1343's capacity reader, and this sweep
+    # is what turns "the queue is climbing" into a notification BEFORE work
+    # starts failing. Isolated: a failure here is a WARNING, never an abort of
+    # the reconcile tick.
+    try:
+        from modulo.core.capacity_alerts import evaluate_capacity_alerts
+
+        capacity_alerts = await evaluate_capacity_alerts(
+            factory=_open_system_factory(),
+            redis_client=redis_client,
+        )
+        summary["capacity_alerts_orgs"] = capacity_alerts.get("orgs_evaluated", 0)
+        summary["capacity_alerts_dispatched"] = capacity_alerts.get("dispatched", 0)
+        summary["capacity_alerts_failed"] = capacity_alerts.get("notify_failed", 0)
+        if capacity_alerts.get("dispatched") or capacity_alerts.get("org_errors"):
+            _log.info(
+                "dispatcher_reconcile.capacity_alerts",
+                extra={
+                    "orgs_evaluated": capacity_alerts.get("orgs_evaluated", 0),
+                    "dispatched": capacity_alerts.get("dispatched", 0),
+                    "org_errors": capacity_alerts.get("org_errors", 0),
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("dispatcher_reconcile.capacity_alerts_failed", exc_info=True)
     try:
         from modulo.auth.api_key import revoke_run_api_key_sweep
 

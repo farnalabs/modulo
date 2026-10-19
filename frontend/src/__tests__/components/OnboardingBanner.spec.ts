@@ -72,4 +72,24 @@ describe('OnboardingBanner', () => {
     expect(wrapper.find('[data-testid="onboarding-banner-checklist"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="onboarding-action-a1"]').exists()).toBe(true)
   })
+
+  it('shows the store error when an onboarding action fails', async () => {
+    const store = useOnboardingStore()
+    store.ready = true
+    store.isFirstRun = true
+    store.dismissed = false
+    store.progressPct = 20
+    store.actions = [makeAction({ id: 'a1' })]
+    const wrapper = mount(OnboardingBanner, {
+      global: { plugins: [router] },
+    })
+    await nextTick()
+    await flushPromises()
+    await wrapper.find('[data-testid="onboarding-banner-trigger"]').trigger('click')
+    store.error = 'Could not load onboarding status'
+    await nextTick()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Could not load onboarding status')
+  })
 })

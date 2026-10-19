@@ -353,6 +353,108 @@ class TestDiffSnapshotsSemantic:
         assert "a" in semantic["impacted_nodes"]
         assert "b" in semantic["impacted_nodes"]
 
+    async def test_added_node_with_ports_does_not_contaminate_port_changes(self):
+        # FAR-1894: an ADDED node's declared ports are not a port-signature
+        # change — the node did not exist in snapshot A, so there is no
+        # "before" signature to diff against. Previously the semantic layer
+        # diffed every added node against an empty placeholder, which emitted
+        # bogus entries carrying the literal node_id "None" (every added node's
+        # ports collapsed onto that one id) alongside the genuine delta.
+        sid_a = uuid.uuid4()
+        sid_b = uuid.uuid4()
+        snap_a = _mock_snapshot(
+            sid_a,
+            1,
+            nodes=[
+                {"id": "a", "agent_id": "ag1", "label": "A", "outputs": [{"name": "res", "schema_ref": "s1"}]},
+                {"id": "b", "agent_id": "ag2", "label": "B"},
+            ],
+            edges=[{"source": "a", "target": "b", "source_port": "res"}],
+        )
+        snap_b = _mock_snapshot(
+            sid_b,
+            2,
+            nodes=[
+                {"id": "a", "agent_id": "ag1", "label": "A", "outputs": [{"name": "res", "schema_ref": "s2"}]},
+                {"id": "b", "agent_id": "ag2", "label": "B"},
+                # Added node declaring ports in BOTH directions.
+                {
+                    "id": "c",
+                    "agent_id": "ag3",
+                    "label": "C",
+                    "inputs": [{"name": "in1", "schema_ref": "in-s"}],
+                    "outputs": [{"name": "out1", "schema_ref": "out-s"}],
+                },
+            ],
+            edges=[{"source": "a", "target": "b", "source_port": "res"}],
+        )
+
+        session = _diff_session(snap_a, snap_b)
+        result = await diff_snapshots(session, sid_a, sid_b)
+        assert result is not None
+
+        # The added node is reported separately, WITH its full port declaration,
+        # so dropping its entries from port_changes loses no information.
+        assert [node["id"] for node in result["nodes_added"]] == ["c"]
+        added = result["nodes_added"][0]
+        assert added["inputs"] == [{"name": "in1", "schema_ref": "in-s"}]
+        assert added["outputs"] == [{"name": "out1", "schema_ref": "out-s"}]
+
+        semantic = result["semantic"]
+        ports = semantic["port_changes"]
+        node_entries = [p for p in ports if p["kind"] == "node_signature"]
+        assert node_entries, "expected the genuine node-signature delta"
+        assert {p["node_id"] for p in node_entries} == {"a"}
+        assert [p["change"] for p in node_entries] == ["modified"]
+
+        # Only the genuinely-changed node appears — the added node's ports are
+        # not reported as a change under any id, including the old placeholder.
+        node_ids = {p["node_id"] for p in ports}
+        assert node_ids == {"a"}
+        assert "None" not in node_ids
+
+        # Impact follows the genuine change only (a -> b); nothing changed on c.
+        assert semantic["impacted_nodes"] == ["a", "b"]
+
+    async def test_added_edge_with_ports_reports_edge_port_kind(self):
+        # FAR-1894: an ADDED edge's port binding IS a genuine semantic change —
+        # unlike an added node, it binds an already-existing output to an
+        # already-existing input, so it still surfaces in port_changes and
+        # carries the edge_port discriminator.
+        sid_a = uuid.uuid4()
+        sid_b = uuid.uuid4()
+        na = {"id": "a", "agent_id": "ag1", "label": "A", "outputs": [{"name": "out1", "schema_ref": "s"}]}
+        nb = {"id": "b", "agent_id": "ag2", "label": "B", "inputs": [{"name": "in1", "schema_ref": "s"}]}
+        snap_a = _mock_snapshot(
+            sid_a,
+            1,
+            nodes=[na, nb],
+            edges=[{"source": "b", "target": "a", "source_port": "out1"}],
+        )
+        snap_b = _mock_snapshot(
+            sid_b,
+            2,
+            nodes=[na, nb],
+            edges=[
+                {"source": "b", "target": "a", "source_port": "out1"},
+                {"source": "a", "target": "b", "source_port": "out1", "target_port": "in1"},
+            ],
+        )
+
+        session = _diff_session(snap_a, snap_b)
+        result = await diff_snapshots(session, sid_a, sid_b)
+        assert result is not None
+        assert [edge["source"] for edge in result["edges_added"]] == ["a"]
+
+        semantic = result["semantic"]
+        edge_entries = [p for p in semantic["port_changes"] if p["kind"] == "edge_port"]
+        assert edge_entries, "an added edge's port binding must surface in port_changes"
+        assert {p["change"] for p in edge_entries} == {"edge_source_port_repoint", "edge_target_port_repoint"}
+        assert {p["node_id"] for p in edge_entries} == {"a", "b"}
+        # The source-port repoint propagates impact from a through b; the
+        # target-port repoint does the same from b.
+        assert semantic["impacted_nodes"] == ["a", "b"]
+
     async def test_diff_no_port_changes_emits_empty_semantic(self):
         sid_a = uuid.uuid4()
         sid_b = uuid.uuid4()
@@ -403,9 +505,12 @@ class TestDiffSnapshotsSemantic:
         result = await diff_snapshots(session, sid_a, sid_b)
         assert result is not None
         semantic = result["semantic"]
-        assert any(
-            p.get("change") == "edge_source_port_repoint" and p.get("node_id") == "a" for p in semantic["port_changes"]
-        ), "edge source_port repoint must appear in port_changes"
+        edge_entries = [p for p in semantic["port_changes"] if p.get("change") == "edge_source_port_repoint"]
+        assert edge_entries, "edge source_port repoint must appear in port_changes"
+        assert edge_entries[0]["node_id"] == "a"
+        # FAR-1894: edge repoints carry an explicit discriminator so a consumer
+        # never has to infer node-vs-edge from the ``change`` vocabulary.
+        assert edge_entries[0]["kind"] == "edge_port"
         # The repoint is attributed to the source node's output, so impact must
         # reach the source and its full downstream (b, c).
         assert semantic["impacted_nodes"] == ["a", "b", "c"]

@@ -218,7 +218,7 @@
             :key="i"
             class="rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-[10px]"
           >
-            <span :class="b.severity === 'block' ? 'font-medium text-destructive' : 'text-warning-text'">
+            <span :class="b.severity === 'block' ? 'font-medium text-destructive-text' : 'text-warning-text'">
               {{ b.severity }}
             </span>
             — {{ b.reason }}
@@ -259,6 +259,7 @@ import LoadingSpinner from '../shared/LoadingSpinner.vue'
 import { formatDateShort } from '../../lib/formatDate'
 import { api } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
+import { withTimeout } from '../../lib/requestTimeout'
 import { isSubstantiveKind, createdKindLabel, SNAPSHOT_PAGE_SIZE } from '../../lib/pipelineVersion'
 
 interface TimelineSnapshot {
@@ -293,15 +294,6 @@ const props = defineProps<{ pipelineId: string }>()
 const emit = defineEmits<{ close: []; view: [id: string]; restore: [id: string, version: number] }>()
 
 const { t } = useI18n()
-
-const REQUEST_TIMEOUT_MS = 15000
-
-/** The host editor's request pattern: abort a request that stalls. */
-function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = REQUEST_TIMEOUT_MS): Promise<T> {
-  const ctrl = new AbortController()
-  const timeout = setTimeout(() => ctrl.abort(), ms)
-  return factory(ctrl.signal).finally(() => clearTimeout(timeout))
-}
 
 const loading = ref(true)
 const loadError = ref<string | null>(null)

@@ -17,8 +17,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy.exc import SQLAlchemyError
+from tests.unit.notifier.conftest import make_scalar_result, session_factory_for
 
-from modulo.core.notifier import DispatchResult, Notifier, _record_owner_read_failure
+from modulo.core.notifier import DispatchResult, Notifier
 from modulo.db.models.account import Account
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 
@@ -52,90 +53,21 @@ def _endpoint(account_id: uuid.UUID | None = None) -> NotificationEndpoint:
 
 def _session_factory(owners: list[Account], *, raise_on_execute: bool = False) -> MagicMock:
     """Session factory returning one session shared by owner-load + in-app blocks."""
-    result = MagicMock()
-    result.scalars.return_value.__iter__ = lambda self: iter(owners)
     session = AsyncMock()
     if raise_on_execute:
         session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))
     else:
-        session.execute = AsyncMock(return_value=result)
+        session.execute = AsyncMock(return_value=make_scalar_result(owners))
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
-    return MagicMock(
-        side_effect=lambda: AsyncMock(
-            __aenter__=AsyncMock(return_value=session),
-            __aexit__=AsyncMock(return_value=False),
-        )
-    )
+    return session_factory_for(session)
 
 
 async def _reject(n: Notifier, endpoints: list[NotificationEndpoint], owners: list[Account]) -> list[Any]:
     with patch.object(n, "_session_factory", _session_factory(owners)):
         return await n._reject_break_glass_owned(endpoints)
-
-
-# ---------------------------------------------------------------------------
-# _record_owner_read_failure
-# ---------------------------------------------------------------------------
-
-
-def test_record_owner_read_failure_noop_when_no_meter_provider() -> None:
-    """When OTel reports no meter provider the counter stays unset and nothing is recorded."""
-    from opentelemetry import metrics as otel_metrics
-
-    with (
-        patch.object(otel_metrics, "get_meter_provider", return_value=None),
-        patch("modulo.core.notifier._owner_read_failures_total", None),
-    ):
-        _record_owner_read_failure()
-
-    from modulo.core.notifier import _owner_read_failures_total
-
-    assert _owner_read_failures_total is None
-
-
-def test_record_owner_read_failure_initialises_and_increments_counter() -> None:
-    """First call builds the OTel counter, subsequent calls reuse it and increment."""
-    from opentelemetry import metrics as otel_metrics
-
-    counter = MagicMock()
-    meter = MagicMock()
-    meter.create_counter.return_value = counter
-    provider = MagicMock()
-    provider.get_meter.return_value = meter
-
-    with (
-        patch.object(otel_metrics, "get_meter_provider", return_value=provider),
-        patch("modulo.core.notifier._owner_read_failures_total", None),
-    ):
-        _record_owner_read_failure()
-        _record_owner_read_failure()
-
-    assert counter.add.call_count == 2
-    meter.create_counter.assert_called_once_with(
-        name="modulo_notifier_break_glass_owner_read_failures_total",
-        description="Fail-closed webhook dispatch suppressions from break-glass owner-read DB errors",
-        unit="1",
-    )
-
-
-def test_record_owner_read_failure_logs_warning_when_counter_creation_fails() -> None:
-    """If OTel counter creation raises, the metric setup is abandoned with a warning."""
-    from opentelemetry import metrics as otel_metrics
-
-    provider = MagicMock()
-    provider.get_meter = MagicMock(side_effect=RuntimeError("otel down"))
-
-    with (
-        patch.object(otel_metrics, "get_meter_provider", return_value=provider),
-        patch("modulo.core.notifier._owner_read_failures_total", None),
-        patch("modulo.core.notifier._log.warning") as mock_warning,
-    ):
-        _record_owner_read_failure()
-
-    mock_warning.assert_called_once_with("notifier.metrics_owner_read_counter_failed")
 
 
 # ---------------------------------------------------------------------------
@@ -206,12 +138,7 @@ async def test_reject_re_raises_cancelled_error(notifier: Notifier) -> None:
     ep = _endpoint(account_id=uuid.uuid4())
     session = AsyncMock()
     session.execute = AsyncMock(side_effect=asyncio.CancelledError)
-    factory = MagicMock(
-        side_effect=lambda: AsyncMock(
-            __aenter__=AsyncMock(return_value=session),
-            __aexit__=AsyncMock(return_value=False),
-        )
-    )
+    factory = session_factory_for(session)
 
     with (
         patch.object(notifier, "_session_factory", factory),

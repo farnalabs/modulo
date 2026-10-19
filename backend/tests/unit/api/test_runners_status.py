@@ -94,6 +94,38 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def viewer_client() -> Generator[TestClient, None, None]:
+    """Org viewer — below the admin floor of the ``runners.status`` gate.
+
+    Mirrors ``client`` but presents a ``viewer`` org role, so a route that
+    still rides the viewer-granted ``environment_profile.list`` key would
+    admit this principal. Used to pin the FAR-1955 admin boundary.
+    """
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="viewer",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="viewer",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
 def _probe_row(
     *,
     engine_reachable: bool = True,
@@ -207,6 +239,31 @@ class TestRunnersStatus:
         data = resp.json()
         assert data["aggregate_state"] == "image_not_pulled"
         assert data["machines"][0]["images_present"] is False
+
+
+class TestRunnersStatusPermission:
+    """FAR-1955: the runner-status capacity read is admin-only.
+
+    The permission was split by surface: ``runners.status`` (admin) gates this
+    read, while ``environment_profile.list`` stays viewer for the pipeline
+    editor's profile select. A viewer therefore gets 403 here, where before
+    the change it rode the viewer-granted shared key and got 200.
+    """
+
+    URL = "/api/v1/runners/status"
+
+    def test_viewer_is_forbidden(self, viewer_client: TestClient) -> None:
+        # Handler deps are patched so a failure here can only be the authz
+        # gate: before FAR-1955 the viewer rode ``environment_profile.list``
+        # (viewer) and this returned 200; now ``runners.status`` (admin) denies.
+        with _enter_patchers(_patch_status(rows=[_probe_row()])):
+            resp = viewer_client.get(self.URL)
+        assert resp.status_code == 403
+
+    def test_admin_succeeds(self, client: TestClient) -> None:
+        with _enter_patchers(_patch_status(rows=[_probe_row()])):
+            resp = client.get(self.URL)
+        assert resp.status_code == 200
 
 
 class TestRunnersStatusProfiles:

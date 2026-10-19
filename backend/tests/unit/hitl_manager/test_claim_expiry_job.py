@@ -216,7 +216,7 @@ async def test_start_and_stop_lifecycle() -> None:
     engine = MagicMock()
     job = ClaimExpiryJob(engine)
 
-    await job.start()
+    job.start()
     assert job._task is not None
     assert not job._task.done()
 
@@ -308,11 +308,11 @@ async def test_start_is_noop_when_already_running() -> None:
     """Calling start() twice must not spawn a second polling task."""
     engine = MagicMock()
     job = ClaimExpiryJob(engine)
-    await job.start()
+    job.start()
     first_task = job._task
     assert first_task is not None
 
-    await job.start()
+    job.start()
     assert job._task is first_task
 
     await job.stop()

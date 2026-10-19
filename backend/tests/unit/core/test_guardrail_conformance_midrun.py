@@ -446,6 +446,27 @@ async def test_build_live_manifest_profile_and_agent(monkeypatch: pytest.MonkeyP
     assert registered.get("git") is True
 
 
+async def test_build_live_manifest_missing_agent_is_unknown(monkeypatch: pytest.MonkeyPatch):
+    """A bound agent that no longer exists contributes nothing (unknown).
+
+    Exercises the ``agent is None`` arm of ``_register_agent_surface``: the
+    agent_id is set but the row is absent, so the reader logs and stamps no
+    capabilities — a block guardrail on the agent surface then fails CLOSED.
+    """
+    aid = uuid.uuid4()
+    session = _manifest_session()  # no agent row for the bound id
+    _patch_select(monkeypatch, session)
+    registered = await build_live_manifest(
+        session,
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=aid,
+    )
+    assert registered == {}
+    assert decide_conformance(["git"], registered).state == "unknown"
+
+
 async def test_build_live_manifest_inactive_connector_absent(monkeypatch: pytest.MonkeyPatch):
     cid = uuid.uuid4()
     row = _row_connector(cid, ["github.read"])

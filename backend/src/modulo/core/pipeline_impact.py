@@ -93,6 +93,12 @@ def diff_node_ports(na: dict[str, Any], nb: dict[str, Any]) -> list[dict[str, An
 
     Returns a list of ``{"node_id", "direction", "port", "change", "old",
     "new"}`` where ``change`` is ``added`` | ``removed`` | ``modified``.
+
+    Both sides must be the same node — pass one node from each snapshot. Do
+    NOT pass an empty placeholder to diff an added node: that has no "before"
+    signature and would report every declared port as a change under the
+    literal node id ``"None"`` (FAR-1894; added nodes are reported by
+    ``nodes_added`` instead).
     """
     node_id = str(na.get("id"))
     changes: list[dict[str, Any]] = []

@@ -426,7 +426,7 @@ async def _seed_pipeline_snapshot_run(
             text(
                 "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
                 "trigger_type, langgraph_thread_id, run_number, input_hash, status) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :thread, 1, :hash, :status)",
+                "VALUES (:id, :oid, :pid, :sid, 'manual', :thread, :run_number, :hash, :status)",
             ),
             {
                 "id": str(run_id),
@@ -434,6 +434,13 @@ async def _seed_pipeline_snapshot_run(
                 "pid": str(pipeline_id),
                 "sid": str(snapshot_id),
                 "thread": str(uuid.uuid4()),
+                # test_org is session-scoped and shared by the whole integration
+                # suite, so a hardcoded 1 collides order-dependently with a run
+                # an earlier module committed into the same org
+                # (uq_runs_org_run_number; the FAR-1968 flake class). Deriving a
+                # high unique value from the run id keeps the raw insert
+                # collision-free without a counter round-trip.
+                "run_number": int(run_id.int % 10**9) + 1,
                 "hash": "0" * 64,
                 "status": run_status,
             },

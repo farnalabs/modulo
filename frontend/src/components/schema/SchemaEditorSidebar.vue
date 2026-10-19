@@ -39,7 +39,7 @@
             <span class="text-sm font-medium">{{ schema.name }}</span>
             <span
               v-if="schema.deprecated"
-              class="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive"
+              class="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive-text"
             >{{ $t('views.SchemaEditorView.deprecated') }}</span>
           </div>
           <p v-if="schema.description" class="mt-0.5 truncate text-xs text-muted-foreground">{{ schema.description }}</p>
