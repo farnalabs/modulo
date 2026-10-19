@@ -305,3 +305,102 @@ class TestMaterializeImport:
         assert result["schema_count"] == 1
         mock_cs.assert_awaited_once()
         mock_csv.assert_awaited_once()
+
+    async def test_materialize_rejects_egress_fields_on_non_sandbox_node(self, mock_session):
+        """FAR-1846: a bundle cannot smuggle egress_policy onto a non-sandbox node.
+
+        The REST/MCP save paths reject this in the Pydantic node model, but a
+        bundle is raw JSON — without this guard the import would persist a
+        declared egress control that is never derived for that node type.
+        """
+        bundle = {
+            "format_version": BUNDLE_FORMAT_VERSION,
+            "pipeline": {
+                "name": "Smuggling Pipeline",
+                "graph_nodes_json": [{"id": str(uuid.uuid4()), "node_type": "agent", "egress_policy": "deny_all"}],
+            },
+            "agents": [],
+            "schemas": [],
+            "model_backends": [],
+            "edges": [],
+        }
+        org_id = uuid.uuid4()
+        user_id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.core.workflow_import_export.get_existing_agent_names",
+                AsyncMock(return_value=_empty_set()),
+            ),
+            patch(
+                "modulo.core.workflow_import_export.get_existing_pipeline_names",
+                AsyncMock(return_value=_empty_set()),
+            ),
+            patch("modulo.core.workflow_import_export.create_pipeline") as mock_cp,
+        ):
+            from modulo.core.workflow_import_export import materialize_import
+
+            with pytest.raises(ValueError, match="egress_policy"):
+                await materialize_import(
+                    mock_session,
+                    org_id=org_id,
+                    created_by=user_id,
+                    bundle=bundle,
+                )
+
+        # Rejected BEFORE any pipeline row is created.
+        mock_cp.assert_not_awaited()
+
+    async def test_materialize_accepts_egress_pair_on_sandbox_node(self, mock_session):
+        """FAR-1846: the guard is scoped — a sandbox_agent node importing the
+        coupled egress pair still lands."""
+        bundle = {
+            "format_version": BUNDLE_FORMAT_VERSION,
+            "pipeline": {
+                "name": "Egress Pipeline",
+                "graph_nodes_json": [
+                    {
+                        "id": str(uuid.uuid4()),
+                        "node_type": "sandbox_agent",
+                        "template_id": "opencode",
+                        "agent_commands": ["opencode run"],
+                        "agent_prompt": "do the thing",
+                        "egress_policy": "selected",
+                        "egress_allowlist": [{"host": "api.github.com", "port": 443}],
+                    }
+                ],
+            },
+            "agents": [],
+            "schemas": [],
+            "model_backends": [],
+            "edges": [],
+        }
+        org_id = uuid.uuid4()
+        user_id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.core.workflow_import_export.get_existing_agent_names",
+                AsyncMock(return_value=_empty_set()),
+            ),
+            patch(
+                "modulo.core.workflow_import_export.get_existing_pipeline_names",
+                AsyncMock(return_value=_empty_set()),
+            ),
+            patch("modulo.core.workflow_import_export.create_pipeline") as mock_cp,
+            patch("modulo.core.workflow_import_export.create_library_primitive", AsyncMock()),
+        ):
+            mock_cp.return_value.id = uuid.uuid4()
+            mock_cp.return_value.name = "Egress Pipeline"
+
+            from modulo.core.workflow_import_export import materialize_import
+
+            result = await materialize_import(
+                mock_session,
+                org_id=org_id,
+                created_by=user_id,
+                bundle=bundle,
+            )
+
+        assert result["pipeline_name"] == "Egress Pipeline"
+        mock_cp.assert_awaited_once()

@@ -1196,6 +1196,21 @@ def test_pipeline_graph_node_egress_null_echo_persists_off_sandbox_nodes() -> No
     assert node.egress_allowlist is None
 
 
+def test_pipeline_graph_node_empty_egress_allowlist_rejected_off_sandbox_nodes() -> None:
+    """FAR-1846: an empty allowlist is not ``None`` — it is a declared value,
+    never a valid one, so it is rejected off-sandbox like any other allowlist."""
+    with pytest.raises(ValidationError, match="Only sandbox_agent nodes can set egress_allowlist"):
+        PipelineGraphNode.model_validate({**_minimal_node(), "egress_allowlist": []})
+
+
+def test_pipeline_graph_node_empty_egress_allowlist_rejected_on_sandbox_nodes() -> None:
+    """FAR-1846: the shared allowlist helper rejects ``[]`` even on a
+    sandbox_agent node — an empty allowlist is only ever valid with
+    ``egress_policy='selected'`` AND at least one host:port entry."""
+    with pytest.raises(ValidationError, match="egress_allowlist"):
+        PipelineGraphNode.model_validate({**_sandbox_node_json(), "egress_policy": "default", "egress_allowlist": []})
+
+
 def test_pipeline_graph_node_idempotent_round_trip() -> None:
     """FAR-295: PipelineGraphNode carries ``idempotent`` on every executor type
     and defaults it to true for legacy nodes."""

@@ -1729,10 +1729,12 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         enforcement surface (the workspace egress policy plus the host:port
         allowlist) is only derived for sandbox_agent nodes —
         ``_check_sandbox_egress`` runs only in the sandbox branch of the graph
-        validator, and ``pipeline_engine/egress.py`` maps a node onto a
-        ``WorkspaceSpec`` only on the sandbox path — so on any other node type
-        the pair would be declared-but-unread configuration that looks
-        enforced and enforces nothing.
+        validator, and the node → ``WorkspaceSpec`` mapping is performed only by
+        the sandbox dispatch sites (``node_runner``, ``sandbox_mode`` and
+        ``bundled_runner/runner_dispatch``) against the resolver in
+        ``pipeline_engine/egress.py`` (itself a pure resolver, not a caller) —
+        so on any other node type the pair would be declared-but-unread
+        configuration that looks enforced and enforces nothing.
         """
         if self.node_type == "sandbox_agent":
             return

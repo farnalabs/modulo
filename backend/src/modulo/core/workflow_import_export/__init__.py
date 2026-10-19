@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.graph_validator import GraphValidator
+from modulo.core.graph_validator import GraphValidator, check_sandbox_only_field_placement
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.pipeline_engine.git_content import GitContentRefError, validate_agent_git_content_values
 from modulo.core.runner_bindings import BindingValidationError, validate_binding_pair
@@ -1421,6 +1421,28 @@ def _log_import_start(pname: str, sections: _ImportSections) -> None:
     )
 
 
+def _reject_sandbox_only_fields_off_sandbox(graph_nodes: list[dict[str, Any]]) -> None:
+    """Fail an import whose graph declares a sandbox-only field elsewhere.
+
+    FAR-1846: the shared graph-validator rule (also applied on the save and
+    run paths) rejects ``read_only`` / ``git_credentials`` /
+    ``single_pr_per_run`` / ``egress_policy`` / ``egress_allowlist`` on a node
+    that is not a ``sandbox_agent``. A bundle bypasses the Pydantic node model,
+    so the importer must apply the same check itself or persist a declared
+    control nothing enforces.
+
+    Raises:
+        ValueError: the bundle's graph carries one of those fields on a
+            non-sandbox_agent node. The message names every offending node and
+            field so an operator can repair the bundle.
+    """
+    placement = check_sandbox_only_field_placement({"nodes": graph_nodes, "edges": []})
+    if placement.is_valid:
+        return
+    problems = "; ".join(issue.message for issue in placement.issues if issue.severity == "error")
+    raise ValueError("Invalid bundle: sandbox-only node fields are set on non-sandbox_agent nodes — " + problems)
+
+
 async def _materialize_pipeline_and_edges(
     ctx: _ImportContext,
     sections: _ImportSections,
@@ -1452,6 +1474,16 @@ async def _materialize_pipeline_and_edges(
         )
         ctx.warnings.append(warning)
         logger.warning("Import stripped declared policy gates: %s", "; ".join(dropped_policy_gates))
+
+    # FAR-1846: a bundle is raw JSON — there is no Pydantic node model in the
+    # import path to reject a sandbox-only field on a non-sandbox_agent node
+    # (the REST/MCP save paths do). Apply the SAME shared graph-validator rule
+    # to the graph about to be persisted and fail the import closed. Unlike the
+    # manual-node schema check below (which tolerates legacy bundles with a
+    # warning), a smuggled egress/read-only/single-PR declaration can never do
+    # anything on another node type, so accepting it would persist a control
+    # that looks enforced and enforces nothing.
+    _reject_sandbox_only_fields_off_sandbox(graph_nodes)
 
     pipeline = await _create_imported_pipeline(
         ctx,

@@ -1106,6 +1106,21 @@ def _check_sandbox_policy_fields_only_on_sandbox_nodes(graph_json: dict[str, Any
     FAR-1273: ``single_pr_per_run`` joins the same set — the one-PR-per-run
     ``gh`` guard is installed only inside a sandbox, so the flag on any other
     node type declares a guard nothing installs (same silent-no-op shape).
+
+    FAR-1846: ``egress_policy`` / ``egress_allowlist`` join the same set. The
+    egress enforcement surface (the workspace egress policy plus the host:port
+    allowlist) is derived ONLY for sandbox_agent nodes:
+    ``_check_sandbox_egress`` short-circuits for every other node type, and the
+    node → ``WorkspaceSpec`` mapping happens only on the sandbox path. On an
+    agent/manual/composite node the pair is declared configuration that looks
+    enforced and enforces nothing, so it is rejected rather than dropped.
+
+    The check is by VALUE (``is not None``), matching its neighbours: an
+    absent field and an explicit ``null`` are the same state at rest, so a
+    payload that round-trips every key for every node type keeps saving. An
+    empty ``egress_allowlist`` (``[]``) IS rejected — it is not ``None``, and
+    it is never valid (the shared allowlist helper requires a non-empty list,
+    and only with ``egress_policy='selected'``).
     """
     for node in graph_json.get("nodes", []):
         if not isinstance(node, dict) or node.get("node_type") == "sandbox_agent":
@@ -1132,6 +1147,35 @@ def _check_sandbox_policy_fields_only_on_sandbox_nodes(graph_json: dict[str, Any
                 "— only sandbox_agent nodes can set single_pr_per_run",
                 node_id=nid,
             )
+        if node.get("egress_policy") is not None:
+            result.error(
+                "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
+                f"Node '{nid}' (node_type={node.get('node_type')!r}) sets egress_policy "
+                "— only sandbox_agent nodes can set egress_policy / egress_allowlist",
+                node_id=nid,
+            )
+        if node.get("egress_allowlist") is not None:
+            result.error(
+                "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
+                f"Node '{nid}' (node_type={node.get('node_type')!r}) sets egress_allowlist "
+                "— only sandbox_agent nodes can set egress_policy / egress_allowlist",
+                node_id=nid,
+            )
+
+
+def check_sandbox_only_field_placement(graph_json: dict[str, Any]) -> ValidationResult:
+    """Public wrapper for the sandbox-only field placement rule (FAR-1846).
+
+    The REST/MCP save paths enforce this through the Pydantic node model. A
+    raw workflow import has no model to validate, so the importer calls this
+    helper on the shipped graph and fails the import closed when a bundle
+    declares a sandbox-only field on a non-sandbox_agent node. Returns a
+    :class:`ValidationResult` whose error issues name the offending node and
+    field.
+    """
+    result = ValidationResult()
+    _check_sandbox_policy_fields_only_on_sandbox_nodes(graph_json, result)
+    return result
 
 
 def _check_sandbox_wallclock_budget(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
@@ -3238,6 +3282,10 @@ class GraphValidator:
         9. agent_commands is Jinja-renderable (FAR-226).
         10. read_only / git_credentials are validated sandbox-only fields
             (FAR-212 PR B), and no non-sandbox node carries them.
+            ``egress_policy`` / ``egress_allowlist`` join that sandbox-only
+            set (FAR-1846): the egress surface is derived only on the sandbox
+            path, so declaring the pair on another node type is a silent
+            no-op.
         10b. single_pr_per_run is a genuine boolean on a sandbox_agent node
             (FAR-1316) — a raw-import non-bool would save cleanly and then
             fail closed to false at dispatch, arming nothing.
