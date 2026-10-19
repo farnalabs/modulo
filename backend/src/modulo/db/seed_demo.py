@@ -1141,6 +1141,101 @@ def _values_match(stored: Any, desired: Any) -> bool:
     return bool(stored == desired)
 
 
+async def _find_demo_run(session: AsyncSession, org: Organisation, run_number: int) -> Run | None:
+    """The existing demo run with this ``run_number``, or None."""
+    result = await session.execute(select(Run).where(Run.organisation_id == org.id, Run.run_number == run_number))
+    return result.scalar_one_or_none()
+
+
+def _warn_unknown_demo_pipeline(run: Run | None, pipeline_name: str, run_number: int) -> None:
+    """Warn (only for a run-less spec) that a demo run names an unknown pipeline."""
+    if run is None:
+        _log.warning(
+            "demo_seed.run_spec_unknown_pipeline",
+            extra={"pipeline_name": pipeline_name, "run_number": run_number},
+        )
+
+
+def _demo_run_desired(
+    *,
+    status: str,
+    trigger_type: str,
+    pipeline: Pipeline,
+    snapshot: PipelineSnapshot,
+    total_tokens: int,
+    cost: Decimal,
+    started: datetime,
+    completed: datetime,
+    trace: _RunTrace,
+) -> dict[str, Any]:
+    """The spec-owned display fields a demo run converges to."""
+    is_failed = status == "failed"
+    return {
+        "status": status,
+        "trigger_type": trigger_type,
+        "total_tokens": total_tokens,
+        "total_cost_usd": cost,
+        "started_at": started,
+        "completed_at": completed if status != "awaiting_human" else None,
+        "pipeline_id": pipeline.id,
+        "snapshot_id": snapshot.id,
+        "error_detail": _DEMO_FAILURE_DETAIL if is_failed else None,
+        "error_code": "DEMO_SAMPLE" if is_failed else None,
+        "node_token_usage": trace.node_token_usage,
+    }
+
+
+def _converge_demo_run(run: Run, desired: dict[str, Any], run_number: int) -> None:
+    """Converge an existing demo run's display fields (never its identity)."""
+    drifted: list[str] = []
+    for attr, val in desired.items():
+        if not _values_match(getattr(run, attr), val):
+            setattr(run, attr, val)
+            drifted.append(attr)
+    if drifted:
+        _log.info("demo_seed.run_converged", extra={"run_number": run_number, "fields": drifted})
+
+
+async def _create_demo_run(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    run_number: int,
+    desired: dict[str, Any],
+    status: str,
+) -> Run | None:
+    """Insert a new demo run; None when a concurrent boot won the race.
+
+    Race-safe: the insert runs in a savepoint keyed on the
+    ``(organisation_id, run_number)`` natural key, so a concurrent boot that
+    already committed only rolls back this savepoint, and the seed stops
+    converging a row it does not own (returns None).
+    """
+    thread_id = f"demo-seed-{org.id}-{run_number}"
+    run = Run(
+        organisation_id=org.id,
+        account_id=account.id,
+        run_number=run_number,
+        input_hash=hashlib.sha256(thread_id.encode()).hexdigest(),
+        langgraph_thread_id=thread_id,
+        **desired,
+    )
+    try:
+        async with session.begin_nested():
+            session.add(run)
+            await session.flush()
+    except IntegrityError:
+        recovered = await session.execute(
+            select(Run.id).where(Run.organisation_id == org.id, Run.run_number == run_number)
+        )
+        if recovered.scalar_one_or_none() is None:
+            raise
+        _log.info("demo_seed.run_recovered_after_conflict", extra={"run_number": run_number})
+        return None
+    _log.info("demo_seed.run_created", extra={"run_number": run_number, "status": status})
+    return run
+
+
 async def _seed_demo_run(
     session: AsyncSession,
     org: Organisation,
@@ -1156,69 +1251,34 @@ async def _seed_demo_run(
     a trace keyed on the old string node ids) are repaired on the next boot.
     """
     run_number, status, trigger_type, pipeline_name, total_tokens, total_cost_usd, days_ago, hours_into_day = run_spec
-    existing_result = await session.execute(
-        select(Run).where(Run.organisation_id == org.id, Run.run_number == run_number)
-    )
-    run = existing_result.scalar_one_or_none()
+    run = await _find_demo_run(session, org, run_number)
     if pipeline_name not in pipeline_lookup or pipeline_name not in specs_by_name:
-        if run is None:
-            _log.warning(
-                "demo_seed.run_spec_unknown_pipeline",
-                extra={"pipeline_name": pipeline_name, "run_number": run_number},
-            )
+        _warn_unknown_demo_pipeline(run, pipeline_name, run_number)
         return
     pipeline, snapshot = pipeline_lookup[pipeline_name]
     spec = specs_by_name[pipeline_name]
     cost = Decimal(str(total_cost_usd))
     started, completed = _run_window(spec, run_number, days_ago, hours_into_day)
     trace = _build_run_trace(spec, run_number, status, total_tokens, cost)
-    is_failed = status == "failed"
-    desired: dict[str, Any] = {
-        "status": status,
-        "trigger_type": trigger_type,
-        "total_tokens": total_tokens,
-        "total_cost_usd": cost,
-        "started_at": started,
-        "completed_at": completed if status != "awaiting_human" else None,
-        "pipeline_id": pipeline.id,
-        "snapshot_id": snapshot.id,
-        "error_detail": _DEMO_FAILURE_DETAIL if is_failed else None,
-        "error_code": "DEMO_SAMPLE" if is_failed else None,
-        "node_token_usage": trace.node_token_usage,
-    }
+    desired = _demo_run_desired(
+        status=status,
+        trigger_type=trigger_type,
+        pipeline=pipeline,
+        snapshot=snapshot,
+        total_tokens=total_tokens,
+        cost=cost,
+        started=started,
+        completed=completed,
+        trace=trace,
+    )
 
     if run is not None:
         # Converge display fields on existing runs (never touch identity).
-        drifted: list[str] = []
-        for attr, val in desired.items():
-            if not _values_match(getattr(run, attr), val):
-                setattr(run, attr, val)
-                drifted.append(attr)
-        if drifted:
-            _log.info("demo_seed.run_converged", extra={"run_number": run_number, "fields": drifted})
+        _converge_demo_run(run, desired, run_number)
     else:
-        thread_id = f"demo-seed-{org.id}-{run_number}"
-        run = Run(
-            organisation_id=org.id,
-            account_id=account.id,
-            run_number=run_number,
-            input_hash=hashlib.sha256(thread_id.encode()).hexdigest(),
-            langgraph_thread_id=thread_id,
-            **desired,
-        )
-        try:
-            async with session.begin_nested():
-                session.add(run)
-                await session.flush()
-        except IntegrityError:
-            recovered = await session.execute(
-                select(Run.id).where(Run.organisation_id == org.id, Run.run_number == run_number)
-            )
-            if recovered.scalar_one_or_none() is None:
-                raise
-            _log.info("demo_seed.run_recovered_after_conflict", extra={"run_number": run_number})
+        run = await _create_demo_run(session, org, account, run_number, desired, status)
+        if run is None:
             return
-        _log.info("demo_seed.run_created", extra={"run_number": run_number, "status": status})
 
     await _write_run_trace(session, org, run, trace)
     await _ensure_daily_fact(
