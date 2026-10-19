@@ -1051,82 +1051,27 @@ async def run_health_alert_check(
     conditions = observation.conditions()
     current_time = now_fn()
 
-    configured = alerting_configured(settings)
     env_excluded = not alerting_enabled_for_environment(settings)
-    if env_excluded:
-        # Excluded environment: exactly the disabled path. Health is still
-        # evaluated, the hysteresis/dedup state machine still advances, but
-        # nothing is sent — so staging (or any env the operator allowlisted
-        # out) never pages while production keeps alerting. The recovery edge
-        # below closes the incident record silently (see its branch); the
-        # ALERT edge keeps "skip send, do not mutate" semantics.
-        configured = False
-        _log_disabled_once(current_time, environment_excluded=True)
-    elif not configured:
-        _log_disabled_once(current_time)
+    configured = _resolve_alerting_gate(settings, current_time, env_excluded=env_excluded)
 
     owns_client = redis_client is None
-    redis = (
-        aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3) if redis_client is None else redis_client
-    )
+    redis = _build_redis_client(settings, redis_client)
     action = "none"
     try:
         state = _AlertState.from_raw(await redis.get(STATE_KEY))
-        # Hysteresis: track consecutive ticks in the observed state.
-        if state.pending == observed:
-            state.pending_count += 1
-        else:
-            state.pending = observed
-            state.pending_count = 1
-        confirmed = state.pending_count >= CONFIRM_TICKS
-
-        if confirmed and observed == "unhealthy" and state.notified != "unhealthy":
-            action = await _notify_alert(
-                settings,
-                send_fn,
-                configured=configured,
-                # Never the raw aggregate: when a real-failure advisory check
-                # fired the alert while the aggregate is ``ok``, the subject
-                # must read ``degraded``, not ``ok`` (FAR-1571).
-                status=observation.reported_status,
-                conditions=conditions,
-                state=state,
-                now=current_time,
-            )
-        elif confirmed and observed == "healthy" and state.notified == "unhealthy":
-            if env_excluded:
-                # Quiet close-out while EXCLUDED: the all-clear email is
-                # suppressed by the allowlist, but the incident record must
-                # not strand. Leaving notified="unhealthy" would mean a
-                # distinct later incident after re-inclusion is never
-                # alerted (the alert edge needs notified != "unhealthy"),
-                # and a much later recovery email would name THIS old
-                # incident's conditions/duration. Clear the record without
-                # sending; pending/pending_count (hysteresis) are untouched
-                # above. NOTE: the SMTP-unconfigured path is SEPARATE and
-                # keeps its "state untouched, retry when configured"
-                # semantics — this branch is reachable only via the
-                # env-allowlist gate.
-                state.notified = None
-                state.conditions = []
-                state.since = None
-                action = "recovery_suppressed"
-            else:
-                # Split the alert-time conditions against the CURRENT
-                # observation: only what actually cleared is reported as
-                # cleared (a still-degraded check must not be claimed
-                # resolved).
-                cleared, still_failing = _split_cleared_conditions(state.conditions, observation.non_ok_names())
-                action = await _notify_recovery(
-                    settings,
-                    send_fn,
-                    configured=configured,
-                    cleared=cleared,
-                    still_failing=still_failing,
-                    state=state,
-                    now=current_time,
-                )
-
+        confirmed = _advance_hysteresis(state, observed)
+        action = await _decide_transition(
+            settings=settings,
+            send_fn=send_fn,
+            configured=configured,
+            env_excluded=env_excluded,
+            observation=observation,
+            confirmed=confirmed,
+            observed=observed,
+            conditions=conditions,
+            state=state,
+            now=current_time,
+        )
         await redis.set(STATE_KEY, state.to_json(), ex=STATE_TTL_SECONDS)
     except asyncio.CancelledError:
         raise
@@ -1148,3 +1093,119 @@ async def run_health_alert_check(
         "pending_count": state.pending_count,
         "notified": state.notified or "none",
     }
+
+
+def _resolve_alerting_gate(settings: Settings, current_time: float, *, env_excluded: bool) -> bool:
+    """Resolve whether alerts may be sent, logging the disabled reason once.
+
+    An excluded environment behaves exactly like the disabled path: health is
+    still evaluated and the hysteresis state still advances, but nothing is
+    sent — so staging (or any env the operator allowlisted out) never pages
+    while production keeps alerting.
+    """
+    configured = alerting_configured(settings)
+    if env_excluded:
+        _log_disabled_once(current_time, environment_excluded=True)
+        return False
+    if not configured:
+        _log_disabled_once(current_time)
+    return configured
+
+
+def _build_redis_client(settings: Settings, redis_client: aioredis.Redis | None) -> aioredis.Redis:
+    """Use the caller's client, or build one for the configured redis URL."""
+    if redis_client is None:
+        return aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
+    return redis_client
+
+
+def _advance_hysteresis(state: _AlertState, observed: str) -> bool:
+    """Advance the consecutive-tick state machine; return whether confirmed."""
+    # Hysteresis: track consecutive ticks in the observed state.
+    if state.pending == observed:
+        state.pending_count += 1
+    else:
+        state.pending = observed
+        state.pending_count = 1
+    return state.pending_count >= CONFIRM_TICKS
+
+
+async def _decide_transition(
+    *,
+    settings: Settings,
+    send_fn: EmailSender,
+    configured: bool,
+    env_excluded: bool,
+    observation: HealthObservation,
+    confirmed: bool,
+    observed: str,
+    conditions: list[str],
+    state: _AlertState,
+    now: float,
+) -> str:
+    """Take the alert / recovery / quiet-close action for a confirmed edge."""
+    if confirmed and observed == "unhealthy" and state.notified != "unhealthy":
+        return await _notify_alert(
+            settings,
+            send_fn,
+            configured=configured,
+            # Never the raw aggregate: when a real-failure advisory check
+            # fired the alert while the aggregate is ``ok``, the subject
+            # must read ``degraded``, not ``ok`` (FAR-1571).
+            status=observation.reported_status,
+            conditions=conditions,
+            state=state,
+            now=now,
+        )
+    if confirmed and observed == "healthy" and state.notified == "unhealthy":
+        return await _handle_recovery_edge(
+            settings,
+            send_fn,
+            configured=configured,
+            env_excluded=env_excluded,
+            observation=observation,
+            state=state,
+            now=now,
+        )
+    return "none"
+
+
+async def _handle_recovery_edge(
+    settings: Settings,
+    send_fn: EmailSender,
+    *,
+    configured: bool,
+    env_excluded: bool,
+    observation: HealthObservation,
+    state: _AlertState,
+    now: float,
+) -> str:
+    """Handle a confirmed healthy edge: quiet close-out or real recovery email."""
+    if env_excluded:
+        # Quiet close-out while EXCLUDED: the all-clear email is suppressed by
+        # the allowlist, but the incident record must not strand. Leaving
+        # notified="unhealthy" would mean a distinct later incident after
+        # re-inclusion is never alerted (the alert edge needs
+        # notified != "unhealthy"), and a much later recovery email would name
+        # THIS old incident's conditions/duration. Clear the record without
+        # sending; pending/pending_count (hysteresis) are untouched above.
+        # NOTE: the SMTP-unconfigured path is SEPARATE and keeps its "state
+        # untouched, retry when configured" semantics — this branch is
+        # reachable only via the env-allowlist gate.
+        state.notified = None
+        state.conditions = []
+        state.since = None
+        return "recovery_suppressed"
+    # Split the alert-time conditions against the CURRENT observation: only
+    # what actually cleared is reported as cleared (a still-degraded check
+    # must not be claimed resolved).
+    cleared, still_failing = _split_cleared_conditions(state.conditions, observation.non_ok_names())
+    return await _notify_recovery(
+        settings,
+        send_fn,
+        configured=configured,
+        cleared=cleared,
+        still_failing=still_failing,
+        state=state,
+        now=now,
+    )
