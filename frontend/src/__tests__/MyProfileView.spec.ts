@@ -475,3 +475,71 @@ describe('MyProfileView HITL email alerts', () => {
     expect(save.attributes('disabled')).toBeUndefined()
   })
 })
+
+describe('MyProfileView loading placeholders and fallbacks', () => {
+  const PROFILE = {
+    id: '1',
+    email: 'user@example.com',
+    display_name: 'Test User',
+    org_role: 'admin',
+    active: true,
+    created_at: '2025-01-01T00:00:00Z',
+    is_system_admin: false,
+  }
+
+  function mockLoadedView(profile: Record<string, unknown>) {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/teams/my') return Promise.resolve({ data: [], error: undefined })
+      if (url === '/api/v1/me/hitl-email-preferences') {
+        return Promise.resolve({ data: { default: false, pipeline_overrides: {} }, error: undefined })
+      }
+      if (url === '/api/v1/pipelines') return Promise.resolve({ data: { items: [] }, error: undefined })
+      return Promise.resolve({ data: profile, error: undefined })
+    })
+  }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('renders accessible skeleton placeholders while both sections load', async () => {
+    usePlanStore().currentTier = 'team'
+    mockGet.mockImplementation(() => new Promise(() => {}))
+
+    const wrapper = mount(MyProfileView)
+    await nextTick()
+
+    const teamsLoading = wrapper.find('[data-testid="my-profile-my-teams-loading"]')
+    const hitlLoading = wrapper.find('[data-testid="my-profile-hitl-email-loading"]')
+    expect(teamsLoading.exists()).toBe(true)
+    expect(hitlLoading.exists()).toBe(true)
+    expect(teamsLoading.attributes('role')).toBe('status')
+    expect(hitlLoading.attributes('role')).toBe('status')
+    expect(teamsLoading.attributes('aria-label')).toBe('Loading')
+    expect(hitlLoading.attributes('aria-label')).toBe('Loading')
+  })
+
+  it('falls back to an em dash when org_role is missing', async () => {
+    usePlanStore().currentTier = 'team'
+    mockLoadedView({ ...PROFILE, org_role: '' })
+
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('span.mt-1').text()).toBe('—')
+    })
+    expect(wrapper.text()).toContain('Member since')
+  })
+
+  it('falls back to an em dash when created_at is missing', async () => {
+    usePlanStore().currentTier = 'team'
+    mockLoadedView({ ...PROFILE, created_at: '' })
+
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('Member since —')
+    })
+  })
+})
