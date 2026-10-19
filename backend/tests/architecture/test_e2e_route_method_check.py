@@ -298,16 +298,22 @@ def test_legitimate_patch_route_resolves_clean() -> None:
     assert not _checker.find_violations(calls, live)
 
 
-def test_main_reports_setup_error_on_empty_descriptor_set(monkeypatch) -> None:
+def test_main_reports_setup_error_on_empty_descriptor_set(monkeypatch, capsys) -> None:
     # FAR-1847: an extractor that collapses to zero descriptors must not exit 0
     # - a "0 descriptor(s) OK" line is a guard that has stopped guarding.
+    #
+    # The stub mirrors ``main()``'s real call shape: ``collect_calls(notes,
+    # unanalysed)``. An earlier one-argument stub raised ``TypeError``, which
+    # ``main()`` converted to exit 2 for the WRONG reason - deleting the empty-set
+    # guard left this test green.
     monkeypatch.setattr(_checker, "load_live_routes", lambda: LIVE_ROUTES)
-    monkeypatch.setattr(_checker, "collect_calls", lambda notes=None: [])
+    monkeypatch.setattr(_checker, "collect_calls", lambda notes=None, unanalysed=None: [])
 
     assert _checker.main() == 2
+    assert "found NO HTTP descriptors" in capsys.readouterr().err
 
 
-def test_main_reports_setup_error_when_a_required_file_yields_nothing(monkeypatch) -> None:
+def test_main_reports_setup_error_when_a_required_file_yields_nothing(monkeypatch, capsys) -> None:
     # FAR-1847: the two ticket-named files are the guard's reason to exist; if
     # either yields no descriptor, the scan regressed and must not report clean.
     working = _checker.extract_http_calls(
@@ -315,9 +321,10 @@ def test_main_reports_setup_error_when_a_required_file_yields_nothing(monkeypatc
         "frontend/tests/e2e/setup/realstack-api.ts",
     )
     monkeypatch.setattr(_checker, "load_live_routes", lambda: LIVE_ROUTES)
-    monkeypatch.setattr(_checker, "collect_calls", lambda notes=None: working)
+    monkeypatch.setattr(_checker, "collect_calls", lambda notes=None, unanalysed=None: working)
 
     assert _checker.main() == 2
+    assert "found NO descriptor in frontend/tests/e2e/pipeline-editor.spec.ts" in capsys.readouterr().err
 
 
 def test_second_callback_parameter_method_filter_is_detected() -> None:
@@ -873,21 +880,37 @@ def test_live_route_table_is_built_from_route_objects_not_openapi() -> None:
     assert not _checker.find_violations(calls, routes)
 
 
-def test_path_converter_matches_a_broad_glob_prefix() -> None:
-    # A Playwright prefix glob (``**/api/v1/registry/**``) covers the
-    # converter's remaining segments; only its literal segments must match.
-    routes = _checker.build_live_routes({"/api/v1/registry/primitives/{slug:path}": {"get": {}}})
-    call = _checker.HttpCall(
+def test_path_converter_matches_a_multi_segment_request_with_a_segment_prefix() -> None:
+    # A ``{slug:path}`` converter mid-path, reached by a request whose final
+    # segment is a Playwright GLOB PREFIX (``down*`` matching ``download``).
+    #
+    # This replaces a test that called itself "broad glob prefix" but never
+    # exercised the converter: a trailing-glob call short-circuits at the
+    # ``trailing_glob`` early return, before the ``{param:path}`` branch runs, so
+    # it passed with converter support removed. Here the converter must consume
+    # ``acme/widgets`` (TWO segments) for ``down`` to align with ``download``; a
+    # single-segment ``{param}`` cannot, so the test fails if converter support
+    # is dropped.
+    routes = _checker.build_live_routes({"/api/v1/registry/{slug:path}/download": {"get": {}}})
+    matching = _checker.HttpCall(
         FILENAME,
         1,
         "GET",
-        "/api/v1/registry",
+        "/api/v1/registry/acme/widgets/down",
         "interceptor",
-        trailing_glob=True,
+        last_segment_prefix=True,
+    )
+    wrong_trailing_literal = _checker.HttpCall(
+        FILENAME,
+        2,
+        "GET",
+        "/api/v1/registry/acme/widgets/upload",
+        "interceptor",
         last_segment_prefix=True,
     )
 
-    assert _checker.path_matches(call, routes[0])
+    assert _checker.path_matches(matching, routes[0])
+    assert not _checker.path_matches(wrong_trailing_literal, routes[0])
 
 
 def test_real_route_table_resolves_path_converter_and_non_schema_routes(monkeypatch) -> None:
@@ -1359,5 +1382,162 @@ def test_realstack_webhook_transport_call_is_extracted() -> None:
         call for call in calls if call.path == "/api/v1/triggers/{param}/webhook" and call.method == "POST"
     ]
 
+    # Shape, not a line pin: the spec moves and a hard-coded line turns a
+    # behavioural test into a brittle one (the suite's own rule - see
+    # ``test_real_tenancy_rbac_leading_interpolation_is_resolved``).
     assert len(webhook_calls) == 1
-    assert webhook_calls[0].line == 897
+    assert {(call.kind, call.method, call.path) for call in webhook_calls} == {
+        ("fetch", "POST", "/api/v1/triggers/{param}/webhook")
+    }
+
+
+# ---------------------------------------------------------------------------
+# FAR-1847 final review: aliased callables, init-parsing depth, recursive
+# constructor unwrapping, and query-vs-path suffix classification.
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_alias_forms_are_unanalysed() -> None:
+    # A renamed callable defeats the extractor silently: ``const f =
+    # window.fetch``, a destructured binding, ``fetch.bind(...)`` and
+    # ``fetch.call(...)`` all issue real requests. The alias is not resolved -
+    # the occurrence must surface as unanalysed so it is annotated explicitly.
+    for source in (
+        "const f = window.fetch\nawait f('/api/v1/pipelines', { method: 'POST' })\n",
+        "const { fetch: f } = globalThis\nawait f('/api/v1/pipelines', { method: 'POST' })\n",
+        "const f = fetch.bind(globalThis)\nawait f('/api/v1/pipelines', { method: 'POST' })\n",
+        "await fetch.call(null, '/api/v1/pipelines', { method: 'POST' })\n",
+    ):
+        unanalysed: list[str] = []
+
+        calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+        assert not calls
+        assert len(unanalysed) == 1
+        assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
+
+
+def test_bracket_request_verb_is_unanalysed() -> None:
+    # ``page.request['post'](...)`` is an APIRequestContext call whose verb is
+    # dynamic; it was neither extracted nor flagged.
+    unanalysed: list[str] = []
+    source = "await page.request['post']('/api/v1/pipelines', { data })\n"
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert not calls
+    assert len(unanalysed) == 1
+    assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
+
+
+def test_renamed_request_fixture_binding_is_unanalysed() -> None:
+    # Playwright fixtures are destructured by name: ``async ({ request: api })
+    # => api.get(...)`` - the binding, not the call, is the only visible marker.
+    unanalysed: list[str] = []
+    source = "test('x', async ({ request: api }) => { await api.get('/api/v1/pipelines') })\n"
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert not calls
+    assert len(unanalysed) == 1
+    assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
+
+
+def test_fetch_alias_can_be_suppressed_with_an_annotation() -> None:
+    # The escape hatch is the point of the ledger: a genuinely non-HTTP alias
+    # (capturing fetch to restore it) is annotated, not silently ignored.
+    unanalysed: list[str] = []
+    source = "// e2e-route-check: ignore captures the original fetch to restore it\nconst f = window.fetch\n"
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert not calls
+    assert not unanalysed
+
+
+def test_fetch_assignment_and_typeof_reference_are_not_candidates() -> None:
+    # A write (replacing global fetch) and a ``typeof`` type reference are not
+    # calls; flagging them would make the ledger noisy for no coverage.
+    unanalysed: list[str] = []
+    source = "globalThis.fetch = replacement\nconst ref = value as typeof globalThis.fetch\n"
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert not calls
+    assert not unanalysed
+
+
+def test_nested_body_method_is_not_the_request_method() -> None:
+    # ``{ body: JSON.stringify({ method: 'DELETE' }) }`` is an implicit GET -
+    # a flat text scan read the nested ``method`` as the HTTP method.
+    calls = _calls("await fetch('/api/v1/pipelines', { body: JSON.stringify({ method: 'DELETE' }) })\n")
+
+    assert len(calls) == 1
+    assert calls[0].method == "GET"
+    assert calls[0].path == "/api/v1/pipelines"
+
+
+def test_method_inside_a_comment_is_not_a_property() -> None:
+    calls = _calls("await fetch('/api/v1/pipelines', { headers /* method: 'DELETE' */ })\n")
+
+    assert len(calls) == 1
+    assert calls[0].method == "GET"
+
+
+def test_init_property_order_does_not_change_the_method() -> None:
+    for source, expected in (
+        ("await fetch('/api/v1/pipelines', { headers, method: 'DELETE' })\n", "DELETE"),
+        ("await fetch('/api/v1/pipelines', { method: 'DELETE', headers })\n", "DELETE"),
+    ):
+        calls = _calls(source)
+
+        assert len(calls) == 1
+        assert calls[0].method == expected
+
+
+def test_first_top_level_method_property_wins() -> None:
+    calls = _calls("await fetch('/api/v1/pipelines', { method: 'POST', method: 'DELETE' })\n")
+
+    assert len(calls) == 1
+    assert calls[0].method == "POST"
+
+
+def test_nested_url_inside_request_is_unwrapped() -> None:
+    # ``new Request(new URL(path, base), init)``: one level of unwrapping left
+    # the URL constructor in the path and reported a false stale violation.
+    live = _checker.build_live_routes({"/api/v1/auth/login": {"post": {}}})
+    source = "await fetch(new Request(new URL('/api/v1/auth/login', base), { method: 'POST' }))\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].method == "POST"
+    assert calls[0].path == "/api/v1/auth/login"
+    assert not _checker.find_violations(calls, live)
+
+
+def test_property_chain_off_a_query_name_is_a_path_segment() -> None:
+    # ``params.id`` / ``search.id`` / ``filters.x`` are property reads, not
+    # query strings: treating them as queries dropped the segment and made
+    # ``/api/v1/pipelines/{id}/graph`` match the collection route (false stale).
+    for expression in ("params.id", "search.id", "filters.x"):
+        source = f"await apiFetch(apiBase, token, 'GET', `/api/v1/pipelines/${{{expression}}}/graph`)\n"
+
+        calls = _calls(source)
+
+        assert len(calls) == 1
+        assert calls[0].path == "/api/v1/pipelines/{param}/graph"
+
+
+def test_method_call_on_a_query_name_is_still_a_query_suffix() -> None:
+    calls = _calls("await apiFetch(apiBase, token, 'GET', `/api/v1/triggers${queryParams.toString()}`)\n")
+
+    assert len(calls) == 1
+    assert calls[0].path == "/api/v1/triggers"
+
+
+def test_property_chain_off_a_query_name_in_a_concatenation_is_a_path_segment() -> None:
+    calls = _calls("await apiFetch(apiBase, token, 'GET', '/api/v1/pipelines/' + params.id + '/graph')\n")
+
+    assert len(calls) == 1
+    assert calls[0].path == "/api/v1/pipelines/{param}/graph"

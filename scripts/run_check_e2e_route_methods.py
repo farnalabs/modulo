@@ -98,6 +98,13 @@ property-qualified form (``globalThis.fetch(``, ``page.request.fetch(``),
 ``context.request.<verb>(`` / ``request.<verb>(`` - plus method-reference lines
 (``.request().method(``, ``request.method(``, and HTTP-method literals compared
 against a method expression: ``=== 'PATCH'``, ``!== 'GET'``, ``includes(...)``).
+Aliasing forms are candidates even though they cannot be modelled, because a
+miss there is silent: a ``fetch`` identifier READ as a value
+(``const f = window.fetch``, ``= fetch.bind(...)``, ``const { fetch: f } =
+globalThis``), bracket access to a request context
+(``page.request['post'](...)``), and a renamed ``request`` binding
+(``async ({ request: api }) => api.get(...)``). Assignment targets and
+``typeof`` type references are not calls and are excluded.
 Every candidate CALL occurrence MUST be accounted for individually on the same
 ``file:line`` by exactly one of:
 
@@ -172,13 +179,12 @@ _QUERY_SUFFIX_NAMES = frozenset(
 #: carrying one is a conditional query suffix, not a path segment
 #: (``${includeArchived ? '?archived=true' : ''}``).
 _QUERY_OPERATOR_RE = re.compile(r"(?<!\?)\?(?![.?])")
-#: A query-suffix expression: a conventional identifier, optionally chained
-#: through a property/call (``queryParams.toString()``) or defaulted.
-_QUERY_SUFFIX_EXPR_RE = re.compile(
-    r"(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)"
-    r"(?:\s*(?:\?\.|\.)\s*[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\([^()]*\))?)*"
-    r"(?:\s*(?:\?\?|\|\|)\s*(?:''|\"\"|``))?"
-)
+#: The tail of a query-suffix expression AFTER its conventional name: only a
+#: chain of METHOD CALLS on that name (``queryParams.toString()``,
+#: ``search.get('page')``) or a literal default. A bare property read
+#: (``params.id``, ``filters.x``) is a path segment, not a query string.
+_QUERY_SUFFIX_CALL_TAIL_RE = re.compile(r"(?:\s*(?:\?\.|\.)\s*[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)\s*)+")
+_QUERY_SUFFIX_DEFAULT_RE = re.compile(r"\s*(?:\?\?|\|\|)\s*(?:''|\"\"|``)")
 #: A trailing TypeScript assertion (``as const``, ``as string``, ``satisfies X``).
 _TS_ASSERTION_RE = re.compile(r"(?:^|\s)(?:as|satisfies)\s+[^+\n]+$")
 #: Regex-literal route registrations: parameter-ish constructs.
@@ -197,11 +203,11 @@ _MULTI_WILDCARD = "{param:path}"
 _SQUASH_SLASH_RE = re.compile(r"/{2,}")
 _SEGMENT_RE = re.compile(r"[A-Za-z0-9._~%\-{}]+")
 _API_PREFIX = "/api/"
-_FETCH_INIT_METHOD_RE = re.compile(r"""(?:(?<![\w$.])method\b|['"]method['"])\s*:\s*(['"])([A-Za-z]+)\1""")
-#: A ``method`` property present WITHOUT a literal value: the shorthand
-#: ``{ method }``, a quoted ``"method"`` key, or any other non-literal value.
-#: Presence alone proves the init is not an implicit GET.
-_FETCH_INIT_METHOD_PRESENT_RE = re.compile(r"""(?:\bmethod\s*:|["']method["']\s*:|[{,]\s*method\s*(?:,|\}))""")
+#: A top-level (depth-1) ``method`` property key in an init object. Properties
+#: are enumerated structurally by :func:`_init_method`, never by a flat regex:
+#: a nested ``method`` inside a body/headers object, or inside a comment, is not
+#: the request method, and a regex scan read it as one.
+_TS_OBJECT_ASSERTION_RE = re.compile(r"(?:as|satisfies)\b")
 _METHOD_CALL_RE = re.compile(r"\.\s*method\s*\(")
 #: A ``method`` pulled out of the request object by destructuring
 #: (``const { method } = route.request()``) - a filter form the comparison
@@ -237,6 +243,16 @@ _API_REQUEST_RE = re.compile(
 # ---------------------------------------------------------------------------
 _HTTP_METHOD_LITERAL_RE = re.compile(r"""['"](?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)['"]""", re.IGNORECASE)
 _LEDGER_IGNORE_RE = re.compile(r"//\s*e2e-route-check:\s*ignore\b")
+#: Bracket access to an APIRequestContext (``page.request['post'](...)``,
+#: ``request[verb](...)``). The verb is dynamic, so the call cannot be modelled
+#: but must still be a candidate occurrence rather than vanish.
+_LEDGER_BRACKET_REQUEST_RE = re.compile(
+    r"(?:(?:page|context)\s*(?:\.\s*context\s*\(\s*\))?\s*\.\s*request|(?<![\w.$])request)\s*\["
+)
+#: A ``request`` binding introduced by destructuring or rename
+#: (``async ({ request: api }) => api.get(...)``). The alias itself is not
+#: resolvable, so the binding occurrence is the candidate the ledger reports.
+_LEDGER_REQUEST_ALIAS_RE = re.compile(r"(?<![\w$.])request\s*:\s*(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)")
 _LEDGER_COMPARISON_RE = re.compile(r"===?|!==?|includes\s*\(")
 _LEDGER_METHOD_WORD_RE = re.compile(r"\bmethod\b")
 _LEDGER_METHOD_CALL_RE = re.compile(r"\.\s*method\s*\(|(?<![\w.$])request\s*\.\s*method\s*\(")
@@ -502,9 +518,11 @@ def _is_query_suffix(expression: str) -> bool:
     text = _strip_ts_assertion(expression)
     while text.startswith("(") and text.endswith(")"):
         text = text[1:-1].strip()
-    text = text.lstrip("?&").strip()
     if not text:
         return False
+    if text.startswith(("?", "&")):
+        # A bare ``?``/``&``-prefixed fragment is a query suffix.
+        return True
     if text.startswith(("`", "'", '"')):
         # A string/template literal that begins with ``?``/``&`` is a query.
         value, _ = _read_template(text, 0) if text[0] == "`" else _read_quoted(text, 0)
@@ -516,10 +534,21 @@ def _is_query_suffix(expression: str) -> bool:
         # (``${role ? 'admins' : 'members'}``) is a ``{param}`` - treating every
         # ``?`` as a query dropped the segment and hid the real route.
         return _ternary_branches_are_query(text)
-    match = _QUERY_SUFFIX_EXPR_RE.fullmatch(text)
+    match = re.fullmatch(r"(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)(?P<rest>.*)", text, flags=re.DOTALL)
     if match is None:
         return False
-    return match.group("name").lower() in _QUERY_SUFFIX_NAMES
+    if match.group("name").lower() not in _QUERY_SUFFIX_NAMES:
+        return False
+    rest = match.group("rest").strip()
+    if not rest:
+        # Exactly the conventional identifier (``${query}``).
+        return True
+    # Only a METHOD CALL on that name is a query string. A property read
+    # (``params.id``, ``search.id``, ``filters.x``) is a PATH segment: treating
+    # it as a query dropped the segment, so
+    # ``/api/v1/pipelines/${params.id}/graph`` matched the collection route and
+    # reported the real route as stale.
+    return bool(_QUERY_SUFFIX_CALL_TAIL_RE.fullmatch(rest) or _QUERY_SUFFIX_DEFAULT_RE.fullmatch(rest))
 
 
 def _ternary_branches_are_query(expression: str) -> bool:
@@ -837,6 +866,131 @@ def _has_string_literal(expression: str) -> bool:
     return any(quote in expression for quote in ("'", '"', "`"))
 
 
+def _skip_literal_or_comment(text: str, index: int) -> int | None:
+    """Skip a string/template literal or comment at *index*; ``None`` if neither."""
+    char = text[index]
+    if char in ("'", '"'):
+        _, end = _read_quoted(text, index)
+        return end
+    if char == "`":
+        _, end = _read_template(text, index)
+        return end
+    if char == "/" and index + 1 < len(text):
+        if text[index + 1] == "/":
+            newline = text.find("\n", index)
+            return len(text) if newline < 0 else newline
+        if text[index + 1] == "*":
+            end = text.find("*/", index + 2)
+            return len(text) if end < 0 else end + 2
+    return None
+
+
+def _object_property_spans(text: str) -> tuple[list[tuple[int, int]], int] | None:
+    """Split an object literal's OWN (depth-1) properties.
+
+    Returns ``(spans, index_after_closing_brace)`` or ``None`` when *text* is not
+    a single object literal. Strings, template literals and comments are skipped,
+    so a ``method`` inside any of them is never seen as a property, and a nested
+    object's property is inside a deeper brace depth so it is never one of the
+    results.
+    """
+    index = 0
+    length = len(text)
+    while index < length and text[index].isspace():
+        index += 1
+    if index >= length or text[index] != "{":
+        return None
+    body_start = index + 1
+    depth = 1
+    spans: list[tuple[int, int]] = []
+    chunk_start = body_start
+    index = body_start
+    while index < length:
+        skipped = _skip_literal_or_comment(text, index)
+        if skipped is not None:
+            index = skipped
+            continue
+        char = text[index]
+        if char in "{[(":
+            depth += 1
+        elif char in "}])":
+            depth -= 1
+            if depth == 0:
+                if text[chunk_start:index].strip():
+                    spans.append((chunk_start, index))
+                return spans, index + 1
+        elif char == "," and depth == 1:
+            spans.append((chunk_start, index))
+            chunk_start = index + 1
+        index += 1
+    return None
+
+
+def _property_parts(chunk: str) -> tuple[str, str, bool]:
+    """Split one object property into ``(raw_key, raw_value, has_colon)``."""
+    masked = mask_non_code(chunk)
+    depth = 0
+    for index, char in enumerate(masked):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == ":" and depth == 0:
+            return chunk[:index].strip(), chunk[index + 1 :].strip(), True
+    return chunk.strip(), "", False
+
+
+def _property_key(raw_key: str) -> str | None:
+    """Return an object property's key name, or ``None`` when it is not static."""
+    key = raw_key.strip()
+    if not key:
+        return None
+    if key[0] in ("'", '"'):
+        value, end = _read_quoted(key, 0)
+        return value if not key[end:].strip() else None
+    return key if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", key) else None
+
+
+def _init_method(text: str) -> tuple[str | None, bool, bool]:
+    """Read the method from ONE init argument.
+
+    Returns ``(method, unresolved, present)``. *present* is True when a
+    top-level ``method`` property exists (literal or not), so an init object that
+    merely omits it does not shadow a ``Request``'s own init.
+
+    Only a depth-1 property can be the request method: ``{ body: JSON.stringify({
+    method: 'DELETE' }) }`` is an implicit GET, not a DELETE, and a ``method``
+    inside a comment is not a property at all. The FIRST top-level ``method``
+    property wins, so property order does not change the result.
+    """
+    stripped = text.strip()
+    parsed = _object_property_spans(stripped)
+    if parsed is None:
+        return None, True, False
+    spans, after = parsed
+    trailing = stripped[after:].strip()
+    if trailing and not _TS_OBJECT_ASSERTION_RE.match(trailing):
+        return None, True, False
+    for start, end in spans:
+        chunk = stripped[start:end].strip()
+        if not chunk:
+            continue
+        if chunk.startswith("..."):
+            # A spread may supply ``method``; the init is not readable.
+            return None, True, False
+        raw_key, raw_value, has_colon = _property_parts(chunk)
+        if _property_key(raw_key) != "method":
+            continue
+        if not has_colon:
+            # ``{ method }`` shorthand: a value exists but is not literal.
+            return None, True, True
+        value = _literal_method(raw_value)
+        if value is None:
+            return None, True, True
+        return value, False, True
+    return None, False, False
+
+
 def _fetch_method(init_arguments: list[str]) -> tuple[str | None, bool]:
     """Resolve a ``fetch`` init's method, or report that it is unreadable.
 
@@ -851,14 +1005,11 @@ def _fetch_method(init_arguments: list[str]) -> tuple[str | None, bool]:
         text = argument.strip()
         if not text:
             continue
-        literal = _FETCH_INIT_METHOD_RE.search(text)
-        if literal is not None:
-            value = literal.group(2).upper()
-            return (value, False) if value in _HTTP_METHODS else (None, True)
-        if _FETCH_INIT_METHOD_PRESENT_RE.search(text):
+        method, unresolved, present = _init_method(text)
+        if unresolved:
             return None, True
-        if "..." in text or not text.startswith("{"):
-            return None, True
+        if present and method is not None:
+            return method, False
     return None, False
 
 
@@ -1302,35 +1453,80 @@ def _unwrap_fetch_target(expression: str) -> tuple[str, list[str]]:
     <base>)`` target contributes only its first argument as the path; a ``new
     Request(<path>, <init>)`` target contributes BOTH the path and the init, so
     its ``method`` is read from the Request rather than assumed to be an
-    implicit GET. Both forms are idiomatic across the specs
-    (``notifications.spec.ts`` builds a ``new URL``), and the fragment scanner
-    used to splice the constructor's remaining arguments into the path
+    implicit GET. A constructor may WRAP another constructor
+    (``fetch(new Request(new URL(path, base), { method }))``), so unwrapping is
+    recursive until neither ``URL`` nor ``Request`` remains.
+
+    Inits accumulate outermost-first: an outer ``fetch`` init overrides the
+    outermost ``Request`` init, which overrides an inner one. The fragment
+    scanner used to splice the constructors' remaining arguments into the path
     (``/api/v1/auth/login/{param}``) - a false stale violation.
     """
     text = expression.strip()
-    masked = mask_non_code(text)
-    match = _NEW_FETCH_TARGET_RE.match(masked)
-    if match is None:
-        return text, []
-    spans = _split_args(masked, match.end() - 1)
-    arguments = [text[start:end].strip() for start, end in spans if text[start:end].strip()]
-    if not arguments:
-        return text, []
-    if match.group(1) == "URL":
-        return arguments[0], []
-    return arguments[0], arguments[1:]
+    request_init_arguments: list[str] = []
+    while True:
+        masked = mask_non_code(text)
+        match = _NEW_FETCH_TARGET_RE.match(masked)
+        if match is None:
+            break
+        spans = _split_args(masked, match.end() - 1)
+        arguments = [text[start:end].strip() for start, end in spans if text[start:end].strip()]
+        # The guard protects against a pathological self-referential expression
+        # (`new Request(` whose first argument is the same text) looping forever.
+        if not arguments or arguments[0] == text:
+            break
+        if match.group(1) == "Request":
+            request_init_arguments.extend(arguments[1:])
+        text = arguments[0]
+    return text, request_init_arguments
+
+
+def _is_fetch_value_reference(masked: str, start: int, end: int) -> bool:
+    """True when a ``fetch`` identifier here is READ as a value (an alias).
+
+    ``const f = window.fetch``, ``const f = fetch.bind(globalThis)`` and
+    ``fetch.call(...)`` cannot be followed statically, so they are candidate
+    occurrences that force an explicit annotation. Two shapes are NOT value
+    reads and are excluded: an assignment TARGET (``globalThis.fetch = ...``,
+    which writes a replacement) and a ``typeof`` type reference
+    (``as typeof globalThis.fetch``).
+    """
+    previous = masked[:start].rstrip()
+    if re.search(r"(?<![\w$])typeof$", previous):
+        return False
+    index = end
+    while index < len(masked) and masked[index] in " \t\r\n":
+        index += 1
+    if index < len(masked) and masked[index] == "=":
+        following = masked[index + 1] if index + 1 < len(masked) else ""
+        if following not in {"=", ">"}:
+            return False
+    return True
 
 
 def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
-    """Return ``(offset, line)`` for every call occurrence the extractor models.
+    """Return ``(offset, line)`` for every HTTP-call CANDIDATE occurrence.
 
     Enumerated with the SAME regexes the extractor uses, so the ledger counts
     each occurrence independently - an unmodelled call can no longer be
     absorbed by a modelled call on the same line (the ``Promise.all([fetch(a),
-    fetch(b, init)])`` shape). A ``function apiFetch(...)`` /
-    ``function fetchWithTransientRetry(...)`` declaration and an identifier that
-    is merely read (no argument list) are not calls and are excluded
-    structurally, exactly as extraction excludes them.
+    fetch(b, init)])`` shape).
+
+    Deliberately broader than the extractor on three shapes that used to be
+    silent ledger gaps:
+
+    * a ``fetch`` identifier READ as a value - the alias capture
+      (``const f = window.fetch``, ``= fetch.bind(...)``) and the destructured
+      binding (``const { fetch: f } = globalThis``). Resolving the alias is not
+      this checker's job; the unanalysed occurrence forces an annotation.
+    * bracket access to an APIRequestContext (``page.request['post'](...)``).
+    * a ``request`` binding introduced by destructuring/rename
+      (``async ({ request: api }) => api.get(...)``).
+
+    A genuine call occurrence is accounted for by extraction; the alias/binding
+    forms are never modelled, so they always surface unless annotated. A
+    ``function apiFetch(...)`` / ``function fetchWithTransientRetry(...)``
+    declaration is excluded structurally, exactly as extraction excludes it.
     """
     occurrences: list[tuple[int, int]] = []
     seen: set[int] = set()
@@ -1353,11 +1549,24 @@ def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
         if _find_open_paren(masked, match.end()) is None:
             continue
         add(match.start())
-    for pattern in (_FETCH_RE, _API_REQUEST_RE):
-        for match in pattern.finditer(masked):
-            if _find_open_paren(masked, match.end()) is None:
-                continue
+    for match in _FETCH_RE.finditer(masked):
+        if _is_function_declaration(masked, match.start()):
+            continue
+        is_call = _find_open_paren(masked, match.end()) is not None
+        if is_call or _is_fetch_value_reference(masked, match.start(), match.end()):
             add(match.start())
+    for match in _API_REQUEST_RE.finditer(masked):
+        if _find_open_paren(masked, match.end()) is None:
+            continue
+        add(match.start())
+    for match in _LEDGER_BRACKET_REQUEST_RE.finditer(masked):
+        add(match.start())
+    for match in _LEDGER_REQUEST_ALIAS_RE.finditer(masked):
+        # A PascalCase name after ``request:`` is a TYPE annotation
+        # (``(route, request: Request)``), not a renamed binding.
+        if match.group("alias")[:1].isupper():
+            continue
+        add(match.start())
     return occurrences
 
 
