@@ -278,7 +278,7 @@
              silently re-committed on save. -->
         <div
           v-if="unrestrictedOptionHidden"
-          class="mb-2 rounded-lg border border-destructive/50 bg-destructive/5 p-3 text-xs text-destructive"
+          class="mb-2 rounded-lg border border-destructive/50 bg-destructive/5 p-3 text-xs text-destructive-text"
           role="alert"
           data-testid="sso-unrestricted-locked-notice"
         >
@@ -347,11 +347,11 @@
             @change="onModeChange('unrestricted')"
           />
           <div class="min-w-0">
-            <span class="text-sm font-medium text-destructive">{{ $t('components.SsoProviderForm.mode_unrestricted') }}</span>
+            <span class="text-sm font-medium text-destructive-text">{{ $t('components.SsoProviderForm.mode_unrestricted') }}</span>
             <p class="mt-0.5 text-xs text-muted-foreground">{{ $t('components.SsoProviderForm.mode_unrestricted_help') }}</p>
             <div
               v-if="provisioningMode === 'unrestricted'"
-              class="mt-2 rounded border border-destructive/50 bg-destructive/5 p-2 text-xs text-destructive"
+              class="mt-2 rounded border border-destructive/50 bg-destructive/5 p-2 text-xs text-destructive-text"
               role="alert"
               data-testid="sso-unrestricted-warning"
             >

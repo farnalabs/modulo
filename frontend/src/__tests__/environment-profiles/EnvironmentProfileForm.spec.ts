@@ -386,3 +386,311 @@ describe('EnvironmentProfileForm — edit mode', () => {
     expect(postMock).not.toHaveBeenCalled()
   })
 })
+
+describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    routeState.params = {}
+  })
+
+  async function mountWithProvider(provider: string) {
+    const wrapper = mountForm()
+    await flush()
+    const vm = wrapper.vm as unknown as { form: { provider_type: string } }
+    vm.form.provider_type = provider
+    await nextTick()
+    return wrapper
+  }
+
+  it('renders persistent BYO helper copy truthful for run dispatch and Test Connection', async () => {
+    const wrapper = await mountWithProvider('runner_docker')
+    const help = wrapper.find('#envprofile-form-image-help')
+    expect(help.exists()).toBe(true)
+    expect(help.text()).toContain('Bring your own agent image')
+    expect(help.text()).toContain('agent commands')
+    // FAR-1779 F2 (corrected): real pipeline runs take the E2B template from
+    // the sandbox_agent node, but the Runners-page Test Connection provisions
+    // from this profile's image reference — the copy must state both.
+    expect(help.text()).toContain('Test Connection')
+    expect(help.text()).toContain('provisions a sandbox from this image reference')
+    expect(help.text()).toContain('real pipeline runs take the E2B template from each sandbox_agent node')
+    expect(help.text()).not.toContain('not on this profile')
+  })
+
+  it('acknowledges a digest-pinned ref and shows no mutable-tag warning', async () => {
+    const wrapper = await mountWithProvider('runner_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`ghcr.io/acme/agent@sha256:${'a'.repeat(64)}`)
+    await nextTick()
+
+    const pinned = wrapper.find('[data-testid="envprofile-form-image-pinned"]')
+    expect(pinned.exists()).toBe(true)
+    expect(pinned.element.tagName).toBe('OUTPUT')
+    expect(pinned.text()).toContain('Pinned by digest')
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
+  })
+
+  it('acknowledges a digest-pinned ref on the dispatchable runner_docker provider', async () => {
+    // FAR-1779 F2: runner_docker is the provider that actually dispatches a
+    // container image (local_docker is refused at dispatch), so the digest
+    // classification must apply to it.
+    const wrapper = await mountWithProvider('runner_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`modulo-runner:opencode@sha256:${'c'.repeat(64)}`)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(true)
+  })
+
+  it.each([
+    ['mixed-case registry host', `GHCR.io/library/alpine@sha256:${'a'.repeat(64)}`],
+    ['mixed-case registry host with a port', `MyRegistry.local:5000/team/agent@sha256:${'a'.repeat(64)}`],
+    ['IPv6 registry host with a port', `[::1]:5000/team/agent@sha256:${'a'.repeat(64)}`],
+    ['uppercase first component with no registry dot', `GHCR/acme/agent@sha256:${'a'.repeat(64)}`],
+  ])('accepts a mixed-case registry host (%s) as pinned', async (_label, ref) => {
+    // FAR-1779 F3 (corrected): Docker's `splitDockerDomain` treats the first
+    // component as a registry host when it contains `.`/`:`, is `localhost`,
+    // OR is not all-lowercase — "Uppercase namespaces are not allowed, so if
+    // the first element is not lowercase, we assume it to be a domain-name".
+    // So `GHCR/acme/agent` is a valid reference (host `GHCR`, lowercase path
+    // `acme/agent`) and is classified pinned/mutable, never invalid — measured
+    // against the daemon it parses. Only the repository PATH is case-sensitive.
+    const wrapper = await mountWithProvider('runner_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(ref)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="envprofile-form-image-invalid"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
+  })
+
+  it.each([
+    ['sha256', 'a'.repeat(64)],
+    ['sha384', 'b'.repeat(96)],
+    ['sha512', 'c'.repeat(128)],
+  ])('accepts a digest pinned with the %s algorithm as pinned', async (algorithm, hex) => {
+    // go-digest registers sha256/sha384/sha512 and the Docker daemon parses all
+    // three (`docker image inspect 'ghcr.io/acme/agent@sha512:<128 hex>'` →
+    // "No such image", i.e. parsed), so each must classify as pinned — not
+    // invalid — with the algorithm's exact lowercase-hex length.
+    const wrapper = await mountWithProvider('runner_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`ghcr.io/acme/agent@${algorithm}:${hex}`)
+    await nextTick()
+
+    const pinned = wrapper.find('[data-testid="envprofile-form-image-pinned"]')
+    expect(pinned.exists()).toBe(true)
+    expect(pinned.text()).toContain('Pinned by digest')
+    expect(wrapper.find('[data-testid="envprofile-form-image-invalid"]').exists()).toBe(false)
+  })
+
+  it.each([
+    ['sha256 with a 63-character digest', `sha256:${'a'.repeat(63)}`],
+    ['sha256 with a 65-character digest', `sha256:${'a'.repeat(65)}`],
+    ['sha384 with a 64-character digest (a sha256-length hex)', `sha384:${'a'.repeat(64)}`],
+    ['sha512 with a 96-character digest (a sha384-length hex)', `sha512:${'a'.repeat(96)}`],
+    ['uppercase hex in a sha384 digest', `sha384:${'A'.repeat(96)}`],
+    ['md5, an algorithm the daemon does not support', `md5:${'a'.repeat(32)}`],
+    ['blake3, an algorithm the daemon does not support', `blake3:${'a'.repeat(64)}`],
+  ])('reports a digest with %s as invalid, never pinned or mutable', async (_label, digest) => {
+    // The hex length is fixed per algorithm and the algorithm must be one
+    // go-digest registers; a wrong-length digest is not valid and the daemon
+    // rejects an unsupported algorithm (`md5`, `blake3`, …) with "unsupported
+    // digest algorithm", so neither may render the green pinned assurance.
+    const wrapper = await mountWithProvider('runner_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`ghcr.io/acme/agent@${digest}`)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
+    const invalid = wrapper.find('[data-testid="envprofile-form-image-invalid"]')
+    expect(invalid.exists()).toBe(true)
+    expect(invalid.element.tagName).toBe('OUTPUT')
+    expect(invalid.text()).toContain('not a valid image reference')
+  })
+
+  it.each([
+    ['uppercase digest hex', `ghcr.io/acme/agent@sha256:${'A'.repeat(64)}`],
+    ['uppercase repository path component', `ghcr.io/ACME/agent@sha256:${'a'.repeat(64)}`],
+    ['embedded space', `ghcr.io/acme/agent @sha256:${'a'.repeat(64)}`],
+    // Docker's separator is a single `.`/`_`, a double `__`, or hyphens — not
+    // an arbitrary one-or-two of [._-]. These are NOT valid references and
+    // must never render the green immutability assurance.
+    ['double-dot repository', `ghcr.io/acme/my..repo@sha256:${'a'.repeat(64)}`],
+    ['dot-underscore repository', `ghcr.io/acme/my._repo@sha256:${'a'.repeat(64)}`],
+    ['underscore-dot repository', `ghcr.io/acme/my_.repo@sha256:${'a'.repeat(64)}`],
+    ['underscore-hyphen repository', `ghcr.io/acme/my-_repo@sha256:${'a'.repeat(64)}`],
+    ['dot-hyphen repository', `ghcr.io/acme/my.-repo@sha256:${'a'.repeat(64)}`],
+    // A Docker Hub namespace (no registry host) is measured against the
+    // repository-path cap as the WHOLE name, and its path is lowercase-only.
+    ['uppercase component in a Hub namespace path', `acme/AGENT@sha256:${'a'.repeat(64)}`],
+    ['over-long Hub namespace path', `acme/${'a'.repeat(251)}@sha256:${'a'.repeat(64)}`],
+    // A malformed tag (must start with [A-Za-z0-9_]) is not a valid reference.
+    ['invalid tag', 'ghcr.io/acme/agent:.bad'],
+  ])('reports a ref with a %s as invalid, never pinned or mutable', async (_label, ref) => {
+    // FAR-1779 F1/F3: Docker/containerd reject these, so classifying them as
+    // pinned would assert immutability the runtime would refuse to honour — and
+    // calling them a mutable tag would advise "pin it by digest", which is
+    // exactly what the operator already tried. They get the invalid state and
+    // its accurate copy.
+    const wrapper = await mountWithProvider('runner_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(ref)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
+    const invalid = wrapper.find('[data-testid="envprofile-form-image-invalid"]')
+    expect(invalid.exists()).toBe(true)
+    expect(invalid.element.tagName).toBe('OUTPUT')
+    expect(invalid.text()).toContain('not a valid image reference')
+  })
+
+  it.each([
+    ['double-hyphen repository', `ghcr.io/acme/my--repo@sha256:${'a'.repeat(64)}`],
+    ['double-underscore repository', `ghcr.io/acme/my__repo@sha256:${'a'.repeat(64)}`],
+    ['triple-hyphen repository', `ghcr.io/acme/my---repo@sha256:${'a'.repeat(64)}`],
+    ['registry host containing a double hyphen', `my--registry.io/acme/agent@sha256:${'a'.repeat(64)}`],
+    ['registry host containing a triple hyphen', `my---registry.io/acme/agent@sha256:${'a'.repeat(64)}`],
+    // A first component with no registry marker (`.`, `:`, `localhost`, or an
+    // uppercase character) is a Docker Hub namespace, not a host — its whole
+    // name is a valid, pinnable repository path.
+    ['Hub namespace with no registry host', `acme/agent@sha256:${'a'.repeat(64)}`],
+  ])('acknowledges a valid ref with a %s as pinned', async (_label, ref) => {
+    // FAR-1779 F3 (corrected): Docker's separator is a single `.`/`_`, a double
+    // `__`, or a run of one-or-more `-`, so these are valid names and must not
+    // be mislabelled invalid (or mutable).
+    const wrapper = await mountWithProvider('runner_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(ref)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="envprofile-form-image-invalid"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
+  })
+
+  it('caps the repository path at Docker\u2019s 255-character limit', async () => {
+    // distribution/reference caps the repository path — the name once the
+    // registry host is split off — at 255 characters; the daemon reports
+    // "repository name must not be more than 255 characters". Measured against
+    // the daemon: a 255-character path parses (`No such image`), 256 is
+    // rejected. An over-length ref cannot be pulled, so it must be `invalid`,
+    // never the green pinned assurance.
+    const digest = `sha256:${'a'.repeat(64)}`
+    const wrapper = await mountWithProvider('runner_docker')
+
+    // `acme/` (5) + 250 = a 255-character path is valid.
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`ghcr.io/acme/${'a'.repeat(250)}@${digest}`)
+    await nextTick()
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="envprofile-form-image-invalid"]').exists()).toBe(false)
+
+    // `acme/` (5) + 251 = a 256-character path is rejected.
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`ghcr.io/acme/${'a'.repeat(251)}@${digest}`)
+    await nextTick()
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+    const invalid = wrapper.find('[data-testid="envprofile-form-image-invalid"]')
+    expect(invalid.exists()).toBe(true)
+    expect(invalid.text()).toContain('not a valid image reference')
+  })
+
+  it('caps a Docker Hub name with no namespace at 247 characters', async () => {
+    // A no-namespace Hub name is normalised to `library/<name>` before the
+    // 255-character repository-path cap is applied, so the raw name may only be
+    // 247 characters (255 - len(`library/`)). Measured against the daemon: 247
+    // parses (`No such image`), 248 is rejected with "repository name must not
+    // be more than 255 characters" — an over-length ref cannot be pulled, so it
+    // is `invalid`, never the green pinned assurance.
+    const digest = `sha256:${'a'.repeat(64)}`
+    const wrapper = await mountWithProvider('runner_docker')
+
+    // 247 characters is valid and digest-pinned.
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`${'a'.repeat(247)}@${digest}`)
+    await nextTick()
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="envprofile-form-image-invalid"]').exists()).toBe(false)
+
+    // 248 characters normalises to 256 and is rejected.
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`${'a'.repeat(248)}@${digest}`)
+    await nextTick()
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+    const invalid = wrapper.find('[data-testid="envprofile-form-image-invalid"]')
+    expect(invalid.exists()).toBe(true)
+    expect(invalid.text()).toContain('not a valid image reference')
+  })
+
+  it('reports the release placeholder digest as unresolvable, never pinned', async () => {
+    // FAR-1779 C1: the release placeholder is syntactically a valid digest but
+    // no registry image exists behind it, so the green "pinned / immutable"
+    // assurance would be a lie. It gets its own unresolvable state.
+    const wrapper = await mountWithProvider('runner_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`modulo-runner:opencode@sha256:${'0'.repeat(64)}`)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+    const placeholder = wrapper.find('[data-testid="envprofile-form-image-placeholder"]')
+    expect(placeholder.exists()).toBe(true)
+    expect(placeholder.element.tagName).toBe('OUTPUT')
+    expect(placeholder.text()).toContain('cannot be pulled')
+  })
+
+  it('does not digest-classify a local_docker profile because dispatch refuses the provider', async () => {
+    // FAR-1779 F2: local_docker cannot dispatch a container image
+    // (SandboxDispatchUnboundError), so it is NOT in the pinnable set.
+    const wrapper = await mountWithProvider('local_docker')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue(`ghcr.io/acme/agent@sha256:${'a'.repeat(64)}`)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
+  })
+
+  it('warns without blocking when a mutable tag is used, and still saves', async () => {
+    postMock.mockResolvedValue(fullProfile({ name: 'byo' }))
+    const wrapper = await mountWithProvider('runner_docker')
+
+    await wrapper.find('[data-testid="envprofile-form-name"]').setValue('byo')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue('ghcr.io/acme/agent:latest')
+    await nextTick()
+
+    const warning = wrapper.find('[data-testid="envprofile-form-image-tag-warning"]')
+    expect(warning.exists()).toBe(true)
+    expect(warning.element.tagName).toBe('OUTPUT')
+    expect(warning.text()).toContain('pin the image by digest')
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="envprofile-form-image-invalid"]').exists()).toBe(false)
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(postMock).toHaveBeenCalledTimes(1)
+    expect(postMock.mock.calls[0][1].image_ref).toBe('ghcr.io/acme/agent:latest')
+  })
+
+  it('warns on an implicit latest ref with no tag at all', async () => {
+    const wrapper = await mountWithProvider('kubernetes')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue('ghcr.io/acme/agent')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(true)
+  })
+
+  it('does not digest-warn an E2B template ID because image_ref is not a container image', async () => {
+    const wrapper = await mountWithProvider('e2b')
+    await wrapper.find('[data-testid="envprofile-form-image"]').setValue('modulo-opencode')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
+  })
+
+  it('references the dynamic state region only while it is rendered', async () => {
+    const wrapper = await mountWithProvider('runner_docker')
+    const input = wrapper.find('[data-testid="envprofile-form-image"]')
+    expect(input.attributes('aria-describedby')).toBe('envprofile-form-image-help')
+
+    await input.setValue(`ghcr.io/acme/agent@sha256:${'b'.repeat(64)}`)
+    await nextTick()
+
+    const describedBy = input.attributes('aria-describedby') ?? ''
+    expect(describedBy).toContain('envprofile-form-image-help')
+    expect(describedBy).toContain('envprofile-form-image-state')
+  })
+})

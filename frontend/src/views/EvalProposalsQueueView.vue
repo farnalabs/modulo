@@ -344,7 +344,7 @@ function statusBadgeClass(status: string): string {
     routing: 'bg-warning/10 text-warning-text',
     correcting: 'bg-purple-100 text-purple-700',
     resolved: 'bg-success/10 text-success',
-    escalated: 'bg-destructive/10 text-destructive',
+    escalated: 'bg-destructive/10 text-destructive-text',
     dismissed: 'bg-muted text-muted-foreground',
   }
   return classMap[status] ?? 'bg-muted text-muted-foreground'

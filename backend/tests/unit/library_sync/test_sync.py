@@ -164,6 +164,11 @@ class TestSyncLibrary:
         by_id = {entry["id"]: entry for entry in session.state.catalog_json}
         assert by_id["agent-1"]["status"] == "revoked"
         assert "status" not in by_id["agent-2"]
+        # ``_apply_revocations`` returns copies: the verified manifest's entry
+        # is not mutated, so the persisted manifest stays byte-for-byte the one
+        # whose signature was checked.
+        assert "status" not in entries[0]
+        assert by_id["agent-1"] is not entries[0]
 
     async def test_updates_existing_state(self, keys: tuple[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
         private_key, public_key = keys
@@ -279,6 +284,13 @@ class TestCachedManifest:
     async def test_returns_none_when_no_state_stored(self) -> None:
         session = _FakeSession()
         assert await get_cached_manifest(session) is None
+
+    async def test_returns_none_when_stored_manifest_is_empty(self) -> None:
+        """A first-ever failed sync writes ``manifest_json={}`` via
+        ``_record_failure``; that placeholder must degrade to ``None`` instead
+        of being handed to callers as a manifest (no entries, no signature)."""
+        state = LibrarySyncState(id=SINGLETON_ID, manifest_json={}, catalog_json=[])
+        assert await get_cached_manifest(_FakeSession(existing=state)) is None
 
     async def test_returns_stored_manifest(self) -> None:
         manifest = {"schema_version": "1", "entries": [{"id": "agent-1"}]}

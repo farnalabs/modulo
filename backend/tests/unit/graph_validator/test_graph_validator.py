@@ -1972,3 +1972,108 @@ async def test_single_pr_per_run_false_and_absent_still_pass(value_case: str):
     assert result.is_valid
     codes = {i.code for i in result.issues}
     assert codes.isdisjoint({"SANDBOX_SINGLE_PR_PER_RUN_INVALID", "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX"})
+
+
+# ---------------------------------------------------------------------------
+# FAR-1846: egress_policy / egress_allowlist are sandbox-only node fields
+# ---------------------------------------------------------------------------
+
+
+def test_egress_fields_rejected_on_non_sandbox_nodes():
+    """A raw import that smuggles the egress pair onto a non-sandbox node fails
+    closed: the egress surface is derived only for sandbox_agent nodes, so the
+    declaration there would look enforced and enforce nothing."""
+    from modulo.core.graph_validator import _check_sandbox_policy_fields_only_on_sandbox_nodes
+
+    result = ValidationResult()
+    _check_sandbox_policy_fields_only_on_sandbox_nodes(
+        {
+            "nodes": [
+                {"id": _UUID_A, "node_type": "agent", "egress_policy": "deny_all"},
+                {
+                    "id": _UUID_B,
+                    "node_type": "manual",
+                    "egress_allowlist": [{"host": "api.github.com", "port": 443}],
+                },
+            ],
+            "edges": [],
+        },
+        result,
+    )
+
+    assert not result.is_valid
+    codes = [i.code for i in result.issues]
+    assert codes == ["SANDBOX_POLICY_FIELD_ON_NON_SANDBOX", "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX"]
+    by_node = {i.node_id: i.message for i in result.issues}
+    assert "egress_policy" in by_node[_UUID_A]
+    assert "egress_allowlist" in by_node[_UUID_B]
+
+
+def test_egress_empty_allowlist_rejected_on_non_sandbox_nodes():
+    """``[]`` is not ``None`` and is never a valid allowlist, so it is rejected
+    off-sandbox rather than treated as an absent default."""
+    from modulo.core.graph_validator import _check_sandbox_policy_fields_only_on_sandbox_nodes
+
+    result = ValidationResult()
+    _check_sandbox_policy_fields_only_on_sandbox_nodes(
+        {"nodes": [{"id": _UUID_A, "node_type": "agent", "egress_allowlist": []}], "edges": []},
+        result,
+    )
+
+    assert not result.is_valid
+    assert [i.code for i in result.issues] == ["SANDBOX_POLICY_FIELD_ON_NON_SANDBOX"]
+    assert "egress_allowlist" in result.issues[0].message
+
+
+async def test_egress_fields_accepted_on_sandbox_nodes():
+    """The guard is scoped to non-sandbox nodes: the coupled pair on a
+    sandbox_agent node still saves."""
+    graph = {
+        "nodes": [
+            _sandbox_node(
+                egress_policy="selected",
+                egress_allowlist=[{"host": "api.github.com", "port": 443}],
+            )
+        ],
+        "edges": [],
+    }
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+
+    assert result.is_valid
+    assert not any(i.code == "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX" for i in result.issues)
+
+
+async def test_egress_empty_allowlist_rejected_on_sandbox_node():
+    """An empty allowlist is never valid, even on a sandbox node: the shared
+    allowlist helper requires a non-empty list and only with
+    ``egress_policy='selected'``."""
+    graph = {"nodes": [_sandbox_node(egress_policy="default", egress_allowlist=[])], "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+
+    assert not result.is_valid
+    assert any(i.code == "SANDBOX_EGRESS_ALLOWLIST_INVALID" for i in result.issues)
+
+
+async def test_egress_fields_off_sandbox_block_run_validation():
+    """RUN-TIME consequence (FAR-1846): the same check runs inside
+    ``validate_for_run``, so a stored graph carrying the pair on a non-sandbox
+    node is blocked at run start — not merely at import/save. Fail closed: the
+    declaration can never do anything on another node type."""
+    graph = {
+        "nodes": [
+            {
+                "id": _UUID_A,
+                "node_type": "agent",
+                "agent_id": str(uuid.uuid4()),
+                "egress_policy": "deny_all",
+            }
+        ],
+        "edges": [],
+    }
+    snap = _snapshot(graph_json=graph)
+    result = await GraphValidator().validate_for_run(snap, {}, _session_returning([]))
+
+    assert not result.is_valid
+    flagged = [i for i in result.issues if i.code == "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX"]
+    assert flagged
+    assert flagged[0].node_id == _UUID_A

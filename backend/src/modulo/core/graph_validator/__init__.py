@@ -1095,6 +1095,33 @@ def _check_sandbox_single_pr_per_run(node: dict[str, Any], nid: str, result: Val
     )
 
 
+def _reject_sandbox_only_field(
+    node: dict[str, Any],
+    nid: str,
+    result: ValidationResult,
+    field: str,
+    *,
+    false_is_legal: bool = False,
+    allowed: str | None = None,
+) -> None:
+    """Record a placement error when ``field`` is set on a non-sandbox node.
+
+    ``false_is_legal`` mirrors each field's default: ``read_only`` and
+    ``single_pr_per_run`` treat an explicit ``False`` as absent, while the
+    ``git_credentials``/egress fields reject any non-``None`` value.
+    """
+    value = node.get(field)
+    if value is None or (false_is_legal and value is False):
+        return
+    allowed_names = allowed or field
+    result.error(
+        "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
+        f"Node '{nid}' (node_type={node.get('node_type')!r}) sets {field} "
+        f"— only sandbox_agent nodes can set {allowed_names}",
+        node_id=nid,
+    )
+
+
 def _check_sandbox_policy_fields_only_on_sandbox_nodes(graph_json: dict[str, Any], result: ValidationResult) -> None:
     """Sandbox check 13: read_only / git_credentials only exist on sandbox_agent nodes.
 
@@ -1106,32 +1133,78 @@ def _check_sandbox_policy_fields_only_on_sandbox_nodes(graph_json: dict[str, Any
     FAR-1273: ``single_pr_per_run`` joins the same set — the one-PR-per-run
     ``gh`` guard is installed only inside a sandbox, so the flag on any other
     node type declares a guard nothing installs (same silent-no-op shape).
+
+    FAR-1846: ``egress_policy`` / ``egress_allowlist`` join the same set. The
+    egress enforcement surface (the workspace egress policy plus the host:port
+    allowlist) is derived ONLY for sandbox_agent nodes: ``_check_sandbox_egress``
+    runs only in the sandbox branch of this validator (it has no node_type guard
+    of its own — it is simply never called for another node type), and the
+    node → ``WorkspaceSpec`` mapping happens only on the sandbox path. On an
+    agent/manual/composite node the pair is declared configuration that looks
+    enforced and enforces nothing, so it is rejected rather than dropped.
+
+    The check is by VALUE (``is not None``), matching its neighbours: an
+    absent field and an explicit ``null`` are the same state at rest, so a
+    payload that round-trips every key for every node type keeps saving. An
+    empty ``egress_allowlist`` (``[]``) IS rejected — it is not ``None``, and
+    it is never valid (the shared allowlist helper requires a non-empty list,
+    and only with ``egress_policy='selected'``).
     """
     for node in graph_json.get("nodes", []):
         if not isinstance(node, dict) or node.get("node_type") == "sandbox_agent":
             continue
         nid = _string_or_default(node.get("id"))
-        if node.get("read_only") is not None and node.get("read_only") is not False:
-            result.error(
-                "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
-                f"Node '{nid}' (node_type={node.get('node_type')!r}) sets read_only — "
-                "only sandbox_agent nodes can set read_only / git_credentials",
-                node_id=nid,
-            )
-        if node.get("git_credentials") is not None:
-            result.error(
-                "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
-                f"Node '{nid}' (node_type={node.get('node_type')!r}) sets git_credentials "
-                "— only sandbox_agent nodes can set read_only / git_credentials",
-                node_id=nid,
-            )
-        if node.get("single_pr_per_run") is not None and node.get("single_pr_per_run") is not False:
-            result.error(
-                "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
-                f"Node '{nid}' (node_type={node.get('node_type')!r}) sets single_pr_per_run "
-                "— only sandbox_agent nodes can set single_pr_per_run",
-                node_id=nid,
-            )
+        _reject_sandbox_only_field(
+            node,
+            nid,
+            result,
+            "read_only",
+            false_is_legal=True,
+            allowed="read_only / git_credentials",
+        )
+        _reject_sandbox_only_field(
+            node,
+            nid,
+            result,
+            "git_credentials",
+            allowed="read_only / git_credentials",
+        )
+        _reject_sandbox_only_field(
+            node,
+            nid,
+            result,
+            "single_pr_per_run",
+            false_is_legal=True,
+        )
+        _reject_sandbox_only_field(
+            node,
+            nid,
+            result,
+            "egress_policy",
+            allowed="egress_policy / egress_allowlist",
+        )
+        _reject_sandbox_only_field(
+            node,
+            nid,
+            result,
+            "egress_allowlist",
+            allowed="egress_policy / egress_allowlist",
+        )
+
+
+def check_sandbox_only_field_placement(graph_json: dict[str, Any]) -> ValidationResult:
+    """Public wrapper for the sandbox-only field placement rule (FAR-1846).
+
+    The REST/MCP save paths enforce this through the Pydantic node model. A
+    raw workflow import has no model to validate, so the importer calls this
+    helper on the shipped graph and fails the import closed when a bundle
+    declares a sandbox-only field on a non-sandbox_agent node. Returns a
+    :class:`ValidationResult` whose error issues name the offending node and
+    field.
+    """
+    result = ValidationResult()
+    _check_sandbox_policy_fields_only_on_sandbox_nodes(graph_json, result)
+    return result
 
 
 def _check_sandbox_wallclock_budget(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
@@ -3238,6 +3311,10 @@ class GraphValidator:
         9. agent_commands is Jinja-renderable (FAR-226).
         10. read_only / git_credentials are validated sandbox-only fields
             (FAR-212 PR B), and no non-sandbox node carries them.
+            ``egress_policy`` / ``egress_allowlist`` join that sandbox-only
+            set (FAR-1846): the egress surface is derived only on the sandbox
+            path, so declaring the pair on another node type is a silent
+            no-op.
         10b. single_pr_per_run is a genuine boolean on a sandbox_agent node
             (FAR-1316) — a raw-import non-bool would save cleanly and then
             fail closed to false at dispatch, arming nothing.

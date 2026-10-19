@@ -21,6 +21,8 @@ import pytest
 from modulo.core.schema_registry.contract import (
     SCHEMA_CONTRACT_VERSION,
     _atomic_write_json,
+    _check_bounds,
+    _child_containers,
     _cleanup_orphan_tmps,
     cleanup_schema_contract,
     list_schema_nodes,
@@ -507,6 +509,23 @@ class TestSanitisation:
         assert "description" not in canonical["allOf"][0]
         assert "title" not in canonical["allOf"][0]
         assert canonical["allOf"][0]["type"] == "object"
+
+
+class TestBoundWalk:
+    """The flattened const/enum bounds walk (FAR-366) recurses dicts AND lists."""
+
+    def test_list_root_is_walked(self) -> None:
+        schema: Any = [{"const": "x" * 300}]
+        rejected, reasons = _check_bounds(schema)
+        assert rejected
+        assert any("const_string_exceeds" in reason for reason in reasons)
+
+    def test_list_container_children_are_its_container_items(self) -> None:
+        node = [{"a": 1}, [{"b": 2}], "skip", 3]
+        assert _child_containers(node) == [{"a": 1}, [{"b": 2}]]
+
+    def test_non_container_node_has_no_children(self) -> None:
+        assert not _child_containers("scalar")
 
 
 # ---------------------------------------------------------------------------

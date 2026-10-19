@@ -125,7 +125,7 @@ function goToLibrary() {
               step === s.num
                 ? 'bg-indigo-600 text-white'
                 : step > s.num
-                  ? 'bg-green-600 text-white'
+                  ? 'bg-green-700 text-white'
                   : 'bg-muted text-muted-foreground'
             "
           >
@@ -191,7 +191,7 @@ function goToLibrary() {
               <span class="text-sm font-medium">{{ port.label }}</span>
               <span
                 v-if="port.required"
-                class="ml-2 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive"
+                class="ml-2 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive-text"
                 >required</span
               >
             </div>
@@ -262,7 +262,7 @@ function goToLibrary() {
           class="flex items-center gap-3 rounded-lg border border-green-600/30 bg-green-600/10 p-4"
         >
           <span
-            class="flex h-8 w-8 items-center justify-center rounded-full bg-green-600 text-lg font-bold text-white"
+            class="flex h-8 w-8 items-center justify-center rounded-full bg-green-700 text-lg font-bold text-white"
             >✓</span
           >
           <div>

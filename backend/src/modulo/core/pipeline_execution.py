@@ -2222,29 +2222,21 @@ async def run_executor_with_watchdog(
     node_deadlines: dict[str, tuple[float, int]] = {}
     if superseded is None:
         superseded = asyncio.Event()
+
+    # The node-deadline callbacks close over the LIVE timeout dict and the
+    # settings default, so both are resolved before wiring.
+    node_timeouts = executor._node_timeouts if executor is not None else {}
+    default_timeout = get_settings().saq_node_default_timeout_seconds
     if executor is not None:
-        executor.on_first_progress = first_progress.set
-
-        # FAR-369: wire the per-node start/completion callbacks that drive the
-        # absolute node-deadline watchdog. Each node gets its own deadline entry
-        # (set on start, removed on completion) so a stalled sibling in a
-        # parallel fan-out cannot hide behind a newer sibling's start.
-        def _on_node_started(nid: str) -> None:
-            to = node_timeouts.get(nid, default_timeout)
-            node_deadlines[nid] = (time.monotonic() + to, to)
-            node_started_event.set()
-
-        def _on_node_completed(nid: str) -> None:
-            node_deadlines.pop(nid, None)
-            node_completed_event.set()
-
-        executor.on_node_started = _on_node_started
-        executor.on_node_completed = _on_node_completed
-        # Wire the cancellation-intent signals into the executor so its
-        # NodeCancelledError retry handler can distinguish a watchdog stall
-        # from a supersession and skip the pending-reset when either fired.
-        executor._stall_requested = stall_requested
-        executor._superseded = superseded
+        _wire_executor_hooks(executor, first_progress, stall_requested, superseded)
+        _wire_node_deadline_hooks(
+            executor,
+            node_deadlines,
+            node_started_event,
+            node_completed_event,
+            node_timeouts,
+            default_timeout,
+        )
 
     async def _execute() -> Any:
         return await execute_fn()
@@ -2288,13 +2280,6 @@ async def run_executor_with_watchdog(
     # stall_requested coordination with zombie_watchdog. node_timeouts is read
     # from the executor (populated from the graph JSON before streaming) as a
     # shared dict reference so it is filled by the time the first node starts.
-    # Read the live dict reference (populated from the graph JSON by
-    # _prepare_and_stream before streaming). Pass the same object — NOT a copy
-    # — so the watchdog sees the per-node timeouts once they are filled in.
-    node_timeouts = executor._node_timeouts if executor is not None else {}
-    # Settings default for nodes with no explicit timeout — read by the
-    # _on_node_started closure above (node_timeouts.get(nid, default_timeout)).
-    default_timeout = get_settings().saq_node_default_timeout_seconds
     node_deadline_task = asyncio.create_task(
         node_deadline_watchdog(
             aeng,
@@ -2323,114 +2308,228 @@ async def run_executor_with_watchdog(
         name=f"saq-heartbeat-{rid}",
     )
 
-    async def _abort_watcher() -> None:
-        waiters = [asyncio.create_task(superseded.wait()), asyncio.create_task(health_failed.wait())]
-        try:
-            await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
-        finally:
-            for w in waiters:
-                w.cancel()
-        if not exec_task.done():
-            exec_task.cancel()
-        if not watchdog_task.done():
-            watchdog_task.cancel()
-        if not node_deadline_task.done():
-            node_deadline_task.cancel()
-
-    abort_watch_task = asyncio.create_task(_abort_watcher(), name=f"saq-abort-watch-{rid}")
+    abort_watch_task = asyncio.create_task(
+        _run_abort_watcher(
+            superseded,
+            health_failed,
+            exec_task=exec_task,
+            watchdog_task=watchdog_task,
+            node_deadline_task=node_deadline_task,
+        ),
+        name=f"saq-abort-watch-{rid}",
+    )
 
     exec_exc, exec_result = await _await_executor_task(
-        aeng=aeng,
-        run_id=run_id,
-        org_id=org_id,
-        claim_token=claim_token,
-        rid=rid,
-        exec_task=exec_task,
-        run_done_event=run_done_event,
-        watchdog_task=watchdog_task,
-        node_deadline_task=node_deadline_task,
-        heartbeat_task=heartbeat_task,
-        abort_watch_task=abort_watch_task,
-        stall_requested=stall_requested,
-        health_failed=health_failed,
-        superseded=superseded,
-        watchdog_retry_outcome=watchdog_retry_outcome,
+        _ExecutorAwaitContext(
+            aeng=aeng,
+            run_id=run_id,
+            org_id=org_id,
+            claim_token=claim_token,
+            rid=rid,
+            watchdog_retry_outcome=watchdog_retry_outcome,
+        ),
+        _ExecutorTaskSet(
+            exec_task=exec_task,
+            run_done_event=run_done_event,
+            watchdog_task=watchdog_task,
+            node_deadline_task=node_deadline_task,
+            heartbeat_task=heartbeat_task,
+            abort_watch_task=abort_watch_task,
+        ),
+        _ExecutorSignals(
+            stall_requested=stall_requested,
+            health_failed=health_failed,
+            superseded=superseded,
+        ),
     )
 
     if exec_exc is not None:
-        # FAR-1831: a sandbox-capacity denial on a resume carrying a COMMITTED
-        # HITL decision must NOT terminal-fail the run — the decision would be
-        # lost. Reset the row to ``awaiting_human`` (fenced, and refunding the
-        # contested claim) so dispatcher_reconcile's F6a path re-dispatches the
-        # resume when a slot frees, and report a deferred (non-failure) outcome.
-        #
-        # SCOPED to a HITL-decision resume (``hitl_decision_resume``): the
-        # parking target is re-dispatched ONLY when a committed gate decision
-        # exists (F6a guard). A node-recovery or guardrail-override resume has
-        # none, so parking it in ``awaiting_human`` would strand it
-        # decisionless and erase the previously-visible terminal signal — those
-        # fall through to the honest terminal outcome below (no silent
-        # failure). This exception type is raised ONLY by the resume capacity
-        # gate (executor._enforce_resume_sandbox_capacity), never by the
-        # execute path, so the reset cannot misfire on a first dispatch.
-        from modulo.core.pipeline_engine.executor import (
-            SandboxCapacityExceededError as _SandboxCapacityExceededError,
-        )
-
-        if hitl_decision_resume and isinstance(exec_exc, _SandboxCapacityExceededError):
-            reset = await defer_capacity_denied_run_to_awaiting_human(aeng, run_id, org_id, claim_token=claim_token)
-            _log.warning(
-                "pipeline_execution.resume_capacity_deferred run=%s reset=%s — "
-                "committed decision preserved; dispatcher_reconcile will re-dispatch",
-                run_id,
-                reset,
-            )
-            return {"status": "capacity_deferred"}
-        # Honest outcome: a generic executor failure is terminal-failed
-        # (token-guarded) BEFORE returning — never a silent wrong-success.
-        await fail_run_terminal(
+        return await _handle_executor_failure(
             aeng,
             run_id,
             org_id,
-            error_code=EXECUTOR_FAILED_ERROR_CODE,
-            error_detail=f"{type(exec_exc).__name__}: {exec_exc}"[:2000],
             claim_token=claim_token,
+            exec_exc=exec_exc,
+            hitl_decision_resume=hitl_decision_resume,
         )
-        return {"status": "failed"}
 
     # Derive the outcome from the executor task result (the returned Run row)
     # and the run row status. A watchdog/supersession/heartbeat cancellation
     # leaves exec_result None — fall back to the run row.
     result_status = await _resolve_result_status(aeng, run_id, org_id, exec_result, rid)
+    return _executor_status_response(result_status)
+
+
+def _wire_executor_hooks(
+    executor: Any,
+    first_progress: asyncio.Event,
+    stall_requested: asyncio.Event,
+    superseded: asyncio.Event,
+) -> None:
+    """Wire the progress signal and cancellation-intent events into the executor."""
+    executor.on_first_progress = first_progress.set
+    # Wire the cancellation-intent signals into the executor so its
+    # NodeCancelledError retry handler can distinguish a watchdog stall from a
+    # supersession and skip the pending-reset when either fired.
+    executor._stall_requested = stall_requested
+    executor._superseded = superseded
+
+
+def _wire_node_deadline_hooks(
+    executor: Any,
+    node_deadlines: dict[str, tuple[float, int]],
+    node_started_event: asyncio.Event,
+    node_completed_event: asyncio.Event,
+    node_timeouts: dict[str, int],
+    default_timeout: int,
+) -> None:
+    """Wire the per-node callbacks that drive the absolute node-deadline watchdog.
+
+    FAR-369: each node gets its own deadline entry (set on start, removed on
+    completion) so a stalled sibling in a parallel fan-out cannot hide behind a
+    newer sibling's start.
+    """
+
+    def _on_node_started(nid: str) -> None:
+        to = node_timeouts.get(nid, default_timeout)
+        node_deadlines[nid] = (time.monotonic() + to, to)
+        node_started_event.set()
+
+    def _on_node_completed(nid: str) -> None:
+        node_deadlines.pop(nid, None)
+        node_completed_event.set()
+
+    executor.on_node_started = _on_node_started
+    executor.on_node_completed = _on_node_completed
+
+
+async def _run_abort_watcher(
+    superseded: asyncio.Event,
+    health_failed: asyncio.Event,
+    *,
+    exec_task: asyncio.Task[Any],
+    watchdog_task: asyncio.Task[Any],
+    node_deadline_task: asyncio.Task[Any],
+) -> None:
+    """Cancel the executor and both watchdogs on supersession or heartbeat loss."""
+    waiters = [asyncio.create_task(superseded.wait()), asyncio.create_task(health_failed.wait())]
+    try:
+        await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for w in waiters:
+            w.cancel()
+    if not exec_task.done():
+        exec_task.cancel()
+    if not watchdog_task.done():
+        watchdog_task.cancel()
+    if not node_deadline_task.done():
+        node_deadline_task.cancel()
+
+
+async def _handle_executor_failure(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    claim_token: str | None,
+    exec_exc: Exception,
+    hitl_decision_resume: bool,
+) -> dict[str, Any]:
+    """Classify an executor exception into a deferred or terminal outcome.
+
+    FAR-1831: a sandbox-capacity denial on a resume carrying a COMMITTED HITL
+    decision must NOT terminal-fail the run — the decision would be lost. Reset
+    the row to ``awaiting_human`` (fenced, and refunding the contested claim) so
+    dispatcher_reconcile's F6a path re-dispatches the resume when a slot frees,
+    and report a deferred (non-failure) outcome.
+
+    SCOPED to a HITL-decision resume (``hitl_decision_resume``): the parking
+    target is re-dispatched ONLY when a committed gate decision exists (F6a
+    guard). A node-recovery or guardrail-override resume has none, so parking it
+    in ``awaiting_human`` would strand it decisionless and erase the
+    previously-visible terminal signal — those fall through to the honest
+    terminal outcome below (no silent failure). This exception type is raised
+    ONLY by the resume capacity gate
+    (executor._enforce_resume_sandbox_capacity), never by the execute path, so
+    the reset cannot misfire on a first dispatch.
+    """
+    from modulo.core.pipeline_engine.executor import (
+        SandboxCapacityExceededError as _SandboxCapacityExceededError,
+    )
+
+    if hitl_decision_resume and isinstance(exec_exc, _SandboxCapacityExceededError):
+        reset = await defer_capacity_denied_run_to_awaiting_human(aeng, run_id, org_id, claim_token=claim_token)
+        _log.warning(
+            "pipeline_execution.resume_capacity_deferred run=%s reset=%s — "
+            "committed decision preserved; dispatcher_reconcile will re-dispatch",
+            run_id,
+            reset,
+        )
+        return {"status": "capacity_deferred"}
+    # Honest outcome: a generic executor failure is terminal-failed
+    # (token-guarded) BEFORE returning — never a silent wrong-success.
+    await fail_run_terminal(
+        aeng,
+        run_id,
+        org_id,
+        error_code=EXECUTOR_FAILED_ERROR_CODE,
+        error_detail=f"{type(exec_exc).__name__}: {exec_exc}"[:2000],
+        claim_token=claim_token,
+    )
+    return {"status": "failed"}
+
+
+def _executor_status_response(result_status: str | None) -> dict[str, Any]:
+    """Map a resolved run status to the executor's outcome dict."""
     if result_status == "complete":
         return {"status": "complete"}
     if result_status == "awaiting_human":
         return {"status": "awaiting_human"}
     if result_status == "rejected":
-        # FAR-1487: a HITL rejection ended the run - a terminal, NON-failure
+        # FAR-1487: a HITL rejection ended the run — a terminal, NON-failure
         # outcome (the run row already carries ``rejected`` + ``hitl.*``); never
         # report it as ``failed``.
         return {"status": "rejected"}
     return {"status": "failed"}
 
 
+@dataclass(frozen=True)
+class _ExecutorAwaitContext:
+    """Identity and claim context for awaiting one executor task."""
+
+    aeng: AsyncEngine
+    run_id: str
+    org_id: str
+    claim_token: str | None
+    rid: uuid.UUID
+    watchdog_retry_outcome: Any = None
+
+
+@dataclass(frozen=True)
+class _ExecutorTaskSet:
+    """The tasks and event started around the executor task."""
+
+    exec_task: asyncio.Task[Any]
+    run_done_event: asyncio.Event
+    watchdog_task: asyncio.Task[Any] | None
+    node_deadline_task: asyncio.Task[Any]
+    heartbeat_task: asyncio.Task[Any] | None
+    abort_watch_task: asyncio.Task[Any] | None
+
+
+@dataclass(frozen=True)
+class _ExecutorSignals:
+    """Cancellation-intent events shared with the executor and watchdogs."""
+
+    stall_requested: asyncio.Event
+    health_failed: asyncio.Event
+    superseded: asyncio.Event
+
+
 async def _await_executor_task(
-    *,
-    aeng: AsyncEngine,
-    run_id: str,
-    org_id: str,
-    claim_token: str | None,
-    rid: uuid.UUID,
-    exec_task: asyncio.Task[Any],
-    run_done_event: asyncio.Event,
-    watchdog_task: asyncio.Task[Any] | None,
-    node_deadline_task: asyncio.Task[Any],
-    heartbeat_task: asyncio.Task[Any] | None,
-    abort_watch_task: asyncio.Task[Any] | None,
-    stall_requested: asyncio.Event,
-    health_failed: asyncio.Event,
-    superseded: asyncio.Event,
-    watchdog_retry_outcome: Any = None,
+    context: _ExecutorAwaitContext,
+    tasks: _ExecutorTaskSet,
+    signals: _ExecutorSignals,
 ) -> tuple[Exception | None, Any]:
     """Await the executor task and classify its outcome.
 
@@ -2445,10 +2544,10 @@ async def _await_executor_task(
     cancels and drains every helper task before the outcome is resolved.
     """
     try:
-        result = await exec_task
+        result = await tasks.exec_task
         # The run reached a terminal/complete outcome via the executor — signal
         # the node-deadline watchdog to stand down (never fail a finished run).
-        run_done_event.set()
+        tasks.run_done_event.set()
         return None, result
     except asyncio.CancelledError:
         # Heartbeat-loss, watchdog stall, or supersession. Await the watchdogs
@@ -2457,17 +2556,17 @@ async def _await_executor_task(
         # mid-write would abort its terminal-fail transaction and leave the run
         # ``running`` forever.
         await _resolve_cancel_outcome(
-            watchdog_task=watchdog_task,
-            node_deadline_task=node_deadline_task,
-            stall_requested=stall_requested,
-            health_failed=health_failed,
-            superseded=superseded,
-            aeng=aeng,
-            run_id=run_id,
-            org_id=org_id,
-            claim_token=claim_token,
-            rid=rid,
-            watchdog_retry_outcome=watchdog_retry_outcome,
+            watchdog_task=tasks.watchdog_task,
+            node_deadline_task=tasks.node_deadline_task,
+            stall_requested=signals.stall_requested,
+            health_failed=signals.health_failed,
+            superseded=signals.superseded,
+            aeng=context.aeng,
+            run_id=context.run_id,
+            org_id=context.org_id,
+            claim_token=context.claim_token,
+            rid=context.rid,
+            watchdog_retry_outcome=context.watchdog_retry_outcome,
         )
         return None, None
     except NodeCancelledError:
@@ -2478,11 +2577,17 @@ async def _await_executor_task(
         # A generic executor failure will be terminal-failed by the caller —
         # signal the node-deadline watchdog to stand down so it does not
         # double-fail.
-        run_done_event.set()
-        _log.exception("run_executor_with_watchdog: execute failed for run %s", rid)
+        tasks.run_done_event.set()
+        _log.exception("run_executor_with_watchdog: execute failed for run %s", context.rid)
         return exc, None
     finally:
-        await _cancel_and_await_tasks(abort_watch_task, watchdog_task, node_deadline_task, exec_task, heartbeat_task)
+        await _cancel_and_await_tasks(
+            tasks.abort_watch_task,
+            tasks.watchdog_task,
+            tasks.node_deadline_task,
+            tasks.exec_task,
+            tasks.heartbeat_task,
+        )
 
 
 async def _await_watchdog_bounded(

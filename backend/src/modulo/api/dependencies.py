@@ -254,7 +254,7 @@ def require_system_permission(permission: str) -> DependsParameter:
     """
     resolve_required(permission)
 
-    async def _check(
+    def _check(
         current_user: AuthenticatedPrincipal = Depends(get_current_user),
     ) -> AuthenticatedPrincipal:
         if not current_user.is_system_admin:
@@ -288,7 +288,7 @@ def require_system_or_org_admin(permission: str) -> Any:
     """
     resolve_required(permission)
 
-    async def _check(
+    def _check(
         principal: TenantPrincipal = Depends(get_current_tenant_user),
     ) -> TenantPrincipal:
         if principal.is_system_admin:
@@ -434,7 +434,7 @@ def require_target_org_role(
     )
 
 
-async def resolve_audit_principal(
+def resolve_audit_principal(
     request: Request,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> TenantPrincipal:
@@ -672,7 +672,7 @@ def require_feature_anonymous(feature_name: str) -> DependsParameter:
        _: object = require_feature_anonymous("sso")  # route parameter
     """
 
-    async def _check(ctx: PlanContext = Depends(get_anonymous_plan_context)) -> None:
+    def _check(ctx: PlanContext = Depends(get_anonymous_plan_context)) -> None:
         if not ctx.feature_enabled(feature_name):
             raise ProblemException(
                 ProblemType.FEATURE_REQUIRED,
@@ -695,7 +695,7 @@ def require_feature(feature_name: str) -> DependsParameter:
        dependencies=[require_feature("team_rbac")]  # decorator
     """
 
-    async def _check(ctx: PlanContext = Depends(get_plan_context)) -> None:
+    def _check(ctx: PlanContext = Depends(get_plan_context)) -> None:
         if not ctx.feature_enabled(feature_name):
             raise ProblemException(
                 ProblemType.FEATURE_REQUIRED,

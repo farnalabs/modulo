@@ -685,10 +685,12 @@ class TriggerEngine:
             #
             # Accepted trade-offs (documented FAR-1034):
             #   * If the first fixer run for (pr, headSha) terminates WITHOUT
-            #     pushing a fix commit (crash/exhausted/no-fix), a same-head CI
+            #     pushing a fix commit (crash/exhausted/no-fix), a same-head
             #     re-fire within the window is deliberately suppressed. A NEW
-            #     commit always launches a fresh run, and the manual
-            #     branch-fixer.yml dispatch (no headSha) is never suppressed.
+            #     commit always launches a fresh run. branch-fixer.yml now
+            #     resolves and sends the PR's head SHA too, so its repeat
+            #     dispatches coalesce; a human bypasses that with the
+            #     `force: true` input, which omits headSha deliberately.
             #   * ci.yml's notify-main-failure sends headSha=github.sha, so a
             #     manually re-dispatched main CI run failing at the SAME sha
             #     within the window is suppressed — same broken commit, same

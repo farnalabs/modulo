@@ -228,4 +228,43 @@ describe('SettingsObservabilityView', () => {
     expect(alert.props('retryable')).toBe(false)
     expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
+
+  it('renders the connection-test result for both success and failure', async () => {
+    vi.mocked(api.POST as unknown as () => Promise<unknown>).mockResolvedValue({
+      data: { success: true, message: 'span received' },
+      error: undefined,
+    })
+    const wrapper = mount(SettingsObservabilityView, {
+      global: {
+        plugins: [createPinia()],
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+      },
+    })
+    await nextTick()
+    await nextTick()
+
+    const testBtn = wrapper.find('[data-testid="settings-observability-test-connection"]')
+    await testBtn.trigger('click')
+    await nextTick()
+
+    const result = wrapper.find('[data-testid="settings-observability-test-result"]')
+    expect(result.exists()).toBe(true)
+    expect(result.text()).toContain('Connection successful')
+    expect(result.text()).toContain('span received')
+
+    vi.mocked(api.POST as unknown as () => Promise<unknown>).mockResolvedValue({
+      data: { success: false, message: 'no spans arrived' },
+      error: undefined,
+    })
+    await testBtn.trigger('click')
+    await nextTick()
+
+    const failed = wrapper.find('[data-testid="settings-observability-test-result"]')
+    expect(failed.exists()).toBe(true)
+    expect(failed.text()).toContain('Connection failed')
+    expect(failed.text()).toContain('no spans arrived')
+    expect(failed.classes()).toContain('text-destructive-text')
+
+    wrapper.unmount()
+  })
 })

@@ -35,10 +35,6 @@ on:
     # contents:write.
     types: [merge-queue-chain]
 
-concurrency:
-  group: merge-queue
-  cancel-in-progress: false
-
 env:
   SECRET_KEY: ${{ secrets.SECRET_KEY }}
   FERNET_KEY: ${{ secrets.FERNET_KEY }}
@@ -121,8 +117,9 @@ jobs:
     # repository_dispatch (self-chain) honors the payload's not-before time so
     # chained passes pace ~10 min apart - the wait happens HERE on a tiny idle
     # runner, NOT inside the queue job, which would hold the merge-queue
-    # concurrency slot and delay other runs. (The pull_request_review and
-    # check_suite paths were removed in FAR-1428.)
+    # concurrency slot and delay other runs. The merge-queue concurrency group
+    # is scoped to the `queue` job precisely so this sleep cannot hold it.
+    # (The pull_request_review and check_suite paths were removed in FAR-1428.)
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
     permissions:
@@ -180,6 +177,14 @@ jobs:
     name: Merge queue -> main
     needs: [freeze-gate, event-gate]
     if: needs.freeze-gate.outputs.frozen == 'false' && needs.event-gate.outputs.should_run == 'true'
+    # The merge-queue concurrency group lives on THIS job, not at workflow
+    # level: only this job merges to main, so only it needs serialising. At
+    # workflow level the group was held by the whole run - including the
+    # event-gate ~10-min pacing sleep - so every chained pass queued behind an
+    # incumbent's sleep and waited out the full ~10 min before its own turn.
+    concurrency:
+      group: merge-queue
+      cancel-in-progress: false
     # 30 was the observed failure ceiling: the last successful pass took 29.1 min
     # (backend 19.9 + frontend 7.2 sequential) and every later pass hit the 30-min
     # job cancel before the merge step. 45 gives ~15 min of headroom for the
@@ -263,7 +268,7 @@ jobs:
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.5
+          version: 11.28.6
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:

@@ -47,6 +47,7 @@ from modulo.core.audit_coverage import audited_system, bind_audit_org
 from modulo.core.license import verify_license_key
 from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.core.sanitize_log import sanitise_log_value
+from modulo.db.crud.organisation import list_login_active_orgs
 from modulo.db.crud.sso_provider import (
     get_enabled_saml_provider,
     get_provider_by_provider_id,
@@ -54,6 +55,7 @@ from modulo.db.crud.sso_provider import (
 )
 from modulo.db.models.organisation import SYSTEM_ORG_ID, Organisation
 from modulo.db.models.sso_provider import SsoProvider
+from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -196,23 +198,43 @@ class SsoProvidersResponse(BaseModel):
     saml: bool
 
 
-async def _list_enabled_oidc_global(
+async def _single_login_active_org(session: AsyncSession) -> Organisation | None:
+    """Return THE login-active org when this instance is single-org, else ``None``.
+
+    FAR-1978: the legacy discovery endpoint may only surface org-level provider
+    rows when there is exactly one login-active org — the single-org login path.
+    ``login-context`` uses the same predicate and the SPA calls this endpoint
+    only when ``login-context`` reported ``multi_org=false`` with a resolved
+    org, i.e. exactly one login-active org. Zero orgs (unconfigured) or more
+    than one (multi-tenant) means no single org can be assumed, so the caller
+    must return environment-level configuration only.
+    """
+    orgs = await list_login_active_orgs(session)
+    return orgs[0] if len(orgs) == 1 else None
+
+
+async def _list_enabled_oidc_for_org(
     system_session: AsyncSession | None,
     app_session: AsyncSession,
+    org_id: uuid.UUID,
 ) -> list[Any]:
-    """List enabled OIDC providers via the system session (global), then app fallback.
+    """List ONE org's enabled OIDC providers — never a sibling org's.
 
-    The system session (``modulo_system`` role, BYPASSRLS) sees every org's
-    providers; when it returns nothing (role unprovisioned -> zero rows), fall
-    back to the app session scoped to the first org (single-org behaviour).
+    The system session (``modulo_system`` role, BYPASSRLS) sees every org, so
+    the result is filtered by ``organisation_id`` before it is returned. When
+    the system role is unprovisioned the read runs as ``modulo_app`` and
+    returns zero RLS-scoped rows, so the app session is bound to the SAME org
+    and read as a fallback; the explicit org filter stays as defense-in-depth.
     """
     providers: list[Any] = []
     if system_session is not None:
         async with system_session.begin():
             providers = await list_enabled_oidc_providers(system_session)
+        providers = [p for p in providers if p.organisation_id == org_id]
     if not providers:
-        await _set_default_rls_org(app_session)
+        await set_rls_org(app_session, org_id)
         providers = await list_enabled_oidc_providers(app_session)
+        providers = [p for p in providers if p.organisation_id == org_id]
     return providers
 
 
@@ -231,6 +253,20 @@ async def _get_enabled_saml_global(
     return provider
 
 
+def _env_saml_available(settings: Settings) -> bool:
+    """Environment-level SAML availability (verified licence + IdP metadata).
+
+    FAR-1733: the env-var licence key is verified (signature + expiry), never
+    trusted on mere presence — an unverifiable key does NOT enable the env
+    SAML path (fail-closed).
+    """
+    return bool(
+        settings.modulo_saml_enabled
+        and verify_license_key(getattr(settings, "modulo_license_key", "") or "") is not None
+        and (bool(settings.modulo_saml_idp_metadata_url) or bool(settings.modulo_saml_idp_metadata_xml))
+    )
+
+
 async def is_saml_available(
     settings: Settings,
     system_session: AsyncSession | None,
@@ -247,17 +283,13 @@ async def is_saml_available(
     returns the first enabled provider globally via ``.limit(1)``).  This is
     therefore an instance-wide boolean — there is no per-org SAML support yet.
 
-    FAR-1733: the env-var licence key is verified (signature + expiry), never
-    trusted on mere presence — an unverifiable key does NOT enable the env
-    SAML path (fail-closed; the DB-provider path is unaffected).
+    FAR-1978: this DB read is only used on the single-org path. Multi-org
+    callers use ``_env_saml_available`` directly so no org's DB configuration
+    (not even a boolean derived from it) is exposed to an anonymous caller.
     """
     db_saml = await _get_enabled_saml_global(system_session, app_session)
     db_saml_ok = db_saml is not None and bool(db_saml.metadata_xml or db_saml.metadata_url)
-    return db_saml_ok or (
-        settings.modulo_saml_enabled
-        and verify_license_key(getattr(settings, "modulo_license_key", "") or "") is not None
-        and (bool(settings.modulo_saml_idp_metadata_url) or bool(settings.modulo_saml_idp_metadata_xml))
-    )
+    return db_saml_ok or _env_saml_available(settings)
 
 
 async def _anonymous_plan_context(settings: Settings, session: AsyncSession) -> Any:
@@ -277,7 +309,7 @@ async def sso_providers(
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
 ) -> SsoProvidersResponse:
-    """List configured SSO providers (OIDC) and whether SAML is enabled.
+    """List the SSO providers this instance advertises on the login page.
 
     Pre-auth discovery endpoint: the login page fetches it BEFORE any user is
     authenticated, so it must never require a user and must never surface an
@@ -288,14 +320,20 @@ async def sso_providers(
     anonymous path resolves system-level licenses only — org-level licenses
     are unreachable pre-auth.
 
-    OIDC providers are merged from the sso_providers DB table (preferred) and
-    the env-var fallback, deduplicated by provider_id. The DB read goes through
-    the system session (``modulo_system`` role, instance-global) so the login
-    page reflects every org's enabled providers; when the system read returns
-    nothing (unprovisioned role), fall back to the app session scoped to the
-    first org (single-org self-hosted behaviour). SAML is enabled if any enabled
-    SAML provider exists in the DB, or if env-var SAML is fully configured
-    (enabled + license + metadata).
+    FAR-1978 — the response is SCOPED. ``display_name`` is admin-chosen free
+    text and can name a tenant, so an anonymous caller must never read a
+    provider row from an org they did not resolve by slug:
+
+    - Single-org instance (exactly one login-active org): that org's enabled
+      OIDC providers (filtered by ``organisation_id``) plus env-var providers.
+      This is the only path the single-org login page (`LoginView.vue`) uses.
+    - Zero or more than one login-active org: environment-level configuration
+      only — env-var OIDC providers and env-var SAML. No DB provider name is
+      listed.
+
+    SAML is enabled on the single-org path if any enabled SAML provider exists
+    in the DB, or if env-var SAML is fully configured (enabled + license +
+    metadata); on the multi-org path only the env-var configuration counts.
     """
     plan = await _anonymous_plan_context(settings, session)
     if not plan.feature_enabled("sso"):
@@ -303,15 +341,18 @@ async def sso_providers(
 
     try:
         async with session.begin():
-            oidc_providers = await _list_enabled_oidc_global(system_session, session)
-            db_ids = {p.provider_id for p in oidc_providers}
+            scoped_org = await _single_login_active_org(session)
+            db_oidc_providers: list[Any] = (
+                [] if scoped_org is None else await _list_enabled_oidc_for_org(system_session, session, scoped_org.id)
+            )
+            db_ids = {p.provider_id for p in db_oidc_providers}
             oidc_list: list[dict[str, str]] = [
                 {
                     "provider_id": p.provider_id,
                     "display_name": p.name or getattr(p, "preset", "custom"),
                     "preset": getattr(p, "preset", "custom"),
                 }
-                for p in oidc_providers
+                for p in db_oidc_providers
                 if p.provider_id
             ]
 
@@ -326,7 +367,11 @@ async def sso_providers(
                         }
                     )
 
-            saml_enabled = await is_saml_available(settings, system_session, session)
+            saml_enabled = (
+                await is_saml_available(settings, system_session, session)
+                if scoped_org is not None
+                else _env_saml_available(settings)
+            )
             return SsoProvidersResponse(
                 oidc=[OidcProviderInfo(**p) for p in oidc_list],
                 saml=saml_enabled,

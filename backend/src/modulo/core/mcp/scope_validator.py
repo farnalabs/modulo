@@ -59,6 +59,7 @@ __all__ = [
     "MCPAuthorizationError",
     "MCPConfigurationError",
     "MCPSystemAdminRequiredError",
+    "check_node_allowed_tools",
     "check_tool_scope",
     "classify_caller_scope",
     "get_request_allowed_tools",
@@ -708,7 +709,7 @@ def _denial_message(
     """
     # Leg 1: node allowed_tools narrowing.
     if allowed_set is not None and normalized not in allowed_set:
-        return f"Tool '{tool_name}' is outside the node's allowed_tools scope"
+        return _allowed_tools_denial_message(tool_name)
 
     # Leg 2: resolution.
     permission_key = _permission_key_for(normalized, act)
@@ -742,3 +743,56 @@ def _denial_message(
     if _tool_requires_system_admin(normalized) and not is_system_admin:
         return f"{tool_name} requires system admin role"
     return f"Tool '{tool_name}' access denied"
+
+
+def _allowed_tools_denial_message(tool_name: str) -> str:
+    """The leg-1 (node ``allowed_tools`` narrowing) refusal message.
+
+    Shared by ``_denial_message`` and ``check_node_allowed_tools`` so the two
+    enforcement sites cannot diverge on the caller-facing text.
+    """
+    return f"Tool '{tool_name}' is outside the node's allowed_tools scope"
+
+
+def check_node_allowed_tools(tool_name: str, allowed_tools: Sequence[str] | None = None) -> None:
+    """Enforce ONLY the node ``allowed_tools`` leg of the tool-scope decision.
+
+    FAR-1976: a handful of read-only MCP tools (the chokepoint-bypassing set
+    pinned in ``tests/unit/test_mcp_structural_coverage.py``) declare no
+    role/system-admin requirement, so their handlers never route through
+    ``check_tool_scope`` — and therefore never reach its node-level
+    ``allowed_tools`` narrowing leg either. Those handlers call this helper to
+    apply EXACTLY that one leg, so a node's ``capability_scope.allowed_tools``
+    bounds them too ("read-only" is not the same as "in scope").
+
+    Deliberately does NOT re-derive the role, caller-scope, grant or
+    system-admin legs: these tools declare none of them, and re-deriving them
+    here would change their semantics.
+
+    Args:
+        tool_name: the tool name being dispatched (validated and normalised
+            exactly as ``check_tool_scope`` does — strip + lower-case).
+        allowed_tools: the resolved allow-list, or ``None`` to fall back to the
+            request-scoped value (``get_request_allowed_tools()``) — the same
+            source ``check_tool_scope`` reads. ``None`` (after the fallback) =
+            UNRESTRICTED/legacy; an explicit empty sequence is
+            deny-by-default.
+
+    Raises:
+        MCPAuthorizationError: when a node scope is present and ``tool_name``
+            is not on it. The message is byte-identical to the chokepoint's
+            leg-1 refusal.
+    """
+    if not isinstance(tool_name, str):
+        raise MCPAuthorizationError("Tool name must be a string")
+
+    normalized = _sanitize(tool_name, name="tool_name")
+
+    if allowed_tools is None:
+        allowed_tools = get_request_allowed_tools()
+    if allowed_tools is None:
+        return
+
+    allowed_set = {_sanitize(t, name="allowed_tool") for t in allowed_tools}
+    if normalized not in allowed_set:
+        raise MCPAuthorizationError(_allowed_tools_denial_message(tool_name))

@@ -35,6 +35,13 @@ module.exports = {
         'accent-foreground': 'hsl(var(--accent-foreground))',
         destructive: 'hsl(var(--destructive))',
         'destructive-foreground': 'hsl(var(--destructive-foreground))',
+        // Fill-safe counterpart of `destructive` for text-bearing SOLID fills
+        // (badges, destructive buttons). `--destructive` is an accent hue, so
+        // `--destructive-foreground` on it is only 3.22:1 (dark) / 3.30:1
+        // (agent) - below the WCAG AA 4.5:1 floor. Use `bg-destructive-fill`
+        // with `text-destructive-foreground` on every solid destructive
+        // surface that carries text.
+        'destructive-fill': 'hsl(var(--destructive-fill))',
         success: 'hsl(var(--success))',
         warning: 'hsl(var(--warning))',
         // FAR-1530/FAR-1587: text-safe counterpart of `warning`. `--warning` is
@@ -45,6 +52,14 @@ module.exports = {
         // themes. Use `text-warning-text` - never `text-warning` - for warning
         // COLOURED TEXT (see style.css for the measured ratios).
         'warning-text': 'hsl(var(--warning-text))',
+        // FAR-1913: text-safe counterpart of `destructive`. `--destructive` is
+        // tuned as a FILL/accent hue, so destructive COLOURED TEXT on a
+        // bg-destructive/* tint is only 4.32:1 (dark) / 3.46:1 (light) - below
+        // the WCAG AA 4.5:1 floor. `--destructive-text` keeps the hue and shifts
+        // the lightness so every destructive-text-on-tint pairing clears AA (see
+        // style.css for the measured ratios). Use `text-destructive-text` -
+        // never `text-destructive` - for destructive COLOURED TEXT on a tint.
+        'destructive-text': 'hsl(var(--destructive-text))',
         pending: 'hsl(var(--pending))',
         preview: 'hsl(var(--preview))',
         border: 'hsl(var(--border))',

@@ -1855,16 +1855,21 @@ class TestOidcProcessCallbackDb:
 class TestSsoProvidersEndpointDb:
     def test_returns_db_configured_provider(self, client: TestClient) -> None:
 
-        db_provider = SimpleNamespace(provider_id="auth0", name="Auth0 SSO", preset="auth0")
+        org_id = uuid.uuid4()
+        db_provider = SimpleNamespace(provider_id="auth0", name="Auth0 SSO", preset="auth0", organisation_id=org_id)
         with (
             patch(
                 "modulo.core.license.get_license",
                 return_value=SimpleNamespace(tier="team", features=["sso"], expires_at=None),
             ),
             patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+            # FAR-1978: DB providers are only advertised on the single-org login
+            # path, so the fixture must resolve exactly one login-active org.
+            patch("modulo.api.routes.sso.list_login_active_orgs", new_callable=AsyncMock) as mock_orgs,
             patch("modulo.api.routes.sso.list_enabled_oidc_providers", new_callable=AsyncMock) as mock_list,
             patch("modulo.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock) as mock_saml,
         ):
+            mock_orgs.return_value = [SimpleNamespace(id=org_id)]
             mock_list.return_value = [db_provider]
             mock_saml.return_value = None
             resp = client.get("/api/v1/auth/sso/providers")

@@ -277,7 +277,7 @@ async def test_read_log_tail_via_provider_resolves_e2b_override(monkeypatch: pyt
             tails.append(b'{"other": 1}')
             return tails[-1]
 
-    async def _fake_builder(api_key: str):
+    def _fake_builder(api_key: str):
         captured.append(api_key)
         return _FakeProvider()
 

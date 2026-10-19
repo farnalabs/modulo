@@ -548,11 +548,12 @@ async def test_oidc_callback_success_provisions_and_redirects_to_frontend_url(
         with (
             _idp_stubbed(world, id_token),
         ):
+            state = _bind_browser(client, world.provider_id)
             resp = await client.get(
                 _callback_url(world.provider_id),
                 params={
                     "code": "authorization-code-CB",
-                    "state": _bind_browser(client, world.provider_id),
+                    "state": state,
                 },
             )
     finally:
@@ -614,11 +615,12 @@ async def test_oidc_callback_redirect_base_falls_back_to_public_url_when_fronten
     client = await oidc_app(frontend_url="")
     try:
         with _idp_stubbed(world, id_token):
+            state = _bind_browser(client, world.provider_id)
             resp = await client.get(
                 _callback_url(world.provider_id),
                 params={
                     "code": "authorization-code-FB",
-                    "state": _bind_browser(client, world.provider_id),
+                    "state": state,
                 },
             )
     finally:
@@ -645,11 +647,12 @@ async def test_oidc_callback_join_gate_denial_is_clean_redirect_and_leaves_no_or
     client = await oidc_app()
     try:
         with _idp_stubbed(world, id_token):
+            state = _bind_browser(client, world.provider_id)
             resp = await client.get(
                 _callback_url(world.provider_id),
                 params={
                     "code": "authorization-code-DENIED",
-                    "state": _bind_browser(client, world.provider_id),
+                    "state": state,
                 },
             )
     finally:
@@ -694,11 +697,12 @@ async def test_oidc_callback_consumes_pending_invitation_for_non_allowlisted_dom
     client = await oidc_app()
     try:
         with _idp_stubbed(world, id_token):
+            state = _bind_browser(client, world.provider_id)
             resp = await client.get(
                 _callback_url(world.provider_id),
                 params={
                     "code": "authorization-code-INV",
-                    "state": _bind_browser(client, world.provider_id),
+                    "state": state,
                 },
             )
     finally:

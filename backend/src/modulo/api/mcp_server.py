@@ -106,6 +106,11 @@ from modulo.auth.api_key import (
     revoke_api_key as auth_revoke_api_key,
 )
 from modulo.auth.dependencies import resolve_role_from_membership
+from modulo.auth.human_linkage import (
+    HumanLinkage,
+    required_permission_for_action,
+    resolve_human_linkage,
+)
 from modulo.auth.oauth import (
     check_oauth_token_family_valid,
     clamp_oauth_role,
@@ -152,7 +157,11 @@ from modulo.core.documentation_indexer import DocumentationIndex
 # under concurrent multi-tenant load a global would resolve to whichever org
 # authenticated last, leaking cross-tenant data.
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
-from modulo.core.feature_flags import get_registry, resolve_plan_context
+from modulo.core.feature_flags import (
+    get_registry,
+    resolve_mcp_human_linked_hitl_authority,
+    resolve_plan_context,
+)
 from modulo.core.hitl_email_alerts import normalize_hitl_email_prefs
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
@@ -176,6 +185,7 @@ from modulo.core.logging_config import org_id_var
 from modulo.core.mcp.scope_validator import (
     MCPAuthorizationError,
     MCPSystemAdminRequiredError,
+    check_node_allowed_tools,
     check_tool_scope,
     set_request_allowed_tools,
 )
@@ -425,6 +435,11 @@ _ctx_key_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_key
 _ctx_auth_token: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_token")
 _ctx_user_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_user_id")
 _ctx_auth_type: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_type")
+# ADR 063 step 1 (FAR-1957): the OAuth access token's signed ``token_family``
+# claim, set only on the OAuth dispatch path. ``None`` for API keys / regular
+# JWTs (no signed family to observe). Read by the human-linkage resolver; never
+# populated from a client-supplied field.
+_ctx_token_family: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_token_family", default=None)
 _ctx_team_id: contextvars.ContextVar[uuid.UUID | None] = contextvars.ContextVar("mcp_team_id")
 # FAR-620: the credential's caller scope — 'org' (org-wide/team/run keys),
 # 'user' (a user-scoped API key, a regular JWT session, or an OAuth token),
@@ -613,6 +628,50 @@ def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
         # pre-centralisation response.
         _log_system_admin_denial(tool_name)
         raise MCPAuthorizationError(str(exc)) from None
+
+
+def _check_node_allowed_tools(tool_name: str) -> None:
+    """Enforce ONLY the node-level allowed_tools narrowing (FAR-1976).
+
+    The handful of read-only MCP tools that bypass ``_check_agent_tool_scope``
+    (they declare no role/system-admin requirement, so they have no full-
+    chokepoint leg to route through) must still honour a node's
+    ``capability_scope.allowed_tools`` — the chokepoint's OTHER leg. Each such
+    handler calls this helper at its top, before any DB/work, so "read-only" is
+    not mistaken for "in scope".
+
+    Reads the SAME request-scoped source as the chokepoint
+    (``_ctx_node_allowed_tools_val()``, with the shared resolver's own
+    request-header fallback); ``None`` = UNRESTRICTED/legacy. Raises
+    ``MCPAuthorizationError`` with the byte-identical chokepoint leg-1 message,
+    so the handler's ``except MCPAuthorizationError`` arm produces the same
+    ``insufficient_scope`` envelope a full-chokepoint refusal does. The role
+    and system-admin legs are deliberately NOT re-derived here — these tools
+    declare neither, and re-deriving them would change their semantics.
+    """
+    check_node_allowed_tools(tool_name, allowed_tools=_ctx_node_allowed_tools_val())
+
+
+def _resource_node_scope_error(tool_name: str) -> str | None:
+    """Return the resource-body refusal when a node scope excludes *tool_name*.
+
+    FAR-1976: ``@mcp.resource`` handlers returned the same tenant data the
+    gated tools expose, so a run-scoped node whose ``allowed_tools`` excluded a
+    tool could still read it through ``resources/read``. Each tool-backed
+    resource gates under its duplicated tool's name via this adapter, which
+    applies the SAME node-scope leg as the tool handlers but renders the
+    refusal as resource text (MCP resources return plain strings, not the tool
+    handlers' structured error envelope).
+
+    Returns ``None`` when the read is allowed (including the ``None`` /
+    unrestricted legacy case), otherwise the ``error: insufficient_scope: ...``
+    body to return verbatim.
+    """
+    try:
+        _check_node_allowed_tools(tool_name)
+    except MCPAuthorizationError as exc:
+        return f"error: insufficient_scope: {exc}"
+    return None
 
 
 # FAR-1184: raising or clearing a pipeline's spend circuit-breaker threshold
@@ -1549,6 +1608,9 @@ async def _authenticate_api_key(
         _ctx_user_id.set(key.account_id)
         _ctx_auth_token.set(token)
         _ctx_auth_type.set("api_key")
+        # ADR 063 step 1: an API key carries no signed token family — fail
+        # closed for human-linkage (linkage is always "none" for an mk_ key).
+        _ctx_token_family.set(None)
         # FAR-620: the credential's caller scope drives the tool-scope
         # caller-scope leg. The isinstance guard keeps test doubles (MagicMock
         # rows) on the fail-closed None; real rows always carry a string.
@@ -1705,6 +1767,9 @@ async def _authenticate_oauth_jwt(
         # auth_type 'jwt' (distinct from OAuth tokens) and caller scope
         # 'user' (identity-bound, eligible for caller-scoped tools).
         _ctx_auth_type.set("jwt")
+        # ADR 063 step 1: a non-OAuth JWT is structurally excluded from
+        # human-linkage (including a browser-class password JWT — FAR-634).
+        _ctx_token_family.set(None)
         _ctx_key_scope.set("user")
         _ctx_key_grants.set(None)
         _ctx_team_id.set(None)  # user tokens carry no team boundary
@@ -1845,6 +1910,9 @@ async def _finalize_oauth_principal(
     _ctx_user_id.set(claims.account_id)
     _ctx_auth_token.set(token)
     _ctx_auth_type.set("oauth")
+    # ADR 063 step 1: the signed token family is the observed half of the
+    # human-linkage check (condition 1). Cleared on every other auth path.
+    _ctx_token_family.set(claims.token_family)
     # FAR-620: an OAuth token is the user's own identity — caller scope
     # 'user' (identity-bound, eligible for caller-scoped tools).
     _ctx_key_scope.set("user")
@@ -2324,6 +2392,9 @@ async def list_pipelines_tool(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("list_pipelines")
         org_id = _ctx_org_id_val()
         from modulo.db.crud.pipeline import list_pipelines
 
@@ -2347,6 +2418,8 @@ async def list_pipelines_tool(
             "next_cursor": result.next_cursor,
             "has_more": result.has_more,
         }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("list_pipelines_tool failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -3673,6 +3746,9 @@ async def get_pipeline_graph_tool(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("get_pipeline_graph")
         from modulo.db.crud.pipeline import get_pipeline_graph
 
         org_id = _ctx_org_id_val()
@@ -3707,6 +3783,8 @@ async def get_pipeline_graph_tool(
             "node_count": len(masked_nodes),
             "edge_count": len(edge_dicts),
         }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("get_pipeline_graph_tool failed")
         return {
@@ -4920,6 +4998,9 @@ def _run_status_node(
 async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    # FAR-1976: this tool bypasses the full chokepoint, so it must still
+    # enforce the node allowed_tools narrowing leg explicitly.
+    _check_node_allowed_tools("get_run_status")
     org_id = _ctx_org_id_val()
     rid, rid_err = _parse_uuid_param(run_id, "run_id")
     if rid_err:
@@ -4955,6 +5036,8 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
     try:
         return await _get_run_status_impl(run_id, detail)
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("get_run_status failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -6177,15 +6260,39 @@ def _hitl_human_only_denial_payload(
     review_id: str,
     action: str,
     verdict: str,
+    linkage: HumanLinkage,
 ) -> dict[str, Any]:
-    """The shared ``hitl.human_only_denied`` audit payload for MCP denials (FAR-634)."""
+    """The ``hitl.human_only_denied`` audit payload for MCP denials (FAR-634, ADR 063).
+
+    Records HOW linkage was established, with per-field provenance, never a
+    collapsed boolean:
+
+    * ``auth_type`` — **observed** credential class (``api_key``/``oauth``/``jwt``);
+    * ``account_id`` / ``token_family`` — **observed** (the credential's account
+      and the signed token-family claim, both ``None`` when the credential
+      carries no such value);
+    * ``principal_kind`` — **derived** from ``Account.kind`` + live membership
+      (``None`` when not evaluated because the credential is not an OAuth
+      candidate — the only class that can be human-linked);
+    * ``linkage`` — **derived** step-1 conditions (``none``/``oauth_consent``);
+    * ``verdict`` — **derived** from ``human_only_denial``.
+
+    The pre-ADR-063 payload named its auth-type field ``principal_kind``
+    (an auth type, not a principal kind) and hard-coded ``client_kind: None``.
+    ``client_kind`` is REMOVED: MCP has no server-derived value for it, and a
+    field that is always ``None`` is indistinguishable from one never
+    evaluated. No client-supplied field is written.
+    """
     return {
         "run_id": str(run_id),
         "review_id": review_id,
         "action": action,
         "surface": "mcp",
-        "principal_kind": _ctx_auth_type.get(None) or "api_key",
-        "client_kind": None,
+        "auth_type": linkage.auth_type,
+        "account_id": str(linkage.account_id) if linkage.account_id is not None else None,
+        "token_family": linkage.token_family,
+        "principal_kind": linkage.principal_kind,
+        "linkage": linkage.linkage,
         "reason": verdict,
     }
 
@@ -6198,6 +6305,7 @@ async def _append_hitl_human_only_denied_audit(
     review_id: str,
     action: str,
     verdict: str,
+    linkage: HumanLinkage,
 ) -> None:
     """Append the ``hitl.human_only_denied`` audit event for an MCP denial (FAR-634).
 
@@ -6228,6 +6336,7 @@ async def _append_hitl_human_only_denied_audit(
                 review_id=review_id,
                 action=action,
                 verdict=verdict,
+                linkage=linkage,
             ),
         )
     except asyncio.CancelledError:
@@ -6250,10 +6359,7 @@ async def _check_human_only_gate(
     """Return an error dict when the gate is human_only, else ``None``.
 
     Called for the ``claim``, ``approve`` and ``deliver_manual`` actions
-    (FAR-609: claim is human_only too — MCP clients authenticate with API
-    keys, so a human_only gate can be neither CLAIMED nor decided through
-    MCP): a ``human_only`` gate can only be decided by a browser-authenticated
-    human, never by an API-key/MCP client. ``reject`` is not mechanically
+    (FAR-609: claim is human_only too). ``reject`` is not mechanically
     intercepted but it is NOT an agent escape hatch: reject requires a
     claim_token, and the claim action is denied for MCP callers on a
     human_only (now the default) gate, so an agent can neither claim, decide,
@@ -6263,45 +6369,73 @@ async def _check_human_only_gate(
 
     FAR-610: the gate's config is resolved from the RUN's snapshot graph
     (falling back to the live pipeline edges, then the live HITL-node config)
-    via the shared resolver (``db.crud.hitl_review_config``). The previous
-    implementation selected the pipeline's edges with NO source/target filter
-    and read ``.scalars().first()`` — the first edge in arbitrary order — and
-    checked THAT edge's config, so on the PR Reviewer pipeline (first edge
-    carried no ``hitl_review_config``) MCP approvals were ALLOWED on a
-    ``human_only`` gate elsewhere in the graph.
+    via the shared resolver (``db.crud.hitl_review_config``).
 
     Fail closed (FAR-610 review): when the config is UNRESOLVABLE but the
     gate actually fired (a claim row exists —
     ``hitl_review_exists_but_unresolved``), the human_only policy cannot be
     verified, so the decision is denied rather than silently allowed. The
-    error reuses the ``human_only_gate`` code (clients already handle it)
-    with a detail naming the actual reason. The verdict itself lives in the
-    shared pure function ``hitl_review_config.human_only_denial`` so REST and
-    MCP enforce one policy with one wording (FAR-610 review); the claim
-    lookup runs only when the config is unresolvable.
+    verdict itself lives in the shared pure function
+    ``hitl_review_config.human_only_denial`` so REST and MCP enforce one policy
+    with one wording (FAR-610 review).
 
-    MCP stays deny-BY-DEFAULT regardless of credential class (FAR-634): even
-    a browser-class JWT through the MCP surface is denied — the browser UI is
-    the human path, and agent sessions hold the admin password (a
-    password-minted JWT is indistinguishable from a browser login at
-    issuance), so relaxing the MCP denial would reopen the exact attack path
-    FAR-610 closed. Every denial emits a warning log + the
-    ``hitl.human_only_denied`` audit event (FAR-634) before the error dict is
-    returned.
+    ADR 063 step 1 (FAR-1957): ``non_browser_credential`` is COMPUTED from the
+    single shared authority resolver (``auth.human_linkage.resolve_human_linkage``)
+    over the verified credential — no longer a hard-coded ``True``. A
+    consent-derived OAuth credential belonging to a live human principal whose
+    grant set covers the action is *human-linked*; when the org-wide
+    ``mcp_human_linked_hitl_authority`` flag is ON (the default), such a
+    credential is treated as a browser-class decision and may decide the gate.
+    Every other credential — ``mk_`` API key, non-OAuth JWT (including a
+    browser-class password JWT, FAR-634), service account, blacklisted family,
+    inactive account/membership, missing scope — and every verification failure
+    resolves to deny. ``deliver_manual`` stays browser-only in step 1 (ADR 035).
+    Every denial emits a warning log + the ``hitl.human_only_denied`` audit
+    event (FAR-634) before the error dict is returned.
     """
     from modulo.db.crud.hitl_review_config import (
         EVENT_HUMAN_ONLY_DENIED,
         hitl_review_exists_but_unresolved,
         human_only_denial,
+        human_only_effective,
         resolve_hitl_review_config,
     )
 
     config = await resolve_hitl_review_config(s, run_id=run.id, review_id=review_id, org_id=org_id, run=run)
+    if config is not None and not human_only_effective(config):
+        # An explicitly non-human_only gate cannot deny ANY credential, so the
+        # linkage + org-flag reads below would be wasted work (and a needless
+        # second DB session for an OAuth caller). Equivalent to letting
+        # ``human_only_denial`` return None.
+        return None
     gate_fired = False
     if config is None:
         gate_fired = await hitl_review_exists_but_unresolved(s, run_id=run.id, review_id=review_id, org_id=org_id)
-    # MCP callers authenticate with API keys — always a non-browser credential.
-    verdict = human_only_denial(config, non_browser_credential=True, gate_fired=gate_fired)
+
+    # ADR 063 step 1: compute the denial input from the verified linkage.
+    auth_type = _ctx_auth_type.get(None) or "unknown"
+    linkage = await resolve_human_linkage(
+        s,
+        org_id=org_id,
+        auth_type=auth_type,
+        account_id=_ctx_user_id.get(None),
+        token_family=_ctx_token_family.get(None),
+        grants=_ctx_key_grants.get(None),
+        required_permission=required_permission_for_action(action),
+    )
+    # The org-wide escape hatch (default ON). Read only when the credential IS
+    # human-linked: for a not-linked credential the verdict is already deny and
+    # the flag is irrelevant.
+    human_linked_authority = linkage.linked and await resolve_mcp_human_linked_hitl_authority(
+        org_id=org_id,
+        flag_name="mcp_human_linked_hitl_authority",
+    )
+    # deliver_manual injects the run's output directly (ADR 035) and stays
+    # browser-only in step 1 — never honoured over MCP, even for a human-linked
+    # credential.
+    allow_via_linkage = human_linked_authority and action != "deliver_manual"
+    non_browser_credential = not allow_via_linkage
+    verdict = human_only_denial(config, non_browser_credential=non_browser_credential, gate_fired=gate_fired)
     if verdict is not None:
         _log.warning(
             EVENT_HUMAN_ONLY_DENIED,
@@ -6310,7 +6444,8 @@ async def _check_human_only_gate(
                 "review_id": review_id,
                 "action": action,
                 "surface": "mcp",
-                "principal_kind": _ctx_auth_type.get(None) or "api_key",
+                "auth_type": linkage.auth_type,
+                "linkage": linkage.linkage,
             },
         )
         await _append_hitl_human_only_denied_audit(
@@ -6320,6 +6455,7 @@ async def _check_human_only_gate(
             review_id=review_id,
             action=action,
             verdict=verdict,
+            linkage=linkage,
         )
         return {"error": "human_only_gate", "detail": verdict}
     return None
@@ -10513,12 +10649,17 @@ async def search_documentation(query: str, section: str | None = None) -> dict[s
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("search_documentation")
         index = _get_doc_index()
         results = index.search(query, section=section)
         if not results:
             return {"results": "No documentation found for query.", "count": 0}
         formatted = index.format_results(results)
         return {"results": formatted, "count": len(results)}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except Exception as exc:
         _log.exception("search_documentation failed")
         return _tool_exception_error("Failed to search documentation", exc, "mcp.search_documentation")
@@ -10536,6 +10677,9 @@ async def get_integration_status() -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("get_integration_status")
         from sqlalchemy import func, select
 
         from modulo.db.models.connector_instance import ConnectorInstance
@@ -10613,6 +10757,8 @@ async def get_integration_status() -> dict[str, Any]:
             "model_backends": backend_list,
             "trigger_count": trigger_count,
         }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("get_integration_status failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -10710,6 +10856,9 @@ async def get_available_features() -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("get_available_features")
         from modulo.core.feature_flags import resolve_plan_context
 
         org_id = _ctx_org_id_val()
@@ -10732,6 +10881,8 @@ async def get_available_features() -> dict[str, Any]:
             lines.append(f"| {flag.name} | {flag.tier} | {available} |")
 
         return {"results": "\n".join(lines), "tier": current_tier, "feature_count": len(all_flags)}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("get_available_features failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -10819,6 +10970,9 @@ async def list_schemas(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("list_schemas")
         org_id = _ctx_org_id_val()
         lim = max(1, min(limit, 100))
 
@@ -10840,6 +10994,8 @@ async def list_schemas(
             "next_cursor": result.next_cursor,
             "has_more": result.has_more,
         }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("list_schemas failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -11773,6 +11929,9 @@ async def validate_payload(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("validate_payload")
         from jsonschema import Draft202012Validator, ValidationError
         from jsonschema.exceptions import SchemaError as JsSchemaError
 
@@ -11823,6 +11982,8 @@ async def validate_payload(
                 "valid": False,
                 "errors": [{"path": "(schema)", "message": f"Invalid schema definition: {exc.message}"}],
             }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("validate_payload failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -12016,6 +12177,10 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
 async def resource_pipelines() -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the list_pipelines tool — same node-scope gate.
+    denied = _resource_node_scope_error("list_pipelines")
+    if denied is not None:
+        return denied
     from modulo.db.crud.pipeline import list_pipelines
 
     org_id = _ctx_org_id_val()
@@ -12055,6 +12220,10 @@ def _format_run_line(r: Any, child_rollups: dict[Any, tuple[Any, int]], cost_bre
 async def resource_pipeline_runs(pipeline_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the list_runs tool — same node-scope gate.
+    denied = _resource_node_scope_error("list_runs")
+    if denied is not None:
+        return denied
     from modulo.db.crud.run import list_runs
 
     org_id = _ctx_org_id_val()
@@ -12094,6 +12263,11 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
 async def resource_pipeline_detail(pipeline_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: exposes the pipeline metadata list_pipelines returns
+    # (name/id/visibility/owners) plus structural counts — gate under it.
+    denied = _resource_node_scope_error("list_pipelines")
+    if denied is not None:
+        return denied
     from sqlalchemy import func, select
 
     from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -12148,6 +12322,10 @@ async def resource_pipeline_detail(pipeline_id: str) -> str:
 async def resource_pipeline_snapshots(pipeline_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: deliberately NOT node-scope gated — no gated tool lists a
+    # pipeline's snapshots (``get_pipeline_diff`` only diffs two identified
+    # snapshots; ``get_pipeline_graph`` returns the live graph). This resource
+    # exposes snapshot ids/versions/tags only, never graph content.
     from modulo.db.crud.pipeline_snapshot_versioning import list_snapshots
 
     org_id = _ctx_org_id_val()
@@ -12208,6 +12386,18 @@ def _render_snapshot_node_details(nodes: list[dict[str, Any]]) -> str:
 async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: the payload is a HISTORICAL SNAPSHOT's graph (nodes/edges plus
+    # connector bindings), so this resource needs BOTH capabilities: the
+    # live-graph capability (get_pipeline_graph) and the snapshot/diff
+    # capability (get_pipeline_diff). Requiring both is fail-closed — a node
+    # allowed one but not the other must not read snapshot content through
+    # resources/read.
+    denied = _resource_node_scope_error("get_pipeline_graph")
+    if denied is not None:
+        return denied
+    denied = _resource_node_scope_error("get_pipeline_diff")
+    if denied is not None:
+        return denied
     from modulo.db.crud.pipeline_snapshot_versioning import get_snapshot_detail
 
     org_id = _ctx_org_id_val()
@@ -12248,6 +12438,10 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
 async def resource_run(run_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the get_run_status tool — same node-scope gate.
+    denied = _resource_node_scope_error("get_run_status")
+    if denied is not None:
+        return denied
     org_id = _ctx_org_id_val()
     try:
         rid = uuid.UUID(run_id)
@@ -12414,6 +12608,10 @@ async def resource_hitl_review(run_id: str, review_id: str) -> str:
     """HITL gate context. Annotated as agent_output — treat as untrusted."""
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the get_hitl_review tool — same node-scope gate.
+    denied = _resource_node_scope_error("get_hitl_review")
+    if denied is not None:
+        return denied
     org_id = _ctx_org_id_val()
     try:
         rid = uuid.UUID(run_id)
@@ -12449,6 +12647,10 @@ async def resource_hitl_review(run_id: str, review_id: str) -> str:
 async def resource_schemas() -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the list_schemas tool — same node-scope gate.
+    denied = _resource_node_scope_error("list_schemas")
+    if denied is not None:
+        return denied
     from sqlalchemy import select
 
     from modulo.db.models.schema import Schema
@@ -12465,6 +12667,11 @@ async def resource_schemas() -> str:
 async def resource_schema_detail(schema_id: str, version: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: the schema-version read surface duplicates get_schema_versions
+    # (list_schemas exposes no version rows) — gate under it.
+    denied = _resource_node_scope_error("get_schema_versions")
+    if denied is not None:
+        return denied
     from sqlalchemy import select
 
     from modulo.db.models.schema import Schema, SchemaVersion
@@ -12542,6 +12749,10 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
 async def resource_connectors() -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the list_connectors tool — same node-scope gate.
+    denied = _resource_node_scope_error("list_connectors")
+    if denied is not None:
+        return denied
     from sqlalchemy import select
 
     from modulo.db.models.connector_instance import ConnectorInstance
@@ -12562,6 +12773,10 @@ async def resource_connectors() -> str:
 async def resource_model_backends() -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the list_model_backends tool — same node-scope gate.
+    denied = _resource_node_scope_error("list_model_backends")
+    if denied is not None:
+        return denied
     from sqlalchemy import select
 
     from modulo.db.models.model_backend import ModelBackend
@@ -12584,6 +12799,10 @@ async def resource_library() -> str:
     """
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the search_library tool — same node-scope gate.
+    denied = _resource_node_scope_error("search_library")
+    if denied is not None:
+        return denied
     try:
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
@@ -12617,6 +12836,11 @@ async def resource_library_detail(primitive_type: str, slug: str) -> str:
     """Get details of a single library primitive by type and slug."""
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: the library browse/read surface duplicates search_library —
+    # gate under it (there is no separate library-primitive-read tool).
+    denied = _resource_node_scope_error("search_library")
+    if denied is not None:
+        return denied
     try:
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:

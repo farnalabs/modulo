@@ -111,7 +111,15 @@ def _is_hitl_budget_path(path: str) -> bool:
 class _NoopRateLimiter:
     """No-op rate limiter used when Redis is unavailable — allows all requests."""
 
-    async def check(self, _key: str, max_requests: int, window_s: int = 60) -> bool:
+    async def check(self, _key: str, _max_requests: int, _window_s: int = 60) -> bool:
+        """Interface-compatible ``check`` (mirrors ``RateLimiterRegistry.check``).
+
+        ``_key`` / ``_max_requests`` / ``_window_s`` are intentionally unused:
+        the noop limiter is the degraded-mode registry that allows every
+        request, but it must still present the registry's awaited signature
+        because ``RateLimitMiddleware.dispatch`` awaits ``self._registry.check``
+        over the ``RateLimiterRegistry | _NoopRateLimiter`` union.
+        """
         return True
 
 
@@ -156,6 +164,58 @@ def _create_registry(settings: Settings) -> RateLimiterRegistry | _NoopRateLimit
     redis_available = False
     _log.warning("ratelimit.in_memory_mode")
     return _NoopRateLimiter()
+
+
+def _principal_client_key(principal: Any, path: str) -> str | None:
+    """Rate-limit key from an outer-middleware principal, or ``None`` if unknown.
+
+    API keys bucket by ``org:prefix``; users by ``org:user``. An unrecognised
+    principal type falls through (``None``) so the caller tries the next source.
+    """
+    if principal["type"] == "api_key":
+        return f"ak:{principal['org_id']}:{principal['prefix']}:{path}"
+    if principal["type"] == "user":
+        return f"user:{principal['org_id']}:{principal['user_id']}:{path}"
+    return None
+
+
+def _authorization_client_key(auth_header: str, secret_key: str, path: str) -> str | None:
+    """Rate-limit key from the ``Authorization`` header, or ``None``.
+
+    ``mk_`` API keys bucket by their prefix; a JWT is signature-verified before
+    its claims are trusted (unverified claims can be forged to rotate buckets).
+    A malformed/absent/undecodable value falls through (``None``).
+    """
+    if not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header[len("Bearer ") :].strip()
+    if token.startswith("mk_"):
+        prefix = token[3:11]
+        return f"ak:none:{prefix}:{path}"
+    try:
+        claims = jwt.decode(token, secret_key, algorithms=["HS256"])
+        org_id = claims.get("org_id", "")
+        user_id = claims.get("user_id", "") or claims.get("account_id", "")
+        if org_id and user_id:
+            return f"user:{org_id}:{user_id}:{path}"
+    except Exception as exc:
+        _log.debug("ratelimit.jwt_decode_failed", extra={"error": str(exc)})
+    return None
+
+
+def _ip_client_key(request: Request, path: str) -> str:
+    """Fallback IP-based rate-limit key.
+
+    Uses ``request.client.host`` (the actual peer IP) instead of the first
+    ``X-Forwarded-For`` value, which is attacker-controlled when the proxy does
+    not strip it.
+    """
+    ip = "unknown"
+    if request.client is not None and request.client.host:
+        ip = request.client.host
+    elif forwarded := request.headers.get("X-Forwarded-For", ""):
+        ip = forwarded.split(",")[0].strip()
+    return f"ip:{ip}:{path}"
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -204,6 +264,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     GET_RULES: ClassVar[list[RateLimitRule]] = [
         RateLimitRule(path_prefix="/api/v1/auth/login-context", max_requests=60, window_s=60),
         RateLimitRule(path_prefix="/api/v1/auth/org-login/", max_requests=60, window_s=60),
+        # FAR-1978: legacy single-org SSO provider discovery. Pre-auth and
+        # anonymous, so the POST/PUT/PATCH gate never fires for it; without
+        # this rule an anonymous caller could enumerate the discovery surface
+        # unthrottled. The budget matches its two siblings above (60/min/IP) —
+        # no reason to differ: all three answer the same login-page question.
+        RateLimitRule(path_prefix="/api/v1/auth/sso/providers", max_requests=60, window_s=60),
     ]
 
     # PRD §7.18: HITL review actions — 20/min per user, AGGREGATE across
@@ -245,8 +311,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             try:
                 allowed = await self._registry.check(
                     client_key,
-                    max_requests=rule.max_requests,
-                    window_s=rule.window_s,
+                    rule.max_requests,
+                    rule.window_s,
                 )
             except asyncio.CancelledError:
                 raise
@@ -331,41 +397,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # 1. Auth principal set by outer middleware (MCP sub-app)
         principal = request.scope.get("auth_principal")
         if principal:
-            if principal["type"] == "api_key":
-                return f"ak:{principal['org_id']}:{principal['prefix']}:{path}"
-            if principal["type"] == "user":
-                return f"user:{principal['org_id']}:{principal['user_id']}:{path}"
+            principal_key = _principal_client_key(principal, path)
+            if principal_key is not None:
+                return principal_key
 
         # 2. Parse Authorization header — verify JWT before trusting claims
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[len("Bearer ") :].strip()
+        auth_key = _authorization_client_key(request.headers.get("Authorization", ""), self._secret_key, path)
+        if auth_key is not None:
+            return auth_key
 
-            # mk_ API keys: use prefix + path (no bucket rotation via prefix)
-            if token.startswith("mk_"):
-                prefix = token[3:11]
-                return f"ak:none:{prefix}:{path}"
-
-            # JWT: verify signature before trusting claims for rate-limit bucketing.
-            # Unverified claims can be forged to rotate buckets.
-            try:
-                claims = jwt.decode(token, self._secret_key, algorithms=["HS256"])
-                org_id = claims.get("org_id", "")
-                user_id = claims.get("user_id", "") or claims.get("account_id", "")
-                if org_id and user_id:
-                    return f"user:{org_id}:{user_id}:{path}"
-            except Exception as exc:
-                _log.debug("ratelimit.jwt_decode_failed", extra={"error": str(exc)})
-
-        # 3. Fallback to IP-based keying — use request.client.host (the
-        #    actual peer IP) instead of the first X-Forwarded-For value,
-        #    which is attacker-controlled when the proxy doesn't strip it.
-        ip = "unknown"
-        if request.client is not None and request.client.host:
-            ip = request.client.host
-        elif forwarded := request.headers.get("X-Forwarded-For", ""):
-            ip = forwarded.split(",")[0].strip()
-        return f"ip:{ip}:{path}"
+        # 3. Fallback to IP-based keying
+        return _ip_client_key(request, path)
 
 
 # ---------------------------------------------------------------------------

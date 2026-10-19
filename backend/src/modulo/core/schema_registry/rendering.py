@@ -216,6 +216,27 @@ _ALWAYS_KEEP = frozenset(
 # ---------------------------------------------------------------------------
 
 
+def _walk_list_items(node: list[Any], path: str, visit_fn: Any) -> None:
+    """Recurse into the dict elements of a JSON array at *path*.
+
+    Only dict items are descended into (matching the historical traversal);
+    the array index is appended to the child path.
+    """
+    for i, item in enumerate(node):
+        if isinstance(item, dict):
+            _walk_dict_items(item, f"{path}[{i}]", visit_fn)
+
+
+def _walk_dict_items(node: dict[str, Any], path: str, visit_fn: Any) -> None:
+    """Visit each key of a JSON object, recursing into nested dicts/arrays."""
+    for key, value in node.items():
+        visit_fn(key, value, path)
+        if isinstance(value, dict):
+            _walk_dict_items(value, f"{path}.{key}", visit_fn)
+        elif isinstance(value, list):
+            _walk_list_items(value, f"{path}.{key}", visit_fn)
+
+
 def _walk_schema(
     node: Any,
     path: str,
@@ -230,18 +251,9 @@ def _walk_schema(
     Used by both ``_render_provider_strict`` and ``preview_strip_warnings``.
     """
     if isinstance(node, dict):
-        for key, value in node.items():
-            visit_fn(key, value, path)
-            if isinstance(value, dict):
-                _walk_schema(value, f"{path}.{key}", visit_fn)
-            elif isinstance(value, list):
-                for i, item in enumerate(value):
-                    if isinstance(item, dict):
-                        _walk_schema(item, f"{path}.{key}[{i}]", visit_fn)
+        _walk_dict_items(node, path, visit_fn)
     elif isinstance(node, list):
-        for i, item in enumerate(node):
-            if isinstance(item, dict):
-                _walk_schema(item, f"{path}[{i}]", visit_fn)
+        _walk_list_items(node, path, visit_fn)
 
 
 # ---------------------------------------------------------------------------
@@ -307,28 +319,14 @@ def _flatten_refs(
 
     for key, value in schema.items():
         if key == "$ref":
-            if not isinstance(value, str):
-                raise _RefFlattenError(f"$ref must be a string, got {type(value).__name__}")
-            if not _is_local_ref(value):
-                raise _RefFlattenError(f"External $ref not allowed: {value}")
-            # FIX 6: memoise by pointer — count each unique definition once
-            if value in _cache:
-                cached_result, _cached_count_delta = _cache[value]
-                result.update(cached_result)
-                # Each unique definition counted once (cached)
-            else:
-                resolved = _resolve_pointer(_root, value)
-                count_before = node_count
-                flattened, node_count = _flatten_refs(
-                    resolved,
-                    _root=_root,
-                    _depth=_depth + 1,
-                    _node_count=node_count,
-                    _cache=_cache,
-                )
-                # Cache the result and the node count delta for this pointer
-                _cache[value] = (flattened, node_count - count_before)
-                result.update(flattened)
+            node_count = _flatten_ref_value(
+                value,
+                result,
+                root=_root,
+                depth=_depth,
+                node_count=node_count,
+                cache=_cache,
+            )
         elif isinstance(value, dict):
             flattened_value, node_count = _flatten_refs(
                 value,
@@ -339,24 +337,83 @@ def _flatten_refs(
             )
             result[key] = flattened_value
         elif isinstance(value, list):
-            new_list: list[Any] = []
-            for item in value:
-                if isinstance(item, dict):
-                    flattened_item, node_count = _flatten_refs(
-                        item,
-                        _root=_root,
-                        _depth=_depth + 1,
-                        _node_count=node_count,
-                        _cache=_cache,
-                    )
-                    new_list.append(flattened_item)
-                else:
-                    new_list.append(item)
+            new_list, node_count = _flatten_ref_list(
+                value,
+                root=_root,
+                depth=_depth,
+                node_count=node_count,
+                cache=_cache,
+            )
             result[key] = new_list
         else:
             result[key] = value
 
     return result, node_count
+
+
+def _flatten_ref_value(
+    value: Any,
+    result: dict[str, Any],
+    *,
+    root: dict[str, Any],
+    depth: int,
+    node_count: int,
+    cache: dict[str, tuple[dict[str, Any], int]],
+) -> int:
+    """Inline ONE ``$ref`` value into *result* and return the updated node count.
+
+    Rejects a non-string ``$ref`` and any external (non-local) pointer. Diamond
+    schemas are memoised by pointer (FIX 6): a pointer already in *cache* is
+    reused verbatim and consumes no extra node budget.
+    """
+    if not isinstance(value, str):
+        raise _RefFlattenError(f"$ref must be a string, got {type(value).__name__}")
+    if not _is_local_ref(value):
+        raise _RefFlattenError(f"External $ref not allowed: {value}")
+    # FIX 6: memoise by pointer — count each unique definition once
+    if value in cache:
+        cached_result, _cached_count_delta = cache[value]
+        result.update(cached_result)
+        # Each unique definition counted once (cached)
+        return node_count
+    resolved = _resolve_pointer(root, value)
+    count_before = node_count
+    flattened, node_count = _flatten_refs(
+        resolved,
+        _root=root,
+        _depth=depth + 1,
+        _node_count=node_count,
+        _cache=cache,
+    )
+    # Cache the result and the node count delta for this pointer
+    cache[value] = (flattened, node_count - count_before)
+    result.update(flattened)
+    return node_count
+
+
+def _flatten_ref_list(
+    value: list[Any],
+    *,
+    root: dict[str, Any],
+    depth: int,
+    node_count: int,
+    cache: dict[str, tuple[dict[str, Any], int]],
+) -> tuple[list[Any], int]:
+    """Flatten the dict elements of a JSON array; return (new list, node count)."""
+    new_list: list[Any] = []
+    for item in value:
+        if isinstance(item, dict):
+            flattened_item, node_count = _flatten_refs(
+                item,
+                _root=root,
+                _depth=depth + 1,
+                _node_count=node_count,
+                _cache=cache,
+            )
+            new_list.append(flattened_item)
+        else:
+            new_list.append(item)
+    return new_list, node_count
 
 
 def _strip_local_defs(schema: dict[str, Any]) -> dict[str, Any]:

@@ -1,7 +1,6 @@
 """Unit tests for the library service layer."""
 
 import uuid
-from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -33,9 +32,7 @@ from modulo.core.library_service import (
 )
 from modulo.db.crud.base import PageResult
 
-_COMMUNITY_PRIMITIVES_BASELINE = tuple(_COMMUNITY_PRIMITIVES)
-_COMMUNITY_BY_ID_BASELINE = dict(_COMMUNITY_BY_ID)
-_COMMUNITY_BY_SLUG_BASELINE = dict(_COMMUNITY_BY_SLUG)
+from .helpers import mock_session as _mock_session
 
 _EXPECTED_MODULO_SLUGS = {
     "agent": {
@@ -90,23 +87,6 @@ _EXPECTED_COMMUNITY_SLUGS = {
 }
 
 
-def _restore_community_cache() -> None:
-    _COMMUNITY_PRIMITIVES[:] = _COMMUNITY_PRIMITIVES_BASELINE
-    _COMMUNITY_BY_ID.clear()
-    _COMMUNITY_BY_ID.update(_COMMUNITY_BY_ID_BASELINE)
-    _COMMUNITY_BY_SLUG.clear()
-    _COMMUNITY_BY_SLUG.update(_COMMUNITY_BY_SLUG_BASELINE)
-
-
-@pytest.fixture(autouse=True)
-def isolate_community_cache() -> Iterator[None]:
-    _restore_community_cache()
-    try:
-        yield
-    finally:
-        _restore_community_cache()
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -139,17 +119,6 @@ def _fake_primitive(
     p.content_json = content_json or {}
     p.tier = tier
     return p
-
-
-def _mock_session() -> MagicMock:
-    """Return a mock AsyncSession that supports `async with session.begin():`."""
-    session = MagicMock()
-    ctx = AsyncMock()
-    ctx.__aenter__ = AsyncMock(return_value=ctx)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=ctx)
-    session.in_transaction = MagicMock(return_value=True)
-    return session
 
 
 def _capture_create_with(captured: dict, return_value: MagicMock):
@@ -263,7 +232,7 @@ def test_community_primitives_have_correct_visibility():
         assert p.organisation_id == MODULO_ORG_ID
 
 
-def test_community_primitives_count():
+def test_modulo_primitives_match_expected_type_and_slug_set():
     actual = {(p.primitive_type, p.slug) for p in _MODULO_PRIMITIVES}
     expected = {(primitive_type, slug) for primitive_type, slugs in _EXPECTED_MODULO_SLUGS.items() for slug in slugs}
     assert actual == expected
