@@ -1759,7 +1759,10 @@ jobs:
           # `|| RESPONSE=""` below is what stops `bash -e` (GitHub Actions
           # adds it to `run:` steps) from aborting the loop on the first curl
           # error - without it a transient webhook blip permanently lost the
-          # dispatch. Every other status is non-retryable and fails loudly.
+          # dispatch. Every other status is non-retryable and fails loudly:
+          # in particular HTTP 500/501 are deliberately NOT retried, because a
+          # deterministic server-side error cannot be fixed by retrying and a
+          # retry only delays the loud failure annotation.
           #
           # TIMESTAMP and HMAC are recomputed on every attempt: the server
           # enforces a +/-300s replay window on X-Modulo-Timestamp, so a
@@ -1914,22 +1917,38 @@ jobs:
             --arg fingerprint "${FINGERPRINT}" \
             '{branchName: $branchName, prNumber: $prNumber, headSha: $headSha, runUrl: $runUrl, failureDescription: $failureDescription, fingerprint: $fingerprint}')
           echo "CI checks failed on main (${{ github.sha }}) -- dispatching Branch Fixer."
-          # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5
-          # attempts, ~5 min total). TIMESTAMP and HMAC are recomputed per
-          # attempt: the server enforces a +/-300s replay window on
-          # X-Modulo-Timestamp, so a signature computed once would fall
-          # outside the window after backoff sleep.
+          # Bounded backpressure retry, identical to notify-pr-failure's loop
+          # above (one retry policy for one endpoint). The webhook returns HTTP
+          # 429 when the Branch Fixer trigger's concurrency slots are exhausted
+          # and 503 when the app is shedding load; 502/504 are gateway-side
+          # unavailability of the same class. Those are transient, so retry
+          # them on a patient but strictly bounded schedule - 3 attempts
+          # total, 10s then 30s - and then fail the step LOUDLY: a dispatch
+          # failure is never swallowed silently.
+          #
+          # HTTP 000 is curl's sentinel for a transport failure (no response
+          # at all). It is retried on the same schedule: it belongs to the
+          # same "server not reachable right now" class, and the
+          # `|| RESPONSE=""` below is what stops `bash -e` (GitHub Actions
+          # adds it to `run:` steps) from aborting the loop on the first curl
+          # error - without it a transient webhook blip permanently lost the
+          # dispatch. Every other status is non-retryable and fails loudly:
+          # in particular HTTP 500/501 are deliberately NOT retried, because a
+          # deterministic server-side error cannot be fixed by retrying and a
+          # retry only delays the loud failure annotation.
+          #
+          # TIMESTAMP and HMAC are recomputed on every attempt: the server
+          # enforces a +/-300s replay window on X-Modulo-Timestamp, so a
+          # signature computed once would fall outside the window after the
+          # 10s/30s sleeps.
+          MAX_ATTEMPTS=3
           DISPATCHED="false"
           LAST_HTTP=""
-          for i in 1 2 3 4 5; do
+          BODY_RESP=""
+          ATTEMPTS=0
+          for i in $(seq 1 "$MAX_ATTEMPTS"); do
             TIMESTAMP=$(date +%s)
             HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
-            # `|| RESPONSE=""` stops the default `bash -e` (GitHub Actions adds
-            # it to `run:` steps) from aborting this retry loop on the FIRST
-            # curl failure. Without it a curl timeout (exit 28) killed the step
-            # immediately, so the HTTP 000 retry branch below (the whole point
-            # of the loop) never ran and a transient webhook blip permanently
-            # lost the dispatch.
             RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "${WEBHOOK_URL}" \
               -H "Content-Type: application/json" \
               -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
@@ -1941,6 +1960,7 @@ jobs:
             [ -n "$HTTP_CODE" ] || HTTP_CODE="000"
             BODY_RESP=$(echo "$RESPONSE" | sed '$d')
             LAST_HTTP="$HTTP_CODE"
+            ATTEMPTS="$i"
             if [ "$HTTP_CODE" = "202" ]; then
               RESP_STATUS=$(echo "$BODY_RESP" | jq -r '.status // "accepted"')
               if [ "$RESP_STATUS" = "coalesced" ]; then
@@ -1959,10 +1979,14 @@ jobs:
               echo "::notice::Branch Fixer duplicate delivery suppressed (identical payload already accepted within the dedup window)"
               DISPATCHED="true"
               break
-            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-              DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
-              sleep "$DELAY"
+            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" = "502" ] || [ "$HTTP_CODE" = "503" ] || [ "$HTTP_CODE" = "504" ] || [ "$HTTP_CODE" = "000" ]; then
+              if [ "$i" -lt "$MAX_ATTEMPTS" ]; then
+                if [ "$i" -eq 1 ]; then DELAY=10; else DELAY=30; fi
+                echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/${MAX_ATTEMPTS}) — retrying in ${DELAY}s"
+                sleep "$DELAY"
+              else
+                echo "::warning::Branch Fixer returned HTTP $HTTP_CODE on the final attempt ($i/${MAX_ATTEMPTS}) — no attempts left"
+              fi
             else
               echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
               break
@@ -1970,9 +1994,13 @@ jobs:
           done
           if [ "$DISPATCHED" != "true" ]; then
             DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-            echo "::error::Branch Fixer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — main CI failure was not handed to the autonomous fix loop."
+            echo "::error::Branch Fixer webhook dispatch failed after ${ATTEMPTS} attempt(s) (last HTTP ${LAST_HTTP}: ${DETAIL}) — main CI failure was not handed to the autonomous fix loop."
             exit 1
           fi
+          # Explicit success exit: the dispatch was accepted (202) or was a
+          # handled duplicate (400 "Duplicate webhook payload"/coalesced).
+          echo "Branch Fixer dispatch delivered (HTTP ${LAST_HTTP})."
+          exit 0
 
   # FAR-1843: the PR-reviewer dispatch (former job `notify-pr-review`, name
   # "Trigger PR Reviewer") has MOVED to .github/workflows/pr-review.yml,
