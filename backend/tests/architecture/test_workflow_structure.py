@@ -216,6 +216,49 @@ def test_merge_queue_per_branch_gate_uses_product_ci_name() -> None:
     )
 
 
+# --- Merge-queue concurrency is scoped to the queue job, not the workflow ---
+
+
+def test_merge_queue_concurrency_is_scoped_to_the_queue_job() -> None:
+    """The ``merge-queue`` concurrency group must live on the ``queue`` job.
+
+    At workflow level the group is held by the WHOLE run — including
+    ``event-gate``'s ~10-min ``CHAIN_READY_AT`` pacing sleep — so every chained
+    pass queued behind an incumbent's sleep and waited out the full ~10 min
+    before its own turn. Only the ``queue`` job merges to main, so only it needs
+    serialising; scoping the group there keeps merges strictly serialised while
+    freeing the pacing sleep. ``cancel-in-progress`` must stay ``false``, or a
+    later run would cancel a merge that is already in flight.
+    """
+    workflow = _load_yaml(MERGE_QUEUE_YML)
+    job_concurrency = _queue_job(workflow).get("concurrency")
+    violations: list[str] = []
+    if "concurrency" in workflow:
+        violations.append(
+            "  merge-queue.yml: workflow-level `concurrency` is present — the group must be scoped to the "
+            "`queue` job, or event-gate's pacing sleep holds it and delays every chained pass"
+        )
+    if not isinstance(job_concurrency, dict):
+        violations.append(
+            "  merge-queue.yml: jobs.queue has no `concurrency` mapping — merges to main are no longer serialised"
+        )
+    else:
+        if job_concurrency.get("group") != "merge-queue":
+            violations.append(
+                "  merge-queue.yml: jobs.queue.concurrency.group must be 'merge-queue' "
+                f"(got {job_concurrency.get('group')!r})"
+            )
+        if job_concurrency.get("cancel-in-progress") is not False:
+            violations.append(
+                "  merge-queue.yml: jobs.queue.concurrency.cancel-in-progress must be false "
+                f"(got {job_concurrency.get('cancel-in-progress')!r}) — a later run must never cancel "
+                "an in-flight merge"
+            )
+    assert not violations, (
+        "merge-queue.yml no longer scopes the merge-queue concurrency group to the queue job:\n" + "\n".join(violations)
+    )
+
+
 # --- FAR-1939: an undelivered Branch Fixer notification is never silent -----
 
 #: The curl invocation every Branch Fixer webhook POST funnels through. All
