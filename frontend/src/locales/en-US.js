@@ -4905,7 +4905,8 @@ export default {
     "model": {
       "provider_timeout": "Model timed out",
       "connection": "Model connection error",
-      "rate_limited": "Model rate limited"
+      "rate_limited": "Model rate limited",
+      "insufficient_funds": "Model provider out of funds"
     },
     "model_disabled": "Model disabled",
     "scope": { "violation": "Capability out of scope" },
@@ -4974,6 +4975,12 @@ export default {
       "authentication": "Authentication with the LLM provider failed.",
       "rate_limited": "The LLM provider returned a rate-limit error.",
       "connection": "A network error occurred while calling the LLM provider."
+    },
+    "model": {
+      "provider_timeout": "The model provider did not respond before the request timed out.",
+      "connection": "A network error occurred while calling the model provider.",
+      "rate_limited": "The model provider rate-limited the request.",
+      "insufficient_funds": "The model provider account balance is exhausted, so it refused the request. Top up the provider account, then re-run; retrying cannot succeed."
     },
     "eval": { "blocked": "A guardrail eval blocked the run from continuing.", "failed": "A guardrail eval failed during execution." },
     "config": { "error": "A configuration error prevented the run from starting.", "invalid": "The configuration is invalid and must be corrected." },

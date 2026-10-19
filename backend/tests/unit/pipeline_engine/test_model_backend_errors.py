@@ -80,6 +80,20 @@ class TestClassifyProviderError:
         )
         assert classify_provider_error(stdout) == "model.insufficient_funds"
 
+    def test_insufficient_funds_does_not_join_across_lines(self):
+        """The match is bounded to ONE JSONL line: a ``"type":"error"`` event must
+        not be joined to a ``"statusCode":402`` that lives on a DIFFERENT line."""
+        stdout = (
+            '{"type":"error","error":{"name":"APIError","data":{"message":"some unrelated failure"}}}\n'
+            '{"note":"unrelated later event","statusCode":402}'
+        )
+        assert classify_provider_error(stdout) is None
+
+    def test_insufficient_funds_status_code_lookahead_rejects_longer_code(self):
+        """``(?!\\d)``: a longer status code such as 4021 is not 402."""
+        stdout = '{"type":"error","error":{"name":"APIError","data":{"statusCode":4021}}}'
+        assert classify_provider_error(stdout) != "model.insufficient_funds"
+
     def test_timeout_unknown_error(self):
         """UnknownError with 'The operation timed out.' → model.provider_timeout."""
         stdout = (

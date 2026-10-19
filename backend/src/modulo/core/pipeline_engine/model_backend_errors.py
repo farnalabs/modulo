@@ -44,11 +44,17 @@ import re
 #
 # Tolerates EITHER the numeric status code OR the message text (case-insensitive)
 # so a variant payload that reports only one of the two still classifies.
+#
+# SINGLE-LINE BOUND: the scan is over a JSONL stream, and one event is exactly
+# one line.  The gap uses ``[^\n]*?`` (not ``.*?``) so a ``"type":"error"``
+# event can never be joined to a DIFFERENT line's ``"statusCode":402`` — an
+# unrelated later event must not be read as this event's billing refusal.  The
+# ``(?!\d)`` after 402 stops a longer code (e.g. ``4021``) from matching.
 _INSUFFICIENT_FUNDS_PATTERN = re.compile(
-    r'"type"\s*:\s*"error".*?(?:'
-    r'"statusCode"\s*:\s*402'
-    r'|"message"\s*:\s*"[^"]*?insufficient\s+account\s+funds)',
-    re.DOTALL | re.IGNORECASE,
+    r'"type"\s*:\s*"error"[^\n]*?(?:'
+    r'"statusCode"\s*:\s*402(?!\d)'
+    r'|"message"\s*:\s*"[^\n"]*?insufficient\s+account\s+funds)',
+    re.IGNORECASE,
 )
 
 _PROVIDER_TIMEOUT_PATTERN = re.compile(

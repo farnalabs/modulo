@@ -182,7 +182,10 @@ KNOWN_FIXES: tuple[KnownFix, ...] = (
             "credit), then re-run. This is a billing fault, not a transient gateway "
             "error, so raising retries or node timeouts will not help."
         ),
-        link="https://github.com/farnalabs/modulo/blob/main/docs/agent-config.md",
+        # No ``link``: the curated docs this KB points at (docs/agent-config.md)
+        # do not cover provider billing or credential top-up, and a link to an
+        # unrelated page would be worse than none. The actionable instruction
+        # lives in the body above.
     ),
 )
 

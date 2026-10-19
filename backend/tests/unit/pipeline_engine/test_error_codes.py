@@ -667,13 +667,17 @@ def test_dispatch_wait_timeout_alias_target_is_registered():
 
 
 def test_model_insufficient_funds_registered_non_retryable_critical():
-    """``model.insufficient_funds`` is model-class, terminal, and critical.
+    """``model.insufficient_funds`` is model-class and DECLARES the
+    non-retryable / critical policy for an HTTP 402 refusal.
 
-    An HTTP 402 "Insufficient account funds" refusal blocks EVERY run that
-    calls the provider, so ``retryable=False`` is what stops the retry
-    machinery burning sandbox dispatches against a wall only an operator can
-    clear, and ``critical`` makes it alert like the sibling credential fault
-    ``model_disabled``."""
+    ``retryable`` and ``alert_severity`` are registry CONTRACT metadata: they
+    state how the code must be treated (a billing fault is a hard blocker, so it
+    is non-retryable by policy and critical), not machinery this test exercises.
+    Today neither flag has a production consumer — ``is_retryable`` and
+    ``alert_severity`` are read only by the registry's own accessor and by tests
+    — so enforcement (retry policy, alerting) lives elsewhere and must be built
+    against this declared contract. The assertions below pin the declared values;
+    they make no claim about a consumer."""
     assert "model.insufficient_funds" in known_error_codes()
     spec = ERROR_CODE_REGISTRY["model.insufficient_funds"]
     assert spec.error_class == "model"
