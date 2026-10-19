@@ -661,6 +661,62 @@ def test_dispatch_wait_timeout_alias_target_is_registered():
 
 
 # ---------------------------------------------------------------------------
+# Provider HTTP 402 — insufficient funds (a billing fault must never be retried
+# into the same wall)
+# ---------------------------------------------------------------------------
+
+
+def test_model_insufficient_funds_registered_non_retryable_critical():
+    """``model.insufficient_funds`` is model-class, terminal, and critical.
+
+    An HTTP 402 "Insufficient account funds" refusal blocks EVERY run that
+    calls the provider, so ``retryable=False`` is what stops the retry
+    machinery burning sandbox dispatches against a wall only an operator can
+    clear, and ``critical`` makes it alert like the sibling credential fault
+    ``model_disabled``."""
+    assert "model.insufficient_funds" in known_error_codes()
+    spec = ERROR_CODE_REGISTRY["model.insufficient_funds"]
+    assert spec.error_class == "model"
+    assert spec.retryable is False
+    assert spec.alert_severity == "critical"
+    assert "top up" in spec.guidance.lower()
+    assert is_retryable("model.insufficient_funds") is False
+
+
+def test_model_insufficient_funds_legacy_spelling_canonicalizes():
+    """The snake_case spelling resolves, and ``present_error`` presents the
+    canonical dotted code (the shape every read surface shows)."""
+    assert LEGACY_ALIASES["model_insufficient_funds"] == "model.insufficient_funds"
+    assert map_legacy_code("model_insufficient_funds") == "model.insufficient_funds"
+    assert is_retryable("model_insufficient_funds") is False
+    assert not error_code_map_conflicts()
+    code, _detail = present_error("model_insufficient_funds", "HTTP 402 Insufficient account funds", 5000)
+    assert code == "model.insufficient_funds"
+
+
+def test_match_known_fixes_positive_insufficient_funds():
+    """The captured HTTP 402 detail surfaces the top-up fix."""
+    detail = (
+        "Sandbox agent produced no parseable output.json (exit code 0)\n"
+        '--- stdout tail ---\n{"type":"error","error":{"name":"APIError",'
+        '"data":{"message":"Upstream request failed: Insufficient account funds",'
+        '"statusCode":402}}}'
+    )
+    matches = match_known_fixes(detail)
+    fix_ids = {fix.fix_id for fix in matches}
+    assert "model_insufficient_funds" in fix_ids
+
+
+def test_match_known_fixes_insufficient_funds_body_points_at_the_balance():
+    """The rendered fix tells the operator what to actually do (top up)."""
+    detail = '{"error":{"data":{"message":"Upstream request failed: Insufficient account funds"}}}'
+    matches = match_known_fixes(detail)
+    fix = next(fix for fix in matches if fix.fix_id == "model_insufficient_funds")
+    assert "top up" in fix.body.lower()
+    assert "402" in fix.body
+
+
+# ---------------------------------------------------------------------------
 # FAR-1558 follow-up — SandboxDispatchUnboundError (dispatch-time refusal)
 # ---------------------------------------------------------------------------
 
