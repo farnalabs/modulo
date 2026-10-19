@@ -555,6 +555,18 @@ class TestBuildEmailBriefing:
         _, _, body_text = _build_email(_GATE, _RUN_LINK, briefing)
         assert "Artifact:" not in body_text
 
+    def test_artifact_with_blank_summary_is_omitted(self) -> None:
+        """An artifact whose summary is blank contributes no Artifact section."""
+        from modulo.core.hitl_email_alerts import _build_email
+
+        briefing = {
+            "description": "Review the output",
+            "artifacts": [{"node_id": "n1", "summary": ""}],
+        }
+        _, _, body_text = _build_email(_GATE, _RUN_LINK, briefing)
+        assert "Review the output" in body_text
+        assert "Artifact:" not in body_text
+
     def test_gate_label_html_escaped_in_briefing_path(self) -> None:
         """gate_label with HTML is escaped in the briefing-path HTML body."""
         from modulo.core.hitl_email_alerts import _build_email

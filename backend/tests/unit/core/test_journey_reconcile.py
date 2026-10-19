@@ -899,6 +899,23 @@ class TestReconcileMetrics:
         reconcile_mod._refs_event_sink("refs_cap_dropped", {})
         assert fake_meter.counter("modulo_work_item_refs_cap_dropped_total").calls == [{"value": 1, "attributes": None}]
 
+    def test_shadow_strip_and_assigned_source_events_are_routed(
+        self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
+    ) -> None:
+        """The shadow-strip and assigned-source branches route to their counters."""
+        monkeypatch.setattr(reconcile_mod, "_get_meter", lambda: fake_meter)
+        monkeypatch.setattr(reconcile_mod, "_journey_advance_total", None)
+        monkeypatch.setattr(reconcile_mod, "_refs_shadow_strip_hits_total", None)
+        monkeypatch.setattr(reconcile_mod, "_refs_by_source_total", None)
+        reconcile_mod._refs_event_sink(reconcile_mod.REFS_EVENT_SHADOW_STRIP_HIT, {"surface": "editor"})
+        assert fake_meter.counter("modulo_work_item_refs_shadow_strip_hits_total").calls == [
+            {"value": 1, "attributes": {"surface": "editor"}}
+        ]
+        reconcile_mod._refs_event_sink(reconcile_mod.REFS_EVENT_ASSIGNED_SOURCE, {"source": "api", "count": 2})
+        assert fake_meter.counter("modulo_work_item_refs_by_source_total").calls == [
+            {"value": 2, "attributes": {"source": "api"}}
+        ]
+
     def test_record_functions_noop_without_meter(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(reconcile_mod, "_get_meter", lambda: None)
         reconcile_mod.record_journey_advance(1)

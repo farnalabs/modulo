@@ -133,6 +133,16 @@ class TestParseLsRemote:
         refs = parse_ls_remote(output)
         assert refs["refs/heads/main"] == "abc1234def0000000000000000000000000000"
 
+    def test_empty_sha_or_ref_name_skipped(self) -> None:
+        """An entry missing its SHA or its ref name is skipped, not stored."""
+        output = (
+            "\trefs/heads/empty-sha\n"
+            "abc1234def0000000000000000000000000000\t\n"
+            "abc1234def0000000000000000000000000000\trefs/heads/main\n"
+        )
+        refs = parse_ls_remote(output)
+        assert refs == {"refs/heads/main": "abc1234def0000000000000000000000000000"}
+
 
 # ---------------------------------------------------------------------------
 # resolve_movable_ref

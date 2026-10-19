@@ -676,6 +676,26 @@ class TestAppendPipelineTemplatePin:
         assert graph_nodes[0]["agent_id"] == agents[0]["id"]
         assert edges[0]["hitl_review_config"] == {"k": "v"}
 
+    def test_template_node_output_schema_remapped(self) -> None:
+        """A template node's output_schema_id is remapped to the installed schema id."""
+        agents: list[dict[str, Any]] = []
+        graph_nodes: list[dict[str, Any]] = []
+        edges: list[dict[str, Any]] = []
+        schema_ids: dict[str, str] = {"out": str(uuid.uuid4())}
+        pin = _prim(
+            uuid.uuid4(),
+            primitive_type="pipeline_template",
+            name="Tpl",
+            slug="tpl",
+            content_json={
+                "agents": [],
+                "graph_nodes": [{"id": "n0", "node_type": "agent", "output_schema_id": "out"}],
+                "edges": [],
+            },
+        )
+        _append_pipeline_template_pin(pin, pin.content_json, agents, graph_nodes, edges, schema_ids)
+        assert graph_nodes[0]["output_schema_id"] == schema_ids["out"]
+
 
 # ---------------------------------------------------------------------------
 # install_collection error + success paths (covers install.py body)

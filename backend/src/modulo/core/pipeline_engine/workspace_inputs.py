@@ -65,16 +65,13 @@ def _parse_ls_remote_line(raw_line: str) -> tuple[str, str] | None:
     line = line.strip()
     if "\t" not in line:
         return None
-    parts = line.split("\t", 1)
-    if len(parts) != 2:
-        return None
-    sha_candidate, ref_name = parts[0].strip(), parts[1].strip()
+    sha_raw, ref_raw = line.split("\t", 1)
+    sha_candidate, ref_name = sha_raw.strip(), ref_raw.strip()
     # Skip dangling symrefs — ``ref: refs/heads/x`` is not a real SHA.
     if sha_candidate.startswith("ref:"):
         return None
-    # Validate hex SHA (40 chars) or at least non-empty.
-    if not sha_candidate or not ref_name:
-        return None
+    # Both halves are non-empty after the whole-line strip above: a tab at
+    # either edge was removed, so only an internal separator remains.
     return sha_candidate, ref_name
 
 

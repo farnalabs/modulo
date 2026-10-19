@@ -189,3 +189,23 @@ class TestMissedFireProbeCooldown:
         create.assert_awaited_once()
         log_warn.assert_called_once()
         assert "cooldown_redis_failed" in log_warn.call_args.args[0]
+
+
+class TestScanOrgMissedFiresRowFiltering:
+    async def test_row_with_no_missed_period_is_skipped(self) -> None:
+        """A row whose cadence has not been missed is skipped without an alert."""
+        redis_client = AsyncMock()
+        with (
+            patch.object(et, "_missed_fire_trigger_rows", new_callable=AsyncMock, return_value=[_stale_trigger()]),
+            patch.object(et, "_row_missed_period", return_value=None),
+            patch.object(et, "_emit_missed_fire_alert", new_callable=AsyncMock) as emit,
+        ):
+            emitted = await et._scan_org_missed_fires(
+                MagicMock(),
+                redis_client,
+                ORG,
+                now=datetime.now(UTC),
+                grace_seconds=0,
+            )
+        assert emitted == 0
+        emit.assert_not_awaited()
