@@ -52,6 +52,13 @@ class HousekeepingCategory(BaseModel):
     description: str
     candidates: list[CandidateItem]
     count: int
+    # FAR-1977: ``status`` distinguishes a scanner that RAN (``"ok"`` — an empty
+    # candidate list is a clean scan) from one that RAISED (``"failed"``). A
+    # failed category carries a structured ``error`` naming the exception CLASS
+    # only — never its message or a traceback. Mirrors the MCP ``list_housekeeping``
+    # shape so the two surfaces cannot drift.
+    status: str
+    error: dict[str, str] | None = None
 
 
 class HousekeepingScanResponse(BaseModel):
@@ -122,6 +129,8 @@ async def list_housekeeping(
                 for c in r.candidates
             ],
             count=len(r.candidates),
+            status=r.status,
+            error=r.error,
         )
         for r in results
     ]

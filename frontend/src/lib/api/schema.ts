@@ -15232,6 +15232,12 @@ export interface components {
             candidates: components["schemas"]["CandidateItem"][];
             /** Count */
             count: number;
+            /** Status */
+            status: string;
+            /** Error */
+            error?: {
+                [key: string]: string;
+            } | null;
         };
         /** HousekeepingScanResponse */
         HousekeepingScanResponse: {
