@@ -6,6 +6,7 @@ import hashlib
 import logging
 import uuid
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import func, select, text
@@ -947,6 +948,271 @@ def _is_snapshot_version_conflict(exc: IntegrityError) -> bool:
     return sqlstate == "23505" and "snapshot_version" in message
 
 
+@dataclass(frozen=True)
+class _SnapshotSource:
+    """The live-graph data copied once, before the version-allocation retry."""
+
+    pipeline: Pipeline
+    nodes: list[dict[str, Any]]
+    edge_dicts: list[dict[str, Any]]
+    composite_bindings: list[dict[str, Any]]
+    agents: list[Agent]
+    parameter_bindings: dict[str, Any]
+    connectors_by_id: dict[uuid.UUID, ConnectorInstance]
+    schema_models_by_id: dict[uuid.UUID, Schema]
+    backends_by_id: dict[uuid.UUID, ModelBackend]
+
+
+@dataclass
+class _SnapshotAttempt:
+    """Per-attempt state: did the version read complete before an error?"""
+
+    version_read_completed: bool = False
+
+
+async def _copy_live_graph_for_snapshot(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+) -> _SnapshotSource | None:
+    """Load, expand and materialise the live graph (the one-shot copy)."""
+    pipeline, nodes, edge_dicts = await _load_pipeline_and_edges(session, pipeline_id)
+    if pipeline is None:
+        return None
+
+    # Expand composite nodes into flat sub-pipeline nodes BEFORE agent
+    # materialization so sub-node agents get their prompt/model_backend
+    # embedded like top-level nodes. After this the snapshot graph contains
+    # only flat node types and the compiled runtime needs no changes.
+    nodes, edge_dicts, composite_bindings = await expand_composites_in_graph(
+        session,
+        org_id=pipeline.organisation_id,
+        nodes=nodes,
+        edges=edge_dicts,
+    )
+
+    agents, _, parameter_schema_ids = await _materialize_agent_fields(session, nodes)
+    parameter_bindings = await _resolve_parameter_bindings(session, nodes, parameter_schema_ids)
+    connectors_by_id, schema_models_by_id, backends_by_id = await _load_reference_models(session, nodes, agents)
+    return _SnapshotSource(
+        pipeline=pipeline,
+        nodes=nodes,
+        edge_dicts=edge_dicts,
+        composite_bindings=composite_bindings,
+        agents=agents,
+        parameter_bindings=parameter_bindings,
+        connectors_by_id=connectors_by_id,
+        schema_models_by_id=schema_models_by_id,
+        backends_by_id=backends_by_id,
+    )
+
+
+def _resolve_model_classes_for_snapshot(source: _SnapshotSource, *, version_kind: str) -> None:
+    """Resolve every node's model_class; an EDIT snapshot fails OPEN (logged)."""
+    try:
+        resolve_graph_model_classes(
+            source.nodes,
+            pipeline_name=str(source.pipeline.name),
+            registry_path=get_settings().model_class_registry_path,
+        )
+    except ModelClassResolutionError as exc:
+        if version_kind == "run":
+            raise
+        _log.warning(
+            "snapshot_model_class_resolution_failed pipeline_id=%s version_kind=%s: %s",
+            source.pipeline.id,
+            version_kind,
+            exc.detail,
+        )
+
+
+async def _next_snapshot_version(session: AsyncSession, pipeline_id: uuid.UUID) -> int:
+    """Read ``max(snapshot_version)`` for the pipeline and reserve the next value."""
+    version_result = await session.execute(
+        select(func.coalesce(func.max(PipelineSnapshot.snapshot_version), 0)).where(
+            PipelineSnapshot.pipeline_id == pipeline_id
+        )
+    )
+    return int(version_result.scalar_one()) + 1
+
+
+async def _guardrail_pin_set(
+    session: AsyncSession,
+    pipeline: Pipeline,
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Load the pipeline's guardrail pin set and its integrity fingerprint."""
+    guardrail_pins = await _load_guardrail_pins(session, pipeline)
+    return guardrail_pins, _fingerprint_guardrail_pins(guardrail_pins)
+
+
+async def _policy_gate_pin_set(
+    session: AsyncSession,
+    pipeline: Pipeline,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Load the pipeline's live policy-gate pin set and its fingerprint."""
+    policy_gate_rows = await _load_policy_gate_rows_for_pipeline(
+        session,
+        pipeline_id=pipeline.id,
+        organisation_id=pipeline.organisation_id,
+    )
+    policy_gate_pins = _build_policy_gate_pins(policy_gate_rows)
+    return policy_gate_pins, _fingerprint_policy_gate_pins(policy_gate_pins)
+
+
+async def _insert_snapshot_once(
+    session: AsyncSession,
+    source: _SnapshotSource,
+    attempt_state: _SnapshotAttempt,
+    *,
+    account_id: uuid.UUID | None,
+    version_kind: str,
+    created_kind: str,
+    draft: bool,
+    channel: str,
+) -> PipelineSnapshot:
+    """Assemble and insert one snapshot row; must run inside the savepoint."""
+    pipeline = source.pipeline
+    snapshot_version = await _next_snapshot_version(session, pipeline.id)
+    attempt_state.version_read_completed = True
+
+    connector_bindings = _build_connector_bindings(source.nodes, source.connectors_by_id)
+    schema_pins = _build_schema_pins(source.agents, source.schema_models_by_id)
+    prompt_pins, model_backend_pins = _build_prompt_and_backend_pins(source.agents, source.backends_by_id)
+
+    graph_json = {
+        "nodes": source.nodes,
+        "edges": source.edge_dicts,
+    }
+
+    # Guardrail snapshot pin (FAR-223 item 10): serialize the pipeline's bound
+    # guardrail rows so a replay evaluates the ORIGINAL conditions (the pinned
+    # set), never the live rows. Loaded here — not inside create_run — so the
+    # pin is immutable like the graph itself.
+    guardrail_pins, guardrail_pins_fingerprint = await _guardrail_pin_set(session, pipeline)
+
+    # FAR-967 chunk 10 (s3.1 - s3.3): policy-gate snapshot pins.
+    # Only live, enabled gates are pinned (criterion 14);
+    # disabled gates are excluded from the pin set at creation.
+    policy_gate_pins, policy_gate_pins_fingerprint = await _policy_gate_pin_set(session, pipeline)
+
+    snapshot = PipelineSnapshot(
+        organisation_id=pipeline.organisation_id,
+        pipeline_id=pipeline.id,
+        snapshot_version=snapshot_version,
+        account_id=account_id,
+        graph_json=graph_json,
+        connector_bindings_json=connector_bindings,
+        schema_pins_json=schema_pins,
+        prompt_pins_json=prompt_pins,
+        model_backend_pins_json=model_backend_pins,
+        composite_bindings_json=source.composite_bindings or None,
+        parameter_bindings_json=source.parameter_bindings or None,
+        guardrail_pins_json=guardrail_pins,
+        guardrail_pins_fingerprint=guardrail_pins_fingerprint,
+        policy_gate_pins_json=policy_gate_pins,
+        policy_gate_pins_fingerprint=policy_gate_pins_fingerprint,
+        run_context_defaults=copy.deepcopy(pipeline.run_context_defaults),
+        default_autonomy_level=pipeline.default_autonomy_level,
+        max_autonomy_level=pipeline.max_autonomy_level,
+        stdout_retention_config=copy.deepcopy(pipeline.stdout_retention_config),
+        # FAR-1558: freeze the pipeline's environment-profile binding onto the
+        # snapshot. The snapshot column has existed since 0003/0110 and is what
+        # dispatch reads (runner_dispatch / executor / graph_validator) — it
+        # was simply never written. NULL = unbound, i.e. the historical default
+        # route (provider_type "none").
+        environment_profile_id=pipeline.environment_profile_id,
+        version_kind=version_kind,
+        created_kind=created_kind,
+        draft=draft,
+        channel=channel,
+    )
+    session.add(snapshot)
+    await session.flush()
+
+    # Inside the savepoint: a rolled-back attempt expunges these rows together
+    # with the snapshot row, so a retry can never duplicate them.
+    _add_snapshot_schema_pins(session, pipeline.organisation_id, snapshot.id, source.nodes)
+    return snapshot
+
+
+def _handle_snapshot_allocation_error(
+    exc: IntegrityError,
+    *,
+    pipeline_id: uuid.UUID,
+    attempt: int,
+) -> None:
+    """Decide the retry cycle's outcome for an IntegrityError.
+
+    A non-collision integrity failure propagates unchanged. Exhaustion raises
+    the terminal ``SnapshotVersionAllocationError``; otherwise the attempt is
+    logged and the caller retries with a freshly read version.
+    """
+    if not _is_snapshot_version_conflict(exc):
+        # Any other integrity failure (FK, RLS, pin constraints) is not an
+        # allocation collision — never swallowed, never retried: it would fail
+        # identically on every attempt.
+        raise
+    if attempt == SNAPSHOT_VERSION_ATTEMPTS:
+        # Exhaustion is the terminal outcome of the retry cycle: log it
+        # explicitly so a fully wedged allocation is visible by the failure
+        # line alone, without relying on the propagated exception surviving
+        # log filtering.
+        _log.warning(
+            "snapshot_version_allocation_exhausted pipeline_id=%s attempts=%s",
+            pipeline_id,
+            SNAPSHOT_VERSION_ATTEMPTS,
+        )
+        raise SnapshotVersionAllocationError(pipeline_id, SNAPSHOT_VERSION_ATTEMPTS) from exc
+    _log.warning(
+        "snapshot_version_conflict_retry pipeline_id=%s attempt=%s/%s",
+        pipeline_id,
+        attempt,
+        SNAPSHOT_VERSION_ATTEMPTS,
+    )
+
+
+async def _allocate_snapshot(
+    session: AsyncSession,
+    source: _SnapshotSource,
+    *,
+    account_id: uuid.UUID | None,
+    version_kind: str,
+    created_kind: str,
+    draft: bool,
+    channel: str,
+) -> PipelineSnapshot | None:
+    """Bounded optimistic retry of the version read + insert (FAR-1287/1625)."""
+    pipeline_id = source.pipeline.id
+    for attempt in range(1, SNAPSHOT_VERSION_ATTEMPTS + 1):
+        attempt_state = _SnapshotAttempt()
+        try:
+            async with session.begin_nested():
+                # A ProgrammingError propagates so the SAVEPOINT ROLLS BACK
+                # (swallowing it would let the block exit cleanly and RELEASE
+                # the savepoint on an aborted transaction (25P02), masking the
+                # original error); it is mapped to the historical ``None``
+                # outside the block.
+                return await _insert_snapshot_once(
+                    session,
+                    source,
+                    attempt_state,
+                    account_id=account_id,
+                    version_kind=version_kind,
+                    created_kind=created_kind,
+                    draft=draft,
+                    channel=channel,
+                )
+        except ProgrammingError:
+            if attempt_state.version_read_completed:
+                raise
+            # Pre-existing contract: a missing/unreadable snapshot_version
+            # column (migration not applied yet) reports "no snapshot".
+            return None
+        except IntegrityError as exc:
+            _handle_snapshot_allocation_error(exc, pipeline_id=pipeline_id, attempt=attempt)
+    # Unreachable by construction: the final attempt always returns or raises.
+    raise SnapshotVersionAllocationError(pipeline_id, SNAPSHOT_VERSION_ATTEMPTS)
+
+
 async def create_snapshot_from_live_graph(
     session: AsyncSession,
     *,
@@ -1011,24 +1277,9 @@ async def create_snapshot_from_live_graph(
     graph_lock_released = False
 
     try:
-        pipeline, nodes, edge_dicts = await _load_pipeline_and_edges(session, pipeline_id)
-        if pipeline is None:
+        source = await _copy_live_graph_for_snapshot(session, pipeline_id)
+        if source is None:
             return None
-
-        # Expand composite nodes into flat sub-pipeline nodes BEFORE agent
-        # materialization so sub-node agents get their prompt/model_backend
-        # embedded like top-level nodes. After this the snapshot graph contains
-        # only flat node types and the compiled runtime needs no changes.
-        nodes, edge_dicts, composite_bindings = await expand_composites_in_graph(
-            session,
-            org_id=pipeline.organisation_id,
-            nodes=nodes,
-            edges=edge_dicts,
-        )
-
-        agents, _, parameter_schema_ids = await _materialize_agent_fields(session, nodes)
-        parameter_bindings = await _resolve_parameter_bindings(session, nodes, parameter_schema_ids)
-        connectors_by_id, schema_models_by_id, backends_by_id = await _load_reference_models(session, nodes, agents)
 
         # FAR-1743 / ADR 037 rev 2 (EXPERIMENTAL): resolve every sandbox_agent
         # node's model_class HERE — the per-run mint seam that already bakes
@@ -1045,21 +1296,7 @@ async def create_snapshot_from_live_graph(
         # (logged) so a broken registry can never lock authors out of graph
         # saves; any run that later consumes such an unbaked node still fails
         # closed at render (node_runner / runner_dispatch backstop).
-        try:
-            resolve_graph_model_classes(
-                nodes,
-                pipeline_name=str(pipeline.name),
-                registry_path=get_settings().model_class_registry_path,
-            )
-        except ModelClassResolutionError as exc:
-            if version_kind == "run":
-                raise
-            _log.warning(
-                "snapshot_model_class_resolution_failed pipeline_id=%s version_kind=%s: %s",
-                pipeline_id,
-                version_kind,
-                exc.detail,
-            )
+        _resolve_model_classes_for_snapshot(source, version_kind=version_kind)
 
         # FAR-1625: release the graph-copy lock BEFORE the allocation phase, so
         # its wait never holds the session-scoped graph lock (see the helper).
@@ -1078,132 +1315,21 @@ async def create_snapshot_from_live_graph(
 
         # FAR-1287 Part 2: bounded OPTIMISTIC retry of the version allocation —
         # now a defensive backstop behind the FAR-1625 serialisation lock. The
-        # graph copy above ran once; each attempt below re-reads
+        # graph copy above ran once; each attempt re-reads
         # ``max(snapshot_version)``, re-loads the two pin sets and inserts,
         # ALL inside a SAVEPOINT so a collision on
         # ``uq_pipeline_snapshot_version`` rolls back to the savepoint — the
         # caller's outer transaction stays usable and the attempt re-runs with a
         # freshly read version instead of surfacing IntegrityError at a caller.
-        for attempt in range(1, SNAPSHOT_VERSION_ATTEMPTS + 1):
-            version_read_completed = False
-            try:
-                async with session.begin_nested():
-                    # A ProgrammingError propagates so the SAVEPOINT ROLLS BACK
-                    # (swallowing it would let the block exit cleanly and
-                    # RELEASE the savepoint on an aborted transaction (25P02),
-                    # masking the original error); it is mapped to the
-                    # historical ``None`` outside the block.
-                    version_result = await session.execute(
-                        select(func.coalesce(func.max(PipelineSnapshot.snapshot_version), 0)).where(
-                            PipelineSnapshot.pipeline_id == pipeline_id
-                        )
-                    )
-                    snapshot_version = int(version_result.scalar_one()) + 1
-                    version_read_completed = True
-
-                    connector_bindings = _build_connector_bindings(nodes, connectors_by_id)
-                    schema_pins = _build_schema_pins(agents, schema_models_by_id)
-                    prompt_pins, model_backend_pins = _build_prompt_and_backend_pins(agents, backends_by_id)
-
-                    graph_json = {
-                        "nodes": nodes,
-                        "edges": edge_dicts,
-                    }
-
-                    # Guardrail snapshot pin (FAR-223 item 10): serialize the
-                    # pipeline's bound guardrail rows so a replay evaluates the
-                    # ORIGINAL conditions (the pinned set), never the live rows.
-                    # Loaded here — not inside create_run — so the pin is
-                    # immutable like the graph itself.
-                    guardrail_pins = await _load_guardrail_pins(session, pipeline)
-                    # Run-start snapshot-integrity fingerprint (FAR-309 PR B):
-                    # the digest of the serialized pin set is saved alongside it
-                    # so the replay seam can detect a tampered/drifted pin set
-                    # and fail closed.
-                    guardrail_pins_fingerprint = _fingerprint_guardrail_pins(guardrail_pins)
-
-                    # FAR-967 chunk 10 (s3.1 - s3.3): policy-gate snapshot pins.
-                    # Only live, enabled gates are pinned (criterion 14);
-                    # disabled gates are excluded from the pin set at creation.
-                    policy_gate_rows = await _load_policy_gate_rows_for_pipeline(
-                        session,
-                        pipeline_id=pipeline.id,
-                        organisation_id=pipeline.organisation_id,
-                    )
-                    policy_gate_pins = _build_policy_gate_pins(policy_gate_rows)
-                    policy_gate_pins_fingerprint = _fingerprint_policy_gate_pins(policy_gate_pins)
-
-                    snapshot = PipelineSnapshot(
-                        organisation_id=pipeline.organisation_id,
-                        pipeline_id=pipeline.id,
-                        snapshot_version=snapshot_version,
-                        account_id=account_id,
-                        graph_json=graph_json,
-                        connector_bindings_json=connector_bindings,
-                        schema_pins_json=schema_pins,
-                        prompt_pins_json=prompt_pins,
-                        model_backend_pins_json=model_backend_pins,
-                        composite_bindings_json=composite_bindings or None,
-                        parameter_bindings_json=parameter_bindings or None,
-                        guardrail_pins_json=guardrail_pins,
-                        guardrail_pins_fingerprint=guardrail_pins_fingerprint,
-                        policy_gate_pins_json=policy_gate_pins,
-                        policy_gate_pins_fingerprint=policy_gate_pins_fingerprint,
-                        run_context_defaults=copy.deepcopy(pipeline.run_context_defaults),
-                        default_autonomy_level=pipeline.default_autonomy_level,
-                        max_autonomy_level=pipeline.max_autonomy_level,
-                        stdout_retention_config=copy.deepcopy(pipeline.stdout_retention_config),
-                        # FAR-1558: freeze the pipeline's environment-profile
-                        # binding onto the snapshot. The snapshot column has
-                        # existed since 0003/0110 and is what dispatch reads
-                        # (runner_dispatch / executor / graph_validator) — it
-                        # was simply never written. NULL = unbound, i.e. the
-                        # historical default route (provider_type "none").
-                        environment_profile_id=pipeline.environment_profile_id,
-                        version_kind=version_kind,
-                        created_kind=created_kind,
-                        draft=draft,
-                        channel=channel,
-                    )
-                    session.add(snapshot)
-                    await session.flush()
-
-                    # Inside the savepoint: a rolled-back attempt expunges these
-                    # rows together with the snapshot row, so a retry can never
-                    # duplicate them.
-                    _add_snapshot_schema_pins(session, pipeline.organisation_id, snapshot.id, nodes)
-                return snapshot
-            except ProgrammingError:
-                if version_read_completed:
-                    raise
-                # Pre-existing contract: a missing/unreadable snapshot_version
-                # column (migration not applied yet) reports "no snapshot".
-                return None
-            except IntegrityError as exc:
-                if not _is_snapshot_version_conflict(exc):
-                    # Any other integrity failure (FK, RLS, pin constraints) is
-                    # not an allocation collision — never swallowed, never
-                    # retried: it would fail identically on every attempt.
-                    raise
-                if attempt == SNAPSHOT_VERSION_ATTEMPTS:
-                    # Exhaustion is the terminal outcome of the retry cycle: log
-                    # it explicitly so a fully wedged allocation is visible by
-                    # the failure line alone, without relying on the propagated
-                    # exception surviving log filtering.
-                    _log.warning(
-                        "snapshot_version_allocation_exhausted pipeline_id=%s attempts=%s",
-                        pipeline_id,
-                        SNAPSHOT_VERSION_ATTEMPTS,
-                    )
-                    raise SnapshotVersionAllocationError(pipeline_id, SNAPSHOT_VERSION_ATTEMPTS) from exc
-                _log.warning(
-                    "snapshot_version_conflict_retry pipeline_id=%s attempt=%s/%s",
-                    pipeline_id,
-                    attempt,
-                    SNAPSHOT_VERSION_ATTEMPTS,
-                )
-        # Unreachable by construction: the final attempt always returns or raises.
-        raise SnapshotVersionAllocationError(pipeline_id, SNAPSHOT_VERSION_ATTEMPTS)
+        return await _allocate_snapshot(
+            session,
+            source,
+            account_id=account_id,
+            version_kind=version_kind,
+            created_kind=created_kind,
+            draft=draft,
+            channel=channel,
+        )
     finally:
         # Runs on every exit — success, `return None`, a ProgrammingError at the
         # version read, an IntegrityError at flush, or a cancellation — and the
