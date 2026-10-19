@@ -1502,13 +1502,16 @@ jobs:
     # step so it keeps its documented meaning ("do not auto-dispatch the
     # Branch Fixer").
     if: github.event_name == 'pull_request' && always()
-    # FAR-1429: `needs` must list EVERY job that can fail on a PR. failure() and
-    # success() in the steps below consider all ancestor jobs, so a failing job
-    # missing from this list (tier1b-light, sonarcloud-scan,
-    # migration-heads-check were) never reached the Branch Fixer / reviewer
-    # gate. A job that is merely SKIPPED is neither failure() nor cancelled();
-    # every job here either always runs (path gates are step-level) or is only
-    # skipped because an ancestor already failed, which is itself a failure.
+    # FAR-1429: `needs` must list EVERY job that can fail on a PR, because the
+    # guard below reads `needs.*.result` and therefore sees ONLY the jobs named
+    # here — a failing job missing from this list (tier1b-light,
+    # sonarcloud-scan, migration-heads-check were) never reached the Branch
+    # Fixer / reviewer gate. Step-level `failure()` does NOT help: the runner
+    # evaluates it from this job's own status alone, so with no failing step in
+    # this job it is always false. A job that is merely SKIPPED is neither
+    # failure() nor cancelled(); every job here either always runs (path gates
+    # are step-level) or is only skipped because an ancestor already failed,
+    # which is itself a failure.
     needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
