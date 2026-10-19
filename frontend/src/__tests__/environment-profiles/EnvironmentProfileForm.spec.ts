@@ -425,7 +425,7 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
 
     const pinned = wrapper.find('[data-testid="envprofile-form-image-pinned"]')
     expect(pinned.exists()).toBe(true)
-    expect(pinned.attributes('role')).toBe('status')
+    expect(pinned.element.tagName).toBe('OUTPUT')
     expect(pinned.text()).toContain('Pinned by digest')
     expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
   })
@@ -503,7 +503,7 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
     expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
     const invalid = wrapper.find('[data-testid="envprofile-form-image-invalid"]')
     expect(invalid.exists()).toBe(true)
-    expect(invalid.attributes('role')).toBe('status')
+    expect(invalid.element.tagName).toBe('OUTPUT')
     expect(invalid.text()).toContain('not a valid image reference')
   })
 
@@ -519,6 +519,12 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
     ['underscore-dot repository', `ghcr.io/acme/my_.repo@sha256:${'a'.repeat(64)}`],
     ['underscore-hyphen repository', `ghcr.io/acme/my-_repo@sha256:${'a'.repeat(64)}`],
     ['dot-hyphen repository', `ghcr.io/acme/my.-repo@sha256:${'a'.repeat(64)}`],
+    // A Docker Hub namespace (no registry host) is measured against the
+    // repository-path cap as the WHOLE name, and its path is lowercase-only.
+    ['uppercase component in a Hub namespace path', `acme/AGENT@sha256:${'a'.repeat(64)}`],
+    ['over-long Hub namespace path', `acme/${'a'.repeat(251)}@sha256:${'a'.repeat(64)}`],
+    // A malformed tag (must start with [A-Za-z0-9_]) is not a valid reference.
+    ['invalid tag', 'ghcr.io/acme/agent:.bad'],
   ])('reports a ref with a %s as invalid, never pinned or mutable', async (_label, ref) => {
     // FAR-1779 F1/F3: Docker/containerd reject these, so classifying them as
     // pinned would assert immutability the runtime would refuse to honour — and
@@ -533,7 +539,7 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
     expect(wrapper.find('[data-testid="envprofile-form-image-tag-warning"]').exists()).toBe(false)
     const invalid = wrapper.find('[data-testid="envprofile-form-image-invalid"]')
     expect(invalid.exists()).toBe(true)
-    expect(invalid.attributes('role')).toBe('status')
+    expect(invalid.element.tagName).toBe('OUTPUT')
     expect(invalid.text()).toContain('not a valid image reference')
   })
 
@@ -543,6 +549,10 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
     ['triple-hyphen repository', `ghcr.io/acme/my---repo@sha256:${'a'.repeat(64)}`],
     ['registry host containing a double hyphen', `my--registry.io/acme/agent@sha256:${'a'.repeat(64)}`],
     ['registry host containing a triple hyphen', `my---registry.io/acme/agent@sha256:${'a'.repeat(64)}`],
+    // A first component with no registry marker (`.`, `:`, `localhost`, or an
+    // uppercase character) is a Docker Hub namespace, not a host — its whole
+    // name is a valid, pinnable repository path.
+    ['Hub namespace with no registry host', `acme/agent@sha256:${'a'.repeat(64)}`],
   ])('acknowledges a valid ref with a %s as pinned', async (_label, ref) => {
     // FAR-1779 F3 (corrected): Docker's separator is a single `.`/`_`, a double
     // `__`, or a run of one-or-more `-`, so these are valid names and must not
@@ -617,7 +627,7 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
     expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
     const placeholder = wrapper.find('[data-testid="envprofile-form-image-placeholder"]')
     expect(placeholder.exists()).toBe(true)
-    expect(placeholder.attributes('role')).toBe('status')
+    expect(placeholder.element.tagName).toBe('OUTPUT')
     expect(placeholder.text()).toContain('cannot be pulled')
   })
 
@@ -642,7 +652,7 @@ describe('EnvironmentProfileForm — BYO image path and digest pinning (FAR-1779
 
     const warning = wrapper.find('[data-testid="envprofile-form-image-tag-warning"]')
     expect(warning.exists()).toBe(true)
-    expect(warning.attributes('role')).toBe('status')
+    expect(warning.element.tagName).toBe('OUTPUT')
     expect(warning.text()).toContain('pin the image by digest')
     expect(wrapper.find('[data-testid="envprofile-form-image-pinned"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="envprofile-form-image-invalid"]').exists()).toBe(false)

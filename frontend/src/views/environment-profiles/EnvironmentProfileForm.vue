@@ -95,46 +95,42 @@
              "pin it by digest" would tell them to do what they already tried —
              so it gets its own `invalid` copy. Only a valid, non-digest ref
              reaches the mutable-tag warning. -->
-        <p
+        <output
           v-if="imageRefState === 'pinned'"
           id="envprofile-form-image-state"
-          role="status"
           class="mt-1 flex items-center gap-1 text-xs text-success"
           data-testid="envprofile-form-image-pinned"
         >
           <ShieldCheck :size="14" aria-hidden="true" />
           {{ $t('views.EnvironmentProfileForm.image_digest_pinned') }}
-        </p>
-        <p
+        </output>
+        <output
           v-else-if="imageRefState === 'placeholder'"
           id="envprofile-form-image-state"
-          role="status"
           class="mt-1 flex items-center gap-1 text-xs text-warning-text"
           data-testid="envprofile-form-image-placeholder"
         >
           <AlertTriangle :size="14" aria-hidden="true" />
           {{ $t('views.EnvironmentProfileForm.image_placeholder_unresolvable') }}
-        </p>
-        <p
+        </output>
+        <output
           v-else-if="imageRefState === 'invalid'"
           id="envprofile-form-image-state"
-          role="status"
           class="mt-1 flex items-center gap-1 text-xs text-destructive"
           data-testid="envprofile-form-image-invalid"
         >
           <AlertTriangle :size="14" aria-hidden="true" />
           {{ $t('views.EnvironmentProfileForm.image_invalid_reference') }}
-        </p>
-        <p
+        </output>
+        <output
           v-else-if="imageRefState === 'mutable'"
           id="envprofile-form-image-state"
-          role="status"
           class="mt-1 flex items-center gap-1 text-xs text-warning-text"
           data-testid="envprofile-form-image-tag-warning"
         >
           <AlertTriangle :size="14" aria-hidden="true" />
           {{ $t('views.EnvironmentProfileForm.image_mutable_tag_warning') }}
-        </p>
+        </output>
       </div>
 
       <div>
@@ -350,8 +346,8 @@ const IMAGE_COMPONENT = `[a-z0-9]+(?:${IMAGE_SEPARATOR}[a-z0-9]+)*`
 const IMAGE_TAG = '[A-Za-z0-9_][A-Za-z0-9._-]{0,127}'
 // distribution/reference: domainNameComponent, domainName and ipv6address.
 const DOMAIN_COMPONENT = '[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?'
-const DOMAIN_NAME = `${DOMAIN_COMPONENT}(?:\\.${DOMAIN_COMPONENT})*`
-const IPV6_ADDRESS = '\\[[a-fA-F0-9:]+\\]'
+const DOMAIN_NAME = String.raw`${DOMAIN_COMPONENT}(?:\.${DOMAIN_COMPONENT})*`
+const IPV6_ADDRESS = String.raw`\[[a-fA-F0-9:]+\]`
 const REGISTRY_HOST_RE = new RegExp(`^(?:${DOMAIN_NAME}|${IPV6_ADDRESS})(?::[0-9]+)?$`)
 const IMAGE_PATH_RE = new RegExp(`^${IMAGE_COMPONENT}(?:/${IMAGE_COMPONENT})*$`)
 const IMAGE_TAG_RE = new RegExp(`^${IMAGE_TAG}$`)
@@ -373,7 +369,7 @@ function isValidImageDigest(digest: string): boolean {
   if (match === null) return false
   return match[2].length === DIGEST_HEX_LENGTHS[match[1]]
 }
-const DIGEST_PINNABLE_PROVIDERS = ['runner_docker', 'kubernetes']
+const DIGEST_PINNABLE_PROVIDERS: ReadonlySet<string> = new Set(['runner_docker', 'kubernetes'])
 
 // Docker's own rule (distribution/reference `splitDockerDomain`): with a `/`
 // present, the first component is a registry host when it contains a `.` or
@@ -450,7 +446,7 @@ function isValidDockerImageRef(ref: string): boolean {
 const PLACEHOLDER_DIGEST = `sha256:${'0'.repeat(64)}`
 
 const imageRefState = computed<'pinned' | 'mutable' | 'invalid' | 'placeholder' | null>(() => {
-  if (!DIGEST_PINNABLE_PROVIDERS.includes(form.provider_type)) return null
+  if (!DIGEST_PINNABLE_PROVIDERS.has(form.provider_type)) return null
   const ref = form.image_ref.trim()
   if (!ref) return null
   if (ref.endsWith(PLACEHOLDER_DIGEST)) return 'placeholder'

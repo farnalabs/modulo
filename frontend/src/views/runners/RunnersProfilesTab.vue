@@ -74,23 +74,21 @@
                placeholder_digest means no registry image exists to pull, so
                the row can never provision; image_not_pulled is a pull failure
                on the runner machine. -->
-          <div
+          <output
             v-if="row.health?.placeholder_digest"
-            class="rounded-lg border border-warning/40 bg-warning/10 p-3"
-            role="status"
+            class="block rounded-lg border border-warning/40 bg-warning/10 p-3"
             data-testid="runner-profile-image-unresolvable"
           >
-            <p class="text-xs font-medium text-warning-text">{{ $t('views.RunnersProfilesTab.image_unresolvable_title') }}</p>
-            <p class="mt-0.5 text-xs text-muted-foreground">{{ $t('views.RunnersProfilesTab.image_unresolvable_hint') }}</p>
-          </div>
-          <p
+            <span class="block text-xs font-medium text-warning-text">{{ $t('views.RunnersProfilesTab.image_unresolvable_title') }}</span>
+            <span class="mt-0.5 block text-xs text-muted-foreground">{{ $t('views.RunnersProfilesTab.image_unresolvable_hint') }}</span>
+          </output>
+          <output
             v-else-if="row.health?.health_state === 'image_not_pulled'"
-            class="text-xs text-muted-foreground"
-            role="status"
+            class="block text-xs text-muted-foreground"
             data-testid="runner-profile-image-pull-hint"
           >
             {{ $t('views.RunnersProfilesTab.image_pull_hint') }}
-          </p>
+          </output>
 
           <div
             v-if="row.drift.drifted"

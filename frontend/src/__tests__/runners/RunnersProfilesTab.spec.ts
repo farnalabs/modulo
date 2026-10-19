@@ -376,7 +376,7 @@ describe('RunnersProfilesTab', () => {
 
     const note = wrapper.find('[data-testid="runner-profile-image-unresolvable"]')
     expect(note.exists()).toBe(true)
-    expect(note.attributes('role')).toBe('status')
+    expect(note.element.tagName).toBe('OUTPUT')
     expect(note.text()).toContain('Image cannot be resolved')
     expect(note.text()).toContain('Edit')
   })
@@ -413,7 +413,7 @@ describe('RunnersProfilesTab', () => {
 
     const hint = wrapper.find('[data-testid="runner-profile-image-pull-hint"]')
     expect(hint.exists()).toBe(true)
-    expect(hint.attributes('role')).toBe('status')
+    expect(hint.element.tagName).toBe('OUTPUT')
     expect(hint.text()).toContain('not pulled on the runner machine')
   })
 })
