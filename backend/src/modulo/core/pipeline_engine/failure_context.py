@@ -64,7 +64,7 @@ _UNDEFINED_COLUMN_RE = re.compile(
 #   'column "<table>.<column>" does not exist'
 #   "column <table>.<column> does not exist"
 _PROGRAMMING_COLUMN_RE = re.compile(
-    r"column\s+(?:(?:\"(?P<table_q>\w+)\.(?P<column_q>\w+)\")|(?:(?P<table>\w+)\.(?P<column>\w+)))",
+    r"column\s+(?:\"(?P<table_q>\w+)\.(?P<column_q>\w+)\"|(?P<table>\w+)\.(?P<column>\w+))",
     re.IGNORECASE,
 )
 

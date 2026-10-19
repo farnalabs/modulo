@@ -358,6 +358,27 @@ def test_sanitize_redacts_slack_rotateable_token_shape():
     assert "xoxr-abcdefghij1234" not in sanitized
 
 
+def test_sanitize_redacts_n8n_and_sentry_token_shapes():
+    """Pin the ``(?i)`` n8n/sentry patterns after the duplicate-character fix.
+
+    Under ``re.IGNORECASE`` the ``A-Z`` range already matches lowercase, so
+    ``[A-Za-z0-9]`` -> ``[A-Z0-9]`` is exactly equivalent (S5869). Both cases
+    must still be redacted, and a short body must still be left alone.
+    """
+    cases = (
+        ("n8n api key: abcdefghijKLMNOPQRST1234", "abcdefghijKLMNOPQRST1234"),
+        ("n8n_token=ABCDEFGHIJKLMNOPQRST1234", "ABCDEFGHIJKLMNOPQRST1234"),
+        ("n8n key abcdefghijklmnopqrst", "abcdefghijklmnopqrst"),
+        ("sentry_dsn=abcdefghijKLMNOPQRST1234567890ab", "abcdefghijKLMNOPQRST1234567890ab"),
+        ("Sentry-auth_token: ABCDEFGHIJKLMNOPQRST1234567890AB", "ABCDEFGHIJKLMNOPQRST1234567890AB"),
+    )
+    for text, secret in cases:
+        sanitized = sanitize_error_text(text)
+        assert "<redacted>" in sanitized, text
+        assert secret not in sanitized, text
+    assert sanitize_error_text("n8n key short") == "n8n key short"
+
+
 def test_sanitize_is_idempotent():
     sample = "boom: Bearer tok1234567890, key sk-abcdefghijkl1234"
     once = sanitize_error_text(sample)
