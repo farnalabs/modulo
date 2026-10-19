@@ -443,6 +443,59 @@ async def _resolve_work_item_id(
     return _floor_work_item_id(org_id, run_id)
 
 
+def _entry_unknown_source(entry: Any, force_source: str | None) -> bool:
+    """True when a sent entry's wire ``source`` disagrees with the assignment."""
+    if force_source is None or not isinstance(entry, dict):
+        return False
+    wire_source = entry.get("source")
+    return wire_source is not None and wire_source != force_source
+
+
+def _canonical_entry(entry: Any, force_source: str | None) -> dict[str, Any] | None:
+    """Validate one raw ref entry; None when malformed (dropped with a warning)."""
+    try:
+        if force_source is not None:
+            return validate_ref_entry(entry, force_source=force_source)
+        return validate_ref_entry(entry)
+    except (ValueError, TypeError) as exc:
+        _log.warning("dropping invalid work-item ref entry: %s", exc)
+        return None
+
+
+def _validated_ref_entries(
+    entries: list[dict[str, Any]],
+    force_source: str | None,
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Validate every raw entry; returns ``(canonical, unknown_source, malformed)``."""
+    canonical: list[dict[str, Any]] = []
+    unknown_source = 0
+    malformed = 0
+    for entry in entries:
+        if _entry_unknown_source(entry, force_source):
+            unknown_source += 1
+        validated = _canonical_entry(entry, force_source)
+        if validated is None:
+            malformed += 1
+        else:
+            canonical.append(validated)
+    return canonical, unknown_source, malformed
+
+
+def _notify_canonicalise_ref_events(
+    force_source: str,
+    unknown_source: int,
+    malformed: int,
+    canonical_count: int,
+) -> None:
+    """Emit the lifecycle_refs counts for one forced-source canonicalisation."""
+    if unknown_source:
+        notify_refs_event(REFS_EVENT_UNKNOWN_SOURCE, count=unknown_source)
+    if malformed:
+        notify_refs_event(REFS_EVENT_MALFORMED, count=malformed)
+    if canonical_count:
+        notify_refs_event(REFS_EVENT_ASSIGNED_SOURCE, source=force_source, count=canonical_count)
+
+
 def _canonicalise_ref_entries(
     entries: list[dict[str, Any]] | None,
     *,
@@ -465,29 +518,9 @@ def _canonicalise_ref_entries(
     """
     if not entries:
         return None
-    canonical: list[dict[str, Any]] = []
-    unknown_source = 0
-    malformed = 0
-    for entry in entries:
-        if force_source is not None and isinstance(entry, dict):
-            wire_source = entry.get("source")
-            if wire_source is not None and wire_source != force_source:
-                unknown_source += 1
-        try:
-            if force_source is not None:
-                canonical.append(validate_ref_entry(entry, force_source=force_source))
-            else:
-                canonical.append(validate_ref_entry(entry))
-        except (ValueError, TypeError) as exc:
-            malformed += 1
-            _log.warning("dropping invalid work-item ref entry: %s", exc)
+    canonical, unknown_source, malformed = _validated_ref_entries(entries, force_source)
     if force_source is not None:
-        if unknown_source:
-            notify_refs_event(REFS_EVENT_UNKNOWN_SOURCE, count=unknown_source)
-        if malformed:
-            notify_refs_event(REFS_EVENT_MALFORMED, count=malformed)
-        if canonical:
-            notify_refs_event(REFS_EVENT_ASSIGNED_SOURCE, source=force_source, count=len(canonical))
+        _notify_canonicalise_ref_events(force_source, unknown_source, malformed, len(canonical))
     return canonical or None
 
 
