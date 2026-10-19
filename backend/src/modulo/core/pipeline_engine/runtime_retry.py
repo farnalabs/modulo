@@ -48,6 +48,7 @@ import asyncio
 import inspect
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Literal, NamedTuple
 
 from langgraph.errors import NodeCancelledError
@@ -350,189 +351,221 @@ def make_retrying_node_fn(
     # FAR-1141 (CRITICAL 1) fail-closed override lives in _resolve_retry_policy.
     node_fires_job = node_fires_dispatch_job(node_def)
     effective_policy = _resolve_retry_policy(node_def, pipeline_retry_policy, node_fires_job)
-    outgoing_edges = outgoing_edges or []
-    incoming_edges = incoming_edges or []
-    node_defs = node_defs or {}
-
-    def _source_fail_closed(edge: dict[str, Any]) -> bool:
-        source_id = rc._string_or_default(edge.get("source", edge.get("source_node_id")))
-        source = node_defs.get(source_id)
-        # The SOURCE may not be re-executed when it is declared non-idempotent
-        # OR when its own binding fires an external job (same predicate, both
-        # spellings — the flag alone does not survive an MCP-authored graph).
-        return rc.node_is_fail_closed(source) or node_fires_dispatch_job(source)
-
-    async def _invoke_with_key(
-        fn: Callable[[dict[str, Any]], Any],
-        key_node_id: str,
-        state: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Invoke a node callable, stamping the node-scoped idempotency key first.
-
-        The key is stamped onto a COPY of ``state`` (never the caller's snapshot)
-        so a side-effecting node can dedupe its write across retry/edge/
-        compensation re-executions. This is the single choke point that wires the
-        documented ``_NODE_IDEMPOTENCY_KEY`` guarantee onto EVERY re-execution
-        path — the node's own retry, the per-edge SOURCE re-execution, the
-        edge-retry target re-run, and the compensation-target invocation
-        (FAR-402 MAJOR-3). The runtime provides ``idempotency_key`` so it can read
-        the run identity from ``state``.
-        """
-        key = idempotency_key(key_node_id, state) if idempotency_key is not None else None
-        if key is not None:
-            state = dict(state)
-            state[_NODE_IDEMPOTENCY_KEY] = key
-        return await _await_result(fn, state)
-
-    async def _invoke_raw(state: dict[str, Any]) -> dict[str, Any]:
-        # Stamp the node-scoped idempotency key before the node body runs so a
-        # side-effecting node can dedupe its write across retry attempts.
-        return await _invoke_with_key(raw_fn, node_id, state)
-
-    async def _execute_edge_retry_source(
-        edge: dict[str, Any],
-        state: dict[str, Any],
-    ) -> dict[str, Any] | None:
-        """Re-execute a single eligible edge's SOURCE node; return the re-run result.
-
-        Iterates the edge's retry budget: sleeps, re-invokes the source with its
-        own idempotency key, merges the source output into state, then re-runs
-        THIS node against the merged state. Returns the successful re-run result,
-        or ``None`` when the edge budget is exhausted or the failure is
-        non-retryable (caller proceeds to the next edge or to compensation).
-        """
-        source_id = rc._string_or_default(edge.get("source", edge.get("source_node_id")))
-        source_fn = raw_fn_resolver(source_id) if raw_fn_resolver is not None else None
-        if source_fn is None:
-            return None
-        edge_policy = rc.parse_edge_retry(edge.get("retry")) or effective_policy
-        attempts = 0
-        while attempts < edge_policy.max_attempts:
-            attempts += 1
-            try:
-                await _sleep(attempts, edge_policy)
-                src_out = await _invoke_with_key(source_fn, source_id, state)
-                merged = dict(state)
-                if isinstance(src_out, dict):
-                    merged.update(src_out)
-                return await _invoke_with_key(raw_fn, node_id, merged)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                event = failure_event(exc)
-                if event is None or not rc.node_retries_on(edge_policy, event):
-                    break
-        return None
-
-    async def _edge_retry(state: dict[str, Any], failed_event: str | None) -> dict[str, Any] | None:
-        """Re-execute an incoming edge's SOURCE node; return the re-run result.
-
-        Per-edge retry fires ONLY when the node's own retry budget is exhausted
-        and an incoming edge declares a transition ``retry``. It re-executes the
-        SOURCE node (not the target). Fail-closed: a non-idempotent source is
-        never re-executed.
-
-        ``failed_event`` is the retry event of the watched node's OWN failure (the
-        exception that landed us here). It is classified BEFORE any source is
-        re-executed (FAR-402 MAJOR-2): if the watched node failed on a
-        never-retryable terminal fault (e.g. ``ScriptFailedError``), re-executing
-        the source and re-running the target would only reproduce the same
-        exactly-once fault — so we fall through to compensation / normal failure
-        WITHOUT re-running a side-effecting source.
-
-        When the edge budget is exhausted (or the edge failure is non-retryable)
-        the edge is skipped and the next incoming edge is tried; if no eligible
-        edge produces a result we return ``None`` so ``_wrapped`` proceeds to
-        compensation (FAR-402 MAJOR-1 — the trailing fall-through must be live,
-        not dead code behind a raised exception).
-
-        FAR-1141 (CRITICAL 1): the fail-closed check covers BOTH nodes the edge
-        retry would re-execute — the source (above) and THIS node, because
-        ``_execute_edge_retry_source`` re-invokes ``raw_fn`` (the failing node)
-        against the source's fresh output. A dispatch node that fires a job is
-        never that second re-invocation either: one failure, one fired job.
-        """
-        if failed_event is None:
-            return None
-        if node_fires_job:
-            # The watched node's own binding fires an external job — re-invoking
-            # it here would fire a second one, whatever the edge declares.
-            return None
-        for edge in incoming_edges:
-            if not rc.edge_retry_reattempts_source(edge):
-                continue
-            if _source_fail_closed(edge):
-                continue
-            if raw_fn_resolver is None:
-                continue
-            result = await _execute_edge_retry_source(edge, state)
-            if result is not None:
-                return result
-        return None
-
-    async def _handle_compensation(
-        state: dict[str, Any],
-        exc: BaseException,
-    ) -> bool:
-        """Attempt compensation edge routing after terminal node failure.
-
-        Returns ``True`` if compensation succeeded (caller should return the
-        compensated marker) and ``False`` if no compensation applies (caller
-        should re-raise the original exception). Control-flow terminal faults
-        (RunCancelledError / GraphInterrupt / EvalBlockedError /
-        SupersededNodeError / OutputRejectedError / RunawayRunError) bypass
-        compensation entirely and re-raise so the executor can terminalize
-        the run as designed.
-        """
-        if _is_control_flow_fault(exc):
-            raise
-        comp_target = resolve_compensation_target(node_id, outgoing_edges)
-        if not comp_target or raw_fn_resolver is None:
-            return False
-        comp_fn = raw_fn_resolver(comp_target)
-        if comp_fn is None:
-            return False
-        try:
-            await _invoke_with_key(comp_fn, comp_target, state)
-            return True
-        except asyncio.CancelledError:
-            raise
-        except Exception as comp_exc:
-            if _is_never_retryable(comp_exc):
-                raise
-            raise CompensationFailedError(
-                node_id=node_id,
-                compensation_target=comp_target,
-                cause=comp_exc,
-            ) from comp_exc
+    ctx = _RetryContext(
+        raw_fn=raw_fn,
+        node_id=node_id,
+        effective_policy=effective_policy,
+        outgoing_edges=outgoing_edges or [],
+        incoming_edges=incoming_edges or [],
+        raw_fn_resolver=raw_fn_resolver,
+        idempotency_key=idempotency_key,
+        node_defs=node_defs or {},
+        node_fires_job=node_fires_job,
+    )
 
     async def _wrapped(state: dict[str, Any]) -> dict[str, Any]:
-        attempts = 0
-        while True:
-            attempts += 1
-            try:
-                result = await _invoke_raw(state)
-                outcome = _classify_attempt(result, effective_policy, None)
-                if _should_retry(outcome, attempts, effective_policy):
-                    await _sleep(attempts, effective_policy)
-                    continue
-                return result
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                outcome = _classify_attempt(None, effective_policy, exc)
-                if _should_retry(outcome, attempts, effective_policy):
-                    await _sleep(attempts, effective_policy)
-                    continue
-                edge_result = await _edge_retry(state, outcome.event)
-                if edge_result is not None:
-                    return edge_result
-                if await _handle_compensation(state, exc):
-                    return _compensated_marker(node_id)
-                raise
+        return await _run_retry_loop(ctx, state)
 
     _wrapped.__name__ = f"retry_{node_id}"
     return _wrapped
+
+
+@dataclass(frozen=True)
+class _RetryContext:
+    """Immutable capture of everything a retry wrapper re-invokes."""
+
+    raw_fn: Callable[[dict[str, Any]], Any]
+    node_id: str
+    effective_policy: NodeRetryPolicy
+    outgoing_edges: list[dict[str, Any]]
+    incoming_edges: list[dict[str, Any]]
+    raw_fn_resolver: Callable[[str], Callable[[dict[str, Any]], Any] | None] | None
+    idempotency_key: Callable[[str, dict[str, Any]], str | None] | None
+    node_defs: dict[str, dict[str, Any]]
+    node_fires_job: bool
+
+
+def _source_fail_closed(edge: dict[str, Any], node_defs: dict[str, dict[str, Any]]) -> bool:
+    """True when the edge's SOURCE must not be re-executed (fail closed)."""
+    source_id = rc._string_or_default(edge.get("source", edge.get("source_node_id")))
+    source = node_defs.get(source_id)
+    # The SOURCE may not be re-executed when it is declared non-idempotent
+    # OR when its own binding fires an external job (same predicate, both
+    # spellings — the flag alone does not survive an MCP-authored graph).
+    return rc.node_is_fail_closed(source) or node_fires_dispatch_job(source)
+
+
+async def _invoke_with_key(
+    fn: Callable[[dict[str, Any]], Any],
+    key_node_id: str,
+    state: dict[str, Any],
+    idempotency_key: Callable[[str, dict[str, Any]], str | None] | None,
+) -> dict[str, Any]:
+    """Invoke a node callable, stamping the node-scoped idempotency key first.
+
+    The key is stamped onto a COPY of ``state`` (never the caller's snapshot)
+    so a side-effecting node can dedupe its write across retry/edge/
+    compensation re-executions. This is the single choke point that wires the
+    documented ``_NODE_IDEMPOTENCY_KEY`` guarantee onto EVERY re-execution
+    path — the node's own retry, the per-edge SOURCE re-execution, the
+    edge-retry target re-run, and the compensation-target invocation
+    (FAR-402 MAJOR-3). The runtime provides ``idempotency_key`` so it can read
+    the run identity from ``state``.
+    """
+    key = idempotency_key(key_node_id, state) if idempotency_key is not None else None
+    if key is not None:
+        state = dict(state)
+        state[_NODE_IDEMPOTENCY_KEY] = key
+    return await _await_result(fn, state)
+
+
+async def _execute_edge_retry_source(
+    ctx: _RetryContext,
+    edge: dict[str, Any],
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Re-execute a single eligible edge's SOURCE node; return the re-run result.
+
+    Iterates the edge's retry budget: sleeps, re-invokes the source with its
+    own idempotency key, merges the source output into state, then re-runs
+    THIS node against the merged state. Returns the successful re-run result,
+    or ``None`` when the edge budget is exhausted or the failure is
+    non-retryable (caller proceeds to the next edge or to compensation).
+    """
+    resolver = ctx.raw_fn_resolver
+    if resolver is None:
+        return None
+    source_id = rc._string_or_default(edge.get("source", edge.get("source_node_id")))
+    source_fn = resolver(source_id)
+    if source_fn is None:
+        return None
+    edge_policy = rc.parse_edge_retry(edge.get("retry")) or ctx.effective_policy
+    attempts = 0
+    while attempts < edge_policy.max_attempts:
+        attempts += 1
+        try:
+            await _sleep(attempts, edge_policy)
+            src_out = await _invoke_with_key(source_fn, source_id, state, ctx.idempotency_key)
+            merged = dict(state)
+            if isinstance(src_out, dict):
+                merged.update(src_out)
+            return await _invoke_with_key(ctx.raw_fn, ctx.node_id, merged, ctx.idempotency_key)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            event = failure_event(exc)
+            if event is None or not rc.node_retries_on(edge_policy, event):
+                break
+    return None
+
+
+async def _edge_retry(ctx: _RetryContext, state: dict[str, Any], failed_event: str | None) -> dict[str, Any] | None:
+    """Re-execute an incoming edge's SOURCE node; return the re-run result.
+
+    Per-edge retry fires ONLY when the node's own retry budget is exhausted
+    and an incoming edge declares a transition ``retry``. It re-executes the
+    SOURCE node (not the target). Fail-closed: a non-idempotent source is
+    never re-executed.
+
+    ``failed_event`` is the retry event of the watched node's OWN failure (the
+    exception that landed us here). It is classified BEFORE any source is
+    re-executed (FAR-402 MAJOR-2): if the watched node failed on a
+    never-retryable terminal fault (e.g. ``ScriptFailedError``), re-executing
+    the source and re-running the target would only reproduce the same
+    exactly-once fault — so we fall through to compensation / normal failure
+    WITHOUT re-running a side-effecting source.
+
+    When the edge budget is exhausted (or the edge failure is non-retryable)
+    the edge is skipped and the next incoming edge is tried; if no eligible
+    edge produces a result we return ``None`` so the retry loop proceeds to
+    compensation (FAR-402 MAJOR-1 — the trailing fall-through must be live,
+    not dead code behind a raised exception).
+
+    FAR-1141 (CRITICAL 1): the fail-closed check covers BOTH nodes the edge
+    retry would re-execute — the source (above) and THIS node, because
+    ``_execute_edge_retry_source`` re-invokes ``raw_fn`` (the failing node)
+    against the source's fresh output. A dispatch node that fires a job is
+    never that second re-invocation either: one failure, one fired job.
+    """
+    if failed_event is None:
+        return None
+    if ctx.node_fires_job:
+        # The watched node's own binding fires an external job — re-invoking
+        # it here would fire a second one, whatever the edge declares.
+        return None
+    for edge in ctx.incoming_edges:
+        if not rc.edge_retry_reattempts_source(edge):
+            continue
+        if _source_fail_closed(edge, ctx.node_defs):
+            continue
+        if ctx.raw_fn_resolver is None:
+            continue
+        result = await _execute_edge_retry_source(ctx, edge, state)
+        if result is not None:
+            return result
+    return None
+
+
+async def _handle_compensation(ctx: _RetryContext, state: dict[str, Any], exc: BaseException) -> bool:
+    """Attempt compensation edge routing after terminal node failure.
+
+    Returns ``True`` if compensation succeeded (caller should return the
+    compensated marker) and ``False`` if no compensation applies (caller
+    should re-raise the original exception). Control-flow terminal faults
+    (RunCancelledError / GraphInterrupt / EvalBlockedError /
+    SupersededNodeError / OutputRejectedError / RunawayRunError) bypass
+    compensation entirely and re-raise so the executor can terminalize
+    the run as designed.
+    """
+    if _is_control_flow_fault(exc):
+        raise
+    resolver = ctx.raw_fn_resolver
+    comp_target = resolve_compensation_target(ctx.node_id, ctx.outgoing_edges)
+    if not comp_target or resolver is None:
+        return False
+    comp_fn = resolver(comp_target)
+    if comp_fn is None:
+        return False
+    try:
+        await _invoke_with_key(comp_fn, comp_target, state, ctx.idempotency_key)
+        return True
+    except asyncio.CancelledError:
+        raise
+    except Exception as comp_exc:
+        if _is_never_retryable(comp_exc):
+            raise
+        raise CompensationFailedError(
+            node_id=ctx.node_id,
+            compensation_target=comp_target,
+            cause=comp_exc,
+        ) from comp_exc
+
+
+async def _run_retry_loop(ctx: _RetryContext, state: dict[str, Any]) -> dict[str, Any]:
+    """Run the per-node retry loop, falling through to edge retry / compensation."""
+    attempts = 0
+    while True:
+        attempts += 1
+        try:
+            result = await _invoke_with_key(ctx.raw_fn, ctx.node_id, state, ctx.idempotency_key)
+            outcome = _classify_attempt(result, ctx.effective_policy, None)
+            if _should_retry(outcome, attempts, ctx.effective_policy):
+                await _sleep(attempts, ctx.effective_policy)
+                continue
+            return result
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            outcome = _classify_attempt(None, ctx.effective_policy, exc)
+            if _should_retry(outcome, attempts, ctx.effective_policy):
+                await _sleep(attempts, ctx.effective_policy)
+                continue
+            edge_result = await _edge_retry(ctx, state, outcome.event)
+            if edge_result is not None:
+                return edge_result
+            if await _handle_compensation(ctx, state, exc):
+                return _compensated_marker(ctx.node_id)
+            raise
 
 
 async def _sleep(attempt_n: int, policy: NodeRetryPolicy) -> None:
