@@ -4336,8 +4336,10 @@ async def _load_attempt_row(
 ) -> RunNodeOutput | None:
     """Load the ``RunNodeOutput`` row for one node attempt, scoped to the org.
 
-    Applies the tenant RLS scope before the exact-key lookup. A DB error is
-    converted to the standard 503 contract rather than propagating raw.
+    Applies the tenant RLS scope before the exact-key lookup. A client-side
+    session-contract violation (``InvalidRequestError`` / ``MissingGreenlet``)
+    is raised as HTTP 500 by ``raise_session_contract_error``; any other DB
+    error returns from that helper and falls through to the 503 raised below.
     """
     try:
         async with session.begin():
