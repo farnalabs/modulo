@@ -531,11 +531,12 @@ volatile-lru`. Without a bound Redis ran `noeviction`, so a worker wedge could
 grow the SAQ queue until every enqueue failed. `volatile-lru` evicts only
 TTL-bearing job hashes; the queue's structural keys are persistent and a
 shed/expired queued job is re-dispatched by `dispatcher_reconcile`. Raise
-`REDIS_MAXMEMORY` in `deploy/compose/.env` for a larger queue budget; keep the
-policy. The capacity alert sweep raises a `capacity_redis_pressure` admin
-notification at 85% of the bound, so the operator sees the pressure before any
-enqueue is refused. If you point `REDIS_URL` at an external/managed Redis, that
-instance's bound and eviction policy are yours to set — see
+`REDIS_MAXMEMORY` in your `deploy/compose` environment file for a larger queue
+budget; keep the policy. The capacity alert sweep raises a
+`capacity_redis_pressure` admin notification at 85% of the bound, so the
+operator sees the pressure before any enqueue is refused. If you point
+`REDIS_URL` at an external/managed Redis, that instance's bound and eviction
+policy are yours to set — see
 [`docs/configuration-reference.md`](./configuration-reference.md#redis--task-queue).
 
 The two queue workers are **not** separate compose services here - they are

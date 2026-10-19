@@ -296,8 +296,9 @@ executor – only in-memory rate limiting and an in-memory event broker.
 Previously it set no bound at all, so Redis ran `noeviction`: under a worker
 wedge (nothing defers, every accepted trigger fire is enqueued) the queue grew
 until every enqueue write failed with `OOM command not allowed`, leaving runs
-`enqueue_failed`. The bound means the host is protected and the store sheds
-instead of failing. `volatile-lru` is deliberate: it evicts **only keys
+`enqueue_failed`. The bound protects the host; a queued run job carries a TTL,
+so it is shed and re-dispatched rather than growing without limit.
+`volatile-lru` is deliberate: it evicts **only keys
 carrying a TTL**. In the SAQ key space that is the job hashes — queued ones are
 TTL'd by the dispatcher (below), completed ones by SAQ — while the queue's
 structural keys (`queued` / `active` lists, `incomplete` zset) are persistent
