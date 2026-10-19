@@ -46,28 +46,47 @@ def parse_ls_remote(output: str) -> dict[str, str]:  # vulture: ignore
     """
     refs: dict[str, str] = {}
     for raw_line in output.splitlines():
-        line = line.strip() if (line := raw_line.strip("\r\n")) else raw_line
-        if not line or "\t" not in line:
+        parsed = _parse_ls_remote_line(raw_line)
+        if parsed is None:
             continue
-        parts = line.split("\t", 1)
-        if len(parts) != 2:
-            continue
-        sha_candidate, ref_name = parts[0].strip(), parts[1].strip()
-        # Skip dangling symrefs — ``ref: refs/heads/x`` is not a real SHA.
-        if sha_candidate.startswith("ref:"):
-            continue
-        # Validate hex SHA (40 chars) or at least non-empty.
-        if not sha_candidate or not ref_name:
-            continue
-        # Prefer peeled entries (^{}) so annotated tags resolve to the
-        # underlying commit SHA.
-        if ref_name.endswith("^{}"):
-            base_ref = ref_name[:-3]
-            refs[base_ref] = sha_candidate
-        # Only store if not already replaced by a peel entry.
-        elif ref_name not in refs:
-            refs[ref_name] = sha_candidate
+        _record_ls_remote_ref(refs, *parsed)
     return refs
+
+
+def _parse_ls_remote_line(raw_line: str) -> tuple[str, str] | None:
+    """Parse one ``git ls-remote`` line into ``(sha, ref_name)``, or ``None``.
+
+    Silently skips blank lines, header/truncated lines and dangling symrefs
+    (``ref: refs/heads/x``), matching :func:`parse_ls_remote`'s contract.
+    """
+    line = raw_line.strip("\r\n")
+    if not line:
+        return None
+    line = line.strip()
+    if "\t" not in line:
+        return None
+    parts = line.split("\t", 1)
+    if len(parts) != 2:
+        return None
+    sha_candidate, ref_name = parts[0].strip(), parts[1].strip()
+    # Skip dangling symrefs — ``ref: refs/heads/x`` is not a real SHA.
+    if sha_candidate.startswith("ref:"):
+        return None
+    # Validate hex SHA (40 chars) or at least non-empty.
+    if not sha_candidate or not ref_name:
+        return None
+    return sha_candidate, ref_name
+
+
+def _record_ls_remote_ref(refs: dict[str, str], sha: str, ref_name: str) -> None:
+    """Record one parsed ref, preferring peeled (``^{}``) tag entries."""
+    # Prefer peeled entries (^{}) so annotated tags resolve to the
+    # underlying commit SHA.
+    if ref_name.endswith("^{}"):
+        refs[ref_name[:-3]] = sha
+    # Only store if not already replaced by a peel entry.
+    elif ref_name not in refs:
+        refs[ref_name] = sha
 
 
 # ---------------------------------------------------------------------------
