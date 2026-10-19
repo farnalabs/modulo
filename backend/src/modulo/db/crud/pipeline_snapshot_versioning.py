@@ -275,6 +275,17 @@ async def rollback_to_snapshot(
     never imports ``modulo.core`` (layer contract). A hook that raises rolls
     the whole rollback back with it.
 
+    FAR-1845: the CALLER also owns the FAR-488a bound-Agent-row sync for the
+    restored graph. This function writes ``pipeline.graph_nodes_json`` from
+    the target snapshot verbatim, but the run snapshot's
+    ``_materialize_agent_fields`` lets the bound Agent row's
+    ``agent_commands`` win — so unless the caller syncs those rows BEFORE this
+    write (the REST route does it inside its ``post_lock_gate``), a restored
+    node's command would read back from the graph and be silently replaced by
+    the stale Agent-row command at run time. The sync cannot live here: this
+    db module may not import ``modulo.api`` (import-linter
+    db-does-not-import-api).
+
     FAR-1471: the rollback itself also appends a ``pipeline.graph_updated``
     audit event (actor, pipeline id, before/after node+edge summary) so every
     graph mutation is attributable — the ``hitl_review_removed`` event above
