@@ -38,6 +38,7 @@ from modulo.core.cost_controller.breakdown.params import (
     RunCostTelemetry,
     build_params,
 )
+from modulo.core.provenance import PROVENANCE_KEY, PROVENANCE_REPORTED
 
 _log = logging.getLogger(__name__)
 
@@ -238,6 +239,14 @@ def _eval_self_reported(
         "component": component.name,
         "display_name": component.display_name,
         "source": "self_reported",
+        # FAR-1780: the amount is the agent's OWN declaration (a parsed
+        # output.json report), typed ``reported`` under the unified taxonomy
+        # and marked non-billable — it renders for audit and is EXCLUDED from
+        # the summed total in ``build_cost_breakdown``. Declared money never
+        # becomes system money, so it can never inflate
+        # ``Run.total_cost_usd`` / spend limits / rate-limit gates.
+        PROVENANCE_KEY: PROVENANCE_REPORTED,
+        "billable": False,
         "amount_usd": _entry_amount(amount),
         "formula_applied": "reported",
         "rate_usd": None,
@@ -337,13 +346,17 @@ def build_cost_breakdown(
 ) -> tuple[list[dict[str, Any]], Decimal]:
     """Build the breakdown list + the summed total (written together).
 
-    Amounts are quantized to 6dp. ``total = sum(amounts)`` in Decimal. NaN
-    guard runs BEFORE the flat clamp. When the summed total exceeds the
-    Numeric(14,6) column capacity, the total is clamped flat and the breakdown
-    is PREFIXED with the synthetic marker entry ``{"total_clamped": true,
-    "amount_usd": "0.000000"}`` — the ONE documented exception to
-    ``total == sum``. Every component entry's serialized amount string is also
-    string-clamped (never ``1E+40``).
+    Amounts are quantized to 6dp. ``total = sum(billable amounts)`` in
+    Decimal (FAR-1780: a ``self_reported`` entry is the agent's own declared
+    cost — it renders with ``provenance: "reported"`` and ``billable: false``
+    and contributes ZERO to the total, so declared money can never inflate
+    ``Run.total_cost_usd`` / spend wiring). NaN guard runs BEFORE the flat
+    clamp. When the summed total exceeds the Numeric(14,6) column capacity,
+    the total is clamped flat and the breakdown is PREFIXED with the synthetic
+    marker entry ``{"total_clamped": true, "amount_usd": "0.000000"}`` — the
+    ONE documented exception to ``total == sum(billable)``. Every component
+    entry's serialized amount string is also string-clamped (never
+    ``1E+40``).
 
     ``rejected_zero_nodes`` (FAR-1305, keyword-only) is the set of nodes that
     presented an explicit ``0.0`` self-report the trust boundary refused as
@@ -377,7 +390,13 @@ def build_cost_breakdown(
             else:
                 entry, amount = _eval_calculated(component, telemetry, settings)
             breakdown.append(entry)
-            total += amount
+            # FAR-1780: a non-billable entry (self_reported — the agent's own
+            # declared cost, typed ``reported``) contributes ZERO to the
+            # total; it renders for audit and is excluded from the summed
+            # total below. The invariant is therefore
+            # ``total == sum(billable amounts)``.
+            if entry.get("billable", True):
+                total += amount
 
         if not total.is_finite():
             _log.warning("cost_breakdown.non_finite_total")

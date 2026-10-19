@@ -172,7 +172,12 @@ def test_self_reported_entry_shape() -> None:
     assert entry["formula_applied"] == "reported"
     assert entry["amount_usd"] == "0.040000"
     assert entry["missing_self_report"] is False
-    assert total == Decimal("0.040000")
+    # FAR-1780: a self_reported entry renders with ``provenance: reported``
+    # and ``billable: False`` and contributes ZERO to the total — the
+    # agent's declared cost is display-only (never summed money).
+    assert entry["provenance"] == "reported"
+    assert entry["billable"] is False
+    assert total == Decimal(0)
 
 
 def test_missing_self_report_when_no_report_for_key() -> None:

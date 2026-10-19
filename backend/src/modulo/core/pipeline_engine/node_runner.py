@@ -154,7 +154,12 @@ from modulo.core.pipeline_engine.sandbox_mode import (
     _validate_sandbox_mode_config,
     sandbox_jinja_environment,
 )
-from modulo.core.provenance import DISPATCH_DATUM_PROVENANCE, PROVENANCE_KEY, WITNESSED_VIA_KEY
+from modulo.core.provenance import (
+    DISPATCH_DATUM_PROVENANCE,
+    PROVENANCE_KEY,
+    PROVENANCE_REPORTED,
+    WITNESSED_VIA_KEY,
+)
 from modulo.core.run_context.autonomy import (
     AutonomyResolution,
     is_autonomy_gating_enabled,
@@ -9107,6 +9112,120 @@ def _format_sandbox_provider_error(exc: Exception, provider_exc_type: type | Non
     return msg
 
 
+#: FAR-1780: the sandbox envelope cost/token datum fields whose values are
+#: extracted from the producer's ``output.json``. DERIVED from the extraction
+#: vocabularies above (the token destinations + the self-reported cost field
+#: set) so the reported-datum stamp list cannot drift from what those helpers
+#: actually emit — a key lands here only if an extraction helper can emit it.
+_SANDBOX_AGENT_COST_DATUM_FIELDS: frozenset[str] = frozenset(dst for _, dst in _TOKEN_USAGE_FIELD_MAP) | frozenset(
+    {
+        "model_cost_usd",
+        "model_cost_raw_usd",
+        "model_cost_display_usd",
+        "model_cost_clamped",
+        "model_cost_out_of_band_high",
+    }
+)
+
+#: FAR-1780: the extraction datums lifted verbatim from a parsed producer
+#: ``output.json`` (the main extraction branch). For EACH datum the map
+#: ``_EXTRACTED_DATUM_SOURCE_KEYS`` below names the report key it is lifted
+#: from — these carry the agent's OWN report ONLY when that branch ran (llm
+#: mode): script mode never extracts (its summary is engine-generated), and
+#: when output.json fails to parse the builder's ``changed_files``/``pr_url``
+#: are empty placeholders, not an agent report. The datum tuple is kept as
+#: the declarative vocabulary (test suites and future union propagation read
+#: it); the stamp loop walks the key map, which cannot name a key outside it.
+_EXTRACTED_DATUM_SOURCE_KEYS: dict[str, str] = {
+    "summary": "summary",
+    "changed_files": "changed_files",
+    "pr_url": "pr_url",
+    "agent_status": "status",
+    "agent_outcome": "outcome",
+}
+_SANDBOX_AGENT_EXTRACTION_DATUM_FIELDS: tuple[str, ...] = tuple(
+    _EXTRACTED_DATUM_SOURCE_KEYS,
+)
+
+
+def _sandbox_reported_datum_provenance(
+    inner: dict[str, Any], output: _SandboxNodeOutput, *, sandbox_mode: str
+) -> dict[str, Any]:
+    """The per-datum ``provenance`` map for a sandbox_agent envelope (FAR-1780).
+
+    A sandbox envelope MIXES agent-claimed and engine-observed facts, so the
+    whole-dict stamp the dispatch arm applies would over-claim
+    ``exit_code`` / ``wall_clock_time_ms``. Instead the envelope types its
+    agent-claimed datums ``reported`` under the ONE envelope ``provenance``
+    key as a per-datum map — ``{datum_name: PROVENANCE_REPORTED}`` — leaving
+    every engine-observed datum unstamped.
+
+    Classifying *which* keys are agent-reported:
+
+    - ``output_json`` IS the verbatim producer surface — always reported when
+      present, in every sandbox mode (script mode's parsed output included:
+      it is still the substrate's own report).
+    - the extraction keys are reported ONLY in llm mode (``sandbox_mode ==
+      "llm"`` — the validated LLM-mode value; legacy builders passing no mode
+      keep their unstamped key set) AND the producer's report actually wrote
+      each datum's SOURCE key (the ``_EXTRACTED_DATUM_SOURCE_KEYS`` map —
+      e.g. ``agent_status`` is lifted from the report's ``status`` key, so a
+      literal ``"agent_status"`` report key stamps nothing under it) —
+      ``changed_files``/``pr_url`` defaults for an omitted key (``[]`` /
+      ``""``) and the absorbed status keys' engine-None (a non-string report
+      value, or a session-lost echo the extraction refuses to absorb) are
+      engine placeholders, not agent claims. ``summary`` additionally ONLY
+      when the envelope's summary value IS the one extracted from the
+      producer's ``output.json``. Two substitutions produce an engine value:
+      the failed-node substitution replaces an empty extracted summary with
+      ``command_error`` / "Sandbox agent command failed", and the generic
+      exception envelope stamps the ``SANDBOX_AGENT_FAILED_SUMMARY``
+      constant — in both the envelope value differs from (or the extraction
+      found nothing in) ``output.json``, so neither is agent-reported.
+    - the cost/token fields are reported per-key presence: those extraction
+      helpers emit a key only for a real producer report (an unproven zero is
+      never written), so presence alone identifies an agent claim.
+
+    Engine-observed or engine-derived keys (``status``, ``exit_code``,
+    ``wall_clock_time_ms``, ``cost_estimate_usd``, ``agent_stdout``/stderr and
+    their lengths/artifacts, ``error_*``, ``sandbox_*``, ``stall_reason``,
+    ``workspace_drift*``, ``provider``/``via_provider``) are deliberately NOT
+    stamped — stamping them would attest Modulo's own measurements as producer
+    claims (the taxonomy's over-claim failure mode).
+    """
+    reported: dict[str, Any] = {}
+    if output.output_json is not _UNSET:
+        reported["output_json"] = PROVENANCE_REPORTED
+    if sandbox_mode == "llm" and isinstance(output.output_json, dict):
+        for key, source_key in _EXTRACTED_DATUM_SOURCE_KEYS.items():
+            if key == "summary":
+                # The envelope's summary is agent-reported ONLY when it IS the
+                # one extracted verbatim from the producer's ``output.json``.
+                # The engine overwrites ``summary`` in two places subclassed
+                # below — the failed-node substitution (``command_error`` or a
+                # generic command text) and the exception envelope's
+                # ``SANDBOX_AGENT_FAILED_SUMMARY`` — and engine text is never
+                # an agent report. An extraction over a report with an empty
+                # or missing summary (the builder emits ``summary=""`` by
+                # default) is likewise engine-authored.
+                producer_summary = output.output_json.get("summary", "")
+                if bool(producer_summary) and output.summary == producer_summary:
+                    reported["summary"] = PROVENANCE_REPORTED
+            elif source_key in output.output_json:
+                # The producer's report wrote the key verbatim. For the two
+                # absorbed-status keys the extraction also runs an engine
+                # absorption gate (a non-string report value, or a
+                # session-lost echo, leaves the envelope value as the
+                # engine-authored ``None``) — the stamp follows the ABSORBED
+                # string, never the suppressed placeholder.
+                if key in {"agent_status", "agent_outcome"} and not isinstance(getattr(output, key), str):
+                    continue
+                reported[key] = PROVENANCE_REPORTED
+    for key in _SANDBOX_AGENT_COST_DATUM_FIELDS & set(inner):
+        reported[key] = PROVENANCE_REPORTED
+    return reported
+
+
 def _build_sandbox_node_envelope(
     *,
     node_id: str,
@@ -9114,9 +9233,9 @@ def _build_sandbox_node_envelope(
     exclude_from_output: frozenset[str] = frozenset(),
     provider: str = "",
     via_provider: bool = False,
+    sandbox_mode: str = "",
 ) -> dict[str, Any]:
     """Assemble a sandbox_agent node envelope from grouped output fields.
-
     The envelope shape is ``{artifacts: [{node_id, status, output}], output}``.
     The artifact's inner ``output`` carries the FULL field set; the top-level
     ``output`` is the reduced telemetry view that omits ``output_json`` and
@@ -9141,6 +9260,14 @@ def _build_sandbox_node_envelope(
     so the key is a historical attribution field; callers that pass no tier
     (the Bundled Runner route) get neither, so their envelope key set is
     unchanged.
+
+    FAR-1780: passing ``sandbox_mode`` (the node's validated sandbox mode)
+    lets the builder type the envelope's agent-claimed datums. When the
+    reported-datum map is non-empty it is stamped under the ONE envelope
+    ``provenance`` key into BOTH views (see
+    :func:`_sandbox_reported_datum_provenance` for the per-datum rules).
+    Callers that pass no mode get no stamp (builder-level tests construct
+    partial envelopes that way); the production paths always pass it.
     """
     inner: dict[str, Any] = {
         "status": output.status,
@@ -9196,6 +9323,16 @@ def _build_sandbox_node_envelope(
     if output.modulo_synthetic_failure:
         inner[MODULO_SYNTHETIC_FAILURE_MARKER] = True
     inner["attempt_key"] = output.attempt_key
+    # FAR-1780: type every agent-claimed datum in the envelope ``reported``
+    # under the ONE envelope ``provenance`` key (a per-datum map) — the
+    # extracted cost/token fields, the verbatim ``output_json`` and the LLM
+    # extraction keys. Engine-observed keys stay unstamped. The stamp rides
+    # BOTH views: the full artifact output AND the reduced telemetry view
+    # (and, after the P1b split, ``node_telemetry_json``), so every surface
+    # rendering or persisting a BYO value sees its class.
+    reported = _sandbox_reported_datum_provenance(inner, output, sandbox_mode=sandbox_mode)
+    if reported:
+        inner[PROVENANCE_KEY] = reported
     excluded = frozenset(("output_json", "exit_code")) | exclude_from_output
     outer = {key: value for key, value in inner.items() if key not in excluded}
     return {
@@ -12082,6 +12219,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             exclude_from_output=frozenset({"changed_files", "pr_url"}),
             provider=_resolved_provider,
             via_provider=True,
+            sandbox_mode=sandbox_mode,
         )
 
     except asyncio.CancelledError:
@@ -12341,6 +12479,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             exclude_from_output=frozenset(),
             provider=_resolved_provider,
             via_provider=True,
+            sandbox_mode=sandbox_mode,
         )
     finally:
         # FAR-1315: settle this node's run-scoped one-PR guard slot. Runs ONLY
