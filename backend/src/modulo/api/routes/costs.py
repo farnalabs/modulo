@@ -604,6 +604,36 @@ async def get_cost_controls(
     )
 
 
+def _cost_controls_response(
+    org: Organisation,
+    cost_state: Any,
+    settings_after: dict[str, Any],
+    teams_result: Any,
+) -> CostControlsResponse:
+    """Build the cost-controls payload from the state persisted by the write."""
+    settings_view = SimpleNamespace(settings_json=settings_after)
+    return CostControlsResponse(
+        teams=[
+            {
+                "id": str(t.id),
+                "name": t.name,
+                "daily_limit_usd": _coerce_spend_limit_usd(t.daily_spend_limit),
+            }
+            for t in teams_result.items
+        ],
+        budget=_coerce_spend_limit_usd(org.daily_spend_limit),
+        max_run_cost=_coerce_cents_usd(cost_state.max_run_cost_cents) if cost_state is not None else None,
+        spend_ceiling=_coerce_cents_usd(cost_state.spend_ceiling_cents) if cost_state is not None else None,
+        org_cumulative_spend_usd=_coerce_cents_usd(cost_state.org_cumulative_spend_cents or 0) or 0.0
+        if cost_state is not None
+        else 0.0,
+        alert_thresholds=_read_alert_thresholds(settings_view),
+        circuit_breaker_enabled=_read_circuit_breaker(settings_view),
+        currency=_read_currency(settings_view),
+        billing_period=_read_billing_period(settings_view),
+    )
+
+
 @router.put(
     "/controls",
     dependencies=[Depends(audited("cost_controls_updated", "cost_control", principal_dep=get_current_tenant_user))],
@@ -685,27 +715,7 @@ async def update_cost_controls(
 
     # The settings-derived response fields read from the value the atomic patch
     # returned (the live merged column), not a possibly-stale in-memory row.
-    settings_view = SimpleNamespace(settings_json=settings_after)
-    return CostControlsResponse(
-        teams=[
-            {
-                "id": str(t.id),
-                "name": t.name,
-                "daily_limit_usd": _coerce_spend_limit_usd(t.daily_spend_limit),
-            }
-            for t in teams_result.items
-        ],
-        budget=_coerce_spend_limit_usd(org.daily_spend_limit),
-        max_run_cost=_coerce_cents_usd(cost_state.max_run_cost_cents) if cost_state is not None else None,
-        spend_ceiling=_coerce_cents_usd(cost_state.spend_ceiling_cents) if cost_state is not None else None,
-        org_cumulative_spend_usd=_coerce_cents_usd(cost_state.org_cumulative_spend_cents or 0) or 0.0
-        if cost_state is not None
-        else 0.0,
-        alert_thresholds=_read_alert_thresholds(settings_view),
-        circuit_breaker_enabled=_read_circuit_breaker(settings_view),
-        currency=_read_currency(settings_view),
-        billing_period=_read_billing_period(settings_view),
-    )
+    return _cost_controls_response(org, cost_state, settings_after, teams_result)
 
 
 # ── FAR-391: dedicated hard spend-ceiling endpoints ───────────────────────────

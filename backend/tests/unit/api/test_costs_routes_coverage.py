@@ -497,6 +497,29 @@ def test_set_spend_ceiling_partial_update_keeps_other_ceiling(client: tuple[Test
     assert store["max_run_cost_cents"] == 500
 
 
+def test_set_spend_ceiling_empty_body_writes_nothing(client: tuple[TestClient, AsyncMock]) -> None:
+    """FAR-1833: a request naming neither ceiling is a read-back, not a write.
+
+    Both fields are absent (not explicit ``null``), so ``cost_state_columns`` is
+    empty and the route must skip the advisory lock + upsert while still
+    returning the org's current ceilings.
+    """
+    http, _session = client
+    org = _make_org()
+    store = dict(_DEFAULT_STORE)
+    with ExitStack() as stack:
+        stack.enter_context(patch(f"{_PREFIX}get_organisation", new=AsyncMock(return_value=org)))
+        stack.enter_context(_rls_cm())
+        stack.enter_context(_cost_state_store_cm(store))
+        resp = http.put("/api/v1/admin/costs/ceiling", json={})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["max_run_cost"] == 5.0
+    assert body["spend_ceiling"] == 100.0
+    assert store == dict(_DEFAULT_STORE)
+
+
 # ---------------------------------------------------------------------------
 # POST /circuit-breaker/{pipeline_id}/reset
 # ---------------------------------------------------------------------------

@@ -72,13 +72,14 @@ _ORG_SCOPE = "(org_id = (NULLIF(current_setting('app.organisation_id'::text, tru
 
 # Plain string concatenation (never an f-string to op.execute) keeps the
 # migration-fstring-sql rule satisfied while interpolating only module constants.
+_ALTER_TABLE = 'ALTER TABLE "' + _TABLE + '"'
 _ENABLE_RLS_STATEMENTS: tuple[str, ...] = (
-    'ALTER TABLE "' + _TABLE + '" ENABLE ROW LEVEL SECURITY',
-    'ALTER TABLE "' + _TABLE + '" FORCE ROW LEVEL SECURITY',
+    _ALTER_TABLE + " ENABLE ROW LEVEL SECURITY",
+    _ALTER_TABLE + " FORCE ROW LEVEL SECURITY",
 )
 _CREATE_POLICY_STATEMENT = 'CREATE POLICY rls_org_isolation ON "' + _TABLE + '" USING (' + _ORG_SCOPE + ")"
 _DROP_POLICY_STATEMENT = 'DROP POLICY IF EXISTS rls_org_isolation ON "' + _TABLE + '"'
-_DISABLE_RLS_STATEMENT = 'ALTER TABLE "' + _TABLE + '" DISABLE ROW LEVEL SECURITY'
+_DISABLE_RLS_STATEMENT = _ALTER_TABLE + " DISABLE ROW LEVEL SECURITY"
 
 # Backfill: one row per existing organisation, copying the three current values.
 # The table is created empty by this same upgrade, so no org can already have a
