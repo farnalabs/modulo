@@ -1095,6 +1095,33 @@ def _check_sandbox_single_pr_per_run(node: dict[str, Any], nid: str, result: Val
     )
 
 
+def _reject_sandbox_only_field(
+    node: dict[str, Any],
+    nid: str,
+    result: ValidationResult,
+    field: str,
+    *,
+    false_is_legal: bool = False,
+    allowed: str | None = None,
+) -> None:
+    """Record a placement error when ``field`` is set on a non-sandbox node.
+
+    ``false_is_legal`` mirrors each field's default: ``read_only`` and
+    ``single_pr_per_run`` treat an explicit ``False`` as absent, while the
+    ``git_credentials``/egress fields reject any non-``None`` value.
+    """
+    value = node.get(field)
+    if value is None or (false_is_legal and value is False):
+        return
+    allowed_names = allowed or field
+    result.error(
+        "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
+        f"Node '{nid}' (node_type={node.get('node_type')!r}) sets {field} "
+        f"— only sandbox_agent nodes can set {allowed_names}",
+        node_id=nid,
+    )
+
+
 def _check_sandbox_policy_fields_only_on_sandbox_nodes(graph_json: dict[str, Any], result: ValidationResult) -> None:
     """Sandbox check 13: read_only / git_credentials only exist on sandbox_agent nodes.
 
@@ -1127,41 +1154,42 @@ def _check_sandbox_policy_fields_only_on_sandbox_nodes(graph_json: dict[str, Any
         if not isinstance(node, dict) or node.get("node_type") == "sandbox_agent":
             continue
         nid = _string_or_default(node.get("id"))
-        if node.get("read_only") is not None and node.get("read_only") is not False:
-            result.error(
-                "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
-                f"Node '{nid}' (node_type={node.get('node_type')!r}) sets read_only — "
-                "only sandbox_agent nodes can set read_only / git_credentials",
-                node_id=nid,
-            )
-        if node.get("git_credentials") is not None:
-            result.error(
-                "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
-                f"Node '{nid}' (node_type={node.get('node_type')!r}) sets git_credentials "
-                "— only sandbox_agent nodes can set read_only / git_credentials",
-                node_id=nid,
-            )
-        if node.get("single_pr_per_run") is not None and node.get("single_pr_per_run") is not False:
-            result.error(
-                "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
-                f"Node '{nid}' (node_type={node.get('node_type')!r}) sets single_pr_per_run "
-                "— only sandbox_agent nodes can set single_pr_per_run",
-                node_id=nid,
-            )
-        if node.get("egress_policy") is not None:
-            result.error(
-                "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
-                f"Node '{nid}' (node_type={node.get('node_type')!r}) sets egress_policy "
-                "— only sandbox_agent nodes can set egress_policy / egress_allowlist",
-                node_id=nid,
-            )
-        if node.get("egress_allowlist") is not None:
-            result.error(
-                "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
-                f"Node '{nid}' (node_type={node.get('node_type')!r}) sets egress_allowlist "
-                "— only sandbox_agent nodes can set egress_policy / egress_allowlist",
-                node_id=nid,
-            )
+        _reject_sandbox_only_field(
+            node,
+            nid,
+            result,
+            "read_only",
+            false_is_legal=True,
+            allowed="read_only / git_credentials",
+        )
+        _reject_sandbox_only_field(
+            node,
+            nid,
+            result,
+            "git_credentials",
+            allowed="read_only / git_credentials",
+        )
+        _reject_sandbox_only_field(
+            node,
+            nid,
+            result,
+            "single_pr_per_run",
+            false_is_legal=True,
+        )
+        _reject_sandbox_only_field(
+            node,
+            nid,
+            result,
+            "egress_policy",
+            allowed="egress_policy / egress_allowlist",
+        )
+        _reject_sandbox_only_field(
+            node,
+            nid,
+            result,
+            "egress_allowlist",
+            allowed="egress_policy / egress_allowlist",
+        )
 
 
 def check_sandbox_only_field_placement(graph_json: dict[str, Any]) -> ValidationResult:

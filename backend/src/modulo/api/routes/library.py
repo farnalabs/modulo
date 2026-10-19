@@ -2716,6 +2716,72 @@ async def _install_response(
     )
 
 
+async def _install_collection_in_transaction(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    org_id: uuid.UUID,
+    primitive_id: uuid.UUID,
+) -> tuple[CollectionInstall, list[dict[str, Any]]]:
+    """Install a collection and run the post-install gates in one transaction.
+
+    Extracted from :func:`install_collection_endpoint` so the route keeps a
+    flat failure-mapping ``except`` chain while the transaction body — the
+    connector-team gate and the RLS-scoped entity load — stays in one place.
+    """
+    async with session.begin():
+        await _set_rls_context(session, principal)
+        install = await install_collection(
+            session,
+            org_id=org_id,
+            created_by=principal.account_id,
+            collection_id=primitive_id,
+        )
+        # FAR-1515 MAJOR 4: a collection install materialises the same
+        # rewired graph as a workflow import — run the same connector-team
+        # gate (collection installs carry no owner team, so only the
+        # team-private-connector direction can fire). Rolls the whole
+        # install back with the import it guards. The freshly-created
+        # pipeline is read back inside the same transaction; a manifest
+        # without a pipeline id (test doubles, partial provenance) has
+        # nothing to gate.
+        installed_pipeline_id = (install.resolved_manifest or {}).get("pipeline_id")
+        if installed_pipeline_id:
+            # The manifest is SERVER data written by the install itself, so
+            # a malformed id is a server-side defect, not caller input.
+            # Parse it HERE (its own try/except) rather than letting the
+            # bundle-validation ``except ValueError`` arm below remap it:
+            # that arm exists for invalid *caller* bundles, and answering a
+            # corrupt manifest with a 422 would blame the caller for a 500.
+            # str() accepts both the real str id and a UUID instance.
+            try:
+                installed_pipeline_uuid = uuid.UUID(str(installed_pipeline_id))
+            except ValueError:
+                _log.exception(
+                    "install_collection_endpoint: resolved manifest carries a malformed pipeline_id %r",
+                    installed_pipeline_id,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Collection install manifest is corrupt: pipeline_id is not a valid UUID.",
+                ) from None
+            installed_pipeline = await get_pipeline(session, installed_pipeline_uuid, organisation_id=org_id)
+            await _enforce_imported_connector_team_gate(
+                session,
+                org_id=org_id,
+                owner_team_id=None,
+                bindings=(
+                    extract_connector_bindings(list(installed_pipeline.graph_nodes_json or []))
+                    if installed_pipeline is not None
+                    else []
+                ),
+            )
+        # FAR-1754: load the entity list while the org RLS context is
+        # still live — the child table's policy fails CLOSED outside the
+        # transaction, so a post-transaction load would silently return [].
+        installed_entities = await _load_installed_entities(session, install.install_id)
+    return install, installed_entities
+
+
 @router.post(
     "/collections/{primitive_id}/install",
     status_code=status.HTTP_201_CREATED,
@@ -2737,57 +2803,12 @@ async def install_collection_endpoint(
     org_id = _require_organisation_id(principal)
     await _require_library_collection_flag(org_id)
     try:
-        async with session.begin():
-            await _set_rls_context(session, principal)
-            install = await install_collection(
-                session,
-                org_id=org_id,
-                created_by=principal.account_id,
-                collection_id=primitive_id,
-            )
-            # FAR-1515 MAJOR 4: a collection install materialises the same
-            # rewired graph as a workflow import — run the same connector-team
-            # gate (collection installs carry no owner team, so only the
-            # team-private-connector direction can fire). Rolls the whole
-            # install back with the import it guards. The freshly-created
-            # pipeline is read back inside the same transaction; a manifest
-            # without a pipeline id (test doubles, partial provenance) has
-            # nothing to gate.
-            installed_pipeline_id = (install.resolved_manifest or {}).get("pipeline_id")
-            if installed_pipeline_id:
-                # The manifest is SERVER data written by the install itself, so
-                # a malformed id is a server-side defect, not caller input.
-                # Parse it HERE (its own try/except) rather than letting the
-                # bundle-validation ``except ValueError`` arm below remap it:
-                # that arm exists for invalid *caller* bundles, and answering a
-                # corrupt manifest with a 422 would blame the caller for a 500.
-                # str() accepts both the real str id and a UUID instance.
-                try:
-                    installed_pipeline_uuid = uuid.UUID(str(installed_pipeline_id))
-                except ValueError:
-                    _log.exception(
-                        "install_collection_endpoint: resolved manifest carries a malformed pipeline_id %r",
-                        installed_pipeline_id,
-                    )
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail="Collection install manifest is corrupt: pipeline_id is not a valid UUID.",
-                    ) from None
-                installed_pipeline = await get_pipeline(session, installed_pipeline_uuid, organisation_id=org_id)
-                await _enforce_imported_connector_team_gate(
-                    session,
-                    org_id=org_id,
-                    owner_team_id=None,
-                    bindings=(
-                        extract_connector_bindings(list(installed_pipeline.graph_nodes_json or []))
-                        if installed_pipeline is not None
-                        else []
-                    ),
-                )
-            # FAR-1754: load the entity list while the org RLS context is
-            # still live — the child table's policy fails CLOSED outside the
-            # transaction, so a post-transaction load would silently return [].
-            installed_entities = await _load_installed_entities(session, install.install_id)
+        install, installed_entities = await _install_collection_in_transaction(
+            session,
+            principal,
+            org_id,
+            primitive_id,
+        )
     except GitContentRefError as exc:
         _log.warning("install_collection_endpoint: unpinned git-content agent prompt rejected: %s", exc)
         raise HTTPException(
