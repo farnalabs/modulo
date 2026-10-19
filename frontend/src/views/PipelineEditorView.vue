@@ -85,9 +85,11 @@
               @open-timeline="openVersionTimeline"
             />
             <!-- FAR-1895: the chip resolves through an AUXILIARY filtered
-                 request; when that fails the chip falls back to the loaded
-                 catalog rather than vanishing, and this surfaces the degraded
-                 state with a retry so it is never silent. -->
+                 request. On failure the chip falls back to the substantive
+                 version in the loaded catalog; if the catalog's first page has
+                 no substantive version, the chip is hidden and the failure is
+                 surfaced via `versionChipError` / retry. It never serves a
+                 STALE version. -->
             <button
               v-if="versionChipError && !isViewing"
               type="button"
@@ -2124,10 +2126,11 @@ const snapshots = ref<any[]>([])
 // must not depend on a substantive version happening to fall inside a
 // fixed-size page of run-streaked history.
 //
-// This is an AUXILIARY request. The chip's resolution must not depend on it
-// succeeding: `versionChipSnapshot` falls back to the already-loaded
-// unfiltered catalog, and `versionChipError` surfaces the degradation with a
-// retry (a failed auxiliary request must never read as "no version yet").
+// This is an AUXILIARY request. On failure `currentVersionSnapshot` falls back
+// to the substantive version in the already-loaded catalog; if that catalog's
+// first page has no substantive version, the chip is hidden and the failure is
+// surfaced via `versionChipError` / retry. It never serves a STALE version (the
+// loader clears `currentVersionSnapshots` on every failure).
 const currentVersionSnapshots = ref<any[]>([])
 const versionChipError = ref<string | null>(null)
 // Monotonic token: loadCatalog re-runs on mount and after a rollback, so a
@@ -3307,9 +3310,11 @@ async function loadCatalog() {
  * merely left untouched — so `currentVersionSnapshot` falls back to the
  * already-loaded unfiltered catalog even when a PREVIOUS query succeeded. That
  * matters after a rollback: the reload re-queries this endpoint, and without the
- * clear a failed re-query would keep serving the pre-rollback version. The chip
- * never vanishes because one auxiliary request failed, and the failure is
- * surfaced with a retry rather than silently degrading to "no version yet".
+ * clear a failed re-query would keep serving the pre-rollback version. On
+ * failure the chip falls back to the substantive version in the loaded catalog;
+ * if the catalog's first page has no substantive version, the chip is hidden and
+ * the failure is surfaced via `versionChipError` / retry. It never serves a
+ * STALE version.
  */
 async function loadCurrentVersionSnapshot() {
   const token = ++versionChipToken
@@ -4712,9 +4717,10 @@ const historicResolving = computed(
 // rollback cannot leave a stale pre-rollback list behind) and this falls back to
 // the already-loaded unfiltered catalog — the pre-FAR-1895 behaviour. A version
 // inside that window therefore still labels the chip even though one auxiliary
-// request failed, and only a genuinely
-// version-less pipeline hides it. The failure itself is surfaced separately by
-// `versionChipError` (with a retry) so degraded is never silent.
+// request failed; if that first page has no substantive version either, the chip
+// is hidden. Either way the failure is surfaced separately by `versionChipError`
+// (with a retry) so degraded is never silent, and a stale version is never
+// served.
 //
 // `currentVersionSnapshot` (viewing-independent) is ALSO handed to the
 // timeline: when the timeline's own window has no substantive row it anchors
