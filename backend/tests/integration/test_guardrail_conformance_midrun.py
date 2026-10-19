@@ -31,7 +31,7 @@ from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.pipeline_engine.decorator import set_model_backend_hub
 from modulo.model_backends.base import ModelBackendBase
 from modulo.model_backends.stub.backend import StubModelBackend
-from tests.integration.conftest import EvalMirrorDefinition, insert_evals_mirror
+from tests.integration.conftest import EvalFixture, insert_eval
 
 pytestmark = [
     pytest.mark.integration,
@@ -185,29 +185,12 @@ async def _seed_guardrail(
     if required_capabilities is not None:
         config["required_capabilities"] = required_capabilities
     async with engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, name, "
-                "eval_type, config_json, failure_behaviour, account_id) "
-                "VALUES (:id, :oid, :pid, :name, 'guardrail', CAST(:cfg AS json), "
-                "CAST(:fb AS varchar), :uid)"
-            ),
-            {
-                "id": str(eval_id),
-                "oid": str(org_id),
-                "pid": str(pipeline_id),
-                "name": name,
-                "cfg": json.dumps(config),
-                "fb": "block" if action == "block" else "warn",
-                "uid": str(account_id),
-            },
-        )
-        # FAR-1101 chunk 3b cut the conformance reader's guardrail load over to
-        # ``evals``: mirror the legacy ``eval_definitions`` row (same UUID) or
-        # the mid-run re-check sees no bound guardrail and fails open.
-        await insert_evals_mirror(
+        # The conformance reader's guardrail load reads ``evals``; seed the row
+        # there directly or the mid-run re-check sees no bound guardrail and
+        # fails open. The action is carried in ``config_json``.
+        await insert_eval(
             conn,
-            EvalMirrorDefinition(
+            EvalFixture(
                 id=eval_id,
                 organisation_id=org_id,
                 pipeline_id=pipeline_id,

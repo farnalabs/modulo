@@ -278,7 +278,7 @@
           type="button"
           :disabled="cancelling"
           data-testid="run-detail-cancel"
-          class="inline-flex items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
+          class="inline-flex items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-2 text-sm font-medium text-destructive-text hover:bg-destructive/20 disabled:opacity-50"
           @click="cancelRun"
         >
           <LoaderCircle v-if="cancelling" aria-hidden="true" class="h-4 w-4 animate-spin" />
@@ -359,14 +359,14 @@
       <!-- Failed Run Diagnostics -->
       <div v-if="run.status === 'failed' && run.error_detail" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 mb-4">
         <div class="flex flex-wrap items-center gap-2 mb-1">
-          <h3 class="text-sm font-semibold text-destructive">{{ $t('views.RunDetailView.run_error') }}</h3>
+          <h3 class="text-sm font-semibold text-destructive-text">{{ $t('views.RunDetailView.run_error') }}</h3>
           <RunErrorTag
             v-if="run.error_code"
             :code="run.error_code"
             :detail="(run.error_detail as string | null | undefined)?.slice(0, 200)"
           />
         </div>
-        <pre class="text-xs whitespace-pre-wrap font-mono text-destructive/80">{{ run.error_detail }}</pre>
+        <pre class="text-xs whitespace-pre-wrap font-mono text-destructive-text">{{ run.error_detail }}</pre>
       </div>
 
       <!-- FAR-704: deadline-kill / cancellation triage evidence retained from
@@ -413,12 +413,11 @@
         class="mb-4 rounded-lg border border-border bg-muted/40 p-4"
       >
         <h3 class="text-sm font-semibold mb-1">{{ $t('views.RunDetailView.cancel_reason_title') }}</h3>
-        <p
+        <output
           data-testid="run-detail-cancel-reason-message"
-          role="status"
           aria-live="polite"
-          class="text-sm text-muted-foreground"
-        >{{ cancelReasonMessage }}</p>
+          class="block text-sm text-muted-foreground"
+        >{{ cancelReasonMessage }}</output>
         <p
           v-if="cancelledByLabel"
           data-testid="run-detail-cancelled-by"
@@ -530,7 +529,18 @@
               <td class="py-3 pr-4 tabular-nums text-muted-foreground">{{ node.duration }}</td>
               <td class="py-3 pr-4 tabular-nums">{{ node.inputTokens ?? '—' }}</td>
               <td class="py-3 pr-4 tabular-nums">{{ node.outputTokens ?? '—' }}</td>
-              <td class="py-3 pr-4 tabular-nums">{{ node.cost != null ? formatMoney(node.cost, currencyCode, 6) : '—' }}</td>
+              <td class="py-3 pr-4 tabular-nums">
+                <template v-if="node.cost != null">
+                  {{ formatMoney(node.cost, currencyCode, 6) }}
+                  <span
+                    v-if="node.costProvenance"
+                    data-testid="run-detail-node-cost-reported"
+                    class="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary align-middle"
+                    :title="$t('views.RunDetailView.reported_by_agent_tooltip')"
+                  >{{ $t('views.RunDetailView.reported_by_agent') }}</span>
+                </template>
+                <template v-else>—</template>
+              </td>
               <td class="py-3 pr-4">
                 <button
                   v-if="node.traceId"
@@ -675,7 +685,7 @@
                 </div>
                 <div v-if="getNodeLog(node.name, 'agent_stderr')" class="rounded-lg border bg-destructive/10 p-4">
                   <div class="mb-2 flex flex-wrap items-center gap-2">
-                    <h4 class="text-xs font-semibold text-destructive">{{ $t('views.RunDetailView.agent_stderr') }}</h4>
+                    <h4 class="text-xs font-semibold text-destructive-text">{{ $t('views.RunDetailView.agent_stderr') }}</h4>
                     <label class="inline-flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
                       <input
                         type="checkbox"
@@ -800,7 +810,18 @@
                     {{ entry.display_name || entry.component }}
                     <span v-if="entry.error" class="ml-1 inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-xs text-warning-text">{{ $t('views.RunDetailView.eval_error_badge') }}</span>
                   </td>
-                  <td class="py-2 pr-4 tabular-nums">{{ entry.missing_self_report ? '—' : formatMoney(Number(entry.amountUsd), currencyCode, 6) }}</td>
+                  <td class="py-2 pr-4 tabular-nums">
+                    <template v-if="!entry.missing_self_report">
+                      {{ formatMoney(Number(entry.amountUsd), currencyCode, 6) }}
+                      <span
+                        v-if="entry.agentReported"
+                        data-testid="run-detail-cost-reported-badge"
+                        class="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary align-middle"
+                        :title="$t('views.RunDetailView.reported_by_agent_tooltip')"
+                      >{{ $t('views.RunDetailView.reported_by_agent') }}</span>
+                    </template>
+                    <template v-else>—</template>
+                  </td>
                   <td class="py-2 pr-4">
                     <template v-if="entry.missing_self_report">
                       <!-- FAR-1305/FAR-1308: a refused report ($0.00 or
@@ -979,6 +1000,13 @@ interface NodeTokenUsage {
   total_tokens?: number
   cost_usd?: number
   model_cost_display_usd?: number
+  // FAR-1780: the declared model cost the agent itself reported is stamped
+  // "reported" at build time and persisted through node_token_usage. The
+  // union's provenance serializes as a PER-DATUM map over the folded union
+  // keys ({"model_cost_usd": "reported", "reported_input_tokens":
+  // "reported", ...}); runs before that change carry no field — the badge is
+  // simply absent for them.
+  provenance?: string | Record<string, string>
 }
 
 interface WorkItemRef {
@@ -1021,6 +1049,12 @@ interface CostBreakdownEntry {
   missing_self_report_reason?: string
   error?: string
   total_clamped?: boolean
+  // FAR-1780: a self_reported component entry is stamped with
+  // provenance="reported" and billable=false — the figure is the agent's own
+  // declaration and is excluded from the run total. Entries lacking either
+  // field are pre-provenance runs and render no badge.
+  provenance?: string
+  billable?: boolean
 }
 
 interface NodeEntry {
@@ -1030,6 +1064,15 @@ interface NodeEntry {
   inputTokens: number | null
   outputTokens: number | null
   cost: number | null
+  // FAR-1780 (QA round 2): true only when the node_token_usage entry's
+  // per-datum provenance map stamps "reported" on a COST datum
+  // (model_cost_usd / model_cost_raw_usd) — false/absent for pre-provenance
+  // runs and token-only maps, which render no badge. The union surface
+  // carries NO envelope-summary badge: the backend deliberately propagates
+  // no summary stamp on the union (finalize.py's datum map excludes
+  // summary/output_json — the union summary can be engine-substituted on
+  // failure), so no truthful summary signal exists here.
+  costProvenance: boolean
   traceId: string | null
   isNodeSpanId: boolean
   io: { input: unknown; output: unknown } | null
@@ -1117,9 +1160,9 @@ function bucketClass(key: string): string {
   const classes: Record<string, string> = {
     evaluated: 'bg-muted text-muted-foreground',
     passed: 'bg-success/10 text-success',
-    violated: 'bg-destructive/10 text-destructive',
+    violated: 'bg-destructive/10 text-destructive-text',
     observed: 'bg-warning/10 text-warning-text',
-    errored: 'bg-destructive/10 text-destructive',
+    errored: 'bg-destructive/10 text-destructive-text',
     redacted: 'bg-purple-500/10 text-purple-600',
     skipped: 'bg-muted text-muted-foreground',
   }
@@ -1353,36 +1396,47 @@ function githubRefId(item: WorkItemRef): string {
   return (item.ref || '').trim().replace(/^[^/\s]+\/[^/\s]+#/, '')
 }
 
+// Resolve an explicit `owner/repo#id` ref to its URL, or null when the ref is
+// not in that shape (or any of its three segments is malformed).
+function explicitGithubRefUrl(ref: string, kind: string): string | null {
+  const hashIndex = ref.indexOf('#')
+  if (hashIndex <= 0) return null
+  const slashIndex = ref.indexOf('/')
+  if (slashIndex <= 0 || slashIndex >= hashIndex) return null
+  const owner = ref.slice(0, slashIndex)
+  const repo = ref.slice(slashIndex + 1, hashIndex)
+  const id = ref.slice(hashIndex + 1)
+  if (!owner || !repo || !id || /\s/.test(owner) || /\s/.test(repo) || repo.includes('/')) return null
+  if (kind === 'github_pr') return `https://github.com/${owner}/${repo}/pull/${id}`
+  if (kind === 'github_issue') return `https://github.com/${owner}/${repo}/issues/${id}`
+  return `https://github.com/${owner}/${repo}`
+}
+
+// Resolve a PR URL from the run payload's pull_request context when the ref
+// itself carries only a bare number (or a non-numeric ref matching the
+// context's PR number). Mirrors getPrUrl's context branch.
+function contextGithubPrUrl(item: WorkItemRef): string | null {
+  const ctx = prContext.value
+  if (!ctx || !ctx.fullName) return null
+  const refId = githubRefId(item)
+  const refIsNumber = /^\d+$/.test(refId)
+  const ctxNumber = /^\d+$/.test(ctx.number) ? ctx.number : ''
+  if (refIsNumber && (!ctxNumber || ctxNumber === refId)) {
+    return `https://github.com/${ctx.fullName}/pull/${refId}`
+  }
+  if (!refIsNumber && ctxNumber) {
+    return `https://github.com/${ctx.fullName}/pull/${ctxNumber}`
+  }
+  return null
+}
+
 function getPrUrl(item: WorkItemRef): string | null {
   const kind = normalizeGithubKind(item.kind)
   const ref = (item.ref || '').trim()
-  const hashIndex = ref.indexOf('#')
-  if (hashIndex > 0) {
-    const slashIndex = ref.indexOf('/')
-    if (slashIndex > 0 && slashIndex < hashIndex) {
-      const owner = ref.slice(0, slashIndex)
-      const repo = ref.slice(slashIndex + 1, hashIndex)
-      const id = ref.slice(hashIndex + 1)
-      if (owner && repo && id && !/\s/.test(owner) && !/\s/.test(repo) && !repo.includes('/')) {
-        if (kind === 'github_pr') return `https://github.com/${owner}/${repo}/pull/${id}`
-        if (kind === 'github_issue') return `https://github.com/${owner}/${repo}/issues/${id}`
-        return `https://github.com/${owner}/${repo}`
-      }
-    }
-  }
-  if (kind === 'github_pr') {
-    const ctx = prContext.value
-    const refId = githubRefId(item)
-    const refIsNumber = /^\d+$/.test(refId)
-    const ctxNumber = ctx && /^\d+$/.test(ctx.number) ? ctx.number : ''
-    if (ctx && ctx.fullName && refIsNumber && (!ctxNumber || ctxNumber === refId)) {
-      return `https://github.com/${ctx.fullName}/pull/${refId}`
-    }
-    if (ctx && ctx.fullName && !refIsNumber && ctxNumber) {
-      return `https://github.com/${ctx.fullName}/pull/${ctxNumber}`
-    }
-  }
-  return null
+  const explicitUrl = explicitGithubRefUrl(ref, kind)
+  if (explicitUrl) return explicitUrl
+  if (kind !== 'github_pr') return null
+  return contextGithubPrUrl(item)
 }
 
 const prContext = computed<{ fullName: string; number: string; title: string | null } | null>(() => {
@@ -1807,6 +1861,52 @@ function formatBreakdownAmount(value: string | number | undefined): string {
   return parseBreakdownAmount(value).toFixed(6)
 }
 
+// FAR-1780 (ADR 059, ADR 042 amendment): a declared figure the agent itself
+// reported is provenance "reported" — Modulo observed the dispatch, never the
+// figure. Whichever field shape the backend stamps — the node_token_usage
+// entry's `provenance`, a cost-breakdown entry's `provenance`/`billable`
+// pair (`billable:false` marks a self-reported entry excluded from the run
+// total) or the union's agent-reported envelope values — the figure is
+// rendered with a "reported by agent" badge either way. Entries carrying
+// neither field (runs before the change) are the graceful fallback: they
+// show no badge, never a wrong badge.
+//
+// The runner-token surfaces differ in SHAPE: the run-token-usage union
+// serializes the envelope's provenance as a per-datum MAP
+// ({"model_cost_usd": "reported", ...}) — the envelope stamp lands on the
+// agent-reported datums under the one `provenance` key — while cost-breakdown
+// entries carry the scalar "reported" string. `figureIsAgentReported` (the
+// breakdown-surface gate) accepts both shapes; the union cost badge keys
+// per-datum through `costDatumReported` above.
+function provenanceIsReported(provenance: unknown): boolean {
+  if (typeof provenance === 'string') return provenance === 'reported'
+  if (typeof provenance === 'object' && provenance !== null && !Array.isArray(provenance)) {
+    return Object.values(provenance).includes('reported')
+  }
+  return false
+}
+
+// FAR-1780 (QA round 2): the union's per-datum provenance map names the
+// datums whose produced value SURVIVED the envelope folds — tokens land in
+// the `reported_*` family, model cost under `model_cost_usd` /
+// `model_cost_raw_usd` (`_UNION_PROVENANCE_DATUM_KEYS`, finalize.py).
+// The union cost badge must attest the COST datums only — a token-only
+// stamp is not a cost attestation, so this check keys strictly to the two
+// cost datums, never an any-value some() over the whole map.
+const UNION_COST_DATUM_KEYS: readonly string[] = ['model_cost_usd', 'model_cost_raw_usd']
+
+function costDatumReported(provenance: unknown): boolean {
+  if (typeof provenance !== 'object' || provenance === null || Array.isArray(provenance)) return false
+  const map = provenance as Record<string, unknown>
+  return UNION_COST_DATUM_KEYS.some(k => map[k] === 'reported')
+}
+
+function figureIsAgentReported(provenance: unknown, billable: unknown = null): boolean {
+  if (provenanceIsReported(provenance)) return true
+  if (billable === false) return true
+  return false
+}
+
 function breakdownBasisLine(entry: CostBreakdownEntry): string {
   // A missing self-report is a CLEAR non-billing state — never render the
   // confusing ``reported=0, node_count=0`` numeric basis. Surface the human
@@ -1847,6 +1947,7 @@ const breakdownEntries = computed(() =>
       ...e,
       amountUsd: formatBreakdownAmount(e.amount_usd),
       basisLine: breakdownBasisLine(e),
+      agentReported: figureIsAgentReported(e.provenance, e.billable),
     })),
 )
 
@@ -2070,6 +2171,9 @@ const nodeEntries = computed<NodeEntry[]>(() => {
       inputTokens: usage?.input_tokens ?? null,
       outputTokens: usage?.output_tokens ?? null,
       cost: usage?.model_cost_display_usd ?? usage?.cost_usd ?? null,
+      // FAR-1780 (QA round 2): keyed strictly to the union map's COST datums —
+      // a token-only report never attests cost.
+      costProvenance: costDatumReported(usage?.provenance),
       traceId: nodeSpanId ?? nodeTraceId ?? run.value?.trace_id ?? null,
       isNodeSpanId: nodeSpanId !== null,
       io: resolveNodeIO(nodeOutput),
@@ -2123,7 +2227,7 @@ function chipClass(state: NodeProgressState): string {
   const map: Record<NodeProgressState, string> = {
     completed: 'bg-success/10 text-success border border-success/30',
     running: 'bg-warning/10 text-warning-text border border-warning/30',
-    failed: 'bg-destructive/10 text-destructive border border-destructive/30',
+    failed: 'bg-destructive/10 text-destructive-text border border-destructive/30',
     pending: 'bg-muted text-muted-foreground border border-border',
   }
   return map[state]

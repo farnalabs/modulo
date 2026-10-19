@@ -13,15 +13,12 @@ Targets the contribution lifecycle in ``modulo.core.library_service``:
 
 import asyncio
 import uuid
-from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.core.library_service import (
-    _COMMUNITY_BY_ID,
-    _COMMUNITY_BY_SLUG,
     _COMMUNITY_PRIMITIVES,
     CONTRIBUTION_DRAFT,
     CONTRIBUTION_PUBLISHED,
@@ -44,26 +41,7 @@ from modulo.core.library_service import (
 )
 from modulo.db.crud.base import PageResult
 
-_COMMUNITY_PRIMITIVES_BASELINE = tuple(_COMMUNITY_PRIMITIVES)
-_COMMUNITY_BY_ID_BASELINE = dict(_COMMUNITY_BY_ID)
-_COMMUNITY_BY_SLUG_BASELINE = dict(_COMMUNITY_BY_SLUG)
-
-
-def _restore_community_cache() -> None:
-    _COMMUNITY_PRIMITIVES[:] = _COMMUNITY_PRIMITIVES_BASELINE
-    _COMMUNITY_BY_ID.clear()
-    _COMMUNITY_BY_ID.update(_COMMUNITY_BY_ID_BASELINE)
-    _COMMUNITY_BY_SLUG.clear()
-    _COMMUNITY_BY_SLUG.update(_COMMUNITY_BY_SLUG_BASELINE)
-
-
-@pytest.fixture(autouse=True)
-def isolate_community_cache() -> Iterator[None]:
-    _restore_community_cache()
-    try:
-        yield
-    finally:
-        _restore_community_cache()
+from .helpers import mock_session as _mock_session
 
 
 def _fake_primitive(*, pid: uuid.UUID | None = None, **overrides: object) -> MagicMock:
@@ -85,17 +63,6 @@ def _fake_primitive(*, pid: uuid.UUID | None = None, **overrides: object) -> Mag
     for key, value in overrides.items():
         setattr(p, key, value)
     return p
-
-
-def _mock_session() -> MagicMock:
-    """Return a mock AsyncSession that supports ``async with session.begin():``."""
-    session = MagicMock()
-    ctx = AsyncMock()
-    ctx.__aenter__ = AsyncMock(return_value=ctx)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=ctx)
-    session.in_transaction = MagicMock(return_value=True)
-    return session
 
 
 def _scalars_result(values: list[object]) -> MagicMock:

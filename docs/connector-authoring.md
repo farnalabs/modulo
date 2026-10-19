@@ -99,10 +99,10 @@ classes exempt from the test is `CIRunnerBase`, `FilesystemConnector`,
 
 Two further optional seams worth knowing:
 
-- `_egress_ssl_context: ssl.SSLContext | None` — the class attribute every
+- `_egress_ssl_context: ssl.SSLContext | None` – the class attribute every
   connector's outbound client is built from; the `None` default means an
   instance that never makes an outbound call pays nothing.
-- `async def close(self) -> None` — duck-typed, not declared on `ConnectorBase`.
+- `async def close(self) -> None` – duck-typed, not declared on `ConnectorBase`.
   The hub awaits it on every held connector at teardown if present, so
   implement it if your connector owns a client or session pool.
 
@@ -164,9 +164,22 @@ class YourConnector(ConnectorBase):
 
 ## Swappable binding
 
-Pipelines bind to connectors by type, not by instance. This means swapping
-`GitHubConnector` for `GitLabConnector` requires **zero pipeline changes** –
-just rebind to a different connector instance of the same `connector_type`.
+A pipeline node binds to a connector **instance** by its
+`connector_instance_id`, not to the connector class directly. Swapping a
+node's binding to another instance rewrites only that binding in the
+extracted graph and leaves the graph topology untouched. The graph
+validator then checks the new binding against the bound instance's
+`connector_type_id` and `allowed_operations` through the same
+`ConnectorACL` the runtime hub applies, so an instance that lacks the
+operation the node routes (`read` for `query`, `write` for `write` and
+`dispatch`) is rejected with `CONNECTOR_MISSING_OPERATIONS`.
+
+Swapping providers is therefore not always a zero-change operation:
+`GitHubConnector` and `GitLabConnector` are separate `ConnectorType`
+members with different capability sets, so a rebind is only valid when the
+target instance satisfies the node's routed operation. Two instances are
+interchangeable when they share a `connector_type` and the target's
+`allowed_operations` covers the node's operation.
 
 ## Testing
 

@@ -27,6 +27,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.api.mcp_server import (
+    get_org_config,
     list_feature_flags,
     list_housekeeping,
     perform_housekeeping,
@@ -55,6 +56,46 @@ class _ParityAuthContext(AuthContext):
 
         _ctx_is_system_admin.set(False)
         super().teardown_method()
+
+
+# ---------------------------------------------------------------------------
+# get_org_config — FAR-1942: read-only floor, system-admin leg is the
+# discriminator (same shape as ``list_feature_flags``; both mirror a REST route
+# gated only by ``require_system_permission``).
+# ---------------------------------------------------------------------------
+
+
+class TestGetOrgConfigSystemAdminParity(_ParityAuthContext):
+    @pytest.fixture(autouse=True)
+    def _validate_auth(self) -> Iterator[None]:
+        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+            yield
+
+    @pytest.mark.parametrize("role", ["viewer", "runner", "operator", "admin"])
+    async def test_any_role_without_system_admin_rejected(self, role: str) -> None:
+        # Every org role clears the read-only role leg; the system-admin
+        # requirement is the sole discriminator — matching REST, whose
+        # ``require_system_permission`` ignores the org role entirely.
+        from modulo.api.mcp_server import _ctx_role
+
+        _ctx_role.set(role)
+        result = await get_org_config()
+        assert result["error"] == "insufficient_scope"
+        assert result["detail"] == _SYS_ADMIN_DETAIL.format(tool="get_org_config")
+
+    async def test_system_admin_accepted(self) -> None:
+        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+
+        _ctx_role.set("admin")
+        _ctx_is_system_admin.set(True)
+        with (
+            patch("modulo.api.mcp_server._session", return_value=make_session_context(AsyncMock())),
+            patch("modulo.db.crud.system_config.list_config", new=AsyncMock(return_value=[])),
+        ):
+            result = await get_org_config()
+
+        assert result["count"] == 0
+        assert "No configuration found" in result["results"]
 
 
 # ---------------------------------------------------------------------------
@@ -227,13 +268,18 @@ class TestSystemAdminDenialLogging(_ParityAuthContext):
         with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
             yield
 
-    @pytest.mark.parametrize("tool", ["list_feature_flags", "list_housekeeping", "perform_housekeeping"])
+    @pytest.mark.parametrize(
+        "tool",
+        ["get_org_config", "list_feature_flags", "list_housekeeping", "perform_housekeeping"],
+    )
     async def test_denial_logs_exactly_one_canonical_line(self, tool: str, caplog: pytest.LogCaptureFixture) -> None:
         import modulo.api.mcp_server as ms
 
         ms._ctx_role.set("admin")
         with caplog.at_level(logging.WARNING):
-            if tool == "list_feature_flags":
+            if tool == "get_org_config":
+                result = await ms.get_org_config()
+            elif tool == "list_feature_flags":
                 result = await ms.list_feature_flags()
             elif tool == "list_housekeeping":
                 result = await ms.list_housekeeping()
@@ -246,3 +292,60 @@ class TestSystemAdminDenialLogging(_ParityAuthContext):
         assert sum("system_admin_required" in message for message in messages) == 1, messages
         assert not any(message.startswith("Scope check failed") for message in messages), messages
         assert any(tool in message for message in messages), messages
+
+
+# ---------------------------------------------------------------------------
+# FAR-1942: the REST twin and the MCP tool admit the SAME caller role.
+# ---------------------------------------------------------------------------
+
+
+def _rest_permission_tag(endpoint: object, parameter: str) -> object:
+    """Return the ``_tagged_dep`` metadata attached to a route's parameter."""
+    import typing
+
+    hints = typing.get_type_hints(endpoint, include_extras=True)
+    return typing.get_args(hints[parameter])[1]
+
+
+def test_get_org_config_mcp_matches_its_rest_twin() -> None:
+    """The REST route and MCP tool agree on the caller each admits.
+
+    ``GET /api/v1/system-admin/config`` is gated by
+    ``require_system_permission("system.config.manage")`` — a strict
+    ``is_system_admin`` claim with no org-role fall-through. The MCP tool must
+    therefore admit EXACTLY the system-admin caller, for every org role. A
+    change to either surface (a different REST dependency, or dropping the
+    claim from the MCP declaration) fails here, so they cannot drift again.
+    """
+    from modulo.api.routes.admin_system_config import admin_list_config
+    from modulo.core.mcp.scope_validator import SYSTEM_ADMIN_TOOLS, resolve_tool_access
+
+    rest_tag = _rest_permission_tag(admin_list_config, "_current_user")
+    assert getattr(rest_tag, "permission_kind", None) == "system"
+    assert getattr(rest_tag, "permission", None) == "system.config.manage"
+
+    assert "get_org_config" in SYSTEM_ADMIN_TOOLS
+
+    for role in ("viewer", "runner", "operator", "admin"):
+        allowed_as_admin, _ = resolve_tool_access(
+            tool="get_org_config",
+            action=None,
+            role=role,
+            key_scope="org",
+            auth_type="jwt",
+            allowed_tools=None,
+            kill_switch=True,
+            is_system_admin=True,
+        )
+        allowed_without_claim, _ = resolve_tool_access(
+            tool="get_org_config",
+            action=None,
+            role=role,
+            key_scope="org",
+            auth_type="jwt",
+            allowed_tools=None,
+            kill_switch=True,
+            is_system_admin=False,
+        )
+        assert allowed_as_admin is True
+        assert allowed_without_claim is False

@@ -407,7 +407,23 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
             select_cols.append(sa.func.min(label_col).label("key_label"))
 
     stmt = sa.select(*select_cols).where(RunDailyFact.organisation_id == sa.bindparam("org_id", type_=sa.Uuid))
+    stmt = _apply_facts_filters(stmt, query, params, not_benign)
+    stmt = stmt.group_by(*group_cols).order_by(*group_cols)
+    return stmt, params
 
+
+def _apply_facts_filters(
+    stmt: sa.Select[Any],
+    query: AnalyticsQuery,
+    params: dict[str, Any],
+    not_benign: Any,
+) -> sa.Select[Any]:
+    """Apply every optional WHERE clause of the day-level facts query.
+
+    ``not_benign`` is the shared SQL expression from :func:`build_facts_query`;
+    it must be the SAME object the select list filters on so the breakdown
+    scope and the aggregate scope cannot drift.
+    """
     if query.dimension == AnalyticsDimension.ERROR_CODE:
         # FAR-707: an error-code breakdown must not carry a business-expected
         # outcome as a slice — a benign rebase conflict would otherwise keep
@@ -433,6 +449,21 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
     if query.pipeline_ids:
         params["pipeline_ids"] = list(query.pipeline_ids)
         stmt = stmt.where(RunDailyFact.pipeline_id.in_(sa.bindparam("pipeline_ids", type_=sa.Uuid, expanding=True)))
+    stmt = _apply_team_filters(stmt, query, params)
+    if query.error_code is not None:
+        stmt = stmt.where(build_error_code_condition(params, query.error_code))
+    if query.folder_id is not None:
+        params["folder_id"] = query.folder_id
+        stmt = stmt.where(RunDailyFact.folder_id == sa.bindparam("folder_id", type_=sa.Uuid))
+    return stmt
+
+
+def _apply_team_filters(
+    stmt: sa.Select[Any],
+    query: AnalyticsQuery,
+    params: dict[str, Any],
+) -> sa.Select[Any]:
+    """Apply the single-team / team-scoped boundary filter (FAR-1795)."""
     if query.team_id is not None and query.team_ids is None:
         # Legacy explicit single-team filter from an UNSCOPED caller (org
         # admin picking a team in the UI) — unchanged bind shape.
@@ -451,14 +482,7 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
         condition = team_scope_condition(effective_team, query.scoped_team_ids(), params)
         if condition is not None:
             stmt = stmt.where(condition)
-    if query.error_code is not None:
-        stmt = stmt.where(build_error_code_condition(params, query.error_code))
-    if query.folder_id is not None:
-        params["folder_id"] = query.folder_id
-        stmt = stmt.where(RunDailyFact.folder_id == sa.bindparam("folder_id", type_=sa.Uuid))
-
-    stmt = stmt.group_by(*group_cols).order_by(*group_cols)
-    return stmt, params
+    return stmt
 
 
 # ---------------------------------------------------------------------------
@@ -867,47 +891,74 @@ def _row_dimension_key(row: Any, dimension: AnalyticsDimension | None) -> Any | 
     return str(raw) if raw is not None else None
 
 
-def _accumulate_row(bucket: dict[str, Any], row: Any, cnt: int) -> None:
+def _accumulate_counts(bucket: dict[str, Any], row: Any, cnt: int) -> None:
+    """Add the row's run counts into the bucket (volume + outcome tallies)."""
     bucket["count"] += cnt
     bucket["complete"] += int(getattr(row, "complete_count", None) or 0)
     bucket["benign"] += int(getattr(row, "benign_count", None) or 0)
     bucket["failure"] += int(getattr(row, "failure_count", None) or 0)
     bucket["stall"] += int(getattr(row, "stall_count", None) or 0)
     bucket["capacity_failure"] += int(getattr(row, "capacity_failure_count", None) or 0)
+
+
+def _accumulate_weighted_avg(
+    bucket: dict[str, Any],
+    avg_value: Any,
+    *,
+    sum_key: str,
+    n_key: str,
+    weight: int,
+) -> None:
+    """Fold one SQL avg into the bucket's weighted running mean.
+
+    The SQL avg already ignores NULL samples, so the bucket mean re-weights by
+    the row's relevant run count (``weight``) — never a plain per-row mean.
+    """
+    if avg_value is not None:
+        bucket[sum_key] += float(avg_value) * weight
+        bucket[n_key] += weight
+
+
+def _accumulate_row(bucket: dict[str, Any], row: Any, cnt: int) -> None:
+    _accumulate_counts(bucket, row, cnt)
     if row.total_cost_usd is not None:
         bucket["cost"] = (bucket["cost"] or Decimal(0)) + Decimal(str(row.total_cost_usd))
     if row.total_tokens is not None:
         bucket["tokens"] = (bucket["tokens"] or 0) + int(row.total_tokens)
-    if row.avg_duration_ms is not None:
-        bucket["duration_sum"] += float(row.avg_duration_ms) * cnt
-        bucket["duration_n"] += cnt
-    avg_capacity_wait = getattr(row, "avg_capacity_wait_ms", None)
-    if avg_capacity_wait is not None:
-        # The SQL avg is over CAPACITY-FAILED rows only, so the bucket
-        # weighting must use the capacity subset — never the bucket's total
-        # run count (a 500-run bucket with 2 capacity fails would otherwise
-        # dominate the mean; see the week-bucket test).
-        capacity_w = int(getattr(row, "capacity_failure_count", None) or 0)
-        bucket["capacity_wait_sum"] += float(avg_capacity_wait) * capacity_w
-        bucket["capacity_wait_n"] += capacity_w
-    avg_queue_wait = getattr(row, "avg_queue_wait_ms", None)
-    if avg_queue_wait is not None:
-        bucket["queue_wait_sum"] += float(avg_queue_wait) * cnt
-        bucket["queue_wait_n"] += cnt
-    avg_dispatch_latency = getattr(row, "avg_dispatch_latency_ms", None)
-    if avg_dispatch_latency is not None:
-        # Same count-weighting as queue_wait: the SQL avg already ignores NULL
-        # samples, so the bucket mean re-weights by the row's run count.
-        bucket["dispatch_latency_sum"] += float(avg_dispatch_latency) * cnt
-        bucket["dispatch_latency_n"] += cnt
-    avg_final_idle = getattr(row, "avg_final_idle_ms", None)
-    if avg_final_idle is not None:
-        bucket["final_idle_sum"] += float(avg_final_idle) * cnt
-        bucket["final_idle_n"] += cnt
-    avg_output = getattr(row, "avg_output_bytes", None)
-    if avg_output is not None:
-        bucket["output_bytes_sum"] += float(avg_output) * cnt
-        bucket["output_bytes_n"] += cnt
+    _accumulate_weighted_avg(bucket, row.avg_duration_ms, sum_key="duration_sum", n_key="duration_n", weight=cnt)
+    # The capacity-wait SQL avg is over CAPACITY-FAILED rows only, so the bucket
+    # weighting must use the capacity subset — never the bucket's total run
+    # count (a 500-run bucket with 2 capacity fails would otherwise dominate the
+    # mean; see the week-bucket test).
+    _accumulate_weighted_avg(
+        bucket,
+        getattr(row, "avg_capacity_wait_ms", None),
+        sum_key="capacity_wait_sum",
+        n_key="capacity_wait_n",
+        weight=int(getattr(row, "capacity_failure_count", None) or 0),
+    )
+    # Same count-weighting as queue_wait: the SQL avg already ignores NULL
+    # samples, so the bucket mean re-weights by the row's run count.
+    _accumulate_weighted_avg(
+        bucket, getattr(row, "avg_queue_wait_ms", None), sum_key="queue_wait_sum", n_key="queue_wait_n", weight=cnt
+    )
+    _accumulate_weighted_avg(
+        bucket,
+        getattr(row, "avg_dispatch_latency_ms", None),
+        sum_key="dispatch_latency_sum",
+        n_key="dispatch_latency_n",
+        weight=cnt,
+    )
+    _accumulate_weighted_avg(
+        bucket, getattr(row, "avg_final_idle_ms", None), sum_key="final_idle_sum", n_key="final_idle_n", weight=cnt
+    )
+    _accumulate_weighted_avg(
+        bucket,
+        getattr(row, "avg_output_bytes", None),
+        sum_key="output_bytes_sum",
+        n_key="output_bytes_n",
+        weight=cnt,
+    )
     # FAR-1463: sum the per-run watchdog-firing counts (getattr default keeps
     # hand-built row doubles without the attribute at 0, like every other
     # metric here).
@@ -962,14 +1013,24 @@ def _format_iso(tkey: date | datetime) -> str:
     return tkey.replace(tzinfo=None).isoformat() if isinstance(tkey, datetime) else tkey.isoformat()
 
 
+def _bucket_int(b: dict[str, Any] | None, key: str) -> int:
+    """Read an integer counter from a bucket, defaulting to 0 when absent."""
+    return int(b[key]) if b else 0
+
+
+def _round_or_none(value: float | None) -> float | None:
+    """Round a metric to one decimal, preserving ``None`` (no sample)."""
+    return round(value, 1) if value is not None else None
+
+
 def _emit_bucket_row(b: dict[str, Any] | None, tkey: date | datetime, dkey: Any | None) -> dict[str, Any]:
-    count = b["count"] if b else 0
-    complete = b["complete"] if b else 0
+    count = _bucket_int(b, "count")
+    complete = _bucket_int(b, "complete")
     # FAR-707: business-expected outcomes leave the FAILURE RATE entirely —
     # they are dropped from the denominator as well as never counted as
     # failures, so a run that was supposed to happen cannot dilute the rate.
     # ``count`` (volume) and the cost/token totals still include them.
-    benign = b["benign"] if b else 0
+    benign = _bucket_int(b, "benign")
     rate_denominator = count - benign
     cost = float(b["cost"]) if b and b["cost"] is not None else None
     tokens = b["tokens"] if b else None
@@ -983,20 +1044,20 @@ def _emit_bucket_row(b: dict[str, Any] | None, tkey: date | datetime, dkey: Any 
         "count": count,
         "total_cost_usd": cost,
         "total_tokens": tokens,
-        "avg_duration_ms": round(avg_dur, 1) if avg_dur is not None else None,
+        "avg_duration_ms": _round_or_none(avg_dur),
         "success_rate": round(success_rate, 4) if success_rate is not None else None,
-        "failure_count": b["failure"] if b else 0,
-        "stall_count": b["stall"] if b else 0,
-        "capacity_failure_count": b["capacity_failure"] if b else 0,
-        "avg_capacity_wait_ms": round(avg_capacity_wait, 1) if avg_capacity_wait is not None else None,
-        "avg_queue_wait_ms": round(avg_queue_wait, 1) if avg_queue_wait is not None else None,
+        "failure_count": _bucket_int(b, "failure"),
+        "stall_count": _bucket_int(b, "stall"),
+        "capacity_failure_count": _bucket_int(b, "capacity_failure"),
+        "avg_capacity_wait_ms": _round_or_none(avg_capacity_wait),
+        "avg_queue_wait_ms": _round_or_none(avg_queue_wait),
         # FAR-1421 claim→dispatch latency (see the select's DEFINITION block):
         # dispatch_phase_entered_at - created_at, else started_at - created_at.
-        "avg_dispatch_latency_ms": round(avg_dispatch_latency, 1) if avg_dispatch_latency is not None else None,
-        "avg_final_idle_ms": round(avg_final_idle, 1) if avg_final_idle is not None else None,
-        "avg_output_bytes": round(avg_output_bytes, 1) if avg_output_bytes is not None else None,
+        "avg_dispatch_latency_ms": _round_or_none(avg_dispatch_latency),
+        "avg_final_idle_ms": _round_or_none(avg_final_idle),
+        "avg_output_bytes": _round_or_none(avg_output_bytes),
         # FAR-1463: total node-deadline watchdog firings in the bucket.
-        "node_deadline_watchdog_fired_count": b["node_deadline_watchdog_fired"] if b else 0,
+        "node_deadline_watchdog_fired_count": _bucket_int(b, "node_deadline_watchdog_fired"),
     }
 
 

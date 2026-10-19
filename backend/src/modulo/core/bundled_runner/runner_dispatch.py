@@ -1714,7 +1714,7 @@ async def _harvest_gh_claim_receipt(
         return await provider.exec_command(provider_ref, command, cmd_timeout=15)
 
     try:
-        receipt = await harvest_gh_pr_claim_bounded(_claim_receipt_exec, run_scope=run_id, timeout=20.0)
+        receipt = await harvest_gh_pr_claim_bounded(_claim_receipt_exec, run_scope=run_id)
         return receipt, None
     except asyncio.CancelledError as cancel_exc:  # NOSONAR S7497
         return None, cancel_exc

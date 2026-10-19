@@ -359,7 +359,7 @@ async def rollback_to_snapshot(
         for edge_data in target.graph_json.get("edges", [])
     ]
 
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         session,
         old_edges,
         new_edges,

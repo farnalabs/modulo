@@ -29,7 +29,7 @@ from modulo.core.guardrails.loop_intercept import (
     persist_loop_interception_audit,
 )
 from modulo.core.guardrails.sandbox_bridge import BridgeClient
-from tests.integration.conftest import EvalMirrorDefinition, insert_evals_mirror
+from tests.integration.conftest import EvalFixture, insert_eval
 
 pytestmark = [
     pytest.mark.integration,
@@ -108,30 +108,11 @@ async def _seed_guardrail(
     if action == "redact":
         config["redaction"] = [{"path": "args.url", "mode": "transform"}]
     async with engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, name, "
-                "eval_type, config_json, failure_behaviour, account_id) "
-                "VALUES (:id, :oid, :pid, :name, 'guardrail', CAST(:cfg AS json), "
-                "CAST(:fb AS varchar), :uid)"
-            ),
-            {
-                "id": str(eval_id),
-                "oid": str(org_id),
-                "pid": str(pipeline_id),
-                "name": name,
-                "cfg": json.dumps(config),
-                "fb": "warn",
-                "uid": str(account_id),
-            },
-        )
-        # FAR-1101 chunk 3b cut the guardrail enforcement seam's reads over to
-        # ``evals``: the legacy ``eval_definitions`` row needs its same-UUID
-        # ``evals`` mirror (the shape 0254's backfill produces) or the loader
-        # finds nothing and the bridge is inert.
-        await insert_evals_mirror(
+        # The loop-interception loader reads ``evals``; seed the row there
+        # directly or the loader finds nothing and the bridge is inert.
+        await insert_eval(
             conn,
-            EvalMirrorDefinition(
+            EvalFixture(
                 id=eval_id,
                 organisation_id=org_id,
                 pipeline_id=pipeline_id,

@@ -146,7 +146,7 @@ Medium / Low incident detected
 | Failed login rate spike (>10/min per IP) | Backend logs / OTel | Credential stuffing, SSO probe |
 | 429 rate limit threshold crossed | Reverse proxy logs | DoS, brute force |
 | Unexpected outbound connection | Network policy logs | Data exfiltration, C2 beacon |
-| Container with Critical CVE deployed | Manual image scan (`trivy image ghcr.io/farnalabs/modulo:<version>`) — no automated image scan runs in CI yet | Known-exploit path |
+| Container with Critical CVE deployed | Manual image scan (`trivy image ghcr.io/farnalabs/modulo:<version>`) – no automated image scan runs in CI yet | Known-exploit path |
 | CSRF token mismatch spike | Backend error logs | CSRF probing, automated scanning |
 | Unexplained 403/401 without auth header | Backend access logs | API key leak, token reuse |
 | RLS policy violation logged | Postgres logs | Multi-tenant cross-read |
@@ -323,10 +323,10 @@ See §6 for the full process. Minimum steps:
 | Attribute | Details |
 |-----------|---------|
 | Severity | **High** (with known PoC), **Medium** (theoretical) |
-| Detection | Manual image scan (`trivy image ghcr.io/farnalabs/modulo:<version>`) — no automated image scan runs in CI yet; GitHub Advisory alert, security scanner notification |
+| Detection | Manual image scan (`trivy image ghcr.io/farnalabs/modulo:<version>`) – no automated image scan runs in CI yet; GitHub Advisory alert, security scanner notification |
 | Containment | Block network to affected Pod, deploy patched image |
 | Eradication | Verify no IOCs, rebuild image from pinned base |
-| Prevention | Per-push/PR dependency scans in CI (`pip-audit`) — no scheduled weekly scan (see `docs/security/dependency-policy.md`); pinned base image digests |
+| Prevention | Per-push/PR dependency scans in CI (`pip-audit`) – no scheduled weekly scan (see `docs/security/dependency-policy.md`); pinned base image digests |
 
 ### 4.6 Data Exfiltration
 
@@ -526,7 +526,7 @@ Each action item must include:
 | Owner | Yes | @engineer-name |
 | Severity | Yes | Critical |
 | Due date | Yes | 2026-07-05 |
-| Verification | Yes | `pytest tests/unit/test_rls.py -v` passes |
+| Verification | Yes | `uv run pytest tests/unit/db/test_rls.py -v` passes (from `backend/`) |
 | Linked ticket | Recommended | Task ID from delivery plan |
 
 ### 6.5 Lessons-Learned Integration
@@ -537,7 +537,7 @@ After the post-mortem is approved:
    missing behaviour, add it to the relevant product map entry under "Known Gaps"
    or as a new behaviour checkbox.
 2. **Update AGENTS.md** – If the incident pattern is likely to recur (e.g.,
-   missing RLS on a new table), add a prevention rule to `Development/Product/AGENTS.md`
+   missing RLS on a new table), add a prevention rule to `Repos/devtools/AGENTS.md`
    or the most specific subdirectory AGENTS.md.
 3. **Update this playbook** – If the response procedure was missing a step or
    a containment action was insufficient, revise the relevant section.
@@ -649,7 +649,7 @@ Once confirmed, contact security@modulo.run to re-enable SSO.
 - [ ] Container logs exported: `docker compose -f deploy/compose/docker-compose.prod.yml logs modulo > incident-YYYYMMDD-container.log`
 - [ ] Audit log window exported: `GET /api/v1/admin/audit/export` (paginated; there is no audit CLI)
 - [ ] Database snapshot: `pg_dump -Fc modulo > incident-YYYYMMDD.dump`
-- [ ] Container image digest recorded: `docker image inspect ghcr.io/<org>/modulo:${TAG} | jq '.[0].RepoDigests'` (the production compose service uses the image pinned in `deploy/compose/docker-compose.prod.yml`)
+- [ ] Container image digest recorded: `docker image inspect ghcr.io/farnalabs/modulo:${TAG} | jq '.[0].RepoDigests'` (the production compose service uses the image pinned in `deploy/compose/docker-compose.prod.yml`; substitute your own registry prefix if you mirror the image)
 - [ ] Network logs captured from cloud provider (VPC flow logs, host firewall logs)
 - [ ] Active users/accounts snapshot: query the accounts via the admin API (`GET /api/v1/admin/users`); there is no session CLI
 - [ ] Checkpoint state snapshot: list runs via the UI or `GET /api/v1/runs`

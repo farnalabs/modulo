@@ -18,7 +18,7 @@ from modulo.api.mcp_server import (
 )
 from modulo.core.documentation_indexer import DocEntry
 from modulo.core.feature_flags import FeatureFlag
-from modulo.core.housekeeping import Candidate, CategoryResult
+from modulo.core.housekeeping import Candidate, CategoryResult, Scanner
 from modulo.db.models.secret import Secret
 from tests.unit.mcp.helpers import AuthContext, make_session_context
 
@@ -41,11 +41,13 @@ def _make_housekeeping_session() -> AsyncMock:
 
 
 class _SystemAdminContext(AuthContext):
-    """Auth context that reaches the destructive housekeeping body (FAR-1879).
+    """Auth context that reaches a system-admin-gated tool body.
 
-    The MCP tool now mirrors the REST cleanup route: an admin org-role floor
-    (``housekeeping.manage``) plus a strict ``is_system_admin`` in-body gate.
-    Tests that exercise the delete body run as a system admin.
+    FAR-1879: the housekeeping tools mirror their REST twins — an admin
+    org-role floor (``housekeeping.manage``) plus a strict ``is_system_admin``
+    gate. FAR-1942: ``get_org_config`` mirrors its REST twin's strict
+    ``is_system_admin`` gate (read-only at the role leg). Tests that exercise
+    these bodies run as a system admin.
     """
 
     def setup_method(self) -> None:
@@ -67,7 +69,7 @@ class _SystemAdminContext(AuthContext):
 # ---------------------------------------------------------------------------
 
 
-class TestGetOrgConfigErrors(AuthContext):
+class TestGetOrgConfigErrors(_SystemAdminContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await get_org_config()
@@ -103,7 +105,7 @@ class TestGetOrgConfigErrors(AuthContext):
         assert result["error"] == "migration_required"
 
 
-class TestGetOrgConfigSuccess(AuthContext):
+class TestGetOrgConfigSuccess(_SystemAdminContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.system_config.list_config")
@@ -486,6 +488,52 @@ class TestListHousekeepingSuccess(_SystemAdminContext):
         assert category["label"] == "Orphan Secrets"
         assert category["count"] == 1
         assert category["candidates"] == [candidate.to_dict()]
+        assert category["status"] == "ok"
+        assert category["error"] is None
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_failed_scanner_is_distinguishable_from_clean_empty(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-1977: the MCP tool carries the SAME status/error shape as REST.
+
+        Drives the REAL ``scan_all`` (only the registry is patched) so a
+        scanner that raises is distinguishable from a clean empty category on
+        the MCP surface too, pinning REST/MCP parity.
+        """
+
+        async def broken_scanner(_s: object, _o: object) -> list[Candidate]:
+            raise RuntimeError("boom")
+
+        scanners = [
+            Scanner(
+                category="orphan_secrets",
+                scan_func=AsyncMock(return_value=[]),
+                label="Orphan Secrets",
+                description="d",
+                entity_type="secret",
+            ),
+            Scanner(
+                category="stale_pipelines",
+                scan_func=broken_scanner,
+                label="Stale Pipelines",
+                description="d",
+                entity_type="pipeline",
+            ),
+        ]
+        mock_session.return_value = make_session_context(_make_housekeeping_session())
+
+        with patch("modulo.core.housekeeping._SCANNERS", scanners):
+            result = await list_housekeeping(limit=100)
+
+        by_category = {c["category"]: c for c in result["categories"]}
+        assert by_category["orphan_secrets"]["status"] == "ok"
+        assert by_category["orphan_secrets"]["error"] is None
+        assert by_category["stale_pipelines"]["status"] == "failed"
+        assert by_category["stale_pipelines"]["error"] == {"reason": "scanner_failed", "exception": "RuntimeError"}
 
 
 class TestListHousekeepingAuthz(AuthContext):

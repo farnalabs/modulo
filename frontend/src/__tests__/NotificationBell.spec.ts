@@ -162,6 +162,12 @@ describe('NotificationBell (FAR-250)', () => {
     const badge = wrapper.find('[data-testid="notification-unread-badge"]')
     expect(badge.exists()).toBe(true)
     expect(badge.text()).toBe('7')
+    // WCAG AA: 10px bold text is not "large text", so the 4.5:1 floor applies.
+    // `--destructive-foreground` on `--destructive` is only 3.22:1 (dark) /
+    // 3.30:1 (agent); the fill-safe token clears AA in every theme.
+    expect(badge.classes()).toContain('bg-destructive-fill')
+    expect(badge.classes()).toContain('text-destructive-foreground')
+    expect(badge.classes()).not.toContain('bg-destructive')
   })
 
   it('caps the badge at "99+" when the unread count exceeds 99', async () => {

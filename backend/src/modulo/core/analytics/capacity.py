@@ -1041,7 +1041,7 @@ def compute_capacity_report(
 # ---------------------------------------------------------------------------
 
 
-async def run_capacity_query(
+async def read_capacity_report(
     *,
     org_id: uuid.UUID,
     params: CapacityParams,
@@ -1049,8 +1049,16 @@ async def run_capacity_query(
     settings: Settings,
     account_id: uuid.UUID | None = None,
     org_role: str | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Read the live queue + active-run health report (FAR-1343).
+    """Read the live queue + active-run health report WITHOUT the HTTP rate limiter.
+
+    FAR-1344: the capacity alerting sweep needs the SAME report the analytics
+    endpoint serves, but it must not consume (or be throttled by) the caller
+    rate-limit budget — it is background machinery, not a user request. This is
+    the shared body; :func:`run_capacity_query` is the rate-limited HTTP front
+    door. ``now`` is injectable so the sweep's ladder and the report it reads are
+    computed against one clock.
 
     One bounded session: RLS org context, statement timeout, the run scan, the
     configured limits, and the sandbox gate's cap/count. The sandbox count is
@@ -1066,10 +1074,7 @@ async def run_capacity_query(
     (FAR-1343 M5), so the org-wide scan never names a foreign team's pipelines.
     """
     params = validate_capacity_params(params)
-    if _rate_limited(str(org_id)):
-        raise AnalyticsRateLimitedError(_ERR_RATE_LIMIT_EXCEEDED)
-
-    now = datetime.now(UTC)
+    now = to_utc_aware(now) if now is not None else datetime.now(UTC)
     window_start = now - timedelta(minutes=params.window_minutes)
     stale_heartbeat_seconds = settings.slot_reconcile_stale_seconds
 
@@ -1121,6 +1126,34 @@ async def run_capacity_query(
         stale_heartbeat_seconds=int(stale_heartbeat_seconds),
         health_rows=health_rows,
         visible_pipeline_ids=visible_pipeline_ids,
+    )
+
+
+async def run_capacity_query(
+    *,
+    org_id: uuid.UUID,
+    params: CapacityParams,
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    account_id: uuid.UUID | None = None,
+    org_role: str | None = None,
+) -> dict[str, Any]:
+    """The rate-limited HTTP front door for :func:`read_capacity_report` (FAR-1343).
+
+    Validation runs BEFORE the rate-limit check so an invalid window is always
+    reported as a validation error (never masked by a 429), and the caller's
+    read budget is consumed once per served request.
+    """
+    validate_capacity_params(params)
+    if _rate_limited(str(org_id)):
+        raise AnalyticsRateLimitedError(_ERR_RATE_LIMIT_EXCEEDED)
+    return await read_capacity_report(
+        org_id=org_id,
+        params=params,
+        factory=factory,
+        settings=settings,
+        account_id=account_id,
+        org_role=org_role,
     )
 
 

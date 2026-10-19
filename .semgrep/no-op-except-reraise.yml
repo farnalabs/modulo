@@ -1,0 +1,53 @@
+# no-op-except-reraise — a `try` whose ONLY handler is a pure re-raise is a
+# no-op (SonarCloud python:S2737).
+#
+# Gap this closes. `bare-raise-in-except.yml` covers `except Exception:` /
+# `except BaseException:` that only re-raise, and DELIBERATELY excludes a
+# concrete handler (`except HTTPException: raise`) because, when OTHER handlers
+# follow, that is the correct FastAPI idiom — it lets the concrete exception
+# skip the broader handler. What neither rule covered is the case where the
+# concrete re-raise is the SOLE handler: there the `try`/`except` is dead
+# structure, and removing it while dedenting the body is behaviour-identical.
+#
+# That shape was flagged by review in the delivery-feedback `correctness`
+# cluster — `except HTTPException: raise` as the only handler in
+# `get_run_logs` — via the SonarCloud new-issues gate, i.e. only in CI. This
+# rule is the shift-left of that gate: it blocks at pre-commit instead.
+#
+# Why a regex rather than `pattern` / `pattern-not`. A structural
+# `try: ... except $E: raise` pattern also matches a `try` that has SEVERAL
+# handlers (semgrep matches the one clause, and a `pattern-not` chain does not
+# reliably absorb a long sibling-handler chain — measured: 9 false positives
+# on three real FastAPI route files, every one of them the legitimate
+# `except HTTPException: raise` ahead of a broader handler). The regex below
+# encodes "sole handler" exactly: the try body may not cross a same-indent
+# `except`/`else`/`finally`, and the handler it matches must be the FIRST one
+# and must have nothing but `raise` in it with no clause after. This mirrors
+# the technique `bare-raise-in-except.yml` already uses.
+#
+# Not a re-raise of a broad base: a sole `except Exception`/`except
+# BaseException: raise` is `bare-raise-in-except.yml`'s job, so those bases are
+# excluded by the negative lookahead after `except` (to avoid a double report).
+rules:
+  - id: no-op-except-reraise
+    # ^(indent)try: <body not crossing a same-indent clause>
+    #   ^\1 except <Not Exception/BaseException> <name> [as var]: <blanks/comments>
+    #   <indent> raise  — and after skipping any comment/blank lines, the next
+    #                     real line is NOT a same-indent except/else/finally.
+    # (The trailing assertion is a SINGLE lookahead that skips blank/comment
+    #  lines internally. A `(...)*(?!...)` form would backtrack and let the
+    #  match end on the last comment line — measured as a false positive on
+    #  mcp_setup.py, where `except HTTPException: raise` is followed by a
+    #  comment line and then `except SQLAlchemyError`.)
+    pattern-regex: '(?m)^([ \t]*)try[ \t]*:[ \t]*\n(?:(?!^\1(?:except|else|finally)\b)[\s\S])*?^\1except[ \t]+(?!(?:Exception|BaseException)\b)[A-Za-z_][\w.]*(?:[ \t]+as[ \t]+[A-Za-z_]\w*)?[ \t]*:[ \t]*\n(?:[ \t]*(?:#[^\n]*)?\n)*[ \t]+raise[ \t]*(?:#[^\n]*)?\n(?!(?:[ \t]*(?:#[^\n]*)?\n)*\1[ \t]*(?:except|else|finally)\b)'
+    message: >
+      `try`/`except ...: raise` where the re-raise is the ONLY handler is a
+      no-op (SonarCloud python:S2737): delete the `try`/`except` and dedent the
+      body, or add real handling (log, or map to a specific error). This rule
+      does NOT fire when the handler is one of several — a concrete re-raise
+      ahead of a broader handler (e.g. `except HTTPException: raise` before
+      `except Exception:`) is the correct FastAPI idiom.
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]

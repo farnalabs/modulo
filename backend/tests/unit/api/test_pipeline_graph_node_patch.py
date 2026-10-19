@@ -538,6 +538,72 @@ def test_egress_pair_can_be_cleared_out_of_selected(client: TestClient) -> None:
     assert written["egress_allowlist"] is None
 
 
+def test_egress_policy_patched_onto_a_non_sandbox_node_is_rejected(client: TestClient) -> None:
+    """FAR-1846: ``egress_policy`` is valid at the body level but only the
+    sandbox path derives an egress surface, so merged onto an ``agent`` node it
+    is a declared-but-unread no-op. Before the fix this PATCH returned 200 and
+    silently persisted the field."""
+    target_id = uuid.uuid4()
+    _STORED.nodes = [_agent_node(target_id)]
+
+    with (
+        _graph_write_doubles(),
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            new=AsyncMock(),
+        ) as write,
+    ):
+        resp = client.patch(_patch_url(target_id), json={"egress_policy": "deny_all"})
+
+    assert resp.status_code == 422, resp.text
+    assert "egress_policy" in resp.json()["detail"], resp.json()["detail"]
+    write.assert_not_awaited()
+
+
+def test_egress_allowlist_patched_onto_a_non_sandbox_node_is_rejected(client: TestClient) -> None:
+    """FAR-1846: same for the companion allowlist — its sole reader is the
+    sandbox egress check, which never runs for a non-sandbox node."""
+    target_id = uuid.uuid4()
+    _STORED.nodes = [_agent_node(target_id)]
+
+    with (
+        _graph_write_doubles(),
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            new=AsyncMock(),
+        ) as write,
+    ):
+        resp = client.patch(
+            _patch_url(target_id),
+            json={"egress_allowlist": [{"host": "example.com", "port": 443}]},
+        )
+
+    assert resp.status_code == 422, resp.text
+    assert "egress_allowlist" in resp.json()["detail"], resp.json()["detail"]
+    write.assert_not_awaited()
+
+
+def test_egress_pair_echoed_as_null_on_a_non_sandbox_node_still_saves(client: TestClient) -> None:
+    """FAR-1846: the rejection is by VALUE, so a body that echoes both fields
+    as ``null`` on a non-sandbox node is the absent/default state and keeps
+    saving — presence alone must not over-reject a uniform round-tripping
+    form."""
+    target_id = uuid.uuid4()
+    target = _agent_node(target_id)
+    _STORED.nodes = [target]
+
+    with _graph_write_doubles(), _write_double([dict(target)]) as write:
+        resp = client.patch(
+            _patch_url(target_id),
+            json={"egress_policy": None, "egress_allowlist": None},
+        )
+
+    assert resp.status_code == 200, resp.text
+    written = write.call_args.kwargs["nodes"][0]
+    assert written["egress_policy"] is None
+    assert written["egress_allowlist"] is None
+
+
 def test_merged_node_rejects_a_boolean_field_supplied_as_null(client: TestClient) -> None:
     """``enable_heartbeat: null`` is accepted by the patch body (the field is
     nullable there so ``None`` can mean "clear"); the MERGED node's own ``bool``

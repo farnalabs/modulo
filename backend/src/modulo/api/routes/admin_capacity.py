@@ -6,8 +6,9 @@ Exposes ``GET /api/v1/admin/db-capacity`` returning the live DB capacity status
 :func:`modulo.db.capacity.db_capacity_status`. This is the source the frontend
 banner polls to alarm on a running-out DB volume before it hits the 98%
 hard-stop. ``source`` names the capacity source that resolved (``env`` /
-``filesystem`` / ``none``, FAR-1882) so an operator can see whether capacity was
-configured or auto-detected.
+``filesystem`` / ``platform`` / ``none``, FAR-1882 + FAR-1992) so an operator can
+see whether capacity was configured, auto-detected from a mounted volume, or
+auto-detected from the hosting provider's API.
 
 Authz: system OR org admin (via ``require_system_or_org_admin``). The read is
 instance-wide capacity, so the same permission set as the housekeeping surface

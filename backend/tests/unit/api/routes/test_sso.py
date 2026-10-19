@@ -8,21 +8,24 @@ fake session; the callback is mocked to perform a ``session.execute()`` (standin
 for the JIT-provisioning queries) so the pre-fix handler fails loudly.
 """
 
+import urllib.parse
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import Request
+from fastapi import Request, Response
 from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.exception_handlers import sso_error_redirect
 from modulo.api.routes.sso import (
+    _OIDC_LOGIN_STATE_COOKIE,
     _resolve_org_slug_for_error,
     _resolve_saml_for_route,
     oidc_callback,
+    oidc_login,
 )
-from modulo.auth.sso import SsoCallbackError, SsoProvisioningDeniedError
+from modulo.auth.sso import SsoCallbackError, SsoProvisioningDeniedError, sign_state, verify_state
 from modulo.settings import Settings
 
 _VALID_32 = "a" * 32
@@ -75,14 +78,37 @@ class _BeginCtx:
         return False
 
 
-def _make_callback_request() -> Request:
+def _make_callback_request(
+    *,
+    raw_state: str = "xyz",
+    cookie_raw_state: str | None = "xyz",
+    state: str | None = None,
+    cookie_value: str | None = None,
+) -> Request:
+    """Build a callback request carrying a validly-signed state.
+
+    FAR-1979: the callback requires the returned ``state`` to match the
+    login-time browser-binding cookie, so the default request carries BOTH a
+    validly signed state and its matching cookie. Pass ``cookie_raw_state=None``
+    for no cookie, a different value for a mismatched one, ``cookie_value`` for
+    an unsigned/forged cookie, or ``state`` to override the query value
+    verbatim, to exercise a rejected binding.
+    """
+    headers: list[tuple[bytes, bytes]] = []
+    if cookie_value is not None:
+        headers.append((b"cookie", f"{_OIDC_LOGIN_STATE_COOKIE}={cookie_value}".encode()))
+    elif cookie_raw_state is not None:
+        cookie_value = sign_state(cookie_raw_state, _VALID_32)
+        headers.append((b"cookie", f"{_OIDC_LOGIN_STATE_COOKIE}={cookie_value}".encode()))
+    state_value = state if state is not None else sign_state(f"google:{raw_state}", _VALID_32)
+    query_string = urllib.parse.urlencode({"code": "abc", "state": state_value}).encode()
     return Request(
         {
             "type": "http",
             "method": "GET",
             "path": "/api/v1/auth/oidc/google/callback",
-            "query_string": b"code=abc&state=google:xyz",
-            "headers": [],
+            "query_string": query_string,
+            "headers": headers,
             "scheme": "http",
             "server": ("test", 80),
             "client": ("test", 123),
@@ -346,3 +372,184 @@ async def test_resolve_org_slug_for_error_read_failure_is_swallowed() -> None:
             raise RuntimeError("session unusable")
 
     assert await _resolve_org_slug_for_error(_BoomSession(), uuid.uuid4()) is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-1979: the OIDC login state must be bound to the browser
+# ---------------------------------------------------------------------------
+# The signed ``state`` proves non-forgery but NOT that the callback belongs to
+# the browser that began the flow — anyone can start a login at the IdP and
+# obtain a validly signed state. Without a browser-carried correlation value an
+# attacker can drive a victim's browser through a callback carrying the
+# ATTACKER's code+state (login-CSRF into the attacker's account). These tests
+# pin the fix: the login route sets an httpOnly correlation cookie and the
+# callback REQUIRES it to match the returned state, failing closed.
+
+
+def _cookie_header_value(response: Response) -> str | None:
+    """Return the browser-binding Set-Cookie value, or None when it is absent."""
+    for header in response.headers.getlist("set-cookie"):
+        if header.startswith(f"{_OIDC_LOGIN_STATE_COOKIE}="):
+            return header
+    return None
+
+
+async def test_oidc_login_sets_browser_binding_cookie() -> None:
+    """The login redirect must set the short-lived httpOnly correlation cookie."""
+    settings = _make_settings()
+    fake = _AutobeginAwareSession()
+    raw_state = str(uuid.uuid4())
+
+    async def fake_authorize_url(*_args: object, **_kwargs: object) -> tuple[str, str]:
+        return "https://idp.example.com/authorize?state=x", raw_state
+
+    with patch("modulo.api.routes.sso.oidc_get_authorize_url", new=fake_authorize_url):
+        resp = await oidc_login(
+            provider="google",
+            _request=_make_request(),
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert resp.status_code == 307
+    cookie = _cookie_header_value(resp)
+    assert cookie is not None
+    assert "httponly" in cookie.lower()
+    # LAX (not Strict) is required: the IdP -> callback leg is cross-site.
+    assert "samesite=lax" in cookie.lower()
+    cookie_value = cookie.split(";", 1)[0].split("=", 1)[1]
+    assert verify_state(cookie_value, settings.secret_key) == raw_state
+
+
+async def test_oidc_callback_rejects_state_without_browser_cookie() -> None:
+    """A validly signed state with NO matching cookie must be rejected (login-CSRF).
+
+    Regression: pre-fix the callback accepted any validly signed state, so an
+    attacker could replay their own state+code into a victim's browser. The
+    binding check must run BEFORE the token exchange and fail closed.
+    """
+    settings = _make_settings()
+    fake = _AutobeginAwareSession()
+    request = _make_callback_request(cookie_raw_state=None)
+    process = AsyncMock()
+
+    with (
+        patch("modulo.api.routes.sso.oidc_process_callback", new=process),
+        pytest.raises(SsoCallbackError) as exc_info,
+    ):
+        await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert exc_info.value.code == "auth_failed"
+    process.assert_not_awaited()
+
+
+async def test_oidc_callback_rejects_cookie_bound_to_a_different_state() -> None:
+    """A cookie from ANOTHER flow (different state) must not satisfy the binding."""
+    settings = _make_settings()
+    fake = _AutobeginAwareSession()
+    request = _make_callback_request(raw_state="victim", cookie_raw_state="attacker")
+    process = AsyncMock()
+
+    with (
+        patch("modulo.api.routes.sso.oidc_process_callback", new=process),
+        pytest.raises(SsoCallbackError) as exc_info,
+    ):
+        await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert exc_info.value.code == "auth_failed"
+    process.assert_not_awaited()
+
+
+async def test_oidc_callback_rejects_unverifiable_browser_cookie() -> None:
+    """A present cookie that fails its HMAC check must be rejected, not trusted.
+
+    A cookie the server did not write (forged, or planted by a sibling
+    subdomain) cannot satisfy the browser binding even when its shape looks
+    plausible — ``verify_state`` returns None and the flow must fail closed.
+    """
+    settings = _make_settings()
+    fake = _AutobeginAwareSession()
+    request = _make_callback_request(cookie_value="forged-cookie-value")
+    process = AsyncMock()
+
+    with (
+        patch("modulo.api.routes.sso.oidc_process_callback", new=process),
+        pytest.raises(SsoCallbackError) as exc_info,
+    ):
+        await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert exc_info.value.code == "auth_failed"
+    process.assert_not_awaited()
+
+
+async def test_oidc_callback_rejects_tampered_state_even_with_a_cookie() -> None:
+    """A state failing its HMAC check must be rejected regardless of the cookie."""
+    settings = _make_settings()
+    fake = _AutobeginAwareSession()
+    request = _make_callback_request(state="google:xyz:deadbeef", cookie_raw_state="xyz")
+    process = AsyncMock()
+
+    with (
+        patch("modulo.api.routes.sso.oidc_process_callback", new=process),
+        pytest.raises(SsoCallbackError) as exc_info,
+    ):
+        await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert exc_info.value.code == "auth_failed"
+    process.assert_not_awaited()
+
+
+async def test_oidc_callback_clears_browser_binding_cookie_on_success() -> None:
+    """A completed flow must expire the correlation cookie."""
+    settings = _make_settings()
+    fake = _AutobeginAwareSession()
+    request = _make_callback_request()
+
+    async def fake_process_callback(*_args: object, **_kwargs: object) -> dict[str, str]:
+        await fake.execute(MagicMock())
+        return {"access_token": "at", "refresh_token": "rt"}
+
+    with patch("modulo.api.routes.sso.oidc_process_callback", new=fake_process_callback):
+        resp = await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert resp.status_code == 307
+    cookie = _cookie_header_value(resp)
+    assert cookie is not None
+    assert "max-age=0" in cookie.lower()

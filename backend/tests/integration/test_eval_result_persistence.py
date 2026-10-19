@@ -8,7 +8,7 @@ rows to the real database before the block/warn decision.
 
 Covers criteria:
   10 -- EvalResult columns match the input data (real Postgres).
-  11 -- EvalResult FK to eval_definitions is enforced (real Postgres).
+  11 -- EvalResult FK to evals is enforced (real Postgres).
   12 -- Blocking eval persists result before halting (real run + DB).
   13 -- Warn eval persists result and run continues (real run + DB).
 """
@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
 from modulo.core.pipeline_engine.eval_persist_order import run_evals_persist_before_decide
-from tests.integration.conftest import EvalMirrorDefinition, insert_evals_mirror
+from tests.integration.conftest import EvalFixture, insert_eval
 
 pytestmark = pytest.mark.integration
 
@@ -53,46 +53,26 @@ async def _setup_org(engine: AsyncEngine) -> tuple[uuid.UUID, uuid.UUID]:
     return org_id, acc_id
 
 
-async def _insert_eval_definition(
+async def _insert_eval(
     engine: AsyncEngine,
     org_id: uuid.UUID,
     account_id: uuid.UUID,
     pipeline_id: uuid.UUID,
     node_id: uuid.UUID | None = None,
     name: str | None = None,
-    failure_behaviour: str = "warn",
 ) -> uuid.UUID:
-    """Insert an eval_definitions row (and its 1:1 evals mirror) and return its id.
+    """Insert an ``evals`` row and return its id.
 
-    The same-UUID ``evals`` mirror is required because FAR-1100 chunk 3
-    (migration 0254) repointed ``eval_results.eval_id`` to ``evals`` before an
-    ``eval_results`` row can reference it; see ``insert_evals_mirror`` in the
+    ``evals`` is the live eval-definition store that ``eval_results.eval_id``
+    references (FAR-1100 chunk 3, migration 0254); see ``insert_eval`` in the
     integration conftest.
     """
     eval_id = uuid.uuid4()
     eval_name = name or f"test-eval-{eval_id.hex[:8]}"
     async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO eval_definitions "
-                "(id, organisation_id, account_id, pipeline_id, node_id, name, "
-                "eval_type, config_json, failure_behaviour, version) "
-                "VALUES (:id, :oid, :aid, :pid, :nid, :name, 'regex', "
-                "'{}'::json, :fb, 1)"
-            ),
-            {
-                "id": str(eval_id),
-                "oid": str(org_id),
-                "aid": str(account_id),
-                "pid": str(pipeline_id),
-                "nid": str(node_id) if node_id else None,
-                "name": eval_name,
-                "fb": failure_behaviour,
-            },
-        )
-        await insert_evals_mirror(
+        await insert_eval(
             conn,
-            EvalMirrorDefinition(
+            EvalFixture(
                 id=eval_id,
                 organisation_id=org_id,
                 pipeline_id=pipeline_id,
@@ -194,7 +174,7 @@ class TestC10EvalResultColumnRoundTrip:
         snapshot_id = await _insert_snapshot(db_engine, org_id, pipeline_id)
         run_id = await _insert_run(db_engine, org_id, pipeline_id, snapshot_id)
         node_id = uuid.uuid4()
-        eval_id = await _insert_eval_definition(db_engine, org_id, acc_id, pipeline_id, node_id)
+        eval_id = await _insert_eval(db_engine, org_id, acc_id, pipeline_id, node_id)
 
         eval_result_id = uuid.uuid4()
         expected_version = 3
@@ -259,7 +239,7 @@ class TestC10EvalResultColumnRoundTrip:
         snapshot_id = await _insert_snapshot(db_engine, org_id, pipeline_id)
         run_id = await _insert_run(db_engine, org_id, pipeline_id, snapshot_id)
         node_id = uuid.uuid4()
-        eval_id = await _insert_eval_definition(db_engine, org_id, acc_id, pipeline_id, node_id)
+        eval_id = await _insert_eval(db_engine, org_id, acc_id, pipeline_id, node_id)
 
         eval_result_id = uuid.uuid4()
         async with db_engine.begin() as conn:
@@ -343,15 +323,14 @@ class TestC12BlockingEvalPersistsBeforeHalting:
         run_id = await _insert_run(db_engine, org_id, pipeline_id, snapshot_id)
         node_id = str(uuid.uuid4())
 
-        # Insert a real eval_definitions row with failure_behaviour='block'
-        eval_id = await _insert_eval_definition(
+        # Insert a real ``evals`` row; the DTO below carries failure_behaviour
+        eval_id = await _insert_eval(
             db_engine,
             org_id,
             acc_id,
             pipeline_id,
             uuid.UUID(node_id),
             name="block-fail-eval",
-            failure_behaviour="block",
         )
 
         eval_def = EvalDefinition(
@@ -409,23 +388,21 @@ class TestC12BlockingEvalPersistsBeforeHalting:
         run_id = await _insert_run(db_engine, org_id, pipeline_id, snapshot_id)
         node_id = str(uuid.uuid4())
 
-        eval_id_1 = await _insert_eval_definition(
+        eval_id_1 = await _insert_eval(
             db_engine,
             org_id,
             acc_id,
             pipeline_id,
             uuid.UUID(node_id),
             name="first-block",
-            failure_behaviour="block",
         )
-        eval_id_2 = await _insert_eval_definition(
+        eval_id_2 = await _insert_eval(
             db_engine,
             org_id,
             acc_id,
             pipeline_id,
             uuid.UUID(node_id),
             name="second-block",
-            failure_behaviour="block",
         )
 
         eval_defs = [
@@ -502,14 +479,13 @@ class TestC13WarnEvalPersistsResultAndRunContinues:
         run_id = await _insert_run(db_engine, org_id, pipeline_id, snapshot_id)
         node_id = str(uuid.uuid4())
 
-        eval_id = await _insert_eval_definition(
+        eval_id = await _insert_eval(
             db_engine,
             org_id,
             acc_id,
             pipeline_id,
             uuid.UUID(node_id),
             name="warn-fail-eval",
-            failure_behaviour="warn",
         )
 
         eval_def = EvalDefinition(
@@ -563,23 +539,21 @@ class TestC13WarnEvalPersistsResultAndRunContinues:
         run_id = await _insert_run(db_engine, org_id, pipeline_id, snapshot_id)
         node_id = str(uuid.uuid4())
 
-        eval_id_warn = await _insert_eval_definition(
+        eval_id_warn = await _insert_eval(
             db_engine,
             org_id,
             acc_id,
             pipeline_id,
             uuid.UUID(node_id),
             name="warn-fail",
-            failure_behaviour="warn",
         )
-        eval_id_pass = await _insert_eval_definition(
+        eval_id_pass = await _insert_eval(
             db_engine,
             org_id,
             acc_id,
             pipeline_id,
             uuid.UUID(node_id),
             name="pass-eval",
-            failure_behaviour="warn",
         )
 
         eval_defs = [
@@ -647,23 +621,21 @@ class TestC13WarnEvalPersistsResultAndRunContinues:
         run_id = await _insert_run(db_engine, org_id, pipeline_id, snapshot_id)
         node_id = str(uuid.uuid4())
 
-        eval_id_warn = await _insert_eval_definition(
+        eval_id_warn = await _insert_eval(
             db_engine,
             org_id,
             acc_id,
             pipeline_id,
             uuid.UUID(node_id),
             name="warn-pass",
-            failure_behaviour="warn",
         )
-        eval_id_block = await _insert_eval_definition(
+        eval_id_block = await _insert_eval(
             db_engine,
             org_id,
             acc_id,
             pipeline_id,
             uuid.UUID(node_id),
             name="block-fail",
-            failure_behaviour="block",
         )
 
         eval_defs = [

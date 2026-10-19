@@ -86,6 +86,22 @@ describe('AppSelect (real Select)', () => {
     const wrapper = mount(AppSelect, { props: { modelValue: '' } })
     expect(innerSelect(wrapper).props('ariaLabel')).toBe('Select')
   })
+
+  it('merges a function-form consumer pt listContainer and adds tabindex', () => {
+    const listContainer = (opts: { density?: string }) => ({ class: `density-${opts.density}` })
+    const wrapper = mount(AppSelect, {
+      props: { modelValue: '' },
+      attrs: { pt: { listContainer } },
+    })
+    const pt = innerSelect(wrapper).props('pt') as {
+      listContainer: (opts: { density?: string }) => Record<string, unknown>
+    }
+    expect(typeof pt.listContainer).toBe('function')
+    expect(pt.listContainer({ density: 'compact' })).toEqual({
+      class: 'density-compact',
+      tabindex: '0',
+    })
+  })
 })
 
 // Stub the inner PrimeVue Select so the wrapper's own behaviour is what we

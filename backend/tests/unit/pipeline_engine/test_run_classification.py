@@ -309,6 +309,17 @@ class TestPrUrlSources:
         urls = collect_pr_urls(outputs, telemetry, None)
         assert urls == [_PR]
 
+    def test_scalar_node_output_without_telemetry_entry_is_skipped(self) -> None:
+        """A non-dict node output has no telemetry value (the legacy fallback
+        returns ``None``), so the walk skips it without extracting a URL."""
+        urls = collect_pr_urls({"n1": "not-a-dict"}, {}, None)
+        assert not urls
+
+    def test_dict_node_output_without_pr_url_is_skipped(self) -> None:
+        """A dict telemetry value carrying no pr_url is skipped, not admitted."""
+        urls = collect_pr_urls({"n1": {"summary": "done"}}, {}, None)
+        assert not urls
+
     def test_failed_with_pr_url_from_markers_is_still_no_delivery(self) -> None:
         # A failed run is COUNTABLE no_delivery regardless of any pr_url
         # evidence (the pr_url matters only for the complete verdict).
@@ -876,6 +887,29 @@ class TestReasons:
         result = classify_run("failed", "provider.rate_limited")
         assert result.value == RunClassificationValue.no_delivery
         assert result.reason == REASON_SOURCE_ERROR
+
+    def test_failed_model_insufficient_funds_source_error(self) -> None:
+        """A provider HTTP 402 billing fault is an upstream source error, not an
+        agent mistake: the ``model`` class derives ``source_error``, so the run
+        is never blamed on the agent with a bare ``no_delivery`` verdict."""
+        result = classify_run("failed", "model.insufficient_funds")
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.reason == REASON_SOURCE_ERROR
+
+    def test_failed_model_sibling_codes_source_error(self) -> None:
+        """Every ``model.*`` sibling derives ``source_error`` too — the whole
+        class is upstream infrastructure, not agent behaviour."""
+        for code in ("model.provider_timeout", "model.connection", "model.rate_limited"):
+            result = classify_run("failed", code)
+            assert result.value == RunClassificationValue.no_delivery
+            assert result.reason == REASON_SOURCE_ERROR
+
+    def test_failed_agent_code_stays_plain_no_delivery(self) -> None:
+        """Attribution must not regress the OTHER way: a genuine agent failure is
+        NOT an infra problem, so it keeps the bare ``no_delivery`` reason."""
+        result = classify_run("failed", "agent.failed")
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.reason == REASON_NO_DELIVERY
 
     def test_failed_legacy_provider_code_resolved_to_source_error(self) -> None:
         """Legacy alias: raw exception class name -> provider.rate_limited.

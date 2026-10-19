@@ -38,10 +38,10 @@
     <span :data-value="option.value">{{ option.label }}</span>
   </template>
 </Select>
-          <p
+          <output
             v-if="availableEventsError"
-            role="status"
-            class="mt-1 text-xs text-destructive"
+            aria-live="polite"
+            class="block mt-1 text-xs text-destructive"
             data-testid="admin-notification-log-events-unavailable"
           >
             {{ $t('views.AdminNotificationDeliveryLogView.event_list_unavailable') }}
@@ -53,7 +53,7 @@
             >
               {{ $t('views.AdminNotificationDeliveryLogView.retry') }}
             </button>
-          </p>
+          </output>
         </div>
         <div>
           <label for="adminnotificationdeliverylogview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminNotificationDeliveryLogView.from') }}</label>
@@ -472,7 +472,8 @@ async function retryDelivery(entry: DeliveryLogEntry) {
         retryMessages.value[entry.id] = { type: 'success', text: t('views.AdminNotificationDeliveryLogView.retry_succeeded') }
       } else {
         await loadDeliveries()
-        retryMessages.value[entry.id] = { type: 'error', text: `${t('views.AdminNotificationDeliveryLogView.retry_failed')} ${data.error || `HTTP ${data.status_code}`}` }
+        const failureDetail = data.error || `HTTP ${data.status_code}`
+        retryMessages.value[entry.id] = { type: 'error', text: `${t('views.AdminNotificationDeliveryLogView.retry_failed')} ${failureDetail}` }
       }
     }
   } catch (e: unknown) {

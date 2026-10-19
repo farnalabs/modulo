@@ -140,12 +140,15 @@ class RuntimeProviderHub:
         provider_type = str(raw_provider_type) if raw_provider_type is not None else "unspecified"
         raise ProviderNotConfiguredError(provider_type, None)
 
-    async def initialise(self, config: dict[str, Any]) -> None:
+    def initialise(self, config: dict[str, Any]) -> None:
         """Factory-load providers from a configuration dict.
 
         The config dict maps provider names to provider-specific configs.
         Supported provider types: runner_docker (legacy alias local_docker),
-        e2b, kubernetes (alias k8s).
+        e2b, kubernetes (alias k8s). The factory is synchronous: every arm
+        constructs and registers its provider without I/O (the Kubernetes and
+        E2B clients connect lazily on first use), so there is no coroutine to
+        await.
 
         Like the other factory arms this is an EXPLICIT configuration path —
         the caller naming the provider is the opt-in (the environment-driven
@@ -159,67 +162,91 @@ class RuntimeProviderHub:
                 _log.warning("Provider '%s' already registered, skipping factory init", provider_name)
                 continue
             provider_type = provider_config.get("type", provider_name)
-            match provider_type:
-                case "local_docker" | "runner_docker" | "docker":
-                    from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+            self._initialise_one(provider_name, provider_config, provider_type)
 
-                    docker_host = provider_config.get("docker_host")
-                    default_image = provider_config.get("default_image", "python:3.12-slim")
-                    docker_provider = DockerRuntimeProvider(
-                        docker_host=docker_host,
-                        default_image=default_image,
-                    )
-                    try:
-                        self.register(provider_name, docker_provider)
-                    except ValueError:
-                        _log.warning(_MSG_PROVIDER_ALREADY_REGISTERED, provider_name)
-                case "e2b":
-                    from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+    def _initialise_one(
+        self,
+        provider_name: str,
+        provider_config: dict[str, Any],
+        provider_type: Any,
+    ) -> None:
+        """Dispatch one config entry to its provider-type factory arm."""
+        match provider_type:
+            case "local_docker" | "runner_docker" | "docker":
+                self._initialise_docker(provider_name, provider_config)
+            case "e2b":
+                self._initialise_e2b(provider_name, provider_config)
+            case "kubernetes" | "k8s":
+                self._initialise_kubernetes(provider_name, provider_config)
+            case _:
+                if _is_unknown_provider_type(provider_type):
+                    raise UnknownProviderTypeError(provider_type, PROVIDER_TYPES)
+                _log.warning(
+                    "Known provider type '%s' not handled in initialise; skipping",
+                    provider_type,
+                )
 
-                    api_key = provider_config.get("api_key")
-                    if not api_key:
-                        _log.warning("E2B provider '%s' has no api_key, skipping", provider_name)
-                        continue
-                    e2b_provider = E2BRuntimeProvider(api_key=api_key)
-                    try:
-                        self.register(provider_name, e2b_provider)
-                    except ValueError:
-                        _log.warning(_MSG_PROVIDER_ALREADY_REGISTERED, provider_name)
-                case "kubernetes" | "k8s":
-                    # FAR-1051: the Kubernetes provider registers here too, so
-                    # both hub entry points agree (build_hub + initialise). The
-                    # client is lazy, so construction never touches the cluster;
-                    # a missing kubernetes-asyncio SDK skips with a warning
-                    # instead of crashing boot (build_hub parity).
-                    try:
-                        from modulo.core.runtime_provider.k8s import KubernetesRuntimeProvider
-                    except ImportError:
-                        _log.warning(
-                            "Kubernetes dependency (kubernetes-asyncio) not installed; skipping provider '%s'",
-                            provider_name,
-                        )
-                        continue
-                    # FAR-1051 review: honour the same per-provider config keys
-                    # the docker/e2b arms do. Only pass keys the caller actually
-                    # supplied so the provider's own env/default fallbacks
-                    # (MODULO_KUBERNETES_NAMESPACE, KUBECONFIG, etc.) still apply.
-                    kubernetes_kwargs: dict[str, Any] = {
-                        key: provider_config[key]
-                        for key in ("namespace", "default_image", "kubeconfig", "provision_timeout_s")
-                        if key in provider_config
-                    }
-                    kubernetes_provider = KubernetesRuntimeProvider(**kubernetes_kwargs)
-                    try:
-                        self.register(provider_name, kubernetes_provider)
-                    except ValueError:
-                        _log.warning(_MSG_PROVIDER_ALREADY_REGISTERED, provider_name)
-                case _:
-                    if _is_unknown_provider_type(provider_type):
-                        raise UnknownProviderTypeError(provider_type, PROVIDER_TYPES)
-                    _log.warning(
-                        "Known provider type '%s' not handled in initialise; skipping",
-                        provider_type,
-                    )
+    def _initialise_docker(self, provider_name: str, provider_config: dict[str, Any]) -> None:
+        """Construct and register the docker-family provider (FAR-1051 aliases)."""
+        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+
+        docker_host = provider_config.get("docker_host")
+        default_image = provider_config.get("default_image", "python:3.12-slim")
+        docker_provider = DockerRuntimeProvider(
+            docker_host=docker_host,
+            default_image=default_image,
+        )
+        self._register_or_warn(provider_name, docker_provider)
+
+    def _initialise_e2b(self, provider_name: str, provider_config: dict[str, Any]) -> None:
+        """Construct and register the E2B provider when an api_key is supplied."""
+        from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+
+        api_key = provider_config.get("api_key")
+        if not api_key:
+            _log.warning("E2B provider '%s' has no api_key, skipping", provider_name)
+            return
+        e2b_provider = E2BRuntimeProvider(api_key=api_key)
+        self._register_or_warn(provider_name, e2b_provider)
+
+    def _initialise_kubernetes(self, provider_name: str, provider_config: dict[str, Any]) -> None:
+        """Construct and register the Kubernetes provider.
+
+        FAR-1051: the Kubernetes provider registers here too, so both hub entry
+        points agree (build_hub + initialise). The client is lazy, so
+        construction never touches the cluster; a missing kubernetes-asyncio SDK
+        skips with a warning instead of crashing boot (build_hub parity).
+        """
+        try:
+            from modulo.core.runtime_provider.k8s import KubernetesRuntimeProvider
+        except ImportError:
+            _log.warning(
+                "Kubernetes dependency (kubernetes-asyncio) not installed; skipping provider '%s'",
+                provider_name,
+            )
+            return
+        # FAR-1051 review: honour the same per-provider config keys
+        # the docker/e2b arms do. Only pass keys the caller actually
+        # supplied so the provider's own env/default fallbacks
+        # (MODULO_KUBERNETES_NAMESPACE, KUBECONFIG, etc.) still apply.
+        kubernetes_kwargs: dict[str, Any] = {
+            key: provider_config[key]
+            for key in ("namespace", "default_image", "kubeconfig", "provision_timeout_s")
+            if key in provider_config
+        }
+        kubernetes_provider = KubernetesRuntimeProvider(**kubernetes_kwargs)
+        self._register_or_warn(provider_name, kubernetes_provider)
+
+    def _register_or_warn(self, provider_name: str, provider: RuntimeProvider) -> None:
+        """Register *provider*, logging (never raising) on a duplicate name.
+
+        A concurrent factory arm may have registered the same name first; that
+        race is logged and skipped rather than crashing boot.
+        """
+        try:
+            self.register(provider_name, provider)
+        except ValueError:
+            _log.warning(_MSG_PROVIDER_ALREADY_REGISTERED, provider_name)
 
     async def aclose(self) -> None:
         """Close every registered provider's owned resources.

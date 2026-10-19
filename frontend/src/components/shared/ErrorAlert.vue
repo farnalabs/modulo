@@ -56,7 +56,7 @@ const problem = computed(() => isProblem.value ? props.message as ProblemDetail 
 // matching the bespoke boxes this component replaced. dismissIcon: lays the
 // root out as a flex row so the icon-only dismiss sits right of the message.
 const rootClass = computed(() => [
-  'rounded-lg border border-destructive/50 bg-destructive/10 text-destructive',
+  'rounded-lg border border-destructive/50 bg-destructive/10 text-destructive-text',
   props.compact ? 'p-3 text-sm' : 'p-4',
   props.dismissIcon ? 'flex items-start justify-between' : '',
 ].filter(Boolean).join(' '))

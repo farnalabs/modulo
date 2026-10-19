@@ -251,7 +251,7 @@ class TestRollbackDiscriminator:
     )
     @patch(
         "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
-        new_callable=AsyncMock,
+        new_callable=MagicMock,
     )
     @patch(
         "modulo.db.crud.pipeline_snapshot_versioning.enforce_guardrail_binding_strip",

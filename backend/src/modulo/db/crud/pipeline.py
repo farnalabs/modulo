@@ -2318,7 +2318,7 @@ async def replace_pipeline_graph(
         grants_deny_guardrail_admin=actor.grants_deny_guardrail_admin,
     )
 
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         session,
         old_edges,
         edges,

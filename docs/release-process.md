@@ -52,9 +52,10 @@ The GA tag is the release identity, so it is created and pushed before anything 
 
 - validates the version input (must be semver `X.Y.Z`);
 - resolves the version, the next RC tag, and the artefacts a `cut` would produce, and writes them to the job summary;
-- builds every container image (see below).
+- builds every container image (see below);
+- generates the CycloneDX SBOM and uploads it as the `sbom-cyclonedx` workflow artefact (building a file inside the run is not publishing - it reaches no registry and no release).
 
-It does **not** publish anything. It does not create a tag of any kind - not the RC, not `release-freeze`, not `validated/*`, not GA - does not push to any registry, and does not create a Release, commit a CHANGELOG, publish a package, or deploy. It is therefore safe to run during an active freeze.
+It does **not** publish anything. It does not create a tag of any kind - not the RC, not `release-freeze`, not `validated/*`, not GA - does not push to any registry, and does not create a Release, commit a CHANGELOG, publish a package, create an attestation, or deploy. It is therefore safe to run during an active freeze.
 
 ### Why the "no tag at all" guarantee is structural, not a convention
 
@@ -92,12 +93,17 @@ Server images are `linux/amd64` **only**. Nothing we ship is `arm64`: `publish-i
 |----------|--------|----------|
 | `publish-images` | FAR-1869 | Publishing the built images to GHCR (folding in `publish-images.yml`, including its smoke checks) |
 | `publish-release-bundle` | FAR-1869 | The release bundle, GitHub Release assets and Helm chart |
-| `produce-sbom-and-attestations` | FAR-1868 | SBOM and build attestations (`backend/scripts/generate-sbom.py` exists but has no caller yet) |
 | `dispatch-rc-soak` | FAR-1870 | Dispatching the RC soak run |
 | `publish-pypi` | FAR-1871 | Publishing the Python package |
 | `pin-release-docs` | FAR-1872 | Pinning the released version in the docs |
 
-Until those land, a GA release still gets its tag, its GitHub Release and its CHANGELOG section - it just does not yet publish new images, bundles, SBOMs, packages or version-pinned docs through this workflow.
+SBOM production and file-artefact attestation are **no longer stubs** (FAR-1868). `produce-sbom` runs for every action, dry-run included, and uploads a validated CycloneDX SBOM as the `sbom-cyclonedx` artefact. `attest-artefacts` runs for every action except `dry-run` and creates SLSA build provenance with `actions/attest-build-provenance`; it is the producer for the fail-closed `gh attestation verify` gate in `native-release-smoke.yml`. Container-image and release-bundle attestation remain FAR-1869 work: both sets are produced by that slice's still-stubbed publish jobs, and attesting an image needs a registry digest that does not exist yet - nothing fabricates a subject for an artefact that was not produced.
+
+Until those land, a GA release still gets its tag, its GitHub Release and its CHANGELOG section - it just does not yet publish new images, bundles, packages or version-pinned docs through this workflow. It does produce an SBOM for the run, plus an attestation for it on non-`dry-run` actions.
+
+## Attestation scope: `gh attestation verify`, not cosign
+
+The repository enforces build provenance with `gh attestation verify`, fail-closed, before any release artifact is installed (`native-release-smoke.yml`). cosign/Sigstore is explicitly **out of scope**: no consumer in the repo verifies a cosign signature or bundle, and `gh attestation verify` needs neither, so a cosign producer would be a second, unreferenced signing path.
 
 ## Running a release
 

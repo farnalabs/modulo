@@ -172,6 +172,127 @@ def create_watchdog_retry_hook(
     return _hook, box
 
 
+async def _load_retry_context_or_none(
+    aeng: AsyncEngine,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> tuple[dict[str, Any], str, dict[str, Any] | None, int] | None:
+    """Load the retry-decision inputs, degrading a failure to ``None``.
+
+    ``CancelledError`` propagates (the watchdog's own cancellation must never be
+    swallowed into a "do not retry" decision); every other load failure logs and
+    fail-closes to ``None`` — the kill then terminal-fails exactly as before.
+    """
+    try:
+        return await _load_watchdog_retry_context(aeng, run_id=run_id, org_id=org_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("pipeline.watchdog_retry_context_load_failed run=%s", run_id, exc_info=True)
+        return None
+
+
+def _resolve_retry_budget(
+    policy: dict[str, Any],
+    final_status: str,
+    error_code: str,
+    *,
+    zero_node: bool,
+    run_id: uuid.UUID,
+) -> int | None:
+    """The shared matcher, plus the FAR-1088 zero-node failure carve-out.
+
+    The raw watchdog codes resolve through the shared ``map_legacy_code`` alias
+    table, so watchdog kills match the same events an in-execute outcome of the
+    same shape would match (and the never-retryable exclusions apply
+    identically). ``zero_node=True`` asks the SAME matcher once more for a
+    failure-covered budget: an empty code means only the failure arm can match,
+    and a non-covered / malformed / zero-budget policy still yields ``None``.
+    """
+    retry_budget = _retry_after_policy(policy, final_status, error_code)
+    if retry_budget is None and zero_node:
+        retry_budget = _retry_after_policy(policy, "failed", "")
+        if retry_budget is not None:
+            _log.info(
+                "pipeline.watchdog_retry_zero_node_carve_out run=%s kill_status=%s kill_code=%s budget=%s",
+                run_id,
+                final_status,
+                error_code,
+                retry_budget,
+            )
+    return retry_budget
+
+
+async def _attempt_count_if_retryable(
+    executor: Any,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    trigger_type: str,
+    graph_json: dict[str, Any] | None,
+    claim_token: Any,
+    claim_count: int,
+    retry_budget: int,
+) -> int | None:
+    """Apply the shared gates + bookkeeping; return the effective attempt count.
+
+    Returns ``None`` when the watchdog must terminal-fail exactly as before:
+    FAR-210 correction run, FAR-295 non-idempotent graph, exhausted budget,
+    superseded claim, or (FAR-296) a failed script-mode stale-lease probe.
+
+    The budget also bounds PRE-node hangs (hub init / graph compile — the exact
+    hang sites the zombie watchdog exists for): ``node_attempt_count`` only
+    increments in ``executor._prepare_and_stream``, AFTER those sites, so a run
+    hung there reads 0 on every kill. Each watchdog retry consumes a claim (the
+    re-raised ``RunRetryPolicyError`` makes SAQ retry the job, whose re-claim
+    grows ``claim_count``), so ``claim_count - 1`` — the number of PRIOR
+    re-claims — grows one per retry cycle and bounds hangs that never reached a
+    node. For a run that reached a node, ``claim_count`` is 1 and the effective
+    count IS ``node_attempt_count``, so the in-execute path is unchanged.
+    """
+    is_correction_run = (trigger_type or "") == "correction"
+    graph_idempotent = _graph_is_idempotent(graph_json)
+    if is_correction_run or not graph_idempotent:
+        return None
+    node_attempt_count, current_claim_token = await executor._read_retry_attempt_state(org_id, run_id)
+    attempt_count: int = max(node_attempt_count, claim_count - 1)
+    superseded = claim_token is not None and current_claim_token is not None and current_claim_token != claim_token
+    script_retry_probe_ok = True
+    if _graph_has_script_mode(graph_json):
+        script_retry_probe_ok = await executor._probe_script_lease(run_id=run_id, org_id=org_id)
+    if not _can_retry_after_policy(attempt_count, retry_budget, superseded, script_retry_probe_ok):
+        return None
+    return attempt_count
+
+
+def _resolve_schedule_state(
+    policy: dict[str, Any],
+    attempt_count: int,
+    run_id: uuid.UUID,
+) -> tuple[str, float]:
+    """Resolve the FAR-525 run-level backoff schedule and the effective sleep.
+
+    Resolved BEFORE the fenced pending-reset so a resolver defect can never
+    strand a run that was already reset (total fail-open to the hardcoded
+    default schedule), mirroring ``_redispatch_after_policy``.
+    """
+    schedule_present, schedule_delay, schedule_multiplier, schedule_reason = rc.resolve_backoff_schedule(policy)
+    if schedule_reason is not None:
+        _log.warning(
+            "pipeline.watchdog_retry_schedule_fail_open",
+            extra={"run_id": str(run_id), "reason": schedule_reason},
+        )
+    if not schedule_present:
+        schedule_state = "absent"
+    elif schedule_reason:
+        schedule_state = "failopen"
+    else:
+        schedule_state = "valid"
+    effective_sleep = _retry_backoff_seconds(attempt_count, base=schedule_delay, multiplier=schedule_multiplier)
+    return schedule_state, effective_sleep
+
+
 async def watchdog_retry_after_policy(
     *,
     aeng: AsyncEngine,
@@ -228,84 +349,38 @@ async def watchdog_retry_after_policy(
     if exec_task is not None and exec_task.done():
         return False
 
-    try:
-        context = await _load_watchdog_retry_context(aeng, run_id=run_id, org_id=org_id)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.warning("pipeline.watchdog_retry_context_load_failed run=%s", run_id, exc_info=True)
-        return False
+    context = await _load_retry_context_or_none(aeng, run_id=run_id, org_id=org_id)
     if context is None:
         return False
     policy, trigger_type, graph_json, claim_count = context
 
-    # THE shared decision — the exact pure function the in-execute path uses.
-    # The raw watchdog codes resolve through the shared map_legacy_code alias
-    # table (node_deadline_exceeded -> node.deadline_exceeded -> "timeout";
-    # executor_stalled -> agent.stall -> "stall"), so watchdog kills match the
-    # same events an in-execute outcome of the same shape would match, and the
-    # never-retryable exclusions (script-mode terminal codes, hang deaths)
-    # apply identically.
-    retry_budget = _retry_after_policy(policy, final_status, error_code)
-    if retry_budget is None and zero_node:
-        # FAR-1088 zero-node failure carve-out (see docstring): the kill found
-        # no coverage for its own outcome — ask the SAME shared matcher for a
-        # failure-covered budget. Empty code ⇒ only the failure arm can match,
-        # and a non-covered / malformed / zero-budget policy still yields None
-        # (fail closed, same as the cron path's carve-out).
-        retry_budget = _retry_after_policy(policy, "failed", "")
-        if retry_budget is not None:
-            _log.info(
-                "pipeline.watchdog_retry_zero_node_carve_out run=%s kill_status=%s kill_code=%s budget=%s",
-                run_id,
-                final_status,
-                error_code,
-                retry_budget,
-            )
+    # THE shared decision (matcher + FAR-1088 zero-node carve-out).
+    retry_budget = _resolve_retry_budget(
+        policy,
+        final_status,
+        error_code,
+        zero_node=zero_node,
+        run_id=run_id,
+    )
     if retry_budget is None:
         return False
-    # Same gates as _retry_policy_applies: FAR-210 correction runs and FAR-295
-    # non-idempotent graphs are never re-dispatched (re-running would
-    # re-execute a side effect / a correction's budget is owned elsewhere).
-    is_correction_run = (trigger_type or "") == "correction"
-    graph_idempotent = _graph_is_idempotent(graph_json)
-    if is_correction_run or not graph_idempotent:
-        return False
-    # Same bookkeeping as the in-execute path: attempt budget, superseded
-    # claim, FAR-296 script-mode stale-lease probe.
-    node_attempt_count, current_claim_token = await executor._read_retry_attempt_state(org_id, run_id)
-    # The budget must also bound PRE-node hangs (hub init / graph compile —
-    # the exact hang sites the zombie watchdog exists for): node_attempt_count
-    # only increments in executor._prepare_and_stream, AFTER those sites, so a
-    # run hung there reads 0 on every kill and ``0 <= budget`` always allowed
-    # the retry (bounded only by the SAQ claim cap — stranded pending churn).
-    # Each watchdog retry consumes a claim (the re-raised RunRetryPolicyError
-    # makes SAQ retry the job, whose re-claim grows claim_count), so
-    # claim_count - 1 — the number of PRIOR re-claims, read from the
-    # already-loaded run row — grows one per retry cycle and bounds hangs that
-    # never reached a node. For a run that reached a node, claim_count is 1
-    # (single claim) and the effective count IS node_attempt_count, so the
-    # in-execute path is unchanged.
-    attempt_count = max(node_attempt_count, claim_count - 1)
-    superseded = claim_token is not None and current_claim_token is not None and current_claim_token != claim_token
-    script_retry_probe_ok = True
-    if _graph_has_script_mode(graph_json):
-        script_retry_probe_ok = await executor._probe_script_lease(run_id=run_id, org_id=org_id)
-    if not _can_retry_after_policy(attempt_count, retry_budget, superseded, script_retry_probe_ok):
+    # Same gates + bookkeeping as the in-execute path (FAR-210 correction runs,
+    # FAR-295 non-idempotent graphs, attempt budget, superseded claim, FAR-296
+    # script-mode stale-lease probe).
+    attempt_count = await _attempt_count_if_retryable(
+        executor,
+        run_id=run_id,
+        org_id=org_id,
+        trigger_type=trigger_type,
+        graph_json=graph_json,
+        claim_token=claim_token,
+        claim_count=claim_count,
+        retry_budget=retry_budget,
+    )
+    if attempt_count is None:
         return False
 
-    # FAR-525: resolve the run-level backoff_schedule EARLY — the pure
-    # computation happens BEFORE the fenced pending-reset so a resolver
-    # defect can never strand a run that was already reset (total fail-open
-    # to the hardcoded default schedule), mirroring _redispatch_after_policy.
-    schedule_present, schedule_delay, schedule_multiplier, schedule_reason = rc.resolve_backoff_schedule(policy)
-    if schedule_reason is not None:
-        _log.warning(
-            "pipeline.watchdog_retry_schedule_fail_open",
-            extra={"run_id": str(run_id), "reason": schedule_reason},
-        )
-    schedule_state = "absent" if not schedule_present else ("failopen" if schedule_reason else "valid")
-    effective_sleep = _retry_backoff_seconds(attempt_count, base=schedule_delay, multiplier=schedule_multiplier)
+    schedule_state, effective_sleep = _resolve_schedule_state(policy, attempt_count, run_id)
     reset_rowcount = await executor._fenced_pending_reset(run_id=run_id, org_id=org_id)
     if not reset_rowcount:
         # Fence lost — a successor owns the run (or it just reached a terminal

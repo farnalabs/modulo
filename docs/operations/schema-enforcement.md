@@ -65,7 +65,7 @@ The per-record fields:
 | `native_output` | `true` when the sandbox returned structured output via the native JSON channel. |
 | `repair_attempts` | Count of repair loop invocations on this attempt. |
 | `wasted_attempts` | Count of attempts whose sole failure cause was schema rejection (repair loop consumed budget but produced nothing usable). |
-| `validation_errors` | The first N structured validation error dicts (capped at 50). Each has `pointer`, `constraint`, `message`, and optionally `expected`, `actual`, `allowed`. |
+| `validation_errors` | The first N structured validation error dicts (capped at 50). Each has `pointer` and `constraint`; `message` is included when present, and the dict may also carry `validator_value`, `actual`, and (for `enum` failures) `allowed`. |
 | `total_error_count` | Total number of validation errors before truncation. |
 | `truncated` | `true` when the error list was truncated to the cap. |
 
@@ -109,9 +109,9 @@ Every non-`__final__` attempt that has a schema assigned gets a
 bounded to 64 KB; validation errors are truncated with `total_count` and
 `truncated` flags when the full list exceeds the cap.
 
-A partial index `ix_run_node_outputs_enforcement_pending` on
-`run_id WHERE schema_enforcement_json IS NOT NULL` supports the run-detail
-enforcement query.
+A partial index `ix_run_node_outputs_enforcement_pending` on `run_id
+WHERE schema_enforcement_json IS NOT NULL AND attempt_key <> '__final__'`
+supports the run-detail enforcement query.
 
 ### Run-level columns (`runs`)
 
@@ -185,7 +185,7 @@ ORDER BY 1 DESC;
 
 ```sql
 SELECT
-  outcome,
+  schema_enforcement_json->>'outcome' AS outcome,
   COUNT(*) AS attempts,
   SUM((schema_enforcement_json->>'repair_attempts')::int) AS total_repairs,
   SUM((schema_enforcement_json->>'wasted_attempts')::int) AS total_wasted

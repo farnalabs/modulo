@@ -308,13 +308,13 @@ describe('formatRun', () => {
 describe('runStatusBadgeClass', () => {
   it('maps known statuses to their badge classes', () => {
     expect(runStatusBadgeClass('complete')).toBe('bg-success/10 text-success')
-    expect(runStatusBadgeClass('failed')).toBe('bg-destructive/10 text-destructive')
-    expect(runStatusBadgeClass('stalled')).toBe('bg-destructive/10 text-destructive')
-    expect(runStatusBadgeClass('budget_exceeded')).toBe('bg-destructive/10 text-destructive')
+    expect(runStatusBadgeClass('failed')).toBe('bg-destructive/10 text-destructive-text')
+    expect(runStatusBadgeClass('stalled')).toBe('bg-destructive/10 text-destructive-text')
+    expect(runStatusBadgeClass('budget_exceeded')).toBe('bg-destructive/10 text-destructive-text')
     expect(runStatusBadgeClass('running')).toBe('bg-primary/10 text-primary')
     expect(runStatusBadgeClass('awaiting_human')).toBe('bg-warning/10 text-warning-text')
     expect(runStatusBadgeClass('cancelled')).toBe('bg-muted text-muted-foreground')
-    expect(runStatusBadgeClass('eval_failed')).toBe('bg-destructive/10 text-destructive')
+    expect(runStatusBadgeClass('eval_failed')).toBe('bg-destructive/10 text-destructive-text')
     expect(runStatusBadgeClass('claimed')).toBe('bg-warning/10 text-warning-text')
     expect(runStatusBadgeClass('waiting_for_lock')).toBe('bg-muted text-muted-foreground')
   })

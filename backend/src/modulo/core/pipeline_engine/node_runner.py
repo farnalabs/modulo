@@ -1144,7 +1144,7 @@ def _compute_sandbox_cost(elapsed_seconds: float, output_json: Any) -> float:
     return round(total, 6)
 
 
-async def _build_log_tail_provider(api_key: str) -> "RuntimeProvider | None":
+def _build_log_tail_provider(api_key: str) -> "RuntimeProvider | None":
     """Build the E2B RuntimeProvider for the sandbox log probe (FAR-1050 R1).
 
     A dedicated seam so unit tests can substitute a
@@ -1156,7 +1156,7 @@ async def _build_log_tail_provider(api_key: str) -> "RuntimeProvider | None":
 
     try:
         provider_hub = RuntimeProviderHub()
-        await provider_hub.initialise({"e2b": {"type": "e2b", "api_key": api_key}})
+        provider_hub.initialise({"e2b": {"type": "e2b", "api_key": api_key}})
     except Exception:
         return None
     return provider_hub.get("e2b")
@@ -1213,7 +1213,7 @@ async def _read_log_tail_via_provider(
     if not api_key:
         return ""
     try:
-        provider = await _build_log_tail_provider(api_key)
+        provider = _build_log_tail_provider(api_key)
         if provider is None:
             return ""
         raw = await provider.read_log_tail(sandbox_id, max_bytes=max_bytes)
@@ -1222,7 +1222,7 @@ async def _read_log_tail_via_provider(
         return ""
 
 
-async def _build_isolation_provider(api_key: str) -> "RuntimeProvider | None":
+def _build_isolation_provider(api_key: str) -> "RuntimeProvider | None":
     """FAR-1050 R3 isolation: build the E2B RuntimeProvider.
 
     Sibling seam of :func:`_build_log_tail_provider` — delegates to it so
@@ -1231,7 +1231,7 @@ async def _build_isolation_provider(api_key: str) -> "RuntimeProvider | None":
     provider cannot be constructed — the caller fails CLOSED (isolation is
     enforcement-critical), never open.
     """
-    return await _build_log_tail_provider(api_key)
+    return _build_log_tail_provider(api_key)
 
 
 async def _apply_isolation_via_provider(
@@ -1320,7 +1320,7 @@ async def _apply_isolation_via_provider(
     _seam_built_provider: RuntimeProvider | None = None
     if _is_legacy_e2b_route(provider_type):
         api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
-        provider = await _build_isolation_provider(api_key) if api_key else None
+        provider = _build_isolation_provider(api_key) if api_key else None
         if provider is None:
             raise SandboxTierRefusedError(
                 "sandbox isolation could not resolve the E2B runtime provider (set MODULO_E2B_API_KEY and restart)"
@@ -1372,7 +1372,7 @@ async def _apply_isolation_via_provider(
             await _close_seam_provider(_seam_built_provider)
 
 
-async def _build_file_io_provider(api_key: str) -> "RuntimeProvider | None":
+def _build_file_io_provider(api_key: str) -> "RuntimeProvider | None":
     """FAR-1050 R2b file I/O: build the E2B RuntimeProvider.
 
     Sibling seam of :func:`_build_isolation_provider` — delegates to
@@ -1383,7 +1383,7 @@ async def _build_file_io_provider(api_key: str) -> "RuntimeProvider | None":
     provider cannot be constructed (never raises) — the caller maps that to
     a typed failure rather than silently degrading to ``sandbox.files``.
     """
-    return await _build_log_tail_provider(api_key)
+    return _build_log_tail_provider(api_key)
 
 
 async def _file_io_provider_for(
@@ -1425,7 +1425,7 @@ async def _file_io_provider_for(
             return borrowed_provider, sandbox_id
         return _build_profile_provider(str(provider_type)), sandbox_id
     api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
-    provider = await _build_file_io_provider(api_key) if api_key else None
+    provider = _build_file_io_provider(api_key) if api_key else None
     if provider is None:
         raise RuntimeProviderError(
             "sandbox file I/O could not resolve the E2B runtime provider (set MODULO_E2B_API_KEY and restart)"
@@ -12747,7 +12747,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         _claim_receipt = await harvest_gh_pr_claim_bounded(
                             _claim_receipt_exec,
                             run_scope=run_id,
-                            timeout=20.0,
                         )
                     # Cancellation is RECORDED, not re-raised here: the dispatch
                     # re-raises it only after the sandbox kill / provider close /

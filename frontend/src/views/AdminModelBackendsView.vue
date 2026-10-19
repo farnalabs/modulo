@@ -8,13 +8,27 @@
         </Button>
       </header>
 
-      <LoadingSpinner v-if="loading" />
+      <TableSkeleton
+        v-if="loading"
+        :columns="7"
+        :rows="5"
+        :aria-label="$t('common.loading')"
+        data-testid="admin-model-backends-loading"
+      />
 
       <ErrorAlert v-else-if="error" :message="error" :on-retry="loadBackends" />
 
       <template v-else>
         <div v-if="formMode === 'add'" class="card p-6">
           <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminModelBackendsView.new_model_backend') }}</h2>
+          <ErrorAlert
+            v-if="presetsError"
+            compact
+            class="mb-4"
+            :message="presetsError"
+            :on-retry="loadPresets"
+            data-testid="admin-model-backends-presets-error"
+          />
           <div v-if="presets.length > 0 && !selectedPresetId && !manualMode" class="mb-6">
             <h3 class="mb-1 text-sm font-medium">{{ $t('views.AdminModelBackendsView.preset_picker_title') }}</h3>
             <p class="mb-3 text-sm text-muted-foreground">{{ $t('views.AdminModelBackendsView.preset_picker_description') }}</p>
@@ -454,8 +468,8 @@
         </div>
 
         <div v-if="deleteConfirmBackendId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-          <p class="text-sm font-medium text-destructive">{{ $t('views.AdminModelBackendsView.delete_confirm', { name: deleteConfirmName }) }}</p>
-          <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminModelBackendsView.this_action_cannot_be_undone') }}</p>
+          <p class="text-sm font-medium text-destructive-text">{{ $t('views.AdminModelBackendsView.delete_confirm', { name: deleteConfirmName }) }}</p>
+          <p class="mt-1 text-sm text-destructive-text">{{ $t('views.AdminModelBackendsView.this_action_cannot_be_undone') }}</p>
           <div class="mt-3 flex items-center gap-2">
           <Button :disabled="deleting" severity="danger" data-testid="admin-model-backends-delete-confirm" @click="deleteBackend">
             {{ deleting ? $t('views.AdminModelBackendsView.deleting') : $t('views.AdminModelBackendsView.delete') }}
@@ -469,7 +483,7 @@
               {{ $t('views.AdminModelBackendsView.cancel') }}
             </button>
           </div>
-          <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
+          <div v-if="deleteError" class="mt-2 text-sm text-destructive-text">{{ deleteError }}</div>
         </div>
       </template>
     </div>
@@ -484,6 +498,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { useProductAnalytics } from '../composables/useProductAnalytics'
@@ -542,7 +557,7 @@ const { data: backendsResp, loading, error, load: loadBackends } = useDataFetch(
   { initialValue: { items: [] } as { items: ModelBackendItem[] } }
 )
 
-const { data: presetsResp } = useDataFetch(
+const { data: presetsResp, error: presetsError, load: loadPresets } = useDataFetch(
   () => api.GET('/api/v1/model-backends/presets'),
   { initialValue: { items: [] } as { items: PresetItem[] } }
 )

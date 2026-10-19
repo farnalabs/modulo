@@ -6,6 +6,7 @@ that redacts secrets from org-config output.
 """
 
 import uuid
+from collections.abc import Iterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -255,10 +256,18 @@ class TestGetOrgConfig:
     """Tests for the get_org_config MCP tool."""
 
     @pytest.fixture(autouse=True)
-    def _set_org(self) -> None:
-        token = _ctx_org_id.set(ORG_ID)
+    def _set_org(self) -> Iterator[None]:
+        # FAR-1942: get_org_config mirrors its REST twin's strict
+        # is_system_admin gate; these tests exercise the body.
+        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+
+        org_token = _ctx_org_id.set(ORG_ID)
+        role_token = _ctx_role.set("admin")
+        admin_token = _ctx_is_system_admin.set(True)
         yield
-        _ctx_org_id.reset(token)
+        _ctx_is_system_admin.reset(admin_token)
+        _ctx_role.reset(role_token)
+        _ctx_org_id.reset(org_token)
 
     def _config(self, key: str, value: object) -> MagicMock:
         cfg = MagicMock()

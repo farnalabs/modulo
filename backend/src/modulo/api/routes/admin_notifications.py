@@ -28,8 +28,14 @@ from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.core.audit_coverage import audited
 from modulo.core.notifier import (
     EVENT_BUDGET_EXCEEDED,
+    EVENT_CAPACITY_BACKPRESSURE,
+    EVENT_CAPACITY_RECOVERED,
+    EVENT_CAPACITY_SATURATION,
     EVENT_CIRCUIT_BREAKER_TRIPPED,
     EVENT_HITL_DEADLINE_WARNING,
+    EVENT_QUEUE_PRESSURE_CRITICAL,
+    EVENT_QUEUE_PRESSURE_NOTICE,
+    EVENT_QUEUE_PRESSURE_WARNING,
     EVENT_RUN_STALLED,
     EVENT_TRIGGER_DEACTIVATED,
     EVENT_TRIGGER_STREAK_ALERT,
@@ -71,6 +77,15 @@ AVAILABLE_EVENTS = [
     EVENT_CIRCUIT_BREAKER_TRIPPED,
     EVENT_TRIGGER_DEACTIVATED,
     EVENT_TRIGGER_STREAK_ALERT,
+    # FAR-1344 — capacity alerting. Each is a real dispatch_event type, so the
+    # webhook subscription surface must accept it (this list is the
+    # subscribable subset of event_mapper._EVENT_CONFIG).
+    EVENT_QUEUE_PRESSURE_NOTICE,
+    EVENT_QUEUE_PRESSURE_WARNING,
+    EVENT_QUEUE_PRESSURE_CRITICAL,
+    EVENT_CAPACITY_BACKPRESSURE,
+    EVENT_CAPACITY_SATURATION,
+    EVENT_CAPACITY_RECOVERED,
 ]
 
 

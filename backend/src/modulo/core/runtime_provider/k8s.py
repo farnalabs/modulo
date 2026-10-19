@@ -183,6 +183,42 @@ def _stream_error_message(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {str(exc)[:_STREAM_ERROR_TRUNC]}"
 
 
+# Decoded-frame channel for an ERROR_CHANNEL payload (the exit-status message,
+# which is NOT yielded as output — it is recorded on the stream state).
+_EXIT_FRAME_CHANNEL = "exit"
+
+
+def _frame_error_message(message: Any) -> str:
+    """Error message carried by a ``WSMsgType.ERROR`` exec frame."""
+    data = getattr(message, "data", None)
+    return _stream_error_message(data if isinstance(data, BaseException) else RuntimeError(str(data)))
+
+
+def _decode_exec_frame(message: Any) -> tuple[str, str] | None:
+    """Decode a TEXT/BINARY exec frame into ``(channel, payload)``.
+
+    ``channel`` is ``stdout`` / ``stderr``, or :data:`_EXIT_FRAME_CHANNEL` for
+    the exec-subresource error channel (the exit-status payload). ``None``
+    means the frame carries no usable output. Unknown channels with payload are
+    routed to stderr so diagnostic output is never silently dropped.
+    """
+    raw = getattr(message, "data", None)
+    payload = raw if isinstance(raw, str) else bytes(raw or b"").decode("utf-8", errors="replace")
+    if not payload:
+        return None
+    channel = ord(payload[0])
+    data = payload[1:]
+    if not data:
+        return None
+    if channel == STDOUT_CHANNEL:
+        return "stdout", data
+    if channel == STDERR_CHANNEL:
+        return "stderr", data
+    if channel == ERROR_CHANNEL:
+        return _EXIT_FRAME_CHANNEL, data
+    return "stderr", data
+
+
 def _resolve_exit_code(payload: str | None) -> tuple[int | None, str | None]:
     """Resolve the exec exit status from the exec-subresource error-channel payload.
 
@@ -565,6 +601,30 @@ class KubernetesRuntimeProvider(RuntimeProvider):
             await asyncio.sleep(_PROVISION_POLL_INTERVAL)
 
     @staticmethod
+    def _container_waiting_note(state: Any) -> str:
+        """Note from a container's ``waiting`` state, or ``""`` when absent."""
+        waiting = getattr(state, "waiting", None)
+        if waiting is None:
+            return ""
+        reason = str(getattr(waiting, "reason", "") or "")
+        if not reason:
+            return ""
+        message = str(getattr(waiting, "message", "") or "")
+        return f"{reason}: {message}" if message else reason
+
+    @staticmethod
+    def _container_terminated_note(state: Any) -> str:
+        """Note from a container's ``terminated`` state, or ``""`` when absent."""
+        terminated = getattr(state, "terminated", None)
+        if terminated is None:
+            return ""
+        reason = str(getattr(terminated, "reason", "") or "")
+        exit_code = getattr(terminated, "exit_code", None)
+        if not reason and exit_code is None:
+            return ""
+        return f"{reason} (exit {exit_code})" if reason else f"exit {exit_code}"
+
+    @staticmethod
     def _pod_phase_and_note(pod: Any) -> tuple[str, str]:
         """Return ``(lowercase phase, diagnostic note)`` from a V1Pod status.
 
@@ -580,18 +640,10 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         terminated_note = ""
         for container_status in getattr(status, "container_statuses", None) or []:
             state = getattr(container_status, "state", None)
-            waiting = getattr(state, "waiting", None)
-            if waiting is not None and not waiting_note:
-                reason = str(getattr(waiting, "reason", "") or "")
-                message = str(getattr(waiting, "message", "") or "")
-                if reason:
-                    waiting_note = f"{reason}: {message}" if message else reason
-            terminated = getattr(state, "terminated", None)
-            if terminated is not None and not terminated_note:
-                reason = str(getattr(terminated, "reason", "") or "")
-                exit_code = getattr(terminated, "exit_code", None)
-                if reason or exit_code is not None:
-                    terminated_note = f"{reason} (exit {exit_code})" if reason else f"exit {exit_code}"
+            if not waiting_note:
+                waiting_note = KubernetesRuntimeProvider._container_waiting_note(state)
+            if not terminated_note:
+                terminated_note = KubernetesRuntimeProvider._container_terminated_note(state)
         condition_note = KubernetesRuntimeProvider._pod_condition_note(status)
         return phase, waiting_note or terminated_note or condition_note
 
@@ -662,6 +714,45 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         stdout_parts: list[str] = []
         stderr_parts: list[str] = []
 
+        timeout_result = await self._collect_exec_or_timeout(
+            ws, state, provider_ref, cmd_timeout, start, stdout_parts, stderr_parts
+        )
+        if timeout_result is not None:
+            return timeout_result
+        await self._close_ws(ws)
+
+        duration = int((time.monotonic() - start) * 1000)
+        if state.error is not None:
+            raise BackendUnreachableError(f"Kubernetes exec stream failed for pod {provider_ref}: {state.error}")
+        exit_code, note = _resolve_exit_code(state.exit_payload)
+        stderr_text = "".join(stderr_parts)
+        if note is not None:
+            stderr_text = f"{stderr_text}\n{note}" if stderr_text else note
+        return ExecResult(
+            exit_code=exit_code if exit_code is not None else -1,
+            stdout="".join(stdout_parts),
+            stderr=stderr_text,
+            duration_ms=duration,
+        )
+
+    async def _collect_exec_or_timeout(
+        self,
+        ws: Any,
+        state: _ExecStreamState,
+        provider_ref: str,
+        cmd_timeout: int | None,
+        start: float,
+        stdout_parts: list[str],
+        stderr_parts: list[str],
+    ) -> ExecResult | None:
+        """Collect the exec stream; return a timeout result, else ``None``.
+
+        A timeout yields the Docker-parity ``exit_code=-1`` result; any other
+        stream failure is raised as the typed :class:`BackendUnreachableError`
+        (the command outcome is unknown and must never be reported as a command
+        failure or a success).
+        """
+
         async def _collect() -> None:
             async for stream_name, data in self._read_exec_frames(ws, state):
                 if stream_name == "stdout":
@@ -690,21 +781,7 @@ class KubernetesRuntimeProvider(RuntimeProvider):
             raise BackendUnreachableError(
                 f"Kubernetes exec stream failed for pod {provider_ref}: {type(exc).__name__}: {exc}"
             ) from exc
-        await self._close_ws(ws)
-
-        duration = int((time.monotonic() - start) * 1000)
-        if state.error is not None:
-            raise BackendUnreachableError(f"Kubernetes exec stream failed for pod {provider_ref}: {state.error}")
-        exit_code, note = _resolve_exit_code(state.exit_payload)
-        stderr_text = "".join(stderr_parts)
-        if note is not None:
-            stderr_text = f"{stderr_text}\n{note}" if stderr_text else note
-        return ExecResult(
-            exit_code=exit_code if exit_code is not None else -1,
-            stdout="".join(stdout_parts),
-            stderr=stderr_text,
-            duration_ms=duration,
-        )
+        return None
 
     async def _open_exec(
         self,
@@ -806,29 +883,18 @@ class KubernetesRuntimeProvider(RuntimeProvider):
             if message_type in (WSMsgType.CLOSED, WSMsgType.CLOSE):
                 return
             if message_type == WSMsgType.ERROR:
-                data = getattr(message, "data", None)
-                state.error = _stream_error_message(
-                    data if isinstance(data, BaseException) else RuntimeError(str(data))
-                )
+                state.error = _frame_error_message(message)
                 return
             if message_type not in (WSMsgType.TEXT, WSMsgType.BINARY):
                 continue  # PING/PONG and other control frames carry no output.
-            raw = getattr(message, "data", None)
-            payload = raw if isinstance(raw, str) else bytes(raw or b"").decode("utf-8", errors="replace")
-            if not payload:
+            frame = _decode_exec_frame(message)
+            if frame is None:
                 continue
-            channel = ord(payload[0])
-            data = payload[1:]
-            if not data:
-                continue
-            if channel == STDOUT_CHANNEL:
-                yield ("stdout", data)
-            elif channel == STDERR_CHANNEL:
-                yield ("stderr", data)
-            elif channel == ERROR_CHANNEL:
+            channel, data = frame
+            if channel == _EXIT_FRAME_CHANNEL:
                 state.exit_payload = data
-            else:
-                yield ("stderr", data)
+                continue
+            yield (channel, data)
 
     async def exec_command_stream(
         self,
@@ -979,29 +1045,34 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         now = time.time()
         entries: list[WorkspacePodRef] = []
         for pod in getattr(pods, "items", None) or []:
-            metadata = getattr(pod, "metadata", None)
-            if metadata is None:
+            entry = self._workspace_pod_entry(pod, identity, now)
+            if entry is None:
                 continue
-            annotations = getattr(metadata, "annotations", None) or {}
-            if annotations.get(_MACHINE_ANNOTATION) != identity:
-                continue
-            labels = getattr(metadata, "labels", None) or {}
-            try:
-                created = float(labels.get(_CREATED_AT_LABEL, "0") or 0)
-            except (TypeError, ValueError):
-                created = 0.0
-            ref = getattr(metadata, "name", "") or ""
-            if not ref:
-                _log.warning("list_workspace_pods: workspace pod without a name in namespace %s", self._namespace)
-                continue
-            entries.append(
-                WorkspacePodRef(
-                    ref=ref,
-                    labels=dict(labels),
-                    created_age_s=max(0.0, now - created) if created else 0.0,
-                )
-            )
+            entries.append(entry)
         return entries
+
+    def _workspace_pod_entry(self, pod: Any, identity: str, now: float) -> WorkspacePodRef | None:
+        """Convert one listed pod to a ref, or ``None`` when it is not ours."""
+        metadata = getattr(pod, "metadata", None)
+        if metadata is None:
+            return None
+        annotations = getattr(metadata, "annotations", None) or {}
+        if annotations.get(_MACHINE_ANNOTATION) != identity:
+            return None
+        labels = getattr(metadata, "labels", None) or {}
+        try:
+            created = float(labels.get(_CREATED_AT_LABEL, "0") or 0)
+        except (TypeError, ValueError):
+            created = 0.0
+        ref = getattr(metadata, "name", "") or ""
+        if not ref:
+            _log.warning("list_workspace_pods: workspace pod without a name in namespace %s", self._namespace)
+            return None
+        return WorkspacePodRef(
+            ref=ref,
+            labels=dict(labels),
+            created_age_s=max(0.0, now - created) if created else 0.0,
+        )
 
     async def get_workspace_status(self, provider_ref: str) -> str:
         """Return the pod phase (``running`` / ``pending`` / ... ), ``terminated`` when gone."""
@@ -1167,6 +1238,15 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         server cannot stall teardown; client closes are best-effort with a
         logged warning on timeout/failure.
         """
+        await self._destroy_tracked_workspaces()
+        await self._close_owned_clients()
+        self._api_client = None
+        self._ws_api_client = None
+        self._core_api = None
+        self._ws_core_api = None
+
+    async def _destroy_tracked_workspaces(self) -> None:
+        """Destroy every tracked workspace pod, bounded and best-effort."""
         for provider_ref in tuple(self._workspaces):
             try:
                 await asyncio.wait_for(
@@ -1183,6 +1263,9 @@ class KubernetesRuntimeProvider(RuntimeProvider):
                 self._workspaces.discard(provider_ref)
             except Exception:
                 _log.exception("Failed to destroy workspace pod %s during close()", provider_ref)
+
+    async def _close_owned_clients(self) -> None:
+        """Close the owned Kubernetes API clients, bounded and best-effort."""
         for client in (self._api_client, self._ws_api_client):
             if client is None:
                 continue
@@ -1194,7 +1277,3 @@ class KubernetesRuntimeProvider(RuntimeProvider):
                 _log.warning("Timed out closing Kubernetes client during close(); force-dropping it")
             except Exception:
                 _log.exception("Failed to close Kubernetes client during close()")
-        self._api_client = None
-        self._ws_api_client = None
-        self._core_api = None
-        self._ws_core_api = None
