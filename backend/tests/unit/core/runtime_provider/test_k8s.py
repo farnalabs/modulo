@@ -1432,6 +1432,31 @@ class TestPodPhaseAndNote:
 
         assert "OOMKilled" in note
 
+    def test_notes_already_found_skip_the_remaining_container_statuses(self) -> None:
+        """The first waiting/terminated note wins; later containers are not
+        re-inspected once each slot is filled."""
+        first_state = SimpleNamespace(
+            waiting=SimpleNamespace(reason="ImagePullBackOff", message="back-off"),
+            terminated=SimpleNamespace(reason="Error", exit_code=1),
+        )
+        second_state = SimpleNamespace(
+            waiting=SimpleNamespace(reason="CrashLoopBackOff", message="crash"),
+            terminated=SimpleNamespace(reason="OOMKilled", exit_code=137),
+        )
+        pod = SimpleNamespace(
+            status=SimpleNamespace(
+                phase="Failed",
+                container_statuses=[
+                    SimpleNamespace(state=first_state),
+                    SimpleNamespace(state=second_state),
+                ],
+            )
+        )
+
+        _phase, note = KubernetesRuntimeProvider._pod_phase_and_note(pod)
+
+        assert note == "ImagePullBackOff: back-off"
+
 
 class TestCreateAndDeleteArms:
     async def test_create_cancellation_propagates(self) -> None:

@@ -619,20 +619,20 @@ async def _run_sse_with_relay(monkeypatch: pytest.MonkeyPatch, fake_relay: Magic
 
 async def test_sse_route_acquires_and_releases_relay(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_relay = MagicMock()
-    fake_relay.acquire = AsyncMock()
+    fake_relay.acquire = MagicMock()
     fake_relay.release = AsyncMock()
 
     resp = await _run_sse_with_relay(monkeypatch, fake_relay)
     async for _ in resp.body_iterator:  # type: ignore[attr-defined]
         pass
 
-    fake_relay.acquire.assert_awaited_once()
+    fake_relay.acquire.assert_called_once()
     fake_relay.release.assert_awaited_once()
 
 
 async def test_sse_route_relay_acquire_cancellation_cleans_up(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_relay = MagicMock()
-    fake_relay.acquire = AsyncMock(side_effect=asyncio.CancelledError())
+    fake_relay.acquire = MagicMock(side_effect=asyncio.CancelledError())
 
     with pytest.raises(asyncio.CancelledError):
         await _run_sse_with_relay(monkeypatch, fake_relay)
@@ -640,7 +640,7 @@ async def test_sse_route_relay_acquire_cancellation_cleans_up(monkeypatch: pytes
 
 async def test_sse_route_relay_acquire_failure_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_relay = MagicMock()
-    fake_relay.acquire = AsyncMock(side_effect=RuntimeError("relay boom"))
+    fake_relay.acquire = MagicMock(side_effect=RuntimeError("relay boom"))
     fake_relay.release = AsyncMock()
 
     resp = await _run_sse_with_relay(monkeypatch, fake_relay)
@@ -653,7 +653,7 @@ async def test_sse_route_relay_acquire_failure_is_fail_open(monkeypatch: pytest.
 
 async def test_sse_route_relay_release_failure_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_relay = MagicMock()
-    fake_relay.acquire = AsyncMock()
+    fake_relay.acquire = MagicMock()
     fake_relay.release = AsyncMock(side_effect=RuntimeError("release boom"))
 
     resp = await _run_sse_with_relay(monkeypatch, fake_relay)
@@ -665,7 +665,7 @@ async def test_sse_route_relay_release_failure_is_fail_open(monkeypatch: pytest.
 
 async def test_sse_route_relay_release_cancellation_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_relay = MagicMock()
-    fake_relay.acquire = AsyncMock()
+    fake_relay.acquire = MagicMock()
     fake_relay.release = AsyncMock(side_effect=asyncio.CancelledError())
 
     resp = await _run_sse_with_relay(monkeypatch, fake_relay)

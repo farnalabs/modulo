@@ -54,4 +54,14 @@ describe('RunErrorTag', () => {
     const sessionLost = mount(RunErrorTag, { props: { code: 'script.session_lost' } })
     expect(sessionLost.text()).toBe('Session lost')
   })
+
+  it('renders model.insufficient_funds with its own label, not Unknown error', () => {
+    const wrapper = mount(RunErrorTag, { props: { code: 'model.insufficient_funds' } })
+    expect(wrapper.text()).toBe('Model provider out of funds')
+    expect(wrapper.text()).not.toBe('Unknown error')
+    // Carries a human-readable description for the aria-label/tooltip.
+    expect(wrapper.attributes('title')).toContain('Top up the provider account')
+    // Billing fault uses the destructive styling of the other critical classes.
+    expect(wrapper.classes()).toContain('text-destructive-text')
+  })
 })
