@@ -721,6 +721,23 @@ _NEVER_RETRYABLE_SCRIPT_RAW: frozenset[str] = frozenset(
     }
 )
 
+# FAR-1800: provider BILLING faults are non-retryable by nature — the provider
+# account is out of funds (HTTP 402) or the model is disabled for the key, so
+# every retry re-hits the same wall and only burns a sandbox dispatch. Excluded
+# from ``failure`` policy retries exactly like the script-mode terminal codes.
+#
+# DELIBERATELY NARROW: this is NOT "every registry-non-retryable code". The
+# registry also marks ``agent.stall`` and ``agent.failed`` non-retryable, yet a
+# run-level ``failure``/``stall`` policy is allowed to retry those (the operator
+# explicitly asked for it, and a fixed prompt/backend can recover). Only the
+# billing/provisioning refusal class is refused outright.
+_NEVER_RETRYABLE_PROVIDER_CODES: frozenset[str] = frozenset(
+    {
+        "model.insufficient_funds",
+        "model_disabled",
+    }
+)
+
 
 def _failure_event_matches(
     event_set: set[Any],
@@ -753,6 +770,10 @@ def _failure_event_matches(
     # This covers both the canonical mapped code and the raw exception-class
     # spelling the generic catch publishes.
     if mapped in _NEVER_RETRYABLE_SCRIPT_CODES or code in _NEVER_RETRYABLE_SCRIPT_RAW:
+        return False
+    # FAR-1800: a provider billing/provisioning refusal cannot recover on retry,
+    # so a ``failure`` policy must not re-dispatch it.
+    if mapped in _NEVER_RETRYABLE_PROVIDER_CODES or code in _NEVER_RETRYABLE_PROVIDER_CODES:
         return False
     # FAR-136 Gap 2: exclude sandbox-agent hang deaths.
     is_cancel = code == "node_cancelled" or mapped == "node.cancelled"
@@ -5503,9 +5524,11 @@ class PipelineExecutor:
         - ``{"decision": "superseded"}`` — the run is owned by a successor or
           was already terminal-failed by the zombie watchdog; cleaned up, never
           reset, never terminal-failed here.
-        - ``{"decision": "terminal", ...}`` — retries exhausted; the run_failed
-          event was published and the caller terminal-fails with the returned
-          code/detail.
+        - ``{"decision": "terminal", ...}`` — no retry will be attempted: either
+          the retry budget is exhausted, or the REQUIRED requeue was refused
+          because the failure class is non-retryable (FAR-1800 — a first-attempt
+          terminal). The run_failed event was published and the caller
+          terminal-fails with the returned code/detail.
         """
         from modulo.settings import get_settings
 
@@ -6285,15 +6308,26 @@ class PipelineExecutor:
             )
         elif non_retryable_code is not None:
             # FAR-1800: a retry cannot succeed for this class (e.g. an HTTP 402
-            # billing refusal), so the requeue gate refused it and the run is
-            # terminal on the FIRST attempt. Say so — otherwise the detail reads
-            # "after retries exhausted" while zero retries were attempted.
+            # billing refusal), so the requeue gate refused it. The WORDING
+            # depends on whether any retry budget ever existed: with budget
+            # left, the run is terminal on the FIRST attempt (say no retry was
+            # attempted); with the budget already exhausted, claiming "not
+            # retried" would be false — the retries DID run, and the last
+            # failure happens to be non-retryable.
             error_code = non_retryable_code
-            error_detail = _sanitize_detail(
-                f"Sandbox node failed with non-retryable error {non_retryable_code}; "
-                "not retried because a retry re-hits the same fault: " + str(exc),
-                limit=5000,
-            )
+            if node_attempt_count < retries:
+                error_detail = _sanitize_detail(
+                    f"Sandbox node failed with non-retryable error {non_retryable_code}; "
+                    "not retried because a retry re-hits the same fault: " + str(exc),
+                    limit=5000,
+                )
+            else:
+                error_detail = _sanitize_detail(
+                    "Sandbox node failed after retries exhausted; the last failure is "
+                    f"non-retryable ({non_retryable_code}) and a further retry would "
+                    "re-hit the same fault: " + str(exc),
+                    limit=5000,
+                )
         else:
             error_code = "node_cancelled"
             if not graph_idempotent and node_attempt_count < retries:

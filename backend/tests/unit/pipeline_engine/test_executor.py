@@ -5044,6 +5044,25 @@ class TestTransientFailureDetail:
         assert "not retried" in detail
         assert "after retries exhausted" not in detail
 
+    def test_non_retryable_code_with_exhausted_budget_says_both(self) -> None:
+        """FAR-1800: when the retry budget is ALREADY exhausted, "not retried
+        because a retry re-hits the same fault" would be false — the retries DID
+        run. The detail must say the budget was exhausted AND that the last
+        failure is non-retryable."""
+        exc = SandboxNodeFailedError("insufficient funds", node_id="node-a")
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=exc,
+            script_lease_ok=True,
+            graph_idempotent=True,
+            node_attempt_count=1,
+            retries=1,
+            non_retryable_code="model.insufficient_funds",
+        )
+        assert code == "model.insufficient_funds"
+        assert "after retries exhausted" in detail
+        assert "last failure is non-retryable (model.insufficient_funds)" in detail
+        assert "not retried because a retry re-hits the same fault" not in detail
+
     def test_script_lease_unknown_outranks_non_retryable_code(self) -> None:
         """The needs-human side-effect-unknown verdict stays first: an unknown
         script side effect outranks a non-retryable provider code."""
