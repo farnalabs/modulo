@@ -2,7 +2,7 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, Numeric, String, UniqueConstraint, Uuid
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, Numeric, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import JSONB_COL, OrgScoped
@@ -72,7 +72,7 @@ class EvalSuite(OrgScoped):
     # definition as it existed before the current version was stamped (nullable
     # for suites that have never been edited since versioning).
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
-    pre_version_raw: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    pre_version_raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True)
 
     # ------------------------------------------------------------------ #
     # Regression alerting config (FAR-379) — org-scoped via OrgScoped.   #

@@ -7,7 +7,7 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, Numeric, Text, UniqueConstraint, Uuid
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, Numeric, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
@@ -38,11 +38,12 @@ class Eval(SoftDeleteMixin, OrgScoped):
             "pass_threshold IS NULL OR pass_threshold BETWEEN 0 AND 1",
             name="ck_evals_pass_threshold",
         ),
+        CheckConstraint("version >= 1", name="ck_evals_version_gte_1"),
         UniqueConstraint("id", "organisation_id", name="uq_evals_id_organisation_id"),
     )
 
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
-    pre_version_raw: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    pre_version_raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True)
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
         ForeignKey("pipelines.id", ondelete="CASCADE"),

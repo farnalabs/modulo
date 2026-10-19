@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -36,6 +37,10 @@ class EvalResult(OrgScoped):
             ["evals.id", "evals.organisation_id"],
             ondelete="CASCADE",
             name="fk_eval_results_eval_org",
+        ),
+        CheckConstraint(
+            "eval_definition_version IS NULL OR eval_definition_version >= 1",
+            name="ck_eval_results_eval_definition_version_gte_1",
         ),
     )
 

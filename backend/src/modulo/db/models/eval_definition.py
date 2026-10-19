@@ -2,7 +2,7 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, Numeric, String, Uuid
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, Numeric, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
@@ -59,7 +59,7 @@ class EvalDefinition(SoftDeleteMixin, OrgScoped):
     # reversal is reconstructable from the column pair rather than lost. It is
     # NULL for definitions that have never been updated since versioning.
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
-    pre_version_raw: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    pre_version_raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True)
     # Two-step soft-delete (FAR-309 PR B): a guardrail eval definition is
     # SOFT-deleted (``deleted_at``/``deleted_by`` stamped) instead of hard
     # removed, so snapshot pins that reference it keep resolving to a

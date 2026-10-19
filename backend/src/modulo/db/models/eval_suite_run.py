@@ -38,7 +38,6 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
-    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -52,7 +51,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import JSONB_COL, OrgScoped
 
 if TYPE_CHECKING:
     from modulo.db.models.eval_result import EvalResult
@@ -169,7 +168,7 @@ class SuiteRun(OrgScoped):
     # suite declares no scenarios (an explicit "scenarios unused" sentinel).
     scenario_signature: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # The full comparison tuple snapshot at creation — NEVER live-looked-up.
-    baseline_tuple: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    baseline_tuple: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True)
     # The same-tuple completed run this run is compared against (resolved at
     # completion). NULL when no completed prior run exists (SKIPPED comparison).
     baseline_run_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -193,7 +192,7 @@ class SuiteRun(OrgScoped):
     claimed_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 6), nullable=True, server_default="0")
 
     # Output of ``detect_regressions`` (group_by=suite) at completion.
-    comparison_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    comparison_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True)
     # Regression decision: True when the run dropped below the configured
     # thresholds vs its baseline; None when no baseline (SKIPPED); False when
     # compared and not degraded.
@@ -204,7 +203,7 @@ class SuiteRun(OrgScoped):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_detail: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     # Cost / excluded_case_count and any additional run telemetry.
-    extra: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    extra: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True)
 
     eval_results: Mapped[list[EvalResult]] = relationship(back_populates="suite_run", lazy="selectin")
 
