@@ -3506,3 +3506,170 @@ describe('RunDetailView pipeline-version link (FAR-1813)', () => {
     wrapper.unmount()
   })
 })
+
+// ── FAR-1780: agent-reported provenance badges (ADR 059 sink contract) ──
+// Every rendered declared figure / envelope value carries the agent-reported
+// provenance badge; entries lacking the build-time stamp (pre-change runs)
+// render no badge rather than a guessed one.
+describe('RunDetailView agent-reported provenance badges', () => {
+  async function mountProvenanceDetail(data: Record<string, unknown>, io: Record<string, unknown>) {
+    // Fresh imports: sibling appended describes replace api.GET wholesale,
+    // so this block re-arms its own mock per mount (same pattern as
+    // mountAwaiting above).
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/io') return Promise.resolve({ data: io, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { reviews: [] }, error: undefined })
+      if (url === '/api/v1/pipelines/{pipeline_id}/graph') return Promise.resolve({ data: { nodes: [], edges: [] }, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    return wrapper
+  }
+
+  const costBreakdownEntry = (overrides: Record<string, unknown> = {}) => ({
+    component: 'model_cost',
+    display_name: 'Model cost',
+    source: 'self_reported',
+    amount_usd: '0.500000',
+    missing_self_report: false,
+    ...overrides,
+  })
+
+  it('shows the badge beside a per-node cost whose usage entry carries provenance "reported"', async () => {
+    const wrapper = await mountProvenanceDetail(
+      {
+        ...baseDetail(),
+        node_token_usage: { 'agent-1': { input_tokens: 10, output_tokens: 20, model_cost_display_usd: 0.25, provenance: 'reported' } },
+      },
+      { outputs_json: {} },
+    )
+
+    const badge = wrapper.find('[data-testid="run-detail-node-cost-reported"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('reported by agent')
+    // The badge sits in the SAME cell as the figure it qualifies.
+    expect(badge.element.parentElement!.textContent).toContain('0.25')
+    wrapper.unmount()
+  })
+
+  it('shows the badge when the cost-breakdown entry carries provenance "reported"', async () => {
+    const wrapper = await mountProvenanceDetail(
+      { ...baseDetail(), cost_breakdown: [costBreakdownEntry({ provenance: 'reported' })] },
+      { outputs_json: {} },
+    )
+
+    const badge = wrapper.find('[data-testid="run-detail-cost-reported-badge"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('reported by agent')
+    // The badge sits in the SAME cell as the figure it qualifies.
+    expect(badge.element.parentElement!.textContent).toContain('0.50')
+    wrapper.unmount()
+  })
+
+  it('shows the badge when the cost-breakdown entry is excluded from the run total (billable false)', async () => {
+    const wrapper = await mountProvenanceDetail(
+      { ...baseDetail(), cost_breakdown: [costBreakdownEntry({ billable: false })] },
+      { outputs_json: {} },
+    )
+
+    expect(wrapper.find('[data-testid="run-detail-cost-reported-badge"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('renders NO badge when the entry carries neither field (pre-provenance run)', async () => {
+    const wrapper = await mountProvenanceDetail(
+      {
+        ...baseDetail(),
+        node_token_usage: { 'agent-1': { input_tokens: 10, output_tokens: 20, model_cost_display_usd: 0.25 } },
+        cost_breakdown: [costBreakdownEntry()],
+      },
+      { outputs_json: {} },
+    )
+
+    expect(wrapper.find('[data-testid="run-detail-node-cost-reported"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="run-detail-cost-reported-badge"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('the run total caveat wording stays intact for provenance entries with excluded (billable false) figures', async () => {
+    const wrapper = await mountProvenanceDetail(
+      { ...baseDetail(), cost_breakdown: [costBreakdownEntry({ provenance: 'reported' })] },
+      { outputs_json: {} },
+    )
+    // The badge qualifies the declared figure but must not invert the
+    // never-equals-total caveat that frames per-node cost.
+    expect(wrapper.text()).toContain('never equals the run total')
+    wrapper.unmount()
+  })
+
+  it('renders the dash and NO badge for a missing self-report even when stamped reported', async () => {
+    const wrapper = await mountProvenanceDetail(
+      {
+        ...baseDetail(),
+        cost_breakdown: [costBreakdownEntry({ amount_usd: '0.000000', missing_self_report: true, provenance: 'reported' })],
+      },
+      { outputs_json: {} },
+    )
+
+    const badge = wrapper.find('[data-testid="run-detail-cost-reported-badge"]')
+    expect(badge.exists()).toBe(false)
+    // The row still renders the explicit non-reporting dash, not a figure.
+    const rows = wrapper.findAll('tbody tr')
+    const row = rows.find((r: any) => r.text().includes('Model cost'))!
+    expect(row.exists()).toBe(true)
+    expect(row.text()).toContain('—')
+    wrapper.unmount()
+  })
+
+  it('shows the badge beside the envelope summary line when the node usage is stamped reported', async () => {
+    const wrapper = await mountProvenanceDetail(
+      {
+        ...baseDetail(),
+        node_token_usage: { 'agent-1': { input_tokens: 10, output_tokens: 20, model_cost_display_usd: 0.25, provenance: 'reported' } },
+      },
+      { outputs_json: {}, node_telemetry: { 'agent-1': { status: 'complete', exit_code: 0, summary: 'deployed the branch' } } },
+    )
+
+    const summary = wrapper.find('[data-testid="run-detail-node-summary"]')
+    expect(summary.exists()).toBe(true)
+    expect(summary.text()).toContain('deployed the branch')
+    const badge = wrapper.find('[data-testid="run-detail-node-summary-reported"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('reported by agent')
+    // The badge lives INSIDE the summary paragraph it qualifies.
+    expect(summary.element.contains(badge.element)).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('renders NO envelope-summary badge when the node usage lacks the provenance stamp', async () => {
+    const wrapper = await mountProvenanceDetail(
+      {
+        ...baseDetail(),
+        node_token_usage: { 'agent-1': { input_tokens: 10, output_tokens: 20, model_cost_display_usd: 0.25 } },
+      },
+      { outputs_json: {}, node_telemetry: { 'agent-1': { status: 'complete', exit_code: 0, summary: 'deployed the branch' } } },
+    )
+
+    expect(wrapper.find('[data-testid="run-detail-node-summary"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="run-detail-node-summary-reported"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('renders no envelope-summary badge when the run has no node_token_usage at all', async () => {
+    const wrapper = await mountProvenanceDetail(
+      baseDetail(),
+      { outputs_json: {}, node_telemetry: { 'agent-1': { status: 'complete', exit_code: 0, summary: 'deployed the branch' } } },
+    )
+
+    expect(wrapper.find('[data-testid="run-detail-node-summary"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="run-detail-node-summary-reported"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})

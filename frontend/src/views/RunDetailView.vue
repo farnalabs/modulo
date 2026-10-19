@@ -530,7 +530,18 @@
               <td class="py-3 pr-4 tabular-nums text-muted-foreground">{{ node.duration }}</td>
               <td class="py-3 pr-4 tabular-nums">{{ node.inputTokens ?? '—' }}</td>
               <td class="py-3 pr-4 tabular-nums">{{ node.outputTokens ?? '—' }}</td>
-              <td class="py-3 pr-4 tabular-nums">{{ node.cost != null ? formatMoney(node.cost, currencyCode, 6) : '—' }}</td>
+              <td class="py-3 pr-4 tabular-nums">
+                <template v-if="node.cost != null">
+                  {{ formatMoney(node.cost, currencyCode, 6) }}
+                  <span
+                    v-if="node.costProvenance"
+                    data-testid="run-detail-node-cost-reported"
+                    class="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary align-middle"
+                    :title="$t('views.RunDetailView.reported_by_agent_tooltip')"
+                  >{{ $t('views.RunDetailView.reported_by_agent') }}</span>
+                </template>
+                <template v-else>—</template>
+              </td>
               <td class="py-3 pr-4">
                 <button
                   v-if="node.traceId"
@@ -637,6 +648,12 @@
                   </div>
                   <p v-if="nodeSummary(node)" class="text-xs whitespace-pre-wrap text-muted-foreground" data-testid="run-detail-node-summary">
                     <span class="font-medium text-foreground">{{ $t('views.RunDetailView.summary') }}:</span> {{ nodeSummary(node) }}
+                    <span
+                      v-if="node.summaryReported"
+                      data-testid="run-detail-node-summary-reported"
+                      class="ml-1 inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary align-middle whitespace-normal"
+                      :title="$t('views.RunDetailView.reported_by_agent_tooltip')"
+                    >{{ $t('views.RunDetailView.reported_by_agent') }}</span>
                   </p>
                 </div>
                 <div v-if="getNodeLog(node.name, 'agent_stdout')" class="rounded-lg border bg-muted p-4">
@@ -800,7 +817,18 @@
                     {{ entry.display_name || entry.component }}
                     <span v-if="entry.error" class="ml-1 inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-xs text-warning-text">{{ $t('views.RunDetailView.eval_error_badge') }}</span>
                   </td>
-                  <td class="py-2 pr-4 tabular-nums">{{ entry.missing_self_report ? '—' : formatMoney(Number(entry.amountUsd), currencyCode, 6) }}</td>
+                  <td class="py-2 pr-4 tabular-nums">
+                    <template v-if="!entry.missing_self_report">
+                      {{ formatMoney(Number(entry.amountUsd), currencyCode, 6) }}
+                      <span
+                        v-if="entry.agentReported"
+                        data-testid="run-detail-cost-reported-badge"
+                        class="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary align-middle"
+                        :title="$t('views.RunDetailView.reported_by_agent_tooltip')"
+                      >{{ $t('views.RunDetailView.reported_by_agent') }}</span>
+                    </template>
+                    <template v-else>—</template>
+                  </td>
                   <td class="py-2 pr-4">
                     <template v-if="entry.missing_self_report">
                       <!-- FAR-1305/FAR-1308: a refused report ($0.00 or
@@ -979,6 +1007,10 @@ interface NodeTokenUsage {
   total_tokens?: number
   cost_usd?: number
   model_cost_display_usd?: number
+  // FAR-1780: the declared model cost the agent itself reported is stamped
+  // "reported" at build time and persisted through node_token_usage. Runs
+  // before that change carry no field — the badge is simply absent for them.
+  provenance?: string
 }
 
 interface WorkItemRef {
@@ -1021,6 +1053,12 @@ interface CostBreakdownEntry {
   missing_self_report_reason?: string
   error?: string
   total_clamped?: boolean
+  // FAR-1780: a self_reported component entry is stamped with
+  // provenance="reported" and billable=false — the figure is the agent's own
+  // declaration and is excluded from the run total. Entries lacking either
+  // field are pre-provenance runs and render no badge.
+  provenance?: string
+  billable?: boolean
 }
 
 interface NodeEntry {
@@ -1030,6 +1068,15 @@ interface NodeEntry {
   inputTokens: number | null
   outputTokens: number | null
   cost: number | null
+  // FAR-1780: true when the declared figure is the agent's own report
+  // (provenance="reported" on the node_token_usage entry) — false/absent for
+  // pre-provenance runs, which render no badge.
+  costProvenance: boolean
+  // FAR-1780: same per-node reported stamp, applied to the envelope figures
+  // the telemetry card renders (agent_status, summary) — a sandbox envelope
+  // is the agent's own report by construction, so the card carries the
+  // provenance badge where one of its rendered values needs it.
+  summaryReported: boolean
   traceId: string | null
   isNodeSpanId: boolean
   io: { input: unknown; output: unknown } | null
@@ -1807,6 +1854,20 @@ function formatBreakdownAmount(value: string | number | undefined): string {
   return parseBreakdownAmount(value).toFixed(6)
 }
 
+// FAR-1780 (ADR 059, ADR 042 amendment): a declared figure the agent itself
+// reported is provenance "reported" — Modulo observed the dispatch, never the
+// figure. Whichever field shape the backend stamps — the node_token_usage
+// entry's `provenance` or a cost-breakdown entry's `provenance`/`billable`
+// pair (`billable:false` marks a self-reported entry excluded from the run
+// total) — the figure is rendered with a "reported by agent" badge either
+// way. Entries carrying neither field (runs before the change) are the
+// graceful fallback: they show no badge, never a wrong badge.
+function figureIsAgentReported(provenance: unknown, billable: unknown = null): boolean {
+  if (provenance === 'reported') return true
+  if (billable === false) return true
+  return false
+}
+
 function breakdownBasisLine(entry: CostBreakdownEntry): string {
   // A missing self-report is a CLEAR non-billing state — never render the
   // confusing ``reported=0, node_count=0`` numeric basis. Surface the human
@@ -1847,6 +1908,7 @@ const breakdownEntries = computed(() =>
       ...e,
       amountUsd: formatBreakdownAmount(e.amount_usd),
       basisLine: breakdownBasisLine(e),
+      agentReported: figureIsAgentReported(e.provenance, e.billable),
     })),
 )
 
@@ -2070,6 +2132,8 @@ const nodeEntries = computed<NodeEntry[]>(() => {
       inputTokens: usage?.input_tokens ?? null,
       outputTokens: usage?.output_tokens ?? null,
       cost: usage?.model_cost_display_usd ?? usage?.cost_usd ?? null,
+      costProvenance: figureIsAgentReported(usage?.provenance),
+      summaryReported: figureIsAgentReported(usage?.provenance),
       traceId: nodeSpanId ?? nodeTraceId ?? run.value?.trace_id ?? null,
       isNodeSpanId: nodeSpanId !== null,
       io: resolveNodeIO(nodeOutput),

@@ -1937,6 +1937,8 @@ export default {
       "estimated": "estimated",
       "reported": "reported",
       "not_reported": "not reported",
+      "reported_by_agent": "reported by agent",
+      "reported_by_agent_tooltip": "This figure was declared by the agent itself — Modulo did not measure it.",
       "zero_report_unproven": "$0 rejected",
       "sub_floor_rejected": "below minimum",
       "eval_error_badge": "eval error",
