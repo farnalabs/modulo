@@ -385,7 +385,7 @@ class Settings(BaseSettings):
     # app's volumes) presented as `Authorization: Bearer`. Required for the Fly
     # probe; set it as a secret, never inline. Env var:
     # DB_CAPACITY_FLY_API_TOKEN.
-    db_capacity_fly_api_token: str = Field("")
+    db_capacity_fly_api_token: str = Field(default="", repr=False)
     # Operator bypass for the 98% hard-stop (e.g. a deliberate migration that
     # must write at/over the limit). Does NOT disable the monitor. Env var:
     # DB_CAPACITY_BYPASS=1.
