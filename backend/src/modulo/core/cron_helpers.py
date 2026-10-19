@@ -27,6 +27,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import threading
 import time
 import uuid
@@ -6400,6 +6401,16 @@ async def _terminalize_mid_graph_wedges(
     logged and the returned run ids drive the post-commit compensating
     analytics fact (P6', FAR-162).
 
+    FAR-1993: the returned ids ALSO drive a post-commit DERIVED-cost
+    attribution. The raw UPDATE writes no cost columns, so each age-gated run
+    used to book $0.00 sandbox spend. ``_reconcile_org`` collects these ids
+    separately (``age_gate_run_ids``) and ``_terminalize_run_facts`` attributes
+    each one through ``finalize_failed_run`` with
+    ``derived_from="reconcile_age_gate_heartbeat"``, using the run's heartbeat
+    liveness window -- NEVER the age bound, which would overstate spend for a
+    sandbox that died early and could falsely trip the spend ceiling. See
+    :func:`_heartbeat_liveness_seconds`.
+
     FAR-1803 — *stale_seconds* is the liveness bound of the FAR-1740 (3)
     live-marker shield: a node-started row carrying a LIVE dispatch marker is
     shielded only while its heartbeat is FRESH (an in-process attempt owns it).
@@ -7049,6 +7060,126 @@ async def _record_fact_for_terminalized_run(run_id: uuid.UUID, org_id: uuid.UUID
         _log.warning("cron_helpers.terminalized_facts_failed run=%s", run_id, exc_info=True)
 
 
+def _heartbeat_liveness_seconds(
+    started_at: datetime | None,
+    heartbeat_at: datetime | None,
+    completed_at: datetime | None,
+) -> float | None:
+    """The liveness-PROVEN wall-clock window of an age-gated run — or ``None``.
+
+    FAR-1993: a run terminal-failed by the reconcile age gate recorded no cost,
+    so its sandbox spend was booked at $0.00. The age bound itself is NOT
+    evidence a sandbox was alive: the gate fires when the run has had NO node
+    progress for ``max_age_minutes`` (~135 min), and the sandbox may have died
+    minutes in — crediting the full age-bound duration would OVERSTATE spend and
+    could falsely trip the spend ceiling. The run's ``heartbeat_at`` is the last
+    liveness stamp written while the run was still alive, so the proven window
+    ends at ``min(heartbeat_at, completed_at)`` (the cap guards a re-stamp or
+    clock skew that pushed the heartbeat past the terminal write).
+
+    Returns ``None`` — meaning DO NOT attribute — unless the window is
+    provable: ``started_at`` and ``heartbeat_at`` are both present, the
+    heartbeat is strictly past the start, and the resulting window is positive
+    and finite. A caller must never substitute the age bound for a missing
+    proof. (Several runs can share one ``heartbeat_at`` when a single worker
+    died holding a batch — that is still each run's own last-liveness stamp,
+    not a shared synthetic value.)
+    """
+    if started_at is None or heartbeat_at is None or heartbeat_at <= started_at:
+        return None
+    end = heartbeat_at if completed_at is None else min(heartbeat_at, completed_at)
+    seconds = (end - started_at).total_seconds()
+    if not math.isfinite(seconds) or seconds <= 0:
+        return None
+    return seconds
+
+
+async def _attribute_age_gate_derived_cost(run_id: uuid.UUID, org_id: uuid.UUID) -> None:
+    """Attribute an age-gated run's heartbeat-proven sandbox spend (FAR-1993).
+
+    Runs AFTER the per-org terminalizer transaction has COMMITTED (called from
+    ``_terminalize_run_facts``), in its OWN RLS-scoped session — the same
+    established pattern ``_record_fact_for_terminalized_run`` uses for a
+    post-commit compensating write. It is deliberately not run inside the bulk
+    terminalizer's transaction: a failure there would abort the org's whole
+    terminalizer UPDATE, and re-reading the just-written row from the same
+    transaction would see the pre-UPDATE state anyway.
+
+    The duration comes from the run's ``heartbeat_at`` liveness window (see
+    :func:`_heartbeat_liveness_seconds`), never from the age bound, and is
+    passed to ``finalize_failed_run`` labelled
+    ``derived_from="reconcile_age_gate_heartbeat"`` so the derived spend carries
+    WHICH proof produced it. ``error_code`` / ``error_detail`` are re-read from
+    the row the terminalizer wrote — never reconstructed — so the attributed
+    run keeps the exact message the gate stamped (the detail's per-row
+    ``node_attempts=`` / ``claims=`` / ``dispatch_phase=`` tail is built in SQL
+    and cannot be faithfully rebuilt here). A row whose code is no longer
+    ``no_progress`` (a later writer relabelled it) is skipped.
+
+    FAIL-OPEN PER RUN: this is a compensating write on a path that has already
+    terminalised the run, so an ordinary failure is logged and swallowed so the
+    remaining runs in the batch are still attributed and the tick never aborts.
+    ``asyncio.CancelledError`` is re-raised (worker shutdown is not ours to
+    swallow).
+    """
+    try:
+        from modulo.core.cost_controller.finalize import finalize_failed_run
+        from modulo.db.models.run import Run
+
+        async with _open_factory()() as session, session.begin():
+            await _set_rls_org(session, org_id)
+            row = (
+                await session.execute(
+                    select(
+                        Run.started_at,
+                        Run.heartbeat_at,
+                        Run.completed_at,
+                        Run.error_code,
+                        Run.error_detail,
+                    ).where(Run.id == run_id)
+                )
+            ).one_or_none()
+            if row is None:
+                _log.info("cron_helpers.age_gate_derived_cost_run_missing run=%s", run_id)
+                return
+            started_at, heartbeat_at, completed_at, stored_code, stored_detail = row
+            if stored_code != _NO_PROGRESS_ERROR_CODE or not stored_detail:
+                # A later writer relabelled the run, or a manual/legacy row —
+                # never overwrite a run this gate did not label.
+                _log.info(
+                    "cron_helpers.age_gate_derived_cost_not_gate_labelled run=%s code=%r",
+                    run_id,
+                    stored_code,
+                )
+                return
+            seconds = _heartbeat_liveness_seconds(started_at, heartbeat_at, completed_at)
+            if seconds is None:
+                # No liveness proof: skip rather than invent a duration from
+                # the age bound (see _heartbeat_liveness_seconds).
+                _log.info(
+                    "cron_helpers.age_gate_derived_cost_skipped run=%s started_at=%s "
+                    "heartbeat_at=%s completed_at=%s (no positive liveness window)",
+                    run_id,
+                    started_at,
+                    heartbeat_at,
+                    completed_at,
+                )
+                return
+            await finalize_failed_run(
+                session,
+                run_id=run_id,
+                org_id=org_id,
+                error_code=stored_code,
+                error_detail=stored_detail,
+                derived_sandbox_wall_hours=seconds / 3600.0,
+                derived_from="reconcile_age_gate_heartbeat",
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("cron_helpers.age_gate_derived_cost_failed run=%s", run_id, exc_info=True)
+
+
 async def _record_terminalisation_audits(entries: list[tuple[uuid.UUID, uuid.UUID]]) -> None:
     """Record every run terminalised by dispatcher_reconcile on its audit chain (FAR-1549).
 
@@ -7483,6 +7614,13 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     # commit (FAR-162, P6'): the terminalizers write raw UPDATEs and never run
     # finalize_cost.
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
+    # FAR-1993: the mid-graph age gate's terminalized runs, whose DERIVED
+    # sandbox spend is attributed post-commit from their heartbeat liveness
+    # window (never from the age bound — see _heartbeat_liveness_seconds).
+    # A separate accumulator because only this terminalizer's rows carry a
+    # derived cost; it is unwound alongside terminalized_run_ids so a
+    # rolled-back org contributes no attribution.
+    age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
 
     redis_client = AsyncRedis.from_url(
         settings.redis_url,
@@ -7521,6 +7659,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                     redis_client=redis_client,
                     summary=summary,
                     terminalized_run_ids=terminalized_run_ids,
+                    age_gate_run_ids=age_gate_run_ids,
                     early_detect_minutes=early_detect_minutes,
                     stage=stage,
                 )
@@ -7566,6 +7705,8 @@ def _unwind_org_counts(
     summary_before: dict[str, Any],
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
     terminalized_len_before: int,
+    age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    age_gate_len_before: int,
 ) -> None:
     """Restore the tick summary to *summary_before* and drop the ids collected since *terminalized_len_before*.
 
@@ -7573,10 +7714,14 @@ def _unwind_org_counts(
     (FAR-1525 time cut, FAR-1601 SQLSTATE 55P03, FAR-1621 SQLSTATE 57014 and
     pool-checkout cuts): in every case the org's transaction rolled back WHOLE,
     so it must contribute neither counters nor compensating-fact ids to the tick.
+    FAR-1993: *age_gate_run_ids* (the mid-graph age gate's derived-cost
+    accumulator) is truncated the same way, so a rolled-back org contributes no
+    cost attribution either.
     """
     summary.clear()
     summary.update(summary_before)
     del terminalized_run_ids[terminalized_len_before:]
+    del age_gate_run_ids[age_gate_len_before:]
 
 
 def _org_stage_label(stage: dict[str, str] | None, org_id: uuid.UUID) -> str:
@@ -7601,6 +7746,10 @@ class _ReconcileContext:
     the S107 parameter ceiling while still sharing the whole tick context.
     ``summary`` and ``terminalized_run_ids`` are mutated through the shared
     references, exactly as when they were passed individually.
+    ``age_gate_run_ids`` is the same kind of shared accumulator for the FAR-1993
+    derived-cost attribution: only the mid-graph age gate's terminalized runs,
+    which the post-commit ``_terminalize_run_facts`` attributes from their
+    heartbeat liveness window.
     """
 
     factory: async_sessionmaker[AsyncSession]
@@ -7613,6 +7762,7 @@ class _ReconcileContext:
     max_rows: int
     summary: dict[str, Any]
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]]
+    age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]]
     outer_budget_seconds: int
     org_budget_seconds: int
 
@@ -7630,6 +7780,7 @@ async def _dispatcher_reconcile_body(
     redis_client: AsyncRedis,
     summary: dict[str, Any],
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
     early_detect_minutes: int | None = None,
     stage: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -7647,7 +7798,13 @@ async def _dispatcher_reconcile_body(
     after reserving the tick tail — so one hung org can never spend the whole
     inner budget, and ``record_facts`` + the compensating sweeps are always
     reached.
+
+    ``age_gate_run_ids`` is the FAR-1993 mid-graph derived-cost accumulator; a
+    direct caller that omits it gets a fresh empty accumulator (only the
+    production ``dispatcher_reconcile`` path needs to observe it).
     """
+    if age_gate_run_ids is None:
+        age_gate_run_ids = []
     # FAR-1525: the tick's working clock and time knobs. Captured at body
     # entry (the outer asyncio.timeout starts microseconds earlier —
     # immaterial here) so each org's slice can be clamped to the budget that
@@ -7693,6 +7850,7 @@ async def _dispatcher_reconcile_body(
             max_rows=max_rows,
             summary=summary,
             terminalized_run_ids=terminalized_run_ids,
+            age_gate_run_ids=age_gate_run_ids,
             outer_budget_seconds=outer_budget_seconds,
             org_budget_seconds=org_budget_seconds,
         ),
@@ -7702,6 +7860,7 @@ async def _dispatcher_reconcile_body(
     )
     await _terminalize_run_facts(
         terminalized_run_ids=terminalized_run_ids,
+        age_gate_run_ids=age_gate_run_ids,
         facts_max=facts_max,
         summary=summary,
         stage=stage,
@@ -7866,6 +8025,7 @@ async def _attempt_reconcile_org(
     # facts to the tick.
     summary_before = dict(ctx.summary)
     terminalized_len_before = len(ctx.terminalized_run_ids)
+    age_gate_len_before = len(ctx.age_gate_run_ids)
     org_pass_started = time.monotonic()
     try:
         async with asyncio.timeout(org_slice_seconds):
@@ -7879,6 +8039,7 @@ async def _attempt_reconcile_org(
                 enqueue_failed_redispatched=enqueue_failed_redispatched,
                 summary=ctx.summary,
                 terminalized_run_ids=ctx.terminalized_run_ids,
+                age_gate_run_ids=ctx.age_gate_run_ids,
                 terminalize_max=ctx.terminalize_max,
                 early_detect_minutes=ctx.early_detect_minutes,
                 row_budget=row_budget,
@@ -7893,7 +8054,14 @@ async def _attempt_reconcile_org(
         # orgs, record_facts and the compensating sweeps still run this
         # tick.
         org_elapsed = time.monotonic() - org_pass_started
-        _unwind_org_counts(ctx.summary, summary_before, ctx.terminalized_run_ids, terminalized_len_before)
+        _unwind_org_counts(
+            ctx.summary,
+            summary_before,
+            ctx.terminalized_run_ids,
+            terminalized_len_before,
+            ctx.age_gate_run_ids,
+            age_gate_len_before,
+        )
         stage_label = _org_stage_label(stage, org_id)
         # FAR-1621 (qa F2): a builtin TimeoutError here is EITHER the
         # per-org asyncio cut — only once the slice has actually
@@ -7993,7 +8161,14 @@ async def _attempt_reconcile_org(
         # Same bounded-failure contract as the 55P03 skip below: the org
         # transaction rolled back whole, so unwind, count, WARN with the
         # stage, and CONTINUE.
-        _unwind_org_counts(ctx.summary, summary_before, ctx.terminalized_run_ids, terminalized_len_before)
+        _unwind_org_counts(
+            ctx.summary,
+            summary_before,
+            ctx.terminalized_run_ids,
+            terminalized_len_before,
+            ctx.age_gate_run_ids,
+            age_gate_len_before,
+        )
         ctx.summary["org_pool_timeouts"] = ctx.summary.get("org_pool_timeouts", 0) + 1
         _log.warning(
             "dispatcher_reconcile.org_pool_timeout org=%s at stage %s (system-engine pool "
@@ -8024,7 +8199,14 @@ async def _attempt_reconcile_org(
             # so the health heartbeat stays untouched. Every OTHER failure
             # keeps its contract and propagates to the outer failure
             # heartbeat above.
-            _unwind_org_counts(ctx.summary, summary_before, ctx.terminalized_run_ids, terminalized_len_before)
+            _unwind_org_counts(
+                ctx.summary,
+                summary_before,
+                ctx.terminalized_run_ids,
+                terminalized_len_before,
+                ctx.age_gate_run_ids,
+                age_gate_len_before,
+            )
             # Observability parity with the per-org time bound above: make
             # a contended tick visible in the health summary, not only in
             # the WARNING log.
@@ -8049,7 +8231,14 @@ async def _attempt_reconcile_org(
             # back whole, so the SAME bounded-failure contract as the
             # 55P03 skip applies: unwind, count, WARN with the stage,
             # CONTINUE — the rows are re-selected next tick.
-            _unwind_org_counts(ctx.summary, summary_before, ctx.terminalized_run_ids, terminalized_len_before)
+            _unwind_org_counts(
+                ctx.summary,
+                summary_before,
+                ctx.terminalized_run_ids,
+                terminalized_len_before,
+                ctx.age_gate_run_ids,
+                age_gate_len_before,
+            )
             ctx.summary["org_statement_timeouts"] = ctx.summary.get("org_statement_timeouts", 0) + 1
             _log.warning(
                 "dispatcher_reconcile.org_statement_timeout org=%s at stage %s (SQLSTATE 57014 "
@@ -8068,18 +8257,20 @@ async def _attempt_reconcile_org(
 async def _terminalize_run_facts(
     *,
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
     facts_max: int,
     summary: dict[str, Any],
     stage: dict[str, str] | None,
 ) -> None:
-    """Post-org fact and audit writes of ``_dispatcher_reconcile_body``.
+    """Post-org fact, derived-cost and audit writes of ``_dispatcher_reconcile_body``.
 
     FAR-162 (P6') + FAR-746: record a capped daily fact for every run
-    terminalised this tick; FAR-1549: record every such run on its org's
-    uncapped audit chain. All per-org terminalizer transactions have
-    committed by the time this runs — each facts write opens its own
-    RLS-scoped session. Extracted for S3776; ordering (facts, then audits)
-    is unchanged.
+    terminalised this tick; FAR-1993: attribute the DERIVED sandbox cost of
+    every mid-graph age-gate run from its heartbeat liveness window; FAR-1549:
+    record every such run on its org's uncapped audit chain. All per-org
+    terminalizer transactions have committed by the time this runs — each facts
+    write opens its own RLS-scoped session. Extracted for S3776; ordering
+    (facts, derived cost, then audits) is unchanged.
     """
     # FAR-162 (P6') — record a daily fact for every run terminalised this
     # tick (executor_stalled / no_progress / claim_cap_exhausted /
@@ -8100,6 +8291,18 @@ async def _terminalize_run_facts(
             summary["facts_deferred"] += len(terminalized_run_ids) - facts_written
             break
         await _record_fact_for_terminalized_run(run_id, run_org_id)
+    # FAR-1993 — attribute the DERIVED sandbox cost of every run the mid-graph
+    # age gate terminalised this tick, from its heartbeat liveness window.
+    # Deliberately UNCAPPED (unlike the facts loop): a run is terminal now and
+    # is never re-selected, so a deferred attribution would be lost forever.
+    # The batch is already bounded by the terminalizer's own per-org ``max_rows``
+    # cap, and each run is fail-open in its own session (see
+    # ``_attribute_age_gate_derived_cost``), so one failure neither aborts the
+    # tick nor blocks the remaining runs.
+    if stage is not None:
+        stage["op"] = "attribute_age_gate_cost"
+    for run_id, run_org_id in age_gate_run_ids:
+        await _attribute_age_gate_derived_cost(run_id, run_org_id)
     # FAR-1549 — record every run terminalised this tick on its org's audit
     # chain. Unlike the facts loop above this is deliberately UNCAPPED: a
     # dropped daily fact is re-derivable from the run row on the next backfill,
@@ -8213,6 +8416,7 @@ async def _reconcile_org(
     enqueue_failed_redispatched: int,
     summary: dict[str, Any],
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
     terminalize_max: int = _TERMINALIZE_UNLIMITED_ROWS,
     early_detect_minutes: int | None = None,
     row_budget: int | None = None,
@@ -8325,6 +8529,11 @@ async def _reconcile_org(
     # COMMITTED work (a rolled-back org contributes neither).
     summary_before = dict(summary)
     terminalized_len_before = len(terminalized_run_ids)
+    if age_gate_run_ids is None:
+        # FAR-1993: a direct caller that omits the accumulator gets a local one
+        # (only the reconcile body consumes it).
+        age_gate_run_ids = []
+    age_gate_len_before = len(age_gate_run_ids)
     async with factory() as session, session.begin():
         _mark("session-acquired")
         # FAR-1601: bound THIS org transaction's row-lock waits FIRST — the
@@ -8372,6 +8581,14 @@ async def _reconcile_org(
                 if len(terminalized) >= terminalize_max:
                     summary["terminalize_capped"] += 1
                 terminalized_run_ids.extend((run_id, org_id) for run_id in terminalized)
+                if spec.key == "mid_graph":
+                    # FAR-1993: only the mid-graph age gate's runs get a DERIVED
+                    # sandbox cost, attributed post-commit from their heartbeat
+                    # liveness window. Collected here (still inside the org
+                    # transaction) and consumed by ``_terminalize_run_facts``
+                    # AFTER the commit; unwound with the org's other ids if the
+                    # transaction rolls back.
+                    age_gate_run_ids.extend((run_id, org_id) for run_id in terminalized)
             row_select = select(
                 Run.id,
                 Run.pipeline_id,
@@ -8510,7 +8727,14 @@ async def _reconcile_org(
             # while this session was checked out for THIS org's pass alone and
             # rolling all of it back is the intended semantics.
             await session.rollback()  # nosemgrep: session-rollback-abuse
-            _unwind_org_counts(summary, summary_before, terminalized_run_ids, terminalized_len_before)
+            _unwind_org_counts(
+                summary,
+                summary_before,
+                terminalized_run_ids,
+                terminalized_len_before,
+                age_gate_run_ids,
+                age_gate_len_before,
+            )
             return enqueue_failed_redispatched
 
         for row_index, row in enumerate(rows):

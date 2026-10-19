@@ -10,6 +10,7 @@ gate), the server-measured token derivation, the legacy-fallback DE-TRUSTS
 
 from __future__ import annotations
 
+import inspect
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -1078,6 +1079,52 @@ async def test_finalize_failed_run_with_real_segment_ignores_derived_hours() -> 
     assert kwargs["segment_node_token_usage"] == stored_usage
     assert kwargs["segment_completed_node_outputs"] == stored_outputs
     assert kwargs["is_terminal"] is True
+
+
+def test_finalize_failed_run_derived_from_default_is_deadline_watchdog() -> None:
+    """Regression pin: the default provenance label is the deadline watchdog.
+
+    PR #2044's deadline path calls ``finalize_failed_run`` without
+    ``derived_from``; its recorded breakdown basis must stay
+    ``"node_deadline_watchdog"``. A changed default silently relabels every
+    deadline-derived cost, so the default is pinned directly.
+    """
+    default = inspect.signature(finalize_failed_run).parameters["derived_from"].default
+    assert default == "node_deadline_watchdog"
+
+
+async def test_finalize_failed_run_threads_supplied_derived_from() -> None:
+    """A caller-supplied ``derived_from`` is what lands in the breakdown basis.
+
+    The reconcile age gate attributes from the heartbeat window, not the node
+    deadline, so the label must follow the caller — hardcoding the deadline
+    label would misattribute that spend.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="no_progress",
+            error_detail="No node progress within the 135m age bound",
+            derived_sandbox_wall_hours=1.0,
+            derived_from="reconcile_age_gate_heartbeat",
+        )
+    entry = mock_urs.await_args.kwargs["cost_breakdown"][0]
+    assert entry["basis"]["derived_from"] == "reconcile_age_gate_heartbeat"
+    assert entry["basis"]["wall_clock_hours"] == 1.0
 
 
 # ---------------------------------------------------------------------------

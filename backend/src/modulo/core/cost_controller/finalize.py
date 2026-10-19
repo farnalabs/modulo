@@ -3032,35 +3032,44 @@ async def _write_derived_deadline_terminal(
     error_code: str,
     error_detail: str,
     wall_hours: float,
+    derived_from: str,
 ) -> None:
-    """Write the DERIVED sandbox cost for a node-deadline-killed run (FAR-1993).
+    """Write DERIVED sandbox cost for a terminal-failed run (FAR-1993).
 
-    A ``sandbox_agent`` node killed by the node-deadline watchdog never wrote
-    ``output.json``, so it contributes no ``wall_clock_time_ms`` to the cost
-    machinery and the normal finalize computes $0 — while the sandbox really
-    did run for the node's configured deadline. This writer attributes that
-    spend at the RUN level, explicitly marked ``source="derived"`` with
-    ``basis.derived_from = "node_deadline_watchdog"`` so it is never confused
-    with agent-reported (``self_reported``) or component-calculated spend.
+    A terminal writer that never ran the normal finalize (the node-deadline
+    watchdog, the reconcile age gate) leaves the run with no cost, so nothing
+    contributes a ``wall_clock_time_ms`` to the cost machinery and the normal
+    finalize computes $0 — while the sandbox really did run for a duration the
+    caller has proven independently. This writer attributes that spend at the
+    RUN level, explicitly marked ``source="derived"`` with
+    ``basis.derived_from = derived_from`` so it is never confused with
+    agent-reported (``self_reported``) or component-calculated spend. The label
+    says WHICH liveness proof produced the duration (the node's configured
+    deadline for the node-deadline watchdog; the run's last heartbeat for the
+    reconcile age gate) — provenance travels with the number.
+
+    The function name is historical: it was introduced for the deadline path
+    and now serves any terminal-failed run whose liveness-proven duration is
+    known.
 
     The status/cost write is SHAPE-IDENTICAL to ``_write_empty_terminal`` —
     total 0 there, the derived total here — so no new raw UPDATE is invented.
     It additionally drives the SAME terminal ledger block as
     ``_fallback_finalize`` (spend-ceiling gate + ``org_daily_run_counts``
-    accrual + circuit breaker), because the ticket's premise is that this spend
-    must not stay invisible to those controls. ``_write_empty_terminal`` writes
-    no ledger row and correctly does not: its total is 0, so
-    ``_ledger_run_date`` returns ``None``. The terminal analytics fact is
-    recorded the same way every other terminal writer does (``record_run_facts``
-    inside ``_record_terminal_analytics``), so ``run_daily_facts`` agrees with
-    the run row.
+    accrual + circuit breaker), because the premise is that this spend must not
+    stay invisible to those controls. ``_write_empty_terminal`` writes no ledger
+    row and correctly does not: its total is 0, so ``_ledger_run_date`` returns
+    ``None``. The terminal analytics fact is recorded the same way every other
+    terminal writer does (``record_run_facts`` inside
+    ``_record_terminal_analytics``), so ``run_daily_facts`` agrees with the run
+    row.
 
-    DELIBERATELY OUT OF SCOPE: the reconcile age-gate path
-    (``cron_helpers`` terminalising ``no_progress`` runs) also records $0, but
-    its wall-clock is NOT evidence a sandbox was alive — the run wedged with no
-    node progress, so the sandbox may have died minutes in and crediting the
-    full age-bound duration would OVERSTATE spend and could falsely trip the
-    spend ceiling. Do not reuse this writer for that path.
+    The caller owns the duration proof. This writer never invents a duration:
+    the reconcile age gate deliberately does NOT pass its age bound (a run can
+    wedge with no node progress long before the bound fires, so crediting the
+    full bound would OVERSTATE spend and could falsely trip the spend ceiling);
+    it passes ``min(heartbeat_at, completed_at) - started_at`` instead, from
+    the run's own last-liveness stamp.
     """
     rate = _e2b_rate()
     total = Decimal(str(wall_hours)) * rate
@@ -3079,7 +3088,7 @@ async def _write_derived_deadline_terminal(
             "rate_usd": str(rate),
             "basis": {
                 "wall_clock_hours": wall_hours,
-                "derived_from": "node_deadline_watchdog",
+                "derived_from": derived_from,
             },
         }
     ]
@@ -3148,6 +3157,7 @@ async def _finalize_failed_run(
     error_code: str,
     error_detail: str,
     derived_sandbox_wall_hours: float | None,
+    derived_from: str,
 ) -> None:
     """Body of :func:`finalize_failed_run` (fail-open envelope lives there)."""
     run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
@@ -3169,6 +3179,7 @@ async def _finalize_failed_run(
                 error_code=error_code,
                 error_detail=error_detail,
                 wall_hours=derived_sandbox_wall_hours,
+                derived_from=derived_from,
             )
             return
         # No node data AND no derived wall-clock: nothing can be attributed.
@@ -3201,22 +3212,27 @@ async def finalize_failed_run(
     error_code: str,
     error_detail: str,
     derived_sandbox_wall_hours: float | None = None,
+    derived_from: str = "node_deadline_watchdog",
 ) -> None:
     """Finalise a run already terminalised ``failed`` by a raw writer (FAR-1993).
 
-    The node-deadline watchdog cancels the executor and writes the terminal
-    row with a raw UPDATE (no cost columns). This re-reads the stored cumulative
+    The node-deadline watchdog and the reconcile age gate both terminalise a
+    run with a raw UPDATE (no cost columns). This re-reads the stored cumulative
     sets and finalises through :func:`finalize_cost` exactly like
     :func:`finalize_cancelled_run`, but with ``status="failed"`` and the error
     fields.
 
     When the run has NO stored node data (a deadline-killed sandbox node never
     wrote ``output.json``) and *derived_sandbox_wall_hours* is a positive finite
-    number, the cost is attributed at the RUN level from that DERIVED duration
-    (the node's configured deadline — the watchdog fired because the node ran to
-    it, so the sandbox really did occupy that time; this is not agent-reported
-    telemetry). See :func:`_write_derived_deadline_terminal` for the provenance
-    marker and the age-gate exclusion.
+    number, the cost is attributed at the RUN level from that DERIVED duration.
+    The caller supplies the duration and its proof: the node's configured
+    deadline (the watchdog fired because the node ran to it) or the run's
+    heartbeat-proven liveness window (the reconcile age gate). This is not
+    agent-reported telemetry. *derived_from* labels WHICH proof produced it and
+    defaults to ``"node_deadline_watchdog"``, preserving the deadline path's
+    provenance exactly; the age gate passes
+    ``"reconcile_age_gate_heartbeat"``. See
+    :func:`_write_derived_deadline_terminal` for the provenance marker.
 
     FAIL-OPEN: this is a compensating write on a path that has already
     terminalised the run, so ordinary failures log and are swallowed.
@@ -3234,6 +3250,7 @@ async def finalize_failed_run(
             error_code=error_code,
             error_detail=error_detail,
             derived_sandbox_wall_hours=derived_sandbox_wall_hours,
+            derived_from=derived_from,
         )
     except asyncio.CancelledError:
         raise
