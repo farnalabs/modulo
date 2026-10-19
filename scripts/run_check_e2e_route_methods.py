@@ -41,8 +41,9 @@ What is scanned (``frontend/tests/e2e/**/*.ts``):
   method). A ``method`` property present without a literal value (the
   ``{ method }`` shorthand, a quoted key, or any other non-literal value) is
   unresolvable, not an implicit GET, and is reported as a note.
-* ``page.request.<verb>(<url>)`` / ``request.<verb>(<url>)`` calls on a
-  Playwright ``APIRequestContext`` (the verb is the method).
+* ``page.request.<verb>(<url>)`` / ``context.request.<verb>(<url>)`` /
+  ``page.context().request.<verb>(<url>)`` / ``request.<verb>(<url>)`` calls on
+  a Playwright ``APIRequestContext`` (the verb is the method).
 * ``route.request().method() === '<METHOD>'`` interceptor filters (and the
   reversed ``'<METHOD>' === route.request().method()`` form), resolved against
   the ``page.route('<url>', ...)`` registration that encloses them in the same
@@ -79,10 +80,35 @@ a conditional query interpolation
 (``'/api/v1/auth/me' as const``) and a literal that already carries a ``?`` add
 no segment. Query strings and fragments are stripped.
 
-Exit codes: 0 clean, 1 stale descriptors (one line each, with file:line, the
-method, the path and the closest live route), 2 setup/tool error - including an
-extractor that found no descriptors at all or no descriptor in either
-ticket-named file - never a silent pass.
+Coverage ledger (the guard's invariant - no silent skips)
+--------------------------------------------------------
+
+Extraction alone can never prove it saw every call shape: the space of
+JavaScript expressions that build an HTTP request is unbounded, and every miss
+is silent. The check therefore also enumerates CANDIDATE lines with a
+deliberately broad marker set - ``apiFetch(``, ``fetch(``,
+``page.request.<verb>(`` / ``context.request.<verb>(`` / ``request.<verb>(``,
+``.request().method(``, ``request.method(``, and HTTP-method literals compared
+against a method expression (``=== 'PATCH'``, ``!== 'GET'``,
+``includes(...)``). Every candidate line MUST be accounted for on the same
+``file:line`` by exactly one of:
+
+* a descriptor extracted for that line, or
+* an explicit note emitted for that line, or
+* an inline suppression annotation on that line or the immediately preceding
+  line: ``// e2e-route-check: ignore <short reason>``.
+
+An unaccounted API-call candidate is a violation (exit 1) naming the line:
+a new call shape fails loudly instead of passing. An unaccounted method
+reference is reported as a note for that line - it names no route this checker
+can validate, but it is never silently dropped. A candidate is only excluded
+structurally when it is provably not a call (an ``apiFetch`` function
+declaration), never by a pattern that happens to miss.
+
+Exit codes: 0 clean, 1 stale descriptors or unanalysed call shapes (one line
+each, with file:line, the method, the path and the closest live route), 2
+setup/tool error - including an extractor that found no descriptors at all or
+no descriptor in either ticket-named file - never a silent pass.
 """
 
 from __future__ import annotations
@@ -173,10 +199,36 @@ _DESTRUCTURED_METHOD_RE = re.compile(r"\{[^}]*\bmethod\b[^}]*\}\s*=\s*[^;\n]*\br
 _ROUTE_CALL_RE = re.compile(r"(?<![\w.])(?:page|context)\s*\.\s*route\s*\(")
 _API_FETCH_RE = re.compile(r"(?<![\w.$])apiFetch\b")
 _FETCH_RE = re.compile(r"(?<![\w.$])fetch\b")
-# ``page.request.get(...)`` / ``request.delete(...)`` on an APIRequestContext.
+# ``page.request.get(...)`` / ``context.request.delete(...)`` /
+# ``page.context().request.put(...)`` / ``request.post(...)`` on a Playwright
+# APIRequestContext.
 _API_REQUEST_RE = re.compile(
-    r"(?<![\w.$])(?:page\s*\.\s*request|request)\s*\.\s*"
-    r"(get|post|put|patch|delete|head|options)\b"
+    r"(?<![\w.$])"
+    r"(?:(?:page|context)\s*(?:\.\s*context\s*\(\s*\))?\s*\.\s*request|request)"
+    r"\s*\.\s*(get|post|put|patch|delete|head|options)\b"
+)
+# ---------------------------------------------------------------------------
+# Coverage-ledger markers. Deliberately broader than the extractor: anything
+# that could name an HTTP call or select on its method is a candidate, and an
+# unaccounted candidate is reported rather than silently skipped.
+# ---------------------------------------------------------------------------
+_HTTP_METHOD_LITERAL_RE = re.compile(r"""['"](?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)['"]""", re.IGNORECASE)
+_LEDGER_IGNORE_RE = re.compile(r"//\s*e2e-route-check:\s*ignore\b")
+_LEDGER_COMPARISON_RE = re.compile(r"===?|!==?|includes\s*\(")
+_LEDGER_METHOD_WORD_RE = re.compile(r"\bmethod\b")
+_LEDGER_METHOD_CALL_RE = re.compile(r"\.\s*method\s*\(|(?<![\w.$])request\s*\.\s*method\s*\(")
+_LEDGER_CALL_MARKER_RE = re.compile(
+    r"(?<![\w.$])apiFetch\b"
+    r"|(?<![\w.$])fetch\b"
+    r"|(?<![\w.$])(?:(?:page|context)\s*(?:\.\s*context\s*\(\s*\))?\s*\.\s*request|request)"
+    r"\s*\.\s*(?:get|post|put|patch|delete|head|options)\b"
+)
+_LEDGER_UNMODELLED_METHOD_NOTE = (
+    "page.route callback filters on the request method in a form this check cannot "
+    "attribute to a single literal method, so its method filter was not checked"
+)
+_UNANALYSED_CALL_MESSAGE = (
+    "unanalysed E2E HTTP call shape - model it, or annotate with // e2e-route-check: ignore <reason>"
 )
 #: Files the guard exists to protect. A run that finds no descriptor in either
 #: means the extractor regressed - report a setup error, never "clean".
@@ -441,13 +493,30 @@ def _is_query_suffix(expression: str) -> bool:
         value, _ = _read_template(text, 0) if text[0] == "`" else _read_quoted(text, 0)
         return value.lstrip().startswith(("?", "&"))
     if _QUERY_OPERATOR_RE.search(text):
-        # A ternary (or a literal query fragment inside one) switches a query
-        # suffix on/off - it is never a path segment.
-        return True
+        # A ternary is a query suffix ONLY when one of its string branches
+        # starts with ``?``/``&`` (``${cond ? '?archived=true' : ''}``). A
+        # ternary that builds a PATH SEGMENT
+        # (``${role ? 'admins' : 'members'}``) is a ``{param}`` - treating every
+        # ``?`` as a query dropped the segment and hid the real route.
+        return _ternary_branches_are_query(text)
     match = _QUERY_SUFFIX_EXPR_RE.fullmatch(text)
     if match is None:
         return False
     return match.group("name").lower() in _QUERY_SUFFIX_NAMES
+
+
+def _ternary_branches_are_query(expression: str) -> bool:
+    """True when a ternary expression's string branches form a query suffix.
+
+    ``cond ? '?page=1' : ''`` switches a query string on/off. A branch that is a
+    path fragment (``'admins'``, ``'/users'``) or a non-literal makes the
+    expression a path-building ternary instead, so it becomes a ``{param}``.
+    """
+    for match in re.finditer(r"""(['"])(.*?)\1|`(.*?)`""", expression, flags=re.DOTALL):
+        value = match.group(2) if match.group(2) is not None else match.group(3)
+        if value.lstrip().startswith(("?", "&")):
+            return True
+    return False
 
 
 def _tail_adds_path_segment(tail: str) -> bool:
@@ -598,6 +667,95 @@ def extract_path(expr: str) -> tuple[str, bool, bool] | None:
         if _API_PREFIX in normalised_regex:
             return normalise_path(normalised_regex)
 
+    structured = _extract_path_from_concat(expr)
+    if structured is not None:
+        return structured
+    # Fallback for expressions that are not a top-level ``+`` chain (e.g. a
+    # path literal inside a factory call): the original fragment scan still
+    # finds the ``/api/`` literal.
+    return _extract_path_from_fragments(expr)
+
+
+def _split_top_level_concat(expr: str) -> list[str]:
+    """Split *expr* on its top-level ``+`` operators, skipping literals/groups."""
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    index = 0
+    length = len(expr)
+    while index < length:
+        char = expr[index]
+        if char in ("'", '"'):
+            _, index = _read_quoted(expr, index)
+            continue
+        if char == "`":
+            _, index = _read_template(expr, index)
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "+" and depth == 0:
+            parts.append(expr[start:index])
+            start = index + 1
+        index += 1
+    parts.append(expr[start:])
+    return parts
+
+
+def _render_concat_operand(operand: str) -> tuple[str, str | None] | None:
+    """Render one ``+`` operand as ``("literal", value)`` or ``("segment", None)``.
+
+    A parenthesised ternary that builds a path segment (``(role ? 'admins' :
+    'members')``) is ONE segment, not two literals with wildcards between them;
+    a ternary that toggles a query string adds nothing. ``None`` means the
+    operand contributes no path text (a query suffix or an empty assertion).
+    """
+    text = _strip_ts_assertion(operand.strip())
+    if not text:
+        return None
+    if text.startswith(("'", '"')):
+        value, end = _read_quoted(text, 0)
+        if text[end:].strip():
+            return None
+        return ("literal", value)
+    if text.startswith("`"):
+        value, end = _read_template(text, 0)
+        if text[end:].strip():
+            return None
+        return ("literal", value)
+    inner = _unwrap_parens(text)
+    if inner != text:
+        return None if _is_query_suffix(inner) else ("segment", None)
+    return None if _is_query_suffix(text) else ("segment", None)
+
+
+def _extract_path_from_concat(expr: str) -> tuple[str, bool, bool] | None:
+    """Build the path from a top-level ``+`` chain, one operand at a time."""
+    rendered = [item for part in _split_top_level_concat(expr) if (item := _render_concat_operand(part))]
+    first_api = next(
+        (
+            position
+            for position, (kind, value) in enumerate(rendered)
+            if kind == "literal" and value is not None and _API_PREFIX in value
+        ),
+        None,
+    )
+    if first_api is None:
+        return None
+    joined = rendered[first_api][1] or ""
+    for kind, value in rendered[first_api + 1 :]:
+        if kind == "literal":
+            joined += value or ""
+        elif joined.endswith("/"):
+            joined += _WILDCARD
+        else:
+            joined = joined.rstrip("/") + "/" + _WILDCARD
+    return normalise_path(joined)
+
+
+def _extract_path_from_fragments(expr: str) -> tuple[str, bool, bool] | None:
+    """Original fragment-scan fallback: join every literal, wildcard the gaps."""
     fragments: list[tuple[str, int, int]] = []
     index = 0
     length = len(expr)
@@ -920,8 +1078,6 @@ def _extract_route_interceptors(
 
     seen: set[tuple[int, str, str]] = set()
     for path, trailing_glob, last_prefix, span_start, span_end, params in registrations:
-        calls_before = len(calls)
-        notes_before = len(notes)
         body = text[span_start:span_end]
         route_parameter = params[0]
         # The Request object: Playwright passes it as the callback's second
@@ -938,14 +1094,23 @@ def _extract_route_interceptors(
         )
         request_objects = list(dict.fromkeys(request_objects))
 
-        resolved: list[re.Match[str]] = list(
-            _resolved_method_comparisons(
+        # ``(match, line_override)``: a method captured into a variable is
+        # attributed to the REFERENCE line (where ``.method()`` is read), not
+        # the later comparison line, so the coverage ledger sees that exact
+        # candidate line accounted for.
+        resolved: list[tuple[re.Match[str], int | None]] = [
+            (match, None)
+            for match in _resolved_method_comparisons(
                 text, masked, span_start, span_end, route_parameter, _method_comparison_re(route_parameter)
             )
-        )
+        ]
         for request_object in request_objects:
             resolved.extend(
-                _resolved_method_comparisons(
+                (
+                    match,
+                    None,
+                )
+                for match in _resolved_method_comparisons(
                     text,
                     masked,
                     span_start,
@@ -964,13 +1129,15 @@ def _extract_route_interceptors(
             body,
         ):
             variable = assignment.group(1)
+            reference_line = _line_of(text, span_start + assignment.start())
             resolved.extend(
-                _resolved_method_comparisons(
+                (match, reference_line)
+                for match in _resolved_method_comparisons(
                     text, masked, span_start, span_end, variable, _variable_comparison_re(variable)
                 )
             )
 
-        for match in resolved:
+        for match, line_override in resolved:
             method = match.group(2) or match.group(4)
             if method is None:
                 continue
@@ -1012,7 +1179,8 @@ def _extract_route_interceptors(
                     "route cannot be attributed to the registration",
                 )
                 continue
-            key = (_line_of(text, match.start()), normalised_method, path)
+            descriptor_line = line_override if line_override is not None else _line_of(text, match.start())
+            key = (descriptor_line, normalised_method, path)
             if key in seen:
                 continue
             seen.add(key)
@@ -1084,29 +1252,129 @@ def _extract_route_interceptors(
                         )
                         break
 
-        # The callback reads the method, but no comparison resolved to a literal
-        # method and nothing above explained why. Never silence a filter shape
-        # the extractor does not model.
-        if (
-            len(calls) == calls_before
-            and len(notes) == notes_before
-            and _has_unmodelled_method_reference(masked[span_start:span_end])
-        ):
-            _add_note(
-                notes,
-                filename,
-                _line_of(text, span_start),
-                "page.route callback filters on the request method in a form this check cannot "
-                "attribute to a single literal method, so its method filter was not checked",
-            )
+        # ``_has_unmodelled_method_reference`` cannot see a destructured method
+        # (``const { method } = route.request()``) because there is no
+        # ``.method()`` call to match. It is a real filter the comparison passes
+        # cannot attribute, so it is noted even when the SAME callback also
+        # yields a descriptor for another comparison - a descriptor elsewhere in
+        # the callback does not make this shape checked.
+        if _DESTRUCTURED_METHOD_RE.search(masked[span_start:span_end]):
+            _add_note(notes, filename, _line_of(text, span_start), _LEDGER_UNMODELLED_METHOD_NOTE)
     return calls
 
 
-def extract_http_calls(source: str, filename: str, notes: list[str] | None = None) -> list[HttpCall]:
+# ---------------------------------------------------------------------------
+# Coverage ledger - prove every candidate line was analysed
+# ---------------------------------------------------------------------------
+
+
+def _is_api_fetch_declaration(masked: str, offset: int) -> bool:
+    """True when the ``apiFetch`` identifier at *offset* declares the helper."""
+    return bool(re.search(r"(?:\basync\s+)?\bfunction\s*$", masked[max(0, offset - 40) : offset]))
+
+
+def _candidate_lines(source: str, masked: str) -> dict[int, set[str]]:
+    """Return ``line -> {"call", "method-ref"}`` for every candidate marker.
+
+    Enumerated on the MASKED source, so a prose mention in a comment or a
+    string (``// ... on a catalog fetch ...``) is not a candidate, while line
+    numbers still match the original file.
+    """
+    candidates: dict[int, set[str]] = {}
+
+    def add(line: int, kind: str) -> None:
+        candidates.setdefault(line, set()).add(kind)
+
+    for match in _LEDGER_CALL_MARKER_RE.finditer(masked):
+        marker = match.group(0)
+        if marker.startswith("apiFetch"):
+            if _is_api_fetch_declaration(masked, match.start()):
+                continue
+            # A ``const apiFetch = ...`` definition is not a call site either.
+            if _find_open_paren(masked, match.end()) is None:
+                continue
+        add(_line_of(source, match.start()), "call")
+
+    raw_lines = source.splitlines()
+    for index, masked_line in enumerate(masked.splitlines()):
+        line = index + 1
+        if _LEDGER_METHOD_CALL_RE.search(masked_line):
+            add(line, "method-ref")
+            continue
+        raw_line = raw_lines[index] if index < len(raw_lines) else ""
+        if (
+            _HTTP_METHOD_LITERAL_RE.search(raw_line)
+            and _LEDGER_METHOD_WORD_RE.search(masked_line)
+            and _LEDGER_COMPARISON_RE.search(masked_line)
+        ):
+            add(line, "method-ref")
+    return candidates
+
+
+def _note_line_numbers(filename: str, notes: list[str]) -> set[int]:
+    """Return the line numbers of the notes emitted for *filename*."""
+    lines: set[int] = set()
+    prefix = f"{filename}:"
+    for note in notes:
+        if not note.startswith(prefix):
+            continue
+        number, separator, _ = note[len(prefix) :].partition(":")
+        if separator and number.isdigit():
+            lines.add(int(number))
+    return lines
+
+
+def _apply_coverage_ledger(
+    source: str,
+    masked: str,
+    filename: str,
+    calls: list[HttpCall],
+    notes: list[str],
+    unanalysed: list[str] | None,
+) -> None:
+    """Account for every candidate line, or report it.
+
+    An unaccounted API-call candidate is appended to *unanalysed* (the CLI turns
+    those into exit 1). An unaccounted method reference is only ever a note - it
+    names no route this checker can validate, but it is never dropped. When no
+    *unanalysed* sink is supplied (a direct library call), the violation is
+    downgraded to a note so it still cannot vanish silently.
+    """
+    candidates = _candidate_lines(source, masked)
+    if not candidates:
+        return
+    accounted = {call.line for call in calls}
+    accounted |= _note_line_numbers(filename, notes)
+    raw_lines = source.splitlines()
+    for line in sorted(candidates):
+        if line in accounted:
+            continue
+        current = raw_lines[line - 1] if line - 1 < len(raw_lines) else ""
+        previous = raw_lines[line - 2] if line >= 2 else ""
+        if _LEDGER_IGNORE_RE.search(current) or _LEDGER_IGNORE_RE.search(previous):
+            continue
+        if "call" in candidates[line]:
+            message = f"{filename}:{line}: {_UNANALYSED_CALL_MESSAGE}"
+            if unanalysed is not None:
+                unanalysed.append(message)
+            else:
+                _add_note(notes, filename, line, _UNANALYSED_CALL_MESSAGE)
+        else:
+            _add_note(notes, filename, line, _LEDGER_UNMODELLED_METHOD_NOTE)
+
+
+def extract_http_calls(
+    source: str,
+    filename: str,
+    notes: list[str] | None = None,
+    unanalysed: list[str] | None = None,
+) -> list[HttpCall]:
     """Extract every statically-readable E2E HTTP call descriptor from *source*.
 
     *notes* (when given) collects explicit explanations for shapes the checker
-    cannot resolve safely, so a skip is visible rather than silent.
+    cannot resolve safely, so a skip is visible rather than silent. *unanalysed*
+    (when given) collects coverage-ledger violations - candidate lines with no
+    descriptor, note or suppression annotation.
     """
     notes = notes if notes is not None else []
     masked = mask_non_code(source)
@@ -1261,6 +1529,7 @@ def extract_http_calls(source: str, filename: str, notes: list[str] | None = Non
 
     calls.extend(_extract_route_interceptors(source, masked, filename, notes))
     calls.sort(key=lambda call: (call.line, call.method, call.path))
+    _apply_coverage_ledger(source, masked, filename, calls, notes, unanalysed)
     return calls
 
 
@@ -1360,39 +1629,42 @@ def _segments_match(extracted: str, live: str, *, last_prefix: bool) -> bool:
     return extracted == live
 
 
-def _matches_path_converter(extracted: tuple[str, ...], prefix: tuple[str, ...], call: HttpCall) -> bool:
-    """Match a path that ends in a ``{param:path}`` converter.
-
-    The converter consumes one OR MORE remaining segments, so a non-glob call
-    needs strictly more segments than the converter's prefix. A glob call (a
-    Playwright prefix pattern) needs only its literal segments to match - the
-    ``**`` covers the rest, including the converter's segments.
-    """
-    if not call.trailing_glob and len(extracted) <= len(prefix):
-        return False
-    for index, (extracted_segment, live_segment) in enumerate(zip(extracted, prefix, strict=False)):
-        is_last = index == len(extracted) - 1
-        if not _segments_match(extracted_segment, live_segment, last_prefix=is_last and call.last_segment_prefix):
-            return False
-    return True
-
-
 def path_matches(call: HttpCall, route: LiveRoute) -> bool:
-    """Does *route* match *call*'s path under Playwright-glob semantics?"""
-    extracted = _split_segments(call.path)
-    live = route.segments
-    if live and live[-1] == _MULTI_WILDCARD:
-        return _matches_path_converter(extracted, live[:-1], call)
-    if call.trailing_glob:
-        if len(extracted) > len(live):
-            return False
-    elif len(extracted) != len(live):
+    """Does *route* match *call*'s path under Playwright-glob semantics?
+
+    A live ``{param:path}`` converter consumes one or more segments and may sit
+    ANYWHERE in the pattern (``/primitives/{slug:path}/download``), so matching
+    is recursive rather than a fixed-length comparison.
+    """
+    return _match_route_segments(_split_segments(call.path), route.segments, call, 0, 0)
+
+
+def _match_route_segments(
+    extracted: tuple[str, ...], live: tuple[str, ...], call: HttpCall, extracted_index: int, live_index: int
+) -> bool:
+    if live_index == len(live):
+        return extracted_index == len(extracted)
+    live_segment = live[live_index]
+    if live_segment == _MULTI_WILDCARD:
+        # A prefix glob's ``**`` already covers the converter's segments.
+        if call.trailing_glob and extracted_index == len(extracted):
+            return True
+        # The converter needs at least one segment unless the call is a prefix
+        # glob; try every possible length so a converter mid-path (followed by
+        # literal segments) can still align with its suffix.
+        for consumed in range(1, len(extracted) - extracted_index + 1):
+            if _match_route_segments(extracted, live, call, extracted_index + consumed, live_index + 1):
+                return True
         return False
-    for index, (extracted_segment, live_segment) in enumerate(zip(extracted, live, strict=False)):
-        is_last = index == len(extracted) - 1
-        if not _segments_match(extracted_segment, live_segment, last_prefix=is_last and call.last_segment_prefix):
-            return False
-    return True
+    if extracted_index == len(extracted):
+        # A prefix glob may stop before the live route's remaining segments.
+        return call.trailing_glob
+    is_last_extracted = extracted_index == len(extracted) - 1
+    if not _segments_match(
+        extracted[extracted_index], live_segment, last_prefix=is_last_extracted and call.last_segment_prefix
+    ):
+        return False
+    return _match_route_segments(extracted, live, call, extracted_index + 1, live_index + 1)
 
 
 def _closest_route(call: HttpCall, routes: list[LiveRoute]) -> LiveRoute | None:
@@ -1448,22 +1720,23 @@ def _e2e_files() -> list[Path]:
     return files
 
 
-def collect_calls(notes: list[str] | None = None) -> list[HttpCall]:
+def collect_calls(notes: list[str] | None = None, unanalysed: list[str] | None = None) -> list[HttpCall]:
     calls: list[HttpCall] = []
     for path in _e2e_files():
         relative = path.relative_to(REPO_ROOT).as_posix()
-        calls.extend(extract_http_calls(path.read_text(encoding="utf-8"), relative, notes))
+        calls.extend(extract_http_calls(path.read_text(encoding="utf-8"), relative, notes, unanalysed))
     return calls
 
 
 def main() -> int:
     notes: list[str] = []
+    unanalysed: list[str] = []
     try:
         routes = load_live_routes()
         if not routes:
             print("e2e route-method check: backend exposed no routes - refusing to pass", file=sys.stderr)
             return 2
-        calls = collect_calls(notes)
+        calls = collect_calls(notes, unanalysed)
     except FileNotFoundError as exc:
         print(f"e2e route-method check: input error: {exc}", file=sys.stderr)
         return 2
@@ -1492,6 +1765,21 @@ def main() -> int:
                 file=sys.stderr,
             )
         return 2
+
+    if unanalysed:
+        print(
+            f"e2e route-method check: {len(unanalysed)} unanalysed E2E HTTP call shape(s):",
+            file=sys.stderr,
+        )
+        for message in unanalysed:
+            print(f"  {message}", file=sys.stderr)
+        print(
+            "\nA call shape this guard does not model is a silent gap in the deploy gate. "
+            "Model the shape, or annotate the line with "
+            "`// e2e-route-check: ignore <reason>` when it is genuinely not an API call.",
+            file=sys.stderr,
+        )
+        return 1
 
     violations = find_violations(calls, routes)
     if violations:

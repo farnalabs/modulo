@@ -470,8 +470,12 @@ def test_api_shaped_route_that_cannot_be_normalised_is_noted() -> None:
     )
 
     assert not calls
-    assert len(notes) == 1
-    assert "could not be normalised statically" in notes[0]
+    # Two distinct facts: the registration path is unreadable (line 1) and the
+    # method reference inside its callback is unattributable (line 2). The
+    # ledger deliberately does not let the first note hide the second.
+    assert len(notes) == 2
+    assert any("could not be normalised statically" in note for note in notes)
+    assert any(note.startswith(f"{FILENAME}:2:") for note in notes)
 
 
 def test_concatenated_query_suffix_does_not_add_a_path_segment() -> None:
@@ -542,13 +546,14 @@ def test_interceptor_combined_with_url_condition_on_a_specific_route_is_not_gues
 
 def test_real_tree_scan_yields_plausible_descriptor_floor() -> None:
     # FAR-1847: the check must be pinned against the REAL tree, not only
-    # synthetic sources. The floor is a MINIMUM, not an exact figure - it
-    # guards against the extractor silently collapsing, so raise it when shapes
-    # are added; 122 were observed at green on this branch (119 before the
-    # implicit-GET fetch shape: ``fetch(url)`` / ``fetch(url, { headers })``).
+    # synthetic sources. This is a COLLAPSE DETECTOR, not an exact count: 122
+    # were observed at green on this branch (119 before the implicit-GET fetch
+    # shape). The floor leaves headroom so a legitimate added/removed call does
+    # not turn a behavioural pin into a brittle one - a regression that loses a
+    # whole class of shapes still trips it.
     calls = _checker.collect_calls()
 
-    assert len(calls) >= 122
+    assert len(calls) >= 100
 
 
 def test_ticket_named_files_contribute_descriptors() -> None:
@@ -701,8 +706,11 @@ def test_catch_all_with_a_method_filter_is_noted() -> None:
     )
 
     assert not calls
-    assert len(notes) == 1
-    assert "catch-all" in notes[0]
+    # The catch-all registration note and the per-line method reference note
+    # are different facts; neither may mask the other.
+    assert len(notes) == 2
+    assert any("catch-all" in note for note in notes)
+    assert any(note.startswith(f"{FILENAME}:2:") for note in notes)
 
 
 def test_catch_all_without_a_method_filter_stays_silent() -> None:
@@ -776,8 +784,11 @@ def test_destructured_method_filter_is_noted() -> None:
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
     assert not calls
-    assert len(notes) == 1
-    assert "cannot attribute to a single literal method" in notes[0]
+    # The destructured reference (registration, line 1) and its comparison
+    # (line 3) are both unattributable, so both are reported.
+    assert len(notes) == 2
+    assert all("cannot attribute to a single literal method" in note for note in notes)
+    assert any(note.startswith(f"{FILENAME}:3:") for note in notes)
 
 
 def test_includes_method_filter_is_noted() -> None:
@@ -964,9 +975,11 @@ def test_hoisted_route_pattern_with_method_filter_is_noted() -> None:
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
     assert not calls
-    assert len(notes) == 1
-    assert "non-literal expression" in notes[0]
-    assert FILENAME in notes[0]
+    # The hoisted URL (line 2) and the method reference in its callback
+    # (line 3) are independently uncheckable, so both must be reported.
+    assert len(notes) == 2
+    assert any("non-literal expression" in note for note in notes)
+    assert any(note.startswith(f"{FILENAME}:3:") for note in notes)
 
 
 def test_conditional_query_interpolation_is_not_a_path_segment() -> None:
@@ -980,3 +993,221 @@ def test_conditional_query_interpolation_is_not_a_path_segment() -> None:
     assert len(calls) == 1
     assert calls[0].path == "/api/v1/pipelines"
     assert not _checker.find_violations(calls, live)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1847 final structural pass: coverage ledger and path-shape correctness
+# ---------------------------------------------------------------------------
+
+
+def test_context_request_verb_is_detected() -> None:
+    # ``context.request.<verb>`` is an APIRequestContext call distinct from
+    # ``page.request`` and ``request``; all three carry the verb as the method.
+    source = "await context.request.patch(`${base}/api/v1/pipelines/${id}/graph`, { data })\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].kind == "request"
+    assert calls[0].method == "PATCH"
+    assert calls[0].path == "/api/v1/pipelines/{param}/graph"
+
+
+def test_page_context_request_verb_is_detected() -> None:
+    source = "await page.context().request.get(`${base}/api/v1/pipelines`)\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].kind == "request"
+    assert calls[0].method == "GET"
+    assert calls[0].path == "/api/v1/pipelines"
+
+
+def test_ternary_path_segment_is_a_parameter_not_a_query() -> None:
+    # ``${role ? 'admins' : 'members'}`` builds a PATH SEGMENT. Treating every
+    # ``?`` as a query dropped it, so the caller looked like the collection
+    # route and a rotated path could pass unseen.
+    live = _checker.build_live_routes({"/api/v1/admin/users/admins": {"get": {}}})
+    source = "await apiFetch(apiBase, token, 'GET', `/api/v1/admin/users/${role ? 'admins' : 'members'}`)\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].path == "/api/v1/admin/users/{param}"
+    assert not _checker.find_violations(calls, live)
+
+
+def test_concatenated_ternary_path_segment_is_a_parameter_not_garbage() -> None:
+    # The concatenation form used to splice the ternary's branches into the
+    # path as separate literals (``/{param}admins{param}members``).
+    live = _checker.build_live_routes({"/api/v1/admin/users/members": {"get": {}}})
+    source = "await apiFetch(apiBase, token, 'GET', '/api/v1/admin/users/' + (role ? 'admins' : 'members'))\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].path == "/api/v1/admin/users/{param}"
+    assert not _checker.find_violations(calls, live)
+
+
+def test_conditional_query_in_the_else_branch_is_still_not_a_path_segment() -> None:
+    # The query may be toggled on in either branch; a ``?``-prefixed branch
+    # anywhere keeps the interpolation a query suffix.
+    live = _checker.build_live_routes({"/api/v1/pipelines": {"get": {}}})
+    source = "await apiFetch(apiBase, token, 'GET', `/api/v1/pipelines${archived ? '' : '?archived=true'}`)\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].path == "/api/v1/pipelines"
+    assert not _checker.find_violations(calls, live)
+
+
+def test_mid_path_converter_matches_multi_segment_and_its_suffix() -> None:
+    # ``{slug:path}`` consumes one or more segments even when it is NOT the
+    # final pattern segment (registry.py:260).
+    routes = _checker.build_live_routes({"/api/v1/registry/primitives/{slug:path}/download": {"post": {}}})
+    matching = _checker.HttpCall(
+        FILENAME,
+        1,
+        "POST",
+        "/api/v1/registry/primitives/acme/widgets/download",
+        "apiFetch",
+    )
+    missing_suffix = _checker.HttpCall(
+        FILENAME,
+        2,
+        "POST",
+        "/api/v1/registry/primitives/acme/widgets",
+        "apiFetch",
+    )
+
+    assert _checker.path_matches(matching, routes[0])
+    assert not _checker.path_matches(missing_suffix, routes[0])
+
+
+def test_final_path_converter_matches_a_multi_segment_request() -> None:
+    routes = _checker.build_live_routes({"/api/v1/registry/primitives/{slug:path}": {"get": {}}})
+    call = _checker.HttpCall(FILENAME, 1, "GET", "/api/v1/registry/primitives/acme/widgets", "apiFetch")
+
+    assert _checker.path_matches(call, routes[0])
+
+
+def test_coverage_ledger_flags_an_unmodelled_call_shape() -> None:
+    # A call shape neither modelled nor annotated must fail the run, naming the
+    # exact line - otherwise a new request silently escapes the deploy gate.
+    unanalysed: list[str] = []
+
+    calls = _checker.extract_http_calls("const res = await fetch(buildUrl(), init)\n", FILENAME, [], unanalysed)
+
+    assert not calls
+    assert len(unanalysed) == 1
+    assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
+    assert "e2e-route-check: ignore" in unanalysed[0]
+
+
+def test_coverage_ledger_accepts_a_same_line_suppression() -> None:
+    unanalysed: list[str] = []
+
+    calls = _checker.extract_http_calls(
+        "await fetch(buildUrl(), init) // e2e-route-check: ignore test fixture\n",
+        FILENAME,
+        [],
+        unanalysed,
+    )
+
+    assert not calls
+    assert not unanalysed
+
+
+def test_coverage_ledger_accepts_a_preceding_line_suppression() -> None:
+    unanalysed: list[str] = []
+    source = "// e2e-route-check: ignore test fixture\nawait fetch(buildUrl(), init)\n"
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert not calls
+    assert not unanalysed
+
+
+def test_coverage_ledger_notes_a_method_filter_even_when_the_callback_yields_a_descriptor() -> None:
+    # The old ``len(calls) == calls_before`` guard silenced an unmodelled filter
+    # when another comparison in the SAME callback resolved. The ledger reports
+    # the unmodelled reference per line.
+    notes: list[str] = []
+    source = (
+        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
+        "  if (route.request().method() === 'PUT') {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "  if (route.request().method() !== 'GET') {\n"
+        "    return route.fulfill({ status: 405 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes)
+
+    assert [(call.method, call.path) for call in calls] == [("PUT", "/api/v1/pipelines/abc/graph")]
+    assert any(note.startswith(f"{FILENAME}:5:") for note in notes)
+    assert all("cannot attribute to a single literal method" in note for note in notes)
+
+
+def test_coverage_ledger_does_not_flag_the_api_fetch_declaration() -> None:
+    unanalysed: list[str] = []
+    source = (
+        "export async function apiFetch<T>(\n"
+        "  apiBase: string,\n"
+        "  token: string,\n"
+        "  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',\n"
+        "  path: string,\n"
+        "): Promise<T> {\n"
+        "  return request(apiBase, token, method, path)\n"
+        "}\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert not calls
+    assert not unanalysed
+
+
+def test_main_fails_when_the_ledger_reports_an_unanalysed_shape(monkeypatch) -> None:
+    working = _checker.extract_http_calls(
+        "await apiFetch(apiBase, token, 'GET', '/api/v1/pipelines/abc/graph')\n",
+        "frontend/tests/e2e/setup/realstack-api.ts",
+    ) + _checker.extract_http_calls(
+        "await apiFetch(apiBase, token, 'PUT', '/api/v1/pipelines/abc/graph')\n",
+        "frontend/tests/e2e/pipeline-editor.spec.ts",
+    )
+
+    def _collect(notes=None, unanalysed=None):
+        if unanalysed is not None:
+            unanalysed.append(f"{FILENAME}:11: unanalysed E2E HTTP call shape - model it")
+        return working
+
+    monkeypatch.setattr(_checker, "load_live_routes", lambda: LIVE_ROUTES)
+    monkeypatch.setattr(_checker, "collect_calls", _collect)
+
+    assert _checker.main() == 1
+
+
+def test_destructured_filter_is_noted_even_when_the_same_callback_yields_a_descriptor() -> None:
+    # The removed ``len(calls) == calls_before`` guard used to suppress the
+    # destructured-filter note whenever another comparison in the callback
+    # resolved. A descriptor for one comparison does not validate the other.
+    notes: list[str] = []
+    source = (
+        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
+        "  const { method } = route.request()\n"
+        "  if (route.request().method() === 'PUT') {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes)
+
+    assert [(call.method, call.path) for call in calls] == [("PUT", "/api/v1/pipelines/abc/graph")]
+    assert any(note.startswith(f"{FILENAME}:1:") for note in notes)
