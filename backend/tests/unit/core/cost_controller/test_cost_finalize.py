@@ -946,6 +946,10 @@ async def test_finalize_failed_run_derived_hours_book_run_level_cost() -> None:
     in the stored sets. With ``derived_sandbox_wall_hours`` the run must still
     carry a non-zero cost, explicitly marked ``source="derived"``. Without the
     derived branch the write would be total 0 (or nothing at all).
+
+    The derived spend must ALSO reach the terminal ledger block (spend ceiling
+    + ``org_daily_run_counts`` + circuit breaker) — not just the run row and the
+    analytics fact — otherwise the controls the ticket names stay blind.
     """
     run = _make_run(node_token_usage=None, outputs_json=None)
     session = AsyncMock()
@@ -958,6 +962,7 @@ async def test_finalize_failed_run_derived_hours_book_run_level_cost() -> None:
         patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
         patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
         patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()) as mock_facts,
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
     ):
         await finalize_failed_run(
             session,
@@ -981,6 +986,15 @@ async def test_finalize_failed_run_derived_hours_book_run_level_cost() -> None:
     assert entry["basis"]["derived_from"] == "node_deadline_watchdog"
     assert entry["basis"]["wall_clock_hours"] == 0.5
     mock_facts.assert_awaited_once()
+    # The ledger block receives the SAME persisted total, org and run date.
+    mock_block.assert_awaited_once()
+    ledger_kwargs = mock_block.await_args.kwargs
+    assert ledger_kwargs["total"] == Decimal("0.065")
+    assert ledger_kwargs["org_id"] == _ORG_ID
+    assert ledger_kwargs["status"] == "failed"
+    assert ledger_kwargs["owner_team_id"] == run.owner_team_id
+    assert ledger_kwargs["run_date"] == run.started_at.astimezone(UTC).date()
+    assert ledger_kwargs["finalize_fields"]["total_cost_usd"] == Decimal("0.065")
 
 
 async def test_finalize_failed_run_empty_segment_without_derived_hours_invents_no_cost() -> None:

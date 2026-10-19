@@ -3028,6 +3028,7 @@ async def _write_derived_deadline_terminal(
     *,
     run: Run,
     run_id: uuid.UUID,
+    org_id: uuid.UUID,
     error_code: str,
     error_detail: str,
     wall_hours: float,
@@ -3044,9 +3045,15 @@ async def _write_derived_deadline_terminal(
 
     The status/cost write is SHAPE-IDENTICAL to ``_write_empty_terminal`` —
     total 0 there, the derived total here — so no new raw UPDATE is invented.
-    The terminal analytics fact is recorded the same way every other terminal
-    writer does (``record_run_facts`` inside ``_record_terminal_analytics``),
-    so ``run_daily_facts`` agrees with the run row.
+    It additionally drives the SAME terminal ledger block as
+    ``_fallback_finalize`` (spend-ceiling gate + ``org_daily_run_counts``
+    accrual + circuit breaker), because the ticket's premise is that this spend
+    must not stay invisible to those controls. ``_write_empty_terminal`` writes
+    no ledger row and correctly does not: its total is 0, so
+    ``_ledger_run_date`` returns ``None``. The terminal analytics fact is
+    recorded the same way every other terminal writer does (``record_run_facts``
+    inside ``_record_terminal_analytics``), so ``run_daily_facts`` agrees with
+    the run row.
 
     DELIBERATELY OUT OF SCOPE: the reconcile age-gate path
     (``cron_helpers`` terminalising ``no_progress`` runs) also records $0, but
@@ -3096,6 +3103,40 @@ async def _write_derived_deadline_terminal(
         cost_breakdown=breakdown,
         total_tokens=0,
     )
+    # FAR-1993: the terminal ledger write — same pattern and same ordering as
+    # ``_fallback_finalize`` (write, then ledger, then analytics). This is what
+    # makes the derived spend visible to the spend ceiling, the daily ledger
+    # (``org_daily_run_counts``) and the circuit breaker. ``run_date`` is
+    # ``None`` for a zero total / missing ``started_at``, so no ledger row is
+    # written in that case.
+    run_date = _ledger_run_date(True, total, run)
+    if run_date is not None:
+        try:
+            await _ledger_block(
+                session,
+                run_id=run_id,
+                org_id=org_id,
+                status="failed",
+                total=total,
+                owner_team_id=run.owner_team_id,
+                run_date=run_date,
+                finalize_fields={
+                    "error_code": error_code,
+                    "error_detail": error_detail,
+                    "total_cost_usd": total,
+                },
+                session_factory=None,
+                claim_token=None,
+                metric_sink=None,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if is_lock_abort(exc):
+                # Do NOT swallow a whole-transaction lock abort — the outer
+                # transaction is aborted, so the ownership layer must own it.
+                raise
+            _log.exception("cost_ledger.derived_deadline_block_failed", extra={"run_id": str(run_id)})
     await _record_terminal_analytics(session, run, "failed", {}, writer=_WRITER_EARLY_RETURN)
 
 
@@ -3124,6 +3165,7 @@ async def _finalize_failed_run(
                 session,
                 run=run,
                 run_id=run_id,
+                org_id=org_id,
                 error_code=error_code,
                 error_detail=error_detail,
                 wall_hours=derived_sandbox_wall_hours,
