@@ -720,11 +720,16 @@ async def test_mcp_graph_writer_syncs_agent_rows_before_the_graph_write() -> Non
     pipeline.owner_team_id = None
     pipeline.graph_nodes_json = []
 
+    lock_statements: list[Any] = []
+
     class _LockResult:
         def scalar_one_or_none(self) -> Any:
             return pipeline
 
-    async def _record_pipeline_lock(*_args: Any, **_kwargs: Any) -> _LockResult:
+    async def _record_pipeline_lock(stmt: Any, *_args: Any, **_kwargs: Any) -> _LockResult:
+        # FAR-1845: capture the statement, not just the ordering. Without this
+        # the test still passes if the lock degrades to a plain ``select``.
+        lock_statements.append(stmt)
         order.append("lock")
         return _LockResult()
 
@@ -766,4 +771,9 @@ async def test_mcp_graph_writer_syncs_agent_rows_before_the_graph_write() -> Non
         )
 
     assert order == ["lock", "sync", "replace"], order
+    assert len(lock_statements) == 1, lock_statements
+    lock_stmt = lock_statements[0]
+    assert lock_stmt._for_update_arg is not None  # type: ignore[attr-defined]
+    assert "FROM pipelines" in str(lock_stmt)
+    assert "FOR UPDATE" in str(lock_stmt)
     assert result[0] == nodes
