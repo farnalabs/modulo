@@ -83,7 +83,19 @@ _NUMERIC_STRING_RE = r"^\s*[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?\s
 # The HAVING keeps only components with at least one parseable-or-absent
 # amount — a malformed amount DROPPED the entry in the retired path (no bucket
 # row), while a null/missing amount KEPT it as a 0 row; a plain GROUP BY would
-# have materialised a 0.000000 row for the malformed case.
+# have materialised a 0.000000 row for the malformed case. BILLABLE FILTER
+# (FAR-1780, the parity delta vs the retired reference): a breakdown entry
+# carrying the JSON-boolean-true-marker inverse — ``billable: false`` (the
+# self_reported agent-declared component) — is EXCLUDED from the per-entry
+# lateral sum, because the in-process total now excludes non-billable
+# entries (``build_cost_breakdown`` sums billable amounts only): the buckets
+# must otherwise keep summing declared money the run is not billed for, and
+# the org/team buckets would drift above the billed components.
+# ``org_total``/``components_by_team`` derive from these buckets.
+# The filter applies PER ENTRY (inside the lateral expansion) — entries
+# WITHOUT a ``billable`` key (every pre-FAR-1780 breakdown) and any
+# non-boolean billable value default to billable, matching
+# ``entry.get("billable", True)`` in the Python aggregator.
 _SQL_COST_COMPONENT_BUCKETS = r"""
 SELECT
     r.owner_team_id AS team_id,
@@ -115,6 +127,10 @@ FROM (
 CROSS JOIN LATERAL jsonb_array_elements(r.cost_breakdown::jsonb) AS elem
 WHERE jsonb_typeof(elem->'component') = 'string'
   AND elem->>'component' <> ''
+  AND NOT (
+      jsonb_typeof(elem->'billable') = 'boolean'
+      AND elem->'billable' = 'false'::jsonb
+  )
 GROUP BY r.owner_team_id, elem->>'component'
 HAVING SUM(
     CASE

@@ -55,7 +55,14 @@ _COST_NODE_FIELDS: dict[str, Any] = {
     **_build_model_cost_fields(_COST_JSON),
     **_build_token_usage_fields(_COST_JSON),
 }
-_COST_DATUM_KEYS = frozenset(_COST_NODE_FIELDS)
+# The ENGINE-COMPUTED cost annotations (_build_model_cost_fields writes them
+# UNCONDITIONALLY per report — display clamp + explicit flags), never tagged
+# as agent claims in the envelope map (see node_runner's
+# _SANDBOX_AGENT_COST_DATUM_FIELDS comment + finalize's
+# _UNION_PROVENANCE_DATUM_KEYS, which excludes the same three).
+_ENGINE_COST_KEYS: frozenset[str] = {"model_cost_display_usd", "model_cost_clamped", "model_cost_out_of_band_high"}
+# The agent-claimed subset of the extracted cost/token datums.
+_AGENT_CLAIMED_COST_KEYS: frozenset[str] = frozenset(_COST_NODE_FIELDS) - _ENGINE_COST_KEYS
 
 _ENGINE_KEYS = ("status", "exit_code", "wall_clock_time_ms", "cost_estimate_usd")
 
@@ -131,9 +138,14 @@ def test_reported_map_names_exactly_the_agent_claimed_datums() -> None:
     }
     assert expected_extraction <= set(prov)
     assert prov["summary"] == PROVENANCE_REPORTED
-    # cost/token fields: stamped per presence of the extraction betas.
-    assert set(_COST_DATUM_KEYS) <= set(prov)
-    assert all(prov[k] == PROVENANCE_REPORTED for k in _COST_DATUM_KEYS)
+    # cost/token fields: the AGENT-CLAIMED datums (declared cost + raw) are
+    # stamped per presence of the extraction betas; the ENGINE-COMPUTED
+    # annotations are NEVER stamped (attesting them would over-claim engine
+    # derivations as producer claims).
+    assert set(prov) >= _AGENT_CLAIMED_COST_KEYS
+    assert all(prov[k] == PROVENANCE_REPORTED for k in _AGENT_CLAIMED_COST_KEYS)
+    for engine_cost_key in _ENGINE_COST_KEYS:
+        assert engine_cost_key not in prov
 
 
 def test_engine_observed_keys_are_never_stamped() -> None:
@@ -155,9 +167,13 @@ def test_script_mode_never_claims_the_extraction_keys() -> None:
     prov = envelope["artifacts"][0]["output"][PROVENANCE_KEY]
     for extraction_key in ("summary", "changed_files", "pr_url", "agent_status", "agent_outcome"):
         assert extraction_key not in prov
-    # substrate's verbatim report + its declared cost stay claimed.
+    # substrate's verbatim report + its declared cost stay claimed (the
+    # agent-claimed datums only — the engine-computed annotations stay
+    # unstamped in every mode).
     assert prov["output_json"] == PROVENANCE_REPORTED
-    assert set(_COST_DATUM_KEYS) <= set(prov)
+    assert set(prov) >= _AGENT_CLAIMED_COST_KEYS
+    for engine_cost_key in _ENGINE_COST_KEYS:
+        assert engine_cost_key not in prov
 
 
 def test_engine_substituted_failure_summary_is_not_claimed() -> None:

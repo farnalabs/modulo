@@ -245,13 +245,18 @@ def _eval_self_reported(
         # the summed total in ``build_cost_breakdown``. Declared money never
         # becomes system money, so it can never inflate
         # ``Run.total_cost_usd`` / spend limits / rate-limit gates.
-        PROVENANCE_KEY: PROVENANCE_REPORTED,
+        # The ``provenance: reported`` stamp lands CONDITIONALLY (below): it
+        # attests a report the agent ACTUALLY made, so the missing-report
+        # marker — no real report, a readability marker only — must never
+        # carry it.
         "billable": False,
         "amount_usd": _entry_amount(amount),
         "formula_applied": "reported",
         "rate_usd": None,
         "basis": _basis_within_limit(basis),
     }
+    if not missing:
+        entry[PROVENANCE_KEY] = PROVENANCE_REPORTED
     if telemetry.eligible_sandbox_node_count > 0:
         entry["missing_self_report"] = missing
         if missing and amount == Decimal(0):

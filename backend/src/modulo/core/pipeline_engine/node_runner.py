@@ -9114,16 +9114,23 @@ def _format_sandbox_provider_error(exc: Exception, provider_exc_type: type | Non
 
 #: FAR-1780: the sandbox envelope cost/token datum fields whose values are
 #: extracted from the producer's ``output.json``. DERIVED from the extraction
-#: vocabularies above (the token destinations + the self-reported cost field
-#: set) so the reported-datum stamp list cannot drift from what those helpers
-#: actually emit — a key lands here only if an extraction helper can emit it.
+#: vocabularies above (the token destinations + the agent's declared cost
+#: fields ``model_cost_usd`` / ``model_cost_raw_usd``) so the reported-datum
+#: stamp list cannot drift from what those helpers actually emit — a key
+#: lands here only if an extraction helper can emit it FROM THE REPORT.
+#:
+#: ``model_cost_display_usd`` / ``model_cost_clamped`` /
+#: ``model_cost_out_of_band_high`` are deliberately EXCLUDED: they are
+#: ENGINE-COMPUTED, never agent claims. ``_build_model_cost_fields`` writes
+#: them UNCONDITIONALLY per report (the display clamp value and the explicit
+#: clamp / out-of-band flags derived from the TRUE raw), so per-key presence
+#: identifies nothing about the producer — stamping them would over-attest
+#: engine derivations as producer claims (matching finalize.py's
+#: ``_UNION_PROVENANCE_DATUM_KEYS``, which excludes exactly those three).
 _SANDBOX_AGENT_COST_DATUM_FIELDS: frozenset[str] = frozenset(dst for _, dst in _TOKEN_USAGE_FIELD_MAP) | frozenset(
     {
         "model_cost_usd",
         "model_cost_raw_usd",
-        "model_cost_display_usd",
-        "model_cost_clamped",
-        "model_cost_out_of_band_high",
     }
 )
 
@@ -9184,7 +9191,12 @@ def _sandbox_reported_datum_provenance(
       found nothing in) ``output.json``, so neither is agent-reported.
     - the cost/token fields are reported per-key presence: those extraction
       helpers emit a key only for a real producer report (an unproven zero is
-      never written), so presence alone identifies an agent claim.
+      never written), so presence alone identifies an agent claim. The three
+      ENGINE-COMPUTED cost annotations (``model_cost_display_usd``,
+      ``model_cost_clamped``, ``model_cost_out_of_band_high``) are explicitly
+      NOT in this set — they are written UNCONDITIONALLY per report
+      (display clamp + flags derived from the TRUE raw), so presence never
+      identifies an agent claim for them.
 
     Engine-observed or engine-derived keys (``status``, ``exit_code``,
     ``wall_clock_time_ms``, ``cost_estimate_usd``, ``agent_stdout``/stderr and
