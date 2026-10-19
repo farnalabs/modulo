@@ -752,30 +752,74 @@ async def _sweep_noop_targets(
         summary["scanned"] += 1
         if time.monotonic() > deadline:
             break
-        blobs = blobs_by_run[run.id]
-        for node_id in _declared_success_nodes(blobs.outputs, blobs.telemetry):
-            if (run.id, node_id) in existing:
-                continue
-            summary["probed"] += 1
-            try:
-                state = await run_evidence_probe(
-                    provider=provider,
-                    session_factory=session_factory,
-                    run_id=run.id,
-                    node_id=node_id,
-                    organisation_id=run.organisation_id,
-                )
-                summary[str(state.value)] += 1
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                summary["errors"] += 1
-                _log.exception(
-                    "heuristic.sweep_probe_failed",
-                    extra={"run_id": str(run.id), "node_id": node_id},
-                )
-            if time.monotonic() > deadline:
-                break
+        if await _sweep_run_targets(
+            run,
+            existing,
+            blobs_by_run[run.id],
+            provider=provider,
+            session_factory=session_factory,
+            deadline=deadline,
+            summary=summary,
+        ):
+            break
+
+
+async def _sweep_run_targets(
+    run: Any,
+    existing: set[tuple[UUID, str]],
+    blobs: Any,
+    *,
+    provider: EvidenceProvider,
+    session_factory: Callable[[], AsyncSession],
+    deadline: float,
+    summary: dict[str, int],
+) -> bool:
+    """Probe one run's unevidenced declared-success nodes.
+
+    Returns ``True`` when the deadline elapsed mid-run (the caller stops).
+    """
+    for node_id in _declared_success_nodes(blobs.outputs, blobs.telemetry):
+        if (run.id, node_id) in existing:
+            continue
+        summary["probed"] += 1
+        await _probe_and_record(
+            provider=provider,
+            session_factory=session_factory,
+            run=run,
+            node_id=node_id,
+            summary=summary,
+        )
+        if time.monotonic() > deadline:
+            return True
+    return False
+
+
+async def _probe_and_record(
+    *,
+    provider: EvidenceProvider,
+    session_factory: Callable[[], AsyncSession],
+    run: Any,
+    node_id: str,
+    summary: dict[str, int],
+) -> None:
+    """Run one sweep probe, recording its state or failure in ``summary``."""
+    try:
+        state = await run_evidence_probe(
+            provider=provider,
+            session_factory=session_factory,
+            run_id=run.id,
+            node_id=node_id,
+            organisation_id=run.organisation_id,
+        )
+        summary[str(state.value)] += 1
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["errors"] += 1
+        _log.exception(
+            "heuristic.sweep_probe_failed",
+            extra={"run_id": str(run.id), "node_id": node_id},
+        )
 
 
 async def reconcile_noop_evidence(
