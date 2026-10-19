@@ -592,8 +592,8 @@ def _notification_command(raw: str, code: str) -> str | None:
 class _NotificationViolation(NamedTuple):
     """One notification-can't-post / silently-swallowed violation.
 
-    ``key`` is a stable, human-readable identity used to scope a temporary
-    allowance for a tracked in-flight fix — never to hide a new violation.
+    ``workflow``/``job``/``step``/``kind`` locate the offending construct so the
+    failure message names the exact place to fix.
     """
 
     workflow: str
@@ -601,10 +601,6 @@ class _NotificationViolation(NamedTuple):
     step: str
     kind: str
     detail: str
-
-    @property
-    def key(self) -> tuple[str, str, str, str]:
-        return (self.workflow, self.job, self.step, self.kind)
 
     def __str__(self) -> str:
         return f"  {self.workflow} job {self.job!r} step {self.step!r}: {self.detail} (FAR-2001)"
