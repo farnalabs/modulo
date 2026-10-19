@@ -1514,10 +1514,26 @@ jobs:
     permissions:
       actions: write
       pull-requests: write
+    # Guard predicate below is NEEDS-AWARE, not step-level `failure()`
+    # (contains(needs.*.result, 'failure') || cancelled()). Step-level
+    # `failure()` sees only THIS job's own previous steps: with every product
+    # job listed in `needs` and no failing step within this job, it was ALWAYS
+    # false, so the entire guard chain (superseded-check -> retry-check ->
+    # queue-check -> dispatch) skipped on every genuine PR CI failure,
+    # dead-ending the CI -> Branch Fixer path onto the PR Housekeeper cron.
+    # `cancelled()` is retained so a cancelled (superseded) run still reaches
+    # the superseded-check guard unchanged. Same needs-aware pattern as
+    # notify-main-failure and self-report-ci below.
+    #
+    # The consumers test `steps.retry-check.outputs.exhausted != 'true'`, not
+    # `== 'false'`: a skipped/empty output then reads as "not exhausted"
+    # rather than silently suppressing the dispatch. The retry-exhausted
+    # suppression is preserved — `exhausted=true` still blocks the dispatch,
+    # so there is no dispatch loop.
     steps:
       - name: Skip if this run was superseded by a newer push
         id: superseded-check
-        if: failure() || cancelled()
+        if: contains(needs.*.result, 'failure') || cancelled()
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
@@ -1545,7 +1561,7 @@ jobs:
 
       - name: Check retry limit
         id: retry-check
-        if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        if: (contains(needs.*.result, 'failure') || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
@@ -1581,7 +1597,7 @@ jobs:
 
       - name: Skip if a merge-queue run is already in flight for this PR
         id: queue-check
-        if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted == 'false' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        if: (contains(needs.*.result, 'failure') || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
@@ -1592,7 +1608,8 @@ jobs:
           # A green CI run entered the merge queue, and then a THIRD-PARTY PR's
           # merge (or a review event) advanced main and cancelled this PR's
           # now-stale queue run. That cancellation surfaces as
-          # (failure() || cancelled()) here and dispatches a Branch Fixer run
+          # (contains(needs.*.result, 'failure') || cancelled()) here and
+          # dispatches a Branch Fixer run
           # even though nothing is broken and the queue is already re-running
           # this branch. If a merge-queue run for this PR is still in flight,
           # the queue owns the outcome — do not dispatch a competing fixer run.
@@ -1674,7 +1691,7 @@ jobs:
       # and hand-managed dispatches.
 
       - name: Trigger Modulo Branch Fixer
-        if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted == 'false' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        if: (contains(needs.*.result, 'failure') || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted != 'true' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
@@ -1961,7 +1978,8 @@ jobs:
     # push/workflow_dispatch to main), and `notify-pr-failure` cannot fail
     # unless one of the 15 product jobs above already failed or the run was
     # cancelled — every step of it that can fail is gated on
-    # `failure() || cancelled()` — and both of those conditions already make
+    # `contains(needs.*.result, 'failure') || cancelled()` — and both of those
+    # conditions already make
     # this job's guard false. `self-report-ci` cannot list itself.
     if: github.event_name == 'pull_request' && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
