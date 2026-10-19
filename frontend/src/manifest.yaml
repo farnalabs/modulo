@@ -1796,6 +1796,9 @@ elements:
       - testid: lock-icon
         type: element
         dynamic_testid: false
+      - testid: my-profile-my-teams-loading
+        type: element
+        dynamic_testid: false
       - testid: my-profile-my-teams-retry
         type: button
         dynamic_testid: false
@@ -1836,6 +1839,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: my-profile-hitl-email-success
+        type: element
+        dynamic_testid: false
+      - testid: my-profile-hitl-email-loading
         type: element
         dynamic_testid: false
       - testid: my-profile-hitl-email-load-error
