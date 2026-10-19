@@ -13,7 +13,7 @@ from modulo.api.main import app
 from modulo.api.routes.admin_housekeeping import CleanupResponse
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.housekeeping import Candidate, CategoryResult
+from modulo.core.housekeeping import Candidate, CategoryResult, Scanner
 from modulo.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -208,6 +208,8 @@ class TestListHousekeeping:
         cat = body["categories"][0]
         assert cat["category"] == "orphan_secrets"
         assert cat["count"] == 1
+        assert cat["status"] == "ok"
+        assert cat["error"] is None
         candidate = cat["candidates"][0]
         assert candidate["entity_type"] == "secret"
         assert set(candidate.keys()) == {"id", "name", "detail", "created_at", "entity_type"}
@@ -263,6 +265,53 @@ class TestListHousekeeping:
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 500
+
+    def test_failed_scanner_is_distinguishable_from_clean_empty(self, client: TestClient) -> None:
+        """FAR-1977: a scanner that RAISES must not read as a clean empty category.
+
+        Drives the REAL ``scan_all`` (only the scanner registry is patched) so
+        the route's serialisation of the failure signal is exercised end-to-end,
+        and asserts BOTH a clean empty category (``ok``) and a failed one
+        (``failed`` + class-only error) so neither can be misread.
+        """
+
+        async def broken_scanner(_s: object, _o: object) -> list[Candidate]:
+            raise RuntimeError("boom")
+
+        scanners = [
+            Scanner(
+                category="orphan_secrets",
+                scan_func=AsyncMock(return_value=[]),
+                label="Orphan Secrets",
+                description="d",
+                entity_type="secret",
+            ),
+            Scanner(
+                category="stale_pipelines",
+                scan_func=broken_scanner,
+                label="Stale Pipelines",
+                description="d",
+                entity_type="pipeline",
+            ),
+        ]
+        with (
+            patch("modulo.core.housekeeping._SCANNERS", scanners),
+            patch("modulo.api.routes.admin_housekeeping.set_rls_org"),
+        ):
+            resp = client.get(self.URL)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_count"] == 0
+        by_category = {c["category"]: c for c in body["categories"]}
+
+        clean = by_category["orphan_secrets"]
+        assert clean["status"] == "ok"
+        assert clean["error"] is None
+
+        failed = by_category["stale_pipelines"]
+        assert failed["status"] == "failed"
+        assert failed["error"] == {"reason": "scanner_failed", "exception": "RuntimeError"}
 
 
 class TestPerformCleanup:

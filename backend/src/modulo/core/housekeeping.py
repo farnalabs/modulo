@@ -167,13 +167,48 @@ class Candidate:
         }
 
 
+# Status vocabulary for a housekeeping category result (FAR-1977).
+#
+# ``SCAN_STATUS_OK`` means the scanner RAN: an empty candidate list is a clean
+# "ran, found nothing" scan, never a failure. ``SCAN_STATUS_FAILED`` means the
+# scanner RAISED and its category is empty because it did not complete — the
+# two must be distinguishable in the response, not only in the logs (FAR-1906).
+# Shared by the REST route and the MCP tool so the two surfaces cannot drift.
+SCAN_STATUS_OK = "ok"
+SCAN_STATUS_FAILED = "failed"
+
+# Stable reason code for a scanner failure. The response carries the exception
+# CLASS NAME only — never its message, a traceback, or any other raw exception
+# text that could leak internals; the traceback stays in the log (FAR-1906).
+SCAN_FAILURE_REASON = "scanner_failed"
+
+
 class CategoryResult:
-    def __init__(self, category: str, candidates: list[Candidate]) -> None:
+    """One scanned category, carrying whether its scanner actually completed.
+
+    ``status`` defaults to ``SCAN_STATUS_OK`` so a scanner that returns an empty
+    list reads as "ran, found nothing" — a plain ``candidates=[]`` must never
+    imply failure, and an unset status must never read as failed. Only
+    :func:`scan_all`'s exception branch sets ``SCAN_STATUS_FAILED`` (with an
+    ``error`` dict), so failure is per-category and a partial failure marks only
+    the scanner that raised.
+    """
+
+    def __init__(
+        self,
+        category: str,
+        candidates: list[Candidate],
+        *,
+        status: str = SCAN_STATUS_OK,
+        error: dict[str, str] | None = None,
+    ) -> None:
         self.category = category
         entry = SCANNERS_BY_CATEGORY.get(category)
         self.label = entry.label if entry is not None else category
         self.description = entry.description if entry is not None else ""
         self.candidates = candidates
+        self.status = status
+        self.error = error
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -182,6 +217,8 @@ class CategoryResult:
             "description": self.description,
             "candidates": [c.to_dict() for c in self.candidates],
             "count": len(self.candidates),
+            "status": self.status,
+            "error": dict(self.error) if self.error is not None else None,
         }
 
 
@@ -1363,8 +1400,14 @@ async def scan_all(session: AsyncSession, org_id: uuid.UUID) -> list[CategoryRes
     An operator can therefore tell "this category is empty because the scanner
     FAILED" from "this category is empty because nothing matched". This matters
     for scanners that REFUSE to run (e.g. raising ``NotImplementedError`` on an
-    unsupported SQL dialect): the refusal fails loud in the logs even though the
-    API response still carries an empty category rather than an error.
+    unsupported SQL dialect): the refusal fails loud in the logs.
+
+    The failure is ALSO carried in the returned result (FAR-1977): the failing
+    category is returned with ``status=SCAN_STATUS_FAILED`` and a structured
+    ``error`` naming the exception CLASS (never its message or a traceback), so
+    the REST and MCP responses distinguish it from a clean empty category
+    without reading logs. The failure is per-category — only the scanner that
+    raised is marked failed; every other category keeps ``status=SCAN_STATUS_OK``.
     """
     results: list[CategoryResult] = []
     for entry in _SCANNERS:
@@ -1383,5 +1426,12 @@ async def scan_all(session: AsyncSession, org_id: uuid.UUID) -> list[CategoryRes
                 entry.category,
                 type(exc).__name__,
             )
-            results.append(CategoryResult(category=entry.category, candidates=[]))
+            results.append(
+                CategoryResult(
+                    category=entry.category,
+                    candidates=[],
+                    status=SCAN_STATUS_FAILED,
+                    error={"reason": SCAN_FAILURE_REASON, "exception": type(exc).__name__},
+                )
+            )
     return results

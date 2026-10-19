@@ -11944,6 +11944,12 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
                     "description": r.description,
                     "candidates": [c.to_dict() for c in r.candidates[:lim]],
                     "count": len(r.candidates),
+                    # FAR-1977: mirrors the REST ``HousekeepingCategory`` shape —
+                    # ``status`` is "ok" for a scanner that ran (empty = clean)
+                    # and "failed" for one that raised, whose ``error`` carries
+                    # the exception CLASS only (no message/traceback).
+                    "status": r.status,
+                    "error": r.error,
                 }
                 for r in results
             ],
