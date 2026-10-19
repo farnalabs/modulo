@@ -832,6 +832,35 @@ describe('RunDetailView coverage — script logic branches', () => {
       expect(wrapper.find('[data-testid="run-detail-cost-reported-badge"]').exists()).toBe(true)
     })
 
+    it('shows the badge on a breakdown entry carrying a per-datum provenance map with a reported value', async () => {
+      const wrapper = await mountWith(
+        baseRun({ cost_breakdown: [
+          { component: 'model', amount_usd: '0.500000', source: 'self_reported', provenance: { model_cost_usd: 'reported' } },
+        ] }),
+      )
+      expect(wrapper.find('[data-testid="run-detail-cost-reported-badge"]').exists()).toBe(true)
+    })
+
+    it('omits the badge on a per-datum provenance map carrying no reported value', async () => {
+      const wrapper = await mountWith(
+        baseRun({ cost_breakdown: [
+          { component: 'model', amount_usd: '0.500000', source: 'self_reported', provenance: { model_cost_usd: 'observed' } },
+        ] }),
+      )
+      expect(wrapper.find('[data-testid="run-detail-cost-reported-badge"]').exists()).toBe(false)
+    })
+
+    it('omits the badge for non-object provenance shapes (array, null) and non-reported scalars', async () => {
+      const withProvenance = (provenance: unknown) =>
+        baseRun({ cost_breakdown: [
+          { component: 'model', amount_usd: '0.500000', source: 'self_reported', provenance },
+        ] })
+      for (const provenance of [['reported'], null, 'observed']) {
+        const wrapper = await mountWith(withProvenance(provenance))
+        expect(wrapper.find('[data-testid="run-detail-cost-reported-badge"]').exists()).toBe(false)
+      }
+    })
+
     it('omits the badge on a breakdown entry without either field', async () => {
       const wrapper = await mountWith(
         baseRun({ cost_breakdown: [

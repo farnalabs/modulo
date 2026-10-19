@@ -1871,7 +1871,7 @@ function formatBreakdownAmount(value: string | number | undefined): string {
 function provenanceIsReported(provenance: unknown): boolean {
   if (typeof provenance === 'string') return provenance === 'reported'
   if (typeof provenance === 'object' && provenance !== null && !Array.isArray(provenance)) {
-    return Object.values(provenance).some(v => v === 'reported')
+    return Object.values(provenance).includes('reported')
   }
   return false
 }
