@@ -61,7 +61,7 @@ APP_DRAIN_DEADLINE_S="${APP_DRAIN_DEADLINE_S:-60}"
 # `if _pid_alive ...` and `set -e` is never tripped by the kill probe itself.
 _pid_alive() {
     local pid="$1"
-    [ -n "$pid" ] || return 1
+    [[ -n "$pid" ]] || return 1
     kill -0 "$pid" 2>/dev/null
 }
 
