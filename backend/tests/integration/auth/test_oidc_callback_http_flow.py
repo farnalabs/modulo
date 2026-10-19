@@ -431,10 +431,21 @@ def _jwt_payload(token: str) -> dict[str, Any]:
     return json.loads(_b64url_decode(token.split(".")[1]))
 
 
-def _signed_state(provider_id: str) -> str:
+def _bind_browser(client: AsyncClient, provider_id: str) -> str:
+    """Install the login-time binding cookie and return the matching signed state.
+
+    FAR-1979: the callback requires the login-time correlation cookie to match
+    the returned ``state``. These tests drive the callback directly (the login
+    leg is out of scope — see the module docstring), so this installs the cookie
+    a real browser would have received from the login redirect and returns the
+    state it is bound to.
+    """
+    from modulo.api.routes.sso import _OIDC_LOGIN_STATE_COOKIE
     from modulo.auth.sso import sign_state
 
-    return sign_state(f"{provider_id}:{uuid.uuid4()}", _SECRET_KEY)
+    raw_state = str(uuid.uuid4())
+    client.cookies.set(_OIDC_LOGIN_STATE_COOKIE, sign_state(raw_state, _SECRET_KEY))
+    return sign_state(f"{provider_id}:{raw_state}", _SECRET_KEY)
 
 
 @dataclass
@@ -534,11 +545,12 @@ async def test_oidc_callback_success_provisions_and_redirects_to_frontend_url(
         with (
             _idp_stubbed(world, id_token),
         ):
+            state = _bind_browser(client, world.provider_id)
             resp = await client.get(
                 _callback_url(world.provider_id),
                 params={
                     "code": "authorization-code-CB",
-                    "state": _signed_state(world.provider_id),
+                    "state": state,
                 },
             )
     finally:
@@ -600,11 +612,12 @@ async def test_oidc_callback_redirect_base_falls_back_to_public_url_when_fronten
     client = await oidc_app(frontend_url="")
     try:
         with _idp_stubbed(world, id_token):
+            state = _bind_browser(client, world.provider_id)
             resp = await client.get(
                 _callback_url(world.provider_id),
                 params={
                     "code": "authorization-code-FB",
-                    "state": _signed_state(world.provider_id),
+                    "state": state,
                 },
             )
     finally:
@@ -631,11 +644,12 @@ async def test_oidc_callback_join_gate_denial_is_clean_redirect_and_leaves_no_or
     client = await oidc_app()
     try:
         with _idp_stubbed(world, id_token):
+            state = _bind_browser(client, world.provider_id)
             resp = await client.get(
                 _callback_url(world.provider_id),
                 params={
                     "code": "authorization-code-DENIED",
-                    "state": _signed_state(world.provider_id),
+                    "state": state,
                 },
             )
     finally:
@@ -680,11 +694,12 @@ async def test_oidc_callback_consumes_pending_invitation_for_non_allowlisted_dom
     client = await oidc_app()
     try:
         with _idp_stubbed(world, id_token):
+            state = _bind_browser(client, world.provider_id)
             resp = await client.get(
                 _callback_url(world.provider_id),
                 params={
                     "code": "authorization-code-INV",
-                    "state": _signed_state(world.provider_id),
+                    "state": state,
                 },
             )
     finally:

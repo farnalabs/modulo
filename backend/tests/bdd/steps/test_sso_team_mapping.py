@@ -193,6 +193,21 @@ def _sign_state(provider_id: str, secret_key: str = _VALID_32) -> str:
     return sign_state(f"{provider_id}:{uuid.uuid4().hex}", secret_key)
 
 
+def _browser_bound_state(provider_id: str, secret_key: str = _VALID_32) -> tuple[str, dict[str, str]]:
+    """Return ``(signed_state, cookies)`` for the FAR-1979 browser binding.
+
+    The callback requires the login-time correlation cookie to match the returned
+    ``state``; a real browser receives that cookie from the login redirect, so
+    these direct-callback steps carry it explicitly.
+    """
+    from modulo.api.routes.sso import _OIDC_LOGIN_STATE_COOKIE
+    from modulo.auth.sso import sign_state
+
+    raw_state = uuid.uuid4().hex
+    state = sign_state(f"{provider_id}:{raw_state}", secret_key)
+    return state, {_OIDC_LOGIN_STATE_COOKIE: sign_state(raw_state, secret_key)}
+
+
 def _setup_plan(license_key: str = _VALID_LICENSE_KEY) -> None:
     from modulo.api.main import app as _app
 
@@ -359,7 +374,7 @@ def get_group_mappings(provider_id: str, request: Any, ctx: dict[str, Any], clie
 def oidc_callback_with_groups(groups: str, request: Any, ctx: dict[str, Any], client: Any) -> None:
     _setup_oidc_client()
     settings = _oidc_settings()
-    signed = _sign_state("google", settings.secret_key)
+    signed, binding_cookies = _browser_bound_state("google", settings.secret_key)
     email = ctx.get("expected_email", "newuser@example.com")
     name = ctx.get("expected_name", email.split("@")[0])
     group_list = [g.strip() for g in groups.split(",") if g.strip()]
@@ -405,6 +420,8 @@ def oidc_callback_with_groups(groups: str, request: Any, ctx: dict[str, Any], cl
             "token_type": "bearer",
         }
 
+        for cookie_name, cookie_value in binding_cookies.items():
+            client.cookies.set(cookie_name, cookie_value)
         resp = client.get(
             f"/api/v1/auth/oidc/google/callback?code=authcode123&state={signed}",
             follow_redirects=False,
