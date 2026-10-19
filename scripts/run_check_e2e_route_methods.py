@@ -74,8 +74,9 @@ What is scanned (``frontend/tests/e2e/**/*.ts``):
   resolved). A catch-all mock
   (``**/api/v1/**``) is skipped silently only when it carries no method filter;
   one that mocks specific routes by URL and filters on the method is noted.
-  Anything the extractor encounters but cannot resolve safely is reported as one
-  explicit note on stderr (never a failure, never dropped silently).
+  Anything an interceptor registration encounters but cannot resolve safely is
+  reported as one explicit note on stderr (never a failure, never dropped
+  silently).
 
 Template placeholders (``${expr}``, ``:param``, ``{param}``) and glob
 wildcards normalise to one path-parameter segment: a whole ``*`` segment
@@ -128,13 +129,16 @@ one of:
 
 Accounting is per occurrence, not per line: a second, unmodelled call on a line
 that also carries a modelled call (``Promise.all([fetch(a), fetch(b, init)])``)
-is still a violation. An unaccounted API-call occurrence is a violation (exit 1)
-naming the line: a new call shape within the documented families fails loudly
-instead of passing. A method-reference line is reported as a note when
+is still a violation. An enumerated occurrence that cannot be analysed - one
+with no descriptor and no note - is a violation (exit 1) naming the line: a new
+call shape within the documented families fails loudly instead of passing. A call whose target is not an API path, or an absolute external URL
+that provably names no Modulo route, is excluded explicitly or noted at most; it
+is never a hard failure. A method-reference line is reported as a note when
 unaccounted - it names no route this checker can validate, but it is never
-dropped silently. A candidate is only excluded structurally when it is provably
-not a call (an ``apiFetch`` / ``fetchWithTransientRetry`` function declaration,
-an ``import``/``export`` binding, or a ``typeof`` type reference / assignment
+dropped silently.
+A candidate is only excluded structurally when it is provably not a call (an
+``apiFetch`` / ``fetchWithTransientRetry`` function declaration, an
+``import``/``export`` binding, or a ``typeof`` type reference / assignment
 target).
 
 What the ledger does NOT check: it is a syntactic scan, not a JavaScript
@@ -150,17 +154,22 @@ an accident of the current marker list.
 Contract freeze
 ---------------
 
-The syntax families documented above are FROZEN. Within those documented callee
-families, a shape the extractor cannot resolve is reported as a note (or, where
-an absolute external URL provably names no Modulo route, excluded explicitly and
-by design) - never a hard failure and never silence. That guarantee does NOT
-extend to HTTP clients outside the documented families: ``axios``, ``ofetch``,
-``ky`` and custom wrappers/transports that are not spelled as one of the
-documented callees (``fetch``, ``fetchWithTransientRetry``, ``apiFetch``, or a
-Playwright ``page.request`` / ``context.request`` / ``request`` verb) are NOT
-scanned, so a request made only through them is invisible to this guard - no
-descriptor, no note and no violation. Adding a family is a deliberate contract
-change with its own tests, not an opportunistic extension of the extractor.
+The syntax families documented above are FROZEN. Within those documented
+families every enumerated occurrence is accounted for: it is a descriptor, an
+explicit note, or - when it is an API-shaped occurrence the extractor cannot
+analyse - an unaccounted-occurrence violation (exit 1), exactly as the coverage
+ledger above states. Documented shapes that name no route this checker can
+validate (a method-reference line, a whole-path ternary, an absolute external
+URL that provably names no Modulo route) are noted or excluded explicitly - at
+most a note, never a hard failure, and never silence within the scanned
+families. That guarantee of visibility does NOT extend to HTTP clients outside
+the documented families: ``axios``, ``ofetch``, ``ky`` and custom
+wrappers/transports that are not spelled as one of the documented callees
+(``fetch``, ``fetchWithTransientRetry``, ``apiFetch``, or a Playwright
+``page.request`` / ``context.request`` / ``request`` verb) are NOT scanned, so a
+request made only through them is invisible to this guard - no descriptor, no
+note and no violation. Adding a family is a deliberate contract change with its
+own tests, not an opportunistic extension of the extractor.
 
 An absolute external URL (``http://`` / ``https://``) whose literal carries no
 ``/api/`` segment is not a Modulo API candidate: it names another origin, so no
@@ -181,6 +190,15 @@ is reported as a note, so those cases stay visible.) These residual shapes are
 tracked for an AST-based rewrite of this check; until then this docstring is the
 contract, and the limitation above is pinned by a test so it cannot drift
 silently.
+
+A separate unscanned shape is a Playwright fixture root renamed outside the
+documented binding forms. ``async ({ page: adminPage }) => { await
+adminPage.request.get('/api/v1/pipelines') }`` destructures ``page`` under a new
+name; a separate ``const adminPage = page`` alias, and a later ``await
+adminPage.route(...)``, are likewise not recognised as the ``page`` root.
+Requests made only through such a renamed root produce no descriptor, no note
+and no violation. This limitation is not modelled here; the AST rewrite is
+tracked separately and pins it with a test.
 
 Exit codes: 0 clean, 1 stale descriptors or unanalysed call shapes (one line
 each, with file:line, the method, the path and the closest live route), 2
@@ -490,12 +508,107 @@ def _blank_literal(text: str, out: list[str], start: int) -> int:
     return length
 
 
+#: Characters after which a ``/`` starts a regex literal rather than a division.
+#: ``>`` covers ``=>``; the doubled operators are covered by their last char.
+_REGEX_PRECEDING_CHARS = frozenset("=(,:;([{!&|?>")
+
+
+def _regex_preceding_word(text: str, index: int) -> str:
+    """Return the identifier immediately before *index*, or an empty string."""
+    cursor = index - 1
+    while cursor >= 0 and text[cursor] in " \t\r":
+        cursor -= 1
+    if cursor < 0 or not (text[cursor].isalnum() or text[cursor] in "_$"):
+        return ""
+    end = cursor + 1
+    while cursor >= 0 and (text[cursor].isalnum() or text[cursor] in "_$"):
+        cursor -= 1
+    return text[cursor + 1 : end]
+
+
+def _regex_starts_here(text: str, index: int) -> bool:
+    """Whether the ``/`` at *index* is in an expression position (a regex literal).
+
+    A ``/`` after an operand is division (``a / b``, ``(a) / b``, ``/re/.test(x) / 2``);
+    a ``/`` after an operator, an opening bracket, a comma, a colon or a keyword
+    such as ``return`` begins a regex literal. A ``/`` at the start of a line can
+    only be a regex or a comment - division never starts a line under ASI.
+    """
+    cursor = index - 1
+    while cursor >= 0 and text[cursor] in " \t\r":
+        cursor -= 1
+    if cursor < 0 or text[cursor] == "\n":
+        return True
+    if text[cursor] in _REGEX_PRECEDING_CHARS:
+        return True
+    return _regex_preceding_word(text, index) in {
+        "return",
+        "case",
+        "throw",
+        "typeof",
+        "delete",
+        "void",
+        "new",
+        "in",
+        "of",
+        "instanceof",
+        "yield",
+        "await",
+        "do",
+        "else",
+    }
+
+
+def _regex_literal_end(text: str, start: int) -> int | None:
+    """Return the index just after the regex literal at *start*, or ``None``.
+
+    A regex ends at the next unescaped ``/`` on the same line, ignoring a ``/``
+    inside a ``[...]`` character class and a ``\\/`` escape. Flags after the
+    closing slash are consumed too. A newline before the terminator means this
+    is not a same-line regex (so the caller leaves the text alone).
+    """
+    index = start + 1
+    length = len(text)
+    in_class = False
+    while index < length:
+        char = text[index]
+        if char == "\n":
+            return None
+        if char == "\\":
+            if index + 1 >= length or text[index + 1] == "\n":
+                return None
+            index += 2
+            continue
+        if in_class:
+            if char == "]":
+                in_class = False
+            index += 1
+            continue
+        if char == "[":
+            in_class = True
+            index += 1
+            continue
+        if char == "/":
+            end = index + 1
+            while end < length and (text[end].isalnum() or text[end] in "_$"):
+                end += 1
+            return end
+        index += 1
+    return None
+
+
 def mask_non_code(text: str) -> str:
-    """Return *text* with comments and string/template contents blanked to spaces.
+    """Return *text* with comments and string/template/regex contents blanked to spaces.
 
     Offsets and newlines are preserved, so structural scanning (parens, commas,
     identifiers) can never be confused by a bracket or comma inside a literal
     or a comment, while line numbers still line up with the original file.
+
+    Regex literals are blanked too: their body is code-shaped to a text scanner
+    (an apostrophe in ``/don't/`` would otherwise open a string and blank the
+    rest of the file, hiding every later call). A ``/`` is only treated as a
+    regex delimiter in an expression position, so division (``a / b``) is left
+    alone.
     """
     out = list(text)
     index = 0
@@ -518,6 +631,14 @@ def mask_non_code(text: str) -> str:
         if char in ("'", '"', "`"):
             index = _blank_literal(text, out, index)
             continue
+        if char == "/" and _regex_starts_here(text, index):
+            end = _regex_literal_end(text, index)
+            if end is not None:
+                for cursor in range(index, end):
+                    if out[cursor] != "\n":
+                        out[cursor] = " "
+                index = end
+                continue
         index += 1
     return "".join(out)
 

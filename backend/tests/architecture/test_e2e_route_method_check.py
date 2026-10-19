@@ -2107,3 +2107,78 @@ def test_documented_limitation_dynamic_property_access_is_not_enumerated() -> No
         assert not calls
         assert not notes
         assert not unanalysed
+
+
+def test_regex_literal_apostrophe_does_not_hide_a_later_stale_call() -> None:
+    # A regex body is code-shaped to a text scanner: the apostrophe in
+    # ``/don't/`` used to open a string literal and blank the rest of the file,
+    # so every call below it was silently skipped (calls=[], exit 0). A stale
+    # call must still be enumerated and reported.
+    source = "const label = /don't/\nawait apiFetch(apiBase, token, 'PATCH', '/api/v1/pipelines/1/graph')\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].method == "PATCH"
+
+    violations = _violations(source)
+
+    assert len(violations) == 1
+    assert "not PATCH" in violations[0].detail
+
+
+def test_regex_literal_escapes_and_character_classes_terminate() -> None:
+    # ``\/`` is an escaped slash and a ``/`` inside ``[...]`` belongs to the
+    # character class, so neither ends the regex early and leaks the rest of
+    # the literal into the structural scan.
+    source = "const pattern = /a\\/b[c/d]/\nawait apiFetch(apiBase, token, 'PATCH', '/api/v1/pipelines/1/graph')\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert len(_violations(source)) == 1
+
+
+def test_division_is_not_masked_as_a_regex_literal() -> None:
+    # A ``/`` after an operand is division, not a regex delimiter, so its line
+    # must survive masking intact and the call below it must still be found.
+    source = "const ratio = total / count / scale\nawait apiFetch(apiBase, token, 'PUT', '/api/v1/pipelines/1/graph')\n"
+
+    masked = _checker.mask_non_code(source)
+
+    assert "total / count / scale" in masked
+    assert "(a) / b" in _checker.mask_non_code("const ratio = (a) / b\n")
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].method == "PUT"
+    assert not _violations(source)
+
+
+def test_documented_limitation_renamed_page_fixture_root_is_not_enumerated() -> None:
+    # KNOWN LIMITATION, see the module docstring's "Known limitations" section;
+    # the AST rewrite is tracked separately.
+    #
+    # A Playwright ``page`` fixture renamed outside the documented binding forms
+    # is not recognised as the ``page`` root, so requests made through it are
+    # invisible: no descriptor, no note and no unanalysed entry. This pins that
+    # boundary so it cannot drift silently; if a future change starts
+    # enumerating these shapes, this test fails and the docstring must change
+    # with it.
+    for source in (
+        # Renamed fixture root in the test callback.
+        "test('x', async ({ page: adminPage }) => {\n  await adminPage.request.get('/api/v1/pipelines')\n})\n",
+        # Alias assignment: ``adminPage`` is not recognised as ``page``.
+        "const adminPage = page\nawait adminPage.request.get('/api/v1/pipelines')\n",
+        # Kept for symmetry - an alias ``route`` registration is unscanned too.
+        "const adminPage = page\nawait adminPage.route('**/api/v1/pipelines', () => {})\n",
+    ):
+        notes: list[str] = []
+        unanalysed: list[str] = []
+
+        calls = _checker.extract_http_calls(source, FILENAME, notes, unanalysed)
+
+        assert not calls
+        assert not notes
+        assert not unanalysed
