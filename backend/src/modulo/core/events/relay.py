@@ -97,14 +97,29 @@ class EventRelay:
         """True when this relay is bound to *broker* (singleton reuse check)."""
         return self._broker is broker
 
-    async def acquire(self, org_id: str) -> None:
-        """Register one SSE client for *org_id*; subscribe on the first one."""
+    def acquire(self, org_id: str) -> None:
+        """Register one SSE client for *org_id*; subscribe on the first one.
+
+        Sync by design: it registers no await work of its own, and the
+        subscription task must be created on the process's running loop. The
+        loop is captured through the same guarded ``get_running_loop`` idiom
+        ``start()`` uses, so a loop-less caller fails open with a log rather
+        than raising from ``create_task``.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Fail open with a log, the same idiom as start(): acquire() is
+            # reached only from the async SSE route, which always has a loop,
+            # and the caller treats a relay failure as non-fatal.
+            _log.warning("event_relay.acquire_skipped_no_loop")
+            return
         count = self._refcounts.get(org_id, 0) + 1
         self._refcounts[org_id] = count
         if count == 1:
             ready = asyncio.Event()
             self._ready[org_id] = ready
-            task = asyncio.create_task(self._org_loop(org_id, ready))
+            task = loop.create_task(self._org_loop(org_id, ready))
             self._org_tasks[org_id] = task
             self._org_tasks_held.add(task)
             task.add_done_callback(self._org_tasks_held.discard)
@@ -136,7 +151,10 @@ class EventRelay:
 
     async def aclose(self) -> None:
         """Stop every org subscription and the sweeper (process teardown)."""
-        for org_id in list(self._org_tasks):
+        # An immutable snapshot: ``_stop_org`` removes the org from
+        # ``_org_tasks``, so iterating the live mapping would raise
+        # "dictionary changed size during iteration".
+        for org_id in tuple(self._org_tasks):
             await self._stop_org(org_id)
         sweeper = self._sweeper
         self._sweeper = None
@@ -197,7 +215,9 @@ class EventRelay:
         interval = max(self._idle_ttl / _IDLE_SWEEP_DIVISOR, 0.05)
         while True:
             await asyncio.sleep(interval)
-            for org_id in list(self._org_tasks):
+            # Immutable snapshot: ``_stop_org`` removes the org from
+            # ``_org_tasks`` (dictionary changed size during iteration otherwise).
+            for org_id in tuple(self._org_tasks):
                 if self._has_clients(org_id):
                     continue
                 _log.info("event_relay.idle_sweep_stop", extra={"org_id": org_id})
@@ -215,17 +235,9 @@ class EventRelay:
                 await self._broker.connect()
                 pubsub = await self._broker.subscribe(f"resource:{org_id}")
                 async for message in pubsub.listen():
-                    msg_type = message.get("type")
-                    if msg_type == "subscribe":
-                        # Subscription confirmation drained — safe to publish
-                        # against this subscription without a lost-message race.
+                    if await self._handle_subscription_frame(org_id, message, ready):
                         established = True
                         backoff = _BACKOFF_BASE_SECONDS
-                        ready.set()
-                        continue
-                    if msg_type != "message":
-                        continue
-                    await self._handle_payload(org_id, message.get("data"))
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -242,6 +254,21 @@ class EventRelay:
             # listen() returning without error (server-side unsubscribe):
             # resubscribe immediately without backoff (no gap to recover).
             ready.clear()
+
+    async def _handle_subscription_frame(self, org_id: str, message: Any, ready: asyncio.Event) -> bool:
+        """Handle one pub/sub frame; ``True`` when it was the subscribe ack.
+
+        The ack means the subscription is confirmed drained, so it is safe to
+        publish against this subscription without a lost-message race.
+        """
+        msg_type = message.get("type")
+        if msg_type == "subscribe":
+            ready.set()
+            return True
+        if msg_type != "message":
+            return False
+        await self._handle_payload(org_id, message.get("data"))
+        return False
 
     async def _sleep_backoff(self, delay: float) -> None:
         await asyncio.sleep(delay)

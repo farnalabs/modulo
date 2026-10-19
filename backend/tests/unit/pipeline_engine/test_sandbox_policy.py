@@ -470,6 +470,23 @@ async def test_apply_sandbox_policy_scoped_without_allowed_hosts_is_single_host(
 
 
 @pytest.mark.asyncio
+async def test_apply_sandbox_policy_git_credentials_none_installs_refuse_helper() -> None:
+    """``git_credentials="none"`` must install the always-refusing helper, not
+    skip the step: the capability certifies that no inherited credential can
+    reach the agent."""
+    sandbox = _FakeSandbox()
+    await apply_sandbox_policy(
+        sandbox,
+        read_only=False,
+        git_credentials="none",
+        egress_policy="default",
+        egress_allowlist=None,
+    )
+    assert len(sandbox.commands.runs) == 1
+    assert "modulo-git-refuse-helper.sh" in sandbox.commands.runs[0]
+
+
+@pytest.mark.asyncio
 async def test_apply_sandbox_policy_multi_host_invalid_host_raises() -> None:
     """FAR-798 (review finding #3): a host containing shell-case metacharacters
     must fail-closed (raise) rather than emit an injectable helper."""
@@ -1679,11 +1696,15 @@ async def test_harvest_bounded_returns_the_probe_result() -> None:
 
 
 @pytest.mark.asyncio
-async def test_harvest_bounded_timeout_cancels_and_drains_the_probe() -> None:
+async def test_harvest_bounded_timeout_cancels_and_drains_the_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The re-gate's shield finding: on TIMEOUT the old ``wait_for(shield(...))``
     returned while the inner probe task kept running against a container the
     teardown was about to destroy (and never awaited it). The wrapper must
     return ``None`` (receipt unknown) AND leave no live probe behind."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
     started = asyncio.Event()
     probe_cancelled = asyncio.Event()
 
@@ -1696,7 +1717,10 @@ async def test_harvest_bounded_timeout_cancels_and_drains_the_probe() -> None:
             raise
         return SimpleNamespace(exit_code=0, stdout="", stderr="")  # pragma: no cover
 
-    result = await harvest_gh_pr_claim_bounded(_hang, run_scope=str(uuid.uuid4()), timeout=0.05)
+    # The bound now lives on the module (the harvest owns its own
+    # asyncio.timeout context manager), so shorten it for the test.
+    monkeypatch.setattr(sandbox_policy, "_HARVEST_PROBE_TIMEOUT_S", 0.05)
+    result = await harvest_gh_pr_claim_bounded(_hang, run_scope=str(uuid.uuid4()))
     assert result is None, "a timed-out harvest must report the receipt as UNKNOWN"
     # The probe task must be cancelled, not left running against the container
     # the teardown that follows is about to destroy.

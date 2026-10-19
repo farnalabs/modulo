@@ -1259,29 +1259,13 @@ def _check_sandbox_git_content_values(
       and pins movable refs at plan time before writing.
     """
     from modulo.core.pipeline_engine.git_content import (
-        GIT_CONTENT_LIST_FIELDS,
-        GIT_CONTENT_PREFIX,
         GitContentRefError,
         git_content_values,
         is_git_content_ref,
         parse_git_content_ref,
     )
 
-    for key in GIT_CONTENT_LIST_FIELDS:
-        items = node.get(key)
-        if not isinstance(items, list) or len(items) <= 1:
-            continue
-        for index, item in enumerate(items):
-            if isinstance(item, str) and GIT_CONTENT_PREFIX in item:
-                result.error(
-                    "GIT_CONTENT_REF_NOT_WHOLE_FIELD",
-                    f"{context} {key}[{index}] contains a git content ref among "
-                    f"{len(items)} commands — git content refs must be the whole "
-                    f"field, not one command of several (use a single-item {key} "
-                    "list whose only entry is the ref, or inline the content)",
-                    node_id=nid,
-                )
-                break
+    _report_non_whole_field_git_refs(node, nid, result, context)
 
     for label, value in git_content_values(node):
         if not is_git_content_ref(value):
@@ -1304,6 +1288,44 @@ def _check_sandbox_git_content_values(
                 "automatically)",
                 node_id=nid,
             )
+
+
+def _find_mixed_git_ref_index(items: list[Any], prefix: str) -> int | None:
+    """Index of the first list item carrying a ``git+`` token, else ``None``."""
+    for index, item in enumerate(items):
+        if isinstance(item, str) and prefix in item:
+            return index
+    return None
+
+
+def _report_non_whole_field_git_refs(
+    node: dict[str, Any],
+    nid: str,
+    result: ValidationResult,
+    context: str,
+) -> None:
+    """Reject a ``git+`` ref that is only ONE command among several (FAR-220).
+
+    List items are joined into a single shell string before dispatch, so a ref
+    can only be honoured as the SOLE item of the field (whole-field semantics).
+    """
+    from modulo.core.pipeline_engine.git_content import GIT_CONTENT_LIST_FIELDS, GIT_CONTENT_PREFIX
+
+    for key in GIT_CONTENT_LIST_FIELDS:
+        items = node.get(key)
+        if not isinstance(items, list) or len(items) <= 1:
+            continue
+        index = _find_mixed_git_ref_index(items, GIT_CONTENT_PREFIX)
+        if index is None:
+            continue
+        result.error(
+            "GIT_CONTENT_REF_NOT_WHOLE_FIELD",
+            f"{context} {key}[{index}] contains a git content ref among "
+            f"{len(items)} commands — git content refs must be the whole "
+            f"field, not one command of several (use a single-item {key} "
+            "list whose only entry is the ref, or inline the content)",
+            node_id=nid,
+        )
 
 
 def _check_sandbox_git_content(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
@@ -1534,6 +1556,23 @@ def _index_nodes_by_id(nodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
         if nid is not None:
             nodes_by_id[str(nid)] = n
     return nodes_by_id
+
+
+def _bindings_nodes_by_id(graph_json: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Index a graph's nodes by id for the connector-binding checks (FAR-1667).
+
+    Guarded: a graph we cannot read yields an empty map (the caller then skips
+    each binding's capability check with a log rather than rejecting).
+    """
+    if not isinstance(graph_json, dict):
+        return {}
+    raw_nodes = graph_json.get("nodes")
+    if not isinstance(raw_nodes, list):
+        return {}
+    # Reuse the module's node indexer (it already drops id-less nodes); filter
+    # to mapping nodes first so a malformed entry is dropped rather than raising
+    # on ``.get``.
+    return _index_nodes_by_id([n for n in raw_nodes if isinstance(n, dict)])
 
 
 def _parallel_fanout_normal_edges(
@@ -2082,50 +2121,15 @@ class GraphValidator:
         brick legacy pipelines whose gates predate the requirement; their
         briefing UI renders the muted no-description fallback instead.
         """
-        nodes = graph_json.get("nodes", [])
-        node_type_by_id: dict[str, str] = {}
-        for node in nodes:
-            if isinstance(node, dict) and node.get("id") is not None:
-                node_type_by_id[str(node["id"])] = str(node.get("node_type") or "agent")
-
-        for node in nodes:
-            if not isinstance(node, dict) or node.get("node_type") != "hitl":
+        for config, source_label, node_id in self._iter_hitl_review_configs(graph_json):
+            if not self._hitl_description_issue(config):
                 continue
-            nid = str(node.get("id", ""))
-            if self._hitl_description_issue(node.get("hitl_config")):
-                result.error(
-                    "HITL_REVIEW_DESCRIPTION_REQUIRED",
-                    f"HITL review on node '{nid}' requires a human-provided description "
-                    f"(min {HITL_DESCRIPTION_MIN_LENGTH} chars) explaining why this gate exists",
-                    node_id=nid,
-                )
-
-        for edge in graph_json.get("edges", []):
-            if not isinstance(edge, dict):
-                continue
-            hitl_config = edge.get("hitl_review_config")
-            if not isinstance(hitl_config, dict):
-                continue
-            source = edge.get("source")
-            if source is None:
-                source = edge.get("source_node_id")
-            target = edge.get("target")
-            if target is None:
-                target = edge.get("target_node_id")
-            if self._hitl_description_issue(hitl_config):
-                # A node-level gate's config is INJECTED onto its outgoing
-                # edges at compile time (graph_cache); in a persisted
-                # definition the node carries it and the edge does not, but a
-                # composite-expanded / compiled graph may present the edge
-                # shape — report it under whichever node type the source is.
-                if str(source) in node_type_by_id and node_type_by_id[str(source)] == "hitl":
-                    continue  # already reported by the node-level pass
-                result.error(
-                    "HITL_REVIEW_DESCRIPTION_REQUIRED",
-                    f"HITL review on edge '{source}->{target}' requires a human-provided description "
-                    f"(min {HITL_DESCRIPTION_MIN_LENGTH} chars) explaining why this gate exists",
-                    node_id=_string_or_default(source),
-                )
+            result.error(
+                "HITL_REVIEW_DESCRIPTION_REQUIRED",
+                f"HITL review on {source_label} requires a human-provided description "
+                f"(min {HITL_DESCRIPTION_MIN_LENGTH} chars) explaining why this gate exists",
+                node_id=node_id,
+            )
 
     @staticmethod
     def _check_hitl_subject_path(
@@ -2165,29 +2169,27 @@ class GraphValidator:
             )
 
     @staticmethod
-    def _iter_hitl_review_configs(graph_json: dict[str, Any]) -> Iterator[tuple[Any, str]]:
-        """Yield ``(config, source_label)`` for every HITL gate config in the graph.
-
-        Shared by the ``subject_path`` and ``response_contract`` checks (FAR-860)
-        so the node-level / edge-level walk — including the skip of edge configs
-        that belong to a node-level gate — cannot drift between them.
-
-        Checks both edge-level ``hitl_review_config`` and node-level
-        ``hitl_config`` (the latter bypasses Pydantic entirely, so these checks
-        are the ONLY save-time gate for node configs).
-        """
-        nodes = graph_json.get("nodes", [])
-        node_type_by_id: dict[str, str] = {}
+    def _node_type_index(nodes: Any) -> dict[str, str]:
+        """Map node id -> node_type for every id-bearing node (``agent`` default)."""
+        index: dict[str, str] = {}
         for node in nodes:
             if isinstance(node, dict) and node.get("id") is not None:
-                node_type_by_id[str(node["id"])] = str(node.get("node_type") or "agent")
+                index[str(node["id"])] = str(node.get("node_type") or "agent")
+        return index
 
+    @staticmethod
+    def _iter_hitl_node_configs(nodes: Any) -> Iterator[tuple[Any, str, str]]:
+        """Yield ``(config, source_label, node_id)`` for every node-level HITL gate."""
         for node in nodes:
             if not isinstance(node, dict) or node.get("node_type") != "hitl":
                 continue
-            yield node.get("hitl_config"), f"node '{node.get('id', '')}'"
+            node_id = str(node.get("id", ""))
+            yield node.get("hitl_config"), f"node '{node_id}'", node_id
 
-        for edge in graph_json.get("edges", []):
+    @staticmethod
+    def _iter_hitl_edge_configs(edges: Any, node_type_by_id: dict[str, str]) -> Iterator[tuple[Any, str, str]]:
+        """Yield edge-level HITL gate configs that are NOT a node-level gate's echo."""
+        for edge in edges:
             if not isinstance(edge, dict):
                 continue
             hitl_config = edge.get("hitl_review_config")
@@ -2199,11 +2201,32 @@ class GraphValidator:
             target = edge.get("target")
             if target is None:
                 target = edge.get("target_node_id")
-            # Skip edge-level configs that belong to a node-level gate
-            # (already yielded by the node pass above — avoid double-reporting).
+            # A node-level gate's config is INJECTED onto its outgoing edges at
+            # compile time (graph_cache); in a persisted definition the node
+            # carries it and the edge does not, but a composite-expanded /
+            # compiled graph may present the edge shape. Skip the edge echo so
+            # it is reported once, under the node it belongs to.
             if str(source) in node_type_by_id and node_type_by_id[str(source)] == "hitl":
                 continue
-            yield hitl_config, f"edge '{source}->{target}'"
+            yield hitl_config, f"edge '{source}->{target}'", _string_or_default(source)
+
+    @staticmethod
+    def _iter_hitl_review_configs(graph_json: dict[str, Any]) -> Iterator[tuple[Any, str, str]]:
+        """Yield ``(config, source_label, node_id)`` for every HITL gate config.
+
+        Shared by the ``description``, ``subject_path``, ``response_contract``
+        and ``on_reject`` checks (FAR-860) so the node-level / edge-level walk —
+        including the skip of edge configs that belong to a node-level gate —
+        cannot drift between them.
+
+        Checks both edge-level ``hitl_review_config`` and node-level
+        ``hitl_config`` (the latter bypasses Pydantic entirely, so these checks
+        are the ONLY save-time gate for node configs).
+        """
+        nodes = graph_json.get("nodes", [])
+        node_type_by_id = GraphValidator._node_type_index(nodes)
+        yield from GraphValidator._iter_hitl_node_configs(nodes)
+        yield from GraphValidator._iter_hitl_edge_configs(graph_json.get("edges", []), node_type_by_id)
 
     @staticmethod
     def _check_hitl_review_subject_paths(graph_json: dict[str, Any], result: ValidationResult) -> None:
@@ -2213,7 +2236,7 @@ class GraphValidator:
         ``hitl_config`` (the latter bypasses Pydantic's ``max_length``
         entirely — this is the ONLY save-time gate for node configs).
         """
-        for config, source_label in GraphValidator._iter_hitl_review_configs(graph_json):
+        for config, source_label, _node_id in GraphValidator._iter_hitl_review_configs(graph_json):
             GraphValidator._check_hitl_subject_path(config, source_label, result)
 
     @staticmethod
@@ -2253,43 +2276,54 @@ class GraphValidator:
                 f"HITL review on {source_label}: response_contract.kind must be 'approval' or 'choice', got {kind!r}",
             )
             return
+        if kind != "choice":
+            return
         options = rc.get("options")
-        if kind == "choice":
-            if not isinstance(options, list) or not options:
-                result.error(
-                    "HITL_RESPONSE_CONTRACT_CHOICE_REQUIRES_OPTIONS",
-                    f"HITL review on {source_label}: response_contract kind 'choice' requires a non-empty options list",
-                )
-                return
-            seen_ids: set[str] = set()
-            for i, opt in enumerate(options):
-                if not isinstance(opt, dict):
-                    result.error(
-                        "HITL_RESPONSE_CONTRACT_INVALID_OPTION",
-                        f"HITL review on {source_label}: response_contract option {i} must be an object",
-                    )
-                    continue
-                opt_id = opt.get("id")
-                opt_label = opt.get("label")
-                if not isinstance(opt_id, str) or not opt_id.strip():
-                    result.error(
-                        "HITL_RESPONSE_CONTRACT_OPTION_MISSING_ID",
-                        f"HITL review on {source_label}: response_contract option {i} must have a non-empty string id",
-                    )
-                    continue
-                if not isinstance(opt_label, str) or not opt_label.strip():
-                    result.error(
-                        "HITL_RESPONSE_CONTRACT_OPTION_MISSING_LABEL",
-                        f"HITL review on {source_label}: response_contract"
-                        f" option {i} must have a non-empty string label",
-                    )
-                    continue
-                if opt_id in seen_ids:
-                    result.error(
-                        "HITL_RESPONSE_CONTRACT_DUPLICATE_OPTION_ID",
-                        f"HITL review on {source_label}: response_contract has duplicate option id {opt_id!r}",
-                    )
-                seen_ids.add(opt_id)
+        if not isinstance(options, list) or not options:
+            result.error(
+                "HITL_RESPONSE_CONTRACT_CHOICE_REQUIRES_OPTIONS",
+                f"HITL review on {source_label}: response_contract kind 'choice' requires a non-empty options list",
+            )
+            return
+        seen_ids: set[str] = set()
+        for i, opt in enumerate(options):
+            GraphValidator._check_hitl_response_option(opt, i, source_label, seen_ids, result)
+
+    @staticmethod
+    def _check_hitl_response_option(
+        opt: Any,
+        index: int,
+        source_label: str,
+        seen_ids: set[str],
+        result: ValidationResult,
+    ) -> None:
+        """Validate one ``choice`` option and record its id in *seen_ids*."""
+        if not isinstance(opt, dict):
+            result.error(
+                "HITL_RESPONSE_CONTRACT_INVALID_OPTION",
+                f"HITL review on {source_label}: response_contract option {index} must be an object",
+            )
+            return
+        opt_id = opt.get("id")
+        opt_label = opt.get("label")
+        if not isinstance(opt_id, str) or not opt_id.strip():
+            result.error(
+                "HITL_RESPONSE_CONTRACT_OPTION_MISSING_ID",
+                f"HITL review on {source_label}: response_contract option {index} must have a non-empty string id",
+            )
+            return
+        if not isinstance(opt_label, str) or not opt_label.strip():
+            result.error(
+                "HITL_RESPONSE_CONTRACT_OPTION_MISSING_LABEL",
+                f"HITL review on {source_label}: response_contract option {index} must have a non-empty string label",
+            )
+            return
+        if opt_id in seen_ids:
+            result.error(
+                "HITL_RESPONSE_CONTRACT_DUPLICATE_OPTION_ID",
+                f"HITL review on {source_label}: response_contract has duplicate option id {opt_id!r}",
+            )
+        seen_ids.add(opt_id)
 
     @staticmethod
     def _check_hitl_review_response_contracts(graph_json: dict[str, Any], result: ValidationResult) -> None:
@@ -2299,7 +2333,7 @@ class GraphValidator:
         ``hitl_config`` (the latter bypasses Pydantic entirely — this is
         the ONLY save-time gate for node configs).
         """
-        for config, source_label in GraphValidator._iter_hitl_review_configs(graph_json):
+        for config, source_label, _node_id in GraphValidator._iter_hitl_review_configs(graph_json):
             GraphValidator._check_hitl_response_contract(config, source_label, result)
 
     @staticmethod
@@ -2311,7 +2345,7 @@ class GraphValidator:
         be ``"terminate"`` (the default) or ``"proceed"`` - a typo must fail
         loudly rather than silently fall back to the default disposition.
         """
-        for config, source_label in GraphValidator._iter_hitl_review_configs(graph_json):
+        for config, source_label, _node_id in GraphValidator._iter_hitl_review_configs(graph_json):
             if not isinstance(config, dict):
                 continue
             on_reject = config.get("on_reject")
@@ -2730,14 +2764,7 @@ class GraphValidator:
         # node's ROUTED verb (the extracted binding rows carry the instance id
         # alone). Guarded: a graph we cannot read yields an empty map, and every
         # binding then skips its capability check (fail-open-with-log below).
-        nodes_by_id: dict[str, dict[str, Any]] = {}
-        if isinstance(graph_json, dict):
-            raw_nodes = graph_json.get("nodes")
-            if isinstance(raw_nodes, list):
-                # Reuse the module's node indexer (it already drops id-less
-                # nodes); filter to mapping nodes first so a malformed entry is
-                # dropped rather than raising on ``.get``.
-                nodes_by_id = _index_nodes_by_id([n for n in raw_nodes if isinstance(n, dict)])
+        nodes_by_id = _bindings_nodes_by_id(graph_json)
 
         # FAR-1141 (MAJOR 8): a dispatch binding must target a connector whose
         # TYPE implements the CI-runner contract. Runs off the GRAPH (the
@@ -2749,67 +2776,86 @@ class GraphValidator:
         self._check_dispatch_binding_capabilities(graph_json, found, result)
 
         for binding in bindings:
-            node_id: str | None = str(binding.get("node_id")) if binding.get("node_id") else None
-            cid_obj = try_parse_uuid(binding.get("connector_instance_id"))
-            if cid_obj is None:
-                continue
-            cid = cid_obj
-            instance = found.get(cid)
+            self._check_one_connector_binding(binding, found, nodes_by_id, result)
 
-            if instance is None:
-                result.error("CONNECTOR_NOT_FOUND", f"Connector instance {cid} not found", node_id)
-                continue
+    @staticmethod
+    def _check_one_connector_binding(
+        binding: dict[str, Any],
+        found: dict[uuid.UUID, ConnectorInstance],
+        nodes_by_id: dict[str, dict[str, Any]],
+        result: ValidationResult,
+    ) -> None:
+        """Validate one connector binding: existence, activity, routed ACL."""
+        node_id: str | None = str(binding.get("node_id")) if binding.get("node_id") else None
+        cid = try_parse_uuid(binding.get("connector_instance_id"))
+        if cid is None:
+            return
+        instance = found.get(cid)
 
-            if instance.status != "active":
+        if instance is None:
+            result.error("CONNECTOR_NOT_FOUND", f"Connector instance {cid} not found", node_id)
+            return
+
+        if instance.status != "active":
+            result.error(
+                "CONNECTOR_INACTIVE",
+                f"Connector {cid} ({instance.name!r}) has status {instance.status!r}",
+                node_id,
+            )
+
+        # FAR-1667: derive the required ACL operations from the node's ROUTED
+        # verb — never from a declared ``required_operations`` key (no producer
+        # ever populated one, so the old check was unreachable).
+        node = nodes_by_id.get(node_id) if node_id is not None else None
+        if node is None:
+            # A binding row whose node is absent from the graph is a harness
+            # bug, not customer input: fail open with a log, never reject.
+            _log.warning(
+                "graph_validator.connector_binding_node_missing",
+                extra={"connector_instance_id": str(cid), "node_id": node_id},
+            )
+            return
+        if not node_routes_binding_to_connector(node):
+            # Dead configuration (an ``agent`` node with an ``agent_id``, a
+            # ``sandbox_agent``): the engine never routes this binding, so
+            # there is no verb to gate.
+            return
+        GraphValidator._check_binding_acl(instance, node, cid, node_id, result)
+
+    @staticmethod
+    def _check_binding_acl(
+        instance: ConnectorInstance,
+        node: dict[str, Any],
+        cid: uuid.UUID,
+        node_id: str | None,
+        result: ValidationResult,
+    ) -> None:
+        required_ops = connector_binding_required_acl_operations(node)
+        if not required_ops:
+            return
+        # Ask the REAL runtime ACL so save-time validation and the hub can
+        # never disagree about what an ``allowed_operations`` value means
+        # (None/[] unrestricted, a non-empty allowlist restricts, a
+        # malformed value fails closed — the ACL owns all of it). The
+        # instance's own ``visibility`` is threaded through exactly as the
+        # hub does (``ci.visibility``); ``check`` does not enforce it today,
+        # but keeping the two construction sites identical avoids drift.
+        acl = ConnectorACL(
+            visibility=instance.visibility,
+            allowed_operations=instance.allowed_operations,
+            connector_type_id=instance.connector_type_id,
+        )
+        operation = connector_binding_operation(node)
+        for op in required_ops:
+            try:
+                acl.check(op)
+            except ConnectorPermissionError:
                 result.error(
-                    "CONNECTOR_INACTIVE",
-                    f"Connector {cid} ({instance.name!r}) has status {instance.status!r}",
+                    "CONNECTOR_MISSING_OPERATIONS",
+                    f"Connector {cid} ({instance.name!r}) does not allow {op!r} "
+                    f"required by node's {operation!r} operation",
                     node_id,
                 )
-
-            # FAR-1667: derive the required ACL operations from the node's
-            # ROUTED verb — never from a declared ``required_operations`` key
-            # (no producer ever populated one, so the old check was unreachable).
-            node = nodes_by_id.get(node_id) if node_id is not None else None
-            if node is None:
-                # A binding row whose node is absent from the graph is a harness
-                # bug, not customer input: fail open with a log, never reject.
-                _log.warning(
-                    "graph_validator.connector_binding_node_missing",
-                    extra={"connector_instance_id": str(cid), "node_id": node_id},
-                )
-                continue
-            if not node_routes_binding_to_connector(node):
-                # Dead configuration (an ``agent`` node with an ``agent_id``, a
-                # ``sandbox_agent``): the engine never routes this binding, so
-                # there is no verb to gate.
-                continue
-            required_ops = connector_binding_required_acl_operations(node)
-            if not required_ops:
-                continue
-            # Ask the REAL runtime ACL so save-time validation and the hub can
-            # never disagree about what an ``allowed_operations`` value means
-            # (None/[] unrestricted, a non-empty allowlist restricts, a
-            # malformed value fails closed — the ACL owns all of it). The
-            # instance's own ``visibility`` is threaded through exactly as the
-            # hub does (``ci.visibility``); ``check`` does not enforce it today,
-            # but keeping the two construction sites identical avoids drift.
-            acl = ConnectorACL(
-                visibility=instance.visibility,
-                allowed_operations=instance.allowed_operations,
-                connector_type_id=instance.connector_type_id,
-            )
-            operation = connector_binding_operation(node)
-            for op in required_ops:
-                try:
-                    acl.check(op)
-                except ConnectorPermissionError:
-                    result.error(
-                        "CONNECTOR_MISSING_OPERATIONS",
-                        f"Connector {cid} ({instance.name!r}) does not allow {op!r} "
-                        f"required by node's {operation!r} operation",
-                        node_id,
-                    )
 
     @staticmethod
     def _check_dispatch_binding_capabilities(
@@ -2838,28 +2884,40 @@ class GraphValidator:
         if not isinstance(nodes, list):
             return
         for node in nodes:
-            if not isinstance(node, dict) or connector_binding_operation(node) != "dispatch":
-                continue
-            binding = node.get("connector_binding")
-            if not isinstance(binding, dict):
-                continue
-            cid_obj = try_parse_uuid(binding.get("instance_id"))
-            if cid_obj is None:
-                continue
-            instance = found.get(cid_obj)
-            if instance is None:
-                continue
-            type_id = str(instance.connector_type_id or "").strip()
-            if not type_id or connector_type_supports_dispatch(type_id):
-                continue
-            result.error(
-                "CONNECTOR_DISPATCH_UNSUPPORTED",
-                f"Node '{node.get('id')}': connector instance {cid_obj} ({instance.name!r}) has type "
-                f"{type_id!r}, which does not implement the CI-runner operations "
-                f"(trigger_run / get_run_status / get_run_logs / list_runs) a "
-                f"dispatch binding requires",
-                str(node.get("id")) if node.get("id") else None,
-            )
+            message = GraphValidator._dispatch_binding_error(node, found)
+            if message is not None:
+                result.error(
+                    "CONNECTOR_DISPATCH_UNSUPPORTED",
+                    message,
+                    str(node.get("id")) if node.get("id") else None,
+                )
+
+    @staticmethod
+    def _dispatch_binding_error(
+        node: Any,
+        found: dict[uuid.UUID, ConnectorInstance],
+    ) -> str | None:
+        """Return the dispatch-capability error message for *node*, else ``None``."""
+        if not isinstance(node, dict) or connector_binding_operation(node) != "dispatch":
+            return None
+        binding = node.get("connector_binding")
+        if not isinstance(binding, dict):
+            return None
+        cid_obj = try_parse_uuid(binding.get("instance_id"))
+        if cid_obj is None:
+            return None
+        instance = found.get(cid_obj)
+        if instance is None:
+            return None
+        type_id = str(instance.connector_type_id or "").strip()
+        if not type_id or connector_type_supports_dispatch(type_id):
+            return None
+        return (
+            f"Node '{node.get('id')}': connector instance {cid_obj} ({instance.name!r}) has type "
+            f"{type_id!r}, which does not implement the CI-runner operations "
+            f"(trigger_run / get_run_status / get_run_logs / list_runs) a "
+            f"dispatch binding requires"
+        )
 
     # ------------------------------------------------------------------
     # Model backend health

@@ -278,6 +278,11 @@ _GH_PR_GUARD_PRE_PLANT_FAILED_NOTE = "could not pre-plant"
 # FAR-1315 settle.
 _POLICY_STEP_FAILED = object()
 
+# Bound for the dispatch's receipt-harvest probe (FAR-1315). Expressed as a
+# module-level constant so the harvest's own ``asyncio.timeout`` context
+# manager owns the bound, rather than an explicit ``timeout`` parameter.
+_HARVEST_PROBE_TIMEOUT_S = 20.0
+
 # ---------------------------------------------------------------------------
 # FAR-1315: the platform-side run claim ledger.
 #
@@ -427,19 +432,51 @@ def settle_run_pr_guard(
         return "noop"
     owner = guard_owner or ""
     observed = any(_GH_PR_GUARD_CLAIM_SENTINEL in stream for stream in streams if stream)
+    spend = _pr_guard_spend_evidence(
+        claim_receipt=claim_receipt,
+        guard_install_status=guard_install_status,
+        pr_url=pr_url,
+        streams=streams,
+        observed=observed,
+    )
+    return _apply_pr_guard_spend(key, owner, spend)
+
+
+def _pr_guard_spend_evidence(
+    *,
+    claim_receipt: bool | None,
+    guard_install_status: str | None,
+    pr_url: str | None,
+    streams: tuple[str | None, ...],
+    observed: bool,
+) -> bool:
+    """SPEND EVIDENCE decision (FAR-1315 hardening — see :func:`settle_run_pr_guard`).
+
+    ``True`` spends the run's slot; ``False`` releases a held one. The receipt
+    (definitive either way) outranks every agent-authored signal; when the
+    receipt is UNKNOWN, only a platform-CORROBORATED ``pr_url`` or the captured
+    sentinel can spend.
+    """
     if claim_receipt is True:
-        spend = True
-    elif claim_receipt is False and guard_install_status in _GH_PR_GUARD_INSTALL_LIVE_STATUSES:
+        return True
+    if claim_receipt is False and guard_install_status in _GH_PR_GUARD_INSTALL_LIVE_STATUSES:
         # Definitive negative: a LIVE shim's receipt path was probed and the
         # receipt is absent. Agent-authored pr_url and the readable sentinel
         # must both lose to it.
-        spend = False
-    else:
-        # Receipt unknown (harvest unavailable, or the probe ran against a
-        # path no shim wrote): fall back to a CORROBORATED pr_url, then the
-        # sentinel. The corroboration is what stops a failed create that
-        # merely reports a URL-shaped pr_url in output.json from spending.
-        spend = (_is_valid_delivered_pr_url(pr_url) and _pr_url_seen_in_streams(pr_url, streams)) or observed
+        return False
+    # Receipt unknown (harvest unavailable, or the probe ran against a path no
+    # shim wrote): fall back to a CORROBORATED pr_url, then the sentinel. The
+    # corroboration is what stops a failed create that merely reports a
+    # URL-shaped pr_url in output.json from spending.
+    return (_is_valid_delivered_pr_url(pr_url) and _pr_url_seen_in_streams(pr_url, streams)) or observed
+
+
+def _apply_pr_guard_spend(key: str, owner: str, spend: bool) -> str:
+    """Apply the spend decision to the process-local run ledger.
+
+    Returns ``"spent"`` / ``"released"`` / ``"noop"`` (see
+    :func:`settle_run_pr_guard`).
+    """
     with _RUN_PR_GUARD_LOCK:
         entry = _RUN_PR_GUARD_CLAIMS.get(key)
         if entry is None:
@@ -1249,19 +1286,19 @@ async def harvest_gh_pr_claim_bounded(
     exec_command: Callable[[list[str]], Awaitable[Any]],
     *,
     run_scope: str | None,
-    timeout: float = 20.0,  # noqa: ASYNC109 - the dispatch's own harvest bound; not a client API timeout
 ) -> bool | None:
     """Bounded, cancellation-aware receipt harvest for a dispatch ``finally`` (FAR-1315).
 
     Wraps :func:`harvest_gh_pr_claim_via_exec` so the dispatch's teardown
     ordering stays safe:
 
-    - **Bounded.** The probe runs as its own task under ``asyncio.wait``. On
-      timeout the probe is CANCELLED and awaited, never left running against a
-      container that is about to be destroyed (the old
-      ``wait_for(shield(...))`` form did the opposite of its comment: on
-      timeout it returned while the shielded inner task kept running, and on
-      cancellation it propagated while that task lived on).
+    - **Bounded.** The probe runs as its own task, bounded by an
+      :func:`asyncio.timeout` context manager set to
+      :data:`_HARVEST_PROBE_TIMEOUT_S`. On timeout the probe is CANCELLED and
+      awaited, never left running against a container that is about to be
+      destroyed (the old ``wait_for(shield(...))`` form did the opposite of its
+      comment: on timeout it returned while the shielded inner task kept
+      running, and on cancellation it propagated while that task lived on).
     - **Cancellation propagates AFTER the probe is cleaned up.**
       ``asyncio.CancelledError`` is re-raised here only once the probe task is
       cancelled and drained, so the CALLER can catch it, treat the receipt as
@@ -1273,12 +1310,16 @@ async def harvest_gh_pr_claim_bounded(
         harvest_gh_pr_claim_via_exec(exec_command, run_scope=run_scope)
     )
     try:
-        await asyncio.wait({task}, timeout=timeout)
+        async with asyncio.timeout(_HARVEST_PROBE_TIMEOUT_S):
+            await asyncio.wait({task})
+    except TimeoutError:
+        # Bound expired: cancel so the probe can never outlive the teardown.
+        await _cancel_and_drain_harvest(task)
+        return None
     except asyncio.CancelledError:
         await _cancel_and_drain_harvest(task)
         raise
     if not task.done():
-        # Bound expired: cancel so the probe can never outlive the teardown.
         await _cancel_and_drain_harvest(task)
         return None
     if task.cancelled():
@@ -1421,16 +1462,7 @@ async def apply_sandbox_policy(
     # registered into the AGENT's config file (see _AGENT_GIT_CONFIG), so the
     # executing (root) user is irrelevant to where the agent reads its config.
     _guard_install_status: str | None = None
-    if git_credentials == "scoped":
-        # FAR-798: when allowed_hosts is provided, use the multi-host helper;
-        # when None (default), use the single-host scoped helper — BYTE-
-        # IDENTICAL to today for the github.com-only case.
-        if allowed_hosts:
-            await _run_step(build_git_multi_host_script(allowed_hosts), user="root", enforce=True)
-        else:
-            await _run_step(build_git_scoped_script(), user="root", enforce=True)
-    elif git_credentials == "none":
-        await _run_step(build_git_none_script(), user="root", enforce=True)
+    await _apply_git_credential_step(_run_step, git_credentials, allowed_hosts)
     if egress_policy == "selected" and egress_allowlist:
         await _run_step(build_egress_selected_script(egress_allowlist), user="root", enforce=False)
     if single_pr_per_run:
@@ -1439,51 +1471,80 @@ async def apply_sandbox_policy(
         # is logged-and-continued and the run degrades to the prompt-level
         # guard — never raises into the dispatch. Runs BEFORE the read-only
         # seal (it writes: system PATH dirs + /tmp).
-        #
-        # FAR-1315: claim the run's one-PR slot FIRST. A denied claim
-        # ("spent" — a create already succeeded in this run; "held" — a
-        # CONCURRENT flagged node owns the slot) flips the install to a
-        # pre-planted refusal and is logged loudly, so a second flagged node
-        # can never install a fresh claimable marker in the same run.
-        _marker_path, _pre_spent, _claim_status = _gh_pr_guard_plan(run_scope, guard_owner)
-        if _pre_spent:
-            _log.warning(
-                "sandbox_policy.gh_guard_run_claim_denied: claim=%s scope=%s owner=%s - "
-                "installing a pre-planted refusal for this node (FAR-1315)",
-                _claim_status,
-                _run_pr_guard_key(run_scope),
-                guard_owner,
-            )
-        _guard_result = await _run_step(
-            build_gh_pr_guard_script(_marker_path, pre_spent=_pre_spent),
-            user="root",
-            enforce=False,
-        )
-        # XS: the install's own diagnostics exit 0 with only a stderr note —
-        # most importantly "no gh on PATH ... NOT platform-guarded", i.e. a
-        # flagged run whose platform guard is ABSENT. Without this mirror the
-        # note is discarded with the result and the degraded run is invisible.
-        _guard_report = str(getattr(_guard_result, "stderr", "") or "").strip()
-        if _guard_report:
-            _log.warning("sandbox_policy.gh_guard_install_reported: %s", _guard_report[:1000])
-        # FAR-1315: classify the install for the dispatch settle. The step
-        # RAISED and was swallowed (enforce=False) -> "failed", never a live
-        # status: an unverified install must leave the receipt meaningless
-        # rather than "confirmed no create". A RETURNED value is a successful
-        # step by ``_run_step``'s contract (the e2b SDK raises on non-zero
-        # exit), so a result without an ``exit_code`` attribute defaults to 0
-        # rather than faking a failure.
-        if _guard_result is _POLICY_STEP_FAILED:
-            _guard_install_status = "failed"
-        else:
-            _guard_install_status, _ = _classify_gh_pr_guard_outcome(
-                getattr(_guard_result, "exit_code", 0),
-                _guard_report,
-                pre_spent=_pre_spent,
-            )
+        _guard_install_status = await _install_gh_pr_guard(_run_step, run_scope=run_scope, guard_owner=guard_owner)
     if read_only:
         await _run_step(build_read_only_script(), user="root", enforce=True)
     return _guard_install_status
+
+
+async def _apply_git_credential_step(
+    run_step: Callable[..., Awaitable[Any]],
+    git_credentials: str | None,
+    allowed_hosts: dict[str, str] | None,
+) -> None:
+    """Run the enforcement-critical git-credential scope step (RAISES on failure)."""
+    if git_credentials == "scoped":
+        # FAR-798: when allowed_hosts is provided, use the multi-host helper;
+        # when None (default), use the single-host scoped helper — BYTE-
+        # IDENTICAL to today for the github.com-only case.
+        if allowed_hosts:
+            await run_step(build_git_multi_host_script(allowed_hosts), user="root", enforce=True)
+        else:
+            await run_step(build_git_scoped_script(), user="root", enforce=True)
+    elif git_credentials == "none":
+        await run_step(build_git_none_script(), user="root", enforce=True)
+
+
+async def _install_gh_pr_guard(
+    run_step: Callable[..., Awaitable[Any]],
+    *,
+    run_scope: str | None,
+    guard_owner: str | None,
+) -> str | None:
+    """Install the run-scoped one-PR-per-run ``gh`` shim; return its install status.
+
+    FAR-1315: claim the run's one-PR slot FIRST. A denied claim ("spent" — a
+    create already succeeded in this run; "held" — a CONCURRENT flagged node
+    owns the slot) flips the install to a pre-planted refusal and is logged
+    loudly, so a second flagged node can never install a fresh claimable marker
+    in the same run.
+    """
+    marker_path, pre_spent, claim_status = _gh_pr_guard_plan(run_scope, guard_owner)
+    if pre_spent:
+        _log.warning(
+            "sandbox_policy.gh_guard_run_claim_denied: claim=%s scope=%s owner=%s - "
+            "installing a pre-planted refusal for this node (FAR-1315)",
+            claim_status,
+            _run_pr_guard_key(run_scope),
+            guard_owner,
+        )
+    guard_result = await run_step(
+        build_gh_pr_guard_script(marker_path, pre_spent=pre_spent),
+        user="root",
+        enforce=False,
+    )
+    # XS: the install's own diagnostics exit 0 with only a stderr note —
+    # most importantly "no gh on PATH ... NOT platform-guarded", i.e. a
+    # flagged run whose platform guard is ABSENT. Without this mirror the
+    # note is discarded with the result and the degraded run is invisible.
+    guard_report = str(getattr(guard_result, "stderr", "") or "").strip()
+    if guard_report:
+        _log.warning("sandbox_policy.gh_guard_install_reported: %s", guard_report[:1000])
+    # FAR-1315: classify the install for the dispatch settle. The step
+    # RAISED and was swallowed (enforce=False) -> "failed", never a live
+    # status: an unverified install must leave the receipt meaningless
+    # rather than "confirmed no create". A RETURNED value is a successful
+    # step by ``run_step``'s contract (the e2b SDK raises on non-zero
+    # exit), so a result without an ``exit_code`` attribute defaults to 0
+    # rather than faking a failure.
+    if guard_result is _POLICY_STEP_FAILED:
+        return "failed"
+    status, _ = _classify_gh_pr_guard_outcome(
+        getattr(guard_result, "exit_code", 0),
+        guard_report,
+        pre_spent=pre_spent,
+    )
+    return status
 
 
 __all__ = [
