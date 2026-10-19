@@ -118,6 +118,6 @@
 
 ## Prior Art
 
-Modulo's data residency architecture was inspired by the [AWS VPC Design
-Guide](https://docs.aws.amazon.com/whitepapers/latest/building-saas-vpc/building-saas-vpc.html)
+Modulo's data residency architecture was inspired by [Building a Scalable and
+Secure Multi-VPC AWS Network Infrastructure](https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/welcome.html)
 and follows the principle of **no implicit trust of external networks**.

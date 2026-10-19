@@ -537,7 +537,7 @@ After the post-mortem is approved:
    missing behaviour, add it to the relevant product map entry under "Known Gaps"
    or as a new behaviour checkbox.
 2. **Update AGENTS.md** – If the incident pattern is likely to recur (e.g.,
-   missing RLS on a new table), add a prevention rule to `Development/Product/AGENTS.md`
+   missing RLS on a new table), add a prevention rule to `Repos/devtools/AGENTS.md`
    or the most specific subdirectory AGENTS.md.
 3. **Update this playbook** – If the response procedure was missing a step or
    a containment action was insufficient, revise the relevant section.
