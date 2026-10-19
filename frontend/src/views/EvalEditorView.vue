@@ -201,7 +201,7 @@
                     <button
                       type="button"
                       data-testid="policy-gate-confirm-toggle-disable"
-                      class="rounded bg-destructive px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
+                      class="rounded bg-destructive-fill px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive-fill/90"
                       @click="confirmToggleGate"
                       ref="gateToggleConfirmBtnRef"
                     >
@@ -250,7 +250,7 @@
                         <button
                           type="button"
                           data-testid="policy-gate-confirm-delete"
-                          class="rounded bg-destructive px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
+                          class="rounded bg-destructive-fill px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive-fill/90"
                           @click="deletePolicyGate"
                           ref="gateDeleteConfirmBtnRef"
                         >
@@ -305,7 +305,7 @@
                 <button
                   type="button"
                   data-testid="dirty-confirm-proceed"
-                  class="rounded bg-destructive px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
+                  class="rounded bg-destructive-fill px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive-fill/90"
                   @click="resolveDirtyConfirm(true)"
                   ref="dirtyConfirmProceedBtnRef"
                 >
@@ -417,7 +417,7 @@
                       type="button"
                       :disabled="deleting"
                       data-testid="eval-editor-confirm-delete"
-                      class="rounded bg-destructive px-2 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+                      class="rounded bg-destructive-fill px-2 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive-fill/90 disabled:opacity-50"
                       @click="deleteEval(ev.id)"
                     >
                       {{ deleting ? $t('common.deleting') : $t('common.confirm') }}

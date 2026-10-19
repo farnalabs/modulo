@@ -133,7 +133,7 @@
             <button type="button"
               :disabled="deleting"
               data-testid="team-notif-delete-confirm"
-              class="rounded-lg bg-destructive px-3 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+              class="rounded-lg bg-destructive-fill px-3 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive-fill/90 disabled:opacity-50"
               @click="deleteEndpoint(ep.id)"
             >
               {{ deleting ? "Deleting..." : "Delete" }}

@@ -95,7 +95,7 @@
               <p class="text-sm font-medium text-destructive-text">{{ $t('views.SettingsTeamsView.delete_confirm_title', { name: team.name }) }}</p>
               <p class="mt-1 text-sm text-destructive-text">{{ $t('views.SettingsTeamsView.this_action_cannot_be_undone') }}</p>
               <div class="mt-3 flex items-center gap-2">
-                <button type="button" :disabled="deletingTeam" data-testid="settings-teams-delete-confirm" class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50" @click="deleteTeam(team.id)">
+                <button type="button" :disabled="deletingTeam" data-testid="settings-teams-delete-confirm" class="rounded-lg bg-destructive-fill px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive-fill/90 disabled:opacity-50" @click="deleteTeam(team.id)">
                   {{ deletingTeam ? $t('views.SettingsTeamsView.deleting') : $t('views.SettingsTeamsView.delete') }}
                 </button>
                 <button type="button" class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-delete-cancel" @click="deleteConfirmTeamId = null; deleteError = null">
@@ -157,7 +157,7 @@
                     <td colspan="4" class="px-2 py-3">
                       <div class="flex items-center gap-3">
                         <span class="text-sm text-destructive-text">{{ $t('views.SettingsTeamsView.remove_member_confirm') }}</span>
-                        <button type="button" :disabled="removingMember" data-testid="settings-teams-remove-confirm" class="rounded-lg bg-destructive px-3 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50" @click="removeMember(team.id, member)">
+                        <button type="button" :disabled="removingMember" data-testid="settings-teams-remove-confirm" class="rounded-lg bg-destructive-fill px-3 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive-fill/90 disabled:opacity-50" @click="removeMember(team.id, member)">
                           {{ removingMember ? $t('views.SettingsTeamsView.deleting') : $t('views.SettingsTeamsView.delete') }}
                         </button>
                         <button type="button" data-testid="settings-teams-remove-cancel" class="rounded-lg border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="removeConfirmMemberId = null">
