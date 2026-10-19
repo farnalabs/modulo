@@ -923,6 +923,53 @@ export async function enforceRoleTierVisibility(
 
 // Note: the phantom `variant_batch_compare` feature flag was removed in FAR-926.
 
+/**
+ * Enforce the manifest-declared role / tier / visibility gate, or fail closed
+ * when the manifest declares a gate for the resolved path but hydration left
+ * `to.meta` ungated (FAR-1950). Extracted from the navigation guard to keep its
+ * cognitive complexity within the SonarCloud budget.
+ */
+async function enforceManifestGate(
+  to: RouteLocationTarget,
+  token: string,
+): Promise<{ name: string } | true> {
+  if (to.meta?.requiresSystemAdmin || to.meta?.requiredRoles?.length || to.meta?.requiredTier) {
+    return enforceRoleTierVisibility(to, token)
+  }
+  // FAR-1950: the manifest declares a gate for this path but hydration left
+  // to.meta ungated — the gate would silently never run, which is how
+  // /admin/runners/{profiles,concurrency} rendered ungated for any caller.
+  // Fail closed (dashboard) and say so, rather than rendering the surface.
+  const unhydratedGatedPath = findUnhydratedGatedManifestPath(to)
+  if (unhydratedGatedPath) {
+    console.warn(
+      `[router] manifest gate for ${unhydratedGatedPath} was not hydrated onto the resolved route (name=${String(to.name)}); failing closed to the dashboard`,
+    )
+    return { name: 'dashboard' }
+  }
+  return true
+}
+
+/**
+ * Enforce a manifest-declared feature flag (FAR-656): a route whose manifest
+ * entry carries feature_flag is reachable only while that flag resolves true —
+ * a disabled flag redirects to the dashboard. navigation.ts filters the sidebar
+ * item on the same flag so nav and route stay consistent.
+ */
+async function enforceRouteFeatureFlag(
+  to: RouteLocationTarget,
+): Promise<{ name: string } | true> {
+  if (!to.meta?.featureFlag) return true
+  const planStore = usePlanStore()
+  if (!planStore.loaded) {
+    await planStore.fetchPlan()
+  }
+  if (!planStore.featureEnabled(to.meta.featureFlag)) {
+    return { name: 'dashboard' }
+  }
+  return true
+}
+
 router.beforeEach(async (to) => {
   try {
     // FAR-535 demo auto-login: /demo never renders as a page. The guard owns
@@ -950,37 +997,13 @@ router.beforeEach(async (to) => {
     if (to.name === 'login' || to.name === 'org-login') return true // login page without token — allowed
     if (!token) return { name: 'login' }
 
-    // Role / tier / visibility enforcement
-    if (to.meta?.requiresSystemAdmin || to.meta?.requiredRoles?.length || to.meta?.requiredTier) {
-      const denied = await enforceRoleTierVisibility(to, token)
-      if (denied !== true) return denied
-    } else {
-      // FAR-1950: the manifest declares a gate for this path but hydration
-      // left to.meta ungated — the gate would silently never run, which is how
-      // /admin/runners/{profiles,concurrency} rendered ungated for any caller.
-      // Fail closed (dashboard) and say so, rather than rendering the surface.
-      const unhydratedGatedPath = findUnhydratedGatedManifestPath(to)
-      if (unhydratedGatedPath) {
-        console.warn(
-          `[router] manifest gate for ${unhydratedGatedPath} was not hydrated onto the resolved route (name=${String(to.name)}); failing closed to the dashboard`,
-        )
-        return { name: 'dashboard' }
-      }
-    }
+    // Role / tier / visibility enforcement, plus the FAR-1950 fail-closed
+    // backstop for a manifest-gated path that hydration did not reach.
+    const denied = await enforceManifestGate(to, token)
+    if (denied !== true) return denied
 
-    // Manifest-declared route flags (FAR-656): a route whose manifest entry
-    // carries feature_flag is reachable only while that flag resolves true —
-    // a disabled flag redirects to the dashboard. navigation.ts filters the
-    // sidebar item on the same flag so nav and route stay consistent.
-    if (to.meta?.featureFlag) {
-      const planStore = usePlanStore()
-      if (!planStore.loaded) {
-        await planStore.fetchPlan()
-      }
-      if (!planStore.featureEnabled(to.meta.featureFlag)) {
-        return { name: 'dashboard' }
-      }
-    }
+    const flagDenied = await enforceRouteFeatureFlag(to)
+    if (flagDenied !== true) return flagDenied
 
   } catch (err) {
     console.error('[router] navigation guard error:', err)
