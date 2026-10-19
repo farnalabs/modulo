@@ -840,6 +840,34 @@ def test_detach_failure_is_signalled_through_the_handshake(
     assert "bundled binaries not found" in capsys.readouterr().err
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX fork mechanics")
+def test_detach_system_exit_propagates_but_still_logs_the_cause(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A pre-ready SystemExit keeps its semantics AND the operator diagnostic."""
+    monkeypatch.setattr(os, "fork", lambda: 0)
+    monkeypatch.setattr(os, "setsid", lambda: None)
+    monkeypatch.setattr(entry_module, "_redirect_stdio", lambda log: None)
+
+    def exiting_run_foreground(
+        data_dir: Path,
+        *,
+        bin_dir: Path | None = None,
+        clear_degraded: bool = False,
+        serve=None,
+        ready_fd: int | None = None,
+    ) -> int:
+        raise SystemExit(3)
+
+    monkeypatch.setattr(entry_module, "_run_foreground", exiting_run_foreground)
+    with pytest.raises(SystemExit) as exc_info:
+        run_start(tmp_path / "data", detach=True)
+    assert exc_info.value.code == 3
+    err = capsys.readouterr().err
+    assert "detached boot failed" in err
+    assert "3" in err
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX pipe mechanics")
 def test_detach_handshake_reader_parses_outcomes() -> None:
     read_fd, write_fd = os.pipe()
