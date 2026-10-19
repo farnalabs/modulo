@@ -843,23 +843,45 @@ def pin_git_content_node_fields(
     if str(node_data.get("node_type", "")).strip() != "sandbox_agent":
         return node_data
     resolve = resolver if resolver is not None else default_git_content_resolver
+    _pin_scalar_fields(node_data, resolve)
+    _pin_list_fields(node_data, resolve)
+    return node_data
 
-    def _pinned(value: str) -> str:
-        parsed = parse_git_content_ref(value)
-        sha = parsed.ref.lower() if parsed.is_pinned and parsed.ref is not None else resolve(parsed)
-        return pin_git_content_spec(parsed, sha)
 
+def _pinned_git_value(value: str, resolve: Callable[[GitContentRef], str]) -> str:
+    """Resolve (when movable) and pin one git content spec."""
+    parsed = parse_git_content_ref(value)
+    sha = parsed.ref.lower() if parsed.is_pinned and parsed.ref is not None else resolve(parsed)
+    return pin_git_content_spec(parsed, sha)
+
+
+def _pin_scalar_fields(
+    node_data: dict[str, Any],
+    resolve: Callable[[GitContentRef], str],
+) -> None:
+    """Pin every git content ref held in a scalar node field."""
     for key in GIT_CONTENT_SCALAR_FIELDS:
         value = node_data.get(key)
         if isinstance(value, str) and is_git_content_ref(value):
-            node_data[key] = _pinned(value)
+            node_data[key] = _pinned_git_value(value, resolve)
+
+
+def _pin_list_fields(
+    node_data: dict[str, Any],
+    resolve: Callable[[GitContentRef], str],
+) -> None:
+    """Pin every git content ref held in a list node field."""
     for key in GIT_CONTENT_LIST_FIELDS:
         items = node_data.get(key)
         if isinstance(items, list):
-            for index, item in enumerate(items):
-                if isinstance(item, str) and is_git_content_ref(item):
-                    items[index] = _pinned(item)
-    return node_data
+            _pin_list_field(items, resolve)
+
+
+def _pin_list_field(items: list[Any], resolve: Callable[[GitContentRef], str]) -> None:
+    """Pin every git content ref in one list field, in place."""
+    for index, item in enumerate(items):
+        if isinstance(item, str) and is_git_content_ref(item):
+            items[index] = _pinned_git_value(item, resolve)
 
 
 __all__ = [
