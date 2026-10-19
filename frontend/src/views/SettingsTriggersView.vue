@@ -97,19 +97,18 @@
                   <!-- FAR-1405: rendered for every trigger type the streak
                        engine covers (ongoing AND cron — the mirrored
                        STREAK_COVERED_TRIGGER_TYPES constant), not just ongoing.
-                       role="status" + aria-live mark it as a status region
-                       (ux-conformance A11Y / WCAG 4.1.3), mirroring the
-                       deactivated badge below. -->
-                  <span
+                       `<output>` carries the implicit status role and
+                       aria-live semantics (ux-conformance A11Y / WCAG 4.1.3),
+                       mirroring the deactivated badge below. -->
+                  <output
                     v-if="isStreakCovered(t) && t.streak_status?.enabled"
                     data-testid="settings-triggers-streak"
-                    role="status"
                     aria-live="polite"
                     :class="streakBadgeClass(t)"
                     class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium"
                   >
                     {{ $t('views.SettingsTriggersView.streak_display', { streak: t.streak_status.streak ?? 0, threshold: t.streak_status.threshold ?? 0 }) }}
-                  </span>
+                  </output>
                   <div
                     v-if="isStreakDeactivated(t)"
                     data-testid="settings-triggers-deactivated-badge"
@@ -789,10 +788,10 @@ function pipelineName(id: string): string {
 // The badge conditions read this constant, never a literal in the template, so
 // widening the backend set is a one-line change here (grep STREAK_TRIGGER_TYPES
 // across both trees to find the pair).
-const STREAK_COVERED_TRIGGER_TYPES: readonly string[] = ['ongoing', 'cron']
+const STREAK_COVERED_TRIGGER_TYPES: ReadonlySet<string> = new Set(['ongoing', 'cron'])
 
 function isStreakCovered(trigger: TriggerItem): boolean {
-  return STREAK_COVERED_TRIGGER_TYPES.includes(trigger.trigger_type)
+  return STREAK_COVERED_TRIGGER_TYPES.has(trigger.trigger_type)
 }
 
 // FAR-1405 — the deactivated badge and the re-enable action are driven by the

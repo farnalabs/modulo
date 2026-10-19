@@ -17,10 +17,9 @@
       </div>
     </header>
 
-    <div
+    <output
       v-if="loading"
-      class="space-y-4"
-      role="status"
+      class="block space-y-4"
       aria-busy="true"
       :aria-label="$t('common.loading')"
       data-testid="admin-error-detail-loading"
@@ -39,7 +38,7 @@
         <SkeletonBlock height-class="h-5 w-48" />
         <SkeletonBlock class="mt-2" height-class="h-16 w-full" />
       </div>
-    </div>
+    </output>
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadDetail" />
     <template v-else-if="group">
       <div
@@ -193,9 +192,9 @@
 
       <div class="card p-4">
         <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminErrorDetailView.raw_events', { count: eventsTotal }) }}</h2>
-        <div v-if="eventsLoading" class="space-y-2 py-2" role="status" :aria-label="$t('common.loading')" data-testid="admin-error-detail-events-loading">
+        <output v-if="eventsLoading" class="block space-y-2 py-2" :aria-label="$t('common.loading')" data-testid="admin-error-detail-events-loading">
           <SkeletonBlock v-for="n in 3" :key="'event-skeleton-' + n" height-class="h-12 w-full" />
-        </div>
+        </output>
         <EmptyState
           v-else-if="events.length === 0"
           :title="$t('views.AdminErrorDetailView.no_raw_events_loaded')"
