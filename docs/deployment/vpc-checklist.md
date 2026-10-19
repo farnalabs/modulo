@@ -118,6 +118,8 @@
 
 ## Prior Art
 
-Modulo's data residency architecture was inspired by [Building a Scalable and
-Secure Multi-VPC AWS Network Infrastructure](https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/welcome.html)
-and follows the principle of **no implicit trust of external networks**.
+Modulo's multi-VPC network design follows the VPC segmentation and IP address
+planning guidance in [Building a Scalable and Secure Multi-VPC AWS Network
+Infrastructure](https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/welcome.html).
+The default-deny egress posture in §5 (no implicit trust of external networks)
+is Modulo's own design choice, not a whitepaper recommendation.

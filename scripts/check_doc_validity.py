@@ -4,30 +4,44 @@
 Scans ``README.md`` and ``docs/**/*.md`` for three classes of defect:
 
 1. Retired tokens - organisation names, paths and environment flags the repo
-   no longer recognises (for example the retired ``Development/Product``
-   AGENTS.md path or a non-``farnalabs`` registry).
-2. Repo-relative paths named in backticks - each is checked against the
-   checkout (also trying ``backend/`` and ``frontend/`` prefixes, because the
-   test tree is documented without its ``backend/`` prefix).
+   no longer recognises. This includes the retired ``Development/Product``
+   AGENTS.md path and a ``ghcr.io`` image path whose first segment is not
+   ``farnalabs`` - a third-party organisation, or a placeholder such as
+   ``<org>``, ``{org}`` or ``$ORG``. A bare ``ghcr.io/farnalabs`` (no image
+   path) is not flagged.
+2. Repo-relative paths named in backticks - each backticked value that begins
+   with a known top-level prefix (see ``PATH_PREFIXES``) and carries no space
+   or placeholder character is checked against the checkout (also trying
+   ``backend/`` and ``frontend/`` prefixes, because the test tree is documented
+   without its ``backend/`` prefix). A reference to a sibling workspace repo
+   (``Repos/...``) is reported as skipped, never failed.
 3. Advertised external URLs - a bounded HTTP status probe per unique URL.
 
-What this check does NOT cover: prose accuracy, markdown anchors, links that
-point outside this checkout (``Repos/devtools/...``), or documentation held in
-another repository. Those are reviewed by hand.
+What this check does NOT cover: prose accuracy, markdown anchors, backticked
+paths that do not begin with a known prefix or that contain a space or a
+placeholder, or documentation held in another repository. Those are reviewed by
+hand.
 
-Exit code 0 when clean, 1 when any stale token, missing path or unreachable URL
-is found. Use ``--no-urls`` to skip the network pass.
+Exit code 0 only when nothing was found AND every candidate URL was probed. It
+is 1 when a stale token, missing path or unreachable URL is found, or when the
+``--max-urls`` cap left URLs unprobed - a capped run is NOT a clean result. Use
+``--no-urls`` to skip the network pass, and ``--self-test`` to exercise the
+checker's own detection rules.
 
 Usage:
     uv run --project backend python scripts/check_doc_validity.py
     uv run --project backend python scripts/check_doc_validity.py --no-urls
+    uv run --project backend python scripts/check_doc_validity.py --self-test
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import re
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -36,6 +50,22 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Characters a ``ghcr.io`` first path segment can use: an organisation name, or
+# a placeholder such as ``<org>``, ``{org}``, ``$ORG`` or ``*``. A sentence
+# period is deliberately excluded, so a bare ``ghcr.io/farnalabs.`` does not
+# look like a path.
+_GHCR_SEGMENT_CHARS = r"[A-Za-z0-9_$<>{}*@-]"
+
+# A ``ghcr.io`` reference whose first path segment is not ``farnalabs``. The
+# lookahead fails only when the first segment is exactly ``farnalabs`` (bare, or
+# followed by a real path separator), so ``ghcr.io/farnalabs`` and
+# ``ghcr.io/farnalabs/modulo`` pass while ``ghcr.io/<org>/modulo``,
+# ``ghcr.io/acme/modulo`` and ``ghcr.io/farnalabsx/modulo`` are flagged.
+NON_FARNALABS_IMAGE_RE = re.compile(rf"ghcr\.io/(?!farnalabs(?!{_GHCR_SEGMENT_CHARS})){_GHCR_SEGMENT_CHARS}+")
+NON_FARNALABS_IMAGE_MESSAGE = (
+    "container image path is not under ghcr.io/farnalabs/ (the first path segment is not 'farnalabs')"
+)
 
 # Patterns that must not appear in the docs. Each entry is (pattern, message).
 RETIRED_TOKENS: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -55,10 +85,7 @@ RETIRED_TOKENS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(r"(?<![\w.-])staging\.modulo\.app\b"),
         "retired host 'staging.modulo.app' (use staging.modulo.run)",
     ),
-    (
-        re.compile(r"ghcr\.io/(?!farnalabs/)[A-Za-z0-9_.-]+"),
-        "container image is not under ghcr.io/farnalabs/",
-    ),
+    (NON_FARNALABS_IMAGE_RE, NON_FARNALABS_IMAGE_MESSAGE),
 )
 
 PATH_PREFIXES: tuple[str, ...] = (
@@ -72,6 +99,9 @@ PATH_PREFIXES: tuple[str, ...] = (
     ".semgrep/",
     "tests/",
     "tools/",
+    # Sibling workspace repos: extracted so ``CROSS_REPO_PREFIXES`` can report
+    # them as skipped rather than silently dropping them.
+    "Repos/",
 )
 
 # Paths that intentionally do not resolve inside this checkout.
@@ -254,6 +284,65 @@ def scan_urls(files: list[Path], timeout: float, max_urls: int) -> tuple[list[Ur
     return results, base_urls, unchecked
 
 
+def _self_test() -> list[str]:
+    """Exercise the checker's own rules; return the failures (empty is good).
+
+    This guards the classes of defect a change here can reintroduce silently:
+    a registry pattern that no longer catches a placeholder first segment (its
+    own target class), a path extractor that stops reporting a cross-repo
+    reference, and a URL-cap path that reports a capped run as clean.
+    """
+    failures: list[str] = []
+
+    def check(description: str, condition: bool) -> None:
+        if not condition:
+            failures.append(description)
+
+    def flags(image: str) -> bool:
+        return NON_FARNALABS_IMAGE_RE.search(image) is not None
+
+    for image in (
+        "ghcr.io/acme/modulo",
+        "ghcr.io/<org>/modulo:${TAG}",
+        "ghcr.io/{org}/modulo",
+        "ghcr.io/$ORG/modulo",
+        "ghcr.io/ORG/modulo",
+        "ghcr.io/<org>/*",
+        "ghcr.io/farnalabsx/modulo",
+    ):
+        check(f"expected a finding for {image!r}", flags(image))
+    for reference in (
+        "ghcr.io/farnalabs",
+        "ghcr.io/farnalabs.",
+        "ghcr.io/farnalabs/modulo:${TAG}",
+        "ghcr.io/farnalabs/modulo@sha256:<digest>",
+        "ghcr.io",
+        "ghcr.io/",
+    ):
+        check(f"expected no finding for {reference!r}", not flags(reference))
+
+    extracted = _extract_backticked_paths(
+        "`docs/missing.md` `Repos/devtools/AGENTS.md` `docs/two words.md` `docs/<placeholder>.md`"
+    )
+    check("a missing in-repo path is extracted", "docs/missing.md" in extracted)
+    check(
+        "a sibling-workspace path is extracted (so the skip reports)",
+        "Repos/devtools/AGENTS.md" in extracted,
+    )
+    check("a path containing a space is ignored", "docs/two words.md" not in extracted)
+    check("a placeholder path is ignored", "docs/<placeholder>.md" not in extracted)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "docs").mkdir()
+        (root / "README.md").write_text("# t\n", encoding="utf-8")
+        (root / "docs" / "page.md").write_text("See https://modulo.run for details.\n", encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            capped_exit = main(["--repo-root", str(root), "--max-urls", "0"])
+        check("a capped URL pass exits non-zero", capped_exit != 0)
+    return failures
+
+
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -284,11 +373,28 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=100,
         help="maximum number of unique URLs to probe (default: 100)",
     )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="run the checker's built-in self-test and exit (no repository scan)",
+    )
     return parser.parse_args(argv)
+
+
+def _report_self_test(failures: list[str]) -> int:
+    for failure in failures:
+        print(f"SELF-TEST FAIL  {failure}", file=sys.stderr)
+    if failures:
+        print(f"\nSelf-test: {len(failures)} failure(s).", file=sys.stderr)
+        return 1
+    print("Self-test: OK (ghcr.io placeholder detection, path extraction, capped-run exit code).")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    if args.self_test:
+        return _report_self_test(_self_test())
     repo_root = args.repo_root.resolve()
     files = _doc_files(repo_root)
     if not files:
@@ -325,10 +431,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     if unchecked_urls:
         print(
-            "Raise --max-urls to cover the remaining URLs; they were NOT verified.",
+            "Raise --max-urls to cover the remaining URLs; they were NOT verified, so this is not a clean result.",
             file=sys.stderr,
         )
-    return 1 if stale_count or failed_count else 0
+        print(
+            f"{unchecked_urls} URL(s) went unprobed; the run exits 1.",
+            file=sys.stderr,
+        )
+    return 1 if stale_count or failed_count or unchecked_urls else 0
 
 
 if __name__ == "__main__":
