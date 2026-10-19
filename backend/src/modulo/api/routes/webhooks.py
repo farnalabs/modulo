@@ -84,7 +84,7 @@ from modulo.core.trigger_engine import (  # noqa: F401
 )
 from modulo.core.trigger_engine.pre_guardrail import GuardrailBlockedAtIntakeError
 from modulo.core.trigger_secrets import resolve_trigger_secret_scoped
-from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+from modulo.db.crud import pipeline_snapshot
 from modulo.db.crud.trigger import load_trigger_and_org_global
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.trigger import Trigger
@@ -874,7 +874,9 @@ async def _receive_webhook_intake(
         if trigger.active:
             await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="webhook")
 
-        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, account_id=None)
+        snapshot = await pipeline_snapshot.create_snapshot_from_live_graph(
+            session, pipeline_id=trigger.pipeline_id, account_id=None
+        )
         if snapshot is None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -973,7 +975,9 @@ async def _replay_webhook_intake(
         if trigger.active:
             await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="webhook")
 
-        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, account_id=None)
+        snapshot = await pipeline_snapshot.create_snapshot_from_live_graph(
+            session, pipeline_id=trigger.pipeline_id, account_id=None
+        )
         if snapshot is None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
