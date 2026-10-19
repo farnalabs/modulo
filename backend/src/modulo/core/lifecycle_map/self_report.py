@@ -138,20 +138,11 @@ def validate_and_normalise_reported_refs(
     seen: set[tuple[str, str, str]] = set()
 
     for raw in entries:
-        if not isinstance(raw, dict):
+        parsed = _normalise_raw_ref(raw)
+        if parsed is None:
             counters["malformed"] += 1
             continue
-        kind_raw = raw.get("kind")
-        ref_raw = raw.get("ref")
-        if kind_raw is None or ref_raw is None:
-            counters["malformed"] += 1
-            continue
-        try:
-            kind = canonicalise_kind(kind_raw)
-            ref = canonicalise_ref(kind, ref_raw)
-        except ValueError:
-            counters["malformed"] += 1
-            continue
+        kind, ref = parsed
 
         key = (kind, ref, _ADVISORY_CLAIM_SOURCE)
         if key in seen:
@@ -162,11 +153,32 @@ def validate_and_normalise_reported_refs(
             counters["capped"] += 1
             continue
 
-        normalised: dict[str, Any] = {"kind": kind, "ref": ref, "source": _ADVISORY_CLAIM_SOURCE}
-        status = raw.get("status")
-        if isinstance(status, str) and status in _VALID_STATUSES:
-            normalised["status"] = status
-        valid.append(normalised)
+        valid.append(_normalised_entry(kind, ref, raw))
         counters["valid"] += 1
 
     return valid, counters
+
+
+def _normalise_raw_ref(raw: Any) -> tuple[str, str] | None:
+    """Canonicalise one raw reported ref, or None when it is malformed."""
+    if not isinstance(raw, dict):
+        return None
+    kind_raw = raw.get("kind")
+    ref_raw = raw.get("ref")
+    if kind_raw is None or ref_raw is None:
+        return None
+    try:
+        kind = canonicalise_kind(kind_raw)
+        ref = canonicalise_ref(kind, ref_raw)
+    except ValueError:
+        return None
+    return kind, ref
+
+
+def _normalised_entry(kind: str, ref: str, raw: dict[str, Any]) -> dict[str, Any]:
+    """Build a canonical reported entry, keeping only a recognised status."""
+    normalised: dict[str, Any] = {"kind": kind, "ref": ref, "source": _ADVISORY_CLAIM_SOURCE}
+    status = raw.get("status")
+    if isinstance(status, str) and status in _VALID_STATUSES:
+        normalised["status"] = status
+    return normalised
