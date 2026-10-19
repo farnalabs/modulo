@@ -3067,6 +3067,45 @@ def _normalise_pr_url(url: str) -> str:
     return key.lower()
 
 
+def _collect_line_pr_urls(line: str, urls: list[str], seen_urls: set[str]) -> bool:
+    """Harvest distinct PR URLs from one text line; True once the ceiling is hit.
+
+    A ``gh pr list --json`` listing line is skipped wholesale; surviving matches
+    are deduplicated on :func:`_normalise_pr_url`. Returns True when
+    *_PR_SCAN_MAX_URLS* was reached so the caller can stop.
+    """
+    if _PR_URL_LISTING_KEY.search(line):
+        return False
+    for match in _PR_URL_PATTERN.findall(line):
+        key = _normalise_pr_url(match)
+        if key in seen_urls:
+            continue
+        seen_urls.add(key)
+        urls.append(match)
+        if len(seen_urls) >= _PR_SCAN_MAX_URLS:
+            return True
+    return False
+
+
+def _scan_text_pr_urls(text: str, urls: list[str], seen_urls: set[str]) -> None:
+    """Line-by-line PR-URL harvest over one string leaf of the value tree."""
+    for line in text.splitlines():
+        if _collect_line_pr_urls(line, urls, seen_urls):
+            return
+
+
+def _walk_child_items(
+    items: Iterable[Any],
+    depth: int,
+    seen: set[int],
+    urls: list[str],
+    seen_urls: set[str],
+) -> None:
+    """Recurse into each child of a dict/list/tuple container."""
+    for item in items:
+        _walk_pr_urls(item, depth + 1, seen, urls, seen_urls)
+
+
 def _walk_pr_urls(value: Any, depth: int, seen: set[int], urls: list[str], seen_urls: set[str]) -> None:
     """Collect distinct GitHub PR URLs from every string in the *value* tree.
 
@@ -3081,31 +3120,13 @@ def _walk_pr_urls(value: Any, depth: int, seen: set[int], urls: list[str], seen_
     if depth > _PR_SCAN_MAX_DEPTH or len(seen_urls) >= _PR_SCAN_MAX_URLS:
         return
     if isinstance(value, str):
-        for line in value.splitlines():
-            if _PR_URL_LISTING_KEY.search(line):
-                continue
-            for match in _PR_URL_PATTERN.findall(line):
-                key = _normalise_pr_url(match)
-                if key in seen_urls:
-                    continue
-                seen_urls.add(key)
-                urls.append(match)
-                if len(seen_urls) >= _PR_SCAN_MAX_URLS:
-                    return
+        _scan_text_pr_urls(value, urls, seen_urls)
         return
-    if isinstance(value, dict):
+    if isinstance(value, (dict, list, tuple)):
         if id(value) in seen:
             return
         seen.add(id(value))
-        for item in value.values():
-            _walk_pr_urls(item, depth + 1, seen, urls, seen_urls)
-        return
-    if isinstance(value, (list, tuple)):
-        if id(value) in seen:
-            return
-        seen.add(id(value))
-        for item in value:
-            _walk_pr_urls(item, depth + 1, seen, urls, seen_urls)
+        _walk_child_items(value.values() if isinstance(value, dict) else value, depth, seen, urls, seen_urls)
 
 
 def collect_delivery_pr_urls(
