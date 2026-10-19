@@ -853,6 +853,51 @@ def test_stream_terminal_reason_stall_alone():
     assert result[1] == "executor_stalled"
 
 
+def test_stream_terminal_reason_session_lost_reason_text_classifies():
+    """FAR-1800: when the session-lost REASON itself carries the provider
+    signature, the terminal code is the classified one (not the hardcoded
+    ``sandbox.no_output_json``)."""
+    state = _StreamState(
+        session_lost_reason=(
+            '{"type":"error","error":{"name":"APIError","data":'
+            '{"message":"Upstream request failed: Insufficient account funds","statusCode":402}}}'
+        )
+    )
+    result = _stream_terminal_reason(state, MagicMock(), uuid.uuid4())
+    assert result[0] == "failed"
+    assert result[1] == "model.insufficient_funds"
+
+
+def test_stream_terminal_reason_session_lost_retained_text_classifies():
+    """FAR-1800: the marker reason is the wrapper's PLACEHOLDER, so the
+    classification runs against the envelope's retained text
+    (``no_output_reason``/stdout) — a 402 there terminalises
+    ``model.insufficient_funds`` while the detail stays the placeholder."""
+    state = _StreamState(
+        session_lost_reason="No output from agent - session interrupted",
+        session_lost_retained_text=(
+            '{"type":"error","error":{"name":"APIError","data":'
+            '{"message":"Upstream request failed: Insufficient account funds","statusCode":402}}}'
+        ),
+    )
+    result = _stream_terminal_reason(state, MagicMock(), uuid.uuid4())
+    assert result[0] == "failed"
+    assert result[1] == "model.insufficient_funds"
+    assert result[2] == "No output from agent - session interrupted"
+
+
+def test_stream_terminal_reason_session_lost_retained_text_without_signature_fails_open():
+    """FAR-1800 control: retained text with NO provider signature keeps today's
+    retryable ``sandbox.no_output_json`` — the classification must not
+    over-broaden."""
+    state = _StreamState(
+        session_lost_reason="No output from agent - session interrupted",
+        session_lost_retained_text="opencode exited before writing any output",
+    )
+    result = _stream_terminal_reason(state, MagicMock(), uuid.uuid4())
+    assert result[1] == "sandbox.no_output_json"
+
+
 # ---------------------------------------------------------------------------
 # _all_capacities_ok
 # ---------------------------------------------------------------------------
@@ -901,6 +946,30 @@ def test_can_fenced_requeue_false_script_lease_not_ok():
 
 def test_can_fenced_requeue_false_not_idempotent():
     assert _can_fenced_requeue(0, 3, False, False, True, False) is False
+
+
+def test_can_fenced_requeue_false_for_non_retryable_code():
+    """FAR-1800: a REGISTERED non-retryable failure class (an HTTP 402 billing
+    refusal) must never be fenced back to pending, however much retry budget
+    remains — the retry re-hits the same wall and only burns a dispatch."""
+    assert _can_fenced_requeue(0, 3, False, False, True, True, error_code="model.insufficient_funds") is False
+
+
+def test_can_fenced_requeue_false_for_non_retryable_legacy_spelling():
+    assert _can_fenced_requeue(0, 3, False, False, True, True, error_code="model_insufficient_funds") is False
+
+
+def test_can_fenced_requeue_true_for_retryable_code():
+    """An ordinary retryable failure class still requeues while budget remains."""
+    assert _can_fenced_requeue(0, 3, False, False, True, True, error_code="sandbox.no_output_json") is True
+
+
+def test_can_fenced_requeue_true_for_unregistered_code():
+    """An UNREGISTERED code has no retryability verdict, so the previous
+    behaviour is preserved (fail open) — refusal is driven by an explicit
+    registry verdict, never by an absent entry. (The six-argument contract with
+    no code at all is pinned by ``test_can_fenced_requeue_true``.)"""
+    assert _can_fenced_requeue(0, 3, False, False, True, True, error_code="not_a_registered_code") is True
 
 
 # ---------------------------------------------------------------------------

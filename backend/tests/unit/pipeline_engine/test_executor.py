@@ -5026,6 +5026,39 @@ class TestTransientFailureDetail:
         assert "retry suppressed because a node in the graph is non-idempotent" in detail
         assert "idempotent=false" in detail
 
+    def test_non_retryable_code_detail_names_the_class_not_exhaustion(self) -> None:
+        """FAR-1800: when requeue was REFUSED because the failure class is
+        non-retryable, the terminal detail must name that class — the retries
+        were never attempted, so the retries-exhausted wording would be false."""
+        exc = SandboxNodeFailedError("insufficient funds", node_id="node-a")
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=exc,
+            script_lease_ok=True,
+            graph_idempotent=True,
+            node_attempt_count=0,
+            retries=1,
+            non_retryable_code="model.insufficient_funds",
+        )
+        assert code == "model.insufficient_funds"
+        assert "non-retryable error model.insufficient_funds" in detail
+        assert "not retried" in detail
+        assert "after retries exhausted" not in detail
+
+    def test_script_lease_unknown_outranks_non_retryable_code(self) -> None:
+        """The needs-human side-effect-unknown verdict stays first: an unknown
+        script side effect outranks a non-retryable provider code."""
+        exc = SandboxNodeFailedError("insufficient funds", node_id="node-a")
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=exc,
+            script_lease_ok=False,
+            graph_idempotent=True,
+            node_attempt_count=0,
+            retries=1,
+            non_retryable_code="model.insufficient_funds",
+        )
+        assert code == "script.side_effect_unknown"
+        assert "needs human review" in detail
+
 
 def _make_connector_init_session(rows: list[Any]) -> AsyncMock:
     """Session whose execute() yields non-empty ConnectorInstance rows for _init_connector_hub."""
