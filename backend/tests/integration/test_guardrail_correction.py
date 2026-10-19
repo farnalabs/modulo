@@ -183,9 +183,20 @@ async def _create_feedback_record(
     """Insert a real FeedbackRecord row bound to the rig's run/pipeline."""
     record_id = uuid.uuid4()
     run_id = run_id or uuid.uuid4()
-    # A deterministic, collision-free run_number for the shared session org.
-    run_number = run_number or (int(run_id.int) % 1_000_000) + 1
     async with db_engine.connect() as conn, conn.begin():
+        if run_number is None:
+            # ``run_number`` is unique per organisation and this org is shared
+            # by every module in the session, so allocate above the current
+            # maximum — a literal would collide with a run an earlier module
+            # already created (e.g. the production ``create_run`` counter).
+            run_number = int(
+                (
+                    await conn.execute(
+                        text("SELECT COALESCE(MAX(run_number), 0) + 1 FROM runs WHERE organisation_id = :oid"),
+                        {"oid": str(rig["org_id"])},
+                    )
+                ).scalar_one()
+            )
         await conn.execute(
             text(
                 "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
@@ -394,9 +405,9 @@ class TestOrgWideConcurrentCap:
         # reached) plus the record being corrected — which is excluded from the
         # self-count (MAJOR-3). The admission of record 0 is denied.
         record_ids = [
-            await _create_feedback_record(db_engine, correction_rig, test_user, run_number=1),
-            await _create_feedback_record(db_engine, correction_rig, test_user, run_number=2),
-            await _create_feedback_record(db_engine, correction_rig, test_user, run_number=3),
+            await _create_feedback_record(db_engine, correction_rig, test_user),
+            await _create_feedback_record(db_engine, correction_rig, test_user),
+            await _create_feedback_record(db_engine, correction_rig, test_user),
         ]
         correction = CorrDef(
             id="corr_no_secrets",
@@ -466,7 +477,7 @@ class TestOrgWideConcurrentCap:
                 )
             ).scalar_one()
 
-        record_id = await _create_feedback_record(db_engine, correction_rig, test_user, run_number=1001)
+        record_id = await _create_feedback_record(db_engine, correction_rig, test_user)
         correction = CorrDef(
             id="corr_no_secrets",
             guardrail_id="gr_no_secrets",
