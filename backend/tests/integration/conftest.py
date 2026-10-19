@@ -191,7 +191,8 @@ class EvalFixture:
     cut over from the legacy ``eval_definitions`` table by migration 0254):
     ``eval_results.eval_id`` references ``evals`` and every production loader
     reads it. Integration fixtures seed directly into ``evals`` — the legacy
-    table is a frozen pre-cutover snapshot and is not written by tests.
+    table is a frozen pre-cutover snapshot and is not written by integration
+    fixtures (only backfill/migration probes still target it).
     """
 
     id: uuid.UUID
