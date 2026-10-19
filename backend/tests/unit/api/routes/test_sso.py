@@ -79,18 +79,25 @@ class _BeginCtx:
 
 
 def _make_callback_request(
-    *, raw_state: str = "xyz", cookie_raw_state: str | None = "xyz", state: str | None = None
+    *,
+    raw_state: str = "xyz",
+    cookie_raw_state: str | None = "xyz",
+    state: str | None = None,
+    cookie_value: str | None = None,
 ) -> Request:
     """Build a callback request carrying a validly-signed state.
 
     FAR-1979: the callback requires the returned ``state`` to match the
     login-time browser-binding cookie, so the default request carries BOTH a
     validly signed state and its matching cookie. Pass ``cookie_raw_state=None``
-    for no cookie, a different value for a mismatched one, or ``state`` to
-    override the query value verbatim, to exercise a rejected binding.
+    for no cookie, a different value for a mismatched one, ``cookie_value`` for
+    an unsigned/forged cookie, or ``state`` to override the query value
+    verbatim, to exercise a rejected binding.
     """
     headers: list[tuple[bytes, bytes]] = []
-    if cookie_raw_state is not None:
+    if cookie_value is not None:
+        headers.append((b"cookie", f"{_OIDC_LOGIN_STATE_COOKIE}={cookie_value}".encode()))
+    elif cookie_raw_state is not None:
         cookie_value = sign_state(cookie_raw_state, _VALID_32)
         headers.append((b"cookie", f"{_OIDC_LOGIN_STATE_COOKIE}={cookie_value}".encode()))
     state_value = state if state is not None else sign_state(f"google:{raw_state}", _VALID_32)
@@ -450,6 +457,35 @@ async def test_oidc_callback_rejects_cookie_bound_to_a_different_state() -> None
     settings = _make_settings()
     fake = _AutobeginAwareSession()
     request = _make_callback_request(raw_state="victim", cookie_raw_state="attacker")
+    process = AsyncMock()
+
+    with (
+        patch("modulo.api.routes.sso.oidc_process_callback", new=process),
+        pytest.raises(SsoCallbackError) as exc_info,
+    ):
+        await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert exc_info.value.code == "auth_failed"
+    process.assert_not_awaited()
+
+
+async def test_oidc_callback_rejects_unverifiable_browser_cookie() -> None:
+    """A present cookie that fails its HMAC check must be rejected, not trusted.
+
+    A cookie the server did not write (forged, or planted by a sibling
+    subdomain) cannot satisfy the browser binding even when its shape looks
+    plausible — ``verify_state`` returns None and the flow must fail closed.
+    """
+    settings = _make_settings()
+    fake = _AutobeginAwareSession()
+    request = _make_callback_request(cookie_value="forged-cookie-value")
     process = AsyncMock()
 
     with (
