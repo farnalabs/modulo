@@ -17,6 +17,7 @@ import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
@@ -1813,3 +1814,102 @@ class TestEnsureAppDatabaseSafety:
         args, kwargs = captured[0]
         assert kwargs["ssl"] is False
         assert "sslmode" not in str(args[0])
+
+
+# ---------------------------------------------------------------------------
+# Serve-phase helpers moved by the S3776 refactor
+# ---------------------------------------------------------------------------
+
+
+class _ServePhaseSupervisor:
+    """Minimal supervisor double for the serve-phase teardown helpers."""
+
+    def __init__(self, *, shutdown_error: Exception | None = None) -> None:
+        self.shutdown_calls = 0
+        self.degraded_reason: str | None = None
+        self._shutdown_error = shutdown_error
+
+    def shutdown(self) -> None:
+        self.shutdown_calls += 1
+        if self._shutdown_error is not None:
+            raise self._shutdown_error
+
+    def monitor_thread_alive(self) -> bool:
+        return True
+
+
+def test_shutdown_supervisor_after_boot_error_swallows_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
+    messages: list[str] = []
+    monkeypatch.setattr(entry_module._log, "exception", lambda message, *args, **kwargs: messages.append(message))
+    supervisor = _ServePhaseSupervisor(shutdown_error=OSError("pipe closed"))
+
+    entry_module._shutdown_supervisor_after_boot_error(supervisor)
+
+    assert supervisor.shutdown_calls == 1
+    assert messages == ["supervisor.shutdown_failed during boot error handling"]
+
+
+def test_serve_until_shutdown_short_circuits_when_shutdown_requested(tmp_path: Path) -> None:
+    supervisor = _ServePhaseSupervisor()
+    run_state = entry_module._RunState()
+    run_state.shutdown_requested.set()
+
+    code = entry_module._serve_until_shutdown(
+        supervisor,
+        run_state,
+        SimpleNamespace(api_port=18000),
+        serve=lambda *args: pytest.fail("serve must not run after a shutdown request"),
+        ready_fd=None,
+        degraded_path=tmp_path / "degraded.json",
+        data_dir=tmp_path,
+    )
+
+    assert code == 0
+    assert supervisor.shutdown_calls == 1
+
+
+def test_serve_until_shutdown_writes_readiness_handshake(tmp_path: Path) -> None:
+    read_fd, write_fd = os.pipe()
+    served: list[tuple[str, int]] = []
+    try:
+        code = entry_module._serve_until_shutdown(
+            _ServePhaseSupervisor(),
+            entry_module._RunState(),
+            SimpleNamespace(api_port=18000),
+            serve=lambda host, port, stop: served.append((host, port)),
+            ready_fd=write_fd,
+            degraded_path=tmp_path / "degraded.json",
+            data_dir=tmp_path,
+        )
+        handshake = os.read(read_fd, 64)
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert handshake == b"ready\n"
+    assert code == 0
+    assert served == [(entry_module.POSTGRES_HOST, 18000)]
+
+
+def test_serve_until_shutdown_uses_serve_api_when_no_serve_callable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, int]] = []
+
+    def _fake_serve_api(host: str, port: int, stop_event: threading.Event, force_exit: threading.Event) -> None:
+        calls.append((host, port))
+
+    monkeypatch.setattr(entry_module, "_serve_api", _fake_serve_api)
+
+    code = entry_module._serve_until_shutdown(
+        _ServePhaseSupervisor(),
+        entry_module._RunState(),
+        SimpleNamespace(api_port=18001),
+        serve=None,
+        ready_fd=None,
+        degraded_path=tmp_path / "degraded.json",
+        data_dir=tmp_path,
+    )
+
+    assert code == 0
+    assert calls == [(entry_module.POSTGRES_HOST, 18001)]
