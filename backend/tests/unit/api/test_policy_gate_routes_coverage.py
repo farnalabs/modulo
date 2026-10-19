@@ -432,7 +432,9 @@ def test_create_gate_live_human_gate_conflicts_and_keeps_mode_when_omitted(
     A POST onto an eval that already has a live ``human`` gate is REFUSED
     with 409 — with ``evaluation_mode`` omitted it must not silently be
     treated as a replace (the old behaviour returned 201 and downgraded the
-    mode to ``automatic``). The live row must stay untouched.
+    mode to ``automatic``). The live row must stay untouched — including its
+    operator-controlled enforcement state (FAR-967 CO-5): a refused POST must
+    never re-enable a disabled gate either.
     """
     http, session = client
     added = _capture_added_gates(session)
@@ -452,6 +454,13 @@ def test_create_gate_live_human_gate_conflicts_and_keeps_mode_when_omitted(
     assert first.json()["evaluation_mode"] == "human"
     live_gate = added[0]
 
+    # The operator then disables the gate (FAR-967 CO-5); a refused POST must
+    # leave that enforcement state alone.
+    disabled_at = datetime(2026, 1, 1, tzinfo=UTC)
+    live_gate.enabled = False
+    live_gate.enabled_at = None
+    live_gate.disabled_at = disabled_at
+
     # (b) POST again with the mode omitted — create-only refuses.
     _queue_execute(
         session,
@@ -464,11 +473,14 @@ def test_create_gate_live_human_gate_conflicts_and_keeps_mode_when_omitted(
     )
     resp = http.post(_GATE_URL, json={"action": "block"})
 
-    # (c) typed 409, and the live row is neither soft-deleted nor re-moded.
+    # (c) typed 409, and the live row is neither soft-deleted, re-moded nor
+    # re-enabled.
     assert resp.status_code == 409, resp.text
     assert resp.json()["detail"] == evals_routes._MSG_POLICY_GATE_ALREADY_EXISTS
     assert live_gate.deleted_at is None
     assert live_gate.evaluation_mode == "human"
+    assert live_gate.enabled is False
+    assert live_gate.disabled_at == disabled_at
     assert len(added) == 1
 
 
@@ -622,6 +634,47 @@ def test_update_gate_omitting_evaluation_mode_preserves_human(client: tuple[Test
     assert gate.evaluation_mode == "human"
     # The snapshot key set equals the mutable set, at pre-edit values.
     assert body["pre_version_raw"] == {"action": "warn", "evaluation_mode": "human"}
+
+
+def test_update_gate_preserves_disabled_enforcement_state(client: tuple[TestClient, AsyncMock]) -> None:
+    """FAR-967 F6 invariant still live on the single replace path (PUT, FAR-1750).
+
+    Create-only POST removed the replace-time inheritance branches, but the
+    invariant they protected is still exercised by PUT: a replace/update must
+    never silently re-enable an operator-disabled gate. A PUT that changes
+    ``action`` and omits ``evaluation_mode`` must leave ``enabled`` False and
+    the ``disabled_at`` stamp unchanged.
+    """
+    http, session = client
+    gate = _gate_row(action="warn", version=1)
+    gate.evaluation_mode = "human"
+    disabled_at = datetime(2026, 1, 1, tzinfo=UTC)
+    gate.enabled = False
+    gate.enabled_at = None
+    gate.disabled_at = disabled_at
+    _queue_execute(
+        session,
+        [
+            _result(),  # SET LOCAL statement_timeout
+            _result(),  # advisory lock
+            _result(scalar_one_or_none=_eval_row()),
+            _result(scalar_one_or_none=gate),
+        ],
+    )
+
+    resp = http.put(_GATE_URL, json={"action": "block"})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # The mutable config changed as requested...
+    assert body["action"] == "block"
+    assert body["evaluation_mode"] == "human"
+    # ...but the operator safety control was not touched: no silent re-enable.
+    assert body["enabled"] is False
+    assert body["disabled_at"] is not None
+    assert gate.enabled is False
+    assert gate.enabled_at is None
+    assert gate.disabled_at == disabled_at
 
 
 def test_update_gate_explicit_automatic_resets_human_gate(client: tuple[TestClient, AsyncMock]) -> None:

@@ -18,7 +18,7 @@ URLs:
     GET    /api/v1/eval-suites/{id}   — get eval suite (team-scoped)
     PATCH  /api/v1/eval-suites/{id}   — update eval suite (team-scoped, admin only)
     DELETE /api/v1/eval-suites/{id}   — delete eval suite (team-scoped, admin only)
-    POST   /api/v1/evals/{eval_id}/policy-gate       — create/replace a policy gate
+    POST   /api/v1/evals/{eval_id}/policy-gate       — create a policy gate (409 if one exists; PUT replaces)
     PUT    /api/v1/evals/{eval_id}/policy-gate       — update a policy gate's action
     DELETE /api/v1/evals/{eval_id}/policy-gate       — soft-delete a policy gate
     GET    /api/v1/evals/{eval_id}/policy-gate       — read a policy gate
@@ -351,7 +351,7 @@ class PolicyGateResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Policy Gate helpers — shared advisory lock and create-or-replace
+# Policy Gate helpers — shared advisory lock and create-only POST
 # ---------------------------------------------------------------------------
 
 # The per-eval advisory lock is SHARED with the declarative graph writer
@@ -647,7 +647,7 @@ async def create_policy_gate(
                         "version": gate.version,
                         # FAR-967 F6: enforcement state is part of what the
                         # event records — an auditor must see whether the
-                        # gate this event created/replaced is active.
+                        # gate this event created is active.
                         "enabled": gate.enabled,
                     },
                 )
@@ -1058,7 +1058,7 @@ async def toggle_policy_gate(
 
             # Load eval (404 when missing); the gate load happens under the
             # advisory lock below so it serialises against a concurrent
-            # create-or-replace (FAR-967 F6).
+            # create or update (FAR-1750).
             await _load_eval_or_404(session, eval_id, principal)
 
             now = datetime.now(UTC)
