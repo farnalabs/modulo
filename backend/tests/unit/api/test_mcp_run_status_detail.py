@@ -209,6 +209,14 @@ class TestRunStatusDetailPayloadBounds:
         assert len(bounded["items"]) <= _MCP_INPUT_PAYLOAD_MAX_TOTAL_ITEMS
         assert bounded["items"][-1] == TRUNCATION_MARKER
 
+    def test_small_list_is_unchanged(self) -> None:
+        run = _run_row(input_payload={"items": [1, "two", [3.0]]})
+
+        bounded = _run_status_detail(run, _blobs(markers=None))["input_payload"]
+
+        assert bounded["items"] == [1, "two", [3.0]]
+        assert TRUNCATION_MARKER not in bounded["items"]
+
     def test_huge_dict_is_capped_with_omitted_count(self) -> None:
         run = _run_row(input_payload={f"key-{i}": i for i in range(10_000)})
 
