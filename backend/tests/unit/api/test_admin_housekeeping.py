@@ -56,6 +56,13 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # ``scan_all`` wraps each scanner in ``async with session.begin_nested()``
+    # (FAR-1977); without the async-CM shape a bare AsyncMock returns a
+    # coroutine that cannot be entered.
+    nested_cm = AsyncMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested_cm)
     session.execute = AsyncMock(return_value=_authz_result())
     return session
 

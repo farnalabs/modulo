@@ -524,7 +524,7 @@ class TestListHousekeepingSuccess(_SystemAdminContext):
                 entity_type="pipeline",
             ),
         ]
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(_make_housekeeping_session())
 
         with patch("modulo.core.housekeeping._SCANNERS", scanners):
             result = await list_housekeeping(limit=100)
