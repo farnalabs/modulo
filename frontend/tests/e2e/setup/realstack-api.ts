@@ -120,7 +120,7 @@ async function fetchWithTransientRetry(
   init: RequestInit,
 ): Promise<{ status: number; text: string }> {
   for (let attempt = 1; ; attempt++) {
-    // e2e-route-check: ignore generic transport helper - method/path are parameters, callers are checked
+    // e2e-route-check: ignore generic transport helper - method/path are parameters; apiFetch's callers and fireWebhook are checked
     const res = await fetch(url, { ...init, signal: AbortSignal.timeout(API_TIMEOUT_MS) })
     if (isTransientHttpStatus(res.status) && attempt < API_ATTEMPTS) {
       await new Promise((resolve) => setTimeout(resolve, API_BACKOFF_BASE_MS * attempt))

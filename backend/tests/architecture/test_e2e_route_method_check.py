@@ -1211,3 +1211,153 @@ def test_destructured_filter_is_noted_even_when_the_same_callback_yields_a_descr
 
     assert [(call.method, call.path) for call in calls] == [("PUT", "/api/v1/pipelines/abc/graph")]
     assert any(note.startswith(f"{FILENAME}:1:") for note in notes)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1847 ledger gaps: property-qualified callees, transport helper, per-call
+# accounting, and ``new URL`` / ``new Request`` fetch targets.
+# ---------------------------------------------------------------------------
+
+
+def test_global_this_fetch_is_extracted() -> None:
+    # ``globalThis.fetch`` (and ``window.fetch``) is a property-qualified call.
+    # The old marker excluded any ``.``-prefixed ``fetch``, so this live login
+    # call was neither extracted nor noted - a silent ledger gap.
+    source = "await globalThis.fetch('/api/v1/auth/login', { method: 'POST' })\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].kind == "fetch"
+    assert calls[0].method == "POST"
+    assert calls[0].path == "/api/v1/auth/login"
+
+
+def test_page_request_fetch_is_extracted() -> None:
+    source = "await page.request.fetch('/api/v1/pipelines', { method: 'DELETE' })\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].kind == "fetch"
+    assert calls[0].method == "DELETE"
+    assert calls[0].path == "/api/v1/pipelines"
+
+
+def test_fetch_with_transient_retry_is_extracted_and_checked() -> None:
+    # ``fetchWithTransientRetry`` is the shared transport helper: a real HTTP
+    # call whose method lives in its init. It must be extracted, not trusted.
+    live = _checker.build_live_routes({"/api/v1/triggers/{trigger_id}/webhook": {"post": {}}})
+    source = "await fetchWithTransientRetry('/api/v1/triggers/abc/webhook', { method: 'POST' })\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].method == "POST"
+    assert calls[0].path == "/api/v1/triggers/abc/webhook"
+    assert not _checker.find_violations(calls, live)
+
+
+def test_fetch_with_transient_retry_stale_method_is_reported() -> None:
+    live = _checker.build_live_routes({"/api/v1/triggers/{trigger_id}/webhook": {"post": {}}})
+    source = "await fetchWithTransientRetry('/api/v1/triggers/abc/webhook', { method: 'GET' })\n"
+
+    calls = _calls(source)
+    violations = _checker.find_violations(calls, live)
+
+    assert len(calls) == 1
+    assert len(violations) == 1
+    assert "not GET" in violations[0].detail
+
+
+def test_transport_helper_declaration_is_not_a_candidate() -> None:
+    unanalysed: list[str] = []
+    source = (
+        "async function fetchWithTransientRetry(\n"
+        "  url: string,\n"
+        "  init: RequestInit,\n"
+        "): Promise<{ status: number }> {\n"
+        "  // e2e-route-check: ignore generic transport helper\n"
+        "  const res = await fetch(url, init)\n"
+        "  return { status: res.status }\n"
+        "}\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert not calls
+    assert not unanalysed
+
+
+def test_two_calls_on_one_line_do_not_absorb_each_other() -> None:
+    # Per-LINE accounting let the modelled ``fetch('/api/v1/pipelines')`` hide
+    # the unmodelled ``fetch(buildUrl(), init)`` beside it. Accounting is now
+    # per call occurrence, so the second one is still a violation.
+    unanalysed: list[str] = []
+    source = "await Promise.all([fetch('/api/v1/pipelines'), fetch(buildUrl(), init)])\n"
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert len(calls) == 1
+    assert calls[0].method == "GET"
+    assert len(unanalysed) == 1
+    assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
+
+
+def test_two_call_occurrences_can_be_individually_accounted() -> None:
+    unanalysed: list[str] = []
+    source = "await Promise.all([fetch('/api/v1/pipelines'), fetch('/api/v1/runs')])\n"
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert [(call.method, call.path) for call in calls] == [
+        ("GET", "/api/v1/pipelines"),
+        ("GET", "/api/v1/runs"),
+    ]
+    assert not unanalysed
+
+
+def test_fetch_new_url_target_extracts_the_path_literal() -> None:
+    # ``fetch(new URL('/api/v1/auth/login', base), { method: 'POST' })``: the
+    # fragment scanner used to splice the base argument into the path as
+    # ``/api/v1/auth/login/{param}`` - a false stale violation.
+    live = _checker.build_live_routes({"/api/v1/auth/login": {"post": {}}})
+    source = "await fetch(new URL('/api/v1/auth/login', base), { method: 'POST' })\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].method == "POST"
+    assert calls[0].path == "/api/v1/auth/login"
+    assert not _checker.find_violations(calls, live)
+
+
+def test_fetch_new_request_target_extracts_path_and_method() -> None:
+    # ``fetch(new Request(path, { method }))``: the method lives in the Request
+    # init, not in an outer fetch init. It used to be read as an implicit GET
+    # and the method literal leaked into the path.
+    live = _checker.build_live_routes({"/api/v1/auth/login": {"post": {}}})
+    source = "await fetch(new Request('/api/v1/auth/login', { method: 'POST' }))\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].method == "POST"
+    assert calls[0].path == "/api/v1/auth/login"
+    assert not _checker.find_violations(calls, live)
+
+
+def test_realstack_webhook_transport_call_is_extracted() -> None:
+    # The helper's caller is literal even though the helper itself is generic:
+    # ``fireWebhook`` names POST /api/v1/triggers/{id}/webhook. It used to be
+    # extracted by nothing and annotated by nothing.
+    source = (REPO_ROOT / "frontend/tests/e2e/setup/realstack-api.ts").read_text(encoding="utf-8")
+
+    calls = _checker.extract_http_calls(source, "frontend/tests/e2e/setup/realstack-api.ts")
+
+    webhook_calls = [
+        call for call in calls if call.path == "/api/v1/triggers/{param}/webhook" and call.method == "POST"
+    ]
+
+    assert len(webhook_calls) == 1
+    assert webhook_calls[0].line == 897

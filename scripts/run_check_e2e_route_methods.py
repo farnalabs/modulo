@@ -38,7 +38,13 @@ What is scanned (``frontend/tests/e2e/**/*.ts``):
 * direct ``fetch(<url>, { method: '<METHOD>' })`` in the setup helpers, plus
   the implicit-GET ``fetch(<url>)`` / ``fetch(<url>, { headers })`` form (a
   genuinely absent ``method`` key means GET, which is checked like any other
-  method). A ``method`` property present without a literal value (the
+  method). Property-qualified callees are the same call shape
+  (``globalThis.fetch``, ``window.fetch``, ``page.request.fetch``).
+  ``fetchWithTransientRetry(<url>, <init>)`` - the shared transport helper - is
+  modelled identically, so its ``method``/URL arguments are checked rather than
+  trusted. ``new URL(<path>, <base>)`` and ``new Request(<path>, <init>)``
+  targets unwrap to the path literal, and a ``Request``'s own ``method`` is read
+  from its init. A ``method`` property present without a literal value (the
   ``{ method }`` shorthand, a quoted key, or any other non-literal value) is
   unresolvable, not an implicit GET, and is reported as a note.
 * ``page.request.<verb>(<url>)`` / ``context.request.<verb>(<url>)`` /
@@ -85,25 +91,30 @@ Coverage ledger (the guard's invariant - no silent skips)
 
 Extraction alone can never prove it saw every call shape: the space of
 JavaScript expressions that build an HTTP request is unbounded, and every miss
-is silent. The check therefore also enumerates CANDIDATE lines with a
-deliberately broad marker set - ``apiFetch(``, ``fetch(``,
-``page.request.<verb>(`` / ``context.request.<verb>(`` / ``request.<verb>(``,
-``.request().method(``, ``request.method(``, and HTTP-method literals compared
-against a method expression (``=== 'PATCH'``, ``!== 'GET'``,
-``includes(...)``). Every candidate line MUST be accounted for on the same
+is silent. The check therefore also enumerates CANDIDATE call OCCURRENCES with a
+deliberately broad marker set - ``apiFetch(``, ``fetch(`` and every
+property-qualified form (``globalThis.fetch(``, ``page.request.fetch(``),
+``fetchWithTransientRetry(``, ``page.request.<verb>(`` /
+``context.request.<verb>(`` / ``request.<verb>(`` - plus method-reference lines
+(``.request().method(``, ``request.method(``, and HTTP-method literals compared
+against a method expression: ``=== 'PATCH'``, ``!== 'GET'``, ``includes(...)``).
+Every candidate CALL occurrence MUST be accounted for individually on the same
 ``file:line`` by exactly one of:
 
-* a descriptor extracted for that line, or
-* an explicit note emitted for that line, or
+* a descriptor extracted for that occurrence, or
+* an explicit note emitted for that occurrence, or
 * an inline suppression annotation on that line or the immediately preceding
   line: ``// e2e-route-check: ignore <short reason>``.
 
-An unaccounted API-call candidate is a violation (exit 1) naming the line:
-a new call shape fails loudly instead of passing. An unaccounted method
-reference is reported as a note for that line - it names no route this checker
-can validate, but it is never silently dropped. A candidate is only excluded
-structurally when it is provably not a call (an ``apiFetch`` function
-declaration), never by a pattern that happens to miss.
+Accounting is per occurrence, not per line: a second, unmodelled call on a line
+that also carries a modelled call (``Promise.all([fetch(a), fetch(b, init)])``)
+is still a violation. An unaccounted API-call occurrence is a violation (exit 1)
+naming the line: a new call shape fails loudly instead of passing. A
+method-reference line is reported as a note when unaccounted - it names no route
+this checker can validate, but it is never silently dropped. A candidate is only
+excluded structurally when it is provably not a call (an ``apiFetch`` /
+``fetchWithTransientRetry`` function declaration, or an identifier with no
+argument list), never by a pattern that happens to miss.
 
 Exit codes: 0 clean, 1 stale descriptors or unanalysed call shapes (one line
 each, with file:line, the method, the path and the closest live route), 2
@@ -198,7 +209,19 @@ _METHOD_CALL_RE = re.compile(r"\.\s*method\s*\(")
 _DESTRUCTURED_METHOD_RE = re.compile(r"\{[^}]*\bmethod\b[^}]*\}\s*=\s*[^;\n]*\brequest\s*\(\s*\)")
 _ROUTE_CALL_RE = re.compile(r"(?<![\w.])(?:page|context)\s*\.\s*route\s*\(")
 _API_FETCH_RE = re.compile(r"(?<![\w.$])apiFetch\b")
-_FETCH_RE = re.compile(r"(?<![\w.$])fetch\b")
+#: ``fetch(...)`` with an optional dotted qualifier: bare ``fetch``, plus the
+#: property-qualified forms (``globalThis.fetch``, ``window.fetch``,
+#: ``page.request.fetch``). A leading ``.`` used to exclude every qualified form,
+#: so those calls were neither extracted nor flagged - a silent ledger gap.
+_FETCH_RE = re.compile(r"(?<![\w$])(?:[A-Za-z_$][\w$]*\s*\.\s*)*fetch\b")
+#: ``fetchWithTransientRetry(url, init)`` - the shared transport helper in
+#: ``frontend/tests/e2e/setup/realstack-api.ts``. It is a real HTTP call whose
+#: method/path live in its arguments, so it is modelled exactly like ``fetch``.
+_RETRY_FETCH_RE = re.compile(r"(?<![\w$])fetchWithTransientRetry\b")
+#: ``new URL(<path>, <base>)`` / ``new Request(<path>, <init>)`` used as a
+#: ``fetch`` target. The path literal is the first constructor argument; a
+#: ``Request`` also carries the method in its init.
+_NEW_FETCH_TARGET_RE = re.compile(r"^\s*new\s+(URL|Request)\s*\(")
 # ``page.request.get(...)`` / ``context.request.delete(...)`` /
 # ``page.context().request.put(...)`` / ``request.post(...)`` on a Playwright
 # APIRequestContext.
@@ -217,12 +240,6 @@ _LEDGER_IGNORE_RE = re.compile(r"//\s*e2e-route-check:\s*ignore\b")
 _LEDGER_COMPARISON_RE = re.compile(r"===?|!==?|includes\s*\(")
 _LEDGER_METHOD_WORD_RE = re.compile(r"\bmethod\b")
 _LEDGER_METHOD_CALL_RE = re.compile(r"\.\s*method\s*\(|(?<![\w.$])request\s*\.\s*method\s*\(")
-_LEDGER_CALL_MARKER_RE = re.compile(
-    r"(?<![\w.$])apiFetch\b"
-    r"|(?<![\w.$])fetch\b"
-    r"|(?<![\w.$])(?:(?:page|context)\s*(?:\.\s*context\s*\(\s*\))?\s*\.\s*request|request)"
-    r"\s*\.\s*(?:get|post|put|patch|delete|head|options)\b"
-)
 _LEDGER_UNMODELLED_METHOD_NOTE = (
     "page.route callback filters on the request method in a form this check cannot "
     "attribute to a single literal method, so its method filter was not checked"
@@ -1268,38 +1285,94 @@ def _extract_route_interceptors(
 # ---------------------------------------------------------------------------
 
 
-def _is_api_fetch_declaration(masked: str, offset: int) -> bool:
-    """True when the ``apiFetch`` identifier at *offset* declares the helper."""
+def _is_function_declaration(masked: str, offset: int) -> bool:
+    """True when the identifier at *offset* is being declared (``function foo``)."""
     return bool(re.search(r"(?:\basync\s+)?\bfunction\s*$", masked[max(0, offset - 40) : offset]))
 
 
-def _candidate_lines(source: str, masked: str) -> dict[int, set[str]]:
-    """Return ``line -> {"call", "method-ref"}`` for every candidate marker.
+def _is_api_fetch_declaration(masked: str, offset: int) -> bool:
+    """True when the ``apiFetch`` identifier at *offset* declares the helper."""
+    return _is_function_declaration(masked, offset)
 
-    Enumerated on the MASKED source, so a prose mention in a comment or a
-    string (``// ... on a catalog fetch ...``) is not a candidate, while line
-    numbers still match the original file.
+
+def _unwrap_fetch_target(expression: str) -> tuple[str, list[str]]:
+    """Resolve a ``fetch`` target to ``(path_expression, request_init_arguments)``.
+
+    ``fetch`` accepts a string, a ``URL`` or a ``Request``. A ``new URL(<path>,
+    <base>)`` target contributes only its first argument as the path; a ``new
+    Request(<path>, <init>)`` target contributes BOTH the path and the init, so
+    its ``method`` is read from the Request rather than assumed to be an
+    implicit GET. Both forms are idiomatic across the specs
+    (``notifications.spec.ts`` builds a ``new URL``), and the fragment scanner
+    used to splice the constructor's remaining arguments into the path
+    (``/api/v1/auth/login/{param}``) - a false stale violation.
     """
-    candidates: dict[int, set[str]] = {}
+    text = expression.strip()
+    masked = mask_non_code(text)
+    match = _NEW_FETCH_TARGET_RE.match(masked)
+    if match is None:
+        return text, []
+    spans = _split_args(masked, match.end() - 1)
+    arguments = [text[start:end].strip() for start, end in spans if text[start:end].strip()]
+    if not arguments:
+        return text, []
+    if match.group(1) == "URL":
+        return arguments[0], []
+    return arguments[0], arguments[1:]
 
-    def add(line: int, kind: str) -> None:
-        candidates.setdefault(line, set()).add(kind)
 
-    for match in _LEDGER_CALL_MARKER_RE.finditer(masked):
-        marker = match.group(0)
-        if marker.startswith("apiFetch"):
-            if _is_api_fetch_declaration(masked, match.start()):
-                continue
-            # A ``const apiFetch = ...`` definition is not a call site either.
+def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
+    """Return ``(offset, line)`` for every call occurrence the extractor models.
+
+    Enumerated with the SAME regexes the extractor uses, so the ledger counts
+    each occurrence independently - an unmodelled call can no longer be
+    absorbed by a modelled call on the same line (the ``Promise.all([fetch(a),
+    fetch(b, init)])`` shape). A ``function apiFetch(...)`` /
+    ``function fetchWithTransientRetry(...)`` declaration and an identifier that
+    is merely read (no argument list) are not calls and are excluded
+    structurally, exactly as extraction excludes them.
+    """
+    occurrences: list[tuple[int, int]] = []
+    seen: set[int] = set()
+
+    def add(offset: int) -> None:
+        if offset in seen:
+            return
+        seen.add(offset)
+        occurrences.append((offset, _line_of(source, offset)))
+
+    for match in _API_FETCH_RE.finditer(masked):
+        if _is_api_fetch_declaration(masked, match.start()):
+            continue
+        if _find_open_paren(masked, match.end()) is None:
+            continue
+        add(match.start())
+    for match in _RETRY_FETCH_RE.finditer(masked):
+        if _is_function_declaration(masked, match.start()):
+            continue
+        if _find_open_paren(masked, match.end()) is None:
+            continue
+        add(match.start())
+    for pattern in (_FETCH_RE, _API_REQUEST_RE):
+        for match in pattern.finditer(masked):
             if _find_open_paren(masked, match.end()) is None:
                 continue
-        add(_line_of(source, match.start()), "call")
+            add(match.start())
+    return occurrences
 
+
+def _method_ref_lines(source: str, masked: str) -> set[int]:
+    """Return every line that references an HTTP method without naming a route.
+
+    Method references are accounted per line: a descriptor or note emitted for
+    the line covers it, and an unaccounted one is noted (never dropped).
+    """
+    lines: set[int] = set()
     raw_lines = source.splitlines()
     for index, masked_line in enumerate(masked.splitlines()):
         line = index + 1
         if _LEDGER_METHOD_CALL_RE.search(masked_line):
-            add(line, "method-ref")
+            lines.add(line)
             continue
         raw_line = raw_lines[index] if index < len(raw_lines) else ""
         if (
@@ -1307,8 +1380,8 @@ def _candidate_lines(source: str, masked: str) -> dict[int, set[str]]:
             and _LEDGER_METHOD_WORD_RE.search(masked_line)
             and _LEDGER_COMPARISON_RE.search(masked_line)
         ):
-            add(line, "method-ref")
-    return candidates
+            lines.add(line)
+    return lines
 
 
 def _note_line_numbers(filename: str, notes: list[str]) -> set[int]:
@@ -1331,36 +1404,135 @@ def _apply_coverage_ledger(
     calls: list[HttpCall],
     notes: list[str],
     unanalysed: list[str] | None,
+    accounted_offsets: set[int],
 ) -> None:
-    """Account for every candidate line, or report it.
+    """Account for every candidate occurrence, or report it.
 
-    An unaccounted API-call candidate is appended to *unanalysed* (the CLI turns
-    those into exit 1). An unaccounted method reference is only ever a note - it
-    names no route this checker can validate, but it is never dropped. When no
-    *unanalysed* sink is supplied (a direct library call), the violation is
-    downgraded to a note so it still cannot vanish silently.
+    Call candidates are accounted PER OCCURRENCE: *accounted_offsets* is the
+    set of call-marker offsets extraction resolved into a descriptor or an
+    explicit note, so a second, unmodelled call on the same line cannot be
+    absorbed by the first. An unaccounted call occurrence is appended to
+    *unanalysed* (the CLI turns those into exit 1). An unaccounted method
+    reference is only ever a note - it names no route this checker can validate,
+    but it is never dropped. When no *unanalysed* sink is supplied (a direct
+    library call), the violation is downgraded to a note so it still cannot
+    vanish silently.
     """
-    candidates = _candidate_lines(source, masked)
-    if not candidates:
+    call_occurrences = _call_candidates(source, masked)
+    method_lines = _method_ref_lines(source, masked)
+    if not call_occurrences and not method_lines:
         return
-    accounted = {call.line for call in calls}
-    accounted |= _note_line_numbers(filename, notes)
+    accounted_lines = {call.line for call in calls}
+    accounted_lines |= _note_line_numbers(filename, notes)
     raw_lines = source.splitlines()
-    for line in sorted(candidates):
-        if line in accounted:
-            continue
+    suppressed_lines: set[int] = set()
+    for line in {line for _, line in call_occurrences} | method_lines:
         current = raw_lines[line - 1] if line - 1 < len(raw_lines) else ""
         previous = raw_lines[line - 2] if line >= 2 else ""
         if _LEDGER_IGNORE_RE.search(current) or _LEDGER_IGNORE_RE.search(previous):
+            suppressed_lines.add(line)
+    for offset, line in call_occurrences:
+        if offset in accounted_offsets or line in suppressed_lines:
             continue
-        if "call" in candidates[line]:
-            message = f"{filename}:{line}: {_UNANALYSED_CALL_MESSAGE}"
-            if unanalysed is not None:
-                unanalysed.append(message)
-            else:
-                _add_note(notes, filename, line, _UNANALYSED_CALL_MESSAGE)
+        message = f"{filename}:{line}: {_UNANALYSED_CALL_MESSAGE}"
+        if unanalysed is not None:
+            unanalysed.append(message)
         else:
-            _add_note(notes, filename, line, _LEDGER_UNMODELLED_METHOD_NOTE)
+            _add_note(notes, filename, line, _UNANALYSED_CALL_MESSAGE)
+    for line in sorted(method_lines):
+        if line in accounted_lines or line in suppressed_lines:
+            continue
+        _add_note(notes, filename, line, _LEDGER_UNMODELLED_METHOD_NOTE)
+
+
+def _extract_fetch_like(
+    source: str,
+    masked: str,
+    filename: str,
+    notes: list[str],
+    accounted_offsets: set[int],
+    pattern: re.Pattern[str],
+    label: str,
+    *,
+    skip_declaration: bool,
+    note_unresolved_always: bool,
+) -> list[HttpCall]:
+    """Extract ``fetch``-shaped calls (``fetch`` and the transport helper).
+
+    *label* names the callee in notes (``fetch`` / ``fetchWithTransientRetry``).
+    The target is unwrapped through ``new URL`` / ``new Request`` first, so the
+    path and a Request's own ``method`` are read from the constructor arguments.
+    Every occurrence that becomes a descriptor or a note registers its offset in
+    *accounted_offsets*, which is what makes the ledger per-occurrence.
+    """
+    calls: list[HttpCall] = []
+    for match in pattern.finditer(masked):
+        if skip_declaration and _is_function_declaration(masked, match.start()):
+            continue
+        open_paren = _find_open_paren(masked, match.end())
+        if open_paren is None:
+            continue
+        offset = match.start()
+        line = _line_of(source, offset)
+        args = _args_of(source, masked, open_paren)
+        if not args:
+            continue
+        target, request_init_arguments = _unwrap_fetch_target(args[0])
+        # An outer init overrides a Request's own init, so it is read first.
+        method, unresolved = _fetch_method(args[1:] + request_init_arguments)
+        path_info = extract_path(target)
+        if path_info is None:
+            if method is not None:
+                _add_note(
+                    notes,
+                    filename,
+                    line,
+                    f"{label} call has a resolvable method but a non-literal URL argument, "
+                    f"so its route was not checked",
+                )
+                accounted_offsets.add(offset)
+            elif _API_PREFIX in target:
+                _add_note(
+                    notes,
+                    filename,
+                    line,
+                    f"{label} URL argument names an API path but could not be normalised statically",
+                )
+                accounted_offsets.add(offset)
+            elif note_unresolved_always:
+                _add_note(
+                    notes,
+                    filename,
+                    line,
+                    f"{label} call could not be fully resolved: its URL is not a statically readable "
+                    f"API path and its method is unknown; its call sites are checked separately",
+                )
+                accounted_offsets.add(offset)
+            continue
+        if unresolved:
+            if _API_PREFIX in target or note_unresolved_always:
+                _add_note(
+                    notes,
+                    filename,
+                    line,
+                    f"{label} init does not expose a single readable method option, so the request method is unknown",
+                )
+                accounted_offsets.add(offset)
+            continue
+        path, trailing_glob, last_prefix = path_info
+        calls.append(
+            HttpCall(
+                filename=filename,
+                line=line,
+                method=method or "GET",  # no method option means an implicit GET
+                path=path,
+                kind="fetch",
+                trailing_glob=trailing_glob,
+                last_segment_prefix=last_prefix,
+            )
+        )
+        accounted_offsets.add(offset)
+    return calls
 
 
 def extract_http_calls(
@@ -1373,23 +1545,25 @@ def extract_http_calls(
 
     *notes* (when given) collects explicit explanations for shapes the checker
     cannot resolve safely, so a skip is visible rather than silent. *unanalysed*
-    (when given) collects coverage-ledger violations - candidate lines with no
-    descriptor, note or suppression annotation.
+    (when given) collects coverage-ledger violations - candidate call
+    occurrences with no descriptor, note or suppression annotation.
     """
     notes = notes if notes is not None else []
     masked = mask_non_code(source)
     calls: list[HttpCall] = []
+    accounted_offsets: set[int] = set()
 
     for match in _API_FETCH_RE.finditer(masked):
         # A function DECLARATION (``export async function apiFetch<T>(...)``)
         # is the helper itself, not a call: its typed parameters are not a
         # method/path pair and must not be noted as an unresolved request.
-        if re.search(r"(?:\basync\s+)?\bfunction\s*$", masked[max(0, match.start() - 40) : match.start()]):
+        if _is_api_fetch_declaration(masked, match.start()):
             continue
         open_paren = _find_open_paren(masked, match.end())
         if open_paren is None:
             continue
-        line = _line_of(source, match.start())
+        offset = match.start()
+        line = _line_of(source, offset)
         args = _args_of(source, masked, open_paren)
         if len(args) < 4:
             # ``apiFetch`` is inherently an API call, so a call shape this
@@ -1401,6 +1575,7 @@ def extract_http_calls(
                 line,
                 "apiFetch call has fewer than four arguments, so its method and path were not checked",
             )
+            accounted_offsets.add(offset)
             continue
         method = _literal_method(args[2])
         path_info = extract_path(args[3])
@@ -1414,6 +1589,7 @@ def extract_http_calls(
                 line,
                 "apiFetch call has a resolvable method but a non-literal path argument, so its route was not checked",
             )
+            accounted_offsets.add(offset)
             continue
         if method is None or path_info is None:
             # ``apiFetch`` IS the API call - both arguments may be hoisted
@@ -1430,6 +1606,7 @@ def extract_http_calls(
                 line,
                 "apiFetch call could not be fully resolved: " + "; ".join(reasons),
             )
+            accounted_offsets.add(offset)
             continue
         path, trailing_glob, last_prefix = path_info
         calls.append(
@@ -1443,59 +1620,40 @@ def extract_http_calls(
                 last_segment_prefix=last_prefix,
             )
         )
+        accounted_offsets.add(offset)
 
-    for match in _FETCH_RE.finditer(masked):
-        open_paren = _find_open_paren(masked, match.end())
-        if open_paren is None:
-            continue
-        line = _line_of(source, match.start())
-        args = _args_of(source, masked, open_paren)
-        if not args:
-            continue
-        method, unresolved = _fetch_method(args[1:])
-        path_info = extract_path(args[0])
-        if path_info is None:
-            if method is not None:
-                _add_note(
-                    notes,
-                    filename,
-                    line,
-                    "fetch call has a resolvable method but a non-literal URL argument, so its route was not checked",
-                )
-            elif _API_PREFIX in args[0]:
-                _add_note(
-                    notes,
-                    filename,
-                    line,
-                    "fetch URL argument names an API path but could not be normalised statically",
-                )
-            continue
-        if unresolved:
-            if _API_PREFIX in args[0]:
-                _add_note(
-                    notes,
-                    filename,
-                    line,
-                    "fetch init does not expose a single readable method option, so the request method is unknown",
-                )
-            continue
-        path, trailing_glob, last_prefix = path_info
-        calls.append(
-            HttpCall(
-                filename=filename,
-                line=line,
-                method=method or "GET",  # no method option means an implicit GET
-                path=path,
-                kind="fetch",
-                trailing_glob=trailing_glob,
-                last_segment_prefix=last_prefix,
-            )
+    calls.extend(
+        _extract_fetch_like(
+            source,
+            masked,
+            filename,
+            notes,
+            accounted_offsets,
+            _FETCH_RE,
+            "fetch",
+            skip_declaration=False,
+            note_unresolved_always=False,
         )
+    )
+    calls.extend(
+        _extract_fetch_like(
+            source,
+            masked,
+            filename,
+            notes,
+            accounted_offsets,
+            _RETRY_FETCH_RE,
+            "fetchWithTransientRetry",
+            skip_declaration=True,
+            note_unresolved_always=True,
+        )
+    )
 
     for match in _API_REQUEST_RE.finditer(masked):
         open_paren = _find_open_paren(masked, match.end())
         if open_paren is None:
             continue
+        offset = match.start()
         args = _args_of(source, masked, open_paren)
         if not args:
             continue
@@ -1509,16 +1667,17 @@ def extract_http_calls(
             _add_note(
                 notes,
                 filename,
-                _line_of(source, match.start()),
+                _line_of(source, offset),
                 "page.request/request verb call has a resolvable method but a non-literal URL "
                 "argument, so its route was not checked",
             )
+            accounted_offsets.add(offset)
             continue
         path, trailing_glob, last_prefix = path_info
         calls.append(
             HttpCall(
                 filename=filename,
-                line=_line_of(source, match.start()),
+                line=_line_of(source, offset),
                 method=method,
                 path=path,
                 kind="request",
@@ -1526,10 +1685,11 @@ def extract_http_calls(
                 last_segment_prefix=last_prefix,
             )
         )
+        accounted_offsets.add(offset)
 
     calls.extend(_extract_route_interceptors(source, masked, filename, notes))
     calls.sort(key=lambda call: (call.line, call.method, call.path))
-    _apply_coverage_ledger(source, masked, filename, calls, notes, unanalysed)
+    _apply_coverage_ledger(source, masked, filename, calls, notes, unanalysed, accounted_offsets)
     return calls
 
 
