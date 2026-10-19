@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import time
 from typing import Any, Literal
 
@@ -63,16 +62,47 @@ PER_CONTAINER_MEM_MB = 1024
 NOTIFICATION_CATEGORY = "runner"
 NOTIFICATION_ACTION_URL = "/admin/runners/concurrency"
 
-#: Matches ``userinfo@`` inside any URL embedded in an error string
-#: (credential-bearing ``MODULO_DOCKER_HOST`` — tcp://user:pass@host:port).
-#: Possessive quantifiers make each repetition's intent explicit and satisfy
-#: SonarCloud S8786. Behaviour-preserving: the pattern accepts and redacts the
-#: same inputs as before (pinned by tests) — not a measured performance fix.
-_URL_USERINFO_RE = re.compile(r"(?<=//)[^/?#\s:@]++:[^/?#\s:@]++@")
+#: Terminators for a URL userinfo block: the path/query/fragment delimiters and
+#: the ``:``/``@`` that separate its credential halves. Whitespace terminates
+#: too (checked via ``str.isspace``). This is the character class the previous
+#: regex encoded; the scrubber below replaced that regex with a single linear
+#: scan (SonarCloud S8786 — no super-linear backtracking).
+_USERINFO_TERMINATORS = frozenset("/?#:@")
 
 #: qa F17: the strip states are a closed contract shared with the wire
 #: schema (routes/runners derives its Pydantic Literals from this union).
 StripState = Literal["healthy", "engine_unreachable", "image_not_pulled", "stale"]
+
+
+def _is_userinfo_char(ch: str) -> bool:
+    """True when *ch* may appear inside a userinfo half (user or password)."""
+    return ch not in _USERINFO_TERMINATORS and not ch.isspace()
+
+
+def _userinfo_end(text: str, start: int) -> int | None:
+    """Return the index just past a ``user:password@`` block beginning at *start*.
+
+    The block is exactly ``user`` ``:`` ``password`` ``@`` where each half is
+    non-empty and free of userinfo terminators — meaning a block with an
+    embedded ``:`` (a password containing ``:``) does not match, and neither
+    does a bare ``:`` pair with an empty half. Returns ``None`` when no such
+    block begins at *start*.
+
+    Single forward scan: *start* .. the ``@`` is walked once, never re-read.
+    """
+    length = len(text)
+    cursor = start
+    while cursor < length and _is_userinfo_char(text[cursor]):
+        cursor += 1
+    if cursor == start or cursor >= length or text[cursor] != ":":
+        return None
+    password_start = cursor + 1
+    cursor = password_start
+    while cursor < length and _is_userinfo_char(text[cursor]):
+        cursor += 1
+    if cursor == password_start or cursor >= length or text[cursor] != "@":
+        return None
+    return cursor + 1
 
 
 def scrub_url_credentials(text: str) -> str:
@@ -82,8 +112,32 @@ def scrub_url_credentials(text: str) -> str:
     (``tcp://user:pass@host:2375``); aiohttp/aiodocker error strings include
     the URL verbatim, so every persisted ``probe_error`` and every log line
     derived from an engine exception must pass through here first.
+
+    Implemented as a single forward scan over the string (no regular
+    expression), so it cannot exhibit super-linear backtracking (S8786). A
+    candidate block is only considered immediately after a ``//``; the scan
+    then consumes the two userinfo halves once and requires the ``@``.
     """
-    return _URL_USERINFO_RE.sub("***@", text)
+    out: list[str] = []
+    cursor = 0
+    search = 0
+    length = len(text)
+    while search < length - 1:
+        slash = text.find("//", search)
+        if slash == -1:
+            break
+        end = _userinfo_end(text, slash + 2)
+        if end is None:
+            # No block here; advance one char so an overlapping ``//`` later in
+            # the string is still considered (regex scan semantics).
+            search = slash + 1
+            continue
+        out.append(text[cursor : slash + 2])
+        out.append("***@")
+        cursor = end
+        search = end
+    out.append(text[cursor:])
+    return "".join(out)
 
 
 class EngineProbeOutcome:

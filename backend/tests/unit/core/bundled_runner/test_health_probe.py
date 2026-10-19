@@ -135,12 +135,11 @@ class TestScrubUrlCredentials:
         assert scrub_url_credentials(text) == text
 
     def test_scrubs_every_userinfo_occurrence(self) -> None:
-        """The possessive-quantifier rewrite (S8786) is behaviour-preserving.
+        """The linear scan (S8786) redacts EVERY occurrence, not just the first.
 
-        Both quantifiers are followed by a literal their class excludes
-        (``:`` / ``@``), so possessive matching cannot change the result; this
-        pins the multi-occurrence ``sub`` behaviour, which is what the probe's
-        error strings actually contain (one URL per engine/proxy error).
+        The scan continues past each redacted block, so the multi-occurrence
+        behaviour the probe's error strings rely on (one URL per engine/proxy
+        error, concatenated) is preserved.
         """
         text = "tcp://alice:first-secret@a.internal:2375 and tcp://bob:second-secret@b.internal:2375"
         scrubbed = scrub_url_credentials(text)
@@ -151,20 +150,46 @@ class TestScrubUrlCredentials:
         assert "b.internal:2375" in scrubbed
 
     def test_does_not_scrub_password_containing_a_colon(self) -> None:
-        """A userinfo block with an embedded ``:`` does not match — unchanged
-        by the possessive rewrite (the class excludes ``:`` in both halves)."""
+        """A userinfo block with an embedded ``:`` does not match — the scan's
+        terminator set excludes ``:`` in both halves, so the block is left
+        untouched rather than partially redacted."""
         text = "tcp://alice:pa:ss@proxy.internal:2375"
         assert scrub_url_credentials(text) == text
 
     def test_userinfo_after_a_long_credential_free_run_is_still_found(self) -> None:
         """Pins the shape the S8786 finding targeted: a long run of class
-        characters before the real userinfo. Possessive matching must still
-        locate the userinfo later in the same string."""
+        characters before the real userinfo. The single forward scan must
+        still locate the userinfo later in the same string."""
         filler = "a" * 500
         text = f"tcp://proxy.internal:2375/{filler} //alice:s3cret@proxy.internal:2375"
         scrubbed = scrub_url_credentials(text)
         assert "s3cret" not in scrubbed
         assert "***@proxy.internal:2375" in scrubbed
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "tcp://:pass@proxy.internal:2375",  # empty user half
+            "tcp://user:@proxy.internal:2375",  # empty password half
+            "tcp://user@proxy.internal:2375",  # no colon at all
+            "tcp://user:pass",  # no @
+            "tcp:// user:pass@proxy.internal:2375",  # whitespace before userinfo
+        ],
+    )
+    def test_malformed_or_empty_userinfo_blocks_are_untouched(self, text: str) -> None:
+        """Both halves must be non-empty and terminator-free for a block to be
+        redacted; anything else is left verbatim (the old class required a
+        non-empty run on each side of the ``:``)."""
+        assert scrub_url_credentials(text) == text
+
+    def test_overlapping_slashes_still_yield_the_userinfo_match(self) -> None:
+        """``///user:pass@`` has a candidate start one char after the first
+        ``//``; the scan must not skip it."""
+        assert scrub_url_credentials("///user:pass@host") == "///***@host"
+
+    def test_empty_and_slash_only_strings_are_unchanged(self) -> None:
+        assert not scrub_url_credentials("")
+        assert scrub_url_credentials("////") == "////"
 
 
 def _fake_session_factory(session: AsyncMock) -> Any:
