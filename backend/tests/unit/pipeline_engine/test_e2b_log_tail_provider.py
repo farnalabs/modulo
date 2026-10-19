@@ -147,7 +147,7 @@ def _sandbox_with_completed_command(sandbox_id: str, output_json: str) -> MagicM
 # ---------------------------------------------------------------------------
 
 
-async def test_build_log_tail_provider_constructs_real_e2b_provider() -> None:
+def test_build_log_tail_provider_constructs_real_e2b_provider() -> None:
     """The real builder body runs the hub factory and returns the E2B provider.
 
     No network: ``RuntimeProviderHub.initialise`` only constructs and registers
@@ -156,21 +156,21 @@ async def test_build_log_tail_provider_constructs_real_e2b_provider() -> None:
     """
     from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
 
-    provider = await _build_log_tail_provider("test-key")
+    provider = _build_log_tail_provider("test-key")
     assert isinstance(provider, E2BRuntimeProvider)
 
 
-async def test_build_log_tail_provider_returns_none_when_hub_init_fails(
+def test_build_log_tail_provider_returns_none_when_hub_init_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A hub/config failure is swallowed and surfaces as ``None`` (never raises)."""
     from modulo.core.runtime_provider.hub import RuntimeProviderHub
 
-    async def _boom(self: RuntimeProviderHub, config: dict[str, Any]) -> None:
+    def _boom(self: RuntimeProviderHub, config: dict[str, Any]) -> None:
         raise RuntimeError("hub exploded")
 
     monkeypatch.setattr(RuntimeProviderHub, "initialise", _boom)
-    assert await _build_log_tail_provider("test-key") is None
+    assert _build_log_tail_provider("test-key") is None
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +181,7 @@ async def test_build_log_tail_provider_returns_none_when_hub_init_fails(
 async def test_log_tail_caller_hits_provider_not_urllib(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     fake = FakeRuntimeProvider(b"provider-fixed-tail")
-    builder = AsyncMock(return_value=fake)
+    builder = MagicMock(return_value=fake)
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_log_tail_provider", builder)
     # urlopen must never fire on the provider path (the hostname lives only in e2b.py).
     monkeypatch.setattr("urllib.request.urlopen", AsyncMock(side_effect=AssertionError("urlopen must not run")))
@@ -209,7 +209,7 @@ async def test_log_tail_caller_hits_provider_not_urllib(monkeypatch: pytest.Monk
 
     message = str(excinfo.value)
     assert "provider-fixed-tail" in message
-    builder.assert_awaited_once()
+    builder.assert_called_once()
     # provider primitive called with the dispatch's sandbox id + plan's bound
     assert fake.calls == [("sbx-logtail", 6000)]
     # pre-kill ordering preserved on the provider path
@@ -231,7 +231,7 @@ async def test_timeout_kill_path_uses_provider(monkeypatch: pytest.MonkeyPatch, 
     fake = FakeRuntimeProvider(b"timeout-tail")
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
-        AsyncMock(return_value=fake),
+        MagicMock(return_value=fake),
     )
 
     fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30))
@@ -272,7 +272,7 @@ async def test_schema_failure_path_uses_provider(monkeypatch: pytest.MonkeyPatch
     fake = FakeRuntimeProvider(b"schema-tail")
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
-        AsyncMock(return_value=fake),
+        MagicMock(return_value=fake),
     )
 
     node_def = _base_node_def(timeout_seconds=30, output_schema_json={"required": ["status", "summary"]})
@@ -302,7 +302,7 @@ async def test_generic_exception_path_uses_provider(monkeypatch: pytest.MonkeyPa
     fake = FakeRuntimeProvider(b"exc-tail")
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
-        AsyncMock(return_value=fake),
+        MagicMock(return_value=fake),
     )
 
     fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30))
@@ -332,25 +332,25 @@ async def test_generic_exception_path_uses_provider(monkeypatch: pytest.MonkeyPa
 async def test_helper_returns_empty_without_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
-    builder = AsyncMock(side_effect=AssertionError("must not build a provider without a key"))
+    builder = MagicMock(side_effect=AssertionError("must not build a provider without a key"))
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_log_tail_provider", builder)
     assert not await _read_log_tail_via_provider("sbx-1")
-    builder.assert_not_awaited()
+    builder.assert_not_called()
 
 
 async def test_helper_returns_empty_on_invalid_ref(monkeypatch: pytest.MonkeyPatch) -> None:
-    builder = AsyncMock()
+    builder = MagicMock()
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_log_tail_provider", builder)
     assert not await _read_log_tail_via_provider(None)
     assert not await _read_log_tail_via_provider("")
-    builder.assert_not_awaited()
+    builder.assert_not_called()
 
 
 async def test_helper_returns_empty_when_provider_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
-        AsyncMock(return_value=None),
+        MagicMock(return_value=None),
     )
     assert not await _read_log_tail_via_provider("sbx-1")
 
@@ -361,7 +361,7 @@ async def test_helper_returns_empty_on_provider_exception(monkeypatch: pytest.Mo
     exploding.read_log_tail = AsyncMock(side_effect=RuntimeError("provider backend down"))
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
-        AsyncMock(return_value=exploding),
+        MagicMock(return_value=exploding),
     )
     assert not await _read_log_tail_via_provider("sbx-1")
 
@@ -371,7 +371,7 @@ async def test_helper_decodes_provider_bytes(monkeypatch: pytest.MonkeyPatch) ->
     fake = FakeRuntimeProvider("héllo tail".encode())
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
-        AsyncMock(return_value=fake),
+        MagicMock(return_value=fake),
     )
     assert await _read_log_tail_via_provider("sbx-1", max_bytes=128) == "héllo tail"
     assert fake.calls == [("sbx-1", 128)]

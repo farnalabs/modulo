@@ -184,9 +184,7 @@ def step_initialise(request, json_text: str) -> None:
     config = json.loads(json_text)
     _reset_resolve(request)
     try:
-        import asyncio
-
-        asyncio.run(state["hub"].initialise(config))
+        state["hub"].initialise(config)
     except Exception as exc:  # BDD verdicts assert on the exact typed error
         state["initialise_error"] = exc
 

@@ -309,6 +309,17 @@ class TestPrUrlSources:
         urls = collect_pr_urls(outputs, telemetry, None)
         assert urls == [_PR]
 
+    def test_scalar_node_output_without_telemetry_entry_is_skipped(self) -> None:
+        """A non-dict node output has no telemetry value (the legacy fallback
+        returns ``None``), so the walk skips it without extracting a URL."""
+        urls = collect_pr_urls({"n1": "not-a-dict"}, {}, None)
+        assert not urls
+
+    def test_dict_node_output_without_pr_url_is_skipped(self) -> None:
+        """A dict telemetry value carrying no pr_url is skipped, not admitted."""
+        urls = collect_pr_urls({"n1": {"summary": "done"}}, {}, None)
+        assert not urls
+
     def test_failed_with_pr_url_from_markers_is_still_no_delivery(self) -> None:
         # A failed run is COUNTABLE no_delivery regardless of any pr_url
         # evidence (the pr_url matters only for the complete verdict).
