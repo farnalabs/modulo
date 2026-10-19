@@ -292,9 +292,11 @@ class PolicyGateCreateRequest(BaseModel):
     action: str = Field(pattern=_POLICY_GATE_ACTION_PATTERN)
     # FAR-939 chunk 12: 'automatic' (default — current behaviour) or 'human'
     # (the HITL decision is the gate's evaluation result). OPTIONAL on the
-    # wire (omitted → 'automatic') so a caller that does not know about the
-    # field keeps today's behaviour and the generated OpenAPI types leave
-    # the field optional for existing clients.
+    # wire so a caller that does not know about the field keeps today's
+    # behaviour and the generated OpenAPI types leave the field optional for
+    # existing clients. FAR-1750: a fresh create with the mode omitted
+    # defaults to 'automatic'; a POST that REPLACES a live gate preserves
+    # that gate's mode (an explicit value always writes).
     evaluation_mode: str | None = Field(None, pattern=_POLICY_GATE_EVALUATION_MODE_PATTERN)
 
 
@@ -373,6 +375,11 @@ async def _create_or_replace_gate(
     FAR-967 F6: when a live gate is replaced, the new row INHERITS its
     ``enabled``/``enabled_at``/``disabled_at`` state — a replace never
     silently re-enables a gate the operator disabled.
+
+    FAR-1750: a replace also PRESERVES the live gate's ``evaluation_mode``
+    when the supplied fields omit it (``None``) — the same preserve-on-omit
+    contract as PUT. An explicit value (including ``"automatic"``) still
+    writes; a fresh create with no supplied mode defaults to ``"automatic"``.
     """
 
     async def _do_insert() -> PolicyGate:
@@ -415,9 +422,15 @@ async def _create_or_replace_gate(
             eval_id=eval_id,
             node_id=gate_fields["node_id"],
             action=gate_fields["action"],
-            # FAR-939 chunk 12: carried exactly as ``action`` is; the default
-            # keeps a fields-dict that predates the field byte-identical.
-            evaluation_mode=gate_fields.get("evaluation_mode", "automatic"),
+            # FAR-939 chunk 12: carried exactly as ``action`` is. FAR-1750:
+            # an omitted mode preserves the live gate's mode on a replace
+            # (an explicit value still wins); only a fresh create falls back
+            # to ``"automatic"``.
+            evaluation_mode=(
+                gate_fields.get("evaluation_mode")
+                or (live_gate.evaluation_mode if live_gate is not None else None)
+                or "automatic"
+            ),
             version=1,
             enabled=enabled,
             enabled_at=enabled_at,
@@ -614,7 +627,10 @@ async def create_policy_gate(
 
             gate_fields = {
                 "action": req.action,
-                "evaluation_mode": req.evaluation_mode or "automatic",
+                # FAR-1750: leave an omitted mode as ``None`` so the helper
+                # can distinguish omit (preserve the live gate's mode on a
+                # replace) from an explicit ``"automatic"`` (overwrite).
+                "evaluation_mode": req.evaluation_mode,
                 "node_id": eval_row.node_id,
             }
 

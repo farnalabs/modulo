@@ -191,6 +191,25 @@ def _gate_row(*, action: str = "warn", version: int | None = 1, node_id: uuid.UU
     return row
 
 
+def _capture_added_gates(session: AsyncMock) -> list:
+    """Capture every row passed to ``session.add`` and stamp it an ``id``.
+
+    ``session.flush`` is mocked at the unit tier, so the DB-side primary-key
+    default never runs; the response model needs a real ``id``. The captured
+    object is the ``PolicyGate`` the helper built, which is what the
+    create-or-replace assertions inspect.
+    """
+    added: list = []
+
+    def _add(obj: object) -> None:
+        if getattr(obj, "id", None) is None:
+            obj.id = _GATE_ID  # type: ignore[attr-defined]
+        added.append(obj)
+
+    session.add = MagicMock(side_effect=_add)
+    return added
+
+
 def _install_overrides(session: AsyncMock, *, org_role: str = "admin") -> None:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield session
@@ -398,6 +417,76 @@ def test_create_gate_binds_the_evals_own_node_id(client: tuple[TestClient, Async
     assert resp.status_code == 201, resp.text
     gate_fields = insert.await_args.args[1]
     assert gate_fields["node_id"] == _NODE_ID
+
+
+def test_create_gate_replace_preserves_human_mode_when_mode_omitted(client: tuple[TestClient, AsyncMock]) -> None:
+    """FAR-1750 regression: a POST replace that omits ``evaluation_mode``
+    must keep the live gate's ``human`` mode rather than silently downgrading
+    it to ``automatic``.
+
+    Exercised end-to-end through the real ``_create_or_replace_gate`` (not a
+    stub), so the old ``req.evaluation_mode or "automatic"`` coercion — and
+    the old helper default — both fail this test.
+    """
+    http, session = client
+    added = _capture_added_gates(session)
+
+    # (a) fresh create with an explicit ``human`` mode.
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _result(),  # SET LOCAL statement_timeout
+            _result(),  # advisory lock
+            _result(scalar_one_or_none=None),
+        ],
+    )
+    first = http.post(_GATE_URL, json={"action": "warn", "evaluation_mode": "human"})
+    assert first.status_code == 201, first.text
+    assert first.json()["evaluation_mode"] == "human"
+    live_gate = added[0]
+
+    # (b) POST replace with the mode omitted.
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _result(),
+            _result(),
+            _result(scalar_one_or_none=live_gate),
+        ],
+    )
+    replaced = http.post(_GATE_URL, json={"action": "block"})
+
+    # (c) the replacement still carries the live gate's ``human`` mode.
+    assert replaced.status_code == 201, replaced.text
+    assert replaced.json()["evaluation_mode"] == "human"
+    assert added[1].evaluation_mode == "human"
+    assert live_gate.deleted_at is not None
+
+
+def test_create_gate_replace_explicit_automatic_overwrites_human_mode(client: tuple[TestClient, AsyncMock]) -> None:
+    """Sibling of the omit case: an explicit ``automatic`` still writes, so
+    the preserve-on-omit contract is not a blanket "never change the mode"."""
+    http, session = client
+    added = _capture_added_gates(session)
+    live_gate = _gate_row(action="warn")
+    live_gate.evaluation_mode = "human"
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _result(),
+            _result(),
+            _result(scalar_one_or_none=live_gate),
+        ],
+    )
+
+    resp = http.post(_GATE_URL, json={"action": "block", "evaluation_mode": "automatic"})
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["evaluation_mode"] == "automatic"
+    assert added[0].evaluation_mode == "automatic"
 
 
 def test_create_gate_conflict_returns_409(client: tuple[TestClient, AsyncMock]) -> None:
@@ -1053,6 +1142,69 @@ async def test_create_or_replace_gate_fresh_create_stamps_enabled() -> None:
     assert gate.enabled is True
     assert gate.enabled_at is not None
     assert gate.disabled_at is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-1750 — create-or-replace PRESERVES the live evaluation_mode on omit
+# ---------------------------------------------------------------------------
+
+
+async def test_create_or_replace_gate_inherits_live_evaluation_mode() -> None:
+    """An omitted mode (``None``) inherits the live gate's mode."""
+    session = _make_session()
+    live_gate = _gate_row(action="warn")
+    live_gate.evaluation_mode = "human"
+    _queue_execute(session, [_result(), _result(), _result(scalar_one_or_none=live_gate)])
+    principal = TenantPrincipal(
+        username="admin@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+    gate = await evals_routes._create_or_replace_gate(
+        _EVAL_ID, {"action": "block", "evaluation_mode": None, "node_id": _NODE_ID}, session, principal
+    )
+
+    assert gate.evaluation_mode == "human"
+
+
+async def test_create_or_replace_gate_explicit_mode_wins_over_live() -> None:
+    """An explicit value overwrites the live gate's mode."""
+    session = _make_session()
+    live_gate = _gate_row(action="warn")
+    live_gate.evaluation_mode = "human"
+    _queue_execute(session, [_result(), _result(), _result(scalar_one_or_none=live_gate)])
+    principal = TenantPrincipal(
+        username="admin@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+    gate = await evals_routes._create_or_replace_gate(
+        _EVAL_ID, {"action": "block", "evaluation_mode": "automatic", "node_id": _NODE_ID}, session, principal
+    )
+
+    assert gate.evaluation_mode == "automatic"
+
+
+async def test_create_or_replace_gate_fresh_create_defaults_mode_automatic() -> None:
+    """With no live gate, an omitted mode still defaults to ``automatic``."""
+    session = _make_session()
+    _queue_execute(session, [_result(), _result(), _result(scalar_one_or_none=None)])
+    principal = TenantPrincipal(
+        username="admin@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+    gate = await evals_routes._create_or_replace_gate(
+        _EVAL_ID, {"action": "warn", "node_id": _NODE_ID}, session, principal
+    )
+
+    assert gate.evaluation_mode == "automatic"
 
 
 def test_create_gate_audit_payload_carries_enabled(client: tuple[TestClient, AsyncMock]) -> None:
