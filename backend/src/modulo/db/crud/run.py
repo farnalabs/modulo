@@ -1202,7 +1202,7 @@ async def _load_snapshot_policy_gate_pins(
     return None, None, None
 
 
-async def _verify_policy_gate_pin_fingerprint(
+def _verify_policy_gate_pin_fingerprint(
     *,
     org_id: uuid.UUID,
     run_id: uuid.UUID,
@@ -1738,7 +1738,7 @@ async def _intercept_guardrails(
             pg_saved_fp,
             pg_snapshot_version,
         ) = await _load_snapshot_policy_gate_pins(session, request.org_id, request.snapshot_id)
-        policy_gate_blocked, policy_gate_block_message = await _verify_policy_gate_pin_fingerprint(
+        policy_gate_blocked, policy_gate_block_message = _verify_policy_gate_pin_fingerprint(
             org_id=request.org_id,
             run_id=request.run_id,
             snapshot_id=request.snapshot_id,
