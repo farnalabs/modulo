@@ -58,8 +58,9 @@ jobs:
     #                   Tier 1b suites drive backend connectors/model servers
     #                   against containers and read nothing under frontend/ or
     #                   docs/ (verified by grep).
-    #   e2e_route_methods - an E2E spec, an API route module or the FAR-1847
-    #                   guard itself changed, so the E2E route-method check has
+    #   e2e_route_methods - an E2E spec, an API route module, the FAR-1847
+    #                   guard, or the guard's own invocation (ci.yml /
+    #                   pre-commit) changed, so the E2E route-method check has
     #                   something to validate.
     #
     # Every output is "true" for every event except pull_request (push to main,
@@ -126,7 +127,7 @@ jobs:
           if printf '%s\n' "$FILES" | grep -qE '^(frontend/|\.github/workflows/ci\.yml$|\.github/scripts/check_e2e_route_coverage\.py$)'; then
             FRONTEND=true
           fi
-          if printf '%s\n' "$FILES" | grep -qE '^(frontend/tests/e2e/|backend/src/modulo/api/|scripts/run_check_e2e_route_methods\.py$)'; then
+          if printf '%s\n' "$FILES" | grep -qE '^(frontend/tests/e2e/|backend/src/modulo/api/|scripts/run_check_e2e_route_methods\.py$|\.github/workflows/ci\.yml$|\.pre-commit-config\.yaml$)'; then
             E2E_ROUTE_METHODS=true
           fi
           # docs-only: every file is markdown, or lives under docs/ (but not the
@@ -1485,10 +1486,14 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # FAR-1847: path-gated like the run step below, so a docs-only PR
+        # cannot turn this check red on a transient checkout/setup failure.
+        if: needs.changes.outputs.e2e_route_methods == 'true'
         with:
           fetch-depth: 0
           persist-credentials: false
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        if: needs.changes.outputs.e2e_route_methods == 'true'
         with:
           python-version: "3.12"
           enable-cache: true

@@ -174,3 +174,183 @@ def test_interceptor_combined_with_url_condition_is_not_guessed() -> None:
     )
 
     assert not _calls(source)
+
+
+def test_reversed_interceptor_comparison_is_detected() -> None:
+    # FAR-1847: ``'PATCH' === route.request().method()`` starts at the opening
+    # quote, which is blanked in the masked source - a start-offset code check
+    # rejected every reversed comparison, leaving this branch dead.
+    source = (
+        "await page.route('**/api/v1/pipelines/abc', (route) => {\n"
+        "  if ('PATCH' === route.request().method()) {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].kind == "interceptor"
+    assert calls[0].method == "PATCH"
+    assert calls[0].path == "/api/v1/pipelines/abc"
+
+
+def test_variable_holding_request_method_is_detected() -> None:
+    # FAR-1847: the real shape is ``const m = route.request().method(); if (m ===
+    # 'PATCH')`` - a literal-route inline comparison never matched it.
+    source = (
+        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
+        "  const requestMethod = route.request().method()\n"
+        "  if (requestMethod === 'PATCH') {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].kind == "interceptor"
+    assert calls[0].method == "PATCH"
+    assert calls[0].path == "/api/v1/pipelines/abc/graph"
+
+
+def test_renamed_callback_parameter_is_detected() -> None:
+    # FAR-1847: the callback parameter is not always named ``route``.
+    source = (
+        "await page.route('**/api/v1/pipelines/abc', (intercepted) => {\n"
+        "  if (intercepted.request().method() === 'PATCH') {\n"
+        "    return intercepted.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].kind == "interceptor"
+    assert calls[0].method == "PATCH"
+
+
+def test_page_request_verb_is_detected() -> None:
+    # FAR-1847: ``page.request.<verb>(url)`` is an APIRequestContext call used
+    # by @regression specs; the verb itself is the method.
+    source = "await page.request.delete(`${base}/api/v1/admin/sso/providers/${providerId}`, { headers })\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].kind == "request"
+    assert calls[0].method == "DELETE"
+    assert calls[0].path == "/api/v1/admin/sso/providers/{param}"
+
+
+def test_bare_request_verb_is_detected() -> None:
+    # FAR-1847: ``request.<verb>(url)`` on a bare APIRequestContext is the same
+    # shape as ``page.request`` and must be scanned too.
+    source = "const resp = await request.post(`${base}/api/v1/admin/users/invite`, { data })\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].kind == "request"
+    assert calls[0].method == "POST"
+    assert calls[0].path == "/api/v1/admin/users/invite"
+
+
+def test_leading_interpolation_before_api_prefix_is_resolved() -> None:
+    # FAR-1847: ``fetch(`${apiBase}/api/v1/pipelines`, { method: 'POST' })``
+    # normalised to ``{param}/api/v1/pipelines`` and was rejected for not
+    # starting with ``/`` - a real POST was invisible.
+    source = "await fetch(`${apiBase}/api/v1/pipelines`, { method: 'POST' })\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].kind == "fetch"
+    assert calls[0].method == "POST"
+    assert calls[0].path == "/api/v1/pipelines"
+
+
+def test_concatenation_ending_in_a_variable_keeps_a_wildcard() -> None:
+    # FAR-1847: ``'/api/v1/pipelines/' + id`` truncated to the collection route,
+    # which both false-positived DELETE /api/v1/pipelines and hid the item
+    # route behind it.
+    source = "await apiFetch(apiBase, token, 'DELETE', '/api/v1/pipelines/' + pipelineId)\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].path == "/api/v1/pipelines/{param}"
+
+
+def test_legitimate_patch_route_resolves_clean() -> None:
+    # FAR-1847: legitimate PATCH routes exist (``/api/v1/pipelines/{id}``); the
+    # guard must NOT be converted into a blanket "no PATCH anywhere" grep.
+    live = _checker.build_live_routes({"/api/v1/pipelines/{pipeline_id}": {"get": {}, "patch": {}}})
+    source = "await apiFetch(apiBase, token, 'PATCH', '/api/v1/pipelines/abc')\n"
+
+    calls = _calls(source)
+
+    assert len(calls) == 1
+    assert calls[0].method == "PATCH"
+    assert not _checker.find_violations(calls, live)
+
+
+def test_main_reports_setup_error_on_empty_descriptor_set(monkeypatch) -> None:
+    # FAR-1847: an extractor that collapses to zero descriptors must not exit 0
+    # - a "0 descriptor(s) OK" line is a guard that has stopped guarding.
+    monkeypatch.setattr(_checker, "load_live_routes", lambda: LIVE_ROUTES)
+    monkeypatch.setattr(_checker, "collect_calls", lambda notes=None: [])
+
+    assert _checker.main() == 2
+
+
+def test_main_reports_setup_error_when_a_required_file_yields_nothing(monkeypatch) -> None:
+    # FAR-1847: the two ticket-named files are the guard's reason to exist; if
+    # either yields no descriptor, the scan regressed and must not report clean.
+    working = _checker.extract_http_calls(
+        "await apiFetch(apiBase, token, 'GET', '/api/v1/pipelines')\n",
+        "frontend/tests/e2e/setup/realstack-api.ts",
+    )
+    monkeypatch.setattr(_checker, "load_live_routes", lambda: LIVE_ROUTES)
+    monkeypatch.setattr(_checker, "collect_calls", lambda notes=None: working)
+
+    assert _checker.main() == 2
+
+
+def test_real_tree_scan_yields_plausible_descriptor_floor() -> None:
+    # FAR-1847: the check must be pinned against the REAL tree, not only
+    # synthetic sources. The floor is a MINIMUM, not an exact figure - it
+    # guards against the extractor silently collapsing, so raise it when shapes
+    # are added; 113 were observed at green on this branch.
+    calls = _checker.collect_calls()
+
+    assert len(calls) >= 113
+
+
+def test_ticket_named_files_contribute_descriptors() -> None:
+    # FAR-1847: both files the guard was written for must keep contributing.
+    calls = _checker.collect_calls()
+    contributors = {call.filename for call in calls}
+
+    assert "frontend/tests/e2e/setup/realstack-api.ts" in contributors
+    assert "frontend/tests/e2e/pipeline-editor.spec.ts" in contributors
+
+
+def test_real_tenancy_rbac_leading_interpolation_is_resolved() -> None:
+    # FAR-1847: frontend/tests/e2e/journeys/tenancy-rbac.spec.ts:168 posts to
+    # ``${apiBase}/api/v1/pipelines``. That line is what pins the
+    # leading-interpolation shape against the real tree (the other
+    # POST /api/v1/pipelines in the file is a plain literal apiFetch).
+    calls = [
+        call
+        for call in _checker.collect_calls()
+        if call.filename.endswith("journeys/tenancy-rbac.spec.ts")
+        and call.line == 168
+        and call.method == "POST"
+        and call.path == "/api/v1/pipelines"
+    ]
+
+    assert len(calls) == 1

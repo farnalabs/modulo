@@ -32,21 +32,31 @@ What is scanned (``frontend/tests/e2e/**/*.ts``):
   string literal and the path as a string/template literal, across multi-line
   argument lists and ``${...}`` interpolation.
 * direct ``fetch(<url>, { method: '<METHOD>' })`` in the setup helpers.
-* ``route.request().method() === '<METHOD>'`` interceptor filters, resolved
-  against the ``page.route('<url>', ...)`` registration that encloses them in
-  the same file/scope. A comparison combined with an in-callback URL test
-  (``url.includes`` / ``url.endsWith``) is skipped: its effective path lives in
-  that condition, not in the registration, so the guard reports only what it
-  can prove statically. ``!== '<METHOD>'`` filters are skipped too - they guard
-  a fallback branch rather than selecting a method.
+* ``page.request.<verb>(<url>)`` / ``request.<verb>(<url>)`` calls on a
+  Playwright ``APIRequestContext`` (the verb is the method).
+* ``route.request().method() === '<METHOD>'`` interceptor filters (and the
+  reversed ``'<METHOD>' === route.request().method()`` form), resolved against
+  the ``page.route('<url>', ...)`` registration that encloses them in the same
+  file/scope. The callback's parameter may be renamed, and a local variable
+  holding ``route.request().method()`` is resolved too. A comparison combined
+  with an in-callback URL test (``url.includes`` / ``url.endsWith``) is
+  skipped: its effective path lives in that condition, not in the
+  registration, so the guard reports only what it can prove statically.
+  ``!== '<METHOD>'`` filters are skipped too - they guard a fallback branch
+  rather than selecting a method. Anything that cannot be resolved safely is
+  reported as an explicit note on stderr (never silently dropped, and never a
+  failure).
 
 Template placeholders (``${expr}``, ``:param``, ``{param}``) and glob
-wildcards normalise to one path-parameter segment; query strings and fragments
-are stripped.
+wildcards normalise to one path-parameter segment; a leading interpolation
+before the ``/api/`` segment (``${apiBase}/api/v1/...``) is discarded, and a
+concatenation that ends in a variable (``'/api/v1/pipelines/' + id``) keeps a
+trailing wildcard. Query strings and fragments are stripped.
 
 Exit codes: 0 clean, 1 stale descriptors (one line each, with file:line, the
-method, the path and the closest live route), 2 setup/tool error - never a
-silent pass.
+method, the path and the closest live route), 2 setup/tool error - including an
+extractor that found no descriptors at all or no descriptor in either
+ticket-named file - never a silent pass.
 """
 
 from __future__ import annotations
@@ -82,14 +92,20 @@ _SQUASH_SLASH_RE = re.compile(r"/{2,}")
 _SEGMENT_RE = re.compile(r"[A-Za-z0-9._~%\-{}]+")
 _API_PREFIX = "/api/"
 _FETCH_INIT_METHOD_RE = re.compile(r"""\bmethod\s*:\s*(['"])([A-Za-z]+)\1""")
-# ``route.request().method() === 'X'`` (and the reversed comparison).
-_ROUTE_METHOD_RE = re.compile(
-    r"route\s*\.\s*request\s*\(\s*\)\s*\.\s*method\s*\(\s*\)\s*===?\s*(['\"])([A-Za-z]+)\1"
-    r"|(['\"])([A-Za-z]+)\3\s*===\s*route\s*\.\s*request\s*\(\s*\)\s*\.\s*method\s*\(\s*\)"
-)
 _ROUTE_CALL_RE = re.compile(r"(?<![\w.])(?:page|context)\s*\.\s*route\s*\(")
 _API_FETCH_RE = re.compile(r"(?<![\w.$])apiFetch\b")
 _FETCH_RE = re.compile(r"(?<![\w.$])fetch\b")
+# ``page.request.get(...)`` / ``request.delete(...)`` on an APIRequestContext.
+_API_REQUEST_RE = re.compile(
+    r"(?<![\w.$])(?:page\s*\.\s*request|request)\s*\.\s*"
+    r"(get|post|put|patch|delete|head|options)\b"
+)
+#: Files the guard exists to protect. A run that finds no descriptor in either
+#: means the extractor regressed - report a setup error, never "clean".
+_REQUIRED_FILES = (
+    "frontend/tests/e2e/setup/realstack-api.ts",
+    "frontend/tests/e2e/pipeline-editor.spec.ts",
+)
 _IF_RE = re.compile(r"(?<![\w.])if\s*\(")
 _URL_CONDITION_RE = re.compile(r"\.includes\s*\(|\.endsWith\s*\(|\.match\s*\(|request\s*\(\s*\)\s*\.\s*url\s*\(")
 
@@ -369,7 +385,18 @@ def normalise_path(raw: str) -> tuple[str, bool, bool] | None:
     if len(text) > 1:
         text = text.rstrip("/")
     if not text.startswith("/"):
-        return None
+        # A template whose leading interpolation is the base URL
+        # (``${apiBase}/api/v1/pipelines``) yields ``{param}/api/v1/pipelines``.
+        # The interpolation precedes the path, so discard everything before the
+        # first ``/api/`` segment (falling back to the first ``/``).
+        api_index = text.find(_API_PREFIX)
+        if api_index > 0:
+            text = text[api_index:]
+        else:
+            slash_index = text.find("/")
+            if slash_index <= 0:
+                return None
+            text = text[slash_index:]
     for segment in text.split("/")[1:]:
         if not _SEGMENT_RE.fullmatch(segment):
             return None
@@ -417,6 +444,12 @@ def extract_path(expr: str) -> tuple[str, bool, bool] | None:
             joined += _WILDCARD
         joined += value
         previous_end = end
+    # A concatenation that ENDS in a variable (``'/api/v1/pipelines/' + id``)
+    # has a non-literal tail; truncating would collide the item route with the
+    # collection route, so keep the variable as a trailing path parameter.
+    tail = re.sub(r"//[^\n]*|/\*.*?\*/", "", expr[previous_end:], flags=re.DOTALL)
+    if tail.strip():
+        joined = joined.rstrip("/") + "/" + _WILDCARD
     return normalise_path(joined)
 
 
@@ -443,68 +476,174 @@ def _enclosing_if_condition(text: str, masked: str, offset: int) -> str | None:
     return best[1] if best else None
 
 
-def _extract_route_interceptors(text: str, masked: str, filename: str) -> list[HttpCall]:
+def _callback_param(handler: str) -> str | None:
+    """Return an inline callback's first parameter name (``None`` if not inline).
+
+    Handles ``(route) =>``, ``async (route, request) =>``, ``route =>``,
+    ``async function (route)`` and a renamed parameter such as ``(r) =>``.
+    """
+    parenthesised = re.search(
+        r"(?:async\s+)?(?:function\s*\w*\s*)?\(\s*([A-Za-z_$][A-Za-z0-9_$]*)",
+        handler,
+    )
+    if parenthesised is not None and "=>" in handler:
+        return parenthesised.group(1)
+    bare = re.search(r"(?:async\s+)?([A-Za-z_$][A-Za-z0-9_$]*)\s*=>", handler)
+    if bare is not None:
+        return bare.group(1)
+    function_word = re.search(r"function\s*(?:\w+\s*)?\(\s*([A-Za-z_$][A-Za-z0-9_$]*)", handler)
+    if function_word is not None:
+        return function_word.group(1)
+    return None
+
+
+def _method_comparison_re(operand: str) -> re.Pattern[str]:
+    """Return the regex for ``<operand> === '<METHOD>'`` and its reverse."""
+    escaped = re.escape(operand)
+    return re.compile(
+        rf"(?<![\w.$]){escaped}\s*\.\s*request\s*\(\s*\)\s*\.\s*method\s*\(\s*\)\s*===?\s*(['\"])([A-Za-z]+)\1"
+        rf"|(['\"])([A-Za-z]+)\3\s*===\s*{escaped}\s*\.\s*request\s*\(\s*\)\s*\.\s*method\s*\(\s*\)"
+    )
+
+
+def _variable_comparison_re(variable: str) -> re.Pattern[str]:
+    """Return the regex for ``<variable> === '<METHOD>'`` and its reverse."""
+    escaped = re.escape(variable)
+    return re.compile(
+        rf"(?<![\w.$]){escaped}\s*(?:===?)\s*(['\"])([A-Za-z]+)\1"
+        rf"|(['\"])([A-Za-z]+)\3\s*(?:===?)\s*{escaped}(?![\w$])"
+    )
+
+
+def _match_is_code(text: str, masked: str, match: re.Match[str], token: str) -> bool:
+    """True when *token* occurs as code inside *match* (not in a comment/string).
+
+    The method literal is a string, so it is blanked in ``masked``. Comparing
+    the start offset is wrong for the reversed form (it starts at the opening
+    quote); probe the receiver identifier instead.
+    """
+    for probe in re.finditer(rf"(?<![\w.$]){re.escape(token)}", text[match.start() : match.end()]):
+        if masked[match.start() + probe.start()] != " ":
+            return True
+    return False
+
+
+def _resolved_method_comparisons(
+    text: str, masked: str, start: int, end: int, operand: str, comparison_re: re.Pattern[str]
+) -> list[re.Match[str]]:
+    """Return the in-scope comparison matches for *operand* inside ``[start, end]``."""
+    matches: list[re.Match[str]] = []
+    for match in comparison_re.finditer(text, start, end):
+        if not _match_is_code(text, masked, match, operand):
+            continue
+        matches.append(match)
+    return matches
+
+
+def _extract_route_interceptors(
+    text: str, masked: str, filename: str, notes: list[str] | None = None
+) -> list[HttpCall]:
     """Extract positive method filters from ``page.route`` callbacks.
 
-    Only ``route.request().method() === 'X'`` (and ``==``) filters are checked;
-    ``!==`` compares a fallback branch and asserts nothing about which methods
-    the route serves, so it is deliberately skipped. A comparison whose
-    enclosing ``if`` also tests the request URL (``url.includes(...)``,
-    ``url.endsWith(...)``) is skipped too: the effective path lives in that
-    condition, not in the registration, so it cannot be read statically here.
+    Only positive filters (``===``/``==``) are checked; ``!==`` compares a
+    fallback branch and asserts nothing about which methods the route serves,
+    so it is deliberately skipped. A comparison whose enclosing ``if`` also
+    tests the request URL (``url.includes(...)``, ``url.endsWith(...)``) is
+    skipped too: the effective path lives in that condition, not in the
+    registration, so it cannot be read statically here.
+
+    Resolvable shapes: the inline receiver (``route.request().method()``,
+    including a renamed callback parameter and the reversed operand order) and
+    a local variable assigned from it (``const m = r.request().method();
+    if (m === 'PATCH')``). A registration whose handler is a bare identifier
+    is reported as an explicit note rather than silently skipped.
     """
+    notes = notes if notes is not None else []
     calls: list[HttpCall] = []
-    registrations: list[tuple[str, int, int, int]] = []  # path, trailing_glob, prefix, start
-    spans: list[tuple[int, int]] = []
+    registrations: list[tuple[str, int, int, int, int, str]] = []
     for match in _ROUTE_CALL_RE.finditer(masked):
         open_paren = match.end() - 1
-        args = _split_args(masked, open_paren)
+        args = [span for span in _split_args(masked, open_paren) if text[span[0] : span[1]].strip()]
         if not args:
             continue
         first = text[args[0][0] : args[0][1]].strip()
         path_info = extract_path(first)
         if path_info is None:
+            # Not a statically-readable path (e.g. the generic
+            # ``**/api/v1/**`` mock) - nothing specific to validate.
             continue
         path, trailing_glob, last_prefix = path_info
-        span = (match.start(), args[-1][1])
-        registrations.append((path, int(trailing_glob), int(last_prefix), span[0]))
-        spans.append(span)
-
-    # The method literal is a string, so it is blanked in ``masked``. Locate the
-    # comparison on the original text and reject anything whose start is not
-    # code (i.e. a match inside a comment or a string literal).
-    for match in _ROUTE_METHOD_RE.finditer(text):
-        if masked[match.start()] == " ":
+        if trailing_glob and path in ("/api", "/api/v1"):
+            # A catch-all API mock (``**/api/v1/**``) carries no specific route
+            # to validate - resolving its fallback branch would invent one.
             continue
-        method = match.group(2) or match.group(4)
-        if method is None or method.upper() not in _HTTP_METHODS:
-            continue
-        containing = [
-            (span[1] - span[0], index) for index, span in enumerate(spans) if span[0] <= match.start() <= span[1]
-        ]
-        if not containing:
-            continue
-        _, registration_index = min(containing)
-        condition = _enclosing_if_condition(text, masked, match.start())
-        if condition is None or _URL_CONDITION_RE.search(condition):
-            continue
-        path, trailing_glob, last_prefix, _ = registrations[registration_index]
-        calls.append(
-            HttpCall(
-                filename=filename,
-                line=_line_of(text, match.start()),
-                method=method.upper(),
-                path=path,
-                kind="interceptor",
-                trailing_glob=bool(trailing_glob),
-                last_segment_prefix=bool(last_prefix),
+        handler = text[args[-1][0] : args[-1][1]].strip()
+        parameter = _callback_param(handler)
+        if parameter is None:
+            notes.append(
+                f"{filename}:{_line_of(text, match.start())}: page.route handler is not an inline "
+                f"function; its method filter was not checked"
             )
+            continue
+        registrations.append((path, int(trailing_glob), int(last_prefix), match.start(), args[-1][1], parameter))
+
+    seen: set[tuple[int, str, str]] = set()
+    for path, trailing_glob, last_prefix, span_start, span_end, parameter in registrations:
+        # A variable holding the request method, resolved within this handler.
+        variable_matches: dict[str, list[re.Match[str]]] = {}
+        for assignment in re.finditer(
+            rf"(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+            rf"(?<![\w.$]){re.escape(parameter)}\s*\.\s*request\s*\(\s*\)\s*\.\s*method\s*\(\s*\)",
+            text[span_start:span_end],
+        ):
+            variable_matches[assignment.group(1)] = _resolved_method_comparisons(
+                text,
+                masked,
+                span_start,
+                span_end,
+                assignment.group(1),
+                _variable_comparison_re(assignment.group(1)),
+            )
+
+        direct = _resolved_method_comparisons(
+            text, masked, span_start, span_end, parameter, _method_comparison_re(parameter)
         )
+        resolved = [(parameter, match) for match in direct]
+        for variable, matches in variable_matches.items():
+            resolved.extend((variable, match) for match in matches)
+
+        for _, match in resolved:
+            method = match.group(2) or match.group(4)
+            if method is None or method.upper() not in _HTTP_METHODS:
+                continue
+            condition = _enclosing_if_condition(text, masked, match.start())
+            if condition is None or _URL_CONDITION_RE.search(condition):
+                # The effective path (or the branch) lives in that condition.
+                continue
+            key = (_line_of(text, match.start()), method.upper(), path)
+            if key in seen:
+                continue
+            seen.add(key)
+            calls.append(
+                HttpCall(
+                    filename=filename,
+                    line=key[0],
+                    method=method.upper(),
+                    path=path,
+                    kind="interceptor",
+                    trailing_glob=bool(trailing_glob),
+                    last_segment_prefix=bool(last_prefix),
+                )
+            )
     return calls
 
 
-def extract_http_calls(source: str, filename: str) -> list[HttpCall]:
-    """Extract every statically-readable E2E HTTP call descriptor from *source*."""
+def extract_http_calls(source: str, filename: str, notes: list[str] | None = None) -> list[HttpCall]:
+    """Extract every statically-readable E2E HTTP call descriptor from *source*.
+
+    *notes* (when given) collects explicit explanations for shapes the checker
+    cannot resolve safely, so a skip is visible rather than silent.
+    """
     masked = mask_non_code(source)
     calls: list[HttpCall] = []
 
@@ -563,7 +702,33 @@ def extract_http_calls(source: str, filename: str) -> list[HttpCall]:
             )
         )
 
-    calls.extend(_extract_route_interceptors(source, masked, filename))
+    for match in _API_REQUEST_RE.finditer(masked):
+        open_paren = _find_open_paren(masked, match.end())
+        if open_paren is None:
+            continue
+        args = _args_of(source, masked, open_paren)
+        if not args:
+            continue
+        method = match.group(1).upper()
+        if method not in _HTTP_METHODS:
+            continue
+        path_info = extract_path(args[0])
+        if path_info is None:
+            continue
+        path, trailing_glob, last_prefix = path_info
+        calls.append(
+            HttpCall(
+                filename=filename,
+                line=_line_of(source, match.start()),
+                method=method,
+                path=path,
+                kind="request",
+                trailing_glob=trailing_glob,
+                last_segment_prefix=last_prefix,
+            )
+        )
+
+    calls.extend(_extract_route_interceptors(source, masked, filename, notes))
     calls.sort(key=lambda call: (call.line, call.method, call.path))
     return calls
 
@@ -677,26 +842,49 @@ def _e2e_files() -> list[Path]:
     return files
 
 
-def collect_calls() -> list[HttpCall]:
+def collect_calls(notes: list[str] | None = None) -> list[HttpCall]:
     calls: list[HttpCall] = []
     for path in _e2e_files():
         relative = path.relative_to(REPO_ROOT).as_posix()
-        calls.extend(extract_http_calls(path.read_text(encoding="utf-8"), relative))
+        calls.extend(extract_http_calls(path.read_text(encoding="utf-8"), relative, notes))
     return calls
 
 
 def main() -> int:
+    notes: list[str] = []
     try:
         routes = load_live_routes()
         if not routes:
             print("e2e route-method check: backend exposed no routes - refusing to pass", file=sys.stderr)
             return 2
-        calls = collect_calls()
+        calls = collect_calls(notes)
     except FileNotFoundError as exc:
         print(f"e2e route-method check: input error: {exc}", file=sys.stderr)
         return 2
     except Exception as exc:
         print(f"e2e route-method check: setup failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+
+    for note in notes:
+        print(f"e2e route-method check: note: {note}", file=sys.stderr)
+
+    if not calls:
+        print(
+            "e2e route-method check: the extractor found NO HTTP descriptors in "
+            f"{E2E_DIR} - refusing to report a clean scan",
+            file=sys.stderr,
+        )
+        return 2
+
+    contributing = {call.filename for call in calls}
+    missing = [required for required in _REQUIRED_FILES if required not in contributing]
+    if missing:
+        for required in missing:
+            print(
+                f"e2e route-method check: the extractor found NO descriptor in {required} "
+                f"- its scan shapes regressed, refusing to report a clean scan",
+                file=sys.stderr,
+            )
         return 2
 
     violations = find_violations(calls, routes)
