@@ -251,3 +251,29 @@ def test_self_reported_component_is_excluded_from_breakdown_total() -> None:
     assert declared["amount_usd"] == "0.040000"
     # The engine-observed sandbox bill is the only money in the total.
     assert total == Decimal("0.200000")
+
+
+def test_declared_only_run_totals_zero() -> None:
+    """A run whose ONLY cost content is the agent's declared report bills
+    nothing: the breakdown carries the (non-billable) declared component for
+    display, and the TOTAL is zero — spend gates (which consume the total)
+    approve a declared-only run."""
+    tele = RunCostTelemetry(
+        wall_clock_elapsed_s=Decimal(0),
+        reported={"model_cost_usd": Decimal("0.04")},
+        raw_reported={"node1": 0.0412},
+        eligible_sandbox_node_count=1,
+    )
+    components = [
+        CostComponentConfig(
+            name="model_tokens",
+            display_name="Model cost (self-reported)",
+            kind="self_reported",
+            report_key="model_cost_usd",
+        ),
+    ]
+    breakdown, total = build_cost_breakdown(tele, components)
+    assert len(breakdown) == 1
+    assert breakdown[0]["component"] == "model_tokens"
+    assert breakdown[0]["amount_usd"] == "0.040000"
+    assert total == Decimal("0.000000")
