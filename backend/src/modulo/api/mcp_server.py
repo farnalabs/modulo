@@ -185,6 +185,7 @@ from modulo.core.logging_config import org_id_var
 from modulo.core.mcp.scope_validator import (
     MCPAuthorizationError,
     MCPSystemAdminRequiredError,
+    check_node_allowed_tools,
     check_tool_scope,
     set_request_allowed_tools,
 )
@@ -627,6 +628,28 @@ def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
         # pre-centralisation response.
         _log_system_admin_denial(tool_name)
         raise MCPAuthorizationError(str(exc)) from None
+
+
+def _check_node_allowed_tools(tool_name: str) -> None:
+    """Enforce ONLY the node-level allowed_tools narrowing (FAR-1976).
+
+    The handful of read-only MCP tools that bypass ``_check_agent_tool_scope``
+    (they declare no role/system-admin requirement, so they have no full-
+    chokepoint leg to route through) must still honour a node's
+    ``capability_scope.allowed_tools`` — the chokepoint's OTHER leg. Each such
+    handler calls this helper at its top, before any DB/work, so "read-only" is
+    not mistaken for "in scope".
+
+    Reads the SAME request-scoped source as the chokepoint
+    (``_ctx_node_allowed_tools_val()``, with the shared resolver's own
+    request-header fallback); ``None`` = UNRESTRICTED/legacy. Raises
+    ``MCPAuthorizationError`` with the byte-identical chokepoint leg-1 message,
+    so the handler's ``except MCPAuthorizationError`` arm produces the same
+    ``insufficient_scope`` envelope a full-chokepoint refusal does. The role
+    and system-admin legs are deliberately NOT re-derived here — these tools
+    declare neither, and re-deriving them would change their semantics.
+    """
+    check_node_allowed_tools(tool_name, allowed_tools=_ctx_node_allowed_tools_val())
 
 
 # FAR-1184: raising or clearing a pipeline's spend circuit-breaker threshold
@@ -2347,6 +2370,9 @@ async def list_pipelines_tool(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("list_pipelines")
         org_id = _ctx_org_id_val()
         from modulo.db.crud.pipeline import list_pipelines
 
@@ -2370,6 +2396,8 @@ async def list_pipelines_tool(
             "next_cursor": result.next_cursor,
             "has_more": result.has_more,
         }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("list_pipelines_tool failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -3696,6 +3724,9 @@ async def get_pipeline_graph_tool(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("get_pipeline_graph")
         from modulo.db.crud.pipeline import get_pipeline_graph
 
         org_id = _ctx_org_id_val()
@@ -3730,6 +3761,8 @@ async def get_pipeline_graph_tool(
             "node_count": len(masked_nodes),
             "edge_count": len(edge_dicts),
         }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("get_pipeline_graph_tool failed")
         return {
@@ -4943,6 +4976,9 @@ def _run_status_node(
 async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    # FAR-1976: this tool bypasses the full chokepoint, so it must still
+    # enforce the node allowed_tools narrowing leg explicitly.
+    _check_node_allowed_tools("get_run_status")
     org_id = _ctx_org_id_val()
     rid, rid_err = _parse_uuid_param(run_id, "run_id")
     if rid_err:
@@ -4978,6 +5014,8 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
     try:
         return await _get_run_status_impl(run_id, detail)
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("get_run_status failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -10589,12 +10627,17 @@ async def search_documentation(query: str, section: str | None = None) -> dict[s
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("search_documentation")
         index = _get_doc_index()
         results = index.search(query, section=section)
         if not results:
             return {"results": "No documentation found for query.", "count": 0}
         formatted = index.format_results(results)
         return {"results": formatted, "count": len(results)}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except Exception as exc:
         _log.exception("search_documentation failed")
         return _tool_exception_error("Failed to search documentation", exc, "mcp.search_documentation")
@@ -10612,6 +10655,9 @@ async def get_integration_status() -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("get_integration_status")
         from sqlalchemy import func, select
 
         from modulo.db.models.connector_instance import ConnectorInstance
@@ -10689,6 +10735,8 @@ async def get_integration_status() -> dict[str, Any]:
             "model_backends": backend_list,
             "trigger_count": trigger_count,
         }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("get_integration_status failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -10786,6 +10834,9 @@ async def get_available_features() -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("get_available_features")
         from modulo.core.feature_flags import resolve_plan_context
 
         org_id = _ctx_org_id_val()
@@ -10808,6 +10859,8 @@ async def get_available_features() -> dict[str, Any]:
             lines.append(f"| {flag.name} | {flag.tier} | {available} |")
 
         return {"results": "\n".join(lines), "tier": current_tier, "feature_count": len(all_flags)}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("get_available_features failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -10895,6 +10948,9 @@ async def list_schemas(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("list_schemas")
         org_id = _ctx_org_id_val()
         lim = max(1, min(limit, 100))
 
@@ -10916,6 +10972,8 @@ async def list_schemas(
             "next_cursor": result.next_cursor,
             "has_more": result.has_more,
         }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("list_schemas failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -11849,6 +11907,9 @@ async def validate_payload(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("validate_payload")
         from jsonschema import Draft202012Validator, ValidationError
         from jsonschema.exceptions import SchemaError as JsSchemaError
 
@@ -11899,6 +11960,8 @@ async def validate_payload(
                 "valid": False,
                 "errors": [{"path": "(schema)", "message": f"Invalid schema definition: {exc.message}"}],
             }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("validate_payload failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}

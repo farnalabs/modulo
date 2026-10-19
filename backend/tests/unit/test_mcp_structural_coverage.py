@@ -523,27 +523,63 @@ def test_system_admin_flag_is_read_only_by_the_shared_dispatch_wrapper() -> None
 
 _MCP_SERVER_SRC = _SRC_ROOT / "api" / "mcp_server.py"
 _CHOKEPOINT = "_check_agent_tool_scope"
+# FAR-1976: the node-allowed_tools-leg helper the chokepoint-bypassing handlers
+# call at their top (the only control they can reach).
+_NODE_SCOPE_HELPER = "_check_node_allowed_tools"
 
 # Registered MCP tools whose handler does NOT route through the shared
-# chokepoint (verified by ``_tools_not_reaching_chokepoint``). Adding a tool
-# here needs a deliberate reason; a SYSTEM-ADMIN tool must NEVER be here.
+# chokepoint (verified by ``_tools_not_reaching_chokepoint``). This is a
+# REASON map (tool -> why it bypasses the FULL chokepoint), not a bare
+# inventory: a pinned tool with an empty reason fails
+# ``test_pinned_chokepoint_bypass_tools_carry_a_reason``. A SYSTEM-ADMIN tool
+# must NEVER be here.
 #
 # ``get_org_config`` was the FAR-1942 authz gap — it mirrored the
 # system-admin-only REST ``GET /api/v1/system-admin/config`` but authorised
 # only ``validate_current_auth()``. It is now WIRED through the chokepoint and
 # declares the system-admin claim, so it is no longer in this exception set.
-_TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT = frozenset(
-    {
-        "get_available_features",
-        "get_integration_status",
-        "get_pipeline_graph",
-        "get_run_status",
-        "list_pipelines",
-        "list_schemas",
-        "search_documentation",
-        "validate_payload",
-    }
-)
+#
+# FAR-1976: because these tools never reach ``check_tool_scope``, they also
+# never reached its node-level ``allowed_tools`` narrowing leg. Each handler
+# now calls ``_check_node_allowed_tools`` (enforced by
+# ``test_every_chokepoint_bypassing_tool_enforces_node_allowed_tools``); this
+# map records the reason the FULL chokepoint is still not used. Routing them
+# through it would newly impose the role/caller-scope/grant legs they have
+# never declared, so the node-scope leg is applied on its own.
+_TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT: dict[str, str] = {
+    "get_available_features": (
+        "legacy read-only plan/feature listing that declares no role/system-admin requirement; "
+        "node allowed_tools enforced via _check_node_allowed_tools"
+    ),
+    "get_integration_status": (
+        "legacy read-only connector/model-backend/trigger health summary; declares no role requirement; "
+        "node allowed_tools enforced via _check_node_allowed_tools"
+    ),
+    "get_pipeline_graph": (
+        "legacy read-only masked pipeline-graph read that declares no role requirement; "
+        "node allowed_tools enforced via _check_node_allowed_tools"
+    ),
+    "get_run_status": (
+        "legacy read-only run-status read that declares no role requirement; "
+        "node allowed_tools enforced via _check_node_allowed_tools"
+    ),
+    "list_pipelines": (
+        "legacy read-only pipeline list that declares no role requirement; "
+        "node allowed_tools enforced via _check_node_allowed_tools"
+    ),
+    "list_schemas": (
+        "legacy read-only schema list that declares no role requirement; "
+        "node allowed_tools enforced via _check_node_allowed_tools"
+    ),
+    "search_documentation": (
+        "static product-manifest search with no tenant data and no role requirement; "
+        "node allowed_tools enforced via _check_node_allowed_tools"
+    ),
+    "validate_payload": (
+        "legacy read-only schema validation that declares no role requirement; "
+        "node allowed_tools enforced via _check_node_allowed_tools"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -553,12 +589,14 @@ class _CallGraph:
     ``tool_to_func`` maps a registered tool name to its handler function;
     ``func_callees`` maps a function to the names/attrs it calls;
     ``func_chokepoint_literals`` maps a function to the tool-name literals it
-    passes to ``_check_agent_tool_scope``.
+    passes to ``_check_agent_tool_scope``; ``func_node_scope_literals`` maps a
+    function to the tool-name literals it passes to ``_check_node_allowed_tools``.
     """
 
     tool_to_func: dict[str, str]
     func_callees: dict[str, set[str]]
     func_chokepoint_literals: dict[str, set[str]]
+    func_node_scope_literals: dict[str, set[str]]
 
     def _reachable_functions(self, tool: str) -> set[str]:
         start = self.tool_to_func.get(tool)
@@ -584,34 +622,41 @@ class _CallGraph:
         chokepoint call whose literal first argument equals the tool name."""
         return any(tool in self.func_chokepoint_literals.get(func, set()) for func in self._reachable_functions(tool))
 
+    def enforces_node_scope_under_own_name(self, tool: str) -> bool:
+        """True when a reachable function applies the node allowed_tools leg for
+        THIS tool by name (a ``_check_node_allowed_tools`` call whose literal
+        first argument equals the tool name). FAR-1976."""
+        return any(tool in self.func_node_scope_literals.get(func, set()) for func in self._reachable_functions(tool))
+
 
 def _build_call_graph() -> _CallGraph:
     tree = ast.parse(_MCP_SERVER_SRC.read_text(encoding="utf-8"), filename=str(_MCP_SERVER_SRC))
     tool_to_func: dict[str, str] = {}
     func_callees: dict[str, set[str]] = {}
     func_chokepoint_literals: dict[str, set[str]] = {}
+    func_node_scope_literals: dict[str, set[str]] = {}
     for node in tree.body:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         callees: set[str] = set()
         literals: set[str] = set()
+        node_scope_literals: set[str] = set()
         for sub in ast.walk(node):
             if not isinstance(sub, ast.Call):
                 continue
             callee = sub.func
             if isinstance(callee, ast.Name):
                 callees.add(callee.id)
-                if (
-                    callee.id == _CHOKEPOINT
-                    and sub.args
-                    and isinstance(sub.args[0], ast.Constant)
-                    and isinstance(sub.args[0].value, str)
-                ):
-                    literals.add(sub.args[0].value)
+                if sub.args and isinstance(sub.args[0], ast.Constant) and isinstance(sub.args[0].value, str):
+                    if callee.id == _CHOKEPOINT:
+                        literals.add(sub.args[0].value)
+                    elif callee.id == _NODE_SCOPE_HELPER:
+                        node_scope_literals.add(sub.args[0].value)
             elif isinstance(callee, ast.Attribute):
                 callees.add(callee.attr)
         func_callees[node.name] = callees
         func_chokepoint_literals[node.name] = literals
+        func_node_scope_literals[node.name] = node_scope_literals
         for dec in node.decorator_list:
             if not isinstance(dec, ast.Call):
                 continue
@@ -630,6 +675,7 @@ def _build_call_graph() -> _CallGraph:
         tool_to_func=tool_to_func,
         func_callees=func_callees,
         func_chokepoint_literals=func_chokepoint_literals,
+        func_node_scope_literals=func_node_scope_literals,
     )
 
 
@@ -649,12 +695,60 @@ def test_tools_not_routed_through_the_chokepoint_are_pinned() -> None:
     """The set of tools that bypass the shared chokepoint is explicit and
     pinned: a future tool either gets wired, or is added here deliberately."""
     actual = _tools_not_reaching_chokepoint()
-    assert actual == _TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT, (
+    pinned = set(_TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT)
+    assert actual == pinned, (
         f"the chokepoint-routing set changed — newly unrouted: "
-        f"{sorted(actual - _TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT)}; newly routed "
+        f"{sorted(actual - pinned)}; newly routed "
         f"(remove from the pinned exception set): "
-        f"{sorted(_TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT - actual)}"
+        f"{sorted(pinned - actual)}"
     )
+
+
+def test_pinned_chokepoint_bypass_tools_carry_a_reason() -> None:
+    """Every pinned chokepoint-bypassing tool carries a non-empty reason.
+
+    FAR-1976: the pin is a REASON map, not a bare inventory — a tool may only
+    stay outside the full chokepoint when the code records why, so an
+    accidental addition (or a blanked reason) fails here.
+    """
+    missing = sorted(tool for tool, reason in _TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT.items() if not reason.strip())
+    assert not missing, f"chokepoint-bypass tools pinned with no reason: {missing}"
+
+
+def test_every_chokepoint_bypassing_tool_enforces_node_allowed_tools() -> None:
+    """FAR-1976: every pinned bypass tool's handler applies the node
+    ``allowed_tools`` narrowing leg under its own name.
+
+    The full chokepoint is the only other place this leg is enforced, so a tool
+    that bypasses it AND omits ``_check_node_allowed_tools`` is entirely
+    outside node-level scope narrowing — the exact gap FAR-1976 closes. The
+    guard walks the real call graph, so dropping the helper call from a handler
+    fails here.
+    """
+    graph = _build_call_graph()
+    missing = [
+        tool
+        for tool in sorted(_TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT)
+        if not graph.enforces_node_scope_under_own_name(tool)
+    ]
+    assert not missing, (
+        f"chokepoint-bypassing tools whose handler does not enforce node "
+        f"allowed_tools under their own name: {missing} — call "
+        f"{_NODE_SCOPE_HELPER}(<tool name>) at the top of the handler"
+    )
+
+
+def test_node_scope_guard_catches_a_handler_without_the_helper_call() -> None:
+    """Can-fail proof for the node-scope guard: a tool whose handler does NOT
+    call ``_check_node_allowed_tools`` is reported.
+
+    Without this the guard could pass vacuously if the AST scan silently
+    stopped finding the literals.
+    """
+    graph = _build_call_graph()
+    # ``create_pipeline`` routes through the full chokepoint and never calls
+    # the node-scope helper.
+    assert not graph.enforces_node_scope_under_own_name("create_pipeline")
 
 
 def test_every_declared_system_admin_tool_routes_through_the_chokepoint() -> None:
