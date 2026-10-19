@@ -776,24 +776,23 @@ class TestDetectEvalGap:
     async def test_round_trips_orm_eval_definition_through_detect_gap(
         self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
     ) -> None:
-        """The real ORM EvalDefinition shape (config_json, string eval_type) must survive
+        """The real ORM Eval shape (config_json, string eval_type) must survive
         detect_eval_gap — EvalEngine.evaluate reads eval_def.config, so the ORM row must
         be normalised to the DTO first, else every eval is swallowed as eval_gap=True
         (FAR-233 review MAJOR-1)."""
         from modulo.core.eval_engine import EvalEngine
-        from modulo.db.models.eval_definition import EvalDefinition
+        from modulo.db.models.eval import Eval
 
         sample_record.rejected_output = {"answer": "the answer is 42"}
         engine = EvalEngine()
 
-        passing_orm = EvalDefinition(
+        passing_orm = Eval(
             id=uuid.uuid4(),
             organisation_id=_ORG_ID,
             pipeline_id=uuid.uuid4(),
             name="answer-must-mention-42",
             eval_type="regex",
             config_json={"pattern": "42", "field": "answer"},
-            failure_behaviour="warn",
         )
         is_gap = await mgr.detect_eval_gap(sample_record, eval_engine=engine, eval_suite=[passing_orm])
         assert is_gap is True
@@ -806,14 +805,13 @@ class TestDetectEvalGap:
         failing_record.rejected_output = {"answer": "the answer is 42"}
         failing_record.eval_gap = None
 
-        failing_orm = EvalDefinition(
+        failing_orm = Eval(
             id=uuid.uuid4(),
             organisation_id=_ORG_ID,
             pipeline_id=uuid.uuid4(),
             name="answer-must-mention-99",
             eval_type="regex",
             config_json={"pattern": "99", "field": "answer"},
-            failure_behaviour="warn",
         )
         no_gap = await mgr.detect_eval_gap(failing_record, eval_engine=engine, eval_suite=[failing_orm])
         assert no_gap is False

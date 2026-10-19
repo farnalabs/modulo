@@ -5359,7 +5359,7 @@ async def _create_eval_definition_impl(
     pass_threshold: float | None,
     suite_id: str | None,
 ) -> dict[str, Any]:
-    """Persist a new EvalDefinition; shared with the MCP tool wrapper.
+    """Persist a new eval definition (an ``Eval`` row); shared with the MCP tool wrapper.
 
     Redirected to write to Eval+PolicyGate via the shared helper (FAR-1101 chunk 3b).
     """
@@ -5435,7 +5435,7 @@ async def _create_eval_definition_impl(
 
 @mcp.tool(
     description="Create a new eval definition (operator or admin). Persists an "
-    "EvalDefinition row scoped to the caller's org and returns its details. "
+    "Eval row scoped to the caller's org and returns its details. "
     "Requires an operator or admin caller; lower roles receive an "
     "insufficient_scope error.",
 )
@@ -5522,7 +5522,7 @@ async def _update_eval_definition_impl(
     pass_threshold: float | None,
     suite_id: str | None,
 ) -> dict[str, Any]:
-    """Apply a partial update to an EvalDefinition; shared with the MCP tool wrapper.
+    """Apply a partial update to an eval definition (an ``Eval`` row); shared with the MCP tool wrapper.
 
     Redirected to write to Eval+PolicyGate via the shared helper (FAR-1101 chunk 3b).
     """

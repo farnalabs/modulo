@@ -56,7 +56,7 @@ class EvalSuite(OrgScoped):
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
-    # Denormalised list of eval_definitions.id belonging to this suite.
+    # Denormalised list of evals.id belonging to this suite.
     # Physical jsonb (0130); JSONB_COL keeps the ORM declaration honest while
     # preserving SQLite/MariaDB parity.
     eval_definition_ids: Mapped[list[uuid.UUID]] = mapped_column(JSONB_COL, nullable=False, default=list)

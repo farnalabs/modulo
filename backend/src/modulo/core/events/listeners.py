@@ -33,7 +33,7 @@ from modulo.core.events.notification_events import (
 )
 from modulo.db.models.agent import Agent
 from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.eval import Eval
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.model_backend import ModelBackend
@@ -55,7 +55,7 @@ _RESOURCE_TYPES: dict[type, str] = {
     ModelBackend: "model_backend",
     Team: "team",
     Trigger: "trigger",
-    EvalDefinition: "eval",
+    Eval: "eval",
     FeedbackRecord: "feedback",
     LibraryPrimitive: "library",
     Notification: RESOURCE_TYPE_NOTIFICATION,
