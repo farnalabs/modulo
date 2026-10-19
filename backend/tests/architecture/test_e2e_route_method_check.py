@@ -1712,3 +1712,144 @@ def test_property_chain_off_a_query_name_in_a_concatenation_is_a_path_segment() 
 
     assert len(calls) == 1
     assert calls[0].path == "/api/v1/pipelines/{param}/graph"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1847 bounded marker completeness: bracket / optional-chain access to the
+# helper callables and to the Playwright APIRequestContext. Each shape below is
+# a real request; the ledger must enumerate it (extracted, or unanalysed -> exit
+# 1), never let it vanish.
+# ---------------------------------------------------------------------------
+
+
+def test_bracket_accessed_helper_callables_are_unanalysed() -> None:
+    # ``helpers['apiFetch'](...)`` / ``helpers['fetchWithTransientRetry'](...)``
+    # reach a real request through a quoted key, which the extractor's
+    # ``.``-only member chains never spell.
+    for source in (
+        "await helpers['apiFetch'](b, t, 'PATCH', '/api/v1/pipelines/1/graph')\n",
+        "await helpers['fetchWithTransientRetry']('/api/v1/pipelines/1/graph', { method: 'PATCH' })\n",
+    ):
+        unanalysed: list[str] = []
+
+        calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+        assert not calls
+        assert len(unanalysed) == 1
+        assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
+
+
+def test_optional_chained_api_fetch_is_unanalysed() -> None:
+    # ``helpers?.apiFetch(...)``: the optional chain breaks the extractor's
+    # ``.``-only member match, so only the ledger can see the occurrence.
+    unanalysed: list[str] = []
+    source = "await helpers?.apiFetch(b, t, 'PATCH', '/api/v1/pipelines/1/graph')\n"
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert not calls
+    assert len(unanalysed) == 1
+    assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
+
+
+def test_optional_chained_retry_fetch_is_extracted_not_flagged() -> None:
+    # ``helpers?.fetchWithTransientRetry(...)`` is a candidate that extraction
+    # DOES resolve (its lookbehind permits a preceding ``.``), so the marker
+    # must not manufacture a duplicate unanalysed entry for the same offset.
+    unanalysed: list[str] = []
+    source = "await helpers?.fetchWithTransientRetry('/api/v1/pipelines/1/graph', { method: 'PATCH' })\n"
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert len(calls) == 1
+    assert calls[0].method == "PATCH"
+    assert calls[0].path == "/api/v1/pipelines/1/graph"
+    assert not unanalysed
+
+
+def test_optional_chained_request_verb_is_unanalysed() -> None:
+    # ``page.request?.post(...)`` / ``request?.delete(...)``: the extractor
+    # requires a plain ``.`` before the verb.
+    for source in (
+        "await page.request?.post('/api/v1/pipelines', { data })\n",
+        "await request?.delete('/api/v1/pipelines/1')\n",
+    ):
+        unanalysed: list[str] = []
+
+        calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+        assert not calls
+        assert len(unanalysed) == 1
+        assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
+
+
+def test_bracket_accessed_request_verb_is_unanalysed() -> None:
+    # ``page['request'].post(...)`` / ``context['request'].delete(...)``: the
+    # ``request`` property is behind a quoted key, so no ``.request`` spelling
+    # matches and the verb call would otherwise vanish.
+    for source in (
+        "await page['request'].post('/api/v1/pipelines', { data })\n",
+        "await context['request'].delete('/api/v1/pipelines/1')\n",
+    ):
+        unanalysed: list[str] = []
+
+        calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+        assert not calls
+        assert len(unanalysed) == 1
+        assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
+
+
+def test_destructured_request_verbs_are_unanalysed() -> None:
+    # ``const { get, post: create } = page.request``: the verbs become bare
+    # identifiers, so the later calls carry no ``request`` marker. The binding
+    # is the only visible occurrence.
+    unanalysed: list[str] = []
+    source = (
+        "const { get, post: create } = page.request\n"
+        "await get('/api/v1/pipelines')\n"
+        "await create('/api/v1/pipelines', { data })\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert not calls
+    assert len(unanalysed) == 1
+    assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
+
+
+def test_unrelated_bracket_keys_and_destructuring_are_not_candidates() -> None:
+    # Precision: the new markers must not turn ordinary property access into
+    # unanalysed noise - only a quoted helper/context key counts.
+    source = "const { get } = config\nconst value = form['name']\n"
+
+    unanalysed: list[str] = []
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert not calls
+    assert not unanalysed
+
+
+def test_documented_limitation_dynamic_property_access_is_not_enumerated() -> None:
+    # KNOWN LIMITATION, see the module docstring's "Known limitations" section;
+    # the AST rewrite is tracked separately.
+    #
+    # This is intentional: a callee assembled at runtime is outside the
+    # text-based marker set's contract, so it produces no descriptor, no note
+    # and no unanalysed entry. The assertion PINS that boundary so it cannot
+    # drift silently - if a future change starts enumerating these shapes, this
+    # test fails and the docstring contract must be updated with it.
+    for source in (
+        # Dynamic property access: the key itself is a runtime value.
+        "const key = 'apiFetch'\nconst send = helpers[key]\nawait send(b, t, 'PATCH', '/api/v1/pipelines/1/graph')\n",
+        # A callee passed as data into a user-defined higher-order function.
+        "const send = (fn) => fn('/api/v1/pipelines/1/graph')\nawait send(page.request.post)\n",
+    ):
+        notes: list[str] = []
+        unanalysed: list[str] = []
+
+        calls = _checker.extract_http_calls(source, FILENAME, notes, unanalysed)
+
+        assert not calls
+        assert not notes
+        assert not unanalysed

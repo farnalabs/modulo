@@ -65,16 +65,17 @@ What is scanned (``frontend/tests/e2e/**/*.ts``):
   a note. ``!== '<METHOD>'`` and negated-boolean filters are skipped too - they
   guard a fallback branch rather than selecting a method - and any other method
   reference the extractor cannot attribute to one literal method (a
-  destructured ``const { method } = route.request()``, an array-membership
-  ``['PATCH', 'PUT'].includes(...)`` test) leaves a note for its registration,
-  so no filter shape is silently dropped. A callback that DELEGATES its filter
+   destructured ``const { method } = route.request()``, an array-membership
+   ``['PATCH', 'PUT'].includes(...)`` test) leaves a note for its registration,
+   so the filter shape is reported rather than dropped. A callback that DELEGATES
+   its filter
   to a helper (``if (isMethod(route, 'PATCH'))``) reads no ``.method()`` in the
   callback, so it is noted against its registration too (the helper is not
   resolved). A catch-all mock
   (``**/api/v1/**``) is skipped silently only when it carries no method filter;
   one that mocks specific routes by URL and filters on the method is noted.
-  Anything that cannot be resolved safely is reported as one explicit note on
-  stderr (never silently dropped, and never a failure).
+  Anything the extractor encounters but cannot resolve safely is reported as one
+  explicit note on stderr (never a failure, never dropped silently).
 
 Template placeholders (``${expr}``, ``:param``, ``{param}``) and glob
 wildcards normalise to one path-parameter segment, and an anchored
@@ -93,31 +94,29 @@ own tail is not path text - and a whole-path ternary
 (``cond ? '/api/v1/plan' : '/api/v1/runs'``) is reported as a note rather than
 spliced into a fabricated route. Query strings and fragments are stripped.
 
-Coverage ledger (the guard's invariant - no silent skips)
---------------------------------------------------------
+Coverage ledger (a bounded, documented contract)
+------------------------------------------------
 
 Extraction alone can never prove it saw every call shape: the space of
 JavaScript expressions that build an HTTP request is unbounded, and every miss
-is silent. The check therefore also enumerates CANDIDATE call OCCURRENCES with a
-deliberately broad marker set - ``apiFetch(``, ``fetch(`` and every
-property-qualified form (``globalThis.fetch(``, ``page.request.fetch(``),
-``fetchWithTransientRetry(``, ``page.request.<verb>(`` /
-``context.request.<verb>(`` / ``request.<verb>(`` - plus method-reference lines
-(``.request().method(``, ``request.method(``, and HTTP-method literals compared
-against a method expression: ``=== 'PATCH'``, ``!== 'GET'``, ``includes(...)``).
-Aliasing forms are candidates even though they cannot be modelled, because a
-miss there is silent: a ``fetch`` OR ``apiFetch`` identifier READ as a value
-(``const f = window.fetch``, ``= fetch.bind(...)``, ``const { fetch: f } =
-globalThis``, ``const call = apiFetch``, ``const { apiFetch: af } = helpers``),
-a member-qualified ``*.apiFetch(...)``, bracket access to a request context
-(``page.request['post'](...)``) or to ``fetch`` (``globalThis['fetch'](...)``),
-a request context captured into an identifier (``const api = page.request``,
-``const api = await request.newContext()``), and a renamed ``request`` binding
-(``async ({ request: api }) => api.get(...)``). Assignment targets, ``typeof``
-type references and ``import``/``export`` specifier bindings are not calls and
-are excluded.
-Every candidate CALL occurrence MUST be accounted for individually on the same
-``file:line`` by exactly one of:
+is silent. The check therefore also enumerates CANDIDATE call OCCURRENCES for
+the syntactic families documented above and below, and requires each candidate
+it enumerates to be accounted for.
+
+What the ledger DOES check: it enumerates candidate occurrences for calls whose
+callee is spelled directly or reached through a member chain, a quoted bracket
+key, or an optional chain - ``apiFetch(``, ``fetch(``,
+``fetchWithTransientRetry(``, their property-qualified / bracket / optional-chain
+forms, the ``page.request`` / ``context.request`` / ``request`` verb calls
+(direct, bracket-accessed and optional-chain), alias captures made by the
+documented binding forms (``const f = window.fetch``, ``const call = apiFetch``,
+``const api = page.request``, ``const { fetch: f } = globalThis``,
+``const { get } = page.request``, a renamed ``request`` fixture), plus
+method-reference lines (``.request().method(``, ``request.method(``, and
+HTTP-method literals compared against a method expression: ``=== 'PATCH'``,
+``!== 'GET'``, ``includes(...)``). Every candidate CALL occurrence enumerated
+this way MUST be accounted for individually on the same ``file:line`` by exactly
+one of:
 
 * a descriptor extracted for that occurrence, or
 * an explicit note emitted for that occurrence, or
@@ -127,13 +126,38 @@ Every candidate CALL occurrence MUST be accounted for individually on the same
 Accounting is per occurrence, not per line: a second, unmodelled call on a line
 that also carries a modelled call (``Promise.all([fetch(a), fetch(b, init)])``)
 is still a violation. An unaccounted API-call occurrence is a violation (exit 1)
-naming the line: a new call shape fails loudly instead of passing. A
-method-reference line is reported as a note when unaccounted - it names no route
-this checker can validate, but it is never silently dropped. A candidate is only
-excluded structurally when it is provably not a call (an ``apiFetch`` /
-``fetchWithTransientRetry`` function declaration, an ``import``/``export``
-binding, or a ``typeof`` type reference / assignment target), never by a
-pattern that happens to miss.
+naming the line: a new call shape within the documented families fails loudly
+instead of passing. A method-reference line is reported as a note when
+unaccounted - it names no route this checker can validate, but it is never
+dropped silently. A candidate is only excluded structurally when it is provably
+not a call (an ``apiFetch`` / ``fetchWithTransientRetry`` function declaration,
+an ``import``/``export`` binding, or a ``typeof`` type reference / assignment
+target).
+
+What the ledger does NOT check: it is a syntactic scan, not a JavaScript
+interpreter. It does not resolve arbitrary runtime aliasing, dynamic property
+access (``helpers[key]``), values passed around as data, or calls reached
+through user-defined higher-order functions (``invoke(page.request.post)``,
+``const send = helpers[key]; send(...)``). A call reached ONLY through that
+indirection is not enumerated at all - it is not a descriptor, not a note and
+not an unanalysed entry. That boundary is intentional and tested (see
+``test_documented_limitation_dynamic_property_access_is_not_enumerated``), not
+an accident of the current marker list.
+
+Known limitations
+-----------------
+
+The residual class is any request whose CALLEE is assembled at runtime beyond
+the binding forms listed above: a computed member key, a function passed as a
+value into a user-defined function, a request context re-exported through an
+unanalysed helper, or a callee produced by arbitrary control flow. A request
+reached only that way is invisible to a text-based marker set - no
+hand-maintained list of spellings can be proven closed over every JavaScript
+binding form. (For a callee that IS enumerated, an unresolvable method or path
+is reported as a note, so those cases stay visible.) These residual shapes are
+tracked for an AST-based rewrite of this check; until then this docstring is the
+contract, and the limitation above is pinned by a test so it cannot drift
+silently.
 
 Exit codes: 0 clean, 1 stale descriptors or unanalysed call shapes (one line
 each, with file:line, the method, the path and the closest live route), 2
@@ -284,6 +308,29 @@ _LEDGER_REQUEST_CONTEXT_ALIAS_RE = re.compile(
 #: A bracket string-key index (``globalThis['fetch']``). The key is blanked in
 #: the masked source, so the KEY TEXT is re-read from the original source.
 _LEDGER_BRACKET_INDEX_RE = re.compile(r"(?<![\w$])[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*\[\s*\]")
+#: Optional-chain member access to the shared helper callables
+#: (``helpers?.apiFetch(...)``, ``helpers?.fetchWithTransientRetry(...)``). The
+#: extractors' member chains only spell ``.``, so ``?.`` was a silent gap. The
+#: captured name is the candidate offset: for
+#: ``?.fetchWithTransientRetry`` extraction already accounts that exact offset
+#: (its lookbehind permits a preceding ``.``), so the marker cannot duplicate it.
+_LEDGER_OPTIONAL_HELPER_ACCESS_RE = re.compile(r"\?\.\s*(?P<name>apiFetch|fetchWithTransientRetry)\b")
+#: Destructured APIRequestContext verbs
+#: (``const { get, post } = page.request``). The verbs become bare identifiers
+#: whose later calls carry no ``request`` marker, so the binding itself is the
+#: candidate occurrence.
+_LEDGER_DESTRUCTURED_REQUEST_RE = re.compile(
+    r"(?:const|let|var)\s*\{(?P<names>[^{}]*)\}\s*=\s*"
+    r"(?:(?:page|context)\s*(?:\.\s*context\s*\(\s*\))?\s*\.\s*request|(?<![\w.$])request)\b"
+)
+#: Optional-chain APIRequestContext verb (``page.request?.post(...)``). The
+#: extractor requires a ``.``, so ``?.`` was a silent gap.
+_LEDGER_OPTIONAL_REQUEST_VERB_RE = re.compile(
+    r"(?:(?:page|context)\s*(?:\.\s*context\s*\(\s*\))?\s*\.\s*request|(?<![\w.$])request)"
+    r"\s*\?\.\s*(?:get|post|put|patch|delete|head|options)\b"
+)
+#: The verb spellings of a Playwright ``APIRequestContext``.
+_API_REQUEST_VERBS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
 #: Bare identifiers that are language keywords/constructs, never a delegated
 #: helper function.
 _NON_HELPER_CALL_NAMES = frozenset(
@@ -1600,7 +1647,7 @@ def _extract_route_interceptors(
 
 
 # ---------------------------------------------------------------------------
-# Coverage ledger - prove every candidate line was analysed
+# Coverage ledger - account for every ENUMERATED candidate occurrence
 # ---------------------------------------------------------------------------
 
 
@@ -1697,12 +1744,14 @@ def _in_import_or_export_specifier(masked: str, offset: int) -> bool:
     return False
 
 
-def _bracket_fetch_offsets(source: str, masked: str) -> list[int]:
-    """Return offsets of bracket-accessed ``fetch`` (``globalThis['fetch']``).
+def _bracket_key_offsets(source: str, masked: str, keys: frozenset[str]) -> list[int]:
+    """Return offsets of bracket indices whose ORIGINAL key is one of *keys*.
 
-    The masked source blanks the key, so only a bracket index whose ORIGINAL
-    text is exactly a quoted ``fetch`` is a candidate - ordinary string-key
-    indexing (``form['name']``) is not an HTTP call.
+    The masked source blanks the key, so only a bracket index whose original
+    text is exactly a quoted member of *keys* is a candidate - ordinary
+    string-key indexing (``form['name']``) is not an HTTP call. A DYNAMIC key
+    (``helpers[key]``) is deliberately not enumerated: resolving arbitrary
+    runtime values is outside this check's contract (see the module docstring).
     """
     offsets: list[int] = []
     for match in _LEDGER_BRACKET_INDEX_RE.finditer(masked):
@@ -1712,7 +1761,52 @@ def _bracket_fetch_offsets(source: str, masked: str) -> list[int]:
         if opening < 0 or closing < opening:
             continue
         key = raw[opening + 1 : closing].strip()
-        if len(key) >= 2 and key[0] in ("'", '"', "`") and key[-1] == key[0] and key[1:-1].strip() == "fetch":
+        if len(key) >= 2 and key[0] in ("'", '"', "`") and key[-1] == key[0] and key[1:-1].strip() in keys:
+            offsets.append(match.start())
+    return offsets
+
+
+def _bracket_fetch_offsets(source: str, masked: str) -> list[int]:
+    """Return offsets of bracket-accessed ``fetch`` (``globalThis['fetch']``)."""
+    return _bracket_key_offsets(source, masked, frozenset({"fetch"}))
+
+
+def _bracket_request_verb_offsets(source: str, masked: str) -> list[int]:
+    """Return offsets of ``page['request'].<verb>(`` (bracket-accessed context).
+
+    The ``request`` property is reached through a quoted key, so the extractor's
+    ``.request`` spellings do not match and the verb call would otherwise vanish.
+    """
+    offsets: list[int] = []
+    for match in _LEDGER_BRACKET_INDEX_RE.finditer(masked):
+        raw = source[match.start() : match.end()]
+        opening = raw.find("[")
+        closing = raw.rfind("]")
+        if opening < 0 or closing < opening:
+            continue
+        key = raw[opening + 1 : closing].strip()
+        if not (len(key) >= 2 and key[0] in ("'", '"', "`") and key[-1] == key[0]):
+            continue
+        if key[1:-1].strip() != "request":
+            continue
+        verb = re.match(r"\s*\.\s*(?:get|post|put|patch|delete|head|options)\b", masked[match.end() :])
+        if verb is None or _find_open_paren(masked, match.end() + verb.end()) is None:
+            continue
+        offsets.append(match.start())
+    return offsets
+
+
+def _destructured_request_offsets(masked: str) -> list[int]:
+    """Return offsets of ``const { <verb> } = page.request`` bindings.
+
+    A destructured verb is a bare identifier afterwards, so no later call carries
+    the ``request`` marker that extraction keys on. The binding is the only
+    visible occurrence.
+    """
+    offsets: list[int] = []
+    for match in _LEDGER_DESTRUCTURED_REQUEST_RE.finditer(masked):
+        names = {part.split(":", 1)[0].strip().lower() for part in match.group("names").split(",") if part.strip()}
+        if names & _API_REQUEST_VERBS:
             offsets.append(match.start())
     return offsets
 
@@ -1725,16 +1819,30 @@ def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
     absorbed by a modelled call on the same line (the ``Promise.all([fetch(a),
     fetch(b, init)])`` shape).
 
-    Deliberately broader than the extractor on three shapes that used to be
-    silent ledger gaps:
+    Deliberately broader than the extractor on the syntactic families that used
+    to be silent ledger gaps:
 
     * a ``fetch`` identifier READ as a value - the alias capture
       (``const f = window.fetch``, ``= fetch.bind(...)``) and the destructured
       binding (``const { fetch: f } = globalThis``). Resolving the alias is not
       this checker's job; the unanalysed occurrence forces an annotation.
-    * bracket access to an APIRequestContext (``page.request['post'](...)``).
+    * member/bracket access to ``apiFetch`` / ``fetchWithTransientRetry``
+      (``helpers.apiFetch(...)``, ``helpers['apiFetch'](...)``,
+      ``helpers?.apiFetch(...)``).
+    * bracket access to an APIRequestContext (``page.request['post'](...)``),
+      a bracket-accessed ``request`` property
+      (``page['request'].<verb>(...)``) and an optional-chain verb
+      (``page.request?.<verb>(...)``).
     * a ``request`` binding introduced by destructuring/rename
       (``async ({ request: api }) => api.get(...)``).
+    * a destructured APIRequestContext verb
+      (``const { get, post } = page.request``).
+
+    These families are enumerated because a miss in any of them is silent. The
+    check does NOT resolve arbitrary runtime aliasing, dynamic property access
+    (``helpers[key]``) or values passed through user-defined higher-order
+    functions; a call reached only through that indirection is not enumerated
+    (see the module docstring's ``Known limitations``).
 
     A genuine call occurrence is accounted for by extraction; the alias/binding
     forms are never modelled, so they always surface unless annotated. A
@@ -1770,11 +1878,22 @@ def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
         is_call = _find_open_paren(masked, match.end()) is not None
         if is_call or _is_fetch_value_reference(masked, match.start(), match.end()):
             add(match.start())
+    for match in _LEDGER_OPTIONAL_HELPER_ACCESS_RE.finditer(masked):
+        # ``helpers?.apiFetch(...)``: the extractor's member chain only spells
+        # ``.``. For ``?.fetchWithTransientRetry`` extraction accounts this same
+        # identifier offset, so the marker only covers the genuinely unmodelled
+        # spelling. A non-call value read is a candidate too - it may be called
+        # elsewhere through an alias.
+        add(match.start("name"))
     for match in _LEDGER_REQUEST_CONTEXT_ALIAS_RE.finditer(masked):
         # An identifier captured from the request context: its later verb calls
         # cannot be followed, so the capture is the candidate occurrence.
         add(match.start())
+    for offset in _bracket_key_offsets(source, masked, frozenset({"apiFetch", "fetchWithTransientRetry"})):
+        add(offset)
     for offset in _bracket_fetch_offsets(source, masked):
+        add(offset)
+    for offset in _destructured_request_offsets(masked):
         add(offset)
     for match in _RETRY_FETCH_RE.finditer(masked):
         if _is_function_declaration(masked, match.start()):
@@ -1792,6 +1911,11 @@ def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
         if _find_open_paren(masked, match.end()) is None:
             continue
         add(match.start())
+    for match in _LEDGER_OPTIONAL_REQUEST_VERB_RE.finditer(masked):
+        if _find_open_paren(masked, match.end()) is not None:
+            add(match.start())
+    for offset in _bracket_request_verb_offsets(source, masked):
+        add(offset)
     for match in _LEDGER_BRACKET_REQUEST_RE.finditer(masked):
         add(match.start())
     for match in _LEDGER_REQUEST_ALIAS_RE.finditer(masked):
@@ -2105,7 +2229,7 @@ def extract_http_calls(
         path_info = extract_path(args[0])
         if path_info is None:
             # The verb IS the method, so the method is always resolvable here -
-            # a non-literal URL is an unchecked request, never a silent skip.
+            # a non-literal URL is an unchecked request, reported as a note.
             _add_note(
                 notes,
                 filename,
