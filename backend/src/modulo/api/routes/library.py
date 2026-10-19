@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any, Literal, Self, cast
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1622,6 +1622,22 @@ async def confirm_import_endpoint(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from None
+    except ValueError as exc:
+        # FAR-1846: ``materialize_import`` rejects an invalid bundle with the
+        # module's bad-input idiom (``ValueError``) — an unsupported format
+        # version, or a sandbox-only field (egress_policy / egress_allowlist /
+        # read_only / git_credentials / single_pr_per_run) on a non-sandbox
+        # node. Without this arm the shared ``handle_db_errors`` backstop maps
+        # the uncaught ValueError to a generic 500, hiding which node/field the
+        # caller must repair. ``GitContentRefError`` (a ValueError subclass)
+        # has its own arm above. ``pydantic.ValidationError`` is also a
+        # ValueError but keeps its established mapping in the shared backstop.
+        if isinstance(exc, ValidationError):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from None
     except IntegrityError:
         _log.exception("library.confirm_import_endpoint")
         raise _conflict_error() from None
@@ -2776,6 +2792,22 @@ async def install_collection_endpoint(
     except CollectionInstallError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except ValueError as exc:
+        # FAR-1846: a collection install materialises a bundle through
+        # ``materialize_import`` (``core/library_service/install.py``), so the
+        # same invalid-bundle ``ValueError`` rejections (unsupported format
+        # version, sandbox-only fields on a non-sandbox node) reach this route.
+        # Map them to 422 naming the offending node/field instead of letting
+        # the shared ``handle_db_errors`` backstop answer a generic 500.
+        # ``CollectionInstallError`` and ``GitContentRefError`` (ValueError
+        # subclass) have their own arms above; ``pydantic.ValidationError``
+        # keeps its established mapping in the shared backstop.
+        if isinstance(exc, ValidationError):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from None
     except IntegrityError:

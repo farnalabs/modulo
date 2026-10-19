@@ -669,6 +669,106 @@ def test_confirm_import_git_content_ref_returns_422(client: TestClient) -> None:
     assert "not pinned" in resp.json()["detail"]
 
 
+def test_confirm_import_egress_policy_on_non_sandbox_node_returns_422(client: TestClient) -> None:
+    """FAR-1846: a bundle smuggling a sandbox-only field onto a non-sandbox node
+    is rejected by the real import engine and the route maps that typed
+    ``ValueError`` to a 422 naming the offending node and field.
+
+    Pre-fix the uncaught ``ValueError`` escaped the endpoint and the shared
+    ``handle_db_errors`` backstop answered a generic 500, so the caller never
+    learned which node/field to repair.
+    """
+    from modulo.core.workflow_import_export import BUNDLE_FORMAT_VERSION
+
+    bundle = {
+        "format_version": BUNDLE_FORMAT_VERSION,
+        "pipeline": {
+            "name": "Egress Smuggle",
+            "graph_nodes_json": [
+                {"id": "node-1", "node_type": "agent", "agent_id": "agent-1", "egress_policy": "none"},
+            ],
+        },
+        "agents": [],
+        "schemas": [],
+        "edges": [],
+    }
+    with (
+        # Only the engine's two existence lookups are stubbed; every other step
+        # (bundle parsing, graph normalisation, the sandbox-only placement
+        # check) is the real code, so the assertion below proves the engine's
+        # own rejection message reaches the caller.
+        patch(
+            "modulo.core.workflow_import_export.get_existing_agent_names",
+            new_callable=AsyncMock,
+            return_value=set(),
+        ),
+        patch(
+            "modulo.core.workflow_import_export.get_existing_pipeline_names",
+            new_callable=AsyncMock,
+            return_value=set(),
+        ),
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.post(
+            "/api/v1/libraries/import/confirm",
+            json={"bundle_json": json.dumps(bundle)},
+        )
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert "egress_policy" in detail
+    assert "node-1" in detail
+
+
+def test_confirm_import_unsupported_bundle_format_returns_422(client: TestClient) -> None:
+    """The pre-existing "Unsupported bundle format" rejection shares the same
+    ``ValueError`` arm and maps to 422, not the backstop's generic 500.
+
+    The format check is the FIRST statement of ``materialize_import``, so the
+    real engine runs here with no internal stubs at all.
+    """
+    with (
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.post(
+            "/api/v1/libraries/import/confirm",
+            json={"bundle_json": json.dumps({"format_version": "999", "pipeline": {"name": "Legacy"}})},
+        )
+    assert resp.status_code == 422, resp.text
+    assert "Unsupported bundle format" in resp.json()["detail"]
+
+
+def test_install_collection_egress_policy_on_non_sandbox_node_returns_422(client: TestClient) -> None:
+    """A collection install flows through ``materialize_import`` too, so the
+    same invalid-bundle ``ValueError`` (FAR-1846 egress rejection) must map to
+    422 on the install route rather than the backstop's generic 500.
+    """
+    from modulo.core.workflow_import_export import _reject_sandbox_only_fields_off_sandbox
+
+    # Derive the rejection from the REAL engine check so the test pins the
+    # engine's message, not a hand-written string.
+    with pytest.raises(ValueError, match=r"sandbox-only node fields") as excinfo:
+        _reject_sandbox_only_fields_off_sandbox(
+            [{"id": "node-1", "node_type": "agent", "egress_policy": "none"}],
+        )
+    rejection = excinfo.value
+
+    with (
+        patch(
+            "modulo.api.routes.library.install_collection",
+            new_callable=AsyncMock,
+            side_effect=rejection,
+        ),
+        patch("modulo.api.routes.library._require_library_collection_flag", new_callable=AsyncMock),
+    ):
+        resp = client.post(f"/api/v1/libraries/collections/{uuid.uuid4()}/install")
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert "egress_policy" in detail
+    assert "node-1" in detail
+
+
 # ---------------------------------------------------------------------------
 # ratings
 # ---------------------------------------------------------------------------
