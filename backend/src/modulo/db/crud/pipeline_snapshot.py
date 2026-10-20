@@ -578,6 +578,24 @@ async def _load_pipeline_and_edges(
 
 
 def _apply_agent_fields(node: dict[str, Any], agent: Agent) -> uuid.UUID | None:
+    """Overlay the bound Agent's settings onto a snapshot node (FAR-2008 contract).
+
+    Field ownership, which every graph writer's save/restore sync must respect:
+
+    * AGENT-AUTHORITATIVE — overwritten here from the row whenever the row value
+      is non-NULL: ``token_budget``, ``prompt_template``, ``model_backend_id``,
+      ``agent_commands``, ``parameter_schema_id``.
+    * NODE-AUTHORITATIVE — ``schema_profile``: an explicit node value wins; the
+      Agent row only supplies a default (``setdefault``).
+
+    Of the five Agent-authoritative fields only ``agent_commands`` is exposed
+    as a node-level editable field on the typed graph model, so it is the only
+    one a graph save/restore syncs back into the Agent row
+    (``modulo.core.agent_command_sync``). The other four stay owned by the
+    Agent: one Agent row can be bound by many pipelines, and copying a
+    historical snapshot's stale value onto it would silently revert an Agent
+    edit made after that snapshot was taken.
+    """
     if agent.token_budget is not None:
         node["token_budget"] = agent.token_budget
     if agent.prompt_template is not None:
