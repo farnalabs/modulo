@@ -986,6 +986,20 @@ jobs:
             for REV in "${HEAD_REVS[@]}"; do
               [ -z "$REV" ] && continue
               HEAD_FILE="$MIG_DIR/${REV}.py"
+              # A revision id normally equals the filename stem, but history holds
+              # at least one exception (0152_add_indexes.py ->
+              # 0152_dismissed_by_user_id_index), so fall back to locating the
+              # file by its `revision` assignment. Attribution must never depend
+              # on the stem convention.
+              if ! git cat-file -e "merge-queue:${HEAD_FILE}" 2>/dev/null; then
+                case "$REV" in
+                  *[!A-Za-z0-9_.-]*) : ;;
+                  *)
+                    FOUND_FILE=$(grep -rl --include='*.py' -E "^revision(:[^=]*)? *= *\"${REV}\"" "$MIG_DIR" 2>/dev/null | head -1 || true)
+                    if [ -n "$FOUND_FILE" ]; then HEAD_FILE="$FOUND_FILE"; fi
+                    ;;
+                esac
+              fi
               if git cat-file -e "main:${HEAD_FILE}" 2>/dev/null; then
                 echo "  head $REV (${HEAD_FILE}) is already on main - not attributable to a batch PR"
                 continue
