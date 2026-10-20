@@ -130,7 +130,8 @@ def _scope_has_real_files(env_scope: str) -> bool:
     return any(Path(p).exists() for p in env_scope.split(os.pathsep))
 
 
-def main() -> int:
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for the scoped test-style scanner."""
     parser = argparse.ArgumentParser(
         description="Run the test-style scanner fast (scoped + parallel).",
     )
@@ -172,53 +173,33 @@ def main() -> int:
         metavar="SECS",
         help="Per-test timeout in seconds (default: 120).",
     )
+    return parser
 
-    args = parser.parse_args()
 
-    # Sanitize operator-supplied inputs before they reach subprocess (S8705):
-    # strip disallowed characters so a crafted value cannot be parsed as a git
-    # option/ref or a child-process flag. The stripped result is a fresh string,
-    # which also drops the taint SonarCloud tracks from argv.
-    raw_ref = args.ref or args.changed_files or "origin/main"
-    ref = _sanitize_ref(raw_ref)
-    if args.lenses is not None:
-        args.lenses = _sanitize_lens(args.lenses)
-    jobs = args.jobs
+def _resolve_jobs(jobs: str) -> str:
+    """Sanitize an explicit job count or derive one from the CPU count."""
     if jobs != "auto":
-        jobs = _sanitize_jobs(jobs)
+        return _sanitize_jobs(jobs)
+    cpu = os.cpu_count() or 4
+    return str(min(8, cpu))
 
-    # Determine scope
-    scope_files: list[str] | None = None
-    if not args.full:
-        scope_files = _collect_changed_test_files(ref)
 
-    # Determine jobs
-    if jobs == "auto":
-        cpu = os.cpu_count() or 4
-        jobs = str(min(8, cpu))
+def _print_scope(scope_files: list[str]) -> None:
+    """Print the changed test files the scan is scoped to."""
+    print(f"Scoped to {len(scope_files)} changed test file(s):")
+    for f in scope_files:
+        print(f"  {f}")
 
-    # Build pytest command
-    cmd: list[str] = [
-        sys.executable,
-        "-m",
-        "pytest",
-        "tests/architecture/test_test_suite_quality.py",
-        "-q",
-        "--tb=short",
-        f"--timeout={args.timeout}",
-        "-p",
-        "no:warnings",
-    ]
 
+def _resolve_scope_or_exit(scope_files: list[str] | None, full: bool) -> tuple[str, int | None]:
+    """Return ``(env_scope, early_exit_code)`` for the resolved scope."""
     if scope_files:
         # Set the scope env var for the child process. scope_files are
         # repo-relative (e.g. "backend/tests/.../*.py"); _build_scope_env strips
         # the leading "backend/" prefix so the entries resolve to real files
         # under BACKEND (see _build_scope_env for the vacuous-pass rationale).
         env_scope = _build_scope_env(scope_files)
-        print(f"Scoped to {len(scope_files)} changed test file(s):")
-        for f in scope_files:
-            print(f"  {f}")
+        _print_scope(scope_files)
         # Vacuous-pass guard: a non-empty scope_files list that resolves to zero
         # real files on disk means the scan would scan nothing yet still exit 0 —
         # exactly the mode the backend/-prefix strip defends against (a regression
@@ -230,29 +211,73 @@ def main() -> int:
                 "files on disk — aborting to avoid a vacuous pass.",
                 file=sys.stderr,
             )
-            return 1
-    else:
-        env_scope = ""
-        if not args.full:
-            print("No scoped test files changed — nothing to scan.")
-            return 0
+            return "", 1
+        return env_scope, None
+    if full:
+        return "", None
+    print("No scoped test files changed — nothing to scan.")
+    return "", 0
 
+
+def _build_pytest_command(args: argparse.Namespace, jobs: str) -> list[str]:
+    """Build the pytest argv for the scanner."""
+    cmd: list[str] = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "tests/architecture/test_test_suite_quality.py",
+        "-q",
+        "--tb=short",
+        f"--timeout={args.timeout}",
+        "-p",
+        "no:warnings",
+    ]
     if args.lenses:
         cmd.extend(["-k", args.lenses])
 
     # Add xdist parallelism unless running a single lens expression
     if not args.lenses or " and " not in (args.lenses or ""):
         cmd.extend(["-n", jobs])
+    return cmd
+
+
+def _build_run_env(env_scope: str) -> dict[str, str]:
+    """Return the child-process environment, carrying the scope when set."""
+    env = os.environ.copy()
+    if env_scope:
+        env["MODULO_TEST_STYLE_SCOPE"] = env_scope
+    return env
+
+
+def main() -> int:
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    # Sanitize operator-supplied inputs before they reach subprocess (S8705):
+    # strip disallowed characters so a crafted value cannot be parsed as a git
+    # option/ref or a child-process flag. The stripped result is a fresh string,
+    # which also drops the taint SonarCloud tracks from argv.
+    raw_ref = args.ref or args.changed_files or "origin/main"
+    ref = _sanitize_ref(raw_ref)
+    if args.lenses is not None:
+        args.lenses = _sanitize_lens(args.lenses)
+    jobs = _resolve_jobs(args.jobs)
+
+    # Determine scope
+    scope_files: list[str] | None = None
+    if not args.full:
+        scope_files = _collect_changed_test_files(ref)
+
+    env_scope, early_exit = _resolve_scope_or_exit(scope_files, args.full)
+    if early_exit is not None:
+        return early_exit
+
+    cmd = _build_pytest_command(args, jobs)
 
     print(f"Jobs: {jobs}")
     print(f"Command: {' '.join(cmd)}")
 
-    env = os.environ.copy()
-    if env_scope:
-        env["MODULO_TEST_STYLE_SCOPE"] = env_scope
-    elif not args.full:
-        # Empty scope + not full = nothing to scan (already returned above)
-        pass
+    env = _build_run_env(env_scope)
 
     t0 = time.monotonic()
     # argv is a pinned list; operator-supplied tokens (ref/lens/jobs) are
