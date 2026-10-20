@@ -11,7 +11,7 @@
       <div class="flex items-center gap-2">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
         <span>{{ $t('components.DashboardNotificationsPanel.notifications') }}</span>
-        <span v-if="unreadCount > 0" class="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-destructive px-1.5 text-[11px] font-bold text-destructive-foreground" role="status" :aria-label="`${unreadCount} unread notifications`">{{ unreadCount }}</span>
+        <span v-if="unreadCount > 0" class="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-destructive-fill px-1.5 text-[11px] font-bold text-destructive-foreground" role="status" :aria-label="`${unreadCount} unread notifications`">{{ unreadCount }}</span>
       </div>
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -36,7 +36,7 @@
         <button
           type="button"
           data-testid="panel-dismiss-all"
-          class="rounded px-2 py-1 text-xs font-medium text-primary hover:bg-muted transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          class="rounded px-2 py-1 text-xs font-medium text-primary-text hover:bg-muted transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="dismissingAll || total === 0"
           @click="onDismissAll"
         >
@@ -123,7 +123,7 @@
       <div v-if="!loading && !error" class="mt-3 text-center">
         <router-link
           to="/notifications"
-          class="text-xs font-medium text-primary hover:underline"
+          class="text-xs font-medium text-primary-text hover:underline"
         >
           {{ $t('components.DashboardNotificationsPanel.view_all') }} &rarr;
         </router-link>

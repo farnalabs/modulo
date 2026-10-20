@@ -15,6 +15,8 @@ from modulo.api.main import app
 from modulo.api.middleware.sensitive_mask import (
     SENSITIVE_VALUE_MASK,
     SensitiveValue,
+    _masked_node_fields,
+    _scrub_node_secrets,
     is_sensitive_key,
     mask_config_json,
     mask_sensitive_value,
@@ -327,6 +329,82 @@ class TestMergeMaskedConfigJson:
         result = merge_masked_config_json(stored, incoming)
         assert result["tokens"] == ["real-A", "real-B"]
 
+    def test_nested_list_element_merges_recursively(self) -> None:
+        """A list element that is itself a list merges positionally, recursively."""
+        stored = {"matrix": [["real-secret", "old"]]}
+        incoming = {"matrix": [[SENSITIVE_VALUE_MASK, "new"]]}
+        result = merge_masked_config_json(stored, incoming)
+        assert result["matrix"] == [["real-secret", "new"]]
+
+    def test_dict_element_appended_when_stored_position_holds_a_scalar(self) -> None:
+        """A dict element whose stored position holds a scalar is appended."""
+        stored = {"items": ["scalar"]}
+        incoming = {"items": [{"name": "new"}, SENSITIVE_VALUE_MASK]}
+        result = merge_masked_config_json(stored, incoming)
+        assert result["items"] == ["scalar", {"name": "new"}]
+
+    def test_list_element_appended_when_stored_position_holds_a_scalar(self) -> None:
+        """A list element whose stored position holds a scalar is appended."""
+        stored = {"items": ["scalar"]}
+        incoming = {"items": [["nested", SENSITIVE_VALUE_MASK]]}
+        result = merge_masked_config_json(stored, incoming)
+        assert result["items"] == ["scalar", ["nested", SENSITIVE_VALUE_MASK]]
+
+    def test_non_masked_element_replaces_stored_at_same_position(self) -> None:
+        """A real (non-masked) element replaces the stored one at its position."""
+        stored = {"items": ["old"]}
+        incoming = {"items": ["new", SENSITIVE_VALUE_MASK]}
+        result = merge_masked_config_json(stored, incoming)
+        assert result["items"] == ["new"]
+
+    def test_non_masked_trailing_element_is_appended(self) -> None:
+        """A real element beyond the stored length is appended."""
+        stored = {"items": ["old"]}
+        incoming = {"items": ["new", "extra", SENSITIVE_VALUE_MASK]}
+        result = merge_masked_config_json(stored, incoming)
+        assert result["items"] == ["new", "extra"]
+
+
+# ---------------------------------------------------------------------------
+# Unit: graph node masking helper branch arms
+# ---------------------------------------------------------------------------
+
+
+class TestGraphNodeMaskingHelpers:
+    def test_node_without_dict_secret_fields_is_unchanged(self) -> None:
+        node = {"id": "n1", "env_vars": None, "context_files": "not-a-dict", "parameter_overrides": []}
+        assert _masked_node_fields(node) == node
+
+    def test_node_with_every_secret_field_masks_each_one(self) -> None:
+        node = {
+            "id": "n1",
+            "env_vars": {"API_KEY": "real-key", "count": 3},
+            "context_files": {"notes": "plain notes", "count": 2},
+            "composite_parameter_values": {"token": "real-token"},
+            "parameter_overrides": [],
+        }
+        masked = _masked_node_fields(node)
+
+        assert masked["env_vars"]["API_KEY"] == SENSITIVE_VALUE_MASK
+        assert masked["env_vars"]["count"] == 3
+        assert masked["context_files"]["count"] == 2
+        assert masked["composite_parameter_values"]["token"] == SENSITIVE_VALUE_MASK
+        assert not masked["parameter_overrides"]
+
+    def test_scrub_masks_dict_fields_and_leaves_others_alone(self) -> None:
+        node = {
+            "env_vars": {"API_KEY": "real-key"},
+            "context_files": None,
+            "composite_parameter_values": {"token": "real-token"},
+            "parameter_overrides": "not-a-dict",
+        }
+        scrubbed = _scrub_node_secrets(node)
+
+        assert scrubbed["env_vars"] == {"API_KEY": SENSITIVE_VALUE_MASK}
+        assert scrubbed["composite_parameter_values"] == {"token": SENSITIVE_VALUE_MASK}
+        assert scrubbed["context_files"] is None
+        assert scrubbed["parameter_overrides"] == "not-a-dict"
+
 
 # ---------------------------------------------------------------------------
 # Unit: SensitiveValue Pydantic type
@@ -498,6 +576,103 @@ class TestRevealEndpoint:
         parsed = json.loads(body["value"])
         assert parsed["api_key"] == "real-key"
         assert parsed["name"] == "test"
+
+    def test_reveal_connector_not_found(self, client: TestClient) -> None:
+        self._setup_session_execute(None)
+
+        resp = client.post(
+            "/api/v1/admin/sensitive/reveal",
+            json={"resource_type": "connector", "resource_id": str(uuid.uuid4())},
+        )
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Connector not found"
+
+    def test_reveal_sso_provider_without_stored_secret(self, client: TestClient) -> None:
+        provider_id = uuid.uuid4()
+        mock_provider = MagicMock(client_secret=None)
+        self._setup_session_execute(mock_provider)
+
+        with patch(
+            "modulo.api.middleware.sensitive_mask.Redis.from_url",
+            side_effect=RuntimeError("Redis unavailable"),
+        ):
+            resp = client.post(
+                "/api/v1/admin/sensitive/reveal",
+                json={"resource_type": "sso_provider", "resource_id": str(provider_id)},
+            )
+
+        assert resp.status_code == 200
+        assert not resp.json()["value"]
+
+    def test_reveal_observability_whole_config(self, client: TestClient) -> None:
+        mock_config = {"endpoint": "http://otel:4317", "sample_ratio": 0.5}
+        self._setup_session_execute(mock_config)
+
+        with patch(
+            "modulo.api.middleware.sensitive_mask.Redis.from_url",
+            side_effect=RuntimeError("Redis unavailable"),
+        ):
+            resp = client.post(
+                "/api/v1/admin/sensitive/reveal",
+                json={"resource_type": "observability", "resource_id": str(uuid.uuid4())},
+            )
+
+        assert resp.status_code == 200
+        assert json.loads(resp.json()["value"]) == mock_config
+
+    def test_reveal_observability_string_field(self, client: TestClient) -> None:
+        self._setup_session_execute({"endpoint": "http://otel:4317"})
+
+        with patch(
+            "modulo.api.middleware.sensitive_mask.Redis.from_url",
+            side_effect=RuntimeError("Redis unavailable"),
+        ):
+            resp = client.post(
+                "/api/v1/admin/sensitive/reveal",
+                json={
+                    "resource_type": "observability",
+                    "resource_id": str(uuid.uuid4()),
+                    "field": "endpoint",
+                },
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["value"] == "http://otel:4317"
+
+    def test_reveal_observability_json_encodes_non_string_field(self, client: TestClient) -> None:
+        self._setup_session_execute({"sample_ratio": 0.5})
+
+        with patch(
+            "modulo.api.middleware.sensitive_mask.Redis.from_url",
+            side_effect=RuntimeError("Redis unavailable"),
+        ):
+            resp = client.post(
+                "/api/v1/admin/sensitive/reveal",
+                json={
+                    "resource_type": "observability",
+                    "resource_id": str(uuid.uuid4()),
+                    "field": "sample_ratio",
+                },
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["value"] == "0.5"
+
+    def test_reveal_observability_empty_config(self, client: TestClient) -> None:
+        self._setup_session_execute(None)
+
+        with patch(
+            "modulo.api.middleware.sensitive_mask.Redis.from_url",
+            side_effect=RuntimeError("Redis unavailable"),
+        ):
+            resp = client.post(
+                "/api/v1/admin/sensitive/reveal",
+                json={"resource_type": "observability", "resource_id": str(uuid.uuid4())},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["value"] == "{}"
 
     def test_reveal_unknown_resource_type(self, client: TestClient) -> None:
         resp = client.post(

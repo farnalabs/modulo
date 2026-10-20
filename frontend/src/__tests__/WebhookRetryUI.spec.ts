@@ -154,6 +154,19 @@ describe('WebhookRetryUI', () => {
       expect(wrapper.text()).toContain('Retry failed')
     })
 
+    it('falls back to the status code when a failed retry carries no error text', async () => {
+      mockPost.mockResolvedValue({ data: { success: false, status_code: 503 }, error: undefined })
+      const wrapper = mountWithItems([failedEntry])
+      await flushPromises()
+      await nextTick()
+      const btn = wrapper.find('[data-testid="admin-notification-log-retry"]')
+      await btn.trigger('click')
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.text()).toContain('Retry failed')
+      expect(wrapper.text()).toContain('HTTP 503')
+    })
+
     it('shows error message when endpoint_id is missing', async () => {
       const noEndpoint = { ...failedEntry, endpoint_id: null }
       const wrapper = mountWithItems([noEndpoint])

@@ -36,7 +36,6 @@ from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.base import Base
 from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.models.eval import Eval
-from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionRow
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.evidence import Evidence
 from modulo.db.models.journey import Journey
@@ -236,7 +235,6 @@ _TABLES: list[Table] = cast(
         Run.__table__,
         PipelineSnapshot.__table__,
         Journey.__table__,
-        EvalDefinitionRow.__table__,
         EvalResult.__table__,
         Evidence.__table__,
         Eval.__table__,

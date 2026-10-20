@@ -792,11 +792,11 @@ async def test_node_runner_dispatch_spec_carries_the_run_id_the_reconciler_keys_
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_file_io_provider",
-        AsyncMock(return_value=file_io),
+        MagicMock(return_value=file_io),
     )
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
-        AsyncMock(return_value=MagicMock(read_log_tail=AsyncMock(return_value=b"f3-tail"))),
+        MagicMock(return_value=MagicMock(read_log_tail=AsyncMock(return_value=b"f3-tail"))),
     )
     dispatch = install_fake_dispatch(monkeypatch, ref="sbx-f3", exit_code=0)
 

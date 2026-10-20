@@ -172,7 +172,7 @@
             <LogoMark :size="24" transparent />
           </div>
           <h2 class="hidden min-[360px]:inline min-w-0 truncate text-lg font-bold tracking-tight">{{ $t('components.AppLayout.modulo') }}</h2>
-          <Badge v-if="planStore.currentTier" severity="secondary" class="shrink-0 border border-border hidden! min-[440px]:inline-flex! text-[10px] px-1.5 py-0 leading-none opacity-70">
+          <Badge v-if="planStore.currentTier" severity="secondary" class="shrink-0 border border-border hidden! min-[440px]:inline-flex! text-[10px] px-1.5 py-0 leading-none">
             {{ planStore.getTierLabel(planStore.currentTier) }}
           </Badge>
         </router-link>
@@ -198,7 +198,7 @@
       <div class="flex items-center gap-2 pt-2 pb-2 border-b mb-2">
         <div class="avatar-ring">
           <div
-            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary"
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary-text"
             :title="userEmail"
           >
             {{ userInitial }}

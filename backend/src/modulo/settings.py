@@ -359,6 +359,33 @@ class Settings(BaseSettings):
     # alone misses. Only consulted when the app and the database share a
     # filesystem. Env var: DB_CAPACITY_PATH.
     db_capacity_path: str = Field("/var/lib/modulo/db-volume")
+    # Provider/platform capacity probe (FAR-1992) - for deployments whose DB
+    # volume is NOT mountable into the app (Fly: the app and the Postgres machine
+    # are separate apps). Participates in the "auto" source chain AFTER the
+    # filesystem probe; when it resolves, `source` is reported as "platform" (an
+    # auto source, not a user-facing DB_CAPACITY_SOURCE value). One of:
+    #   "auto"  - build the provider probe when its config is complete; no-op
+    #             (returns None) when it is not, so the chain falls through.
+    #   "fly"   - same as "auto" today (Fly is the only provider); explicit.
+    #   "none"  - never build a platform probe (chain behaves as pre-FAR-1992).
+    # An unrecognised value disables the probe (with a warning) rather than
+    # guessing a provider. Env var: DB_CAPACITY_PLATFORM_PROVIDER.
+    db_capacity_platform_provider: str = Field("auto")
+    # Fly provider: the Fly APP whose volume holds the Postgres data directory
+    # (e.g. `modulo-app-db`), read via `GET /v1/apps/{app}/volumes`. Required for
+    # the Fly probe - without it (or without the token below) the probe is not
+    # built and the chain falls through to "none". Env var: DB_CAPACITY_FLY_APP.
+    db_capacity_fly_app: str = Field("")
+    # Fly provider: restrict the probe to this volume NAME (or id). Empty means
+    # "use the app's single volume"; if the app exposes zero or multiple volumes
+    # the probe resolves nothing rather than guessing. Env var:
+    # DB_CAPACITY_FLY_VOLUME.
+    db_capacity_fly_volume: str = Field("")
+    # Fly provider: API token (a Fly org/APP token with read access to the DB
+    # app's volumes) presented as `Authorization: Bearer`. Required for the Fly
+    # probe; set it as a secret, never inline. Env var:
+    # DB_CAPACITY_FLY_API_TOKEN.
+    db_capacity_fly_api_token: str = Field(default="", repr=False)
     # Operator bypass for the 98% hard-stop (e.g. a deliberate migration that
     # must write at/over the limit). Does NOT disable the monitor. Env var:
     # DB_CAPACITY_BYPASS=1.

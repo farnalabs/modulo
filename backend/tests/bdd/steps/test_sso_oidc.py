@@ -85,6 +85,23 @@ def _sign_state(provider_id: str, settings_override: Settings) -> str:
     return sign_state(raw_state, settings_override.secret_key)
 
 
+def _browser_bound_state(provider_id: str, settings_override: Settings) -> tuple[str, dict[str, str]]:
+    """Return ``(signed_state, cookies)`` for the FAR-1982 flow binding.
+
+    The callback requires the login-time correlation cookie to carry the raw
+    state of the returned ``state`` plus the per-request nonce and PKCE
+    verifier. A real browser receives that cookie from the login redirect;
+    these direct-callback steps install it explicitly.
+    """
+    from modulo.api.routes.sso import _OIDC_FLOW_COOKIE
+    from modulo.auth.sso import sign_state
+
+    raw_state = uuid.uuid4().hex
+    state = sign_state(f"{provider_id}:{raw_state}", settings_override.secret_key)
+    cookie = sign_state(f"{raw_state}:bdd-nonce:bdd-verifier", settings_override.secret_key)
+    return state, {_OIDC_FLOW_COOKIE: cookie}
+
+
 @pytest.fixture
 def ctx() -> dict[str, Any]:
     return {}
@@ -135,7 +152,7 @@ def initiate_oidc_login(provider: str, request: Any, ctx: dict[str, Any], client
 def callback_valid(request: Any, ctx: dict[str, Any], client: Any) -> None:
     _setup_oidc_client()
     settings = _oidc_settings()
-    signed = _sign_state("google", settings)
+    signed, binding_cookies = _browser_bound_state("google", settings)
     email = ctx.get("expected_email", "user@example.com")
     name = ctx.get("expected_name", "Test User")
     id_token = _make_id_token(email, name)
@@ -183,6 +200,8 @@ def callback_valid(request: Any, ctx: dict[str, Any], client: Any) -> None:
             "token_type": "bearer",
         }
 
+        for cookie_name, cookie_value in binding_cookies.items():
+            client.cookies.set(cookie_name, cookie_value)
         resp = client.get(
             f"/api/v1/auth/oidc/google/callback?code=authcode123&state={signed}",
             follow_redirects=False,

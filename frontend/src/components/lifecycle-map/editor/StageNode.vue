@@ -95,7 +95,7 @@ const bgClass = computed(() => {
 
 const labelClass = computed(() => {
   switch (props.data.stage_type) {
-    case 'modulo': return 'text-primary'
+    case 'modulo': return 'text-primary-text'
     case 'external': return 'text-sky-500'
     case 'manual': return 'text-amber-500'
     case 'placeholder': return 'text-muted-foreground'

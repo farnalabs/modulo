@@ -58,7 +58,7 @@
       </div>
       <div
         v-if="exportSuccess"
-        class="mb-4 rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success"
+        class="mb-4 rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success-text"
         data-testid="admin-run-retention-export-result"
       >
         {{ exportSuccess }}
@@ -78,7 +78,7 @@
       </div>
       <div
         v-if="purgeResult"
-        class="mb-4 rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success"
+        class="mb-4 rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success-text"
         data-testid="admin-run-retention-purge-result"
       >
         {{ $t('views.AdminRunRetentionView.purge_result', { runs: purgeResult.purged_runs, checkpoints: purgeResult.purged_checkpoints, bytes: formatBytes(purgeResult.freed_estimated_bytes) }) }}
@@ -563,7 +563,7 @@ function pipelineName(id: string): string {
 }
 
 function statusBadge(status: string): string {
-  if (status === 'complete') return 'bg-success/15 text-success'
+  if (status === 'complete') return 'bg-success/15 text-success-text'
   if (status === 'failed') return 'bg-destructive/15 text-destructive-text'
   if (status === 'cancelled' || status === 'stalled' || status === 'rejected') return 'bg-muted text-muted-foreground'
   return 'bg-secondary text-secondary-foreground'

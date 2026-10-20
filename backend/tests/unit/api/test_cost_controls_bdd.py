@@ -45,6 +45,20 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
+def _cost_state(
+    *,
+    max_run_cost_cents: int | None = None,
+    spend_ceiling_cents: int | None = None,
+    org_cumulative_spend_cents: int = 0,
+) -> MagicMock:
+    """A cost-state row mock (FAR-1833)."""
+    state = MagicMock()
+    state.max_run_cost_cents = max_run_cost_cents
+    state.spend_ceiling_cents = spend_ceiling_cents
+    state.org_cumulative_spend_cents = org_cumulative_spend_cents
+    return state
+
+
 class _TeamPlan:
     def feature_enabled(self, name: str) -> bool:
         return True
@@ -459,6 +473,8 @@ class TestAdminGetCostControls:
             patch("modulo.api.routes.costs.get_organisation", return_value=org),
             patch("modulo.api.routes.costs.list_teams", return_value=page_result),
             patch("modulo.api.routes.costs.set_rls_org"),
+            # No cost-state row yet -> get_org_cost_state returns None (defaults).
+            patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=None)),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -475,6 +491,7 @@ class TestAdminGetCostControls:
             patch("modulo.api.routes.costs.get_organisation", return_value=None),
             patch("modulo.api.routes.costs.list_teams", return_value=page_result),
             patch("modulo.api.routes.costs.set_rls_org"),
+            patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=None)),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -501,16 +518,22 @@ class TestAdminGetCostControls:
 
         page_result = MagicMock(items=[team_a, team_b], total=2, page=1, page_size=1000)
 
+        state = _cost_state(max_run_cost_cents=1234, spend_ceiling_cents=10000, org_cumulative_spend_cents=4000)
+
         with (
             patch("modulo.api.routes.costs.get_organisation", return_value=org),
             patch("modulo.api.routes.costs.list_teams", return_value=page_result),
             patch("modulo.api.routes.costs.set_rls_org"),
+            patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=state)),
         ):
             resp = client.get(self.ENDPOINT)
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["budget"] == 1000.0
+        assert data["max_run_cost"] == pytest.approx(12.34)
+        assert data["spend_ceiling"] == 100.0
+        assert data["org_cumulative_spend_usd"] == 40.0
         assert len(data["teams"]) == 2
         assert data["teams"][0] == {"id": str(_TEAM_ID), "name": "Alpha", "daily_limit_usd": 250.5}
         assert data["teams"][1]["daily_limit_usd"] is None
@@ -527,6 +550,7 @@ class TestAdminGetCostControls:
             patch("modulo.api.routes.costs.get_organisation", return_value=org),
             patch("modulo.api.routes.costs.list_teams", return_value=page_result),
             patch("modulo.api.routes.costs.set_rls_org"),
+            patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=None)),
         ):
             resp = client.get(self.ENDPOINT)
 

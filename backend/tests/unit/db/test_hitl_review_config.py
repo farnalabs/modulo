@@ -608,6 +608,38 @@ class TestSnapshotGateConfigMap:
         }
         assert not snapshot_review_config_map(graph)
 
+    def test_malformed_and_incomplete_edges_are_skipped(self) -> None:
+        """A non-dict edge, an edge missing its source and an edge missing its
+        target are all inert — neither raises nor contributes a gate."""
+        config = {"label": "Only the complete edge counts."}
+        graph = {
+            "nodes": [],
+            "edges": [
+                None,
+                {"target": str(_TARGET_ID)},
+                {"source": str(_SOURCE_ID)},
+                {"source": "unrelated", "target": str(_TARGET_ID)},
+                {"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_review_config": config},
+            ],
+        }
+        assert snapshot_review_config_map(graph) == {_review_id(): config}
+
+    def test_node_walk_skips_malformed_and_non_matching_edges(self) -> None:
+        """The HITL-node walk ignores non-dict / incomplete edges and edges
+        whose source is not the node, keeping only the node's own outgoing
+        edge for the derived gate id."""
+        config = {"description": "Human confirms the resolution."}
+        graph = {
+            "nodes": [{"id": str(_SOURCE_ID), "node_type": "hitl", "hitl_config": config}],
+            "edges": [
+                None,
+                {"target": str(_TARGET_ID)},
+                {"source": "unrelated", "target": str(_TARGET_ID)},
+                {"source": str(_SOURCE_ID), "target": str(_TARGET_ID)},
+            ],
+        }
+        assert snapshot_review_config_map(graph) == {_review_id(): config}
+
 
 class TestNormalizeGateDescription:
     def test_strips_usable_description(self) -> None:

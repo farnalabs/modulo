@@ -443,6 +443,59 @@ async def _resolve_work_item_id(
     return _floor_work_item_id(org_id, run_id)
 
 
+def _entry_unknown_source(entry: Any, force_source: str | None) -> bool:
+    """True when a sent entry's wire ``source`` disagrees with the assignment."""
+    if force_source is None or not isinstance(entry, dict):
+        return False
+    wire_source = entry.get("source")
+    return wire_source is not None and wire_source != force_source
+
+
+def _canonical_entry(entry: Any, force_source: str | None) -> dict[str, Any] | None:
+    """Validate one raw ref entry; None when malformed (dropped with a warning)."""
+    try:
+        if force_source is not None:
+            return validate_ref_entry(entry, force_source=force_source)
+        return validate_ref_entry(entry)
+    except (ValueError, TypeError) as exc:
+        _log.warning("dropping invalid work-item ref entry: %s", exc)
+        return None
+
+
+def _validated_ref_entries(
+    entries: list[dict[str, Any]],
+    force_source: str | None,
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Validate every raw entry; returns ``(canonical, unknown_source, malformed)``."""
+    canonical: list[dict[str, Any]] = []
+    unknown_source = 0
+    malformed = 0
+    for entry in entries:
+        if _entry_unknown_source(entry, force_source):
+            unknown_source += 1
+        validated = _canonical_entry(entry, force_source)
+        if validated is None:
+            malformed += 1
+        else:
+            canonical.append(validated)
+    return canonical, unknown_source, malformed
+
+
+def _notify_canonicalise_ref_events(
+    force_source: str,
+    unknown_source: int,
+    malformed: int,
+    canonical_count: int,
+) -> None:
+    """Emit the lifecycle_refs counts for one forced-source canonicalisation."""
+    if unknown_source:
+        notify_refs_event(REFS_EVENT_UNKNOWN_SOURCE, count=unknown_source)
+    if malformed:
+        notify_refs_event(REFS_EVENT_MALFORMED, count=malformed)
+    if canonical_count:
+        notify_refs_event(REFS_EVENT_ASSIGNED_SOURCE, source=force_source, count=canonical_count)
+
+
 def _canonicalise_ref_entries(
     entries: list[dict[str, Any]] | None,
     *,
@@ -465,29 +518,9 @@ def _canonicalise_ref_entries(
     """
     if not entries:
         return None
-    canonical: list[dict[str, Any]] = []
-    unknown_source = 0
-    malformed = 0
-    for entry in entries:
-        if force_source is not None and isinstance(entry, dict):
-            wire_source = entry.get("source")
-            if wire_source is not None and wire_source != force_source:
-                unknown_source += 1
-        try:
-            if force_source is not None:
-                canonical.append(validate_ref_entry(entry, force_source=force_source))
-            else:
-                canonical.append(validate_ref_entry(entry))
-        except (ValueError, TypeError) as exc:
-            malformed += 1
-            _log.warning("dropping invalid work-item ref entry: %s", exc)
+    canonical, unknown_source, malformed = _validated_ref_entries(entries, force_source)
     if force_source is not None:
-        if unknown_source:
-            notify_refs_event(REFS_EVENT_UNKNOWN_SOURCE, count=unknown_source)
-        if malformed:
-            notify_refs_event(REFS_EVENT_MALFORMED, count=malformed)
-        if canonical:
-            notify_refs_event(REFS_EVENT_ASSIGNED_SOURCE, source=force_source, count=len(canonical))
+        _notify_canonicalise_ref_events(force_source, unknown_source, malformed, len(canonical))
     return canonical or None
 
 
@@ -1202,7 +1235,7 @@ async def _load_snapshot_policy_gate_pins(
     return None, None, None
 
 
-async def _verify_policy_gate_pin_fingerprint(
+def _verify_policy_gate_pin_fingerprint(
     *,
     org_id: uuid.UUID,
     run_id: uuid.UUID,
@@ -1738,7 +1771,7 @@ async def _intercept_guardrails(
             pg_saved_fp,
             pg_snapshot_version,
         ) = await _load_snapshot_policy_gate_pins(session, request.org_id, request.snapshot_id)
-        policy_gate_blocked, policy_gate_block_message = await _verify_policy_gate_pin_fingerprint(
+        policy_gate_blocked, policy_gate_block_message = _verify_policy_gate_pin_fingerprint(
             org_id=request.org_id,
             run_id=request.run_id,
             snapshot_id=request.snapshot_id,
@@ -3034,6 +3067,45 @@ def _normalise_pr_url(url: str) -> str:
     return key.lower()
 
 
+def _collect_line_pr_urls(line: str, urls: list[str], seen_urls: set[str]) -> bool:
+    """Harvest distinct PR URLs from one text line; True once the ceiling is hit.
+
+    A ``gh pr list --json`` listing line is skipped wholesale; surviving matches
+    are deduplicated on :func:`_normalise_pr_url`. Returns True when
+    *_PR_SCAN_MAX_URLS* was reached so the caller can stop.
+    """
+    if _PR_URL_LISTING_KEY.search(line):
+        return False
+    for match in _PR_URL_PATTERN.findall(line):
+        key = _normalise_pr_url(match)
+        if key in seen_urls:
+            continue
+        seen_urls.add(key)
+        urls.append(match)
+        if len(seen_urls) >= _PR_SCAN_MAX_URLS:
+            return True
+    return False
+
+
+def _scan_text_pr_urls(text: str, urls: list[str], seen_urls: set[str]) -> None:
+    """Line-by-line PR-URL harvest over one string leaf of the value tree."""
+    for line in text.splitlines():
+        if _collect_line_pr_urls(line, urls, seen_urls):
+            return
+
+
+def _walk_child_items(
+    items: Iterable[Any],
+    depth: int,
+    seen: set[int],
+    urls: list[str],
+    seen_urls: set[str],
+) -> None:
+    """Recurse into each child of a dict/list/tuple container."""
+    for item in items:
+        _walk_pr_urls(item, depth + 1, seen, urls, seen_urls)
+
+
 def _walk_pr_urls(value: Any, depth: int, seen: set[int], urls: list[str], seen_urls: set[str]) -> None:
     """Collect distinct GitHub PR URLs from every string in the *value* tree.
 
@@ -3048,31 +3120,13 @@ def _walk_pr_urls(value: Any, depth: int, seen: set[int], urls: list[str], seen_
     if depth > _PR_SCAN_MAX_DEPTH or len(seen_urls) >= _PR_SCAN_MAX_URLS:
         return
     if isinstance(value, str):
-        for line in value.splitlines():
-            if _PR_URL_LISTING_KEY.search(line):
-                continue
-            for match in _PR_URL_PATTERN.findall(line):
-                key = _normalise_pr_url(match)
-                if key in seen_urls:
-                    continue
-                seen_urls.add(key)
-                urls.append(match)
-                if len(seen_urls) >= _PR_SCAN_MAX_URLS:
-                    return
+        _scan_text_pr_urls(value, urls, seen_urls)
         return
-    if isinstance(value, dict):
+    if isinstance(value, (dict, list, tuple)):
         if id(value) in seen:
             return
         seen.add(id(value))
-        for item in value.values():
-            _walk_pr_urls(item, depth + 1, seen, urls, seen_urls)
-        return
-    if isinstance(value, (list, tuple)):
-        if id(value) in seen:
-            return
-        seen.add(id(value))
-        for item in value:
-            _walk_pr_urls(item, depth + 1, seen, urls, seen_urls)
+        _walk_child_items(value.values() if isinstance(value, dict) else value, depth, seen, urls, seen_urls)
 
 
 def collect_delivery_pr_urls(
@@ -3382,6 +3436,105 @@ _DUAL_WRITE_RETRYABLE_SQLSTATES = DUAL_WRITE_RETRYABLE_SQLSTATES
 _sqlstate_of = sqlstate_of
 
 
+def _resolve_store_org(
+    session_org: uuid.UUID | None,
+    organisation_id: uuid.UUID | None,
+    *,
+    origin: str,
+    run_id: uuid.UUID,
+    claim_token: str | None,
+) -> uuid.UUID:
+    """Resolve the org for the store write, failing loudly on an RLS mismatch.
+
+    qa iteration 1 (Major 1): the org-context precheck failures are wrapped as
+    DualWriteError (origin='rls_precheck') so the guardDualWrite-style
+    catch/rollback/orchestrate contract covers them exactly like an
+    in-savepoint store failure. The OutputsRlsMismatch is chained as
+    ``__cause__`` for diagnostics; both orgs are carried in the message.
+    """
+    if session_org is None:
+        raise DualWriteError(
+            f"run_node_outputs store write requires a bound RLS organisation context "
+            f"(origin={origin}); wrap the call in an org-bound transaction",
+            run_id=run_id,
+            organisation_id=organisation_id,
+            claim_token=claim_token,
+            sqlstate=None,
+            origin="rls_precheck",
+        ) from OutputsRlsMismatch(
+            "run_node_outputs store write requires a bound RLS organisation context; "
+            "wrap the call in `async with session.begin():` + set_rls_org(session, org)"
+        )
+    if organisation_id is None:
+        return session_org
+    if session_org != organisation_id:
+        raise DualWriteError(
+            f"run_node_outputs org mismatch on run {run_id}: session org {session_org} != row org "
+            f"{organisation_id} (origin={origin})",
+            run_id=run_id,
+            organisation_id=organisation_id,
+            claim_token=claim_token,
+            sqlstate=None,
+            origin="rls_precheck",
+        ) from OutputsRlsMismatch(
+            f"run_node_outputs org mismatch on run {run_id}: session org {session_org} != row org {organisation_id}"
+        )
+    return organisation_id
+
+
+def _dual_write_sqlstate(exc: BaseException) -> str | None:
+    """The failing statement's SQLSTATE, or None for a non-SQLAlchemy error."""
+    return _sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
+
+
+async def _store_run_outputs_with_retry(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    outputs: dict[str, Any] | None,
+    telemetry: dict[str, Any] | None,
+    claim_token: str | None,
+    origin: str,
+    inherited_outputs: dict[str, Any] | None,
+    inherited_telemetry: dict[str, Any] | None,
+) -> None:
+    """ONE bounded in-session retry of the REPLACE store write.
+
+    Only the statement-timeout SQLSTATE is savepoint-recoverable (see
+    ``_DUAL_WRITE_RETRYABLE_SQLSTATES``); everything else, and a second
+    failure, raises :class:`DualWriteError` with the savepoint rolled back.
+    """
+    for attempt in (1, 2):
+        savepoint = session.begin_nested()
+        try:
+            async with savepoint:
+                await replace_run_node_outputs(
+                    session,
+                    run_id=run_id,
+                    organisation_id=organisation_id,
+                    outputs=outputs,
+                    telemetry=telemetry,
+                    inherited_outputs=inherited_outputs,
+                    inherited_telemetry=inherited_telemetry,
+                )
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            state = _dual_write_sqlstate(exc)
+            if attempt == 1 and state in _DUAL_WRITE_RETRYABLE_SQLSTATES:
+                continue
+            raise DualWriteError(
+                f"run_node_outputs store write failed (origin={origin}, sqlstate={state}): {exc}",
+                run_id=run_id,
+                organisation_id=organisation_id,
+                claim_token=claim_token,
+                sqlstate=state,
+                origin=origin,
+            ) from exc
+
+
 async def write_run_outputs_from_run(
     session: AsyncSession,
     *,
@@ -3440,67 +3593,24 @@ async def write_run_outputs_from_run(
         return
 
     session_org = await read_rls_org(session)
-    # qa iteration 1 (Major 1): the org-context precheck failures are wrapped
-    # as DualWriteError (origin='rls_precheck') so the guardDualWrite-style
-    # catch/rollback/orchestrate contract covers them exactly like an
-    # in-savepoint store failure. The OutputsRlsMismatch is chained as
-    # __cause__ for diagnostics; both orgs are carried in the message.
-    if session_org is None:
-        raise DualWriteError(
-            f"run_node_outputs store write requires a bound RLS organisation context "
-            f"(origin={origin}); wrap the call in an org-bound transaction",
-            run_id=run_id,
-            organisation_id=organisation_id,
-            claim_token=claim_token,
-            sqlstate=None,
-            origin="rls_precheck",
-        ) from OutputsRlsMismatch(
-            "run_node_outputs store write requires a bound RLS organisation context; "
-            "wrap the call in `async with session.begin():` + set_rls_org(session, org)"
-        )
-    if organisation_id is None:
-        organisation_id = session_org
-    if session_org != organisation_id:
-        raise DualWriteError(
-            f"run_node_outputs org mismatch on run {run_id}: session org {session_org} != row org "
-            f"{organisation_id} (origin={origin})",
-            run_id=run_id,
-            organisation_id=organisation_id,
-            claim_token=claim_token,
-            sqlstate=None,
-            origin="rls_precheck",
-        ) from OutputsRlsMismatch(
-            f"run_node_outputs org mismatch on run {run_id}: session org {session_org} != row org {organisation_id}"
-        )
-
-    for attempt in (1, 2):
-        savepoint = session.begin_nested()
-        try:
-            async with savepoint:
-                await replace_run_node_outputs(
-                    session,
-                    run_id=run_id,
-                    organisation_id=organisation_id,
-                    outputs=outputs,
-                    telemetry=telemetry,
-                    inherited_outputs=inherited_outputs,
-                    inherited_telemetry=inherited_telemetry,
-                )
-            return
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            state = _sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
-            if attempt == 1 and state in _DUAL_WRITE_RETRYABLE_SQLSTATES:
-                continue
-            raise DualWriteError(
-                f"run_node_outputs store write failed (origin={origin}, sqlstate={state}): {exc}",
-                run_id=run_id,
-                organisation_id=organisation_id,
-                claim_token=claim_token,
-                sqlstate=state,
-                origin=origin,
-            ) from exc
+    organisation_id = _resolve_store_org(
+        session_org,
+        organisation_id,
+        origin=origin,
+        run_id=run_id,
+        claim_token=claim_token,
+    )
+    await _store_run_outputs_with_retry(
+        session,
+        run_id=run_id,
+        organisation_id=organisation_id,
+        outputs=outputs,
+        telemetry=telemetry,
+        claim_token=claim_token,
+        origin=origin,
+        inherited_outputs=inherited_outputs,
+        inherited_telemetry=inherited_telemetry,
+    )
 
 
 async def update_run_status(
@@ -4692,23 +4802,21 @@ async def _get_run_stats_postgres(
     # Failure reason breakdown for failed / eval_failed runs carrying an error
     # code. FAR-707: benign (business-expected) rows are excluded so an
     # expected failure never inflates its own error-code cluster.
-    failure_rows = list(
-        (
-            await session.execute(
-                select(Run.error_code, func.count())
-                .select_from(Run)
-                .join(Pipeline, Run.pipeline_id == Pipeline.id)
-                .where(
-                    *base_where,
-                    Run.status.in_(_FAILURE_REASON_STATUSES),
-                    Run.error_code.is_not(None),
-                    Run.error_code != "",
-                    _NOT_BENIGN_PREDICATE,
-                )
-                .group_by(Run.error_code)
+    failure_rows = (
+        await session.execute(
+            select(Run.error_code, func.count())
+            .select_from(Run)
+            .join(Pipeline, Run.pipeline_id == Pipeline.id)
+            .where(
+                *base_where,
+                Run.status.in_(_FAILURE_REASON_STATUSES),
+                Run.error_code.is_not(None),
+                Run.error_code != "",
+                _NOT_BENIGN_PREDICATE,
             )
-        ).all()
-    )
+            .group_by(Run.error_code)
+        )
+    ).all()
 
     success_count = sum(int(row.success) for row in day_rows)
     benign_total = sum(int(row.benign_count or 0) for row in day_rows)

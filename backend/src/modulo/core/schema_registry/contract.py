@@ -165,22 +165,30 @@ def _check_bounds(schema: dict[str, Any]) -> tuple[bool, list[str]]:
     Checks recursively.  A single violation is sufficient to reject.
     """
     reasons: list[str] = []
-
-    def _walk(node: Any) -> None:
-        if isinstance(node, dict):
-            _check_const(node, reasons)
-            _check_enum(node, reasons)
-            # Recurse into children.
-            for value in node.values():
-                if isinstance(value, (dict, list)):
-                    _walk(value)
-        elif isinstance(node, list):
-            for item in node:
-                if isinstance(item, (dict, list)):
-                    _walk(item)
-
-    _walk(schema)
+    _collect_bound_violations(schema, reasons)
     return bool(reasons), reasons
+
+
+def _child_containers(node: Any) -> list[Any]:
+    """The dict/list children the bounds walk recurses into, in visit order."""
+    if isinstance(node, dict):
+        return [value for value in node.values() if isinstance(value, (dict, list))]
+    if isinstance(node, list):
+        return [item for item in node if isinstance(item, (dict, list))]
+    return []
+
+
+def _collect_bound_violations(node: Any, reasons: list[str]) -> None:
+    """Pre-order depth-first walk collecting const/enum cap violations.
+
+    Dict nodes are checked before their children, and siblings are visited in
+    their original order — the same order the previous nested walk produced.
+    """
+    if isinstance(node, dict):
+        _check_const(node, reasons)
+        _check_enum(node, reasons)
+    for child in _child_containers(node):
+        _collect_bound_violations(child, reasons)
 
 
 def _strip_free_text(node: Any) -> None:
@@ -555,7 +563,7 @@ def read_schema_contract_version(schema_dir: Path, node_id: str) -> int | None:
             version = data.get("_schema_contract_version")
             if isinstance(version, int):
                 return version
-    except (OSError, json.JSONDecodeError, ValueError):
+    except (OSError, ValueError):
         pass
     return None
 

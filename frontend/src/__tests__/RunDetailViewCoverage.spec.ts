@@ -769,6 +769,127 @@ describe('RunDetailView coverage — script logic branches', () => {
     expect(wrapper.find('[data-testid="run-detail-no-attributable-costs"]').exists()).toBe(true)
   })
 
+  // ── FAR-1780: agent-reported provenance badge on declared costs ─
+  // A figure the agent itself reported is provenance "reported" — Modulo
+  // observed the dispatch, never the figure. Whichever field shape lands
+  // (node_token_usage provenance, breakdown provenance/billable pair) the
+  // badge renders; pre-provenance runs carry neither field and show none.
+  describe('agent-reported provenance badge (FAR-1780)', () => {
+    it('shows the badge on a per-node cost whose entry carries the reported provenance map', async () => {
+      // The union serializes the envelope's provenance as a PER-DATUM MAP —
+      // the real wire shape: cost under model_cost_usd, tokens under the
+      // distinct reported_* family, never bare input_tokens keys.
+      const wrapper = await mountWith(
+        baseRun({
+          node_token_usage: { 'node-a': { model_cost_display_usd: 0.05, provenance: { model_cost_usd: 'reported', reported_input_tokens: 'reported' } } },
+        }),
+      )
+      const badge = wrapper.find('[data-testid="run-detail-node-cost-reported"]')
+      expect(badge.exists()).toBe(true)
+      expect(badge.text()).toContain('reported by agent')
+    })
+
+    it('omits the badge on a per-node cost rendered without the provenance field (old runs)', async () => {
+      const wrapper = await mountWith(
+        baseRun({ node_token_usage: { 'node-a': { model_cost_display_usd: 0.05 } } }),
+      )
+      expect(wrapper.find('[data-testid="run-detail-node-cost-reported"]').exists()).toBe(false)
+      // The figure still renders — only the badge is absent.
+      expect(wrapper.text()).toContain('0.050000')
+    })
+
+    it('omits the badge when the provenance map carries no "reported" values', async () => {
+      const wrapper = await mountWith(
+        baseRun({ node_token_usage: { 'node-a': { model_cost_display_usd: 0.05, provenance: { reported_input_tokens: 'observed' } } } }),
+      )
+      expect(wrapper.find('[data-testid="run-detail-node-cost-reported"]').exists()).toBe(false)
+    })
+
+    it('omits the badge when only TOKEN datums are reported (token-only report is not a cost attestation)', async () => {
+      const wrapper = await mountWith(
+        baseRun({ node_token_usage: { 'node-a': { model_cost_display_usd: 0.05, provenance: { reported_input_tokens: 'reported', reported_output_tokens: 'reported' } } } }),
+      )
+      expect(wrapper.find('[data-testid="run-detail-node-cost-reported"]').exists()).toBe(false)
+    })
+
+    it('shows the badge on a breakdown entry carrying billable false (excluded from the run total)', async () => {
+      const wrapper = await mountWith(
+        baseRun({ cost_breakdown: [
+          { component: 'model', amount_usd: '0.500000', source: 'self_reported', billable: false },
+        ] }),
+      )
+      const badge = wrapper.find('[data-testid="run-detail-cost-reported-badge"]')
+      expect(badge.exists()).toBe(true)
+      expect(badge.text()).toContain('reported by agent')
+    })
+
+    it('shows the badge on a breakdown entry carrying provenance reported', async () => {
+      const wrapper = await mountWith(
+        baseRun({ cost_breakdown: [
+          { component: 'model', amount_usd: '0.500000', source: 'self_reported', provenance: 'reported' },
+        ] }),
+      )
+      expect(wrapper.find('[data-testid="run-detail-cost-reported-badge"]').exists()).toBe(true)
+    })
+
+    it('shows the badge on a breakdown entry carrying a per-datum provenance map with a reported value', async () => {
+      const wrapper = await mountWith(
+        baseRun({ cost_breakdown: [
+          { component: 'model', amount_usd: '0.500000', source: 'self_reported', provenance: { model_cost_usd: 'reported' } },
+        ] }),
+      )
+      expect(wrapper.find('[data-testid="run-detail-cost-reported-badge"]').exists()).toBe(true)
+    })
+
+    it('omits the badge on a per-datum provenance map carrying no reported value', async () => {
+      const wrapper = await mountWith(
+        baseRun({ cost_breakdown: [
+          { component: 'model', amount_usd: '0.500000', source: 'self_reported', provenance: { model_cost_usd: 'observed' } },
+        ] }),
+      )
+      expect(wrapper.find('[data-testid="run-detail-cost-reported-badge"]').exists()).toBe(false)
+    })
+
+    it('omits the badge for non-object provenance shapes (array, null) and non-reported scalars', async () => {
+      const withProvenance = (provenance: unknown) =>
+        baseRun({ cost_breakdown: [
+          { component: 'model', amount_usd: '0.500000', source: 'self_reported', provenance },
+        ] })
+      for (const provenance of [['reported'], null, 'observed']) {
+        const wrapper = await mountWith(withProvenance(provenance))
+        expect(wrapper.find('[data-testid="run-detail-cost-reported-badge"]').exists()).toBe(false)
+      }
+    })
+
+    it('omits the badge on a breakdown entry without either field', async () => {
+      const wrapper = await mountWith(
+        baseRun({ cost_breakdown: [
+          { component: 'model', amount_usd: '0.500000', source: 'self_reported' },
+        ] }),
+      )
+      expect(wrapper.find('[data-testid="run-detail-cost-reported-badge"]').exists()).toBe(false)
+      expect(wrapper.find('#run-detail-cost-section').text()).toContain('0.500000')
+    })
+
+    it('omits the badge on a billable:true breakdown entry without provenance', async () => {
+      const wrapper = await mountWith(
+        baseRun({ cost_breakdown: [
+          { component: 'model', amount_usd: '0.500000', billable: true },
+        ] }),
+      )
+      expect(wrapper.find('[data-testid="run-detail-cost-reported-badge"]').exists()).toBe(false)
+    })
+
+    it('never shows the badge on a missing_self_report row (nothing was reported)', async () => {
+      const wrapper = await mountWith(
+        baseRun({ cost_breakdown: [
+          { component: 'model', amount_usd: '0.000000', missing_self_report: true, provenance: 'reported' },
+        ] }),
+      )
+      expect(wrapper.find('[data-testid="run-detail-cost-reported-badge"]').exists()).toBe(false)
+    })
+  })
+
   // ── node progress: live events ──────────────────────────────────
   it('shows node progress chips from live events', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({

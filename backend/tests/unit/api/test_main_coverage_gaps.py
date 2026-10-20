@@ -21,6 +21,7 @@ from cryptography.fernet import Fernet
 from sqlalchemy.exc import SQLAlchemyError
 
 import modulo.api.main as main
+from modulo.db import capacity as db_capacity
 from modulo.settings import Settings
 
 
@@ -538,6 +539,51 @@ async def test_lifespan_is_fail_open_when_stall_attribution_install_fails(
             pass
 
     assert "startup.event_loop_stall_attribution_install_failed" in caplog.text
+
+
+# ── FAR-1992: capacity platform probe installation ──
+
+
+@pytest.mark.anyio
+async def test_lifespan_installs_the_capacity_platform_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The API lifespan is one of the TWO production wiring points for the
+    platform capacity probe (the other is the SAQ worker startup hook). Both
+    call sites are fail-open, so a deleted or typo'd call would leave the whole
+    suite green while the feature silently stopped existing in production:
+    asserting the installed port is what distinguishes wired from absent.
+    """
+    settings = _make_settings()
+    _patch_lifespan_seams(monkeypatch, settings)
+    probe = object()
+    factory = MagicMock(return_value=probe)
+    monkeypatch.setattr("modulo.core.capacity_providers.build_platform_capacity_probe", factory)
+    monkeypatch.setattr(db_capacity, "_platform_probe", None)
+
+    async with main._lifespan(main.app):
+        assert db_capacity._platform_probe is probe
+
+    factory.assert_called_once_with(settings)
+
+
+@pytest.mark.anyio
+async def test_lifespan_is_fail_open_when_the_capacity_probe_factory_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = _make_settings()
+    _patch_lifespan_seams(monkeypatch, settings)
+    monkeypatch.setattr(
+        "modulo.core.capacity_providers.build_platform_capacity_probe",
+        MagicMock(side_effect=RuntimeError("factory boom")),
+    )
+    monkeypatch.setattr(db_capacity, "_platform_probe", None)
+
+    with caplog.at_level(logging.WARNING, logger="modulo.api.main"):
+        async with main._lifespan(main.app):
+            pass
+
+    assert db_capacity._platform_probe is None
+    assert "startup.capacity_platform_probe_failed" in caplog.text
 
 
 _VALID_32 = "a" * 32

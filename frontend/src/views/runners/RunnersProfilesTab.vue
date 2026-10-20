@@ -59,7 +59,7 @@
 
           <div class="flex flex-wrap gap-1.5">
             <span
-              class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+              class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary-text"
               data-testid="envprofile-list-tier-badge"
             >
               {{ tierLabel(row.profile.provider_type) }}
@@ -68,6 +68,27 @@
               {{ row.profile.provider_type }}
             </span>
           </div>
+
+          <!-- FAR-1779: surface the pre-provision image-resolution guards the
+               backend ALREADY returns (no new guards) with actionable copy.
+               placeholder_digest means no registry image exists to pull, so
+               the row can never provision; image_not_pulled is a pull failure
+               on the runner machine. -->
+          <output
+            v-if="row.health?.placeholder_digest"
+            class="block rounded-lg border border-warning/40 bg-warning/10 p-3"
+            data-testid="runner-profile-image-unresolvable"
+          >
+            <span class="block text-xs font-medium text-warning-text">{{ $t('views.RunnersProfilesTab.image_unresolvable_title') }}</span>
+            <span class="mt-0.5 block text-xs text-muted-foreground">{{ $t('views.RunnersProfilesTab.image_unresolvable_hint') }}</span>
+          </output>
+          <output
+            v-else-if="row.health?.health_state === 'image_not_pulled'"
+            class="block text-xs text-muted-foreground"
+            data-testid="runner-profile-image-pull-hint"
+          >
+            {{ $t('views.RunnersProfilesTab.image_pull_hint') }}
+          </output>
 
           <div
             v-if="row.drift.drifted"
@@ -297,6 +318,12 @@ function tierLabel(providerType: string): string {
 }
 
 function healthLabel(row: ProfileRow): string {
+  // FAR-1779: a placeholder-digest row is excluded from image inspection, so
+  // the backend reports health_state='healthy' (or None) alongside
+  // placeholder_digest=true. A green "healthy" badge would contradict the
+  // "Image cannot be resolved" note directly below it, so the badge agrees
+  // with the note instead of the un-inspectable probe state.
+  if (row.health?.placeholder_digest) return t('views.RunnersProfilesTab.health_image_unresolvable')
   if (row.profile.provider_type !== 'runner_docker') return row.profile.status === 'active' ? t('views.RunnersProfilesTab.status_active') : row.profile.status
   switch (row.health?.health_state) {
     case 'healthy':
@@ -311,10 +338,11 @@ function healthLabel(row: ProfileRow): string {
 }
 
 function healthBadgeClass(row: ProfileRow): string {
-  if (row.profile.provider_type !== 'runner_docker') return 'bg-success/10 text-success'
+  if (row.health?.placeholder_digest) return 'bg-warning/10 text-warning-text'
+  if (row.profile.provider_type !== 'runner_docker') return 'bg-success/10 text-success-text'
   switch (row.health?.health_state) {
     case 'healthy':
-      return 'bg-success/10 text-success'
+      return 'bg-success/10 text-success-text'
     case 'engine_unreachable':
       return 'bg-destructive/10 text-destructive-text'
     case 'image_not_pulled':
@@ -325,6 +353,7 @@ function healthBadgeClass(row: ProfileRow): string {
 }
 
 function healthDotClass(row: ProfileRow): string {
+  if (row.health?.placeholder_digest) return 'bg-warning'
   if (row.profile.provider_type !== 'runner_docker') return 'bg-success'
   switch (row.health?.health_state) {
     case 'healthy':

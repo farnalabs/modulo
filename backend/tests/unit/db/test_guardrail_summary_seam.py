@@ -32,7 +32,6 @@ from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.base import Base
 from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.models.eval import Eval
-from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.journey import Journey
 from modulo.db.models.organisation import Organisation
@@ -57,7 +56,6 @@ _TABLES: list[Table] = cast(
         Run.__table__,
         PipelineSnapshot.__table__,
         Journey.__table__,
-        EvalDefinition.__table__,
         EvalResult.__table__,
         Eval.__table__,
         AuditEvent.__table__,
@@ -109,18 +107,6 @@ async def _seed_guardrail(
     if config:
         cfg.update(config)
     guardrail_id = uuid.uuid4()
-    eval_def = EvalDefinition(
-        id=guardrail_id,
-        organisation_id=_ORG,
-        pipeline_id=_PIPELINE,
-        node_id=None,
-        name=name,
-        eval_type="guardrail",
-        config_json=cfg,
-        failure_behaviour="block" if action in ("block", "redact") else "warn",
-        account_id=_ACCOUNT,
-    )
-    session.add(eval_def)
     eval_row = Eval(
         id=guardrail_id,
         organisation_id=_ORG,
@@ -136,14 +122,14 @@ async def _seed_guardrail(
     return guardrail_id
 
 
-async def _get_guardrail_row(session: AsyncSession, guardrail_id: uuid.UUID) -> EvalDefinition:
-    return (await session.execute(select(EvalDefinition).where(EvalDefinition.id == guardrail_id))).scalar_one()
+async def _get_guardrail_row(session: AsyncSession, guardrail_id: uuid.UUID) -> Eval:
+    return (await session.execute(select(Eval).where(Eval.id == guardrail_id))).scalar_one()
 
 
 async def _seed_snapshot_with_pins(
     session: AsyncSession,
     *,
-    guardrail_defs: list[EvalDefinition],
+    guardrail_defs: list[Eval],
     fingerprint: str | None = None,
     tamper: bool = False,
     zero_pins: bool = False,
@@ -311,7 +297,6 @@ async def test_create_run_expected_skip_no_unexpected_alert(session: AsyncSessio
     pinned = await _seed_guardrail(session, name="ghost-block", action="block")
     pinned_row = await _get_guardrail_row(session, pinned)
     await _seed_snapshot_with_pins(session, guardrail_defs=[pinned_row])
-    await session.execute(EvalDefinition.__table__.delete().where(EvalDefinition.__table__.c.id == pinned))
     await session.execute(Eval.__table__.delete().where(Eval.__table__.c.id == pinned))
     session.expire_all()
     await session.flush()
@@ -511,10 +496,6 @@ async def test_create_run_excludes_soft_deleted_guardrail_from_live_binding(sess
     row = await _get_guardrail_row(session, gid)
     row.deleted_at = datetime.now(UTC)
     row.deleted_by = _ACCOUNT
-    # Also soft-delete the Eval row (load_pipeline_guardrail_rows reads evals).
-    eval_row = (await session.execute(select(Eval).where(Eval.id == gid))).scalar_one()
-    eval_row.deleted_at = datetime.now(UTC)
-    eval_row.deleted_by = _ACCOUNT
     await session.flush()
 
     run = await _create(session, input_payload={"body": "leak SECRET_ABC12345"})
@@ -545,10 +526,6 @@ async def test_create_run_replay_soft_deleted_pin_skips_with_audit(
     # live binding (load_pipeline_guardrail_rows) excludes it from fresh runs.
     pinned_row.deleted_at = datetime.now(UTC)
     pinned_row.deleted_by = _ACCOUNT
-    # Also soft-delete the Eval row (load_pipeline_guardrail_rows reads evals).
-    eval_row = (await session.execute(select(Eval).where(Eval.id == gid))).scalar_one()
-    eval_row.deleted_at = datetime.now(UTC)
-    eval_row.deleted_by = _ACCOUNT
     await session.flush()
 
     run = await _create(session, input_payload={"body": "clean"}, is_replay=True)

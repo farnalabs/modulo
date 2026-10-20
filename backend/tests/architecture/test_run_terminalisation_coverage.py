@@ -543,9 +543,16 @@ def _resolve_py_anchor(fragment: str, files: Iterable[Path]) -> list[Path]:
     Notes cite the shortest distinctive path, not a backend-relative one (both
     ``db/models/run.py`` and bare ``cron_helpers.py`` appear), so resolution is
     by path SUFFIX over the anchor trees.
+
+    The cited fragment always uses POSIX separators (the anchor regex only
+    permits ``/``), while ``str(Path)`` renders with the platform separator — so
+    the comparison is normalised to POSIX on BOTH sides. Comparing
+    ``str(path)`` against a ``/``-prefixed suffix is false on every match under
+    Windows (``backend\\src\\...`` never ends with ``/db/models/run.py``), which
+    made this gate unsatisfiable there regardless of the anchor's accuracy.
     """
-    suffix = "/" + fragment.lstrip("./")
-    return [path for path in files if str(path).endswith(suffix)]
+    suffix = "/" + fragment.lstrip("./").replace("\\", "/")
+    return [path for path in files if path.as_posix().endswith(suffix)]
 
 
 def _exempt_justification_violations(
@@ -879,6 +886,38 @@ def test_synthetic_bare_exempt_justification_is_flagged() -> None:
         ),
     )
     assert not _exempt_justification_violations("synthetic", anchored, anchor_files=files)
+    # The mirror of the line above: a cited ``*.py`` path that resolves to no
+    # file must STILL be flagged, so normalising the separator comparison can
+    # never be "made to pass" by loosening the predicate to match everything.
+    nonexistent = StatusCoverage(
+        _EXEMPT,
+        reason="operator_driven_recovery",
+        note=(
+            "db/models/this_anchor_file_does_not_exist.py documents the operator-recovery "
+            "contract this synthetic status relies on for its exemption decision"
+        ),
+    )
+    assert _exempt_justification_violations("synthetic", nonexistent, anchor_files=files), (
+        "an exemption citing a *.py path that resolves to no file passed the anchor gate"
+    )
+
+
+def test_resolve_py_anchor_normalises_separators_both_directions() -> None:
+    """A POSIX-anchored fragment resolves against native (Windows) paths.
+
+    The anchor is written ``db/models/run.py`` (POSIX separators) while the
+    anchor tree yields native paths (``Path`` — backslashes on Windows), so the
+    predicate must normalise before matching. Both directions are pinned here
+    against synthetic files so the check is proven independent of the shipped
+    inventory: the known-good fragment resolves, and a fragment naming no file
+    still resolves to nothing.
+    """
+    files = [
+        Path("backend/src/modulo/db/models/run.py"),
+        Path("backend/src/modulo/db/crud/run.py"),
+    ]
+    assert _resolve_py_anchor("db/models/run.py", files) == [files[0]]
+    assert not _resolve_py_anchor("db/models/missing.py", files)
 
 
 def _gap_note_violations(status: str, note: str) -> list[str]:

@@ -238,6 +238,24 @@ def _semgrep_json_timeout(json_path: str | os.PathLike[str]) -> bool:
     return any(_json_error_type_is_fatal(err) for err in errors)
 
 
+def _as_text(value: bytes | str | None) -> str:
+    """Normalise a captured subprocess stream to ``str``.
+
+    ``subprocess.TimeoutExpired.stdout``/``.stderr`` are typed ``bytes | str |
+    None``: ``bytes`` when the child was not run with ``text=True``, or when the
+    kill path re-``communicate()``-d the pipes. The wrapper only pattern-matches
+    this captured output, so normalise each stream here — ``None`` becomes ``""``,
+    ``bytes`` decodes with ``errors="replace"`` (a byte sequence that is not valid
+    UTF-8 must never make this gate script crash while reporting a crash), and
+    ``str`` passes through unchanged.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 def _semgrep_scan_incomplete(output: str, json_path: str | os.PathLike[str] | None = None) -> bool:
     """True when either detector sees an incomplete scan (JSON primary, text net)."""
     if json_path is not None and _semgrep_json_timeout(json_path):
@@ -397,7 +415,7 @@ def _run_windows() -> int:
         # path uses over that captured output: a reported skip still fails
         # CLOSED (the silent-pass hole FAR-1859 closed is not reopened by a kill
         # that happened to follow a skip).
-        killed_output = (exc.stdout or "") + (exc.stderr or "")
+        killed_output = _as_text(exc.stdout) + _as_text(exc.stderr)
         if _semgrep_scan_incomplete(killed_output, json_path):
             print(
                 _SEMGREP_INCOMPLETE.format(

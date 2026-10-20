@@ -8,7 +8,7 @@ load testing tool. Scripts live in `tests/performance/` and target the Modulo AP
 
 ## Prerequisites
 
-- [k6](https://k6.io/docs/getting-started/installation/) installed locally (v0.49+)
+- [k6](https://grafana.com/docs/k6/latest/set-up/install-k6/) installed locally (v0.49+)
 - The Modulo backend (and its dependencies: Postgres 16, Redis 8) is running
 - Test user credentials exist in the target environment (`auth-burst.js` rotates
   through five of them so token caching does not distort the login numbers):
@@ -186,7 +186,7 @@ jobs:
 
 ```bash
 k6 cloud tests/performance/pipeline-crud.js \
-  --env BASE_URL=https://staging.modulo.app/api/v1
+  --env BASE_URL=https://staging.modulo.run/api/v1
 ```
 
 ### Pre-merge Gate (optional)

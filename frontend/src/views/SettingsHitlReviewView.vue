@@ -76,7 +76,7 @@
           type="button"
           :disabled="bulkClaiming || bulkRejecting || showBulkRejectInput"
           data-testid="hitl-review-bulk-reject"
-          class="rounded-lg bg-destructive px-3 py-1.5 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+          class="rounded-lg bg-destructive-fill px-3 py-1.5 text-sm font-medium text-destructive-foreground hover:bg-destructive-fill/90 disabled:opacity-50"
           @click="openBulkReject"
         >
           {{ $t('views.SettingsHitlReviewView.bulk_reject') }}
@@ -108,7 +108,7 @@
             type="button"
             :disabled="bulkRejecting"
             data-testid="hitl-review-bulk-reject-confirm"
-            class="rounded-lg bg-destructive px-3 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+            class="rounded-lg bg-destructive-fill px-3 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive-fill/90 disabled:opacity-50"
             @click="confirmBulkReject"
           >
             {{ bulkRejecting ? $t('views.SettingsHitlReviewView.bulk_rejecting') : $t('views.SettingsHitlReviewView.bulk_reject_confirm') }}

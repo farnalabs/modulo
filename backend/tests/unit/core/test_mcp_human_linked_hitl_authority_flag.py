@@ -8,7 +8,6 @@ failure must never widen the human_only auth boundary.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from modulo.core.feature_flags import (
-    MCP_HUMAN_LINKED_HITL_AUTHORITY_FLAG,
     FeatureFlagRegistry,
     resolve_mcp_human_linked_hitl_authority,
 )
@@ -17,13 +16,13 @@ from modulo.core.feature_flags import (
 class TestFlagRegistration:
     def test_flag_is_registered_community_tier(self) -> None:
         registry = FeatureFlagRegistry(current_tier="community")
-        flag = registry.get_flag(MCP_HUMAN_LINKED_HITL_AUTHORITY_FLAG)
+        flag = registry.get_flag("mcp_human_linked_hitl_authority")
         assert flag is not None
         assert flag.tier == "community"
 
     def test_flag_is_default_on(self) -> None:
         registry = FeatureFlagRegistry(current_tier="community")
-        flag = registry.get_flag(MCP_HUMAN_LINKED_HITL_AUTHORITY_FLAG)
+        flag = registry.get_flag("mcp_human_linked_hitl_authority")
         assert flag is not None
         assert flag.currently_active is True
 
@@ -31,7 +30,7 @@ class TestFlagRegistration:
 class TestResolver:
     async def test_defaults_on_without_an_org_override(self) -> None:
         assert (
-            await resolve_mcp_human_linked_hitl_authority(org_id=None, flag_name=MCP_HUMAN_LINKED_HITL_AUTHORITY_FLAG)
+            await resolve_mcp_human_linked_hitl_authority(org_id=None, flag_name="mcp_human_linked_hitl_authority")
             is True
         )
 
@@ -40,7 +39,7 @@ class TestResolver:
         registry.resolve_flag = AsyncMock(return_value=False)
         with patch("modulo.core.feature_flags.get_registry", return_value=registry):
             enabled = await resolve_mcp_human_linked_hitl_authority(
-                org_id=None, flag_name=MCP_HUMAN_LINKED_HITL_AUTHORITY_FLAG
+                org_id=None, flag_name="mcp_human_linked_hitl_authority"
             )
         assert enabled is False
 
@@ -49,13 +48,13 @@ class TestResolver:
         registry.resolve_flag = AsyncMock(side_effect=RuntimeError("db down"))
         with patch("modulo.core.feature_flags.get_registry", return_value=registry):
             enabled = await resolve_mcp_human_linked_hitl_authority(
-                org_id=None, flag_name=MCP_HUMAN_LINKED_HITL_AUTHORITY_FLAG
+                org_id=None, flag_name="mcp_human_linked_hitl_authority"
             )
         assert enabled is False
         registry.resolve_flag.assert_awaited_once()
         # The caller-supplied flag name is what gets resolved — the flag lives
         # at the gate site, not hidden in the registry module (FAR-1957).
-        assert registry.resolve_flag.await_args.args[0] == MCP_HUMAN_LINKED_HITL_AUTHORITY_FLAG
+        assert registry.resolve_flag.await_args.args[0] == "mcp_human_linked_hitl_authority"
         # The strict mode is what turns a failed ORG read into a raise instead
         # of a silent fall-through to the permissive tier default.
         assert registry.resolve_flag.await_args.kwargs["raise_on_error"] is True

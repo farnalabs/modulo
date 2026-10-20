@@ -44,12 +44,6 @@ _EXPECTED_CONTENT = "Hello from the test server!"
 _REQUEST_LOG: list[dict[str, Any]] = []
 
 
-def _find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 class _OpenAIHandler(BaseHTTPRequestHandler):
     """Minimal OpenAI-compatible server for testing."""
 
@@ -109,18 +103,42 @@ class _OpenAIHandler(BaseHTTPRequestHandler):
 
 
 class _ThreadedHTTPServer(threading.Thread):
-    """Daemon thread running a simple HTTP server on a random free port."""
+    """Daemon thread running a real HTTP server on an ephemeral loopback port.
+
+    Binds to port 0 and reads the kernel-assigned port back. The previous
+    probe-then-bind approach (bind a throwaway socket to :0, close it, then
+    rebind that number) raced other xdist workers for the port, and a lost
+    race surfaced as an opaque "did not start in time" thread crash. A bind
+    failure is now reported clearly from ``wait_until_ready``.
+
+    ``ThreadingHTTPServer`` services each connection in its own thread, so a
+    pooled keep-alive connection or a slow handler cannot stall the accept
+    loop and time out another request. The listen backlog is widened for the
+    same reason: on a busy parallel suite the kernel must keep completing
+    loopback handshakes while the accept loop waits for CPU (a single-threaded
+    ``HTTPServer`` with the default 5-entry backlog is the shape of a real
+    ``health_check`` connect timeout under load).
+    """
+
+    request_queue_size = 128
 
     def __init__(self) -> None:
         super().__init__(daemon=True)
-        self.port = _find_free_port()
+        self.port = 0
         self._started_event = threading.Event()
         self._server: Any = None
+        self._startup_error: BaseException | None = None
 
     def run(self) -> None:
-        from http.server import HTTPServer
+        from http.server import ThreadingHTTPServer
 
-        self._server = HTTPServer(("127.0.0.1", self.port), _OpenAIHandler)
+        try:
+            self._server = ThreadingHTTPServer(("127.0.0.1", 0), _OpenAIHandler)
+            self.port = self._server.server_address[1]
+        except OSError as exc:  # surfaced by wait_until_ready
+            self._startup_error = exc
+            self._started_event.set()
+            return
         self._started_event.set()
         self._server.serve_forever()
 
@@ -128,6 +146,9 @@ class _ThreadedHTTPServer(threading.Thread):
         if not self._started_event.wait(timeout):
             msg = "Test server did not start in time"
             raise RuntimeError(msg)
+        if self._startup_error is not None:
+            msg = f"Test server failed to bind: {self._startup_error}"
+            raise RuntimeError(msg) from self._startup_error
         # Also verify the port actually accepts connections
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -142,6 +163,8 @@ class _ThreadedHTTPServer(threading.Thread):
     def shutdown(self) -> None:
         if self._server is not None:
             self._server.shutdown()
+            self._server.server_close()
+        self.join(timeout=5)
 
 
 @pytest.fixture

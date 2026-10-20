@@ -167,13 +167,49 @@ class Candidate:
         }
 
 
+# Status vocabulary for a housekeeping category result (FAR-1977).
+#
+# ``SCAN_STATUS_OK`` means the scanner RAN: an empty candidate list is a clean
+# "ran, found nothing" scan, never a failure. ``SCAN_STATUS_FAILED`` means the
+# scanner RAISED and its category is empty because it did not complete — the
+# two must be distinguishable in the response, not only in the logs (FAR-1906).
+# Shared by the REST route and the MCP tool so the two surfaces cannot drift.
+SCAN_STATUS_OK = "ok"
+SCAN_STATUS_FAILED = "failed"
+
+# Stable reason code for a scanner failure. The response carries the exception
+# CLASS NAME only — never its message, a traceback, or any other raw exception
+# text that could leak internals; the traceback stays in the log (FAR-1906).
+SCAN_FAILURE_REASON = "scanner_failed"
+
+
 class CategoryResult:
-    def __init__(self, category: str, candidates: list[Candidate]) -> None:
+    """One scanned category, carrying whether its scanner actually completed.
+
+    ``status`` defaults to ``SCAN_STATUS_OK`` so a scanner that returns an empty
+    list reads as "ran, found nothing" — a plain ``candidates=[]`` must never
+    imply failure, and an unset status must never read as failed. Only
+    :func:`scan_all`'s exception branch sets ``SCAN_STATUS_FAILED`` (with an
+    ``error`` dict). Each scanner runs in its own savepoint, so a failure is
+    isolated to the category whose scanner raised: the savepoint is rolled back,
+    the remaining scanners keep running, and their categories keep ``ok``.
+    """
+
+    def __init__(
+        self,
+        category: str,
+        candidates: list[Candidate],
+        *,
+        status: str = SCAN_STATUS_OK,
+        error: dict[str, str] | None = None,
+    ) -> None:
         self.category = category
         entry = SCANNERS_BY_CATEGORY.get(category)
         self.label = entry.label if entry is not None else category
         self.description = entry.description if entry is not None else ""
         self.candidates = candidates
+        self.status = status
+        self.error = error
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -182,6 +218,8 @@ class CategoryResult:
             "description": self.description,
             "candidates": [c.to_dict() for c in self.candidates],
             "count": len(self.candidates),
+            "status": self.status,
+            "error": dict(self.error) if self.error is not None else None,
         }
 
 
@@ -1358,18 +1396,36 @@ async def scan_all(session: AsyncSession, org_id: uuid.UUID) -> list[CategoryRes
     does NOT abort the scan: the failure is caught, that scanner's category is
     returned EMPTY, and every other category still runs.
 
+    Each scanner runs inside its OWN savepoint (``session.begin_nested()``).
+    That isolation is what makes "every other category still runs" true for the
+    commonest real failure class — a DATABASE-level scanner error. A failed
+    statement aborts the enclosing transaction, so without a savepoint every
+    LATER scanner would raise ``DBAPIError: current transaction is aborted`` and
+    be marked failed too: one root cause misattributed to N categories. Rolling
+    back the scanner's savepoint restores the shared transaction, so only the
+    scanner that raised is marked failed. The exception is caught OUTSIDE the
+    savepoint context, i.e. after the savepoint has been rolled back.
+
     The catch is deliberately OBSERVABLE (FAR-1906): the failure is logged at
     ERROR with the scanner's category, the exception class and the traceback.
     An operator can therefore tell "this category is empty because the scanner
     FAILED" from "this category is empty because nothing matched". This matters
     for scanners that REFUSE to run (e.g. raising ``NotImplementedError`` on an
-    unsupported SQL dialect): the refusal fails loud in the logs even though the
-    API response still carries an empty category rather than an error.
+    unsupported SQL dialect): the refusal fails loud in the logs.
+
+    The failure is ALSO carried in the returned result (FAR-1977): the failing
+    category is returned with ``status=SCAN_STATUS_FAILED`` and a structured
+    ``error`` naming the exception CLASS (never its message or a traceback), so
+    the REST and MCP responses distinguish it from a clean empty category
+    without reading logs. Failure is per-category: the savepoint isolates the
+    scanner, so only the one that raised is marked failed and the categories of
+    scanners that ran before or after it keep ``status=SCAN_STATUS_OK``.
     """
     results: list[CategoryResult] = []
     for entry in _SCANNERS:
         try:
-            candidates = await entry.scan_func(session, org_id)
+            async with session.begin_nested():
+                candidates = await entry.scan_func(session, org_id)
             # Detection-only scanners (entity_type=None) set entity_type directly
             # on their candidates and must not be overridden here.
             if entry.entity_type is not None:
@@ -1383,5 +1439,12 @@ async def scan_all(session: AsyncSession, org_id: uuid.UUID) -> list[CategoryRes
                 entry.category,
                 type(exc).__name__,
             )
-            results.append(CategoryResult(category=entry.category, candidates=[]))
+            results.append(
+                CategoryResult(
+                    category=entry.category,
+                    candidates=[],
+                    status=SCAN_STATUS_FAILED,
+                    error={"reason": SCAN_FAILURE_REASON, "exception": type(exc).__name__},
+                )
+            )
     return results

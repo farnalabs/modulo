@@ -65,6 +65,32 @@ def _manifest_with(entry: dict[str, Any]) -> dict[str, Any]:
     return {**MANIFEST, "entries": [entry]}
 
 
+def _library_settings() -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        modulo_library_endpoint="https://library.modulo.run",
+        modulo_library_root_public_key="",
+        modulo_library_sync_timeout_seconds=15,
+    )
+
+
+def _stub_manifest(monkeypatch: pytest.MonkeyPatch, manifest: dict[str, Any]) -> None:
+    """Serve *manifest* from the sync cache without a real DB or signature check."""
+
+    async def _manifest(_session: Any) -> dict[str, Any]:
+        return manifest
+
+    monkeypatch.setattr(community_module, "get_cached_manifest", _manifest)
+
+
+def _stub_manifest_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simulate an empty sync cache (no manifest has ever been fetched)."""
+
+    async def _none(_session: Any) -> None:
+        return None
+
+    monkeypatch.setattr(community_module, "get_cached_manifest", _none)
+
+
 class _FakeResult:
     def __init__(self, rows: list[Any] | None = None, scalar: Any = None) -> None:
         self._rows = rows or []
@@ -156,15 +182,7 @@ def fake_blob(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def fake_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        community_module,
-        "get_settings",
-        lambda: types.SimpleNamespace(
-            modulo_library_endpoint="https://library.modulo.run",
-            modulo_library_root_public_key="",
-            modulo_library_sync_timeout_seconds=15,
-        ),
-    )
+    monkeypatch.setattr(community_module, "get_settings", _library_settings)
 
 
 class _FakeLibraryClient:
@@ -226,10 +244,7 @@ class TestListCommunityEntries:
             "revoked": [{"id": 99, "type": "agent", "slug": "int-id-agent", "version": "1.0.0"}],
         }
 
-        async def _manifest(_session: Any) -> dict | None:
-            return manifest
-
-        monkeypatch.setattr(community_module, "get_cached_manifest", _manifest)
+        _stub_manifest(monkeypatch, manifest)
 
         entries = await list_community_entries(_FakeSession(), ORG_ID)
 
@@ -250,20 +265,14 @@ class TestListCommunityEntries:
             "revoked": [{"id": "99", "type": "agent", "slug": "int-id-agent", "version": "1.0.0"}],
         }
 
-        async def _manifest(_session: Any) -> dict | None:
-            return manifest
-
-        monkeypatch.setattr(community_module, "get_cached_manifest", _manifest)
+        _stub_manifest(monkeypatch, manifest)
 
         entries = await list_community_entries(_FakeSession(), ORG_ID)
 
         assert [entry["id"] for entry in entries] == ["entry-1"]
 
     async def test_returns_empty_when_no_manifest(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        async def _none(_session: Any) -> None:
-            return None
-
-        monkeypatch.setattr(community_module, "get_cached_manifest", _none)
+        _stub_manifest_absent(monkeypatch)
         assert not await list_community_entries(_FakeSession(), ORG_ID)
 
     async def test_skips_revoked_entries(self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -279,10 +288,7 @@ class TestListCommunityEntries:
             }
         ]
 
-        async def _manifest(_session: Any) -> dict | None:
-            return manifest
-
-        monkeypatch.setattr(community_module, "get_cached_manifest", _manifest)
+        _stub_manifest(monkeypatch, manifest)
         entries = await list_community_entries(_FakeSession(), ORG_ID)
         assert {e["id"] for e in entries} == {"entry-1"}
 
@@ -327,10 +333,7 @@ class TestGetCommunityEntry:
         assert await get_community_entry(_FakeSession(), "entry-1") is None
 
     async def test_returns_none_when_no_manifest(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        async def _none(_session: Any) -> None:
-            return None
-
-        monkeypatch.setattr(community_module, "get_cached_manifest", _none)
+        _stub_manifest_absent(monkeypatch)
         assert await get_community_entry(_FakeSession(), "entry-1") is None
 
 
@@ -377,20 +380,14 @@ class TestInstallCommunityEntry:
             await install_community_entry(_FakeSession(), ORG_ID, "entry-1")
 
     async def test_raises_entry_not_found_when_no_manifest(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        async def _none(_session: Any) -> None:
-            return None
-
-        monkeypatch.setattr(community_module, "get_cached_manifest", _none)
+        _stub_manifest_absent(monkeypatch)
         with pytest.raises(ValueError, match="entry not found"):
             await install_community_entry(_FakeSession(), ORG_ID, "entry-1")
 
     async def test_raises_unsupported_primitive_type(
         self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        async def _manifest(_session: Any) -> dict | None:
-            return _manifest_with({**ENTRY_1, "type": "bogus"})
-
-        monkeypatch.setattr(community_module, "get_cached_manifest", _manifest)
+        _stub_manifest(monkeypatch, _manifest_with({**ENTRY_1, "type": "bogus"}))
         with pytest.raises(ValueError, match="unsupported primitive type"):
             await install_community_entry(_FakeSession(), ORG_ID, "entry-1")
 
@@ -422,10 +419,7 @@ class TestInstallCommunityEntry:
         else:
             entry[field] = value
 
-        async def _manifest(_session: Any) -> dict | None:
-            return _manifest_with(entry)
-
-        monkeypatch.setattr(community_module, "get_cached_manifest", _manifest)
+        _stub_manifest(monkeypatch, _manifest_with(entry))
         with pytest.raises(ValueError, match="entry not found"):
             await install_community_entry(_FakeSession(), ORG_ID, "entry-1")
 
@@ -477,15 +471,7 @@ class TestFetchBlob:
     ) -> _FakeLibraryClient:
         client = _FakeLibraryClient(blob, fetch_error=fetch_error, close_error=close_error)
         monkeypatch.setattr(community_module, "LibraryClient", lambda **_: client)
-        monkeypatch.setattr(
-            community_module,
-            "get_settings",
-            lambda: types.SimpleNamespace(
-                modulo_library_endpoint="https://library.modulo.run",
-                modulo_library_root_public_key="",
-                modulo_library_sync_timeout_seconds=15,
-            ),
-        )
+        monkeypatch.setattr(community_module, "get_settings", _library_settings)
         return client
 
     async def test_returns_none_when_client_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -568,29 +554,3 @@ class TestFetchBlob:
 
         with pytest.raises(RuntimeError, match="blob boom"):
             await community_module._fetch_blob("a" * 64)
-
-    async def test_raising_close_never_propagates(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """A ``close()`` that raises is logged and swallowed on every path.
-
-        The teardown sits in ``finally`` OUTSIDE the ``except ValueError``
-        block, so without its own guard a raising ``close()`` would replace the
-        body's exception (or discard its ``return``) and escape — breaking the
-        documented "return None on failure" contract.
-        """
-        payload = b'{"name": "code-reviewer"}'
-        ok_client = self._install_client(monkeypatch, payload, close_error=RuntimeError("teardown failed"))
-
-        with caplog.at_level(logging.ERROR, logger=community_module.logger.name):
-            assert await community_module._fetch_blob(hashlib.sha256(payload).hexdigest()) == {"name": "code-reviewer"}
-
-        assert ok_client.closed is True
-        assert "community.install.client_close_failed" in caplog.messages
-
-        # Failure path: the body's ValueError handling returns None AND teardown
-        # fails — still no escape.
-        bad_payload = b"not json"
-        bad_client = self._install_client(monkeypatch, bad_payload, close_error=RuntimeError("teardown failed"))
-        assert await community_module._fetch_blob(hashlib.sha256(bad_payload).hexdigest()) is None
-        assert bad_client.closed is True

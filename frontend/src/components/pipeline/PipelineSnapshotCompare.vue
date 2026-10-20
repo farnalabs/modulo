@@ -269,7 +269,24 @@ import ErrorAlert from '../shared/ErrorAlert.vue'
 import { api } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
 import { withTimeout, RequestTimeoutError } from '../../lib/requestTimeout'
-import { shortId } from '../../utils/format'
+import {
+  hasStructuralChanges as diffHasStructuralChanges,
+  isBlockingSeverity,
+  readBreakingChanges,
+  readChangeClassCounts,
+  readChangeClasses,
+  readFrozenGraphNodes,
+  readImpactedNodes,
+  readNodeSignatureNodeIds,
+  readUnchangedNodeIds,
+  severityLabel as resolveSeverityLabel,
+  shortId,
+  type NodePortDelta,
+  type SnapshotDiffEdge,
+  type SnapshotDiffNode,
+  type SnapshotDiffResponse,
+  type SnapshotModifiedEdge,
+} from '../../lib/pipelineSnapshotDiff'
 import { X as XIcon } from '@lucide/vue'
 
 /** One selectable version in the pair pickers. */
@@ -278,70 +295,6 @@ interface CompareSnapshot {
   snapshot_version: number
   tag: string | null
   created_at: string | null
-}
-
-interface GraphNode {
-  id?: string
-  label?: string | null
-  node_type?: string
-}
-
-interface GraphEdge {
-  source?: string
-  target?: string
-  source_node_id?: string
-  target_node_id?: string
-}
-
-interface Graph {
-  nodes?: GraphNode[]
-  edges?: GraphEdge[]
-}
-
-interface PortChange {
-  node_id?: string
-  direction?: string
-  port?: string | null
-  change?: string
-  old?: unknown
-  new?: unknown
-}
-
-interface ModifiedNode {
-  node_id?: string
-  changes?: Record<string, unknown>
-}
-
-interface ModifiedEdge {
-  edge?: { source?: string; target?: string }
-  changes?: Record<string, unknown>
-}
-
-interface BreakingChange {
-  severity?: string
-  node_id?: string
-  direction?: string
-  port?: string | null
-  edge?: { source?: string | null; target?: string | null }
-  reason?: string
-}
-
-interface SemanticLayer {
-  port_changes?: PortChange[]
-  impacted_nodes?: string[]
-  breaking_changes?: BreakingChange[]
-}
-
-interface DiffResponse {
-  snapshot_a?: { version?: number; graph?: Graph }
-  snapshot_b?: { version?: number; graph?: Graph }
-  nodes_added?: GraphNode[]
-  nodes_removed?: GraphNode[]
-  nodes_modified?: ModifiedNode[]
-  edges_added?: GraphEdge[]
-  edges_removed?: GraphEdge[]
-  edges_modified?: ModifiedEdge[]
-  semantic?: SemanticLayer
 }
 
 /** Raw snapshot row as returned by the list/detail endpoints. */
@@ -372,7 +325,7 @@ const { t } = useI18n()
 type CompareStatus = 'idle' | 'loading' | 'ready' | 'error'
 
 const status = ref<CompareStatus>('idle')
-const diff = ref<DiffResponse | null>(null)
+const diff = ref<SnapshotDiffResponse | null>(null)
 const errorMessage = ref<string | null>(null)
 const showRaw = ref(false)
 
@@ -546,66 +499,28 @@ async function ensureSnapshotLoaded(id: string | null): Promise<void> {
   }
 }
 
-const nodesAdded = computed(() => diff.value?.nodes_added ?? [])
-const nodesRemoved = computed(() => diff.value?.nodes_removed ?? [])
-const nodesModified = computed(() => diff.value?.nodes_modified ?? [])
-const edgesAdded = computed(() => diff.value?.edges_added ?? [])
-const edgesRemoved = computed(() => diff.value?.edges_removed ?? [])
-const edgesModified = computed(() => diff.value?.edges_modified ?? [])
+// FAR-1893: the change-class enumeration lives in the shared module — this
+// component never reads a raw response key, and neither do its siblings.
+const changeClasses = computed(() => readChangeClasses(diff.value))
+const changeCounts = computed(() => readChangeClassCounts(diff.value))
+const nodesAdded = computed(() => changeClasses.value.nodesAdded)
+const nodesRemoved = computed(() => changeClasses.value.nodesRemoved)
+const nodesModified = computed(() => changeClasses.value.nodesModified)
+const edgesAdded = computed(() => changeClasses.value.edgesAdded)
+const edgesRemoved = computed(() => changeClasses.value.edgesRemoved)
+const edgesModified = computed(() => changeClasses.value.edgesModified)
 
-const semantic = computed<SemanticLayer>(() => diff.value?.semantic ?? {})
-const breakingChanges = computed(() => semantic.value.breaking_changes ?? [])
-const impactedNodes = computed(() => semantic.value.impacted_nodes ?? [])
-const portChanges = computed(() => semantic.value.port_changes ?? [])
 
-/** Node ids present in BOTH frozen graphs. */
-const commonNodeIds = computed(() => {
-  const before = new Set(
-    (diff.value?.snapshot_a?.graph?.nodes ?? []).map((n) => n.id).filter((id): id is string => Boolean(id)),
-  )
-  return new Set(
-    (diff.value?.snapshot_b?.graph?.nodes ?? [])
-      .map((n) => n.id)
-      .filter((id): id is string => typeof id === 'string' && before.has(id)),
-  )
-})
+// FAR-1893: the semantic layer and the port-signature rule are interpreted by
+// the shared module, so the timeline and this view can never disagree about
+// what the diff says.
+const breakingChanges = computed(() => readBreakingChanges(diff.value))
+const impactedNodes = computed(() => readImpactedNodes(diff.value))
+const portChangedNodeCount = computed(() => readNodeSignatureNodeIds(diff.value).length)
 
-/**
- * Distinct nodes whose PORT SIGNATURE genuinely changed — i.e. a node present in
- * BOTH versions. The backend's semantic `port_changes` array also carries
- * ADDED-node port deltas (`diff_node_ports({}, node)`), whose `node_id` is the
- * literal string "None" and which are already reported under "nodes added"; a
- * node only in one version cannot have changed its signature, so those entries
- * are excluded here rather than inflated into a false headline.
- */
-const portChangedNodeCount = computed(() => {
-  const ids = new Set<string>()
-  for (const change of portChanges.value) {
-    const id = change.node_id
-    if (!id || id === 'None') continue
-    if (!commonNodeIds.value.has(id)) continue
-    ids.add(id)
-  }
-  return ids.size
-})
+const hasStructuralChanges = computed(() => diffHasStructuralChanges(diff.value))
 
-const hasStructuralChanges = computed(
-  () =>
-    nodesAdded.value.length > 0 ||
-    nodesRemoved.value.length > 0 ||
-    nodesModified.value.length > 0 ||
-    edgesAdded.value.length > 0 ||
-    edgesRemoved.value.length > 0 ||
-    edgesModified.value.length > 0,
-)
-
-/** Nodes present in both versions with no changed field, in version-B order. */
-const unchangedNodeIds = computed<string[]>(() => {
-  const modified = new Set((diff.value?.nodes_modified ?? []).map((m) => m.node_id))
-  return (diff.value?.snapshot_b?.graph?.nodes ?? [])
-    .map((n) => n.id)
-    .filter((id): id is string => typeof id === 'string' && commonNodeIds.value.has(id) && !modified.has(id))
-})
+const unchangedNodeIds = computed<string[]>(() => readUnchangedNodeIds(diff.value))
 
 const unchangedCount = computed(() => unchangedNodeIds.value.length)
 
@@ -614,13 +529,14 @@ function plural(key: string, count: number): string {
 }
 
 const summaryLine = computed(() => {
+  const counts = changeCounts.value
   const parts = [
-    plural('components.PipelineSnapshotCompare.summary_node_added', nodesAdded.value.length),
-    plural('components.PipelineSnapshotCompare.summary_node_removed', nodesRemoved.value.length),
-    plural('components.PipelineSnapshotCompare.summary_node_modified', nodesModified.value.length),
-    plural('components.PipelineSnapshotCompare.summary_edge_added', edgesAdded.value.length),
-    plural('components.PipelineSnapshotCompare.summary_edge_removed', edgesRemoved.value.length),
-    plural('components.PipelineSnapshotCompare.summary_edge_modified', edgesModified.value.length),
+    plural('components.PipelineSnapshotCompare.summary_node_added', counts.nodesAdded),
+    plural('components.PipelineSnapshotCompare.summary_node_removed', counts.nodesRemoved),
+    plural('components.PipelineSnapshotCompare.summary_node_modified', counts.nodesModified),
+    plural('components.PipelineSnapshotCompare.summary_edge_added', counts.edgesAdded),
+    plural('components.PipelineSnapshotCompare.summary_edge_removed', counts.edgesRemoved),
+    plural('components.PipelineSnapshotCompare.summary_edge_modified', counts.edgesModified),
   ]
   if (portChangedNodeCount.value > 0) {
     parts.push(plural('components.PipelineSnapshotCompare.summary_ports', portChangedNodeCount.value))
@@ -636,13 +552,13 @@ const summaryLine = computed(() => {
 /** node id -> display label, from the versions' frozen graphs (B wins). */
 const nodeLabels = computed<Record<string, string>>(() => {
   const map: Record<string, string> = {}
-  const add = (nodes?: GraphNode[]) => {
+  const add = (nodes?: SnapshotDiffNode[]) => {
     for (const node of nodes ?? []) {
       if (node?.id) map[node.id] = node.label || shortId(node.id)
     }
   }
-  add(diff.value?.snapshot_a?.graph?.nodes)
-  add(diff.value?.snapshot_b?.graph?.nodes)
+  add(readFrozenGraphNodes(diff.value, 'a'))
+  add(readFrozenGraphNodes(diff.value, 'b'))
   return map
 })
 
@@ -651,16 +567,16 @@ function nodeLabel(id?: string | null): string {
   return nodeLabels.value[id] ?? shortId(id)
 }
 
-function nodeId(node: GraphNode, index: number): string {
+function nodeId(node: SnapshotDiffNode, index: number): string {
   return node.id ?? `node-${index}`
 }
 
-function nodeText(node: GraphNode): string {
+function nodeText(node: SnapshotDiffNode): string {
   if (!node.id) return t('components.PipelineSnapshotCompare.no_value')
   return nodeLabels.value[node.id] ?? node.label ?? shortId(node.id)
 }
 
-function nodeTypeOf(node: GraphNode): string {
+function nodeTypeOf(node: SnapshotDiffNode): string {
   return node.node_type ?? ''
 }
 
@@ -670,11 +586,11 @@ function edgeEndpoint(edge: { source?: string; target?: string; source_node_id?:
   return `${nodeLabel(source)} → ${nodeLabel(target)}`
 }
 
-function edgeText(edge: GraphEdge): string {
+function edgeText(edge: SnapshotDiffEdge): string {
   return edgeEndpoint(edge)
 }
 
-function modifiedEdgeText(modified: ModifiedEdge): string {
+function modifiedEdgeText(modified: SnapshotModifiedEdge): string {
   const ends = edgeEndpoint(modified.edge ?? {})
   // Edge `changes.ports` is a `{source_port:{old,new}, target_port:{old,new}}`
   // delta DICT (unlike a node's list), so it needs its own reader — a repointed
@@ -723,9 +639,14 @@ function fieldEntries(changes?: Record<string, unknown>): Array<{ key: string; o
 }
 
 /** Node port deltas are a LIST of `{direction, port, change}` entries. */
-function portsOf(changes?: Record<string, unknown>): PortChange[] {
+function portsOf(changes?: Record<string, unknown>): NodePortDelta[] {
   const raw = changes?.ports
-  return Array.isArray(raw) ? (raw as PortChange[]) : []
+  if (!Array.isArray(raw)) return []
+  // Shape-guard the entries: a malformed element must degrade, not throw on
+  // the first `.direction` access (FAR-1893 robustness contract).
+  return raw.filter(
+    (entry): entry is NodePortDelta => typeof entry === 'object' && entry !== null,
+  )
 }
 
 /** Edge port deltas are a `{source_port, target_port}` -> `{old, new}` dict. */
@@ -759,7 +680,7 @@ function directionLabel(direction?: string): string {
   return direction ?? ''
 }
 
-function portChangeLabel(change: PortChange): string {
+function portChangeLabel(change: NodePortDelta): string {
   const direction = directionLabel(change.direction)
   const port = change.port ?? ''
   if (change.change === 'added') return t('components.PipelineSnapshotCompare.port_added', { direction, port })
@@ -773,13 +694,13 @@ function portChangeLabel(change: PortChange): string {
 }
 
 function severityClass(severity?: string): string {
-  return severity === 'block' ? 'font-medium text-destructive' : 'font-medium text-warning-text'
+  // The tone is this surface's presentation; WHICH severities are blocking is
+  // shared interpretation (FAR-1893).
+  return isBlockingSeverity(severity) ? 'font-medium text-destructive' : 'font-medium text-warning-text'
 }
 
 function severityLabel(severity?: string): string {
-  if (severity === 'block') return t('components.PipelineSnapshotCompare.severity_block')
-  if (severity === 'warning') return t('components.PipelineSnapshotCompare.severity_warning')
-  return severity ?? t('components.PipelineSnapshotCompare.severity_warning')
+  return resolveSeverityLabel(severity, t)
 }
 
 function onBaseChange(value: unknown): void {
@@ -838,7 +759,7 @@ async function loadDiff(): Promise<void> {
       status.value = 'error'
       return
     }
-    diff.value = data as unknown as DiffResponse
+    diff.value = data
     status.value = 'ready'
   } catch (e: unknown) {
     if (token !== diffRequestToken) return

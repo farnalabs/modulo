@@ -482,9 +482,11 @@ class TestDeriveCiFailureCoalesceKey:
         payload = {"branchName": "main", "prNumber": 0, "headSha": "main-sha-9"}
         assert ra.derive_ci_failure_coalesce_key(payload) == "ci-failure:pr:0:sha:main-sha-9"
 
-    def test_manual_dispatch_without_head_sha_returns_none(self) -> None:
-        # branch-fixer.yml is a manual workflow_dispatch with no PR/head context
-        # — an intentional fire must never be suppressed.
+    def test_payload_without_head_sha_returns_none(self) -> None:
+        # branch-fixer.yml now resolves and sends the PR's head SHA, so
+        # equivalent repeat deliveries coalesce. A payload with NO headSha is
+        # never coalesced: that is the `force: true` opt-out (a deliberate
+        # re-fire) and also the fail-open path when the SHA cannot be resolved.
         payload = {"branchName": "branch-x", "prNumber": 42, "failureDescription": "manual look"}
         assert ra.derive_ci_failure_coalesce_key(payload) is None
 

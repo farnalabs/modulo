@@ -248,33 +248,62 @@ def _bound_artifacts(entries: list[dict[str, str]]) -> list[dict[str, str]]:
         if len(bounded) >= _ARTIFACT_MAX_ENTRIES:
             break
         separator = 1 if bounded else 0
+        used = total + separator
         serialized = json.dumps(entry, sort_keys=True, ensure_ascii=False)
-        if total + separator + len(serialized) <= ARTIFACTS_BUDGET_CHARS:
+        if used + len(serialized) <= ARTIFACTS_BUDGET_CHARS:
             bounded.append(entry)
-            total += separator + len(serialized)
+            total = used + len(serialized)
             continue
-        # JSON overhead of the entry minus the summary itself (keys, quotes,
-        # escaping) — the budget the summary actually has left.
-        overhead = len(serialized) - len(entry["summary"])
-        remaining = ARTIFACTS_BUDGET_CHARS - total - separator - overhead
+        remaining, overhead = _artifact_summary_budget(entry, serialized, used)
         if remaining <= 0:
             break
-        summary = entry["summary"][:remaining]
-        serialized = ""
-        while summary:
-            candidate = {"node_id": entry["node_id"], "summary": summary + TRUNCATION_MARKER}
-            serialized = json.dumps(candidate, sort_keys=True, ensure_ascii=False)
-            overflow = total + separator + len(serialized) - ARTIFACTS_BUDGET_CHARS
-            if overflow <= 0:
-                break
-            # Escaping can expand the sliced form — shrink by the measured
-            # overshoot and re-serialise. Each pass removes at least one
-            # character, so the loop terminates.
-            summary = summary[: max(0, len(summary) - overflow)]
-        if serialized and total + separator + len(serialized) <= ARTIFACTS_BUDGET_CHARS:
+        fitted = _slice_artifact_to_budget(entry, remaining, overhead)
+        if fitted is None:
+            continue
+        candidate, length = fitted
+        if used + length <= ARTIFACTS_BUDGET_CHARS:
             bounded.append(candidate)
-            total += separator + len(serialized)
+            total = used + length
     return bounded
+
+
+def _artifact_summary_budget(entry: dict[str, str], serialized: str, used: int) -> tuple[int, int]:
+    """The remaining budget for *entry*'s summary plus its measured JSON overhead.
+
+    The overhead is the entry's serialised length minus its raw summary length
+    (keys, quotes, escaping) — the budget the summary actually has left.
+    """
+    overhead = len(serialized) - len(entry["summary"])
+    return ARTIFACTS_BUDGET_CHARS - used - overhead, overhead
+
+
+def _slice_artifact_to_budget(
+    entry: dict[str, str],
+    remaining: int,
+    overhead: int,
+) -> tuple[dict[str, str], int] | None:
+    """Slice *entry*'s summary to fit the remaining budget.
+
+    Escaping can expand the sliced form (an escape sequence cut in half), so
+    the sliced entry is re-serialised and, when it still overflows, shrunk by
+    the measured overshoot until it fits. Each pass removes at least one
+    character, so the loop terminates. The sliced summary carries
+    :data:`TRUNCATION_MARKER`. Returns ``(candidate, serialised_length)`` when a
+    candidate was produced, else ``None`` (nothing to admit).
+    """
+    summary = entry["summary"][:remaining]
+    serialized = ""
+    candidate: dict[str, str] = {}
+    while summary:
+        candidate = {"node_id": entry["node_id"], "summary": summary + TRUNCATION_MARKER}
+        serialized = json.dumps(candidate, sort_keys=True, ensure_ascii=False)
+        overflow = len(serialized) - remaining - overhead
+        if overflow <= 0:
+            break
+        summary = summary[: max(0, len(summary) - overflow)]
+    if not serialized:
+        return None
+    return candidate, len(serialized)
 
 
 def _artifact_entry(node_id: str, output: Any) -> dict[str, str]:
@@ -847,51 +876,8 @@ def _resolve_consequences(
 
     Returns ``None`` when neither target can be resolved.
     """
-    approve_target: str | None = None
-    reject_target: str | None = None
-    gate_source: str | None = None
-
-    # Approve: find the edge whose topology-derived review_id matches and
-    # extract its target.  Uses make_review_id (topology-based) — the same
-    # derivation the executor stamps at fire time — NOT the config's
-    # review_id field, which is injected only in compiled graphs.
-    for edge in graph_json.get("edges", []):
-        if not isinstance(edge, dict):
-            continue
-        source = edge_source_or_target(edge, "source")
-        target = edge_source_or_target(edge, "target")
-        if source is not None and target is not None and make_review_id(source, target) == review_id:
-            approve_target = str(target)
-            gate_source = source
-            break
-
-    # Reject: gate config ``reject_target`` first, then a reject-typed edge
-    # from the gate's source node — the SAME precedence the graph compiler
-    # applies (graph_cache._add_hitl_review_edge: config value, ``is None``
-    # → reject_targets_by_source, then ``if reject_target:`` wires the
-    # router). An edge-wired reject route with no config reject_target must
-    # still show a reject consequence in the reviewer briefing.
-    raw_reject: Any = None
-    if isinstance(config, dict):
-        raw_reject = config.get("reject_target")
-    if raw_reject is None:
-        reject_source = gate_source if gate_source is not None else source_node_id
-        if reject_source is not None:
-            for edge in graph_json.get("edges", []):
-                if not isinstance(edge, dict):
-                    continue
-                # Mirror graph_cache._get_edge_type (type, else edge_type).
-                edge_type = edge.get("type", edge.get("edge_type", ""))
-                if edge_type is None or str(edge_type) != "reject":
-                    continue
-                if edge_source_or_target(edge, "source") == reject_source:
-                    target = edge_source_or_target(edge, "target")
-                    if target:
-                        # Last matching reject edge wins — mirrors
-                        # graph_cache._build_reject_targets' dict build.
-                        reject_target = target
-    elif raw_reject:
-        reject_target = str(raw_reject)
+    approve_target, gate_source = _find_approve_target(graph_json, review_id)
+    reject_target = _resolve_reject_target(graph_json, config, gate_source, source_node_id)
 
     if approve_target is None and reject_target is None and not isinstance(config, dict):
         return None
@@ -915,6 +901,81 @@ def _resolve_consequences(
         reject["label"] = _snapshot_node_label(graph_json, reject_target)
     result["reject"] = reject
     return result
+
+
+def _find_approve_target(graph_json: dict[str, Any], review_id: str) -> tuple[str | None, str | None]:
+    """The gate edge's approve target and source node id, or ``(None, None)``.
+
+    Finds the edge whose topology-derived review_id matches and extracts its
+    target. Uses make_review_id (topology-based) — the same derivation the
+    executor stamps at fire time — NOT the config's review_id field, which is
+    injected only in compiled graphs.
+    """
+    for edge in graph_json.get("edges", []):
+        if not isinstance(edge, dict):
+            continue
+        source = edge_source_or_target(edge, "source")
+        target = edge_source_or_target(edge, "target")
+        if source is not None and target is not None and make_review_id(source, target) == review_id:
+            return str(target), source
+    return None, None
+
+
+def _resolve_reject_target(
+    graph_json: dict[str, Any],
+    config: dict[str, Any] | None,
+    gate_source: str | None,
+    source_node_id: str | None,
+) -> str | None:
+    """Resolve the reject destination: gate config first, then a reject edge.
+
+    The SAME precedence the graph compiler applies
+    (graph_cache._add_hitl_review_edge: config value, ``is None`` →
+    reject_targets_by_source, then ``if reject_target:`` wires the router). An
+    edge-wired reject route with no config reject_target must still show a
+    reject consequence in the reviewer briefing. A FALSY config value
+    (``""`` / ``False``) never yields a reject route.
+    """
+    raw_reject: Any = None
+    if isinstance(config, dict):
+        raw_reject = config.get("reject_target")
+    if raw_reject is None:
+        reject_source = gate_source if gate_source is not None else source_node_id
+        return _reject_target_from_edge(graph_json, reject_source)
+    if raw_reject:
+        return str(raw_reject)
+    return None
+
+
+def _reject_target_from_edge(graph_json: dict[str, Any], reject_source: str | None) -> str | None:
+    """The last reject-typed edge from *reject_source*, mirroring graph_cache.
+
+    Mirrors graph_cache._build_reject_targets' dict build: among the
+    reject-typed edges whose source matches, the last one wins.
+    """
+    if reject_source is None:
+        return None
+    reject_target: str | None = None
+    for edge in graph_json.get("edges", []):
+        if not isinstance(edge, dict):
+            continue
+        if _edge_source_node(edge) != reject_source:
+            continue
+        target = edge_source_or_target(edge, "target")
+        if target:
+            reject_target = target
+    return reject_target
+
+
+def _edge_source_node(edge: dict[str, Any]) -> str | None:
+    """The edge's source node id when the edge is reject-typed, else ``None``.
+
+    Mirrors graph_cache._get_edge_type (``type``, else ``edge_type``).
+    """
+    edge_type = edge.get("type", edge.get("edge_type", ""))
+    if edge_type is None or str(edge_type) != "reject":
+        return None
+    return edge_source_or_target(edge, "source")
 
 
 def _snapshot_source_is_hitl_node(graph_json: dict[str, Any] | None, source_node_id: str | None) -> bool:

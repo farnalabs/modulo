@@ -29,8 +29,9 @@ Use the [bug report](.github/ISSUE_TEMPLATE/bug_report.yml) and [feature
 request](.github/ISSUE_TEMPLATE/feature_request.yml) templates when opening
 issues.
 
-We do not yet have a formal code of conduct; be respectful, constructive, and
-assume good faith.
+All participants are expected to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md). Be respectful, constructive, and assume
+good faith.
 
 ---
 

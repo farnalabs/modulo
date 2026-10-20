@@ -345,20 +345,20 @@ class TestC15aPreVersionRawIntegration:
 
 
 # ---------------------------------------------------------------------------
-# C16: eval_definitions columns match ORM model (reflection contract)
+# C16: evals columns match ORM model (reflection contract)
 # ---------------------------------------------------------------------------
 
 
-class TestC16EvalDefinitionSchemaContract:
+class TestC16EvalSchemaContract:
     @pytest.mark.asyncio
-    async def test_eval_definitions_columns_match_orm(self, db_engine: AsyncEngine) -> None:
-        from modulo.db.models.eval_definition import EvalDefinition
+    async def test_evals_columns_match_orm(self, db_engine: AsyncEngine) -> None:
+        from modulo.db.models.eval import Eval
 
         async with db_engine.connect() as connection:
             db_columns = await connection.run_sync(
-                lambda sync_conn: {column["name"] for column in inspect(sync_conn).get_columns("eval_definitions")}
+                lambda sync_conn: {column["name"] for column in inspect(sync_conn).get_columns("evals")}
             )
-        orm_columns = {column.name for column in EvalDefinition.__table__.columns}
+        orm_columns = {column.name for column in Eval.__table__.columns}
         missing_in_db = orm_columns - db_columns
         assert not missing_in_db, (
             f"ORM columns absent from migrated schema: {sorted(missing_in_db)}. "

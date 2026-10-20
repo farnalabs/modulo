@@ -3,6 +3,12 @@
 Verifies that ``_ledger_block`` refuses the ledger (and terminalizes the run as
 ``cost_ceiling_exceeded``) when the per-run or per-org ceiling is breached, and
 that on success the org's consumed total is incremented. DB is fully mocked.
+
+FAR-1833: the ceiling/cumulative state now lives on ``organisation_cost_state``
+(read via ``get_org_cost_state``) and the accrual is a single atomic
+``increment_org_cumulative_spend`` statement applied inside the ledger
+savepoint. The gate's serialisation point is the per-org cost-state advisory
+lock (``lock_org_cost_state``), NOT an ``organisations`` row lock.
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from modulo.core.cost_controller.finalize import (
 )
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, RUN_CEILING_EXCEEDED
 from modulo.db.models.organisation import Organisation
+from modulo.db.models.organisation_cost_state import OrganisationCostState
 from modulo.db.models.run import Run
 
 
@@ -52,31 +59,58 @@ def _make_run() -> MagicMock:
     return run
 
 
-def _make_org(*, max_run_cost_cents=None, spend_ceiling_cents=None, org_cumulative_spend_cents=0) -> MagicMock:
+def _make_org() -> MagicMock:
     org = MagicMock(spec=Organisation)
     org.id = uuid.UUID("00000000-0000-0000-0000-000000000001")
-    org.max_run_cost_cents = max_run_cost_cents
-    org.spend_ceiling_cents = spend_ceiling_cents
-    org.org_cumulative_spend_cents = org_cumulative_spend_cents
+    org.triggers_paused = False
+    org.settings_json = {}
     return org
 
 
-async def test_spend_ceiling_gate_locks_org_for_no_key_update() -> None:
-    """FAR-1624: the ceiling gate must take ``FOR NO KEY UPDATE`` (not the
-    stronger ``FOR UPDATE``) on the org row.
+def _make_state(*, max_run_cost_cents=None, spend_ceiling_cents=None, org_cumulative_spend_cents=0) -> MagicMock:
+    state = MagicMock(spec=OrganisationCostState)
+    state.max_run_cost_cents = max_run_cost_cents
+    state.spend_ceiling_cents = spend_ceiling_cents
+    state.org_cumulative_spend_cents = org_cumulative_spend_cents
+    return state
 
-    The finalisation transaction already holds a foreign-key ``FOR KEY SHARE``
-    on the org tuple (from rows it inserted/updated that reference the org), so
-    requesting ``FOR UPDATE`` deadlocked up to 8 concurrent finalisations
-    (SQLSTATE 40P01). ``FOR NO KEY UPDATE`` is compatible with ``FOR KEY
-    SHARE`` while still conflicting with itself, so concurrent spend accrual
-    stays serialised.
+
+def _cost_state(*, max_run_cost_cents=None, spend_ceiling_cents=None, org_cumulative_spend_cents=0, present=True):
+    """Patch the cost-state read the ceiling gate uses.
+
+    ``present=False`` models an org with no cost-state row (the defaults)."""
+    state = (
+        _make_state(
+            max_run_cost_cents=max_run_cost_cents,
+            spend_ceiling_cents=spend_ceiling_cents,
+            org_cumulative_spend_cents=org_cumulative_spend_cents,
+        )
+        if present
+        else None
+    )
+    return patch("modulo.core.cost_controller.finalize.get_org_cost_state", new=AsyncMock(return_value=state))
+
+
+def _accrual():
+    """Patch the atomic cost-state accrual so unit tests never touch the DB."""
+    return patch("modulo.core.cost_controller.finalize.increment_org_cumulative_spend", new=AsyncMock())
+
+
+async def test_spend_ceiling_gate_takes_cost_state_advisory_lock_not_org_row() -> None:
+    """FAR-1833: the ceiling gate must serialise on the per-org cost-state
+    advisory lock (``lock_org_cost_state``) and must NOT request a row lock on
+    the ``organisations`` row.
+
+    The old FAR-1624 A22 ``with_for_update(key_share=True)`` org-row lock
+    coupled the finalize path with the ceiling endpoints' org-row write — the
+    D9 deadlock. The gate now reads the org row only for existence, takes the
+    cost advisory, and reads ``organisation_cost_state`` for the values.
     """
     from sqlalchemy.dialects import postgresql
 
     from modulo.core.cost_controller.finalize import _apply_spend_ceiling_gate
 
-    org = _make_org(spend_ceiling_cents=None, org_cumulative_spend_cents=0)
+    org = _make_org()
     captured: list[object] = []
     result = MagicMock()
     result.scalar_one_or_none = MagicMock(return_value=org)
@@ -90,25 +124,34 @@ async def test_spend_ceiling_gate_locks_org_for_no_key_update() -> None:
     session.execute = AsyncMock(side_effect=_execute)
 
     run = _make_run()
-    skip_ledger, _accrual_org, _accrual_cents = await _apply_spend_ceiling_gate(
-        session,
-        run,
-        org_id=org.id,
-        total=Decimal("1.00"),
-        run_id=run.id,
-    )
+    with (
+        patch("modulo.core.cost_controller.finalize.lock_org_cost_state", new=AsyncMock()) as lock_cost,
+        _cost_state(present=True),
+    ):
+        skip_ledger, accrual_cents = await _apply_spend_ceiling_gate(
+            session,
+            run,
+            org_id=org.id,
+            total=Decimal("1.00"),
+            run_id=run.id,
+        )
 
     assert skip_ledger is False
-    assert len(captured) == 1
-    sql = str(captured[0].compile(dialect=postgresql.dialect()))  # type: ignore[attr-defined]
-    assert "FOR NO KEY UPDATE" in sql
-    assert "FOR UPDATE" not in sql
+    assert accrual_cents == 100
+    lock_cost.assert_awaited_once_with(session, org.id)
+    # The only org-row statement is a plain SELECT — no FOR UPDATE / FOR NO KEY
+    # UPDATE anywhere in the compiled SQL.
+    org_statements = [
+        str(stmt.compile(dialect=postgresql.dialect())) for stmt in captured if "organisations" in str(stmt)
+    ]
+    assert org_statements, "the org row must still be read for existence"
+    assert all("FOR UPDATE" not in sql and "FOR NO KEY UPDATE" not in sql for sql in org_statements)
 
 
 def _session_for(run: MagicMock, org: MagicMock) -> AsyncMock:
-    """A session whose execute returns the Run (FOR UPDATE) then the Org (FOR UPDATE)."""
+    """A session whose execute returns the Run (FOR UPDATE) then the Org (plain read)."""
 
-    def _execute(stmt):
+    def _execute(stmt, *_args, **_kwargs):
         text = str(stmt)
         result = MagicMock()
         if "organisations" in text:
@@ -127,46 +170,46 @@ def _session_for(run: MagicMock, org: MagicMock) -> AsyncMock:
 
 async def test_org_ceiling_exceeded_refuses_ledger_and_halts_run() -> None:
     run = _make_run()
-    org = _make_org(spend_ceiling_cents=100, org_cumulative_spend_cents=100)  # $1.00 ceiling, already consumed
+    org = _make_org()
     session = _session_for(run, org)
 
-    await _ledger_block(
-        session,
-        run_id=run.id,
-        org_id=org.id,
-        status="complete",
-        total=Decimal("2.00"),  # would push cumulative to $3.00 > $1.00 ceiling
-        owner_team_id=None,
-        run_date=date(2026, 6, 24),
-        finalize_fields={},
-        session_factory=None,
-        claim_token=None,
-    )
+    with _cost_state(spend_ceiling_cents=100, org_cumulative_spend_cents=100):
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="complete",
+            total=Decimal("2.00"),  # would push cumulative to $3.00 > $1.00 ceiling
+            owner_team_id=None,
+            run_date=date(2026, 6, 24),
+            finalize_fields={},
+            session_factory=None,
+            claim_token=None,
+        )
 
     assert run.ledger_refused_at is not None
     assert run.status == "cost_ceiling_exceeded"
     assert run.error_code == ORG_CEILING_EXCEEDED
-    # Org cumulative must NOT be incremented on refusal.
-    assert org.org_cumulative_spend_cents == 100
 
 
 async def test_run_ceiling_exceeded_refuses_ledger() -> None:
     run = _make_run()
-    org = _make_org(max_run_cost_cents=100, org_cumulative_spend_cents=0)  # $1.00 per-run cap
+    org = _make_org()
     session = _session_for(run, org)
 
-    await _ledger_block(
-        session,
-        run_id=run.id,
-        org_id=org.id,
-        status="complete",
-        total=Decimal("2.00"),  # single run cost $2.00 > $1.00 cap
-        owner_team_id=None,
-        run_date=date(2026, 6, 24),
-        finalize_fields={},
-        session_factory=None,
-        claim_token=None,
-    )
+    with _cost_state(max_run_cost_cents=100, org_cumulative_spend_cents=0):
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="complete",
+            total=Decimal("2.00"),  # single run cost $2.00 > $1.00 cap
+            owner_team_id=None,
+            run_date=date(2026, 6, 24),
+            finalize_fields={},
+            session_factory=None,
+            claim_token=None,
+        )
 
     assert run.ledger_refused_at is not None
     assert run.status == "cost_ceiling_exceeded"
@@ -181,21 +224,22 @@ async def test_ceiling_refusal_preserves_explicit_cancelled_status() -> None:
     """
     run = _make_run()
     run.status = "cancelled"
-    org = _make_org(spend_ceiling_cents=100, org_cumulative_spend_cents=100)
+    org = _make_org()
     session = _session_for(run, org)
 
-    await _ledger_block(
-        session,
-        run_id=run.id,
-        org_id=org.id,
-        status="cancelled",
-        total=Decimal("2.00"),
-        owner_team_id=None,
-        run_date=date(2026, 6, 24),
-        finalize_fields={},
-        session_factory=None,
-        claim_token=None,
-    )
+    with _cost_state(spend_ceiling_cents=100, org_cumulative_spend_cents=100):
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="cancelled",
+            total=Decimal("2.00"),
+            owner_team_id=None,
+            run_date=date(2026, 6, 24),
+            finalize_fields={},
+            session_factory=None,
+            claim_token=None,
+        )
 
     # Refused (no billing beyond the ceiling) ...
     assert run.ledger_refused_at is not None
@@ -203,12 +247,11 @@ async def test_ceiling_refusal_preserves_explicit_cancelled_status() -> None:
     assert run.status == "cancelled"
     # The cancel branch leaves error_code untouched (it was None before).
     assert run.error_code is None
-    assert org.org_cumulative_spend_cents == 100
 
 
 async def test_org_row_missing_skips_gate_and_ledger_write() -> None:
     """FAR-1025: an org row that vanished is treated as no ceiling — the gate
-    returns ``(False, None)`` so the ledger write proceeds without an accrual."""
+    returns ``(False, 0)`` so the ledger write proceeds without an accrual."""
     from modulo.core.cost_controller.finalize import _apply_spend_ceiling_gate
 
     run = _make_run()
@@ -217,25 +260,26 @@ async def test_org_row_missing_skips_gate_and_ledger_write() -> None:
     session = AsyncMock()
     session.execute = AsyncMock(return_value=result)
 
-    skip_ledger, accrual_org, accrual_cents = await _apply_spend_ceiling_gate(
-        session,
-        run,
-        org_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
-        total=Decimal("1.00"),
-        run_id=run.id,
-    )
+    with patch("modulo.core.cost_controller.finalize.lock_org_cost_state", new=AsyncMock()):
+        skip_ledger, accrual_cents = await _apply_spend_ceiling_gate(
+            session,
+            run,
+            org_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+            total=Decimal("1.00"),
+            run_id=run.id,
+        )
 
     assert skip_ledger is False
-    assert accrual_org is None
     assert accrual_cents == 0
 
 
 async def test_within_ceilings_increments_org_cumulative() -> None:
     run = _make_run()
-    org = _make_org(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500)  # $100 ceiling, $5 consumed
+    org = _make_org()
     session = _session_for(run, org)
 
     with (
+        _cost_state(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500),
         patch(
             "modulo.core.cost_controller.finalize.check_and_record_spend",
             new=AsyncMock(return_value=(True, None)),
@@ -243,13 +287,14 @@ async def test_within_ceilings_increments_org_cumulative() -> None:
         # The best-effort circuit-breaker check is out of scope here and would
         # otherwise issue real queries against the mock session.
         patch("modulo.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
+        _accrual() as accrual,
     ):
         await _ledger_block(
             session,
             run_id=run.id,
             org_id=org.id,
             status="complete",
-            total=Decimal("3.00"),  # $3.00 run -> cumulative $8.00
+            total=Decimal("3.00"),  # $3.00 run
             owner_team_id=None,
             run_date=date(2026, 6, 24),
             finalize_fields={},
@@ -258,10 +303,52 @@ async def test_within_ceilings_increments_org_cumulative() -> None:
         )
 
     # Only a SUCCESSFUL ledger write accrues the org's consumed total (the
-    # accrual rides the ledger savepoint); $5.00 + $3.00 = $8.00.
+    # accrual rides the ledger savepoint); exactly one atomic increment of the
+    # $3.00 run cost.
     assert run.ledger_refused_at is None
     assert run.ledger_written is True
-    assert org.org_cumulative_spend_cents == 800
+    accrual.assert_awaited_once_with(session, org.id, delta_cents=300)
+
+
+async def test_missing_cost_state_row_uses_defaults_and_accrual_inserts_row() -> None:
+    """FAR-1833 P3-4: a MISSING ``organisation_cost_state`` row is the defaults.
+
+    No row means both ceilings unlimited and cumulative 0, so the gate allows
+    the run. The accrual is the atomic ``increment_org_cumulative_spend`` upsert
+    — the INSERT branch creates the row on this first terminal run — so the run
+    is both billed and accrued (rather than silently skipped for a fresh org).
+    """
+    run = _make_run()
+    org = _make_org()
+    session = _session_for(run, org)
+
+    with (
+        _cost_state(present=False),
+        patch(
+            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            new=AsyncMock(return_value=(True, None)),
+        ),
+        patch("modulo.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
+        _accrual() as accrual,
+    ):
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="complete",
+            total=Decimal("3.00"),
+            owner_team_id=None,
+            run_date=date(2026, 6, 24),
+            finalize_fields={},
+            session_factory=None,
+            claim_token=None,
+        )
+
+    # Defaults allow the run (no ceiling), and the atomic accrual (which INSERTs
+    # the missing row) is applied exactly once for the $3.00 cost.
+    assert run.ledger_refused_at is None
+    assert run.ledger_written is True
+    accrual.assert_awaited_once_with(session, org.id, delta_cents=300)
 
 
 async def test_ledger_write_failure_then_refinalize_does_not_double_accrue() -> None:
@@ -270,14 +357,18 @@ async def test_ledger_write_failure_then_refinalize_does_not_double_accrue() -> 
     accrues exactly once (the ``ledger_written`` guard does not cover the
     accrual)."""
     run = _make_run()
-    org = _make_org(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500)
+    org = _make_org()
     session = _session_for(run, org)
 
     # First finalisation: every ledger-write attempt fails (non-abort). The
     # savepoint rolls back, so the accrual must NOT commit.
-    with patch(
-        "modulo.core.cost_controller.finalize.check_and_record_spend",
-        new=AsyncMock(side_effect=RuntimeError("ledger write failed")),
+    with (
+        _cost_state(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500),
+        patch(
+            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            new=AsyncMock(side_effect=RuntimeError("ledger write failed")),
+        ),
+        _accrual() as accrual,
     ):
         await _ledger_block(
             session,
@@ -292,16 +383,19 @@ async def test_ledger_write_failure_then_refinalize_does_not_double_accrue() -> 
             claim_token=None,
         )
 
-    assert org.org_cumulative_spend_cents == 500  # no accrual on write failure
+    # The failure was BEFORE the increment: no accrual was applied at all.
+    accrual.assert_not_awaited()
     assert run.ledger_written is False  # left re-finalisable by the reduced escape
 
     # Re-finalisation: the ledger write now succeeds -> accrue exactly once.
     with (
+        _cost_state(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500),
         patch(
             "modulo.core.cost_controller.finalize.check_and_record_spend",
             new=AsyncMock(return_value=(True, None)),
         ),
         patch("modulo.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
+        _accrual() as accrual,
     ):
         await _ledger_block(
             session,
@@ -316,83 +410,44 @@ async def test_ledger_write_failure_then_refinalize_does_not_double_accrue() -> 
             claim_token=None,
         )
 
-    assert org.org_cumulative_spend_cents == 800  # 500 + 300, NOT 500 + 300 + 300
     assert run.ledger_written is True
+    accrual.assert_awaited_once_with(session, org.id, delta_cents=300)
 
 
 # ---------------------------------------------------------------------------
-# MAJOR 2 — a retry must never re-read a savepoint-expired accrual attribute
+# MAJOR 2 — a retry re-applies the atomic accrual without a stale ORM read
 # ---------------------------------------------------------------------------
 
 
-class _SqlstateError(Exception):
-    """A stand-in DBAPI error carrying a SQLSTATE (no SQLAlchemy class)."""
+async def test_accrual_retry_reapplies_atomic_increment_without_orm_reread() -> None:
+    """A savepoint rollback expires any ORM state; the retry re-runs the accrual.
 
-    def __init__(self, sqlstate: str) -> None:
-        super().__init__(f"sqlstate={sqlstate}")
-        self.sqlstate = sqlstate
-
-
-class _ExpiringOrg:
-    """An org whose cumulative attribute read FAILS once marked expired.
-
-    Mirrors SQLAlchemy's savepoint-rollback behaviour: a rolled-back savepoint
-    EXPIRES the Organisation's loaded state, so a subsequent attribute read
-    triggers a lazy refresh — which, outside an async greenlet, raises
-    ``MissingGreenlet``. Reading the base BEFORE the retry loop must never
-    touch the attribute again.
+    FAR-1833: the accrual is a single atomic ``increment_org_cumulative_spend``
+    statement, so there is no org attribute to re-read (the old
+    ``_read_accrued_base`` / ``MissingGreenlet`` hazard is gone). On a contained
+    failure the savepoint rolls the increment back; the retry re-applies it from
+    the restored DB value, so the still-committed total accrues exactly once.
     """
-
-    def __init__(self, base: int) -> None:
-        self._value = base
-        self.reads = 0
-        self.expired = False
-
-    @property
-    def org_cumulative_spend_cents(self) -> int:
-        self.reads += 1
-        if self.expired:
-            from sqlalchemy.exc import MissingGreenlet
-
-            raise MissingGreenlet("cannot lazy-load an expired attribute outside a greenlet")
-        return self._value
-
-    @org_cumulative_spend_cents.setter
-    def org_cumulative_spend_cents(self, value: int) -> None:
-        self._value = value
-
-    def stored_value(self) -> int:
-        """The raw stored value — reads WITHOUT incrementing ``reads`` or
-        raising once expired (for the test's own assertions)."""
-        return self._value
-
-
-async def test_accrual_retry_after_flush_failure_never_rereads_expired_org() -> None:
-    """A failed accrual flush expires the org; the retry must not re-read it.
-
-    Regression: reading ``org_cumulative_spend_cents`` on every attempt raised
-    ``MissingGreenlet`` after the savepoint rollback expired the object — a
-    non-abort error that exhausted the retries and lost the ledger. The base is
-    captured once before the loop, so the retry assigns the absolute value and
-    accrues exactly once.
-    """
-    org = _ExpiringOrg(base=500)
-    first_savepoint = AsyncMock()
-    first_savepoint.rollback = AsyncMock(side_effect=lambda: setattr(org, "expired", True))
-    first_savepoint.commit = AsyncMock()
-    second_savepoint = AsyncMock()
-    second_savepoint.rollback = AsyncMock()
-    second_savepoint.commit = AsyncMock()
+    savepoint_one = AsyncMock()
+    savepoint_one.rollback = AsyncMock()
+    savepoint_one.commit = AsyncMock()
+    savepoint_two = AsyncMock()
+    savepoint_two.rollback = AsyncMock()
+    savepoint_two.commit = AsyncMock()
 
     session = AsyncMock()
-    session.begin_nested = AsyncMock(side_effect=[first_savepoint, second_savepoint])
-    # The accrual flush fails on attempt 1 (rolling the savepoint back and
-    # expiring the org), then succeeds on attempt 2.
-    session.flush = AsyncMock(side_effect=[RuntimeError("accrual flush failed"), None])
+    session.begin_nested = AsyncMock(side_effect=[savepoint_one, savepoint_two])
 
-    with patch(
-        "modulo.core.cost_controller.finalize.check_and_record_spend",
-        new=AsyncMock(return_value=(True, None)),
+    # The accrual statement fails on attempt 1 (rolling the savepoint back),
+    # then succeeds on attempt 2.
+    accrual = AsyncMock(side_effect=[RuntimeError("accrual failed"), None])
+
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            new=AsyncMock(return_value=(True, None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.increment_org_cumulative_spend", new=accrual),
     ):
         ok, reason = await _record_ledger_with_retry(
             session,
@@ -402,15 +457,15 @@ async def test_accrual_retry_after_flush_failure_never_rereads_expired_org() -> 
             run_id=uuid.uuid4(),
             run_date=date(2026, 6, 24),
             attempts=3,
-            accrued_org=org,  # type: ignore[arg-type]
             accrued_cents=300,
         )
 
     assert ok is True
     assert reason is None
-    assert org.reads == 1, "the base must be read exactly once, before the retry loop"
-    assert org.stored_value() == 800  # exactly one accrual of 300, no re-read
-    assert org.expired is True  # the rollback really did expire the object
+    # Once per attempt; the first was rolled back, so only the second commits.
+    assert accrual.await_count == 2
+    savepoint_one.rollback.assert_awaited_once()
+    savepoint_two.commit.assert_awaited_once()
 
 
 async def test_record_ledger_rolls_back_savepoint_and_propagates_cancellation() -> None:
@@ -445,7 +500,6 @@ async def test_record_ledger_rolls_back_savepoint_and_propagates_cancellation() 
             run_id=uuid.uuid4(),
             run_date=date(2026, 6, 24),
             attempts=3,
-            accrued_org=None,
             accrued_cents=0,
         )
 
@@ -464,13 +518,14 @@ async def test_ledger_path_lock_abort_is_reraised_not_reduced_escaped() -> None:
     ``whole_tx_abort`` + reduced escape (which would terminalize without a
     ledger on the highest-contention path)."""
     run = _make_run()
-    org = _make_org(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500)
+    org = _make_org()
     session = _session_for(run, org)
 
     # If the reduced escape were reached, it would build a fresh session here.
     escape_factory = MagicMock(side_effect=AssertionError("reduced escape must not run on a lock abort"))
 
     with (
+        _cost_state(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500),
         patch(
             "modulo.core.cost_controller.finalize.check_and_record_spend",
             new=AsyncMock(side_effect=_SqlstateError("55P03")),
@@ -505,7 +560,7 @@ async def test_non_lock_whole_tx_abort_reduced_escapes_with_bounded_fresh_txn() 
     its ``update_run_status`` cannot queue unbounded on the outer ``runs``
     FOR UPDATE (FAR-1313 / FAR-1592)."""
     run = _make_run()
-    org = _make_org(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500)
+    org = _make_org()
     session = _session_for(run, org)
     # The savepoint acquisition fails before the ledger write: a non-lock
     # whole-tx abort that reaches ``_ledger_block``'s except (NOT the
@@ -518,6 +573,7 @@ async def test_non_lock_whole_tx_abort_reduced_escapes_with_bounded_fresh_txn() 
     lock_bound = AsyncMock()
 
     with (
+        _cost_state(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500),
         patch("modulo.core.cost_controller.finalize.set_rls_org", new=AsyncMock()),
         patch("modulo.core.cost_controller.finalize.set_mutation_row_lock_timeout", new=lock_bound),
         patch("modulo.core.cost_controller.finalize.guard_dual_write", new=lambda _s: _acm(None)),
@@ -544,19 +600,22 @@ async def test_non_lock_whole_tx_abort_reduced_escapes_with_bounded_fresh_txn() 
     lock_bound.assert_awaited_once_with(fresh)
 
 
-async def test_record_ledger_skips_accrual_when_no_org() -> None:
-    """When no accrual is due (``accrued_org`` is None), the ledger savepoint
-    must NOT attempt an org increment/flush — the accrual is strictly
-    conditional on the gate handing back a locked org row."""
+async def test_record_ledger_skips_accrual_when_no_cents() -> None:
+    """When no accrual is due (``accrued_cents`` is 0), the ledger savepoint
+    must NOT attempt a cost-state increment — the accrual is strictly
+    conditional on the gate handing back a non-zero cents value."""
     savepoint = AsyncMock()
     savepoint.commit = AsyncMock()
     savepoint.rollback = AsyncMock()
     session = AsyncMock()
     session.begin_nested = AsyncMock(return_value=savepoint)
 
-    with patch(
-        "modulo.core.cost_controller.finalize.check_and_record_spend",
-        new=AsyncMock(return_value=(True, None)),
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            new=AsyncMock(return_value=(True, None)),
+        ),
+        _accrual() as accrual,
     ):
         ok, reason = await _record_ledger_with_retry(
             session,
@@ -566,13 +625,12 @@ async def test_record_ledger_skips_accrual_when_no_org() -> None:
             run_id=uuid.uuid4(),
             run_date=date(2026, 6, 24),
             attempts=3,
-            accrued_org=None,
             accrued_cents=0,
         )
 
     assert ok is True
     assert reason is None
-    session.flush.assert_not_awaited()
+    accrual.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -787,11 +845,14 @@ async def test_ledger_block_threads_sink_to_ceiling_limit_refused() -> None:
     """A ceiling refusal on the real path must buffer ``limit_refused`` into the
     PASSED sink (pins the ``_apply_spend_ceiling_gate(..., metric_sink=...)`` wire)."""
     run = _make_run()
-    org = _make_org(max_run_cost_cents=100)  # $1.00 per-run cap
+    org = _make_org()
     session = _session_for(run, org)
     sink = FinalizeMetricSink()
 
-    with patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused:
+    with (
+        _cost_state(max_run_cost_cents=100),
+        patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused,
+    ):
         await _ledger_block(
             session,
             run_id=run.id,
@@ -815,15 +876,17 @@ async def test_ledger_block_threads_sink_to_daily_limit_refused() -> None:
     """A daily-limit refusal must buffer ``limit_refused`` into the PASSED sink
     (pins the ``_handle_limit_refused(..., metric_sink=...)`` wire)."""
     run = _make_run()
-    org = _make_org(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500)
+    org = _make_org()
     session = _session_for(run, org)
     sink = FinalizeMetricSink()
 
     with (
+        _cost_state(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500),
         patch(
             "modulo.core.cost_controller.finalize.check_and_record_spend",
             new=AsyncMock(return_value=(False, "daily_limit_exceeded: team")),
         ),
+        _accrual(),
         patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused,
     ):
         await _ledger_block(
@@ -883,11 +946,12 @@ async def test_ledger_block_threads_sink_to_finalize_deferred_on_write_failure()
     PASSED sink (pins the ``_handle_ledger_write_failure(..., metric_sink=...)``
     wire)."""
     run = _make_run()
-    org = _make_org(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500)
+    org = _make_org()
     session = _session_for(run, org)
     sink = FinalizeMetricSink()
 
     with (
+        _cost_state(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500),
         patch(
             "modulo.core.cost_controller.finalize.check_and_record_spend",
             new=AsyncMock(side_effect=RuntimeError("ledger boom")),
@@ -910,3 +974,11 @@ async def test_ledger_block_threads_sink_to_finalize_deferred_on_write_failure()
         deferred.assert_not_called()
         sink.flush()
         deferred.assert_called_once_with(reason="write_failure", team="none")
+
+
+class _SqlstateError(Exception):
+    """A stand-in DBAPI error carrying a SQLSTATE (no SQLAlchemy class)."""
+
+    def __init__(self, sqlstate: str) -> None:
+        super().__init__(f"sqlstate={sqlstate}")
+        self.sqlstate = sqlstate

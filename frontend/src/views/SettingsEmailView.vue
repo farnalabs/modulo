@@ -93,7 +93,7 @@
 
         <div
           v-if="successMessage"
-          class="rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success"
+          class="rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success-text"
         >
           {{ successMessage }}
         </div>

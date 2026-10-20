@@ -68,6 +68,31 @@ app = 'app-modulo'
 # Do NOT add process groups or machines without updating this block.
 primary_region = 'lhr'
 
+# ===== Shutdown window (FAR-2004) =====
+# These are TOP-LEVEL keys (Fly documents kill_signal/kill_timeout at the top
+# level only; a value nested inside [http_service] does not reach the worker
+# process group). Fly's default window is 5 seconds.
+#
+# The worker group runs SAQ, whose graceful shutdown is a 30s job-drain grace
+# (saq_worker._SHUTDOWN_GRACE_PERIOD_S) plus up to a 60s cancellation hard
+# deadline (_CANCELLATION_HARD_DEADLINE_S), and only THEN the FAR-1627 shutdown
+# handoff that releases/requeues the runs still executing in that process. With
+# the 5s default, Fly SIGKILLed the worker ~85-115s before the handoff could
+# run: every in-flight run was orphaned as `running`, its heartbeat froze, and
+# `_RECONCILE_RUNS_SQL` excludes node-started rows while claim_count <= 3, so
+# the 135-minute age gate was the first reaper (58 of 70 measured
+# `run.no_progress` stops fell inside a deploy window).
+#
+# 180s comfortably outlasts the SAQ ceiling (90s) + the entrypoint's bounded
+# drain (WORKER_DRAIN_DEADLINE_S=140) + teardown, and sits well inside Fly's
+# 300s cap. The entrypoint forwards SIGTERM to
+# the SAQ PIDs and exits as soon as they are gone, so a stop with no in-flight
+# runs is still fast — this is a ceiling, not a fixed wait.
+# The coupling is enforced by
+# backend/tests/architecture/test_deploy_worker_shutdown.py.
+kill_signal = "SIGTERM"
+kill_timeout = 180
+
 [deploy]
   strategy = 'rolling'
 
@@ -115,9 +140,9 @@ primary_region = 'lhr'
   min_machines_running = 1
   max_machines_running = 5
   processes = ['app']
-  # Graceful worker drain window (plan F8): SIGTERM drains 30s + hard deadline
-  # 60s each (parallel, ~90s max). kill_timeout must exceed that.
-  kill_timeout = 120
+  # Graceful shutdown window: see the TOP-LEVEL kill_signal/kill_timeout block
+  # above (FAR-2004). A kill_timeout nested here does not reach the worker
+  # process group — and it was never the worker that needed it.
 
   [http_service.concurrency]
     type = "connections"
@@ -204,6 +229,11 @@ primary_region = 'lhr'
   # concurrent blocking dequeue holds one pool connection, plus a 5-connection
   # reserve for the upkeep ops schedule/sweep/abort/worker_info).
   SAQ_REDIS_POOL_SIZE = "50"
+  # FAR-2004: the worker entrypoint's bounded drain window. Must be >= SAQ's
+  # shutdown ceiling (30s grace + 60s cancellation) + handback time, and
+  # comfortably below the top-level kill_timeout (180s) so the container exits
+  # before Fly SIGKILLs it. Read by deploy/fly/entrypoint.sh.
+  WORKER_DRAIN_DEADLINE_S = "140"
   # REQUIRED: Upstash Redis instance. Create with:
   #   fly redis create --name modulo-app-redis -r lhr,ams --enable-eviction
   # Then store its connection string with `fly secrets set REDIS_URL=...`.
