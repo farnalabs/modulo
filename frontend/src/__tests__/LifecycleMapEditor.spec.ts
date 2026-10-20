@@ -606,4 +606,30 @@ describe('LifecycleMapEditor interactions', () => {
     expect(((wrapper.vm as unknown as { flowNodes: unknown[] }).flowNodes).length).toBe(before)
     vi.unstubAllGlobals()
   })
+
+  it('onDrop adds a stage node for a lifecycle-stage drop', async () => {
+    class FakeDragEvent extends Event {
+      clientX = 10
+      clientY = 20
+      dataTransfer: { getData: ReturnType<typeof vi.fn>; dropEffect: string } | null = null
+      constructor(type: string, init?: { bubbles?: boolean; dataTransfer?: { getData: ReturnType<typeof vi.fn>; dropEffect: string } }) {
+        super(type, { bubbles: init?.bubbles })
+        this.dataTransfer = init?.dataTransfer ?? null
+      }
+    }
+    vi.stubGlobal('DragEvent', FakeDragEvent)
+
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    const dt = { getData: vi.fn(() => 'manual'), dropEffect: '' }
+    const event = new FakeDragEvent('drop', { bubbles: true, dataTransfer: dt })
+
+    const before = ((wrapper.vm as unknown as { flowNodes: unknown[] }).flowNodes).length
+    ;(wrapper.vm as unknown as { onDrop: (e: unknown) => void }).onDrop(event)
+    const nodes = (wrapper.vm as unknown as { flowNodes: Array<{ id: string; data: { name: string } }> }).flowNodes
+    expect(nodes.length).toBe(before + 1)
+    expect(nodes[nodes.length - 1].data.name).toBe('New Manual Stage')
+    vi.unstubAllGlobals()
+  })
 })
