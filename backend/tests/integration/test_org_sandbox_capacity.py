@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, async_sessionmaker
 
 from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.core.pipeline_execution import stale_run_recovery_sweep
@@ -95,6 +95,29 @@ async def _seed_account(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -
     return account_id
 
 
+async def _pipeline_has_queue_timeout_column(conn: AsyncConnection) -> bool:
+    """Whether ``pipelines.queue_timeout_seconds`` exists on *conn*'s database.
+
+    Migration ``0322_pipeline_queue_timeout`` added the column, and the
+    migration tests that share these seeders drive a PRIVATE database migrated
+    only to a HISTORICAL revision (``0275`` / ``0300``), whose ``pipelines``
+    table predates it. Probing here keeps one seeder valid for both shapes.
+
+    Deliberately not cached: a private database can cross the 0322 boundary
+    inside a single test's own alembic upgrade, so a per-engine cache would go
+    stale mid-test. One catalog lookup per seeded pipeline is negligible next to
+    the INSERT it accompanies.
+    """
+    result = await conn.execute(
+        text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'pipelines' "
+            "AND column_name = 'queue_timeout_seconds'"
+        )
+    )
+    return result.first() is not None
+
+
 async def _seed_pipeline(
     db_engine: AsyncEngine,
     org_id: uuid.UUID,
@@ -105,24 +128,40 @@ async def _seed_pipeline(
 ) -> uuid.UUID:
     pipeline_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "queue_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
-                "VALUES (:id, :oid, :name, :uid, :mcr, 30, 300, :qts, "
-                "'{}'::json, '[]'::json, 'manual_approval', 'org')"
-            ),
-            {
-                "id": str(pipeline_id),
-                "oid": str(org_id),
-                "name": name,
-                "uid": str(account_id),
-                "mcr": max_concurrent,
-                "qts": queue_timeout_seconds,
-            },
-        )
+        params: dict[str, Any] = {
+            "id": str(pipeline_id),
+            "oid": str(org_id),
+            "name": name,
+            "uid": str(account_id),
+            "mcr": max_concurrent,
+            "qts": queue_timeout_seconds,
+        }
+        # ``queue_timeout_seconds`` only exists from migration 0322 onward —
+        # see the probe above. Two static statements keep the SQL literal
+        # (ruff S608) while still catering for both schema shapes.
+        if await _pipeline_has_queue_timeout_column(conn):
+            await conn.execute(
+                text(
+                    "INSERT INTO pipelines (id, organisation_id, name, account_id, "
+                    "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                    "queue_timeout_seconds, "
+                    "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
+                    "VALUES (:id, :oid, :name, :uid, :mcr, 30, 300, :qts, "
+                    "'{}'::json, '[]'::json, 'manual_approval', 'org')"
+                ),
+                params,
+            )
+        else:
+            await conn.execute(
+                text(
+                    "INSERT INTO pipelines (id, organisation_id, name, account_id, "
+                    "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                    "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
+                    "VALUES (:id, :oid, :name, :uid, :mcr, 30, 300, "
+                    "'{}'::json, '[]'::json, 'manual_approval', 'org')"
+                ),
+                params,
+            )
     return pipeline_id
 
 
