@@ -4,7 +4,7 @@ import { defineComponent, h } from 'vue'
 import { mount } from '@vue/test-utils'
 import { useAssistantStore } from '../composables/useAssistantStore'
 import { useAssistantStream } from '../composables/useAssistantStream'
-import { executeCommandBatch } from '../composables/useUiCommandExecutor'
+import { executeCommandBatch, isPaused } from '../composables/useUiCommandExecutor'
 import { usePlanStore } from '../stores/planStore'
 
 vi.mock('@/lib/api/client', () => ({
@@ -127,6 +127,47 @@ describe('useAssistantStream', () => {
     expect(postedBody.results).toBeDefined()
     expect(postedBody.results[0].name).toBe('get_url')
     expect(postedBody.results[0].success).toBe(true)
+  })
+
+  it('waits for the executor to resume before submitting command results', async () => {
+    setupStore()
+    // Hold the post-execution hold-off open for two polls, then resume.
+    vi.mocked(isPaused).mockReturnValueOnce(true).mockReturnValueOnce(true)
+
+    const posted: any[] = []
+    global.fetch = vi.fn().mockImplementation((url: string, opts?: any) => {
+      if (url === '/api/v1/assistant/sessions/session-1/stream') {
+        return Promise.resolve({
+          ok: true,
+          body: createMockSSEStream([
+            { event: 'ui_command_batch', data: { commands: [{ id: 'cmd-1', name: 'get_url', args: {} }] } },
+          ]),
+        })
+      }
+      if (url.includes('/ui-command-results')) {
+        posted.push(JSON.parse(opts?.body || '{}'))
+        return Promise.resolve({ ok: true })
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+    })
+
+    vi.useFakeTimers()
+    const { connectStream } = useAssistantStream()
+    const p = connectStream('session-1')
+
+    // Still inside the first 200 ms hold-off poll: the results must not have
+    // been reported yet, otherwise the hold-off is not actually gating.
+    await vi.advanceTimersByTimeAsync(100)
+    expect(posted).toHaveLength(0)
+
+    // Past both paused polls (2 x 200 ms): the executor has resumed, so the
+    // results are submitted exactly once.
+    await vi.advanceTimersByTimeAsync(1000)
+    await p
+
+    expect(posted).toHaveLength(1)
+    // One probe on entry, plus one per poll tick before the resume is seen.
+    expect(vi.mocked(isPaused)).toHaveBeenCalledTimes(3)
   })
 
   it('turn_separator event appends summary message', async () => {

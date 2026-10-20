@@ -121,7 +121,9 @@ export class ErrorTracker {
     return { user: this._user, tags: { ...this._tags } }
   }
 
-  async reloadBackends(newBackends: MonitorBackend[]): Promise<void> {
+  // Reconfiguration is synchronous; both call sites either ignore the result
+  // or feed it into a promise chain that tolerates a void return.
+  reloadBackends(newBackends: MonitorBackend[]): void {
     this.backends.disposeAll()
     for (const b of newBackends) {
       this.backends.add(b)
