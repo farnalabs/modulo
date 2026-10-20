@@ -1,6 +1,9 @@
 {{- if .Values.redis.embedded }}
 {{- $redisPassword := include "modulo.redisPassword" . }}
-{{- $redisArgs := list "redis-server" "--maxmemory" "256mb" "--maxmemory-policy" "allkeys-lru" }}
+{{- /* FAR-2002: volatile-lru evicts ONLY TTL-bearing keys. The SAQ queue's
+structural keys (queued/active lists, incomplete zset) carry no TTL and must
+never be evicted; an allkeys-* policy can lose them with nothing to repair. */}}
+{{- $redisArgs := list "redis-server" "--maxmemory" "256mb" "--maxmemory-policy" "volatile-lru" }}
 {{- if $redisPassword }}
 {{- $redisArgs = concat $redisArgs (list "--requirepass" "$(REDIS_PASSWORD)") }}
 {{- end }}
