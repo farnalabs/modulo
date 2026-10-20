@@ -159,7 +159,7 @@ _DROPPED_0147_PAIRS: dict[tuple[str, str], str] = {
     ("workspace_leases", "output_artifact_refs_json"): "0179_drop_workspace_leases",
     # FAR-1962 (chunk 13 slice 3+4): the legacy eval_definitions table is purged
     # after the cutover proved every row redundant.
-    ("eval_definitions", "config_json"): "0321_purge_eval_definitions",
+    ("eval_definitions", "config_json"): "0324_purge_eval_definitions",
 }
 
 #: A TRANSITIONAL state between "mapped" and "dropped": the ORM entity is gone

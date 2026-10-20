@@ -1,8 +1,8 @@
-"""Isolated real-Postgres test for migration 0321 (FAR-1962 — the purge).
+"""Isolated real-Postgres test for migration 0324 (FAR-1962 — the purge).
 
 Runs the REAL Alembic ``upgrade`` against a live Postgres (testcontainers) on
 private databases cloned from a template stepped to the PRE-PURGE head
-(``0320_evidence_redaction_rules``), so the legacy ``eval_definitions`` table
+(``0323_pipeline_snapshots_substantive_version_index``), so the legacy ``eval_definitions`` table
 still exists. The template is migrated exactly once; each test clones it, so
 every attempt starts from the same pre-purge state and a rolled-back attempt
 leaves no residue.
@@ -48,8 +48,8 @@ pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 
-PREV_REV = "0320_evidence_redaction_rules"
-PURGE_REV = "0321_purge_eval_definitions"
+PREV_REV = "0323_pipeline_snapshots_substantive_version_index"
+PURGE_REV = "0324_purge_eval_definitions"
 PURGE_LOGGER = f"alembic.{PURGE_REV}"
 
 # The catalogue objects observed at the pre-purge head. The migration ENUMERATES

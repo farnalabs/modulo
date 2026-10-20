@@ -44,8 +44,8 @@ Production rollout preconditions that live OUTSIDE this migration:
 * a pre-purge ``pg_dump`` verified with ``pg_restore --list`` (FAR-1963), and
 * a passed staging rehearsal of the purge.
 
-Revision ID: 0321_purge_eval_definitions
-Revises: 0320_evidence_redaction_rules
+Revision ID: 0324_purge_eval_definitions
+Revises: 0323_pipeline_snapshots_substantive_version_index
 Create Date: 2026-10-20
 """
 
@@ -57,8 +57,8 @@ from typing import Any
 from alembic import op
 from sqlalchemy import text
 
-revision: str = "0321_purge_eval_definitions"
-down_revision: str | None = "0320_evidence_redaction_rules"
+revision: str = "0324_purge_eval_definitions"
+down_revision: str | None = "0323_pipeline_snapshots_substantive_version_index"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
@@ -405,14 +405,14 @@ def downgrade() -> None:
 
     1. stop the application (web + worker) so nothing writes during the restore;
     2. restore the pre-purge dump into the database;
-    3. stamp ``alembic_version`` back to ``0320_evidence_redaction_rules`` so the
+    3. stamp ``alembic_version`` back to ``0323_pipeline_snapshots_substantive_version_index`` so the
        chain is consistent with the restored schema.
 
     After a restore, deploying the previously running image also redeploys the
     application code that predates the purge.
     """
     raise RuntimeError(
-        "FAR-1962 purge: migration 0321 downgrade is a DOCUMENTED NO-OP — the DROP is "
+        "FAR-1962 purge: migration 0324 downgrade is a DOCUMENTED NO-OP — the DROP is "
         "irreversible and rollback is a database restore from the pre-purge backup "
         "(FAR-1963), never a code revert. See this function's docstring for the procedure."
     )
