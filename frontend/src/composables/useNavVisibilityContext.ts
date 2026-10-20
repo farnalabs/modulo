@@ -24,6 +24,13 @@ export interface NavVisibilityOverrides {
  * prop overrides instead of hand-building a second, drifting context, so a
  * new field (e.g. isDemoSession) is added exactly once. Pass overrides as a
  * plain object or a getter; a getter keeps prop overrides reactive.
+ *
+ * FAR-2020: an EMPTY permissions list is not an override. Callers used to hand
+ * this context a JWT-derived array (the token mints no `permissions` claim, so
+ * it was always `[]`), and `[] ?? x` is `[]` — which silently discarded the
+ * endpoint-resolved list for every sidebar variant. Emptiness therefore means
+ * "nothing to say", and the plan store's list wins; only a NON-EMPTY override
+ * (or non-empty JWT claim) takes precedence.
  */
 export function useNavVisibilityContext(
   overrides?: MaybeRefOrGetter<NavVisibilityOverrides | undefined>,
@@ -40,20 +47,26 @@ export function useNavVisibilityContext(
   return computed<NavVisibilityContext>(() => {
     const o = toValue(overrides)
     const claimPermissions = jwtPayload.value?.permissions
+    const overridePermissions = o?.userPermissions
+    // Precedence: non-empty override > non-empty token claim > store list.
+    // An empty array at either higher layer means "no opinion" — never "deny
+    // everything", which is the store's terminal fail-closed state, not an
+    // override's job.
+    let userPermissions: string[]
+    if (overridePermissions && overridePermissions.length > 0) {
+      userPermissions = overridePermissions
+    } else if (Array.isArray(claimPermissions) && claimPermissions.length > 0) {
+      userPermissions = claimPermissions as string[]
+    } else {
+      userPermissions = planStore.userPermissions
+    }
     return {
       isSystemAdmin: o?.isSystemAdmin ?? (jwtPayload.value?.is_system_admin === true),
       userRole:
         o?.userRole !== undefined
           ? o.userRole || null
           : (jwtPayload.value?.org_role as string | null) || null,
-      // A `permissions` claim, when a token carries one, is an OVERRIDE
-      // (highest precedence); otherwise the registry-backed list the plan
-      // store resolved for this session.
-      userPermissions:
-        o?.userPermissions ??
-        (Array.isArray(claimPermissions)
-          ? (claimPermissions as string[])
-          : planStore.userPermissions),
+      userPermissions,
       devMode: planStore.devMode,
       tierInfoLoaded: !!planStore.tierRanks && Object.keys(planStore.tierRanks).length > 0,
       isAtMinimumTier: (tier: string) => planStore.isAtMinimumTier(tier),

@@ -1538,6 +1538,27 @@ class PermissionsResponse(BaseModel):
     permissions: list[str]
 
 
+#: Permission keys whose ONLY gates are strict ``require_system_permission``
+#: (``is_system_admin`` with no org-role fall-through), so no org role — however
+#: senior — actually holds them. A non-system-admin must never be told they do:
+#: the nav would render an item that every backing route answers 403 to.
+#:
+#: Derived, not remembered: ``tests/unit/api/test_auth_permissions.py`` walks
+#: the live app's route tags (``permission_kind == "system"``) and asserts this
+#: set equals the strict-system keys with NO org-reachable gate. A key that also
+#: has a tenant or system-or-org gate is deliberately NOT here — an org role can
+#: reach it, so dropping it would hide a surface the caller can really use.
+#: Adding a ``require_system_permission("new.key")`` call site fails that drift
+#: test until this set is updated.
+_SYSTEM_ONLY_PERMISSIONS: frozenset[str] = frozenset(
+    {
+        "errors.resolve_instance",
+        "system.config.manage",
+        "system.org.manage",
+    },
+)
+
+
 def _effective_permission_names(org_role: str | None, *, is_system_admin: bool) -> list[str]:
     """Resolve the registry names an org role is granted (FAR-2020).
 
@@ -1550,7 +1571,9 @@ def _effective_permission_names(org_role: str | None, *, is_system_admin: bool) 
     ``is_system_admin`` holds the admin floor: the strict system gates are
     ``is_system_admin``-only (they ignore the org hierarchy entirely), so a
     system admin's set must include them rather than resolve solely to whatever
-    org role they happen to carry.
+    org role they happen to carry. For everyone else those keys are removed
+    (``_SYSTEM_ONLY_PERMISSIONS``) so the response never over-states what an org
+    role can actually reach.
     """
     if is_system_admin:
         level = org_role_level("admin")
@@ -1560,7 +1583,12 @@ def _effective_permission_names(org_role: str | None, *, is_system_admin: bool) 
         level = -1
     if level < 0:
         return []
-    return [name for name, min_role in sorted(PERMISSIONS.items()) if org_role_level(min_role) <= level]
+    unreachable = frozenset() if is_system_admin else _SYSTEM_ONLY_PERMISSIONS
+    return [
+        name
+        for name, min_role in sorted(PERMISSIONS.items())
+        if org_role_level(min_role) <= level and name not in unreachable
+    ]
 
 
 @router.get("/permissions")
@@ -1573,14 +1601,23 @@ async def permissions(
 
     The frontend gates nav/route entries on ``required_permissions`` (see
     ``frontend/src/config/navigation.ts``); the access token deliberately
-    carries no ``permissions`` claim (200+ names would bloat every request and
-    go stale the moment a role changes), so the nav resolves them from this
+    carries no ``permissions`` claim (honouring one would bloat every request
+    and leave it stale after a role change), so the nav resolves them from this
     registry-backed read instead.
 
     Authenticated only. The role is the LIVE membership role (ADR 047), not the
-    token claim, so a demoted user's nav follows the reduction immediately and
-    a removed member is denied. A system admin gets the full admin floor
-    without a membership lookup.
+    token claim, so a removed or deactivated member is denied outright (401)
+    rather than served a stale set. A DEMOTED user does get the reduced set on
+    this read, but the SPA caches the answer for the session: the client's nav
+    follows the reduction on its next permissions read, not the instant the role
+    changes.
+
+    A system admin is resolved at the admin floor regardless of the org role the
+    token carries, and additionally retains the keys only a system admin can
+    reach (a non-system-admin's set omits those, so it never over-states what
+    their org role can do). When the token carries no org claim there is no
+    membership lookup at all; when it does, the lookup still guards removed
+    members (401) even though the role it returns no longer narrows the set.
     """
     live_org_role = await _resolve_live_org_role(
         session,

@@ -1566,14 +1566,23 @@ export interface paths {
          *
          *     The frontend gates nav/route entries on ``required_permissions`` (see
          *     ``frontend/src/config/navigation.ts``); the access token deliberately
-         *     carries no ``permissions`` claim (200+ names would bloat every request and
-         *     go stale the moment a role changes), so the nav resolves them from this
+         *     carries no ``permissions`` claim (honouring one would bloat every request
+         *     and leave it stale after a role change), so the nav resolves them from this
          *     registry-backed read instead.
          *
          *     Authenticated only. The role is the LIVE membership role (ADR 047), not the
-         *     token claim, so a demoted user's nav follows the reduction immediately and
-         *     a removed member is denied. A system admin gets the full admin floor
-         *     without a membership lookup.
+         *     token claim, so a removed or deactivated member is denied outright (401)
+         *     rather than served a stale set. A DEMOTED user does get the reduced set on
+         *     this read, but the SPA caches the answer for the session: the client's nav
+         *     follows the reduction on its next permissions read, not the instant the role
+         *     changes.
+         *
+         *     A system admin is resolved at the admin floor regardless of the org role the
+         *     token carries, and additionally retains the keys only a system admin can
+         *     reach (a non-system-admin's set omits those, so it never over-states what
+         *     their org role can do). When the token carries no org claim there is no
+         *     membership lookup at all; when it does, the lookup still guards removed
+         *     members (401) even though the role it returns no longer narrows the set.
          */
         get: operations["permissions_api_v1_auth_permissions_get"];
         put?: never;
