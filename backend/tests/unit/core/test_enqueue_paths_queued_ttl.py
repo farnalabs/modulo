@@ -226,6 +226,13 @@ def test_repairable_interval_is_derived_from_both_catchup_conditions() -> None:
     assert (ceiling + 1) + queued_ttl > window(ceiling + 1)
 
 
+def test_uncomputable_cadence_is_not_repairable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No derivable cadence means no provable repair path — keep the hash unbounded."""
+    monkeypatch.setattr(ch, "_cron_cadence_seconds", lambda *args, **kwargs: None)
+
+    assert ch._cron_fire_ttl_is_repairable(_cron_row("0 * * * *"), datetime.now(UTC)) is False
+
+
 @pytest.mark.parametrize(
     ("cadence", "expected"),
     [

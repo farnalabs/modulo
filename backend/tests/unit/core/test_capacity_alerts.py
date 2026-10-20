@@ -468,6 +468,49 @@ def test_redis_memory_rung_missing_or_garbage_is_clear() -> None:
     assert ca.redis_memory_rung({"used_memory": "x", "maxmemory": "y"}) == ca.CLEAR_RUNG
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (-5, "0 B"),
+        (0, "0 B"),
+        (900, "900 B"),
+        (1024, "1.0 KB"),
+        (900 * 1024 * 1024, "900.0 MB"),
+        (1024**5, "1024.0 TB"),
+    ],
+)
+def test_bytes_label_spans_every_unit(value: int, expected: str) -> None:
+    """The alert body must never render a raw byte count or an ``[unknown]``."""
+    assert ca._bytes_label(value) == expected
+
+
+async def test_read_redis_memory_returns_info() -> None:
+    redis = FakeRedis()
+    redis.memory = {"used_memory": 5, "maxmemory": 10}
+    summary: dict[str, Any] = {}
+
+    assert await ca._read_redis_memory(redis, summary) == {"used_memory": 5, "maxmemory": 10}  # type: ignore[arg-type]
+    assert summary == {}
+
+
+async def test_read_redis_memory_non_dict_is_unavailable() -> None:
+    """A non-dict INFO reply is UNKNOWN, never a clear signal."""
+    redis = FakeRedis()
+    redis.info = AsyncMock(return_value="PONG")  # type: ignore[method-assign]
+    summary: dict[str, Any] = {}
+
+    assert await ca._read_redis_memory(redis, summary) is None  # type: ignore[arg-type]
+    assert summary["redis_memory_unavailable"] == 1
+
+
+async def test_read_redis_memory_cancellation_propagates() -> None:
+    redis = FakeRedis()
+    redis.info = AsyncMock(side_effect=asyncio.CancelledError())  # type: ignore[method-assign]
+
+    with pytest.raises(asyncio.CancelledError):
+        await ca._read_redis_memory(redis, {})  # type: ignore[arg-type]
+
+
 def test_redis_pressure_payload_renders_without_unknown_placeholder() -> None:
     payload = ca._redis_pressure_payload(
         {"used_memory": 900 * 1024 * 1024, "maxmemory": 1024 * 1024 * 1024, "maxmemory_policy": "volatile-lru"}

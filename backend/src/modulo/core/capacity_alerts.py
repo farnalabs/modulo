@@ -341,11 +341,12 @@ def redis_memory_rung(info: dict[str, Any] | None) -> int:
 def _bytes_label(value: int) -> str:
     """Humanise a byte count for the alert body (``256 MB`` / ``900 B``)."""
     size = float(max(value, 0))
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if size < 1024 or unit == "TB":
+    units = ("B", "KB", "MB", "GB", "TB")
+    for unit in units[:-1]:
+        if size < 1024:
             return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
         size /= 1024
-    return f"{size:.1f} TB"
+    return f"{size:.1f} {units[-1]}"
 
 
 def resolve_alert_action(prev_rung: int | None, rung: int) -> tuple[str, int | None]:

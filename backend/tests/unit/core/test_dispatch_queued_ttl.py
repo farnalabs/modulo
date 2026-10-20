@@ -13,6 +13,7 @@ in-flight job is never expired.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -108,6 +109,15 @@ async def test_dequeue_then_active_clears_the_queued_ttl() -> None:
     await dequeued.update(status=Status.ACTIVE)
 
     assert await redis.ttl(job.id) == -1
+
+
+async def test_queued_ttl_cancellation_propagates() -> None:
+    """A cancelled dispatch must not be swallowed by the best-effort handler."""
+    redis = AsyncMock()
+    redis.eval.side_effect = asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await dispatch._apply_queued_ttl(redis, _QUEUED_JOB_ID)  # type: ignore[arg-type]
 
 
 async def test_queued_ttl_failure_is_logged_not_raised(caplog: pytest.LogCaptureFixture) -> None:
