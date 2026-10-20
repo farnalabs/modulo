@@ -84,7 +84,7 @@ export function clearFlagCache(): void {
     const stale: string[] = []
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i)
-      if (key && key.startsWith(FLAG_CACHE_PREFIX)) stale.push(key)
+      if (key?.startsWith(FLAG_CACHE_PREFIX)) stale.push(key)
     }
     for (const key of stale) localStorage.removeItem(key)
   } catch (err) {
