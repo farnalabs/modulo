@@ -103,15 +103,9 @@ async def _seed_pipeline(
     max_concurrent: int = _PIPELINE_CAP,
     queue_timeout_seconds: int | None = None,
 ) -> uuid.UUID:
+    from sqlalchemy import inspect
+
     pipeline_id = uuid.uuid4()
-    # The test_migration_* suites seed a private database stalled at their own
-    # alembic revision, so ``pipelines.queue_timeout_seconds`` (0322) may not
-    # exist. Only name the column when the caller sets a value: at head the
-    # NULL default is equivalent, and on a pinned revision its omission is
-    # required. This is the same live-column discipline ``_seed_run`` applies
-    # for later-migration ``runs`` columns.
-    queue_timeout_column = "queue_timeout_seconds, " if queue_timeout_seconds is not None else ""
-    queue_timeout_value = ":qts, " if queue_timeout_seconds is not None else ""
     params: dict[str, Any] = {
         "id": str(pipeline_id),
         "oid": str(org_id),
@@ -119,21 +113,39 @@ async def _seed_pipeline(
         "uid": str(account_id),
         "mcr": max_concurrent,
     }
-    if queue_timeout_seconds is not None:
-        params["qts"] = queue_timeout_seconds
+    # The test_migration_* suites seed a private database stalled at their own
+    # alembic revision, so the INSERT must name only columns the LIVE table
+    # actually has. ``queue_timeout_seconds`` arrives in migration
+    # ``0322_pipeline_queue_timeout``; a database pinned at 0274/0297 (the
+    # historical-revision suites) predates it. Probe on the SAME connection and
+    # inside the SAME transaction as the insert — a private database can cross
+    # the 0322 boundary inside one test's own alembic upgrade, so a cached
+    # column set would be wrong. Name the column only when the caller actually
+    # sets a value as well: at head the NULL default is equivalent, matching
+    # ``_seed_run``'s live-column discipline.
+    with_queue_timeout = text(
+        "INSERT INTO pipelines (id, organisation_id, name, account_id, "
+        "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+        "queue_timeout_seconds, "
+        "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
+        "VALUES (:id, :oid, :name, :uid, :mcr, 30, 300, :qts, "
+        "'{}'::json, '[]'::json, 'manual_approval', 'org')"
+    )
+    without_queue_timeout = text(
+        "INSERT INTO pipelines (id, organisation_id, name, account_id, "
+        "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+        "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
+        "VALUES (:id, :oid, :name, :uid, :mcr, 30, 300, "
+        "'{}'::json, '[]'::json, 'manual_approval', 'org')"
+    )
     async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                + queue_timeout_column
-                + "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
-                "VALUES (:id, :oid, :name, :uid, :mcr, 30, 300, "
-                + queue_timeout_value
-                + "'{}'::json, '[]'::json, 'manual_approval', 'org')"
-            ),
-            params,
+        existing_columns = await conn.run_sync(
+            lambda sync_conn: {col["name"] for col in inspect(sync_conn).get_columns("pipelines")}
         )
+        include_queue_timeout = queue_timeout_seconds is not None and "queue_timeout_seconds" in existing_columns
+        if include_queue_timeout:
+            params["qts"] = queue_timeout_seconds
+        await conn.execute(with_queue_timeout if include_queue_timeout else without_queue_timeout, params)
     return pipeline_id
 
 
@@ -1551,7 +1563,14 @@ async def test_slot_sweep_never_resets_node_started_stale_run(
     The sweep's UPDATE therefore excludes ``first_node_dispatched`` rows from
     the retry arm (claim_count within budget); the NULL-phase control with
     the identical shape is still reset (retry) as before — the exclusion
-    discriminates on the phase alone."""
+    discriminates on the phase alone.
+
+    FAR-2005: a stopped heartbeat is proof the executor is dead, so the
+    terminal-fail-only dead-heartbeat arm runs FIRST and reaps the node-started
+    row as ``heartbeat_stale`` long before the legacy 30-minute retry window.
+    The FAR-1649 premise still holds — the row is never reset to ``pending``
+    (never re-executed) — it now reaches a terminal state instead of waiting
+    for the node deadline/age gate."""
     from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
     from modulo.core.run_admission import reconcile_pipeline_slots
 
@@ -1582,9 +1601,11 @@ async def test_slot_sweep_never_resets_node_started_stale_run(
 
     await reconcile_pipeline_slots(db_engine)
 
-    # Node-started: untouched — still running, for the watchdogs / age gate.
-    status, _code = await _run_state(db_engine, org_id, node_started)
-    assert status == "running"
+    # Node-started: terminal-failed by the FAR-2005 dead-heartbeat reap —
+    # NEVER reset to pending, so the started node is never re-executed.
+    status, code = await _run_state(db_engine, org_id, node_started)
+    assert status == "failed"
+    assert code == "heartbeat_stale"
     # Control (NULL phase, claim_count within the retry budget): reset to
     # pending for re-dispatch, exactly as before the exclusion.
     status, _code = await _run_state(db_engine, org_id, control)

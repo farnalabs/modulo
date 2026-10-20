@@ -134,9 +134,14 @@ async def test_node_started_stale_run_is_not_redispatched(
 ) -> None:
     """A first-node-STARTED run with a stale heartbeat and no SAQ job is NOT
     re-dispatched: no job appears and the claim token is untouched (nothing
-    claimed or re-enqueued it). FAR-1999 then reaps it at its durable node
-    deadline — a started node may have executed side effects, so the run is
-    terminal-failed rather than held ``running`` forever or re-executed."""
+    claimed or re-enqueued it).
+
+    FAR-1999: a zero-progress node-started run whose durable node deadline has
+    passed is terminal-failed at its node deadline (``node_deadline_exceeded``)
+    rather than held ``running`` until the ~135-minute age gate — a started
+    node may have executed side effects, so the run is terminal-failed rather
+    than held ``running`` forever or re-executed. It is still never
+    re-executed: terminal-failing re-executes nothing."""
     run_id, _ = await _seed_node_phase_run(db_engine, test_org, test_user, dispatch_phase=PHASE_FIRST_NODE_DISPATCHED)
 
     await ch.dispatcher_reconcile()
