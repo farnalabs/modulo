@@ -15,11 +15,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx2
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes import admin_run_retention as route
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.settings import Settings, get_settings
@@ -201,6 +203,20 @@ class TestCandidates:
 # ---------------------------------------------------------------------------
 
 
+def _raising_export(exc: Exception):
+    """An ``iter_run_export`` stand-in whose FIRST ``__anext__`` raises ``exc``.
+
+    Models a start-up failure (RLS/tenant/validation/migration/database) that
+    priming must surface as a real HTTP status before the stream starts.
+    """
+
+    async def _gen(session_arg, **kwargs):
+        raise exc
+        yield  # pragma: no cover - unreachable; keeps this an async generator
+
+    return _gen
+
+
 class TestExport:
     def test_streams_jsonl_with_download_headers(self) -> None:
         session = _make_session()
@@ -220,8 +236,165 @@ class TestExport:
         assert resp.headers["content-type"].startswith("application/x-ndjson")
         assert resp.headers["content-disposition"].startswith("attachment; filename=")
         lines = resp.text.splitlines()
-        assert len(lines) == 2
+        # Two run records plus the FAR-1924 terminating completeness sentinel.
+        assert len(lines) == 3
         assert json.loads(lines[0])["id"] == "run-1"
+        assert json.loads(lines[2]) == {"_complete": True}
+
+    def test_streams_a_completeness_sentinel_on_a_clean_stream(self) -> None:
+        """FAR-1924: a successful export ends with the completion marker."""
+        session = _make_session()
+        client = _build(session, _principal())
+
+        async def fake_export(session_arg, **kwargs):
+            yield '{"id":"run-1"}\n'
+
+        with (
+            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.admin_run_retention.iter_run_export", new=fake_export),
+        ):
+            resp = client.post(EXPORT_URL, json={})
+
+        assert resp.status_code == 200
+        assert resp.text.endswith(route._COMPLETE_SENTINEL)
+
+    def test_empty_stream_still_emits_the_completeness_sentinel(self) -> None:
+        """An empty (but successful) export is complete, not truncated."""
+        session = _make_session()
+        client = _build(session, _principal())
+
+        async def fake_export(session_arg, **kwargs):
+            if False:  # pragma: no cover - keeps this an async generator
+                yield ""
+
+        with (
+            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.admin_run_retention.iter_run_export", new=fake_export),
+        ):
+            resp = client.post(EXPORT_URL, json={})
+
+        assert resp.status_code == 200
+        assert resp.text == route._COMPLETE_SENTINEL
+
+    def test_startup_db_error_yields_503_not_a_truncated_200(self) -> None:
+        """FAR-1924 prove-the-fix: a DB error before the first item -> real 503.
+
+        Before priming, ``iter_run_export``'s first ``__anext__`` ran while the
+        body was streamed — i.e. after HTTP 200 had already been sent — so the
+        client saw a truncated 200 with no error status. Awaiting the first item
+        inside the handler maps the error to 503 before the response starts.
+        """
+        session = _make_session()
+        client = _build_unhandled(session, _principal())
+        with (
+            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch(
+                "modulo.api.routes.admin_run_retention.iter_run_export",
+                new=_raising_export(SQLAlchemyError("boom")),
+            ),
+        ):
+            resp = client.post(EXPORT_URL, json={})
+
+        assert resp.status_code == 503, resp.text
+        assert resp.json()["detail"] == "Database temporarily unavailable."
+
+    def test_startup_programming_error_yields_501(self) -> None:
+        """A missing migration surfaces as 501, not a truncated 200."""
+        session = _make_session()
+        client = _build_unhandled(session, _principal())
+        with (
+            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch(
+                "modulo.api.routes.admin_run_retention.iter_run_export",
+                new=_raising_export(ProgrammingError("s", {}, Exception())),
+            ),
+        ):
+            resp = client.post(EXPORT_URL, json={})
+
+        assert resp.status_code == 501, resp.text
+        assert resp.json()["detail"] == _MSG_501
+
+    def test_startup_integrity_error_yields_409_not_503(self) -> None:
+        """FAR-1924 regression: the shared classifier's 409 arm is reachable.
+
+        The old hand-rolled priming copy mapped only ProgrammingError ->
+        501 / SQLAlchemyError -> 503 / Exception -> 500, so an ``IntegrityError``
+        (a ``SQLAlchemyError`` subclass, mapped to 409 by the shared classifier)
+        was silently downgraded to a 503. ``prime_stream`` routes every arm
+        through the one classifier, so the 409 verdict now surfaces before the
+        response starts.
+        """
+        session = _make_session()
+        client = _build_unhandled(session, _principal())
+        with (
+            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch(
+                "modulo.api.routes.admin_run_retention.iter_run_export",
+                new=_raising_export(IntegrityError("s", {}, Exception())),
+            ),
+        ):
+            resp = client.post(EXPORT_URL, json={})
+
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"] == "Resource conflict. The operation could not be completed."
+
+    def test_startup_http_exception_passes_through_untouched(self) -> None:
+        """An HTTPException raised while priming is re-raised with its status."""
+        session = _make_session()
+        client = _build_unhandled(session, _principal())
+        with (
+            patch(
+                "modulo.api.routes.admin_run_retention.set_rls_org",
+                new=AsyncMock(side_effect=HTTPException(status_code=403, detail="nope")),
+            ),
+            patch("modulo.api.routes.admin_run_retention.iter_run_export", new=_raising_export(RuntimeError())),
+        ):
+            resp = client.post(EXPORT_URL, json={})
+
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"] == "nope"
+
+    def test_startup_unexpected_error_yields_500(self) -> None:
+        """A non-DB startup error maps to 500, not a truncated 200."""
+        session = _make_session()
+        client = _build_unhandled(session, _principal())
+        with (
+            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch(
+                "modulo.api.routes.admin_run_retention.iter_run_export",
+                new=_raising_export(RuntimeError("boom")),
+            ),
+        ):
+            resp = client.post(EXPORT_URL, json={})
+
+        assert resp.status_code == 500, resp.text
+        assert resp.json()["detail"] == "An unexpected error occurred."
+
+    def test_mid_stream_error_omits_the_completeness_sentinel(self) -> None:
+        """The residual is not silent: a truncated stream lacks the sentinel.
+
+        Priming only covers failures at or before the first item. An error AFTER
+        the stream begins still truncates the body at HTTP 200 — this asserts
+        the completeness sentinel is emitted only on clean exhaustion, so a
+        consumer can tell a partial file from a complete one.
+        """
+        session = _make_session()
+        client = _build_unhandled(session, _principal())
+
+        async def fake_export(session_arg, **kwargs):
+            yield '{"id":"run-1"}\n'
+            raise SQLAlchemyError("mid-stream boom")
+
+        with (
+            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.admin_run_retention.iter_run_export", new=fake_export),
+        ):
+            resp = client.post(EXPORT_URL, json={})
+
+        # The first item primed cleanly, so the status is 200...
+        assert resp.status_code == 200
+        # ...and the sentinel's ABSENCE is the truncation signal.
+        assert route._COMPLETE_SENTINEL not in resp.text
 
     def test_org_admin_cannot_export_another_org(self) -> None:
         session = _make_session()
