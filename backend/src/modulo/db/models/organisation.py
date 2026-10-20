@@ -58,6 +58,11 @@ class Organisation(SoftDeleteMixin, Base):
             "NOT guardrails_kill_switch OR guardrails_kill_switch_at IS NOT NULL",
             name="ck_organisations_guardrails_kill_switch_at",
         ),
+        # Retained ONLY so the ORM metadata keeps matching the live schema
+        # (tests/integration/test_initial_migration.py::test_migrated_schema_matches_orm_metadata).
+        # The physical columns + this CHECK are dropped by the follow-up
+        # migration once the additive 0321 release is live — see the cost-column
+        # comment below. Nothing in production code reads or writes them.
         CheckConstraint("org_cumulative_spend_cents >= 0", name="ck_organisations_cum_spend"),
         Index(
             "uq_organisations_slug",
@@ -106,13 +111,22 @@ class Organisation(SoftDeleteMixin, Base):
     guardrails_kill_switch: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     guardrails_kill_switch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     daily_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
-    # Hard spend ceilings (FAR-391, spec §5.1 cost controls). Stored in integer
-    # CENTS so the gate comparison is exact and allocation-free (no float drift).
-    #   max_run_cost_cents      — per-run hard ceiling; None = unlimited.
-    #   spend_ceiling_cents      — org lifetime budget; None = unlimited.
-    #   org_cumulative_spend_cents — running consumed total (incremented at each
-    #                               run's terminal ledger write).
-    # A ceiling of 0 is a deliberate kill-switch (blocks every billable run).
+    # FAR-391 hard spend ceilings (``max_run_cost_cents`` / ``spend_ceiling_cents``)
+    # and the lifetime consumed total (``org_cumulative_spend_cents``) are NO
+    # LONGER USED (FAR-1833): they now live on ``organisation_cost_state`` keyed
+    # by ``org_id``, read/written under the per-org cost-state advisory lock
+    # (``modulo.core.runner_capacity.lock_org_cost_state``). Keeping the cost
+    # path off the ``organisations`` row removes the lock coupling (the D9
+    # deadlock) between the finalize gate+accrual and the ceiling set/clear
+    # endpoints.
+    #
+    # The three columns are STILL MAPPED here (and the CHECK above still
+    # declared) only for expand/contract: migration 0321 deliberately leaves the
+    # physical columns in place so a rolling deploy never serves old code against
+    # a dropped column, and the ORM metadata must keep matching that live schema
+    # (test_migrated_schema_matches_orm_metadata). No production code reads or
+    # writes them; the follow-up DROP migration removes both the columns and
+    # this mapping in the same change.
     max_run_cost_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     spend_ceiling_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     org_cumulative_spend_cents: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))

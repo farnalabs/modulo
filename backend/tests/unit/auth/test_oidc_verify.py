@@ -50,6 +50,7 @@ def _create_id_token(
     audience: str = _CLIENT_ID,
     exp_offset: timedelta | None = None,
     kid: str = "test-key-1",
+    nonce: str | None = None,
 ) -> str:
     now = datetime.now(UTC)
     claims = {
@@ -60,6 +61,8 @@ def _create_id_token(
         "iat": now,
         "exp": now + (exp_offset if exp_offset is not None else timedelta(hours=1)),
     }
+    if nonce is not None:
+        claims["nonce"] = nonce
     pem_key = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
@@ -413,6 +416,103 @@ class TestClaimValidation:
 
 
 # ---------------------------------------------------------------------------
+# FAR-1982: nonce binding (ID token -> authentication request)
+# ---------------------------------------------------------------------------
+# The login leg sends a per-request ``nonce``; the IdP echoes it in the ID
+# token. Without a nonce check a token minted for one authentication request
+# (or replayed from an attacker-started flow) verifies against another. These
+# tests pin the check itself: only after the signature has verified, and with a
+# constant-time comparison that must not escape as an uncaught ``TypeError``.
+
+
+class TestVerifyNonce:
+    def _verifier_client(self, jwks_resp: MagicMock) -> MagicMock:
+        return _make_httpx_mock({_JWKS_URI: jwks_resp})
+
+    async def test_accepts_matching_nonce(
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+        jwks_resp: MagicMock,
+    ) -> None:
+        private_key, _ = keypair
+        id_token = _create_id_token(private_key, nonce="request-nonce")
+        mock_client = self._verifier_client(jwks_resp)
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value = mock_client
+            claims = await verify_id_token(id_token, _JWKS_URI, _CLIENT_ID, _ISSUER, expected_nonce="request-nonce")
+
+        assert claims["nonce"] == "request-nonce"
+
+    async def test_rejects_mismatched_nonce(
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+        jwks_resp: MagicMock,
+    ) -> None:
+        """Regression: pre-fix the nonce was not checked at all, so a token minted
+        for a DIFFERENT authentication request verified successfully."""
+        private_key, _ = keypair
+        id_token = _create_id_token(private_key, nonce="attacker-nonce")
+        mock_client = self._verifier_client(jwks_resp)
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value = mock_client
+            with pytest.raises(OidcVerifyError, match="nonce does not match"):
+                await verify_id_token(id_token, _JWKS_URI, _CLIENT_ID, _ISSUER, expected_nonce="victim-nonce")
+
+    async def test_rejects_missing_nonce_claim(
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+        jwks_resp: MagicMock,
+    ) -> None:
+        """An IdP that omits the echoed nonce must not satisfy the binding."""
+        private_key, _ = keypair
+        id_token = _create_id_token(private_key)
+        mock_client = self._verifier_client(jwks_resp)
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value = mock_client
+            with pytest.raises(OidcVerifyError, match="nonce does not match"):
+                await verify_id_token(id_token, _JWKS_URI, _CLIENT_ID, _ISSUER, expected_nonce="request-nonce")
+
+    async def test_rejects_non_ascii_nonce_without_crashing(
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+        jwks_resp: MagicMock,
+    ) -> None:
+        """A malformed (non-ASCII) nonce claim must fail as OidcVerifyError.
+
+        ``hmac.compare_digest`` raises ``TypeError`` on non-ASCII ``str``
+        operands; an IdP-controlled claim must not turn the check into an
+        uncaught 500. The comparison is therefore over UTF-8 bytes.
+        """
+        private_key, _ = keypair
+        id_token = _create_id_token(private_key, nonce="n\u00f6nce")
+        mock_client = self._verifier_client(jwks_resp)
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value = mock_client
+            with pytest.raises(OidcVerifyError, match="nonce does not match"):
+                await verify_id_token(id_token, _JWKS_URI, _CLIENT_ID, _ISSUER, expected_nonce="request-nonce")
+
+    async def test_no_expected_nonce_skips_the_check(
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+        jwks_resp: MagicMock,
+    ) -> None:
+        """The primitive stays usable by callers that did not send a nonce."""
+        private_key, _ = keypair
+        id_token = _create_id_token(private_key, nonce="ignored")
+        mock_client = self._verifier_client(jwks_resp)
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value = mock_client
+            claims = await verify_id_token(id_token, _JWKS_URI, _CLIENT_ID, _ISSUER)
+
+        assert claims["sub"] == "user123"
+
+
+# ---------------------------------------------------------------------------
 # JWKS rotation handling
 # ---------------------------------------------------------------------------
 
@@ -646,7 +746,7 @@ class TestOidcCallbackIntegration:
 
         private_key, public_key = keypair
         jwk = _pubkey_to_jwk(public_key)
-        id_token = _create_id_token(private_key)
+        id_token = _create_id_token(private_key, nonce="callback-nonce")
 
         settings = Settings(
             database_url="postgresql+asyncpg://localhost/test",
@@ -693,6 +793,8 @@ class TestOidcCallbackIntegration:
                 None,
                 session,
                 "http://localhost/callback",
+                expected_nonce="callback-nonce",
+                code_verifier="callback-verifier",
             )
             assert result["access_token"] == "at"
 
@@ -752,6 +854,8 @@ class TestOidcCallbackIntegration:
                     None,
                     session,
                     "http://localhost/callback",
+                    expected_nonce="test-nonce",
+                    code_verifier="test-verifier",
                 )
 
     async def test_callback_fails_on_discovery_http_error(self) -> None:
@@ -792,6 +896,8 @@ class TestOidcCallbackIntegration:
                     None,
                     session,
                     "http://localhost/callback",
+                    expected_nonce="test-nonce",
+                    code_verifier="test-verifier",
                 )
 
     async def test_callback_fails_on_code_exchange_http_error(self) -> None:
@@ -835,6 +941,8 @@ class TestOidcCallbackIntegration:
                     None,
                     session,
                     "http://localhost/callback",
+                    expected_nonce="test-nonce",
+                    code_verifier="test-verifier",
                 )
 
     async def test_callback_fails_on_provisioning_runtime_error(self) -> None:
@@ -890,6 +998,8 @@ class TestOidcCallbackIntegration:
                     None,
                     session,
                     "http://localhost/callback",
+                    expected_nonce="test-nonce",
+                    code_verifier="test-verifier",
                 )
 
 
