@@ -277,6 +277,76 @@ class TestFailNodeDeadlineRun:
         assert summary["node_deadline_reaped"] == 0
 
     @pytest.mark.asyncio
+    async def test_does_not_reap_when_token_usage_landed_after_the_scan(self) -> None:
+        """Zero-progress race: the node finalised between the scan and the lock.
+
+        ``node_token_usage`` is written when a run finalises, so a non-NULL
+        value on the locked row proves the node reported after the scan
+        snapshot. The locked row's token usage is re-checked BEFORE the
+        reconcile-flag query, so a run that made progress is never
+        terminal-failed as zero-progress (and the guard never even reaches the
+        extra query). Removing the guard reaps this row and fails the test.
+        """
+        run = _node_started_run(
+            phase_entered_at=datetime.now(UTC) - timedelta(minutes=90),
+            node_token_usage={"prompt_tokens": 10},
+        )
+        session = _ReaperSession(run)
+        summary: dict[str, Any] = {"node_deadline_reaped": 0}
+        with patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock):
+            reaped = await ch._fail_node_deadline_run(
+                session,
+                run.id,
+                ORG,
+                summary,
+                stale_window=STALE_WINDOW_SECONDS,
+                node_budget_seconds=NODE_BUDGET_SECONDS,
+            )
+
+        assert reaped is False
+        assert run.status == "running"
+        assert summary["node_deadline_reaped"] == 0
+        # The guard short-circuits before the reconcile-flag query and the write.
+        assert not session.executed
+        assert session.flushed is False
+
+    @pytest.mark.asyncio
+    async def test_does_not_reap_when_the_locked_row_did_not_start_a_node(self) -> None:
+        """Defence in depth: the locked row's phase is re-checked on its own.
+
+        ``_is_node_started_executor_lost_row`` already requires
+        ``first_node_dispatched``, so for every row the classifier accepts the
+        two checks agree. The reaper STILL re-checks the phase on the row it
+        locked with ``with_for_update`` instead of trusting the classification
+        alone: a classifier change (or a wider future predicate) must never let
+        this terminal-fail a run that never started a node. Force the
+        classifier to accept and prove the locked-row recheck still refuses.
+        Removing the recheck reaps this row and fails the test.
+        """
+        run = _node_started_run(phase_entered_at=datetime.now(UTC) - timedelta(minutes=90))
+        run.dispatch_phase = None
+        session = _ReaperSession(run)
+        summary: dict[str, Any] = {"node_deadline_reaped": 0}
+        with (
+            patch.object(ch, "_is_node_started_executor_lost_row", return_value=True),
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock),
+        ):
+            reaped = await ch._fail_node_deadline_run(
+                session,
+                run.id,
+                ORG,
+                summary,
+                stale_window=STALE_WINDOW_SECONDS,
+                node_budget_seconds=NODE_BUDGET_SECONDS,
+            )
+
+        assert reaped is False
+        assert run.status == "running"
+        assert summary["node_deadline_reaped"] == 0
+        assert not session.executed
+        assert session.flushed is False
+
+    @pytest.mark.asyncio
     async def test_does_not_reap_a_missing_row(self) -> None:
         run = _node_started_run(phase_entered_at=datetime.now(UTC) - timedelta(minutes=90))
         session = _ReaperSession(run, return_run=False)
