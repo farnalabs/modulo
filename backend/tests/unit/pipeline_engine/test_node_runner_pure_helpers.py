@@ -1046,3 +1046,36 @@ class TestPersistFullStdoutArtifact:
             pytest.raises(asyncio.CancelledError),
         ):
             _persist_full_stdout_artifact(**self._kwargs())
+
+
+# ---------------------------------------------------------------------------
+# _resolve_hitl_subject — FAR-859 / FAR-862 subject_path resolution
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_hitl_subject_without_path_returns_empty_triple() -> None:
+    assert nr._resolve_hitl_subject(None, {"output": {"comment": "x"}}, "rev-1") == (None, None, None)
+    assert nr._resolve_hitl_subject("", {"output": {"comment": "x"}}, "rev-1") == (None, None, None)
+
+
+def test_resolve_hitl_subject_returns_serialised_value_and_parent_shape() -> None:
+    """A resolvable path yields the serialised subject plus its parent dict and
+    leaf key, so the frontend can rebuild a shape-preserving modified_output."""
+    state = {"output": {"comment": "ship it", "other": 1}}
+
+    resolved, parent, leaf = nr._resolve_hitl_subject("output.comment", state, "rev-1")
+
+    assert resolved == '"ship it"'
+    assert parent == {"comment": "ship it", "other": 1}
+    assert leaf == "comment"
+
+
+def test_resolve_hitl_subject_missing_value_returns_empty_triple() -> None:
+    """A path that resolves to None is a normal empty result, not an error."""
+    assert nr._resolve_hitl_subject("output.absent", {"output": {}}, "rev-1") == (None, None, None)
+
+
+def test_resolve_hitl_subject_invalid_path_fails_safe() -> None:
+    """An unparseable JMESPath expression is swallowed (logged at debug) — a
+    bad subject_path never blocks the HITL gate from raising its interrupt."""
+    assert nr._resolve_hitl_subject("[invalid", {"output": {}}, "rev-1") == (None, None, None)

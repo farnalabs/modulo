@@ -8,13 +8,18 @@ error classification as retryable).
 """
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.bundled_runner.runner_dispatch import _consume_stream
+from modulo.core.bundled_runner.runner_dispatch import (
+    _consume_stream,
+    _finalize_stream_consume,
+    _pump_exec_to_queue,
+)
 from modulo.core.runtime_provider import ExecProcess, ExecStreamChunk
 from modulo.core.runtime_provider.docker import DockerRuntimeProvider, _split_exec_frame
 
@@ -273,3 +278,94 @@ async def test_consume_touches_stall_detector_on_progress() -> None:
     touched = {call.args[0] for call in stall.touch.call_args_list}
     assert "output" in touched
     assert "heartbeat" in touched
+
+
+# ---------------------------------------------------------------------------
+# _pump_exec_to_queue / _finalize_stream_consume — teardown edge paths
+# ---------------------------------------------------------------------------
+
+
+async def test_pump_exec_to_queue_empty_stream_still_signals_end() -> None:
+    """An exec that yields NO chunks must still push the ``None`` sentinel —
+    the consumer waits on the queue, not on the generator."""
+    process, _ = _fake_process([])
+    queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
+
+    await _pump_exec_to_queue(
+        process,
+        queue,
+        stream_broker=None,
+        node_id="n",
+        throttle_state={"buf": [], "last_ts": 0.0},
+    )
+
+    assert await queue.get() is None
+
+
+async def test_finalize_stream_consume_reraises_cancelled_kill() -> None:
+    """Cancellation during the kill await must propagate — a cancelled node
+    is never downgraded to an ordinary retryable failure."""
+
+    async def _cancel_kill() -> None:
+        raise asyncio.CancelledError
+
+    process, _ = _fake_process([])
+    process._kill = _cancel_kill
+    pump = asyncio.create_task(asyncio.sleep(30))
+
+    with pytest.raises(asyncio.CancelledError):
+        await _finalize_stream_consume(process, pump, node_id="n", kill=True)
+
+    pump.cancel()
+    await asyncio.gather(pump, return_exceptions=True)
+
+
+async def test_finalize_stream_consume_swallows_kill_failure(caplog: pytest.LogCaptureFixture) -> None:
+    """A best-effort kill failure is logged, never raised: teardown must not
+    mask the timeout/stall failure that triggered it."""
+
+    async def _boom_kill() -> None:
+        raise RuntimeError("docker kill failed")
+
+    process, _ = _fake_process([])
+    process._kill = _boom_kill
+    pump = asyncio.create_task(asyncio.sleep(0))
+
+    await _finalize_stream_consume(process, pump, node_id="n", kill=True)
+
+    assert any(record.message == "runner_dispatch.exec_kill_failed" for record in caplog.records)
+
+
+async def test_finalize_stream_consume_reraises_cancelled_join(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cancellation while joining the pump task must propagate."""
+    process, _ = _fake_process([])
+    pump = asyncio.create_task(asyncio.sleep(30))
+
+    async def _cancel_wait(_aws: object, **_kwargs: object) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(asyncio, "wait", _cancel_wait)
+    with pytest.raises(asyncio.CancelledError):
+        await _finalize_stream_consume(process, pump, node_id="n", kill=False)
+    monkeypatch.undo()
+
+    pump.cancel()
+    await asyncio.gather(pump, return_exceptions=True)
+
+
+async def test_finalize_stream_consume_swallows_join_failure(caplog: pytest.LogCaptureFixture) -> None:
+    """A pump that cannot be joined (not a task/future) is logged at info
+    level and the consume returns — teardown never raises on a best-effort join."""
+    caplog.set_level(logging.INFO, logger="modulo.core.bundled_runner.runner_dispatch")
+
+    class _UnjoinablePump:
+        def cancel(self) -> None:
+            self.cancelled = True
+
+    pump = _UnjoinablePump()
+    process, _ = _fake_process([])
+
+    await _finalize_stream_consume(process, pump, node_id="n", kill=False)  # type: ignore[arg-type]
+
+    assert pump.cancelled is True
+    assert any(record.message == "runner_dispatch.pump_join_failed" for record in caplog.records)
