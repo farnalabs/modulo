@@ -1901,21 +1901,27 @@ class TestTerminateBootProcessGroup:
         mock_process.wait.side_effect = subprocess.TimeoutExpired("pg", 30)
 
         # The POSIX path is simulated on every host by patching sys.platform.
-        # `signal.SIGKILL` does not exist on a Windows interpreter, so it is
-        # patched with a sentinel too (`create=True`); the function under test
-        # and this assertion then refer to the SAME object.
-        sigkill = object()
+        # A Windows interpreter has no `signal.SIGKILL` at all, so there the
+        # constant is supplied (and restored) by the patch itself; on POSIX the
+        # REAL constant stays in play and nothing is substituted.
+        real_sigkill = getattr(upgrade_module.signal, "SIGKILL", None)
+        expected_sigkill = real_sigkill if real_sigkill is not None else object()
+        patch_sigkill = (
+            patch.object(upgrade_module.signal, "SIGKILL", expected_sigkill, create=True)
+            if real_sigkill is None
+            else contextlib.nullcontext()
+        )
         with (
             patch.object(upgrade_module.os, "getpgid", return_value=12345, create=True),
             patch.object(upgrade_module.os, "killpg", create=True) as mock_killpg,
             patch.object(upgrade_module.sys, "platform", "linux"),
-            patch.object(upgrade_module.signal, "SIGKILL", sigkill, create=True),
+            patch_sigkill,
         ):
             upgrade_module._terminate_boot_process_group(mock_process)
         # The FULL ordered escalation: SIGTERM -> wait(30) -> SIGKILL -> wait(10).
         assert mock_killpg.call_args_list == [
             call(12345, upgrade_module.signal.SIGTERM),
-            call(12345, sigkill),
+            call(12345, expected_sigkill),
         ]
         mock_process.wait.assert_any_call(timeout=30)
         mock_process.wait.assert_any_call(timeout=10)
