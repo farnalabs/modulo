@@ -2353,6 +2353,12 @@ elements:
       - testid: admin-run-retention-export-result
         type: element
         dynamic_testid: false
+      - testid: admin-run-retention-export-warning
+        type: element
+        dynamic_testid: false
+      - testid: admin-run-retention-export-incomplete
+        type: element
+        dynamic_testid: false
       - testid: admin-run-retention-purge-result
         type: element
         dynamic_testid: false
@@ -6646,6 +6652,8 @@ features:
         description: Runtime configuration, rate limits, retention, sandbox concurrency, and the Runners page (D5)
         status: covered
         behaviours:
+            # FAR-1924: run-retention export wire contract
+            - '[x] Run retention exports the filtered runs as NDJSON, one run record per line, terminated by a `{"_complete":true}` sentinel. The sentinel is emitted ONLY when the stream ran to exhaustion; its absence means the export was truncated (a mid-stream failure still returns HTTP 200), so a compliance consumer must verify it before treating the file as complete (see docs/product-map/system/runtime.md)'
             # FAR-591 D5: Runners page + health-probe cache
             - "[x] A per-machine health-probe system cron (runner_health_probe, every 60s, retries=2, unique=True) probes the deployment's Docker engine THROUGH the socket-proxy and upserts one runner_probe_cache row per (organisation, machine): engine reachability, pinned-image presence, and the engine's /info CPU/memory for the concurrency preflight — the Runners page and node editor read ONLY this cache, never a synchronous engine probe on the request path"
             - "[x] The probe tick is three-phase (engine probe + image inspects run BEFORE any DB transaction opens; the write tx is scoped to the upserts), prunes (org, machine) rows not refreshed within a 24h retention window, and upserts per org inside a SAVEPOINT so one poisoned org rolls back only itself; a per-org infrastructure error (SQLAlchemyError) marks the org failed and re-raises at the end of the tick so SAQ's retries engage, while the wrapper persists the saq:cron:stats:runner_health_probe liveness key on success AND failure (failure records zero counts + error=probe_failed; the last_run_at refresh keeps the /healthz/ready staleness check honest; the FAR-538 per-machine cron heartbeat is refreshed per successful tick)"
