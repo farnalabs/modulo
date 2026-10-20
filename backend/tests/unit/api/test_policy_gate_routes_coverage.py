@@ -567,6 +567,31 @@ def test_create_gate_unexpected_error_returns_500(client: tuple[TestClient, Asyn
 # ---------------------------------------------------------------------------
 
 
+def _expected_pre_version_raw(*, action: str, evaluation_mode: str) -> dict[str, str]:
+    """Expected ``pre_version_raw`` for a PUT, derived from the request contract.
+
+    Criteria 17/18: the snapshot reports every mutable field at its pre-edit
+    value. PUT is a full replace of the mutable config, so the mutable field
+    set IS ``PolicyGateUpdateRequest.model_fields``. Deriving the KEY SET from
+    that model (rather than hand-copying it into a literal) means adding a
+    mutable field can no longer leave this expectation stale — FAR-939 added
+    ``evaluation_mode`` and a copied literal broke the deploy gate.
+
+    The VALUES are pinned explicitly: they are the pre-edit state the test
+    seeded, not the request model's defaults (``evaluation_mode`` is ``None``
+    on the wire, but a live gate always stores ``automatic``/``human``). The
+    assertion below fails loudly, naming the fields, if the model gains or
+    loses one.
+    """
+    pinned: dict[str, str] = {"action": action, "evaluation_mode": evaluation_mode}
+    model_fields = list(evals_routes.PolicyGateUpdateRequest.model_fields)
+    assert sorted(pinned) == sorted(model_fields), (
+        "PolicyGateUpdateRequest's field set changed: pin the pre-edit value for every "
+        f"mutable field here. model_fields={sorted(model_fields)} pinned={sorted(pinned)}"
+    )
+    return {field: pinned[field] for field in model_fields}
+
+
 def test_update_gate_non_admin_returns_403() -> None:
     session = _make_session()
     _install_overrides(session, org_role="operator")
@@ -598,7 +623,7 @@ def test_update_gate_success_bumps_version(client: tuple[TestClient, AsyncMock])
     assert body["version"] == 2
     # FAR-939 chunk 12: the snapshot key set equals the mutable set
     # ({action, evaluation_mode}); the pre-edit values are captured.
-    assert body["pre_version_raw"] == {"action": "warn", "evaluation_mode": "automatic"}
+    assert body["pre_version_raw"] == _expected_pre_version_raw(action="warn", evaluation_mode="automatic")
 
 
 def test_update_gate_omitting_evaluation_mode_preserves_human(client: tuple[TestClient, AsyncMock]) -> None:
@@ -633,7 +658,7 @@ def test_update_gate_omitting_evaluation_mode_preserves_human(client: tuple[Test
     assert body["evaluation_mode"] == "human"
     assert gate.evaluation_mode == "human"
     # The snapshot key set equals the mutable set, at pre-edit values.
-    assert body["pre_version_raw"] == {"action": "warn", "evaluation_mode": "human"}
+    assert body["pre_version_raw"] == _expected_pre_version_raw(action="warn", evaluation_mode="human")
 
 
 def test_update_gate_preserves_disabled_enforcement_state(client: tuple[TestClient, AsyncMock]) -> None:
@@ -704,7 +729,7 @@ def test_update_gate_explicit_automatic_resets_human_gate(client: tuple[TestClie
     assert body["evaluation_mode"] == "automatic"
     assert gate.evaluation_mode == "automatic"
     # Snapshot captured the pre-edit HUMAN value before the reset.
-    assert body["pre_version_raw"] == {"action": "warn", "evaluation_mode": "human"}
+    assert body["pre_version_raw"] == _expected_pre_version_raw(action="warn", evaluation_mode="human")
 
 
 def test_update_gate_version_none_defaults_to_one(client: tuple[TestClient, AsyncMock]) -> None:

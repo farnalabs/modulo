@@ -741,6 +741,33 @@ async def test_pg_spec_c12_fk_restrict_blocks_hard_delete_with_decision_records(
 # ---------------------------------------------------------------------------
 
 
+def _expected_pre_version_raw(*, action: str, evaluation_mode: str) -> dict[str, str]:
+    """Expected ``pre_version_raw`` for a PUT, derived from the request contract.
+
+    Criteria 17/18: the snapshot reports every mutable field at its pre-edit
+    value. PUT is a full replace of the mutable config, so the mutable field
+    set IS ``PolicyGateUpdateRequest.model_fields``. Deriving the KEY SET from
+    that model (rather than hand-copying it into a literal) means adding a
+    mutable field can no longer leave this expectation stale — FAR-939 added
+    ``evaluation_mode`` and a copied literal broke the deploy gate.
+
+    The VALUES are pinned explicitly: they are the pre-edit state the test
+    seeded, not the request model's defaults (``evaluation_mode`` is ``None``
+    on the wire, but a live gate always stores ``automatic``/``human``). The
+    assertion below fails loudly, naming the fields, if the model gains or
+    loses one.
+    """
+    from modulo.api.routes.evals import PolicyGateUpdateRequest  # local import; avoid app import at module scope
+
+    pinned: dict[str, str] = {"action": action, "evaluation_mode": evaluation_mode}
+    model_fields = list(PolicyGateUpdateRequest.model_fields)
+    assert sorted(pinned) == sorted(model_fields), (
+        "PolicyGateUpdateRequest's field set changed: pin the pre-edit value for every "
+        f"mutable field here. model_fields={sorted(model_fields)} pinned={sorted(pinned)}"
+    )
+    return {field: pinned[field] for field in model_fields}
+
+
 async def test_pg_spec_c18_versions_bump_monotonically_with_snapshot(
     db_engine: AsyncEngine, client: AsyncClient, env: _Env
 ) -> None:
@@ -764,13 +791,13 @@ async def test_pg_spec_c18_versions_bump_monotonically_with_snapshot(
     # FAR-939: the snapshot key set equals the mutable-field set, which now
     # includes ``evaluation_mode`` (defaults to "automatic"; omitted on the
     # wire preserves the live mode, so both writes stay "automatic").
-    assert body2["pre_version_raw"] == {"action": "warn", "evaluation_mode": "automatic"}
+    assert body2["pre_version_raw"] == _expected_pre_version_raw(action="warn", evaluation_mode="automatic")
 
     third = await client.put(f"/api/v1/evals/{eval_id}/policy-gate", json={"action": "warn"}, headers=env.headers)
     assert third.status_code == 200, third.text
     body3 = third.json()
     assert body3["version"] == 3
-    assert body3["pre_version_raw"] == {"action": "block", "evaluation_mode": "automatic"}
+    assert body3["pre_version_raw"] == _expected_pre_version_raw(action="block", evaluation_mode="automatic")
 
     # DB state mirrors the API surface
     rows = await _load_gates(db_engine, env.org_id, eval_id, live_only=True)
