@@ -668,6 +668,11 @@ describe('LifecycleMapList pagination', () => {
   })
 })
 
+/** The native `close` event is queued as a task (see the jsdom dialog shim). */
+function flushCloseEvent(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 describe('LifecycleMapList create dialog', () => {
   it('opens create dialog when New Map button is clicked', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
@@ -794,8 +799,9 @@ describe('LifecycleMapList create dialog', () => {
     expect(cancelBtn).toBeDefined()
     await cancelBtn!.trigger('click')
     // The native close event is queued (shim models the browser), so the
-    // @close handler that unmounts the v-if branch lands a tick later.
+    // @close handler that unmounts the v-if branch lands a task later.
     await flushPromises()
+    await flushCloseEvent()
 
     // Dialog should be closed (no longer shows "Create Lifecycle Map")
     expect(wrapper.text()).not.toContain('Create Lifecycle Map')
@@ -815,6 +821,7 @@ describe('LifecycleMapList create dialog', () => {
 
     focused!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await flushPromises()
+    await flushCloseEvent()
 
     expect(dialogEl.open).toBe(false)
     expect(wrapper.text()).not.toContain('Create Lifecycle Map')
@@ -840,6 +847,7 @@ describe('LifecycleMapList create dialog', () => {
     // A click whose target is the dialog itself is a ::backdrop click.
     await dialog.trigger('click')
     await flushPromises()
+    await flushCloseEvent()
 
     expect((dialog.element as HTMLDialogElement).open).toBe(false)
     expect(wrapper.text()).not.toContain('Create Lifecycle Map')
@@ -878,20 +886,33 @@ describe('LifecycleMapList create dialog', () => {
     trigger.remove()
   })
 
-  it('unmounts safely while the create dialog is open', async () => {
+  it('unmounts safely while the create dialog is open and remounts cleanly', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
-    const wrapper = mount(LifecycleMapList, {
-      attachTo: document.body,
-      global: {
-        plugins: [i18n],
-        stubs: { PageHeader: true, FilterBar: true, ErrorAlert: true, Button: true },
-      },
-    })
+    const mountList = () =>
+      mount(LifecycleMapList, {
+        attachTo: document.body,
+        global: {
+          plugins: [i18n],
+          stubs: { PageHeader: true, FilterBar: true, ErrorAlert: true, Button: true },
+        },
+      })
+
+    const wrapper = mountList()
     await flushPromises()
     await wrapper.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
     await wrapper.vm.$nextTick()
     expect((wrapper.find('dialog').element as HTMLDialogElement).open).toBe(true)
     expect(() => wrapper.unmount()).not.toThrow()
+    expect(document.querySelector('dialog')).toBeNull()
+
+    // A fresh instance must still open its dialog — an unmount that left modal
+    // state or a close handler behind would break this mount.
+    const remounted = mountList()
+    await flushPromises()
+    await remounted.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
+    await remounted.vm.$nextTick()
+    expect((remounted.find('dialog').element as HTMLDialogElement).open).toBe(true)
+    remounted.unmount()
   })
 
   it('shows error when create fails', async () => {

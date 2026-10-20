@@ -36,6 +36,11 @@ function makePort(overrides: Partial<ParameterPort> = {}): ParameterPort {
   }
 }
 
+/** The native `close` event is queued as a task (see the jsdom dialog shim). */
+function flushCloseEvent(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 function mountFlow(ports: ParameterPort[] = [makePort()]) {
   return mount(PublishCompositeFlow, {
     props: { compositeId: 'comp-1', ports },
@@ -238,6 +243,7 @@ describe('PublishCompositeFlow', () => {
     expect(dialog.attributes('role')).toBeUndefined()
     expect((dialog.element as HTMLDialogElement).open).toBe(true)
     await dialog.trigger('click')
+    await flushCloseEvent()
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
@@ -294,10 +300,18 @@ describe('PublishCompositeFlow', () => {
     trigger.remove()
   })
 
-  it('unmounts safely while the modal is open', async () => {
+  it('unmounts safely while the modal is open and remounts cleanly', async () => {
     const wrapper = mountFlow()
     await flushPromises()
     expect((wrapper.find('dialog').element as HTMLDialogElement).open).toBe(true)
     expect(() => wrapper.unmount()).not.toThrow()
+    expect(document.querySelector('dialog')).toBeNull()
+
+    // A fresh instance must still open its modal — an unmount that left modal
+    // state behind would break this mount.
+    const remounted = mountFlow()
+    await flushPromises()
+    expect((remounted.find('dialog').element as HTMLDialogElement).open).toBe(true)
+    remounted.unmount()
   })
 })

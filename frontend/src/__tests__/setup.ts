@@ -93,12 +93,13 @@ if (dialogPrototype && typeof dialogPrototype.showModal !== 'function') {
     this.removeAttribute('open')
     const restore = returnFocus.get(this)
     returnFocus.delete(this)
-    // Browsers queue the `close` event rather than firing it synchronously
-    // from close(); model that so a handler that toggles render state cannot
-    // pass only because jsdom was synchronous.
-    queueMicrotask(() => {
+    // Browsers queue the `close` event as a TASK rather than firing it
+    // synchronously from close(); model that with setTimeout so a handler that
+    // toggles render state cannot pass only because jsdom was synchronous or
+    // flushed microtasks sooner than a browser would.
+    setTimeout(() => {
       this.dispatchEvent(new Event('close'))
-    })
+    }, 0)
     if (restore?.isConnected) restore.focus()
   }
 }
