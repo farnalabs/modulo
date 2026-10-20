@@ -959,10 +959,12 @@ def test_node_deadline_guidance_states_the_observable_not_an_assumed_cause():
     assert "half-alive" not in spec.guidance
     assert "timeout_seconds" in spec.guidance
     assert "deadline_triage" in spec.guidance
-    # The per-attempt tail is a SANDBOX-only artefact — the guidance must not
-    # claim every triage entry carries one (run-level entries never do).
+    # Triage is CONDITIONAL: a sandbox attempt may retain an envelope, a
+    # run-level entry may carry the attempt count — but not every
+    # terminalisation writes one, so the prose must not assert availability.
     assert "SANDBOX" in spec.guidance
     assert "run_attempt_count" in spec.guidance
+    assert "may be empty" in spec.guidance
     # The classification contract is unchanged.
     assert spec.error_class == "node"
     assert spec.retryable is False

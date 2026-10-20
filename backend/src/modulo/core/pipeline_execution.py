@@ -2034,8 +2034,9 @@ async def _fail_overdue_node(
         error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
         error_detail=(
             f"Node '{node_id}' did not complete within its configured timeout_seconds "
-            f"({_timeout}s) — node-deadline watchdog; the cause is carried by the "
-            "run's deadline_triage fields, not asserted here"
+            f"({_timeout}s) — node-deadline watchdog ended the dispatch. The cause is "
+            "not asserted here; retained deadline_triage evidence is conditional, not "
+            "guaranteed."
         ),
     )
 

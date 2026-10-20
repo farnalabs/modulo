@@ -21,6 +21,7 @@ The age-gate wiring is covered in
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -324,6 +325,27 @@ async def test_writer_is_bounded_by_a_client_side_timeout() -> None:
     assert session.aborted is False
 
 
+async def test_writer_propagates_cancellation() -> None:
+    """Cancellation is not a triage failure: it must propagate, never be
+    swallowed as a best-effort miss."""
+    session = _writer_session(SimpleNamespace(node_attempt_count=1))
+
+    async def _cancelled_read(sess: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
+        raise asyncio.CancelledError
+
+    with (
+        patch("modulo.db.crud.run_node_outputs.read_run_markers", _cancelled_read),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await ch.persist_terminal_triage_marker(
+            session,  # type: ignore[arg-type]
+            run_id=_RUN,
+            organisation_id=_ORG,
+            error_code="no_progress",
+            reason=ch._TERMINAL_TRIAGE_REASON_AGE_BOUND,
+        )
+
+
 async def test_writer_preserves_concurrently_written_markers() -> None:
     """The read and the write share one savepoint under the run-row lock, so
     the merge sees (and re-sends) another writer's key rather than deleting it
@@ -491,9 +513,8 @@ def test_worker_lost_code_is_the_registry_constant() -> None:
     assert ch._TERMINAL_TRIAGE_REASON_WORKER_LOST == "executor lost (worker handoff)"
 
 
-async def test_worker_lost_triage_helper_sets_rls_and_delegates_the_reason() -> None:
-    """The helper opens its own RLS-scoped session and delegates with the
-    exact ``harness.worker_lost`` registry spelling and the handoff reason."""
+def _worker_lost_factory() -> tuple[MagicMock, AsyncMock]:
+    """The ``async_sessionmaker`` double the worker-lost helper opens."""
     session = AsyncMock()
 
     class _Begin:
@@ -507,7 +528,13 @@ async def test_worker_lost_triage_helper_sets_rls_and_delegates_the_reason() -> 
     factory_cm = MagicMock()
     factory_cm.__aenter__ = AsyncMock(return_value=session)
     factory_cm.__aexit__ = AsyncMock(return_value=False)
-    factory = MagicMock(return_value=factory_cm)
+    return MagicMock(return_value=factory_cm), session
+
+
+async def test_worker_lost_triage_helper_sets_rls_and_delegates_the_reason() -> None:
+    """The helper opens its own RLS-scoped session and delegates with the
+    exact ``harness.worker_lost`` registry spelling and the handoff reason."""
+    factory, _session = _worker_lost_factory()
     writer = AsyncMock(return_value=True)
     rls = AsyncMock()
 
@@ -529,3 +556,46 @@ async def test_worker_lost_triage_helper_sets_rls_and_delegates_the_reason() -> 
     assert kwargs["reason"] == "executor lost (worker handoff)"
     assert kwargs["run_id"] == _RUN
     assert kwargs["organisation_id"] == _ORG
+
+
+async def test_worker_lost_triage_helper_swallows_a_generic_failure(caplog: pytest.LogCaptureFixture) -> None:
+    """Triage is best-effort: a DB failure while writing the marker is logged
+    and swallowed — it must never fail the terminal write that already
+    committed."""
+    factory, session = _worker_lost_factory()
+    writer = AsyncMock(return_value=True)
+    caplog.set_level(logging.WARNING, logger="modulo.core.pipeline_execution")
+
+    with (
+        patch.object(pe, "async_sessionmaker", MagicMock(return_value=factory)),
+        patch.object(pe, "set_rls_org", AsyncMock(side_effect=RuntimeError("db down"))),
+        patch.object(ch, "persist_terminal_triage_marker", writer),
+    ):
+        result = await pe._persist_worker_lost_triage(
+            MagicMock(),
+            "00000000-0000-0000-0000-000000000002",
+            "00000000-0000-0000-0000-000000000001",
+        )
+
+    assert result is None
+    writer.assert_not_awaited()
+    # The failure is observable, not silently dropped.
+    assert "pipeline_execution.worker_lost_triage_failed" in caplog.text
+    assert session.begin.called
+
+
+async def test_worker_lost_triage_helper_propagates_cancellation() -> None:
+    """Cancellation is not a triage failure: it must propagate, never be
+    swallowed as a best-effort miss."""
+    factory, _session = _worker_lost_factory()
+
+    with (
+        patch.object(pe, "async_sessionmaker", MagicMock(return_value=factory)),
+        patch.object(pe, "set_rls_org", AsyncMock(side_effect=asyncio.CancelledError)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await pe._persist_worker_lost_triage(
+            MagicMock(),
+            "00000000-0000-0000-0000-000000000002",
+            "00000000-0000-0000-0000-000000000001",
+        )
