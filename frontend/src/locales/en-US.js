@@ -717,6 +717,80 @@ export default {
       "destination": "Destination",
       "attempts": "Attempts"
     },
+    "SettingsNotificationsView": {
+      "title": "Notification Preferences",
+      "subtitle": "Choose which in-app notifications you receive. These preferences apply to your account.",
+      "categories_heading": "In-app notification categories",
+      "categories_help": "Turn a category off to stop receiving those in-app notifications. Changes are saved as you make them.",
+      "no_categories": "No notification categories are available.",
+      "unknown_category": "Other notification",
+      "toggle_aria_label": "Notifications for {category}",
+      "dashboard_level_heading": "Dashboard notifications",
+      "dashboard_level_summary": "Control which notifications appear on your dashboard.",
+      "dashboard_level_label": "Dashboard minimum level",
+      "dashboard_level_help": "Notifications below this level are hidden from your dashboard panel and unread badge.",
+      "saving": "Saving...",
+      "saving_row": "Saving...",
+      "load_failed": "Could not load notification preferences: {message}",
+      "save_failed": "Could not save your change: {message}",
+      "levels": {
+        "debug": "Debug",
+        "info": "Info",
+        "warning": "Warning",
+        "error": "Error"
+      },
+      "categories": {
+        "capacity": {
+          "backpressure": "Capacity backpressure",
+          "queue_critical": "Queue critical",
+          "queue_notice": "Queue notice",
+          "queue_warning": "Queue warning",
+          "recovered": "Capacity recovered",
+          "redis_pressure": "Redis pressure",
+          "saturation": "Capacity saturation"
+        },
+        "costs": {
+          "circuit_breaker_tripped": "Cost circuit breaker tripped"
+        },
+        "eval": {
+          "blocked": "Eval blocked",
+          "regression": "Eval regression"
+        },
+        "feedback": {
+          "pending": "Feedback pending"
+        },
+        "guardrails": {
+          "enforcement_gap": "Guardrail enforcement gap",
+          "kill_switch": "Guardrail kill switch",
+          "unexpected_skip": "Guardrail unexpected skip"
+        },
+        "hitl": {
+          "approve_sweep": "HITL approve sweep",
+          "awaiting": "HITL awaiting review",
+          "claim_expired": "HITL claim expired",
+          "deadline_warning": "HITL deadline warning",
+          "gate_removal_denied": "HITL gate removal denied",
+          "gate_removed": "HITL gate removed",
+          "overdue": "HITL overdue"
+        },
+        "provider": {
+          "failure": "Model provider authentication or billing failure"
+        },
+        "run": {
+          "budget_exceeded": "Run budget exceeded",
+          "failed": "Run failed",
+          "stalled": "Run stalled"
+        },
+        "system": {
+          "announcement": "System announcement"
+        },
+        "triggers": {
+          "auto_deactivated": "Trigger auto-deactivated",
+          "auto_paused": "Trigger auto-paused",
+          "streak_alert": "Trigger streak alert"
+        }
+      }
+    },
     "MyProfileView": {
       "new_password": "New Password",
       "current_password": "Current Password",
@@ -4520,6 +4594,7 @@ export default {
       "item_observability": "Observability",
       "item_evidence": "Evidence",
       "item_email_settings": "Email",
+      "item_notification_preferences": "Notification Preferences",
       "item_error_forwarders": "Error Forwarders",
       "item_settings_guardrails": "Guardrails",
       "item_browser_monitoring": "Browser Monitoring",
