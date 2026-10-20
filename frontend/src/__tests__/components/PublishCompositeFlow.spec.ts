@@ -215,19 +215,43 @@ describe('PublishCompositeFlow', () => {
     expect(wrapper.text()).toContain('Name & Description')
   })
 
-  it('closes via backdrop click', async () => {
+  it('closes via a backdrop click on the modal dialog', async () => {
     const wrapper = mountFlow()
-    await wrapper.find('.fixed.inset-0').trigger('click')
-    expect(wrapper.emitted('close')).toHaveLength(1)
-  })
-
-  it('closes on Escape (native <dialog> modal affordance)', async () => {
-    const wrapper = mountFlow()
-    // Web:S6819: the backdrop is a native <dialog>, not a div with role=button.
+    await flushPromises()
+    // Web:S6819: the backdrop is the native <dialog> (opened with showModal),
+    // not a div with role=button. A click on ::backdrop targets the dialog.
     const dialog = wrapper.find('dialog')
     expect(dialog.exists()).toBe(true)
     expect(dialog.attributes('role')).toBeUndefined()
-    await dialog.trigger('keydown', { key: 'Escape' })
+    expect((dialog.element as HTMLDialogElement).open).toBe(true)
+    await dialog.trigger('click')
     expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+
+  it('closes on Escape dispatched from the focused element inside the modal dialog', async () => {
+    const wrapper = mount(PublishCompositeFlow, {
+      props: { compositeId: 'comp-1', ports: [makePort()] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const dialog = wrapper.find('dialog')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.attributes('role')).toBeUndefined()
+    const dialogEl = dialog.element as HTMLDialogElement
+    // A real modal dialog is open and owns focus — the premise the Escape
+    // assertion depends on. (`showModal()` is implemented by the jsdom shim.)
+    expect(dialogEl.open).toBe(true)
+    const focused = document.activeElement as HTMLElement | null
+    expect(focused).not.toBeNull()
+    expect(dialogEl.contains(focused)).toBe(true)
+
+    focused!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+
+    // The dialog actually closed, rather than merely emitting a close event.
+    expect(dialogEl.open).toBe(false)
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    wrapper.unmount()
   })
 })

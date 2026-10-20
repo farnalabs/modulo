@@ -95,15 +95,15 @@
     <!-- Save as composite dialog -->
     <dialog
       v-if="showSaveAsComposite"
-      open
-      aria-modal="true"
-      :aria-label="$t('views.CompositeEditorView.close_dialog')"
-      class="fixed inset-0 z-50 m-0 flex max-h-none max-w-none items-center justify-center border-0 bg-black/50 p-0 text-foreground"
-      @click.self="showSaveAsComposite = false"
-      @keydown.escape="showSaveAsComposite = false"
+      ref="saveAsDialogRef"
+      aria-labelledby="composite-save-as-title"
+      class="w-full max-w-lg border-0 bg-transparent p-0 text-foreground backdrop:bg-black/50"
+      @click.self="closeSaveAsDialog"
+      @keydown.escape="closeSaveAsDialog"
+      @close="showSaveAsComposite = false"
     >
       <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-base font-semibold">{{ $t('views.CompositeEditorView.save_as_composite') }}</h3>
+        <h3 id="composite-save-as-title" class="mb-4 text-base font-semibold">{{ $t('views.CompositeEditorView.save_as_composite') }}</h3>
         <div class="space-y-4">
           <div>
             <label for="compositeeditorview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.CompositeEditorView.name') }}</label>
@@ -154,7 +154,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow } from '@vue-flow/core'
@@ -194,11 +194,33 @@ const rawEdges = ref<any[]>([])
 const ports = ref<ParameterPort[]>([])
 const showPortPanel = ref(true)
 const showSaveAsComposite = ref(false)
+const saveAsDialogRef = ref<HTMLDialogElement | null>(null)
 const showPublishFlow = ref(false)
 const saveAsName = ref('')
 const saveAsDescription = ref('')
 const saveAsError = ref<string | null>(null)
 const saving = ref(false)
+
+// A bare `<dialog open>` keeps the UA's fit-content sizing, so `fixed inset-0`
+// never stretches it and the backdrop is unreachable. showModal() makes it a
+// real modal: viewport-sized layout, an inert background and native Escape.
+// flush:'post' waits for the v-if branch to render the element.
+watch(
+  showSaveAsComposite,
+  (isOpen) => {
+    const dialog = saveAsDialogRef.value
+    if (isOpen) {
+      if (dialog && !dialog.open) dialog.showModal()
+    } else if (dialog?.open) {
+      dialog.close()
+    }
+  },
+  { immediate: true, flush: 'post' },
+)
+
+function closeSaveAsDialog(): void {
+  saveAsDialogRef.value?.close()
+}
 
 const nodeTypes = { agent: 'agent', manual: 'manual', composite: 'composite', dispatch: 'dispatch' }
 

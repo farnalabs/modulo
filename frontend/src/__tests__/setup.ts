@@ -57,6 +57,36 @@ if (typeof (globalThis.CSS as { escape?: unknown }).escape !== 'function') {
   }
 }
 
+// jsdom does not implement the <dialog> element's modal methods
+// (jsdom#3294). Production components use the native showModal()/close()
+// pair for real viewport-sized, inert, focus-containing modal dialogs, so the
+// test environment needs a spec-shaped implementation: showModal() opens the
+// dialog and moves focus into it (as a browser does), close() removes the
+// open attribute and fires the native `close` event. This keeps the Escape
+// tests honest — they can dispatch keydown from the focused element inside
+// the dialog and assert the dialog actually closed.
+const dialogPrototype = globalThis.HTMLDialogElement?.prototype
+if (dialogPrototype && typeof dialogPrototype.showModal !== 'function') {
+  dialogPrototype.showModal = function (this: HTMLDialogElement): void {
+    if (this.open) {
+      throw new DOMException('The dialog is already open', 'InvalidStateError')
+    }
+    this.setAttribute('open', '')
+    const focusTarget =
+      this.querySelector<HTMLElement>('[autofocus]') ??
+      this.querySelector<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      )
+    focusTarget?.focus()
+  }
+
+  dialogPrototype.close = function (this: HTMLDialogElement): void {
+    if (!this.open) return
+    this.removeAttribute('open')
+    this.dispatchEvent(new Event('close'))
+  }
+}
+
 const i18n = createI18n({
   legacy: false,
   locale: 'en-US',

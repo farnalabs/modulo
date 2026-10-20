@@ -695,6 +695,7 @@ describe('LifecycleMapList create dialog', () => {
   it('closes create dialog when Cancel is clicked', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
     const wrapper = mount(LifecycleMapList, {
+      attachTo: document.body,
       global: {
         plugins: [i18n],
         stubs: {
@@ -719,15 +720,25 @@ describe('LifecycleMapList create dialog', () => {
     // Dialog should be closed (no longer shows "Create Lifecycle Map")
     expect(wrapper.text()).not.toContain('Create Lifecycle Map')
 
-    // Reopen and dismiss with Escape (native <dialog> modal affordance).
+    // Reopen: the dialog is a real modal (showModal), so focus lands inside it
+    // and Escape dispatched from the focused element closes it.
     await wrapper.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
     await wrapper.vm.$nextTick()
     const dialog = wrapper.find('dialog')
     expect(dialog.exists()).toBe(true)
     expect(dialog.attributes('role')).toBeUndefined()
-    await dialog.trigger('keydown', { key: 'Escape' })
+    const dialogEl = dialog.element as HTMLDialogElement
+    expect(dialogEl.open).toBe(true)
+    const focused = document.activeElement as HTMLElement | null
+    expect(focused).not.toBeNull()
+    expect(dialogEl.contains(focused)).toBe(true)
+
+    focused!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await wrapper.vm.$nextTick()
+
+    expect(dialogEl.open).toBe(false)
     expect(wrapper.text()).not.toContain('Create Lifecycle Map')
+    wrapper.unmount()
   })
 
   it('shows error when create fails', async () => {
@@ -902,11 +913,16 @@ describe('LifecycleMapList card content', () => {
     await flushPromises()
 
     const card = wrapper.find('[data-testid="lifecycle-map-list-card"]')
-    // Web:S6819: the card no longer carries role=button/tabindex; the native
-    // button is the keyboard-activatable target.
+    // Web:S6819: the card no longer carries role=button/tabindex; the title is
+    // a native button inside the restored <h3> heading, in the tab order.
     expect(card.attributes('role')).toBeUndefined()
     expect(card.attributes('tabindex')).toBeUndefined()
-    await card.find('button').trigger('click')
+    expect(card.find('h3').exists()).toBe(true)
+    const titleButton = card.find('h3 button')
+    expect(titleButton.exists()).toBe(true)
+    expect(titleButton.attributes('tabindex')).toBeUndefined()
+    expect((titleButton.element as HTMLButtonElement).disabled).toBe(false)
+    await titleButton.trigger('keydown', { key: 'Enter' })
     expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
   })
 

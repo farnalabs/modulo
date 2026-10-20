@@ -101,8 +101,9 @@ function editorPayload() {
   }
 }
 
-function mountView() {
+function mountView(attachToBody = false) {
   return mount(CompositeEditorView, {
+    ...(attachToBody ? { attachTo: document.body } : {}),
     global: {
       stubs: {
         BackLink: { template: '<div />' },
@@ -366,8 +367,8 @@ describe('CompositeEditorView', () => {
     wrapper.unmount()
   })
 
-  it('save-as dialog is a native <dialog> and closes on Escape', async () => {
-    const wrapper = mountView()
+  it('save-as dialog is a real modal <dialog> and closes on Escape from the focused field', async () => {
+    const wrapper = mountView(true)
     await flush()
 
     const saveAsBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Save as composite')!
@@ -377,9 +378,17 @@ describe('CompositeEditorView', () => {
     const dialog = wrapper.find('dialog')
     expect(dialog.exists()).toBe(true)
     expect(dialog.attributes('role')).toBeUndefined()
+    const dialogEl = dialog.element as HTMLDialogElement
+    expect(dialogEl.open).toBe(true)
+    const focused = document.activeElement as HTMLElement | null
+    expect(focused).not.toBeNull()
+    expect(dialogEl.contains(focused)).toBe(true)
 
-    await dialog.trigger('keydown', { key: 'Escape' })
+    focused!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await nextTick()
+    await nextTick()
+
+    expect(dialogEl.open).toBe(false)
     expect(wrapper.find('#compositeeditorview-field-2').exists()).toBe(false)
     wrapper.unmount()
   })

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, onMounted, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import { useApi } from "../../../composables/useApi";
 import type { ParameterPort } from "../../../types/pipeline";
@@ -108,14 +108,30 @@ function portRef(port: { name: string }) {
 function goToLibrary() {
   router.push({ name: "library" });
 }
+
+const dialogRef = ref<HTMLDialogElement | null>(null);
+
+// The flow is mounted only while the parent wants it open, so opening as a
+// real modal is a mount-time action. showModal() gives viewport-size layout,
+// real inertness, focus containment and native Escape — none of which a bare
+// `<dialog open>` has.
+onMounted(async () => {
+  await nextTick();
+  dialogRef.value?.showModal();
+});
+
+function closeDialog() {
+  dialogRef.value?.close();
+}
 </script>
 
 <template>
   <dialog
-    open
-    class="fixed inset-0 z-50 m-0 flex max-h-none max-w-none items-center justify-center border-0 bg-black/50 p-0 text-foreground"
-    @click.self="emit('close')"
-    @keydown.escape="emit('close')"
+    ref="dialogRef"
+    class="w-full max-w-lg border-0 bg-transparent p-0 text-foreground backdrop:bg-black/50"
+    @click.self="closeDialog"
+    @keydown.escape="closeDialog"
+    @close="emit('close')"
   >
     <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
       <!-- Step indicator -->

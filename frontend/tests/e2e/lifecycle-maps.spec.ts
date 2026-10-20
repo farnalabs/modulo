@@ -147,8 +147,10 @@ test.describe('Lifecycle Maps', { tag: '@regression' }, () => {
     await page.goto('/lifecycle-maps')
     await page.getByTestId('lifecycle-map-list-new').click()
 
-    const dialog = page.locator('div.fixed.inset-0', { hasText: 'Create Lifecycle Map' })
-    await expect(dialog.getByText('Create Lifecycle Map')).toBeVisible()
+    // The dialog is a native <dialog> opened with showModal(), named by its
+    // aria-labelledby heading — locate it by role, not by a backdrop div.
+    const dialog = page.getByRole('dialog', { name: 'Create Lifecycle Map' })
+    await expect(dialog).toBeVisible()
 
     await dialog.locator('#lifecyclemaplist-field-2').fill('Delivery Lifecycle')
     await dialog.getByRole('button', { name: 'Create', exact: true }).click()

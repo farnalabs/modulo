@@ -74,11 +74,14 @@
           data-testid="lifecycle-map-list-card"
         >
           <div class="flex items-start justify-between gap-2 mb-2">
-            <button
-              type="button"
-              class="min-w-0 truncate text-left text-base font-medium text-foreground"
-              @click.stop="openMap(m)"
-            >{{ m.name }}</button>
+            <h3 class="min-w-0">
+              <button
+                type="button"
+                class="max-w-full truncate text-left text-base font-medium text-foreground"
+                @click.stop="openMap(m)"
+                @keydown.enter.prevent.stop="openMap(m)"
+              >{{ m.name }}</button>
+            </h3>
             <div class="flex shrink-0 items-center gap-1">
               <span class="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                 v{{ m.current_version }}
@@ -148,14 +151,15 @@
     <!-- Create dialog -->
     <dialog
       v-if="showCreateDialog"
-      open
-      :aria-label="$t('views.LifecycleMapList.create_lifecycle_map')"
-      class="fixed inset-0 z-50 m-0 flex max-h-none max-w-none items-center justify-center border-0 bg-black/50 p-0 text-foreground"
-      @click.self="showCreateDialog = false"
-      @keydown.escape="showCreateDialog = false"
+      ref="createDialogRef"
+      aria-labelledby="lifecycle-map-create-title"
+      class="w-full max-w-md border-0 bg-transparent p-0 text-foreground backdrop:bg-black/50"
+      @click.self="closeCreateDialog"
+      @keydown.escape="closeCreateDialog"
+      @close="showCreateDialog = false"
     >
       <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-base font-semibold">{{ $t('views.LifecycleMapList.create_lifecycle_map') }}</h3>
+        <h3 id="lifecycle-map-create-title" class="mb-4 text-base font-semibold">{{ $t('views.LifecycleMapList.create_lifecycle_map') }}</h3>
         <div class="space-y-4">
           <div>
             <label for="lifecyclemaplist-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.LifecycleMapList.name') }}</label>
@@ -204,7 +208,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Clock, Pencil, Plus, Star, User } from '@lucide/vue'
 import PageHeader from '../../components/shared/PageHeader.vue'
@@ -285,10 +289,32 @@ function editMap(m: LifecycleMapSummary): void {
 }
 
 const showCreateDialog = ref(false)
+const createDialogRef = ref<HTMLDialogElement | null>(null)
 const newName = ref('')
 const newDescription = ref('')
 const creating = ref(false)
 const createError = ref<string | null>(null)
+
+// A bare `<dialog open>` keeps the UA's fit-content sizing, so `fixed inset-0`
+// never stretches it. showModal() makes it a real modal: viewport-sized
+// layout, an inert background and native Escape, with focus moved into the
+// panel. flush:'post' waits for the v-if branch to render the element.
+watch(
+  showCreateDialog,
+  (isOpen) => {
+    const dialog = createDialogRef.value
+    if (isOpen) {
+      if (dialog && !dialog.open) dialog.showModal()
+    } else if (dialog?.open) {
+      dialog.close()
+    }
+  },
+  { immediate: true, flush: 'post' },
+)
+
+function closeCreateDialog(): void {
+  createDialogRef.value?.close()
+}
 
 function handleNewMap(): void {
   newName.value = ''
