@@ -1,6 +1,7 @@
 import { computed, reactive, readonly } from 'vue'
 import type { Ref } from 'vue'
 import type { AnalyticsEventType } from './productAnalyticsEvents'
+import { randomId } from '../lib/randomId'
 
 /**
  * Product analytics event capture composable (FAR-358).
@@ -43,22 +44,9 @@ interface AnalyticsEvent {
 const _buffer = reactive<AnalyticsEvent[]>([])
 let _flushTimer: ReturnType<typeof setInterval> | null = null
 let _eventIdCounter = 0
-const _sessionPrefix = _createSessionPrefix()
+const _sessionPrefix = randomId()
 let _consentFn: (() => boolean) | null = null
 let _visibilityHandler: (() => void) | null = null
-
-function _createSessionPrefix(): string {
-  const cryptoApi = globalThis.crypto
-  if (cryptoApi && typeof cryptoApi.randomUUID === 'function') {
-    return cryptoApi.randomUUID()
-  }
-  // Fallback for environments without randomUUID — use the CSPRNG, not Math.random.
-  if (cryptoApi && typeof cryptoApi.getRandomValues === 'function') {
-    const bytes = cryptoApi.getRandomValues(new Uint8Array(16))
-    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
-  }
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}` // NOSONAR: only when no CSPRNG exists
-}
 
 function _isConsented(): boolean {
   if (!_consentFn) return false
