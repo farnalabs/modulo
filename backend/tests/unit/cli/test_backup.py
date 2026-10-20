@@ -1359,7 +1359,9 @@ class TestRestoreCli:
 
     def test_restore_missing_manifest(self, tmp_path: Path) -> None:
         runner = CliRunner()
-        result = runner.invoke(cli, ["restore", str(tmp_path), "--yes"])
+        # The app role URL is resolved before the manifest is read, so it must
+        # be supplied explicitly (the ambient test DATABASE_URL is sqlite).
+        result = runner.invoke(cli, ["restore", str(tmp_path), "--yes", "--app-db-url", _TEST_APP_DB_URL])
 
         assert result.exit_code != 0
         assert "backup-info.json not found" in result.output
@@ -1746,6 +1748,10 @@ class TestRestoreIntegrity:
     @patch("modulo.cli.backup.get_settings")
     def test_restore_fails_on_checksum_mismatch(self, mock_settings: MagicMock, tmp_path: Path) -> None:
         mock_settings.return_value.fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        # The app role URL is resolved from configuration BEFORE the archive
+        # checks, so the patched settings need a real string (a MagicMock
+        # attribute is refused and would mask the checksum assertion).
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
 
         db_sql = tmp_path / "database.sql"
         db_sql.write_text("-- SQL", encoding="utf-8")
@@ -1776,6 +1782,7 @@ class TestRestoreIntegrity:
     @patch("modulo.cli.backup.get_settings")
     def test_restore_fails_on_missing_manifest_file(self, mock_settings: MagicMock, tmp_path: Path) -> None:
         mock_settings.return_value.fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
 
         (tmp_path / "database.sql").write_text("-- SQL", encoding="utf-8")
         manifest = {

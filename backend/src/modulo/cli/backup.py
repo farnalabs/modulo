@@ -2,8 +2,9 @@
 
 Usage:
   modulo backup [--db-url <url>] [--output-dir <path>] [--data-dir <path>] [--include-secrets]
-  modulo restore <backup-dir> [--db-url <url>] [--yes] [--previous-fernet-key <key>] [--dry-run]
-               [--data-dir <path>] [--replace-cluster]
+  modulo restore <backup-dir> [--db-url <url>] [--app-db-url <url>] [--yes]
+               [--previous-fernet-key <key>] [--dry-run] [--data-dir <path>]
+               [--replace-cluster]
 
 Data-safety semantics (FAR-672 / ADR 031 Decision 6/7):
 
@@ -32,10 +33,13 @@ Data-safety semantics (FAR-672 / ADR 031 Decision 6/7):
   uninitialized targets are exempt — disaster recovery and machine
   migration must keep working.
 * After the database restore, the promoted bootstrap/bootstrap_role posture
-  path re-runs, and the Postgres collation-version table is checked:
-  an INCOMPATIBLE collation-version drift (different libc family, e.g.
-  the compose musl -> native glibc path) HARD REFUSES the restore, while
-  a compatible-but-older same-family drift warns and proceeds.
+  path re-runs for the APPLICATION role — resolved from ``--app-db-url``, else
+  ``DATABASE_URL``, never from ``--db-url`` (the admin connection) — and a
+  posture failure FAILS the restore instead of warning. The Postgres
+  collation-version table is checked too: an INCOMPATIBLE collation-version
+  drift (different libc family, e.g. the compose musl -> native glibc path)
+  HARD REFUSES the restore, while a compatible-but-older same-family drift
+  warns and proceeds.
 """
 
 from __future__ import annotations
@@ -1145,14 +1149,30 @@ def _url_role(url: str) -> str:
 _APP_URL_PREFIXES = ("postgresql+asyncpg://", "postgresql+psycopg://", "postgresql://", "postgres://")
 
 
+def _url_display(url: str) -> str:
+    """A credential-free description of a connection URL for error messages.
+
+    Only the scheme and the role (username) are echoed — never the userinfo,
+    so a password embedded in the URL cannot reach stderr or the restore log
+    (``click.ClickException`` messages are printed and logged verbatim).
+    """
+    try:
+        parts = urllib.parse.urlsplit(url)
+        role = urllib.parse.unquote(parts.username or "")
+    except ValueError:
+        return "<unparseable URL>"
+    scheme = parts.scheme or "<no scheme>"
+    return f"{scheme}:// (role {role!r})" if role else f"{scheme}://"
+
+
 def _as_asyncpg_url(url: str) -> str:
     """Normalise a Postgres URL to the ``postgresql+asyncpg://`` SQLAlchemy form."""
     for prefix in _APP_URL_PREFIXES:
         if url.startswith(prefix):
             return "postgresql+asyncpg://" + url[len(prefix) :]
     raise click.ClickException(
-        f"Cannot use {url!r} as the application connection URL — expected a postgresql:// URL. "
-        "Pass --app-db-url with the app role's Postgres URL."
+        f"Cannot use {_url_display(url)} as the application connection URL — expected a "
+        "postgresql:// URL. Pass --app-db-url with the app role's Postgres URL."
     )
 
 
@@ -1171,8 +1191,9 @@ def _resolve_restore_app_url(settings: Any, app_db_url: str | None) -> str:
     source = app_db_url or settings.database_url
     if not isinstance(source, str) or not source:
         raise click.ClickException(
-            "Cannot resolve the application role for the restore: neither --app-db-url nor "
-            "DATABASE_URL is set. Pass --app-db-url with the app role's connection URL."
+            "Cannot resolve the application role for the restore: --app-db-url was not given "
+            "and DATABASE_URL is unset or empty. Pass --app-db-url with the app role's "
+            "connection URL."
         )
     return _as_asyncpg_url(source)
 
@@ -1387,18 +1408,24 @@ class _RestoreOptions:
 def _run_restore(opts: _RestoreOptions) -> None:
     """Execute a restore from ``opts`` — the CLI command's whole body.
 
-    Phases, in order: validate targets (verify-before-wipe checks, then the
-    --dry-run preview short-circuit), the pre-restore safety dump, the
-    database-cluster restore (SQL dump, checkpoint JSON exports, credential
-    re-encryption, collation drift check), then launcher data-dir adoption
-    and the promoted bootstrap role-posture re-run. The app role is resolved
-    from configuration (``--app-db-url``, else ``DATABASE_URL``) — never from
-    the restore target URL — and a posture failure FAILS the restore. Any
-    failure is logged, echoed, and re-raised as a ClickException; a data-dir
-    lock taken before the phases is always released.
+    Both connection URLs are resolved first (the target from ``--db-url`` /
+    settings, the APP role from ``--app-db-url`` / ``DATABASE_URL``), so a
+    configuration typo fails BEFORE anything destructive happens. Then, in
+    order: validate targets (verify-before-wipe checks, then the --dry-run
+    preview short-circuit), the pre-restore safety dump, the database-cluster
+    restore (SQL dump, checkpoint JSON exports, credential re-encryption,
+    collation drift check), launcher data-dir adoption, and the promoted
+    bootstrap role-posture re-run. The app role is never derived from the
+    restore target URL, and a posture failure FAILS the restore. Any failure
+    is logged, echoed, and re-raised as a ClickException; a data-dir lock
+    taken before the phases is always released.
     """
     raw_url = _resolve_url(opts.db_url)
     settings = get_settings()
+    # Resolve the APPLICATION role URL up front. It is pure configuration
+    # (``--app-db-url`` / ``DATABASE_URL``), so a typo or an unset value must
+    # fail BEFORE the safety dump and the cluster wipe — never after them.
+    app_url = _resolve_restore_app_url(settings, opts.app_db_url)
     from modulo.launcher.env_safety import scrub_os_environment
 
     scrub_os_environment()
@@ -1426,7 +1453,6 @@ def _run_restore(opts: _RestoreOptions) -> None:
         _restore_data_dir(opts, manifest)
 
         admin_url = os.environ.get("DATABASE_ADMIN_URL") or raw_url
-        app_url = _resolve_restore_app_url(settings, opts.app_db_url)
         _ensure_restore_posture(admin_url, app_url)
 
         click.echo("\nRestore complete.")

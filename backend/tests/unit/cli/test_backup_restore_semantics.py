@@ -16,6 +16,7 @@ import contextlib
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import urlsplit
@@ -37,6 +38,10 @@ from modulo.launcher.state import LauncherState, load_state, save_state
 
 _FERNET_KEY = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 _RESTORE_OUTPUTS = "restore-outputs"
+# The app role URL is resolved BEFORE the archive is validated (FAR-2021), so
+# tests that exercise archive-level refusals with the ambient test settings
+# (whose DATABASE_URL is sqlite) must supply it explicitly.
+_APP_DB_URL = "postgresql://modulo_app:pw@127.0.0.1:5432/modulo"
 
 _FAKE_ARCHIVED_PAYLOAD = {"schema_version": 1, "postgres_port": 15432, "redis_port": 16379, "api_port": 18000}
 _DB_SQL_NAME = "database.sql"
@@ -592,6 +597,142 @@ def test_ensure_restore_posture_raises_typed_error_naming_the_check() -> None:
     assert "modulo_app" in excinfo.value.message
 
 
+def test_ensure_restore_posture_echoes_the_application_role_on_success(capsys: pytest.CaptureFixture[str]) -> None:
+    """FAR-2021: a SUCCESSFUL posture re-run says which role it configured."""
+    with patch("modulo.db.bootstrap_role.bootstrap_roles", AsyncMock()):
+        backup_mod._ensure_restore_posture(
+            "postgresql://modulo_admin:adminpw@127.0.0.1:5432/modulo",
+            "postgresql+asyncpg://modulo_app:apppw@127.0.0.1:5432/modulo",
+        )
+    out = capsys.readouterr().out
+    assert "modulo_app" in out
+    assert "Role posture re-verified via the promoted bootstrap path" in out
+
+
+def test_executed_restore_does_not_rewrap_a_posture_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-2021: ``_run_restore`` re-raises the posture error AS ITSELF.
+
+    Asserting only the CLI exit code cannot distinguish the typed,
+    remediation-carrying ``RestorePostureError`` from the generic handler
+    re-wrapping it in a bare ``ClickException`` — so call the body directly
+    and pin the exception type.
+    """
+    monkeypatch.delenv("DATABASE_ADMIN_URL", raising=False)
+    archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
+    with contextlib.ExitStack() as stack:
+        _enter_restore_patches(stack, lock=MagicMock())
+        stack.enter_context(
+            patch(
+                "modulo.cli.backup._ensure_restore_posture",
+                side_effect=RestorePostureError("Role-posture verification FAILED after the restore."),
+            )
+        )
+        opts = backup_mod._RestoreOptions(
+            backup_dir=archive,
+            db_url=None,
+            app_db_url=None,
+            yes=True,
+            previous_fernet_key=None,
+            dry_run=False,
+            data_dir=None,
+            replace_cluster=False,
+            no_safety_dump=False,
+        )
+        with pytest.raises(RestorePostureError):
+            backup_mod._run_restore(opts)
+
+
+def test_as_asyncpg_url_normalises_every_supported_prefix() -> None:
+    """FAR-2021: each accepted Postgres URL prefix normalises to asyncpg."""
+    for prefix in ("postgresql+asyncpg://", "postgresql+psycopg://", "postgresql://", "postgres://"):
+        assert backup_mod._as_asyncpg_url(f"{prefix}role:pw@db:5432/modulo") == (
+            "postgresql+asyncpg://role:pw@db:5432/modulo"
+        )
+
+
+def test_as_asyncpg_url_refuses_a_non_postgres_url_without_leaking_the_password() -> None:
+    """FAR-2021: a non-Postgres URL is refused, and the message is credential-free.
+
+    The refusal is echoed to stderr and logged by ``_run_restore``, so the
+    URL's password must never appear in it.
+    """
+    with pytest.raises(click.ClickException) as excinfo:
+        backup_mod._as_asyncpg_url("mysql://app_role:sup3r-s3cret@db:3306/modulo")
+    message = excinfo.value.message
+    assert "sup3r-s3cret" not in message
+    assert "mysql://" in message
+    assert "app_role" in message
+
+
+def test_as_asyncpg_url_describes_a_roleless_url_without_inventing_one() -> None:
+    """FAR-2021: a URL with no userinfo is described by scheme only."""
+    with pytest.raises(click.ClickException) as excinfo:
+        backup_mod._as_asyncpg_url("sqlite:///var/lib/modulo.db")
+    assert "sqlite://" in excinfo.value.message
+    assert "(role " not in excinfo.value.message
+
+
+def test_as_asyncpg_url_survives_an_unparseable_url() -> None:
+    """FAR-2021: a malformed URL is refused cleanly, not with a ValueError.
+
+    ``urlsplit`` raises on a bad IPv6 literal; the operator must still get the
+    remediation message rather than a raw traceback.
+    """
+    with pytest.raises(click.ClickException) as excinfo:
+        backup_mod._as_asyncpg_url("mysql://[::1:bad-port/modulo")
+    assert "<unparseable URL>" in excinfo.value.message
+
+
+def test_resolve_restore_app_url_falls_back_to_the_configured_database_url() -> None:
+    """FAR-2021: with no --app-db-url the settings DATABASE_URL is the source."""
+    settings = SimpleNamespace(database_url="postgresql+psycopg://modulo:pw@127.0.0.1:5432/modulo")
+    resolved = backup_mod._resolve_restore_app_url(settings, None)
+    assert resolved == "postgresql+asyncpg://modulo:pw@127.0.0.1:5432/modulo"
+
+
+def test_resolve_restore_app_url_prefers_the_explicit_app_db_url() -> None:
+    """FAR-2021: --app-db-url wins over the configured DATABASE_URL."""
+    settings = SimpleNamespace(database_url="postgresql://from_settings:pw@127.0.0.1:5432/modulo")
+    resolved = backup_mod._resolve_restore_app_url(settings, "postgres://modulo_app:apppw@127.0.0.1:5432/modulo")
+    assert resolved == "postgresql+asyncpg://modulo_app:apppw@127.0.0.1:5432/modulo"
+
+
+@pytest.mark.parametrize("configured", ["", None])
+def test_resolve_restore_app_url_refuses_a_missing_source(configured: Any) -> None:
+    """FAR-2021: an unset/empty DATABASE_URL is a refusal, not a silent default."""
+    settings = SimpleNamespace(database_url=configured)
+    with pytest.raises(click.ClickException, match="--app-db-url"):
+        backup_mod._resolve_restore_app_url(settings, None)
+
+
+def test_restore_validates_the_app_url_before_touching_the_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FAR-2021: an invalid app URL must fail BEFORE the safety dump / wipe."""
+    monkeypatch.delenv("DATABASE_ADMIN_URL", raising=False)
+    archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
+    restore_cluster = MagicMock()
+    safety_dump = MagicMock()
+    with contextlib.ExitStack() as stack:
+        _enter_restore_patches(stack, lock=MagicMock())
+        stack.enter_context(patch("modulo.cli.backup._restore_cluster", restore_cluster))
+        stack.enter_context(patch("modulo.cli.backup._take_safety_dump", safety_dump))
+        stack.enter_context(
+            patch(
+                "modulo.cli.backup.get_settings",
+                **{
+                    "return_value.fernet_key": _FERNET_KEY,
+                    "return_value.database_url": "",
+                },
+            )
+        )
+        result = CliRunner().invoke(cli, ["restore", str(archive), "--yes"])
+    assert result.exit_code != 0, result.output
+    assert "--app-db-url" in result.output
+    safety_dump.assert_not_called()
+    restore_cluster.assert_not_called()
+
+
 def test_restore_carries_nullable_checkpoint_type_through_json_export(tmp_path: Path) -> None:
     """FAR-2022: a non-null ``checkpoints.type`` survives the JSON restore.
 
@@ -930,7 +1071,7 @@ def test_restore_refuses_malformed_manifest_before_echo(tmp_path: Path) -> None:
     bad_archive = tmp_path / "badlist"
     bad_archive.mkdir()
     (bad_archive / "backup-info.json").write_text("[]", encoding="utf-8")
-    result = CliRunner().invoke(cli, ["restore", str(bad_archive), "--yes"])
+    result = CliRunner().invoke(cli, ["restore", str(bad_archive), "--yes", "--app-db-url", _APP_DB_URL])
     assert result.exit_code != 0
     assert "not a JSON object" in result.output
     assert "Backup timestamp" not in result.output
@@ -940,7 +1081,7 @@ def test_restore_refuses_corrupt_manifest(tmp_path: Path) -> None:
     bad_archive = tmp_path / "badjson"
     bad_archive.mkdir()
     (bad_archive / "backup-info.json").write_text("{not json", encoding="utf-8")
-    result = CliRunner().invoke(cli, ["restore", str(bad_archive), "--yes"])
+    result = CliRunner().invoke(cli, ["restore", str(bad_archive), "--yes", "--app-db-url", _APP_DB_URL])
     assert result.exit_code != 0
     assert "unreadable" in result.output
 
@@ -950,7 +1091,7 @@ def test_restore_typed_field_validation_refuses_wrong_types(tmp_path: Path) -> N
     archive_manifest = json.loads((archive / "backup-info.json").read_text(encoding="utf-8"))
     archive_manifest["schema_versions"] = "rev1"  # must be a LIST of strings
     (archive / "backup-info.json").write_text(json.dumps(archive_manifest), encoding="utf-8")
-    result = CliRunner().invoke(cli, ["restore", str(archive), "--yes"])
+    result = CliRunner().invoke(cli, ["restore", str(archive), "--yes", "--app-db-url", _APP_DB_URL])
     assert result.exit_code != 0
     assert "not a list of strings" in result.output
 
