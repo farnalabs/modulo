@@ -7,6 +7,7 @@ import {
   runStatusBadgeClass,
   runStatusDescription,
   runStatusLabel,
+  runStatusShortLabel,
 } from '../utils/runUtils'
 
 // FAR-1487 (Roddy): a coalesced-supersede run ends `rejected` with
@@ -59,7 +60,11 @@ describe('queue-expiry run labelling (FAR-1883)', () => {
             ? 'QUEUE EXPIRED LABEL'
             : key === 'errorCodeDescriptions.queue.expired'
               ? 'QUEUE EXPIRED ERROR DESC'
-              : key
+              : key === 'views.RunsListView.status_queue_expired'
+                ? 'EXPIRED WHILE QUEUED'
+                : key === 'views.RunsListView.status_superseded'
+                  ? 'SUPERSEDED LABEL'
+                  : key
 
   it('detects only rejected runs carrying queue.expired', () => {
     expect(isQueueExpiredRun('rejected', 'queue.expired')).toBe(true)
@@ -95,5 +100,14 @@ describe('queue-expiry run labelling (FAR-1883)', () => {
   it('resolves the queue.expired error-code label and description keys', () => {
     expect(errorCodeLabel('queue.expired', t)).toBe('QUEUE EXPIRED LABEL')
     expect(errorCodeDescription('queue.expired', t)).toBe('QUEUE EXPIRED ERROR DESC')
+  })
+
+  it('gives the visible short label its own queue-expired copy, never the generic superseded one', () => {
+    expect(runStatusShortLabel('rejected', 'queue.expired', t, 'rejected')).toBe('EXPIRED WHILE QUEUED')
+    // The FAR-1487 supersession copy is unchanged for a coalesced review.
+    expect(runStatusShortLabel('rejected', 'hitl.superseded', t, 'rejected')).toBe('SUPERSEDED LABEL')
+    // A human rejection and every non-superseded status keep the caller's fallback.
+    expect(runStatusShortLabel('rejected', 'hitl.rejected', t, 'rejected')).toBe('rejected')
+    expect(runStatusShortLabel('complete', null, t, 'complete')).toBe('complete')
   })
 })

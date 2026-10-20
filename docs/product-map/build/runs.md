@@ -144,7 +144,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       `email_delivered` / `no_work` / `no_delivery` / `needs_human` /
       `source_error` / `parse_error` / `operator_or_hitl_cancelled` /
       `hitl_timeout` / `budget_exceeded` / `compensation_failed` /
-      `router_no_match` / `hitl_rejected` / `hitl_superseded` /
+      `router_no_match` / `hitl_rejected` / `hitl_superseded` / `queue_expired` /
       `benign_outcome` / `classifier_error`), `delivered_pr_urls`, `computed_at`,
       and the `work_intact` / `declared_success_nodes` terminalization-fact
       metadata. A classifier/persist failure writes a fail-closed `unclassified`
@@ -152,7 +152,10 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       and bounded) – a terminal run NEVER commits with a NULL record – and the
       periodic reconciliation sweep (`reconcile_missing_classifications`, wired into
       `dispatcher_reconcile`) backfills raw-SQL terminalizers within a minute
-      (`pipeline_engine/classify.py`, `test_run_classification.py`)
+      (`pipeline_engine/classify.py`, `test_run_classification.py`). A
+      `queue_expired` reason marks a run superseded because it waited in a
+      capacity queue past its pipeline's `queue_timeout_seconds` – a
+      supersession, not a failure.
 - [x] Business-expected run outcomes (FAR-707): a pipeline may declare explicit
       benign signatures (`benign_signatures` JSON column on `pipelines`, migration
       0296 – a list of `{"error_code": "<exact runs.error_code>", "error_detail_contains":
