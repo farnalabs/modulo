@@ -93,7 +93,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 
 ### Monitor
 - **feat-observability** - Error dashboard and observability exports (Error Forwarders and Browser Monitoring deferred from the MVP nav – hidden via private_preview; see FAR-547 / FAR-543) - routes: `/settings/observability`, `/admin/errors`, `/admin/errors/:id`
-- **feat-notifications** - Notifications, email delivery, and notification logs - routes: `/notifications`, `/settings/email`, `/admin/notification-delivery`
+- **feat-notifications** - Notifications, email delivery, and notification logs - routes: `/notifications`, `/settings/email`, `/admin/notification-delivery`, `/settings/notifications`
 - **feat-costs** - Cost tracking, spend limits, cost controls, and cost components - routes: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`, `/admin/costs/components`
 - **feat-hitl** - Human-in-the-loop approval gates and review - routes: `/settings/hitl-review`
 - **feat-analytics** - Reporting and analytics over runs, costs, and facts - routes: `/analytics`
