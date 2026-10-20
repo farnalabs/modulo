@@ -72,7 +72,7 @@
         v-if="exportWarning"
         class="mb-4 rounded-lg border border-warning/50 bg-warning/10 p-3 text-sm text-warning-text"
         data-testid="admin-run-retention-export-warning"
-        role="status"
+        aria-live="polite"
       >
         {{ exportWarning }}
       </div>
