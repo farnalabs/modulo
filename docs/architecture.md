@@ -435,8 +435,8 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   refuses NEW runs when the pipeline's pending queue exceeds
   `max(3 x max_concurrent_runs, 5)` rows, or its oldest genuinely-wedged
   pending run is older than `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` (default
-  60 min). `org_capacity_limited` rows are excluded from the age leg — a busy
-  org is not a wedged pipeline — while `pipeline_capacity` rows still count: a
+  60 min). `org_capacity_limited` rows are excluded from the age leg (a busy
+  org is not a wedged pipeline), while `pipeline_capacity` rows still count: a
   pipeline pinned at its own cap (possibly by a leaked slot) is itself the
   wedge this guard exists to break. How the refusal reaches the delivery
   depends on the funnel (FAR-1342):
@@ -446,7 +446,7 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   | Webhook | HTTP 429, no run created | The delivery is discrete and the sender can retry; refusing beats queueing work that will never run. |
   | Cron | The fire is CONSUMED and recorded: a `backpressure_skipped` TriggerEvent plus `last_fired_at` stamped | A cron fire has no sender to retry it; the next scheduled fire carries the future. `next_fire_at` was already advanced at enqueue time, so the epoch is consumed rather than re-fired (the missed-fire catch-up only re-fires an epoch advanced but never fired). |
   | Polling | Skipped and recorded; the next poll interval re-fires | The poll repeats naturally on its own schedule, so deferral is free. |
-  | Manual / MCP | Exempt — no backpressure check | A human explicitly asked for this run; capacity gates may still DEFER its dispatch, but they do not refuse it. |
+  | Manual / MCP | Exempt: no backpressure check | A human explicitly asked for this run; capacity gates may still DEFER its dispatch, but they do not refuse it. |
 
   Invariant: **a pending run may wait indefinitely while its pipeline makes
   progress; a pipeline making NO progress stops accepting new work.** A

@@ -28,12 +28,12 @@ as a Docker build-arg (`VITE_PRIMEUI_LICENSE`, from the deploy workflow's
 GitHub secret). For local development there is no build step, so
 `frontend/vite.config.ts` lifts `VITE_PRIMEUI_LICENSE` from the nearest
 ancestor `.env` file (the workspace root `.env` in the standard layout) into
-the process environment when it is not already set — Vite then inlines it into
+the process environment when it is not already set; Vite then inlines it into
 `import.meta.env` exactly as it does for the production build. This covers
 `pnpm dev` and the Playwright e2e `webServer` with one mechanism.
 
 If you see the banner locally, add `VITE_PRIMEUI_LICENSE=<key>` to your
-workspace root `.env` (gitignored — never commit the key; the repo is public
+workspace root `.env` (gitignored, so never commit the key; the repo is public
 and `VITE_*` values are inlined into the client bundle). A shell-exported
 `VITE_PRIMEUI_LICENSE` takes precedence over the `.env` lookup.
 

@@ -94,7 +94,7 @@ than silently passing through.
 
 Idempotent verbs (`GET`/`HEAD`) are retried up to 2 times (3 total attempts)
 with exponential backoff + jitter, honouring `Retry-After` and the retryable
-status set (`429`, `500`, `502`, `503`, `504` — a narrow set, not every `5xx`;
+status set (`429`, `500`, `502`, `503`, `504`: a narrow set, not every `5xx`;
 other server errors fail immediately). Mutating verbs are retried only when the
 operation declares an `idempotency_header`. Transport failures are retried for
 idempotent verbs and surface as a typed `RESTConnectError`. The retry sleep
