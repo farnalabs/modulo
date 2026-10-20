@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, watch } from 'vue'
 import { useStorage } from '@vueuse/core'
 import { useAssistantStore } from './useAssistantStore'
+import { randomId } from '../lib/randomId'
 
 export interface AssistantTab {
   tabId: string
@@ -9,19 +10,6 @@ export interface AssistantTab {
 }
 
 const STORAGE_KEY = 'assistant-only-tabs'
-
-function makeTabId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  // Fallback for environments without randomUUID — use the CSPRNG, not Math.random.
-  const arr = new Uint8Array(16)
-  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
-    crypto.getRandomValues(arr)
-    return `tab-${Date.now()}-${Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('')}`
-  }
-  return `tab-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` // NOSONAR: only when no CSPRNG exists
-}
 
 function parseStoredTabs(raw: unknown): AssistantTab[] {
   if (!Array.isArray(raw)) return []
@@ -62,14 +50,14 @@ export const useAssistantTabsStore = defineStore('assistantTabs', () => {
     if (!session) return null
     tabs.value = [
       ...tabs.value.filter(t => t.sessionId !== session.id),
-      { tabId: makeTabId(), sessionId: session.id },
+      { tabId: randomId('tab'), sessionId: session.id },
     ]
     return session
   }
 
   async function resumeTab(sessionId: string) {
     if (!tabs.value.some(t => t.sessionId === sessionId)) {
-      tabs.value = [...tabs.value, { tabId: makeTabId(), sessionId }]
+      tabs.value = [...tabs.value, { tabId: randomId('tab'), sessionId }]
     }
     await assistantStore.loadSession(sessionId)
   }
@@ -101,7 +89,7 @@ export const useAssistantTabsStore = defineStore('assistantTabs', () => {
       // First mount with no tabs but a live restored activeSessionId — seed a
       // tab for it instead of nulling a panel session the user may still use.
       if (pruned.length === 0 && assistantStore.activeSessionId && live.some(s => s.id === assistantStore.activeSessionId)) {
-        tabs.value = [{ tabId: makeTabId(), sessionId: assistantStore.activeSessionId }]
+        tabs.value = [{ tabId: randomId('tab'), sessionId: assistantStore.activeSessionId }]
         return
       }
     }
