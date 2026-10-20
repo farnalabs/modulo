@@ -283,7 +283,7 @@ Team-tier feature (requires valid `MODULO_LICENSE_KEY`). Configurable via env va
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `REDIS_URL` | No | `redis://localhost:6379/0` | `redis://host:port/db` for the SAQ broker and rate limiting |
-| `REDIS_MAXMEMORY` | No | `256mb` | Compose only: the `maxmemory` bound passed to the bundled `redis` service in `docker-compose.yml`, `docker-compose.local.yml` and `deploy/compose/docker-compose.prod.yml`. Raise it (e.g. `1gb`) for a larger queue budget. Ignored when `REDIS_URL` points at an external/managed Redis — bound that instance yourself. |
+| `REDIS_MAXMEMORY` | No | `256mb` | Compose only: the `maxmemory` bound passed to the bundled `redis` service in `docker-compose.yml`, `docker-compose.local.yml` and `deploy/compose/docker-compose.prod.yml`. Raise it (e.g. `1gb`) for a larger queue budget. Ignored when `REDIS_URL` points at an external/managed Redis; bound that instance yourself. |
 
 Redis is **required** for production: the SAQ workers (runs + system) provide
 run dispatch, cron firing, and the scheduler. Without Redis there is no
@@ -301,15 +301,15 @@ until every enqueue write failed with `OOM command not allowed`, leaving runs
 `enqueue_failed`. The bound protects the host; a queued run job carries a TTL,
 so it is shed and re-dispatched rather than growing without limit.
 `volatile-lru` is deliberate: it evicts **only keys
-carrying a TTL**. In the SAQ key space that is the job hashes — queued ones are
-TTL'd by the dispatcher (below), completed ones by SAQ — while the queue's
+carrying a TTL**. In the SAQ key space that is the job hashes: queued ones are
+TTL'd by the dispatcher (below), completed ones by SAQ, while the queue's
 structural keys (`queued` / `active` lists, `incomplete` zset) are persistent
 and are never evicted. Do not switch to an `allkeys-*` policy: losing a
 structural key drops queued work with no job hash for `dispatcher_reconcile` to
 detect and repair.
 
 *Code side.* `core.dispatch` applies a 3600s TTL (`SAQ_QUEUED_JOB_TTL`) to a
-still-`queued` job hash **only where a lost hash is recoverable** — a TTL on a
+still-`queued` job hash **only where a lost hash is recoverable**, because a TTL on a
 job nothing re-creates would silently drop work. The TTL is applied only while
 the stored job status is `queued` (atomic, status-gated); the worker's dequeue
 transition to `active` clears it, so an in-flight job is never expired. The
@@ -324,7 +324,7 @@ paths and their repair guarantee:
 | Suite-run execution jobs (`_enqueue_suite_run_execution`) | **no** | Nothing reconciles a stranded `pending` `SuiteRun`, so an expired hash would strand the run forever. The hash stays unbounded while queued; the `maxmemory` bound and the capacity alert are the backstop. |
 
 So for run dispatch the guarantee is: a queued run job whose hash is evicted or
-expired is not lost — `dispatcher_reconcile` re-enqueues it. For a polling or
+expired is not lost; `dispatcher_reconcile` re-enqueues it. For a polling or
 ongoing fire it is the next scan interval, and for a cron fire inside the
 `30 min .. 47 h` cadence range it is the catch-up scan. The un-TTL'd paths
 remain bounded once SAQ finishes them (SAQ's finish-origin `ttl`), and are
@@ -678,6 +678,8 @@ cloud-metadata and CGNAT destinations are refused by default.
 |----------|----------|---------|-------------|
 | `SSRF_ALLOW_PRIVATE_RANGES` | No | – | Comma-separated CIDRs to permit as outbound targets, e.g. `127.0.0.0/8,::1/128,10.0.0.0/8` |
 | `SSRF_DNS_TIMEOUT` | No | `10` | DNS resolution timeout in seconds; a hung resolver fails closed |
+| `SSRF_RESOLVE_TTL` | No | `300` | Seconds before the pinned transport re-resolves a host, so a decommissioned or changed IP self-heals |
+| `SSRF_TRUST_PROXY` | No | `false` | Honour `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` in the pinned transport. Only enable when the proxy is the trusted egress boundary: the proxy re-resolves the target server-side, which defeats IP pinning |
 
 Link-local (`169.254.0.0/16`, `fe80::/10`), multicast, IPv6 site-local and the
 cloud-metadata ranges are a **non-negotiable floor**: no allowlist entry can

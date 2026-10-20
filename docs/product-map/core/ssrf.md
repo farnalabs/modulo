@@ -75,6 +75,10 @@ route, so it is tracked here rather than in the manifest registry.
       trusted proxy would re-resolve the target server-side and defeat
       pinning); explicitly opting into proxy trust with a proxy env var
       present logs a loud warning
+- [x] Pinned hosts are re-resolved after ``SSRF_RESOLVE_TTL`` (default
+      300s) so a decommissioned or changed IP self-heals without a restart;
+      proxy environment variables are honoured only when
+      ``SSRF_TRUST_PROXY`` is enabled
 
 ## Known Gaps
 

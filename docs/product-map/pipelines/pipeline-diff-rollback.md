@@ -57,7 +57,7 @@ centralized authorization cleanup.
       `rollback-v{version}` that restores the graph: `rollback_to_snapshot`
       writes `version_kind='edit'` / `created_kind='rollback'` with the next
       allocated `snapshot_version`, so a restore is a new version rather than a
-      rewrite and history is never deleted — the same target can be restored
+      rewrite and history is never deleted, so the same target can be restored
       again (`backend/src/modulo/db/crud/pipeline_snapshot_versioning.py::rollback_to_snapshot`)
 - [x] The editor's restore flow is ONE shared FormDialog opened from the
       read-only historic view (the persistent banner's Restore this version and
@@ -67,7 +67,7 @@ centralized authorization cleanup.
       port changes), names the real consequences (new runs use the restored
       version, edits made since stop being used, history is NOT deleted, runs
       already in progress keep the version they started on), and uses a plain
-      confirm — no typed phrase, because the action is reversible. A refusal
+      confirm (no typed phrase), because the action is reversible. A refusal
       that would remove a HITL gate, strip a node-bound guardrail, or use
       another team's connector is rendered as plain-language copy, never the raw
       server error; success navigates back to the latest version and announces
@@ -80,7 +80,7 @@ centralized authorization cleanup.
       unmounted, `?compare=<uuid>`) is tracked under
       `feat-pipelines-pipeline-versioning`
 - [x] Snapshot diff and rollback are Community-tier: the
-      `pipeline_diff_rollback` plan gate is RETIRED (FAR-1819) — no
+      `pipeline_diff_rollback` plan gate is RETIRED (FAR-1819): no
       `require_feature` guard remains on the routes, and migration
       `0317_drop_retired_pipeline_diff_rollback_flag` deletes the stale
       `feature_flag_catalog` row so the admin Feature Flags surface cannot

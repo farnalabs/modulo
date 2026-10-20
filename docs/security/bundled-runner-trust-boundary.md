@@ -200,7 +200,7 @@ detection, which kills the exec first.
 **Image scanning**: the proxy image and the runner image are digest-pinned,
 but no weekly image-scan cadence exists yet. Trivy runs in CI as a repository
 *filesystem* scan (`ci.yml`, `scan-type: 'fs'`, `scan-ref: '.'`) for
-dependency CVEs and misconfigurations — it does not scan the built images.
+dependency CVEs and misconfigurations; it does not scan the built images.
 `publish-images.yml` gates the GHCR push on image smoke checks (`import
 modulo`, `nginx -t`) only, with no vulnerability gate. Until the automated
 trivy/grype image gate lands (the GA/CI item below), scanning a published
