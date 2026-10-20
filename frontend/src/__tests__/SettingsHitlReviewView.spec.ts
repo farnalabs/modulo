@@ -2412,3 +2412,83 @@ describe('SettingsHitlReviewView — matchesSearch by name', () => {
     expect(wrapper.text()).toContain('PR Reviewer')
   })
 })
+
+// ---- Branch coverage: bulk reject skips an already-decided gate ----
+describe('SettingsHitlReviewView — bulk reject skip-already-decided', () => {
+  let wrapper: VueWrapper | null = null
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    resetHitlReviewState()
+  })
+
+  afterEach(() => { wrapper?.unmount(); wrapper = null })
+
+  it('bulk reject skips an approved gate without calling the reject endpoint', async () => {
+    const { api } = await import('../lib/api/client')
+    const approved = {
+      ...PENDING_GATE,
+      review_id: 'approved-gate',
+      claimed_by: 'reviewer@team',
+      decision: 'approved',
+      decision_at: '2025-06-30T11:00:00Z',
+    }
+    ;(api.GET as any).mockResolvedValue(gatesResponse([approved]))
+    ;(api.POST as any).mockResolvedValue({ data: null, error: undefined })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="hitl-review-select-all"]').setValue(true)
+    await nextTick()
+    await wrapper.find('[data-testid="hitl-review-bulk-reject"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="hitl-review-bulk-reject-confirm"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const rejectCalls = (api.POST as any).mock.calls.filter((c: unknown[]) => (c[0] as string).endsWith('/reject'))
+    expect(rejectCalls).toHaveLength(0)
+    expect(wrapper.find('[data-testid="hitl-review-bulk-outcomes"]').text()).toContain('Skipped (already decided)')
+  })
+})
+
+// ---- Branch coverage: bulk claim with neither data nor an error ----
+describe('SettingsHitlReviewView — bulk claim empty envelope', () => {
+  let wrapper: VueWrapper | null = null
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    resetHitlReviewState()
+  })
+
+  afterEach(() => { wrapper?.unmount(); wrapper = null })
+
+  it('records no outcome and no failure when the claim returns neither data nor error', async () => {
+    const { api } = await import('../lib/api/client');
+    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+    ;(api.POST as any).mockResolvedValue({ data: null, error: undefined })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="hitl-review-select-all"]').setValue(true)
+    await nextTick()
+    await wrapper.find('[data-testid="hitl-review-bulk-claim"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const outcomes = wrapper.find('[data-testid="hitl-review-bulk-outcomes"]')
+    expect(outcomes.exists()).toBe(true)
+    expect(outcomes.findAll('.font-mono')).toHaveLength(0)
+    expect(wrapper.find('[data-testid="hitl-review-claim-failure-banner"]').exists()).toBe(false)
+  })
+})

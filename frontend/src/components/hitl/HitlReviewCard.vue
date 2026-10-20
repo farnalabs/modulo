@@ -653,6 +653,32 @@ async function claimGate() {
   }
 }
 
+/** Approve body, optionally carrying the required choice answer (FAR-860). */
+function approveBody(token: string) {
+  const body = { claim_token: token, notes: notes.value || null }
+  if (!isChoiceGate.value || !selectedOption.value) return body
+  return {
+    ...body,
+    answer: { kind: 'choice' as const, option_id: selectedOption.value },
+  }
+}
+
+/**
+ * FAR-1486: the reject outcome is only "routed to the reject target" when the
+ * gate actually HAS a reject route; without one the rejection records the
+ * decision and the run continues along its normal path.
+ */
+function decisionSuccessText(decision: 'approve' | 'reject'): string {
+  if (decision === 'approve') return t('hitl.gate.gate_approved_pipeline_resuming')
+  const consequence = rejectConsequence.value
+  if (consequence?.disposition === 'terminate') return t('hitl.gate.gate_rejected_run_ended')
+  if (consequence?.disposition === 'proceed') return t('hitl.gate.gate_rejected_proceeding')
+  if (consequence) {
+    return t('hitl.gate.gate_rejected_pipeline_routed_to_reject_target', { target: rejectTargetName(consequence) })
+  }
+  return t('hitl.gate.gate_rejected_no_reject_route')
+}
+
 async function decideGate(decision: 'approve' | 'reject') {
   const token = claimToken.value
   if (!token) {
@@ -670,50 +696,25 @@ async function decideGate(decision: 'approve' | 'reject') {
         : '/api/v1/runs/{run_id}/hitl/{review_id}/reject',
       {
         params: { path: { run_id: props.gate.run_id, review_id: props.gate.review_id } },
-        body:
-          decision === 'approve'
-            ? {
-                claim_token: token,
-                notes: notes.value || null,
-                ...(isChoiceGate.value && selectedOption.value
-                  ? { answer: { kind: 'choice', option_id: selectedOption.value } }
-                  : {}),
-              }
-            : { claim_token: token, reason },
+        body: decision === 'approve' ? approveBody(token) : { claim_token: token, reason },
       },
     )
     if (err) {
       showMessage({ type: 'error', text: `${t(errorKey)} ${formatApiError(err)}` }, false)
-    } else {
-      // Decision done: drop the persisted token/notes for this gate so no
-      // stale session state is left behind (FAR-686).
-      reviewState.clear()
-      claimedByYou.value = false
-      track(
-        decision === 'approve'
-          ? ANALYTICS_EVENTS.HITL_REVIEW_APPROVED
-          : ANALYTICS_EVENTS.HITL_REVIEW_REJECTED,
-      )
-      // FAR-1486: the reject outcome is only "routed to the reject target"
-      // when the gate actually HAS a reject route; without one the rejection
-      // records the decision and the run continues along its normal path.
-      const consequence = rejectConsequence.value
-      let successText: string
-      if (decision === 'approve') {
-        successText = t('hitl.gate.gate_approved_pipeline_resuming')
-      } else if (consequence?.disposition === 'terminate') {
-        successText = t('hitl.gate.gate_rejected_run_ended')
-      } else if (consequence?.disposition === 'proceed') {
-        successText = t('hitl.gate.gate_rejected_proceeding')
-      } else if (consequence) {
-        successText = t('hitl.gate.gate_rejected_pipeline_routed_to_reject_target', { target: rejectTargetName(consequence) })
-      } else {
-        successText = t('hitl.gate.gate_rejected_no_reject_route')
-      }
-      const payload: HitlMessage = { type: 'success', text: successText }
-      showMessage(payload)
-      emit('decided', payload)
+      return
     }
+    // Decision done: drop the persisted token/notes for this gate so no
+    // stale session state is left behind (FAR-686).
+    reviewState.clear()
+    claimedByYou.value = false
+    track(
+      decision === 'approve'
+        ? ANALYTICS_EVENTS.HITL_REVIEW_APPROVED
+        : ANALYTICS_EVENTS.HITL_REVIEW_REJECTED,
+    )
+    const payload: HitlMessage = { type: 'success', text: decisionSuccessText(decision) }
+    showMessage(payload)
+    emit('decided', payload)
   } catch (e: unknown) {
     showMessage({ type: 'error', text: `${t(errorKey)} ${formatApiError(e)}` }, false)
   } finally {

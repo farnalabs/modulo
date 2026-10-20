@@ -559,21 +559,22 @@ function pipelineDisplayName(gate: GateItem): string {
   return t('views.SettingsHitlReviewView.deleted_pipeline_fallback', { id: shortId(gate.pipeline_id) })
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** The condition-result value a gate carries, when it is a non-blank string. */
+function conditionResultValue(context: unknown): string {
+  if (!isRecord(context)) return ''
+  const result = context.condition_result
+  if (!isRecord(result)) return ''
+  return typeof result.value === 'string' ? result.value : ''
+}
+
 /** FAR-858: one-line snippet for the collapsed row — gate description or condition-result value. */
 function gateDescriptionSnippet(gate: GateItem): string {
-  let raw = ''
-  if (gate.description && gate.description.trim()) {
-    raw = gate.description
-  } else {
-    const ctx = gate.context
-    if (ctx && typeof ctx === 'object' && !Array.isArray(ctx)) {
-      const cr = (ctx as Record<string, unknown>).condition_result
-      if (cr && typeof cr === 'object' && !Array.isArray(cr)) {
-        const entry = cr as Record<string, unknown>
-        if (typeof entry.value === 'string' && entry.value.trim()) raw = entry.value
-      }
-    }
-  }
+  const candidate = gate.description?.trim() ? gate.description : conditionResultValue(gate.context)
+  const raw = candidate.trim() ? candidate : ''
   // Cap at 120 chars so the full text is never exposed to the accessibility tree.
   const MAX_SNIPPET = 120
   return raw.length > MAX_SNIPPET ? raw.slice(0, MAX_SNIPPET) + '\u2026' : raw
@@ -721,53 +722,54 @@ function dismissBulkOutcomes() {
   bulkOutcomes.value = null
 }
 
+/** A gate that must not be claimed, or null when it is claimable. */
+function bulkClaimSkip(gate: GateItem): BulkOutcome | null {
+  const status = gateStatus(gate)
+  if (status === 'approved' || status === 'rejected') {
+    return { key: gateKey(gate), status: 'skipped-already-decided' }
+  }
+  if (status === 'claimed') {
+    // A claimed gate cannot be re-claimed; distinguish the operator's own
+    // claim (e.g. this session lost the token) from another reviewer's so
+    // the outcome report is not misleading.
+    return {
+      key: gateKey(gate),
+      status: gate.claimed_by_me ? 'skipped-claimed-by-you' : 'skipped-claimed-by-other',
+    }
+  }
+  return null
+}
+
+/** Claims one gate. Null means "no result" (no error and no data returned). */
+async function claimOne(gate: GateItem): Promise<BulkOutcome | null> {
+  const skipped = bulkClaimSkip(gate)
+  if (skipped) return skipped
+  const key = gateKey(gate)
+  try {
+    const { data, error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{review_id}/claim', {
+      params: { path: { run_id: gate.run_id, review_id: gate.review_id } },
+      body: { expiry_minutes: 15 },
+    })
+    if (err) return { key, status: 'failed', error: claimFailureMessage(err, t) }
+    if (!data) return null
+    const d = data as { claim_token: string; expires_at: string }
+    useHitlReviewState(gate.run_id, gate.review_id).setClaimToken(d.claim_token)
+    return { key, status: 'succeeded' }
+  } catch (e: unknown) {
+    return { key, status: 'failed', error: claimFailureMessage(e, t) }
+  }
+}
+
 async function bulkClaim() {
   bulkClaiming.value = true
   bulkOutcomes.value = null
-  const outcomes: BulkOutcome[] = []
   const selected = filteredGates.value.filter(g => selectedKeys.value.has(gateKey(g)))
-  let anyFailed = false
-
-  for (const gate of selected) {
-    const key = gateKey(gate)
-    const status = gateStatus(gate)
-
-    if (status === 'approved' || status === 'rejected') {
-      outcomes.push({ key, status: 'skipped-already-decided' })
-      continue
-    }
-    if (status === 'claimed') {
-      // A claimed gate cannot be re-claimed; distinguish the operator's own
-      // claim (e.g. this session lost the token) from another reviewer's so
-      // the outcome report is not misleading.
-      outcomes.push({ key, status: gate.claimed_by_me ? 'skipped-claimed-by-you' : 'skipped-claimed-by-other' })
-      continue
-    }
-
-    try {
-      const { data, error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{review_id}/claim', {
-        params: { path: { run_id: gate.run_id, review_id: gate.review_id } },
-        body: { expiry_minutes: 15 },
-      })
-      if (err) {
-        outcomes.push({ key, status: 'failed', error: claimFailureMessage(err, t) })
-        anyFailed = true
-      } else if (data) {
-        const d = data as { claim_token: string; expires_at: string }
-        const reviewState = useHitlReviewState(gate.run_id, gate.review_id)
-        reviewState.setClaimToken(d.claim_token)
-        outcomes.push({ key, status: 'succeeded' })
-      }
-    } catch (e: unknown) {
-      outcomes.push({ key, status: 'failed', error: claimFailureMessage(e, t) })
-      anyFailed = true
-    }
-  }
-
+  const claimed = await Promise.all(selected.map(claimOne))
+  const outcomes = claimed.filter((outcome): outcome is BulkOutcome => outcome !== null)
   bulkOutcomes.value = outcomes
   bulkClaiming.value = false
 
-  if (anyFailed) {
+  if (outcomes.some(o => o.status === 'failed')) {
     const failedMessages = outcomes.filter(o => o.status === 'failed').map(o => o.error).join('; ')
     showClaimFailureBanner(t('views.SettingsHitlReviewView.bulk_claim_partial_failure', { errors: failedMessages }))
   }
@@ -789,63 +791,58 @@ function cancelBulkReject() {
   bulkRejectReason.value = ''
 }
 
+/** Either the outcome that skips a gate, or the claim token to reject with. */
+function planBulkReject(gate: GateItem): { outcome: BulkOutcome } | { token: string } {
+  const key = gateKey(gate)
+  if (gate.decision === 'approved' || gate.decision === 'rejected') {
+    return { outcome: { key, status: 'skipped-already-decided' } }
+  }
+  if (!gate.claimed_by) {
+    return { outcome: { key, status: 'skipped-pending' } }
+  }
+  const token = useHitlReviewState(gate.run_id, gate.review_id).claimToken.value
+  if (gate.claimed_by && !gate.claimed_by_me && !token) {
+    return { outcome: { key, status: 'skipped-claimed-by-other' } }
+  }
+  if (!token) {
+    // The gate is claimed by this operator, but this browser session has no
+    // claim token (a reload drops it). It is not "claimed by another
+    // reviewer" -- the operator must claim it again before rejecting.
+    return { outcome: { key, status: 'skipped-claim-expired' } }
+  }
+  return { token }
+}
+
+async function rejectOne(gate: GateItem, reason: string): Promise<BulkOutcome> {
+  const plan = planBulkReject(gate)
+  if ('outcome' in plan) return plan.outcome
+  const key = gateKey(gate)
+  try {
+    const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{review_id}/reject', {
+      params: { path: { run_id: gate.run_id, review_id: gate.review_id } },
+      body: { claim_token: plan.token, reason },
+    })
+    if (err) return { key, status: 'failed', error: `${t('hitl.gate.reject_failed')} ${formatApiError(err)}` }
+    useHitlReviewState(gate.run_id, gate.review_id).clear()
+    return { key, status: 'succeeded' }
+  } catch (e: unknown) {
+    return { key, status: 'failed', error: `${t('hitl.gate.reject_failed')} ${formatApiError(e)}` }
+  }
+}
+
 async function confirmBulkReject() {
   bulkRejecting.value = true
   bulkOutcomes.value = null
   const selected = filteredGates.value.filter(g => selectedKeys.value.has(gateKey(g)))
-  const outcomes: BulkOutcome[] = []
-  let anyFailed = false
   const reason = bulkRejectReason.value.trim() || t('hitl.gate.rejected_by_reviewer')
-
-  for (const gate of selected) {
-    const key = gateKey(gate)
-    const reviewState = useHitlReviewState(gate.run_id, gate.review_id)
-    const token = reviewState.claimToken.value
-
-    if (gate.decision === 'approved' || gate.decision === 'rejected') {
-      outcomes.push({ key, status: 'skipped-already-decided' })
-      continue
-    }
-    if (!gate.claimed_by) {
-      outcomes.push({ key, status: 'skipped-pending' })
-      continue
-    }
-    if (gate.claimed_by && !gate.claimed_by_me && !token) {
-      outcomes.push({ key, status: 'skipped-claimed-by-other' })
-      continue
-    }
-    if (!token) {
-      // The gate is claimed by this operator, but this browser session has no
-      // claim token (a reload drops it). It is not "claimed by another
-      // reviewer" -- the operator must claim it again before rejecting.
-      outcomes.push({ key, status: 'skipped-claim-expired' })
-      continue
-    }
-
-    try {
-      const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{review_id}/reject', {
-        params: { path: { run_id: gate.run_id, review_id: gate.review_id } },
-        body: { claim_token: token, reason },
-      })
-      if (err) {
-        outcomes.push({ key, status: 'failed', error: `${t('hitl.gate.reject_failed')} ${formatApiError(err)}` })
-        anyFailed = true
-      } else {
-        reviewState.clear()
-        outcomes.push({ key, status: 'succeeded' })
-      }
-    } catch (e: unknown) {
-      outcomes.push({ key, status: 'failed', error: `${t('hitl.gate.reject_failed')} ${formatApiError(e)}` })
-      anyFailed = true
-    }
-  }
+  const outcomes = await Promise.all(selected.map(gate => rejectOne(gate, reason)))
 
   bulkOutcomes.value = outcomes
   bulkRejecting.value = false
   showBulkRejectInput.value = false
   bulkRejectReason.value = ''
 
-  if (anyFailed) {
+  if (outcomes.some(o => o.status === 'failed')) {
     const failedMessages = outcomes.filter(o => o.status === 'failed').map(o => o.error).join('; ')
     showClaimFailureBanner(t('views.SettingsHitlReviewView.bulk_reject_partial_failure', { errors: failedMessages }))
   }
