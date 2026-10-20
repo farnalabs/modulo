@@ -181,6 +181,25 @@ class TestOrgAdminWrite:
 
 
 class TestDefaultResolution:
+    def test_an_unregistered_flag_falls_back_to_the_documented_default(self, admin_client: TestClient) -> None:
+        """With no registry entry there is no default to consult, so the route reports ON.
+
+        ``resolve_flag`` would report OFF for an org with no override, which is
+        the inverse of the documented default; the fallback keeps the read
+        truthful until (or unless) the flag is registered in the running build.
+        """
+        org = SimpleNamespace(settings_json=None)
+        registry = MagicMock()
+        registry.get_flag.return_value = None
+        with (
+            patch.object(route_module, "get_organisation", AsyncMock(return_value=org)),
+            patch.object(route_module, "get_registry", MagicMock(return_value=registry)),
+        ):
+            resp = admin_client.get(_PATH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"enabled": True, "overridden": False}
+
     def test_a_registered_flag_supplies_its_own_default(self, admin_client: TestClient) -> None:
         """Once FAR-1957 registers the flag, the registry - not the fallback - decides.
 
