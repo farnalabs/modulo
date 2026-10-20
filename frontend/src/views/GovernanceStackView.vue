@@ -47,18 +47,19 @@
               {{ $t('views.GovernanceStackView.loading') }}
             </output>
 
-            <output
+            <div
               v-else-if="level.state.status === 'restricted'"
-              aria-live="polite"
+              role="group"
               :aria-label="$t(level.titleKey)"
-              class="block rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm"
+              class="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm"
               :data-testid="`governance-level-restricted-${level.id}`"
             >
+              <output class="sr-only" aria-live="polite">{{ $t('views.GovernanceStackView.restricted_title') }}</output>
               <p class="font-medium text-warning-text">{{ $t('views.GovernanceStackView.restricted_title') }}</p>
               <p class="mt-1 text-muted-foreground">
                 {{ $t('views.GovernanceStackView.restricted_body', { gate: $t(level.gateKey) }) }}
               </p>
-            </output>
+            </div>
 
             <div
               v-else-if="level.state.status === 'error'"
