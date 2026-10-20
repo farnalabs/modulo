@@ -28,9 +28,7 @@ async def list_templates(
         term = f"%{search.strip()}%"
         conditions.append(LibraryPrimitive.name.ilike(term))
 
-    count_stmt = select(func.count()).select_from(LibraryPrimitive)
-    if conditions:
-        count_stmt = count_stmt.where(*conditions)
+    count_stmt = select(func.count()).select_from(LibraryPrimitive).where(*conditions)
     try:
         total = (await session.execute(count_stmt)).scalar_one()
     except ProgrammingError:
