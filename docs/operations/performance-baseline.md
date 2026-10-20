@@ -13,10 +13,12 @@
 | **OS** | Ubuntu 22.04 LTS (Docker host) |
 | **Docker** | 24.0+ with Compose V2 |
 | **Postgres** | 16-alpine, shared_buffers=512MB, max_connections=200, work_mem=16MB |
-| **Redis** | 8-alpine, maxmemory=256mb, maxmemory-policy=allkeys-lru |
+| **Redis** | 8-alpine, maxmemory=256mb, maxmemory-policy=volatile-lru |
 | **Backend** | 4 uvicorn workers, 3 async DB pool connections per worker |
 | **Python** | 3.12+ |
 | **Network** | Loopback (localhost) |
+
+**Why `volatile-lru` and not `allkeys-lru`:** a `volatile-*` policy evicts only keys that carry a TTL, which in the SAQ key space is the job hashes. The queue's structural keys (`queued` / `active` lists, `incomplete` zset) carry no TTL and are therefore never evicted. An `allkeys-*` policy can evict a structural key and strand queued work, because there is no job hash left for `dispatcher_reconcile` to detect and repair. The `256 MB` default is raised with `REDIS_MAXMEMORY` on Compose; keep the policy whatever the bound. A managed/external Redis reached via `REDIS_URL` sets its own policy and is not controlled by the bundled artifacts.
 
 ## Methodology
 
