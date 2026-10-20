@@ -25,6 +25,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.agent_command_sync import is_clean_agent_commands, sync_agent_row_commands
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.graph_validator import GraphValidator, check_sandbox_only_field_placement
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.pipeline_engine.git_content import GitContentRefError, validate_agent_git_content_values
@@ -589,6 +591,12 @@ async def export_pipeline_bundle(
                 # bundles exported before this column existed -> import inherits
                 # the org/instance default, the shipped behaviour).
                 "hitl_review_window_seconds": getattr(pipeline, "hitl_review_window_seconds", None),
+                # FAR-1883: the capacity-queue timeout is threaded through
+                # exactly like its HITL sibling (absent on bundles exported
+                # before this column existed -> import reads NULL, the shipped
+                # default "never expire"). Without this a bounded queue timeout
+                # silently reverted to "wait forever" on import.
+                "queue_timeout_seconds": getattr(pipeline, "queue_timeout_seconds", None),
                 "retry_policy": dict(pipeline.retry_policy or {}),
                 "visibility": "org",  # Always strip team scoping
                 "business_owner_email": business_owner_email,
@@ -1491,6 +1499,47 @@ def _reject_sandbox_only_fields_off_sandbox(graph_nodes: list[dict[str, Any]]) -
     raise ValueError("Invalid bundle: sandbox-only node fields are set on non-sandbox_agent nodes — " + problems)
 
 
+def _strip_malformed_node_agent_commands(
+    graph_nodes: list[dict[str, Any]],
+    created_agent_ids: set[str],
+    pname: str,
+    warnings: list[str],
+) -> None:
+    """Drop a malformed node-level ``agent_commands`` from imported nodes (FAR-2008).
+
+    Bundle import hands raw bundle node dicts to the shared Agent-row sync with
+    no typed validation (the Pydantic ``PipelineGraphNode`` model is bypassed),
+    and the shared sync accepts a node value only when it is a clean
+    ``list[str]``. A value that is not — a mixed list such as ``["ok", 3]``, a
+    scalar, ``[None]`` — is therefore stripped HERE, in place, with a disclosed
+    warning: the sync silently skips it, so leaving it on the persisted node
+    would make the graph claim a command the Agent row does not hold (the node
+    value stands only while the row is NULL, and it cannot be materialised).
+
+    Only nodes bound to an Agent CREATED by this import are touched — the same
+    trust boundary the sync itself uses; a node bound to a pre-existing Agent
+    is never modified.
+
+    A clean list (every item a ``str``, at least one non-empty) is left
+    untouched so it still syncs into the created Agent row.
+    """
+    for node in graph_nodes:
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("agent_id")) not in created_agent_ids:
+            continue
+        if "agent_commands" not in node:
+            continue
+        if is_clean_agent_commands(node["agent_commands"]):
+            continue
+        del node["agent_commands"]
+        warnings.append(
+            f"Node '{node.get('id')}' in imported pipeline '{pname}' declares malformed "
+            "agent_commands (expected a list of strings with at least one non-empty string). "
+            "The node commands will be omitted."
+        )
+
+
 async def _materialize_pipeline_and_edges(
     ctx: _ImportContext,
     sections: _ImportSections,
@@ -1532,6 +1581,59 @@ async def _materialize_pipeline_and_edges(
         sections.name,
     )
 
+    # FAR-2008: bundle import is a graph writer too. Keep the imported nodes'
+    # bound Agent rows in step with the node-level ``agent_commands`` they
+    # declare, in the SAME transaction and BEFORE the graph is persisted —
+    # ``_apply_agent_fields`` lets a non-NULL Agent-row command win at run
+    # snapshot time, so without this an imported graph could claim one command
+    # and every run execute another (FAR-488-class). The sync is the shared
+    # ``core.agent_command_sync`` helper every other graph writer uses, which
+    # is why it lives in core rather than api.
+    #
+    # TRUST BOUNDARY (FAR-2008 security): a bundle is untrusted input, and
+    # ``_rewire_graph_nodes`` only rewrites an ``agent_id`` that the bundle
+    # DECLARED (present in ``agent_id_map``). An unrecognised id is left
+    # verbatim — which, in an attacker-crafted bundle, can name ANY Agent
+    # already in this organisation. Feeding every node to the org-scoped sync
+    # would then let the bundle overwrite that pre-existing Agent's commands
+    # and silently change unrelated pipelines. So only nodes bound to an Agent
+    # CREATED by this import are eligible; a node bound to a pre-existing Agent
+    # is left untouched (the pre-FAR-2008 behaviour), never silently synced.
+    created_agent_ids = set(agent_id_map.values())
+    # A bundle bypasses the Pydantic node model, so the node path needs the
+    # same type check the Agent declaration path (``_base_agent_args``) already
+    # applies: the target column is ``list[str] | None``, and a mixed list such
+    # as ``["ok", 3]`` written through the sync would break ``AgentResponse``
+    # validation for EVERY read of the org's agents (``GET /api/v1/agents``).
+    # Strip the malformed value from the imported node and disclose it, rather
+    # than persist a graph that claims a command the row cannot hold.
+    _strip_malformed_node_agent_commands(graph_nodes, created_agent_ids, pname, ctx.warnings)
+    import_bound_nodes = [
+        node for node in graph_nodes if isinstance(node, dict) and str(node.get("agent_id")) in created_agent_ids
+    ]
+    synced_agent_ids = await sync_agent_row_commands(
+        ctx.session,
+        org_id=ctx.org_id,
+        nodes=import_bound_nodes,
+        pipeline_id=pipeline.id,
+    )
+    # Attribution (FAR-2008): import is the untrusted-input writer, so a sync
+    # that rewrites a newly created Agent row must leave a durable audit trail
+    # naming the pipeline, the actor and every changed Agent id — the same
+    # event/payload shape the rollback writer emits.
+    if synced_agent_ids:
+        await append_audit_event(
+            ctx.session,
+            org_id=ctx.org_id,
+            event_type="pipeline.agent_commands_synced",
+            actor_user_id=ctx.created_by,
+            resource_type="pipeline",
+            resource_id=pipeline.id,
+            payload_json={
+                "agent_count": len(synced_agent_ids),
+                "agent_ids": [str(agent_id) for agent_id in synced_agent_ids],
+            },
+        )
     pipeline.graph_nodes_json = list(graph_nodes)
     # FAR-889: detect imports that recreate schema-less manual nodes.  Unlike
     # the REST write path, import tolerates legacy bundles (FAR-874) and keeps
@@ -1950,6 +2052,16 @@ async def _materialize_agents(
         except GitContentRefError as exc:
             msg = f"Agent '{aname}' prompt_template git content ref was rejected: {exc}"
             raise GitContentRefError(msg) from exc
+        # FAR-2008/FAR-220: ``agent_commands`` is imported now, so the bundle's
+        # commands pass the same save-time pin gate every Agent write path runs —
+        # otherwise a bundle could store an unpinned ``git+`` ref that fails
+        # closed only when a bound node renders it (and is then materialised
+        # onto every node bound to the Agent at snapshot time).
+        try:
+            validate_agent_git_content_values(agent_commands=agent_args.get("agent_commands"))
+        except GitContentRefError as exc:
+            msg = f"Agent '{aname}' agent_commands git content ref was rejected: {exc}"
+            raise GitContentRefError(msg) from exc
         _apply_agent_references(
             agent_args,
             ad,
@@ -1991,7 +2103,38 @@ def _base_agent_args(
     aname: str,
     ad: dict[str, Any],
 ) -> dict[str, Any]:
-    """Build the base create_agent keyword arguments for an imported agent."""
+    """Build the base create_agent keyword arguments for an imported agent.
+
+    FAR-2008: ``agent_commands`` is carried over too. Export writes it into the
+    bundle and import used to drop it, so an imported Agent bound by a node
+    that relies on its row-level command started with a NULL ``agent_commands``
+    — which ``_apply_agent_fields`` then cannot materialise, losing the
+    bundle's command entirely.
+
+    A bundle is untrusted input, so the value is accepted only when it is a
+    non-empty list whose every item is a non-empty string. Anything else
+    (a scalar, a mixed-type list, ``[None]``, an empty list) is DROPPED with a
+    disclosed warning rather than silently coerced: persisting a malformed or
+    empty list would make snapshot materialisation overwrite the bound node's
+    command with junk or with no command at all (FAR-488-class).
+    """
+    agent_commands = ad.get("agent_commands")
+    resolved_commands: list[str] | None = None
+    if agent_commands is not None:
+        # ``any`` rather than ``all``: an EMPTY list must be rejected too, and
+        # ``all`` over an empty list is vacuously true (semgrep
+        # all-empty-iterable). ``any`` over the negated predicate is False for
+        # an empty list, and the separate emptiness check below rejects it.
+        malformed = not isinstance(agent_commands, list) or any(
+            not isinstance(command, str) or not command for command in agent_commands
+        )
+        if malformed or not agent_commands:
+            ctx.warnings.append(
+                f"Agent '{aname}' declares malformed agent_commands (expected a non-empty list of "
+                "non-empty strings). The commands will be omitted."
+            )
+        else:
+            resolved_commands = list(agent_commands)
     return {
         "session": ctx.session,
         "org_id": ctx.org_id,
@@ -2003,6 +2146,7 @@ def _base_agent_args(
         "evals": ad.get("evals"),
         "retry_policy": ad.get("retry_policy"),
         "token_budget": ad.get("token_budget"),
+        "agent_commands": resolved_commands,
     }
 
 
@@ -2333,6 +2477,10 @@ async def _create_imported_pipeline(
                     # None IS the meaningful "no override" value here, and an
                     # absent key on a pre-FAR-1257 bundle maps to the same None.
                     hitl_review_window_seconds=pipeline_info.get("hitl_review_window_seconds"),
+                    # FAR-1883: bare ``.get`` for the same reason as its HITL
+                    # sibling — None is the meaningful "never expire" default,
+                    # and an absent key on a pre-FAR-1883 bundle maps to NULL.
+                    queue_timeout_seconds=pipeline_info.get("queue_timeout_seconds"),
                     run_context_defaults=pipeline_info.get("run_context_defaults"),
                     business_owner_id=business_owner_id,
                     reliability_owner_id=reliability_owner_id,

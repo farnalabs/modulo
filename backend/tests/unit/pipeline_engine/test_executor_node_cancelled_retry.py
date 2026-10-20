@@ -530,6 +530,71 @@ async def test_execute_non_idempotent_graph_suppresses_transient_retry():
     assert run_failed[0][1]["error"] == "node_cancelled"
 
 
+async def test_execute_refuses_requeue_for_non_retryable_provider_402():
+    """FAR-1800: a transient node failure whose retained stdout carries a
+    NON-retryable provider refusal (HTTP 402 "Insufficient account funds") must
+    NOT be fenced back to pending, even with the whole retry budget remaining —
+    every retry re-hits the same billing wall and burns a sandbox dispatch. The
+    run terminal-fails ONCE with the classified code."""
+    from modulo.core.pipeline_engine.error_codes import is_retryable
+    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+
+    diagnostic = (
+        "Sandbox agent command produced no output within 600s. Retained stdout tail: "
+        '{"type":"error","error":{"name":"APIError","data":'
+        '{"message":"Upstream request failed: Insufficient account funds",'
+        '"statusCode":402,"isRetryable":false}}}'
+    )
+    # Full retry budget left (node_attempt_count 1 < saq_run_retries 5).
+    run = _make_run(claim_count=1, node_attempt_count=1, claim_token="tok-claim-abc")
+    snapshot = _make_snapshot()
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(SandboxNodeFailedError(diagnostic, node_id="node-a"))
+    registry = _mock_registry()
+    broker = registry.get_or_create.return_value
+    settings = MagicMock(saq_run_retries=5)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(
+            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
+        )
+
+    # Terminal on the FIRST attempt — execute returned normally, no re-raise.
+    assert result is run
+    # No fenced pending-reset: no re-dispatch of a fault that cannot succeed.
+    assert not any("status='pending'" in s for s in statements)
+    call = mock_finalize.await_args
+    assert call is not None
+    assert call.kwargs["status"] == "failed"
+    assert call.kwargs.get("error_code") == "model.insufficient_funds"
+    detail = call.kwargs["error_detail"]
+    # The detail names the non-retryable class and does NOT claim retries were
+    # exhausted (they were refused).
+    assert "model.insufficient_funds" in detail
+    assert "not retried" in detail
+    assert "after retries exhausted" not in detail
+    # The classified code is registry NON-retryable — the whole point of the fix.
+    assert is_retryable("model.insufficient_funds") is False
+    run_failed = [c.args for c in broker.publish.call_args_list if c.args and c.args[0] == "run_failed"]
+    assert run_failed
+    assert run_failed[0][1]["error"] == "model.insufficient_funds"
+
+
 async def test_execute_terminal_fail_roundtrips_sandbox_diagnostics():
     """FAR-197 review fix (PR #1317 CHANGES_REQUESTED): the retry-exhausted
     terminal-fail write surface used to truncate the error_detail at 500 chars,

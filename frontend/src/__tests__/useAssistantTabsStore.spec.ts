@@ -124,6 +124,17 @@ describe('useAssistantTabsStore', () => {
     expect(tabs.tabs).toHaveLength(1)
   })
 
+  it('resumeTab appends a tab when the session has none', async () => {
+    const store = useAssistantStore()
+    store.sessions = [makeSession('session-2', 'Beta')]
+    const tabs = useAssistantTabsStore()
+    expect(tabs.tabs).toHaveLength(0)
+    await tabs.resumeTab('session-2')
+    expect(tabs.tabs).toHaveLength(1)
+    expect(tabs.tabs[0].sessionId).toBe('session-2')
+    expect(tabs.tabs[0].tabId).toMatch(/^tab-/)
+  })
+
   it('closeTab removes a non-active tab and keeps the active session intact', () => {
     seedStoredTabs([['t1', 'session-1'], ['t2', 'session-2']])
     const store = useAssistantStore()

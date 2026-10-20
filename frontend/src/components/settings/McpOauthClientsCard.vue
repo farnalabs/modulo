@@ -227,6 +227,10 @@
           data-testid="settings-mcp-oauth-scopes-error"
           aria-live="assertive"
         >{{ $t('views.SettingsMcpView.scopes_required') }}</p>
+
+        <p class="mt-2 text-xs text-muted-foreground" data-testid="settings-mcp-oauth-hitl-review-scope-note">
+          {{ $t('views.SettingsMcpView.oauth_hitl_review_scope_note') }}
+        </p>
       </fieldset>
 
       <div

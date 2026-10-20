@@ -212,24 +212,50 @@ def refresh_access_token(refresh_token: str, secret_key: str) -> str:
 def decode_principal(token: str, secret_key: str, allowed_purposes: list[str] | None = None) -> AuthenticatedPrincipal:
     """Decode and validate all identity claims needed for tenant-scoped API access."""
     payload: dict[str, object] = jwt.decode(token, secret_key, algorithms=[_ALGORITHM])
-    sub: object = payload.get("sub")
-    org_id: object = payload.get("org_id")
-    account_id: object = payload.get("account_id") or payload.get("user_id")
-    org_role: object = payload.get("org_role")
-    is_system_admin: object = payload.get("is_system_admin", False)
-    # FAR-634: the credential class. ABSENT claim (tokens minted before the
-    # claim existed) -> the browser default (backward compatible). A present
-    # but non-string value is carried as its string form so enforcement sees
-    # a value that is not exactly CLIENT_KIND_BROWSER (fail closed) rather
-    # than silently re-classifying an unparseable claim as browser.
+    # The credential class is read BEFORE claim validation so the
+    # non-string warning keeps its original ordering relative to a
+    # missing/invalid 'sub' rejection.
+    client_kind = _decode_client_kind(payload)
+    sub, account_id, is_system_admin = _extract_required_claims(payload, allowed_purposes)
+    parsed_account_id = _parse_account_id(account_id)
+    parsed_org_id = _parse_org_id(payload.get("org_id"))
+    org_role = payload.get("org_role")
+    return AuthenticatedPrincipal(
+        username=sub,
+        organisation_id=parsed_org_id,
+        account_id=parsed_account_id,
+        org_role=org_role if isinstance(org_role, str) and org_role else None,
+        is_system_admin=is_system_admin,
+        client_kind=client_kind,
+    )
+
+
+def _decode_client_kind(payload: dict[str, object]) -> str:
+    """Read the credential class, defaulting to browser for absent claims.
+
+    FAR-634: ABSENT claim (tokens minted before the claim existed) -> the
+    browser default (backward compatible). A present but non-string value is
+    carried as its string form so enforcement sees a value that is not
+    exactly CLIENT_KIND_BROWSER (fail closed) rather than silently
+    re-classifying an unparseable claim as browser.
+    """
     raw_client_kind: object = payload.get(_CLIENT_KIND_CLAIM)
     if raw_client_kind is None:
-        client_kind: str = _DEFAULT_CLIENT_KIND
-    elif isinstance(raw_client_kind, str):
-        client_kind = raw_client_kind
-    else:
-        _log.warning("jwt.non_string_client_kind", extra={"value": str(raw_client_kind)})
-        client_kind = str(raw_client_kind)
+        return _DEFAULT_CLIENT_KIND
+    if isinstance(raw_client_kind, str):
+        return raw_client_kind
+    _log.warning("jwt.non_string_client_kind", extra={"value": str(raw_client_kind)})
+    return str(raw_client_kind)
+
+
+def _extract_required_claims(
+    payload: dict[str, object],
+    allowed_purposes: list[str] | None,
+) -> tuple[str, str, bool]:
+    """Validate and return ``(sub, account_id, is_system_admin)``."""
+    sub: object = payload.get("sub")
+    account_id: object = payload.get("account_id") or payload.get("user_id")
+    is_system_admin: object = payload.get("is_system_admin", False)
     if not isinstance(sub, str) or not sub:
         raise JWTError("Token missing or invalid 'sub' claim")
     if not isinstance(account_id, str):
@@ -241,25 +267,26 @@ def decode_principal(token: str, secret_key: str, allowed_purposes: list[str] | 
         purpose: object = payload.get("purpose")
         if not isinstance(purpose, str) or purpose not in allowed_purposes:
             raise JWTError(f"Token purpose '{purpose}' not in allowed list: {allowed_purposes}")
+    return sub, account_id, is_system_admin
+
+
+def _parse_account_id(account_id: str) -> uuid.UUID:
+    """Parse the required account UUID, failing closed on malformed input."""
     try:
-        parsed_account_id: uuid.UUID = uuid.UUID(account_id)
+        return uuid.UUID(account_id)
     except ValueError as exc:
         raise JWTError("Token contains a malformed identity UUID") from exc
+
+
+def _parse_org_id(org_id: object) -> uuid.UUID | None:
+    """Parse the optional org UUID; warn (never raise) on malformed input."""
     parsed_org_id: uuid.UUID | None = None
     if isinstance(org_id, str) and org_id:
         with contextlib.suppress(ValueError):
             parsed_org_id = uuid.UUID(org_id)
-    parsed_org_role: str | None = org_role if isinstance(org_role, str) and org_role else None
     if org_id is not None and parsed_org_id is None:
         _log.warning("jwt.malformed_org_id", extra={"org_id": str(org_id)})
-    return AuthenticatedPrincipal(
-        username=sub,
-        organisation_id=parsed_org_id,
-        account_id=parsed_account_id,
-        org_role=parsed_org_role,
-        is_system_admin=is_system_admin,
-        client_kind=client_kind,
-    )
+    return parsed_org_id
 
 
 def create_ws_token(

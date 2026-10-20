@@ -90,6 +90,9 @@
           <p class="mb-3 text-xs text-muted-foreground" data-testid="settings-mcp-org-scope-note">
             {{ $t('views.SettingsMcpView.api_keys_act_org_wide_note') }}
           </p>
+          <p class="mb-3 text-xs text-muted-foreground" data-testid="settings-mcp-machine-credential-note">
+            {{ $t('views.SettingsMcpView.api_keys_machine_credential_note') }}
+          </p>
           <div v-if="apiKeys.length === 0" class="py-8 text-center text-sm text-muted-foreground">
             {{ $t('views.SettingsMcpView.no_api_keys_created_yet') }}
           </div>

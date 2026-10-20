@@ -4,9 +4,21 @@ import { isTerminalStatus } from '../constants/runStatuses'
 /** FAR-1487: the bookkeeping `rejected` variant - a newer version replaced the waiting review. */
 export const SUPERSEDED_ERROR_CODE = 'hitl.superseded'
 
-/** True for a `rejected` run that ended because a newer version superseded its review (never a human "no"). */
+/** FAR-1883: a capacity-queue timeout - the run was dropped before it started. */
+export const QUEUE_EXPIRED_ERROR_CODE = 'queue.expired'
+
+/** True for a `rejected` run that ended because its capacity-queue timeout expired (never a human "no"). */
+export function isQueueExpiredRun(status: string | null | undefined, errorCode: string | null | undefined): boolean {
+  return status === 'rejected' && errorCode === QUEUE_EXPIRED_ERROR_CODE
+}
+
+/** True for a `rejected` run that ended by supersession - a newer version replaced
+ * its waiting review (FAR-1487), or FAR-1883's capacity-queue timeout dropped it
+ * before it started. Either way it is bookkeeping, never a human "no". */
 export function isSupersededRun(status: string | null | undefined, errorCode: string | null | undefined): boolean {
-  return status === 'rejected' && errorCode === SUPERSEDED_ERROR_CODE
+  return (
+    status === 'rejected' && (errorCode === SUPERSEDED_ERROR_CODE || errorCode === QUEUE_EXPIRED_ERROR_CODE)
+  )
 }
 
 export function runStatusBadgeClass(status: string): string {
@@ -49,6 +61,7 @@ const RUN_STATUS_LABELS: Record<string, string> = {
 
 export function runStatusLabel(status: string | null | undefined, errorCode?: string | null): string {
   if (status == null) return ''
+  if (isQueueExpiredRun(status, errorCode)) return 'expired while queued'
   if (isSupersededRun(status, errorCode)) return 'superseded by a newer version'
   if (RUN_STATUS_LABELS[status]) return RUN_STATUS_LABELS[status]
   return status.replaceAll('_', ' ')
@@ -68,8 +81,17 @@ export function runStatusDescription(
   errorCode?: string | null,
 ): string {
   if (status == null) return ''
-  // FAR-1487: a superseded run is bookkeeping, not a reviewer decision.
-  const key = isSupersededRun(status, errorCode) ? 'statusDescriptions.superseded' : `statusDescriptions.${status}`
+  // FAR-1487 / FAR-1883: a superseded run is bookkeeping, not a reviewer decision.
+  // A queue expiry (capacity-queue timeout) gets its own copy, distinct from the
+  // "newer version replaced this review" supersession.
+  let key: string
+  if (isQueueExpiredRun(status, errorCode)) {
+    key = 'statusDescriptions.queue_expired'
+  } else if (isSupersededRun(status, errorCode)) {
+    key = 'statusDescriptions.superseded'
+  } else {
+    key = `statusDescriptions.${status}`
+  }
   const translated = t(key)
   // Pass errorCode through: the fallback must preserve the superseded phrasing
   // for a `rejected` run whose locale lacks the `statusDescriptions.superseded` key.

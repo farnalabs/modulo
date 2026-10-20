@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from datetime import date as _date
 from decimal import Decimal
-from typing import Any, NamedTuple, ParamSpec, cast
+from typing import Annotated, Any, NamedTuple, ParamSpec, cast
 from urllib.parse import quote, urlencode
 
 from fastapi import HTTPException as FastAPIHTTPException
@@ -45,6 +45,7 @@ from jwt import InvalidTokenError as JWTError
 import pydantic.root_model  # noqa: F401  # isort: skip
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -2428,6 +2429,39 @@ async def list_pipelines_tool(
         return _tool_exception_error("Failed to list pipelines", exc, "mcp.list_pipelines_tool")
 
 
+class PipelineTimeoutOverrides(BaseModel):
+    """The per-pipeline time-window overrides accepted by ``create_pipeline``.
+
+    Grouped into ONE tool argument so ``create_pipeline``'s parameter count
+    stays within the project limit (python:S107) without dropping either
+    documented capability: both are nullable overrides measured in seconds,
+    applied to the same pipeline. Each is validated by
+    ``_validate_create_pipeline_args`` against the same envelope as the
+    REST/Pydantic layer and the corresponding DB CHECK constraint.
+    """
+
+    hitl_review_window_seconds: Annotated[
+        int | None,
+        Field(
+            description=(
+                "Per-pipeline HITL review window in seconds (60-604800). "
+                "Omit or pass null to inherit the org default, then the instance default."
+            )
+        ),
+    ] = None
+    queue_timeout_seconds: Annotated[
+        int | None,
+        Field(
+            description=(
+                "Per-pipeline capacity-queue timeout in seconds (1-604800). When set, a pending run "
+                "carrying a capacity marker older than this window is ended as a supersession "
+                "(status rejected, error_code queue.expired), never a failure. Omit or pass null "
+                "(default) to never expire."
+            )
+        ),
+    ] = None
+
+
 class _CreatePipelineParsed(NamedTuple):
     """Parsed UUID arguments for ``create_pipeline``."""
 
@@ -2440,6 +2474,7 @@ def _validate_create_pipeline_args(
     *,
     folder_id: str | None,
     hitl_review_window_seconds: int | None,
+    queue_timeout_seconds: int | None,
     circuit_breaker_threshold: float | None,
     business_owner_id: str | None,
     reliability_owner_id: str | None,
@@ -2456,6 +2491,9 @@ def _validate_create_pipeline_args(
       (FAR-1257: the same envelope as the REST/Pydantic layer and
       ``ck_pipelines_hitl_review_window`` — validated up front so an
       out-of-range value is a clean tool error, not a DB IntegrityError).
+    - ``queue_timeout_seconds`` must sit in the 1..604800 envelope (FAR-1883:
+      the same envelope as the REST/Pydantic layer and
+      ``ck_pipelines_queue_timeout``; null = never expire).
     - ``circuit_breaker_threshold`` runs the shared FAR-1182 check.
     - owner ids must parse as optional UUIDs (FAR-1161).
     - the autonomy ceiling must be a valid level at or above the default
@@ -2473,6 +2511,12 @@ def _validate_create_pipeline_args(
             "detail": (
                 f"hitl_review_window_seconds must be between 60 and 604800 seconds, got {hitl_review_window_seconds}"
             ),
+        }
+    if queue_timeout_seconds is not None and not (1 <= queue_timeout_seconds <= 604800):
+        return {
+            "error": "validation_failed",
+            "field": "queue_timeout_seconds",
+            "detail": (f"queue_timeout_seconds must be between 1 and 604800 seconds, got {queue_timeout_seconds}"),
         }
     threshold_error = _circuit_breaker_threshold_error(circuit_breaker_threshold)
     if threshold_error is not None:
@@ -2502,8 +2546,13 @@ def _validate_create_pipeline_args(
     "owners (FAR-1161); each assignee must be an active member of this organisation and, when "
     "visibility is 'team', a member of the owner team — an ineligible owner is rejected with a "
     "validation error, never silently dropped. Omit or pass null for unassigned. "
-    "Optional hitl_review_window_seconds (60-604800) sets the per-pipeline HITL review window "
-    "override. Omit or pass null to inherit the org default, then the instance default."
+    "Optional `timeouts` object groups the pipeline's two nullable time-window overrides: "
+    "timeouts.hitl_review_window_seconds (60-604800) sets the per-pipeline HITL review window "
+    "override (omit or pass null to inherit the org default, then the instance default), and "
+    "timeouts.queue_timeout_seconds (1-604800) sets the per-pipeline capacity-queue timeout: "
+    "when set, a pending run carrying a capacity marker older than this window is ended as a "
+    "supersession (status rejected, error_code queue.expired), never a failure. Omit the object, "
+    "or leave queue_timeout_seconds null (default), to never expire."
 )
 @mcp_audited("pipeline_created", "pipeline", fail_closed=False)
 @_RETRY_DB
@@ -2514,7 +2563,7 @@ async def create_pipeline(
     max_concurrent_runs: int = 5,
     lock_wait_timeout_seconds: int = 300,
     node_timeout_seconds: int = 300,
-    hitl_review_window_seconds: int | None = None,
+    timeouts: PipelineTimeoutOverrides | None = None,
     default_autonomy_level: str = "manual_approval",
     max_autonomy_level: str | None = None,
     folder_id: str | None = None,
@@ -2522,9 +2571,15 @@ async def create_pipeline(
     business_owner_id: str | None = None,
     reliability_owner_id: str | None = None,
 ) -> dict[str, Any]:
+    # Grouped so the tool stays within the parameter limit (python:S107); the
+    # two overrides keep their documented names inside the object.
+    timeout_overrides = timeouts or PipelineTimeoutOverrides()
+    hitl_review_window_seconds = timeout_overrides.hitl_review_window_seconds
+    queue_timeout_seconds = timeout_overrides.queue_timeout_seconds
     args = _validate_create_pipeline_args(
         folder_id=folder_id,
         hitl_review_window_seconds=hitl_review_window_seconds,
+        queue_timeout_seconds=queue_timeout_seconds,
         circuit_breaker_threshold=circuit_breaker_threshold,
         business_owner_id=business_owner_id,
         reliability_owner_id=reliability_owner_id,
@@ -2575,6 +2630,7 @@ async def create_pipeline(
                 lock_wait_timeout_seconds=lock_wait_timeout_seconds,
                 node_timeout_seconds=node_timeout_seconds,
                 hitl_review_window_seconds=hitl_review_window_seconds,
+                queue_timeout_seconds=queue_timeout_seconds,
                 default_autonomy_level=default_autonomy_level,
                 max_autonomy_level=max_autonomy_level,
                 folder_id=parsed_folder_id,
@@ -4108,9 +4164,12 @@ async def _replace_pipeline_graph_txn(
         # the command the caller saved, not the pre-sync Agent-row value. The
         # sync runs inside this transaction (``_session`` commits it with the
         # graph write), so a failure rolls the whole save back.
-        from modulo.api.routes.pipelines import _sync_agent_row_commands
+        # The helper lives in ``core`` so every writer (REST, MCP, import,
+        # rollback) shares ONE implementation; import it from its home rather
+        # than through the API module's private alias.
+        from modulo.core.agent_command_sync import sync_agent_row_commands
 
-        await _sync_agent_row_commands(s, org_id=org_id, nodes=nodes)
+        await sync_agent_row_commands(s, org_id=org_id, nodes=nodes, pipeline_id=pid)
         # FAR-309 PR A review: the guardrail-binding strip guard runs in the
         # service layer (replace_pipeline_graph, under the row lock) — the
         # MCP surface inherits it via caller_type="mcp".

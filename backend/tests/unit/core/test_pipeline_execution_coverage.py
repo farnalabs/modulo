@@ -808,7 +808,7 @@ class TestStaleRunRecoverySweepEdgeCases:
         result = await pe.stale_run_recovery_sweep(_Engine())  # type: ignore[arg-type]
         assert result["never_dispatched_swept"] == 0
         assert result["worker_lost_swept"] == 0
-        assert result["capacity_timeout_swept"] == 0
+        assert result["queue_expired_swept"] == 0
         assert result["stranded_capacity_redispatched"] == 0
 
     async def test_cancelled_error_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:

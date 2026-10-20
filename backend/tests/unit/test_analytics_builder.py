@@ -482,6 +482,19 @@ class TestFAR102Metrics:
 
         assert CAPACITY_MARKERS | {ERROR_CODE_CAPACITY_TIMEOUT} == CAPACITY_ERROR_CODES
 
+    def test_queue_expired_supersession_is_not_counted_as_a_failure(self) -> None:
+        """FAR-1883: a queue-expired run is ENDED as ``rejected`` with
+        ``queue.expired``. The analytics failure/stall filters key ONLY on the
+        failed/stalled statuses, so the supersession can never enter
+        ``failure_count`` - and ``queue.expired`` is deliberately absent from the
+        capacity-failure sub-bucket too."""
+        stmt, _params = build_facts_query(_query())
+        compiled = stmt.compile(dialect=postgresql.dialect())
+        failure_statuses = {compiled.params["status_2"], compiled.params["status_3"]}
+        assert failure_statuses == {"failed", "stalled"}
+        assert "rejected" not in failure_statuses
+        assert "queue.expired" not in CAPACITY_ERROR_CODES
+
     def test_capacity_bucket_metrics_aggregate_from_rows(self) -> None:
         # FAR-604: capacity-code failures are their own sub-bucket alongside the
         # generic failure_count — never lumped into agent-failure rates.

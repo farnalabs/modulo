@@ -283,10 +283,60 @@ Team-tier feature (requires valid `MODULO_LICENSE_KEY`). Configurable via env va
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `REDIS_URL` | No | `redis://localhost:6379/0` | `redis://host:port/db` for the SAQ broker and rate limiting |
+| `REDIS_MAXMEMORY` | No | `256mb` | Compose only: the `maxmemory` bound passed to the bundled `redis` service in `docker-compose.yml`, `docker-compose.local.yml` and `deploy/compose/docker-compose.prod.yml`. Raise it (e.g. `1gb`) for a larger queue budget. Ignored when `REDIS_URL` points at an external/managed Redis — bound that instance yourself. |
 
 Redis is **required** for production: the SAQ workers (runs + system) provide
 run dispatch, cron firing, and the scheduler. Without Redis there is no
 executor – only in-memory rate limiting and an in-memory event broker.
+
+**The queue store is bounded on both sides.**
+
+*Deployment side.* The shipped Compose runs Redis with
+`--maxmemory ${REDIS_MAXMEMORY:-256mb} --maxmemory-policy volatile-lru`.
+The Helm chart's embedded Redis (`redis.embedded=true`) passes the same pair
+(`--maxmemory 256mb --maxmemory-policy volatile-lru`).
+Previously it set no bound at all, so Redis ran `noeviction`: under a worker
+wedge (nothing defers, every accepted trigger fire is enqueued) the queue grew
+until every enqueue write failed with `OOM command not allowed`, leaving runs
+`enqueue_failed`. The bound protects the host; a queued run job carries a TTL,
+so it is shed and re-dispatched rather than growing without limit.
+`volatile-lru` is deliberate: it evicts **only keys
+carrying a TTL**. In the SAQ key space that is the job hashes — queued ones are
+TTL'd by the dispatcher (below), completed ones by SAQ — while the queue's
+structural keys (`queued` / `active` lists, `incomplete` zset) are persistent
+and are never evicted. Do not switch to an `allkeys-*` policy: losing a
+structural key drops queued work with no job hash for `dispatcher_reconcile` to
+detect and repair.
+
+*Code side.* `core.dispatch` applies a 3600s TTL (`SAQ_QUEUED_JOB_TTL`) to a
+still-`queued` job hash **only where a lost hash is recoverable** — a TTL on a
+job nothing re-creates would silently drop work. The TTL is applied only while
+the stored job status is `queued` (atomic, status-gated); the worker's dequeue
+transition to `active` clears it, so an in-flight job is never expired. The
+paths and their repair guarantee:
+
+| Enqueue path | Queued TTL | What happens if the hash is shed |
+|---|---|---|
+| Run dispatch (`dispatch._enqueue_saq`) | yes | `dispatcher_reconcile` sees `q.job()` absent on its `pending` + `dispatcher='saq'` leg and re-enqueues the run after `SAQ_REENQUEUE_WINDOW` (600s default). |
+| Cron fire and cron catch-up fire jobs (`cron_helpers._enqueue_fire_job_async`) | yes, **only** for a cadence in `30 min ≤ cadence ≤ 47 h` | `_fire_missed_cron_epochs` re-fires the consumed epoch once the epoch's 960s marker (written when the fire was enqueued) expires. Outside that range the fire is **exempt** (no TTL) because the catch-up could not repair a shed hash: a shed hash disappears `cadence + 3600s` after the previous fire, while the catch-up abandons a miss older than `min(48h, cadence × 3)`. **Below 30 min** the hash outlives the window before the scan can act (for `*/5`: gone at age 3900s, window closed at age 900s), and **above 47 h** the miss falls outside the 48-hour bound. The 960s marker must also expire while the window is still open (`cadence + 960 ≤ min(48h, cadence × 3)`, i.e. `cadence ≥ 8 min`), which the 30-minute floor already satisfies. An exempt fire keeps its hash unbounded while queued rather than being shed silently. A trigger that has **never** fired is the remaining exception: the scan measures staleness from `last_fired_at`, which is NULL, so a shed first-fire hash is not re-fired and the trigger resumes at its next cadence. |
+| Polling and ongoing fire jobs, and their `suite_run` variants | yes | Continuous scans: the next interval enqueues an equivalent job, so a shed hash delays one scan rather than losing a slot. |
+| Scheduled-report fires (`fire_report_trigger`) | **no** | `next_send_at` is advanced *before* the enqueue and there is no rollback and no missed-report scan, so a TTL here would silently drop the report slot. The hash stays unbounded while queued; the deployment `maxmemory` bound and the capacity alert below are the backstop. |
+| Suite-run execution jobs (`_enqueue_suite_run_execution`) | **no** | Nothing reconciles a stranded `pending` `SuiteRun`, so an expired hash would strand the run forever. The hash stays unbounded while queued; the `maxmemory` bound and the capacity alert are the backstop. |
+
+So for run dispatch the guarantee is: a queued run job whose hash is evicted or
+expired is not lost — `dispatcher_reconcile` re-enqueues it. For a polling or
+ongoing fire it is the next scan interval, and for a cron fire inside the
+`30 min .. 47 h` cadence range it is the catch-up scan. The un-TTL'd paths
+remain bounded once SAQ finishes them (SAQ's finish-origin `ttl`), and are
+protected while queued by the deployment bound rather than by silent expiry.
+
+**The bound is alerted, not silent.** The capacity alert sweep
+(`core/capacity_alerts.py`, wired into `dispatcher_reconcile`) reads `INFO
+memory` once per tick. When a bounded Redis is at or above 85% of its
+`maxmemory` and the org has pending work, it raises the admin-scoped
+`capacity_redis_pressure` in-app notification (with the used/limit figures and
+the configured policy), and `capacity_recovered` when it drops back. If the
+`INFO` read fails, an open alert is left open (unknown is not clear).
 
 ---
 
@@ -332,7 +382,7 @@ Client sync for the hosted community library of pipeline primitives.
 | `SAQ_TEST_PAUSE` | TEST-ONLY | `false` | Test-only pause flag; refused outside test/staging (`DEBUG=true`) |
 | `SAQ_NODE_DEFAULT_TIMEOUT_SECONDS` | No | `1200` | Default node execution timeout when graph node has no explicit timeout |
 | `SAQ_NODELESS_REDISPATCH_BUDGET` | No | `4` | Max re-dispatch cycles for claimed-but-nodeless SAQ zombies (raised 2 → 4 by FAR-812 so a zero-node run survives a transient dispatch wobble) |
-| `SAQ_CAPACITY_RETRY_BUDGET` | No | `3` | Per-run capacity-retry budget: a claimed run past this many total claims is terminal-failed regardless of TTL (min 0, max 20) |
+| `SAQ_CAPACITY_RETRY_BUDGET` | No | `3` | **Retired no-op (FAR-1883).** Controls nothing: the instance-wide `capacity_timeout` TTL it governed was removed (capacity-queued runs wait indefinitely unless a pipeline sets `queue_timeout_seconds`). Retained only so an existing deployment's env value is accepted; local overrides have no effect |
 | `HITL_REVIEW_CANCEL_GRACE_SECONDS` | No | `3600` | Instance layer of the three-level HITL review window (per-pipeline override > org default > instance default, FAR-1257): seconds after an open HITL gate expires unanswered before the gate is auto-cancelled, `cancelled` / `hitl_review_expired`, releasing the org concurrency slot (min 60, max 604800). The effective window is resolved once at gate fire time (pipeline override > org default > `HITL_CLAIM_TTL_SECONDS` (900) + this value, clamped to 60..604800) and stamped as the absolute `hitl_claims.terminalize_at`: org default via `GET/PUT /api/v1/admin/org/hitl-review-window` on `/admin/org` (reachable on every plan tier, FAR-1269), per-pipeline override in the pipeline editor. Stamped rows ignore this knob (the stamp is the deadline); it applies verbatim only to legacy unstamped rows. The deprecated name `HITL_GATE_CANCEL_GRACE_SECONDS` is still read when the new name is unset, with a rename warning logged at boot |
 | `SLOT_RECONCILE_STALE_SECONDS` | No | `1800` | Stale heartbeat window for slot reconciliation sweep (force-releases leaked slots) |
 | `HEARTBEAT_STALE_RETRY_BUDGET` | No | `3` | Heartbeat-stale auto-retry budget for the slot-reconcile sweep: a `running` run swept as heartbeat-stale is reset to `pending` for re-dispatch while its `claim_count` is ≤ this budget; only a claim beyond it terminal-fails (raised 1 → 3 by FAR-812 to absorb a transient dispatch wobble in a zero-node run) |

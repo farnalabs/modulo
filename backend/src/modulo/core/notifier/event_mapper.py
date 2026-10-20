@@ -32,6 +32,7 @@ the webhook-subscribable subset is ``AVAILABLE_EVENTS`` in
   - capacity_backpressure → level: warning, scope: org (FAR-1344)
   - capacity_saturation → level: warning, scope: admin (FAR-1344)
   - capacity_recovered → level: info, scope: org (FAR-1344)
+  - capacity_redis_pressure → level: warning, scope: admin (FAR-2002)
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ from modulo.core.notifier import (
     EVENT_BUDGET_EXCEEDED,
     EVENT_CAPACITY_BACKPRESSURE,
     EVENT_CAPACITY_RECOVERED,
+    EVENT_CAPACITY_REDIS_PRESSURE,
     EVENT_CAPACITY_SATURATION,
     EVENT_CIRCUIT_BREAKER_TRIPPED,
     EVENT_CLAIM_EXPIRED,
@@ -347,6 +349,17 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 24,
     },
+    # FAR-2002 — the SAQ queue's Redis store is at its maxmemory bound. Admin
+    # scope: the fix is an operator/deployment change (raise REDIS_MAXMEMORY or
+    # the Redis tier), and it is raised per org with pending work at risk.
+    EVENT_CAPACITY_REDIS_PRESSURE: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "capacity.redis_pressure",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 72,
+    },
 }
 
 _TITLE_TEMPLATES: dict[str, str] = {
@@ -378,6 +391,7 @@ _TITLE_TEMPLATES: dict[str, str] = {
     EVENT_CAPACITY_BACKPRESSURE: "New runs refused (backpressure) — {pipeline_name}",
     EVENT_CAPACITY_SATURATION: "Capacity saturation — {limit_label} fully held",
     EVENT_CAPACITY_RECOVERED: "Capacity recovered — {subject_label}",
+    EVENT_CAPACITY_REDIS_PRESSURE: "Queue store at memory bound — {used_percent}% used",
 }
 
 _BODY_TEMPLATES: dict[str, str] = {
@@ -466,6 +480,12 @@ _BODY_TEMPLATES: dict[str, str] = {
         "Capacity has recovered for {subject_label}: the queue is draining again and the "
         "{previous_level} capacity alert is cleared."
     ),
+    EVENT_CAPACITY_REDIS_PRESSURE: (
+        "The Redis store backing the SAQ queue is using {used_memory_label} of its "
+        "{maxmemory_label} maxmemory bound ({used_percent}%; policy {policy}). Queued job "
+        "hashes are being evicted/shed and re-dispatched by the reconciler — raise "
+        "REDIS_MAXMEMORY (or the Redis tier's memory) before the bound starts refusing enqueues."
+    ),
 }
 
 _ACTION_URL_TEMPLATES: dict[str, str | None] = {
@@ -501,6 +521,7 @@ _ACTION_URL_TEMPLATES: dict[str, str | None] = {
     EVENT_CAPACITY_BACKPRESSURE: _CAPACITY_PANEL_URL,
     EVENT_CAPACITY_SATURATION: _CAPACITY_PANEL_URL,
     EVENT_CAPACITY_RECOVERED: _CAPACITY_PANEL_URL,
+    EVENT_CAPACITY_REDIS_PRESSURE: _CAPACITY_PANEL_URL,
 }
 
 # FAR-1410 — payload-driven wording overrides, selected from the payload's

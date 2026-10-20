@@ -17,6 +17,13 @@ const hitlWindowState = vi.hoisted(() => ({
   deferred: null as null | Promise<unknown>,
 }))
 
+// FAR-1972: org human-linked MCP HITL authority endpoint state.
+const mcpAuthorityState = vi.hoisted(() => ({
+  data: { enabled: true, overridden: false } as unknown,
+  error: undefined as unknown,
+  reject: false,
+}))
+
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn().mockImplementation((url: string) => {
@@ -37,6 +44,12 @@ vi.mock('../lib/api/client', () => ({
           data: { community_objects_enabled: communityState.enabled },
           error: communityState.error,
         })
+      }
+      if (url === '/api/v1/admin/org/mcp-human-linked-hitl-authority') {
+        if (mcpAuthorityState.reject) {
+          return Promise.reject(new Error('setting unreachable'))
+        }
+        return Promise.resolve({ data: mcpAuthorityState.data, error: mcpAuthorityState.error })
       }
       if (url === '/api/v1/admin/billing/overview') {
         return Promise.resolve({
@@ -117,6 +130,9 @@ describe('AdminOrgSettingsView', () => {
     communityState.enabled = true
     communityState.error = undefined
     communityState.reject = false
+    mcpAuthorityState.data = { enabled: true, overridden: false }
+    mcpAuthorityState.error = undefined
+    mcpAuthorityState.reject = false
     hitlWindowState.data = { hitl_review_window_seconds: null, is_default: true }
     hitlWindowState.error = undefined
     hitlWindowState.reject = false
@@ -591,6 +607,98 @@ describe('AdminOrgSettingsView', () => {
     await vi.waitFor(() => {
       expect(wrapper.text()).toContain('network down')
     })
+    wrapper.unmount()
+  })
+
+  // -- FAR-1972: human-linked MCP HITL authority ----------------------------
+
+  it('loads the human-linked MCP authority setting and renders the toggle on', async () => {
+    const wrapper = await mountWindowView()
+    const toggle = wrapper.find('[data-testid="org-mcp-authority-toggle"]')
+    expect(toggle.exists()).toBe(true)
+    expect(toggle.attributes('aria-checked')).toBe('true')
+    expect(wrapper.find('[data-testid="org-mcp-authority-status"]').text()).toContain('may decide a human-only gate')
+    wrapper.unmount()
+  })
+
+  it('renders the toggle off and the stricter status when the org disabled it', async () => {
+    mcpAuthorityState.data = { enabled: false, overridden: true }
+    const wrapper = await mountWindowView()
+    expect(wrapper.find('[data-testid="org-mcp-authority-toggle"]').attributes('aria-checked')).toBe('false')
+    expect(wrapper.find('[data-testid="org-mcp-authority-status"]').text()).toContain('No MCP credential may decide')
+    wrapper.unmount()
+  })
+
+  it('PUTs the org override and confirms the save', async () => {
+    const wrapper = await mountWindowView()
+    const putMock = vi.mocked(api.PUT)
+    putMock.mockResolvedValue({ data: {}, error: undefined } as any)
+
+    await wrapper.find('[data-testid="org-mcp-authority-toggle"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-mcp-authority-saved"]').exists()).toBe(true)
+    })
+
+    expect(putMock).toHaveBeenCalledWith(
+      '/api/v1/admin/org/mcp-human-linked-hitl-authority',
+      expect.objectContaining({ body: { enabled: false } }),
+    )
+    expect(wrapper.find('[data-testid="org-mcp-authority-toggle"]').attributes('aria-checked')).toBe('false')
+    // Announced politely without the `status` role (Web:S6819): a long-lived
+    // region whose content updates, not an atomic status message.
+    expect(wrapper.find('[data-testid="org-mcp-authority-saved"]').attributes('aria-live')).toBe('polite')
+    expect(wrapper.find('[data-testid="org-mcp-authority-saved"]').attributes('role')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('shows an error and keeps the toggle on when the authority save fails', async () => {
+    const wrapper = await mountWindowView()
+    vi.mocked(api.PUT).mockResolvedValueOnce({ data: null, error: 'Server exploded' } as any)
+
+    await wrapper.find('[data-testid="org-mcp-authority-toggle"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-mcp-authority-error"]').text()).toContain('Server exploded')
+    })
+    expect(wrapper.find('[data-testid="org-mcp-authority-toggle"]').attributes('aria-checked')).toBe('true')
+    wrapper.unmount()
+  })
+
+  it('shows the retry affordance when the authority setting cannot be loaded', async () => {
+    mcpAuthorityState.reject = true
+    const wrapper = await mountWindowView()
+    expect(wrapper.find('[data-testid="org-mcp-authority-load-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="org-mcp-authority-retry"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('reports a load error carried in the response body and keeps retry available', async () => {
+    mcpAuthorityState.error = 'setting rejected'
+    const wrapper = await mountWindowView()
+    expect(wrapper.find('[data-testid="org-mcp-authority-load-error"]').text()).toContain('setting rejected')
+    expect(wrapper.find('[data-testid="org-mcp-authority-retry"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('defaults to enabled when the authority payload omits the flag', async () => {
+    // `enabled` is optional on the response; an older/partial payload must not
+    // render the toggle OFF (which would read as "credentials are refused").
+    mcpAuthorityState.data = {}
+    const wrapper = await mountWindowView()
+    expect(wrapper.find('[data-testid="org-mcp-authority-toggle"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.find('[data-testid="org-mcp-authority-status"]').text()).toContain('may decide a human-only gate')
+    wrapper.unmount()
+  })
+
+  it('shows an error and keeps the toggle on when the authority save throws', async () => {
+    const wrapper = await mountWindowView()
+    vi.mocked(api.PUT).mockRejectedValueOnce(new Error('network down'))
+
+    await wrapper.find('[data-testid="org-mcp-authority-toggle"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-mcp-authority-error"]').text()).toContain('network down')
+    })
+    expect(wrapper.find('[data-testid="org-mcp-authority-toggle"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.find('[data-testid="org-mcp-authority-saved"]').exists()).toBe(false)
     wrapper.unmount()
   })
 })
