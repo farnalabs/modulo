@@ -522,8 +522,25 @@ function resetRestForm() {
   restLegacyAuthEcho.value = false
 }
 
-function prefillRestConfig(connector: ConnectorItem) {
-  const cfg = connector.config_json ?? {}
+function readAllowedHosts(value: unknown): string {
+  if (Array.isArray(value)) return value.join(', ')
+  return typeof value === 'string' ? value : ''
+}
+
+function buildAdvancedConfigJson(cfg: Record<string, unknown>): string {
+  const advanced: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(cfg)) {
+    // Snapshot any stored config key the form does not surface as a first-class
+    // control back into the JSON editor: known advanced_fields AND genuinely
+    // unknown keys. This preserves them on an edit-save instead of silently
+    // dropping the config (no data loss on edit, FAR-466).
+    if (NON_ADVANCED_FIELDS.has(key)) continue
+    advanced[key] = value
+  }
+  return Object.keys(advanced).length ? JSON.stringify(advanced, null, 2) : ''
+}
+
+function applyRestConfigFields(cfg: Record<string, unknown>): void {
   restConfig.value.base_url = typeof cfg.base_url === 'string' ? cfg.base_url : ''
   restConfig.value.method = typeof cfg.method === 'string' ? cfg.method.toUpperCase() : 'GET'
   // Preserve a stored non-number timeout verbatim (e.g. a legacy string "45"):
@@ -541,28 +558,14 @@ function prefillRestConfig(connector: ConnectorItem) {
   restConfig.value.records_path = typeof cfg.records_path === 'string' ? cfg.records_path : ''
   // Stored allowed_hosts may be a list (canonical) or a legacy string; anything
   // else pre-fills as empty rather than coerced to "[object Object]".
-  let allowedHosts = ''
-  if (Array.isArray(cfg.allowed_hosts)) {
-    allowedHosts = (cfg.allowed_hosts as unknown[]).join(', ')
-  } else if (typeof cfg.allowed_hosts === 'string') {
-    allowedHosts = cfg.allowed_hosts
-  }
-  restConfig.value.allowed_hosts = allowedHosts
-  const advanced: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(cfg)) {
-    // Snapshot any stored config key the form does not surface as a first-class
-    // control back into the JSON editor: known advanced_fields AND genuinely
-    // unknown keys. This preserves them on an edit-save instead of silently
-    // dropping the config (no data loss on edit, FAR-466).
-    if (NON_ADVANCED_FIELDS.has(key)) continue
-    advanced[key] = value
-  }
-  restConfig.value.advanced_json = Object.keys(advanced).length ? JSON.stringify(advanced, null, 2) : ''
-  // Credentials are write-only in the API (has_credentials boolean only) — the
-  // secret VALUES can never be read back. But the NON-SECRET auth identity
-  // (auth_mode, api_key in/header_name, query_param_name) is echoed back from
-  // config_json so edit mode displays the real auth profile instead of
-  // silently resetting to defaults. Only the secret values stay write-only.
+  restConfig.value.allowed_hosts = readAllowedHosts(cfg.allowed_hosts)
+  restConfig.value.advanced_json = buildAdvancedConfigJson(cfg)
+}
+
+// Restore the NON-SECRET auth identity echoed in config_json and return the
+// stored auth_mode ('' when the row predates the echo). Credentials are
+// write-only in the API, so only these non-secret fields are restored.
+function applyRestCredentials(cfg: Record<string, unknown>): string {
   const creds = defaultRestCreds()
   const storedMode = String(cfg.auth_mode || '').toLowerCase()
   if (AUTH_MODE_OPTIONS.includes(storedMode)) creds.auth_mode = storedMode
@@ -572,6 +575,13 @@ function prefillRestConfig(connector: ConnectorItem) {
   Object.assign(restCreds.value, creds)
   credsDirty.value = false
   credsIdentityDirty.value = false
+  return storedMode
+}
+
+function prefillRestConfig(connector: ConnectorItem) {
+  const cfg = connector.config_json ?? {}
+  applyRestConfigFields(cfg)
+  const storedMode = applyRestCredentials(cfg)
   // Legacy-echo hint: rows stored before the config echo carry no auth_mode in
   // config_json, so the form's bearer default may not match the stored
   // credential — surface the ambiguity instead of silently defaulting (FAR-532).
