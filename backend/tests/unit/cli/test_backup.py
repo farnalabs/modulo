@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
+from psycopg.types.json import Jsonb
 
 from modulo.cli.backup import (
     _export_checkpoint_blobs_sync,
@@ -828,6 +829,40 @@ class TestRestoreCheckpointsSync:
         columns = [column.strip() for column in sql[sql.index("(") + 1 : sql.index(")")].split(",")]
         assert "type" in columns
         assert params[columns.index("type")] == "msgpack"
+
+    @patch("psycopg.connect")
+    def test_wraps_json_columns_as_jsonb(self, mock_connect: MagicMock) -> None:
+        """The JSON exports decode to dicts; psycopg does not adapt a bare dict
+        for a jsonb parameter, so the restore must wrap them explicitly."""
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_connect.return_value.__enter__.return_value = mock_conn
+
+        checkpoints = [
+            {
+                "organisation_id": "00000000-0000-0000-0000-000000000001",
+                "thread_id": "t1",
+                "checkpoint_ns": "ns",
+                "checkpoint_id": "cp1",
+                "parent_checkpoint_id": None,
+                "type": "msgpack",
+                "checkpoint": {"key": "val"},
+                "metadata": {"src": "test"},
+            },
+        ]
+
+        result = _restore_checkpoints_sync("postgresql://localhost/db", checkpoints)
+
+        assert result == 1
+        sql, params = mock_cur.execute.call_args_list[1][0]
+        columns = [column.strip() for column in sql[sql.index("(") + 1 : sql.index(")")].split(",")]
+        checkpoint_value = params[columns.index("checkpoint")]
+        metadata_value = params[columns.index("metadata")]
+        assert isinstance(checkpoint_value, Jsonb)
+        assert checkpoint_value.obj == {"key": "val"}
+        assert isinstance(metadata_value, Jsonb)
+        assert metadata_value.obj == {"src": "test"}
 
 
 # ── _restore_checkpoint_writes_sync ───────────────────────────────────────────

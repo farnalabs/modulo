@@ -59,6 +59,7 @@ import click
 import psycopg
 from cryptography.fernet import Fernet, InvalidToken
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from modulo.cli.apply import register_apply
 from modulo.settings import get_settings
@@ -160,6 +161,17 @@ def _parse_org_id(raw: str | None) -> uuid.UUID | None:
         except (ValueError, TypeError):
             raise RuntimeError(f"Invalid organisation_id: {raw!r}") from None
     return None
+
+
+def _jsonb(value: Any) -> Jsonb | None:
+    """Adapt a restored JSON value for a ``jsonb`` column.
+
+    The checkpoint JSON exports decode into Python objects (dict/list), and
+    psycopg does NOT adapt a bare dict for a parameter — it raises
+    "cannot adapt type 'dict'" at execute time. The value must be wrapped
+    explicitly; ``None`` stays SQL NULL.
+    """
+    return None if value is None else Jsonb(value)
 
 
 def _write_json(path: Path, data: Any) -> None:
@@ -442,8 +454,8 @@ def _restore_checkpoints_sync(raw_url: str, checkpoints: list[dict[str, Any]]) -
                         row.get("checkpoint_id"),
                         row.get("parent_checkpoint_id"),
                         row.get("type"),
-                        row.get("checkpoint"),
-                        row.get("metadata"),
+                        _jsonb(row.get("checkpoint")),
+                        _jsonb(row.get("metadata")),
                     ),
                 )
         conn.commit()
