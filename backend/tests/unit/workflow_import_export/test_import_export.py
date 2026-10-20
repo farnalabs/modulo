@@ -1809,6 +1809,55 @@ async def test_materialize_strips_malformed_node_agent_commands_before_the_sync(
     assert "Imported" in warning
 
 
+def test_strip_malformed_node_agent_commands_ignores_non_dict_nodes() -> None:
+    """FAR-2008: the strip helper tolerates non-dict entries in the raw node array.
+
+    ``graph_nodes_json`` is untrusted bundle JSON, so the array can contain a
+    scalar as well as a mapping. The helper must skip those entries instead of
+    dereferencing them (a ``TypeError`` here would fail the whole import), keep
+    a clean node's ``agent_commands`` intact, strip a malformed value from a
+    node bound to an Agent this import created, leave a node bound to a
+    pre-existing Agent untouched, and disclose exactly the one malformed node.
+    """
+    created_agent_id = str(uuid.uuid4())
+    foreign_agent_id = str(uuid.uuid4())
+    clean_node = {
+        "id": "clean",
+        "agent_id": created_agent_id,
+        "agent_commands": ["opencode run -- ok"],
+    }
+    malformed_node = {
+        "id": "malformed",
+        "agent_id": created_agent_id,
+        "agent_commands": ["ok", 3],
+    }
+    foreign_node = {
+        "id": "foreign",
+        "agent_id": foreign_agent_id,
+        "agent_commands": ["ok", 3],
+    }
+    graph_nodes: list[Any] = [None, "not-a-node", clean_node, malformed_node, foreign_node]
+    warnings: list[str] = []
+
+    mod._strip_malformed_node_agent_commands(graph_nodes, {created_agent_id}, "Imported", warnings)
+
+    # Non-dict entries are ignored in place - neither dropped nor dereferenced.
+    assert graph_nodes[0] is None
+    assert graph_nodes[1] == "not-a-node"
+    assert len(graph_nodes) == 5
+    # A clean value survives so the shared sync can still materialise it.
+    assert clean_node["agent_commands"] == ["opencode run -- ok"]
+    # The malformed value is stripped, and disclosed exactly once.
+    assert "agent_commands" not in malformed_node
+    assert warnings == [
+        "Node 'malformed' in imported pipeline 'Imported' declares malformed "
+        "agent_commands (expected a list of strings with at least one non-empty string). "
+        "The node commands will be omitted."
+    ]
+    # Trust boundary: a node bound to a pre-existing Agent is never rewritten.
+    assert foreign_node["agent_commands"] == ["ok", 3]
+
+
 async def test_materialize_rejects_unpinned_git_ref_in_bundled_agent_commands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
