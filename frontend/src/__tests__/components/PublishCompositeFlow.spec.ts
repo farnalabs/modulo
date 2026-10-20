@@ -267,6 +267,7 @@ describe('PublishCompositeFlow', () => {
 
     focused!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await flushPromises()
+    await flushCloseEvent()
 
     // The dialog actually closed, rather than merely emitting a close event.
     expect(dialogEl.open).toBe(false)

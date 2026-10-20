@@ -742,6 +742,9 @@ describe('LifecycleMapList create dialog', () => {
     await wrapper.find('[data-testid="lifecycle-map-list-create-name"]').setValue('New Map')
     await wrapper.find('[data-testid="lifecycle-map-list-create-submit"]').trigger('click')
     await flushPromises()
+    // The native close event is queued as a task; the @close handler that
+    // unmounts the v-if branch lands after it.
+    await flushCloseEvent()
 
     expect(routerPushMock).toHaveBeenCalledWith({
       name: 'lifecycle-map-editor',
