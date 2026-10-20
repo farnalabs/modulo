@@ -236,7 +236,7 @@ def _build_pytest_command(args: argparse.Namespace, jobs: str) -> list[str]:
         cmd.extend(["-k", args.lenses])
 
     # Add xdist parallelism unless running a single lens expression
-    if not args.lenses or " and " not in (args.lenses or ""):
+    if not args.lenses or " and " not in args.lenses:
         cmd.extend(["-n", jobs])
     return cmd
 
