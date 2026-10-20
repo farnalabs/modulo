@@ -154,10 +154,20 @@ describe('useAssistantStream', () => {
     vi.useFakeTimers()
     const { connectStream } = useAssistantStream()
     const p = connectStream('session-1')
-    await vi.advanceTimersByTimeAsync(2000)
+
+    // Still inside the first 200 ms hold-off poll: the results must not have
+    // been reported yet, otherwise the hold-off is not actually gating.
+    await vi.advanceTimersByTimeAsync(100)
+    expect(posted).toHaveLength(0)
+
+    // Past both paused polls (2 x 200 ms): the executor has resumed, so the
+    // results are submitted exactly once.
+    await vi.advanceTimersByTimeAsync(1000)
     await p
 
     expect(posted).toHaveLength(1)
+    // One probe on entry, plus one per poll tick before the resume is seen.
+    expect(vi.mocked(isPaused)).toHaveBeenCalledTimes(3)
   })
 
   it('turn_separator event appends summary message', async () => {

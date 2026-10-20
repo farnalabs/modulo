@@ -253,12 +253,12 @@ export async function executeCommandBatch(commands: UiCommand[]): Promise<UiComm
       continue
     }
 
-    if (!(await waitForVisible(abort))) { // NOSONAR: commands are ordered, not independent
+    if (!(await waitForVisible(abort))) { // NOSONAR: visibility is a per-command precondition; a target may only become visible after the previous command ran
       results.push(cancelled(cmd))
       continue
     }
 
-    if (!(await waitForResume(abort))) { // NOSONAR: commands are ordered, not independent
+    if (!(await waitForResume(abort))) { // NOSONAR: applyActionDelay() re-arms _paused after every command in review mode, so the gate must be re-evaluated each iteration
       results.push(cancelled(cmd))
       continue
     }

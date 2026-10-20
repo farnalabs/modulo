@@ -91,7 +91,7 @@ async function submitUiCommandResults(ctx: AssistantEventContext, results: UiCom
   const body = JSON.stringify({ results })
   const maxRetries = 3
   for (let retries = 0; retries < maxRetries; retries++) {
-    const resp = await fetch(`/api/v1/assistant/sessions/${sessionId}/ui-command-results`, {
+    const resp = await fetch(`/api/v1/assistant/sessions/${sessionId}/ui-command-results`, { // NOSONAR: retries must repeat the same submission in order, never concurrently
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
