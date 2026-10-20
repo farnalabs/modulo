@@ -131,6 +131,13 @@ def _paginate(body: dict[str, Any], records: list[Any], max_results_fallback: in
     return total, next_cursor
 
 
+def _network_error_message(exc: Exception) -> str:
+    """The user-facing message for a terminal transport failure."""
+    if isinstance(exc, httpx.TimeoutException):
+        return "Jira API timeout"
+    return "Jira API connection error"
+
+
 class JiraConnector(ConnectorBase):
     """Read/write Jira issues via the REST API (Cloud API v3 / Data Center API v2).
 
@@ -329,18 +336,14 @@ class JiraConnector(ConnectorBase):
                     return result
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
-                if await self._handle_status_error(exc, attempt):
-                    continue
-            except httpx.TimeoutException as exc:
+                # Returns True (already slept) to retry, or raises on a
+                # terminal status — either way the loop handles the outcome.
+                await self._handle_status_error(exc, attempt)
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
                 last_exc = exc
                 if await self._retry_after_network_failure(attempt):
                     continue
-                raise ValueError("Jira API timeout") from exc
-            except httpx.ConnectError as exc:
-                last_exc = exc
-                if await self._retry_after_network_failure(attempt):
-                    continue
-                raise ValueError("Jira API connection error") from exc
+                raise ValueError(_network_error_message(exc)) from exc
         raise ValueError("Jira API request failed after retries") from last_exc
 
     @staticmethod
