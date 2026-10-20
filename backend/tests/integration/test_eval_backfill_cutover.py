@@ -545,24 +545,31 @@ async def test_fk_repointed_and_eval_result_integrity_preserved(isolated_db_url:
 
 async def test_eval_definitions_table_unchanged(isolated_db_url: str) -> None:
     """Criterion 10: the legacy table is NOT altered — its reflected column set
-    matches the ORM model exactly, and the audit table exists."""
-    from modulo.db.models.eval_definition import EvalDefinition
+    is identical before and after the backfill, and the audit table exists.
 
+    The legacy ORM entity was deleted (FAR-1961), so the comparison is against
+    the schema that exists at ``PREV_REV`` rather than a model.
+    """
     db_url = isolated_db_url
     engine = create_async_engine(db_url, poolclass=NullPool)
     try:
         seeded = await _seed_org_and_pipeline(engine)
         await _seed_eval_definitions(engine, seeded)
+
+        async with engine.connect() as conn:
+            before = await conn.run_sync(
+                lambda sync_conn: {c["name"] for c in inspect(sync_conn).get_columns("eval_definitions")}
+            )
+
         command.upgrade(_alembic_config(db_url), MIGRATION_REV)
 
         async with engine.connect() as conn:
-            reflected = await conn.run_sync(lambda sync_conn: inspect(sync_conn).get_columns("eval_definitions"))
-        reflected_names = {c["name"] for c in reflected}
-        model_names = {c.name for c in EvalDefinition.__table__.columns}
-
-        assert reflected_names == model_names, (
+            after = await conn.run_sync(
+                lambda sync_conn: {c["name"] for c in inspect(sync_conn).get_columns("eval_definitions")}
+            )
+        assert after == before, (
             f"eval_definitions must be untouched by the backfill; reflected-only="
-            f"{reflected_names - model_names}, model-only={model_names - reflected_names}"
+            f"{after - before}, disappeared={before - after}"
         )
 
         audit_exists = await _scalar(

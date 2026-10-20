@@ -285,6 +285,7 @@ async def _run_reconcile(
     terminalizer_ids: dict[str, list[uuid.UUID]] | None = None,
     terminalizer: AsyncMock | None = None,
     terminalizer_missing: AsyncMock | None = None,
+    review_expiry: AsyncMock | None = None,
     settings_overrides: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], Any, Any, Any, Any, _MockSession]:
     """Drive one ``dispatcher_reconcile`` tick against a fully mocked env.
@@ -294,7 +295,9 @@ async def _run_reconcile(
     ``_terminalize_hitl_review_missing`` (FAR-721 wiring tests) — the caller
     keeps its own reference and asserts on it directly; ``settings_overrides``
     feeds ``_settings`` so a test can prove a settings-derived value (e.g. the
-    gate-expiry grace) reaches the reconciled code unchanged. Both default to
+    gate-expiry grace) reaches the reconciled code unchanged. ``review_expiry``
+    optionally patches the FAR-1854 gate-level recorder so a wiring test can
+    prove the tick calls it with the collected terminalised ids. All default to
     the historical behaviour.
     """
     _patch_env(monkeypatch)
@@ -316,6 +319,8 @@ async def _run_reconcile(
             stack.enter_context(patch.object(ch, "_terminalize_expired_hitl_reviews", terminalizer))
         if terminalizer_missing is not None:
             stack.enter_context(patch.object(ch, "_terminalize_hitl_review_missing", terminalizer_missing))
+        if review_expiry is not None:
+            stack.enter_context(patch.object(ch, "record_review_expiry_outcomes", review_expiry))
         reenqueue = stack.enter_context(
             patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=dispatch_result)
         )
@@ -346,6 +351,8 @@ async def _run_reconcile(
         session.terminalizer = terminalizer
     if terminalizer_missing is not None:
         session.terminalizer_missing = terminalizer_missing
+    if review_expiry is not None:
+        session.review_expiry = review_expiry
     return summary, reenqueue, ingest, redis_client, awaiting_guard, session
 
 
@@ -2943,6 +2950,62 @@ class TestHitlReviewExpiryTerminalizerWiring:
         )
 
         assert terminalizer.await_args.kwargs["grace_seconds"] == 180
+
+    @pytest.mark.asyncio
+    async def test_terminalized_expiry_run_records_gate_level_outcome(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-1854 wiring: the ids the expiry terminalizer returned must reach
+        ``record_review_expiry_outcomes`` after the org transaction commits.
+
+        Deleting the production call site fails this test — it asserts on the
+        REAL tick's invocation, not on a direct helper call.
+        """
+        expired_run = uuid.uuid4()
+        terminalizer = AsyncMock(return_value=[expired_run])
+        review_expiry = AsyncMock(return_value=1)
+
+        summary, _reenqueue, _ingest, _redis, _awaiting, session = await _run_reconcile(
+            monkeypatch,
+            [],
+            terminalizer=terminalizer,
+            review_expiry=review_expiry,
+        )
+
+        assert summary["hitl_review_expired_terminalized"] == 1
+        session.review_expiry.assert_awaited_once()
+        assert session.review_expiry.await_args.args[1] == [(expired_run, ORG)]
+
+    @pytest.mark.asyncio
+    async def test_expiry_recorder_failure_is_logged_and_does_not_fail_the_tick(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The cancellations have committed: a recorder error must not undo them."""
+        expired_run = uuid.uuid4()
+        terminalizer = AsyncMock(return_value=[expired_run])
+        review_expiry = AsyncMock(side_effect=RuntimeError("recorder down"))
+
+        with caplog.at_level(logging.WARNING):
+            summary, _reenqueue, _ingest, _redis, _awaiting, _session = await _run_reconcile(
+                monkeypatch,
+                [],
+                terminalizer=terminalizer,
+                review_expiry=review_expiry,
+            )
+
+        assert summary["hitl_review_expired_terminalized"] == 1
+        assert any("cron_helpers.review_expiry_outcomes_failed" in record.message for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_expiry_recorder_cancellation_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Cancellation is never converted into a swallowed tick failure."""
+        review_expiry = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with pytest.raises(asyncio.CancelledError):
+            await _run_reconcile(
+                monkeypatch,
+                [],
+                terminalizer=AsyncMock(return_value=[uuid.uuid4()]),
+                review_expiry=review_expiry,
+            )
 
 
 class TestTerminalizeHitlReviewMissing:

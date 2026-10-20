@@ -87,7 +87,7 @@
     line-height: 1.4;
     border: 1px solid hsla(var(--primary) / 0.2);
     background-color: hsla(var(--primary) / 0.08);
-    color: hsl(var(--primary));
+    color: hsl(var(--primary-text));
   }
 
   .badge-plan::before {
@@ -193,7 +193,7 @@
   }
 
   .sidebar-link.active {
-    color: hsl(var(--primary));
+    color: hsl(var(--primary-text));
     background-color: hsla(var(--primary) / 0.08);
     border-left: 2px solid hsl(var(--accent-bright));
     padding-left: calc(0.75rem - 2px);
@@ -291,7 +291,7 @@
 
   .badge-status-primary {
     background-color: hsla(var(--primary) / 0.1);
-    color: hsl(var(--primary));
+    color: hsl(var(--primary-text));
   }
 
   .badge-status-primary::before {
@@ -300,7 +300,7 @@
 
   .badge-status-success {
     background-color: hsla(var(--success) / 0.1);
-    color: hsl(var(--success));
+    color: hsl(var(--success-text));
   }
 
   .badge-status-success::before {
@@ -356,7 +356,7 @@
 
   .badge-context-blue {
     background-color: hsla(var(--primary) / 0.1);
-    color: hsl(var(--primary));
+    color: hsl(var(--primary-text));
   }
 
   .badge-context-purple {
@@ -401,7 +401,7 @@
 
   .badge-context-teal {
     background-color: hsla(var(--primary) / 0.1);
-    color: hsl(var(--primary));
+    color: hsl(var(--primary-text));
   }
 
   .badge-context-green {
@@ -457,6 +457,16 @@
   --popover-foreground: 210 28% 93%;
   --primary: 169 90% 45%;
   --primary-foreground: 222 29% 9%;
+  /* FAR-1938: text-safe counterpart of --primary, following the
+     --warning-text / --destructive-text precedent. --primary is tuned as a
+     FILL/accent hue; as TEXT on a bg-primary/* tint it only reaches 4.16-4.33:1
+     in light mode, below the WCAG AA 4.5:1 floor. --primary-text keeps the hue
+     and is an exact copy of --primary in the dark/agent themes (already clear
+     of AA), darkening only in light mode (measured there:
+       white          5.87:1
+       bg-primary/10  5.12:1
+       bg-primary/5   5.16:1). */
+  --primary-text: 169 90% 45%;
   --secondary: 213 23% 15%;
   --secondary-foreground: 210 28% 93%;
   --muted: 213 23% 15%;
@@ -485,6 +495,13 @@
      the .badge-status-destructive rule for the measured ratios. */
   --destructive-text: 0 84% 66%;
   --success: 142 71% 45%;
+  /* FAR-1938: text-safe counterpart of --success. --success is a fill/accent
+     green: as TEXT it is only 2.30:1 on white in light mode. Dark/agent are an
+     exact copy (already clear of AA); light darkens (measured there:
+       white          5.42:1
+       bg-success/10  4.97:1
+       bg-success/15  4.76:1). */
+  --success-text: 142 71% 45%;
   --warning: 38 92% 50%;
   --warning-text: 38 92% 50%;
   /* FAR-1607: text drawn ON a --warning fill (banner/badge backgrounds), which
@@ -516,8 +533,21 @@
 
 /* Light mode — values derived from the ink scale (tailwind.config.cjs)
    --foreground = ink-900, --secondary = ink-50, --muted = ink-50,
-   --muted-foreground = ink-400, --border = ink-50, --input = ink-50 */
-.light {
+   --muted-foreground = ink-400, --border = ink-50, --input = ink-50
+
+   FAR-1938: `.light [data-theme="agent"]` makes the USER'S LIGHT CHOICE win
+   inside an agent-themed page. The agent block below is a dark palette; it was
+   designed against a dark background, so under `.light` it produced dark cards
+   on a white page whose inherited body ink stayed light-mode dark
+   (measured 1.12:1 on the triggers page) and agent-muted text on white
+   (2.52:1). Re-declaring the light palette here keeps the agent TYPOGRAPHY
+   (font-family from the agent block) and uses light colours — the same rule the
+   theme toggle already applies everywhere else. The one non-colour token it
+   changes is --focus-ring, re-declared below to the dark ring so the agent
+   focus indicator clears the 3:1 non-text contrast floor on a light surface.
+   Dark mode is unaffected (this selector requires `.light`). */
+.light,
+.light [data-theme="agent"] {
   color-scheme: light;
   --background: 0 0% 100%;
   --foreground: 220 29% 6%;
@@ -527,6 +557,10 @@
   --popover-foreground: 220 29% 6%;
   --primary: 170 95% 26%;
   --primary-foreground: 210 40% 98%;
+  /* FAR-1938: see --primary-text in :root - 23% lightness is the light-mode
+     text-safe value (5.87:1 on white, 5.12:1 on bg-primary/10, 5.16:1 on
+     bg-primary/5). */
+  --primary-text: 170 95% 23%;
   --secondary: 214 18% 88%;
   --secondary-foreground: 220 29% 6%;
   --muted: 214 18% 88%;
@@ -542,6 +576,10 @@
      36% instead - 5.41:1 on the tint, 7.61:1 on white. */
   --destructive-text: 0 84.2% 36%;
   --success: 142 71% 45%;
+  /* FAR-1938: see --success-text in :root - 28% lightness is the light-mode
+     text-safe value (5.42:1 on white, 4.97:1 on bg-success/10, 4.76:1 on
+     bg-success/15). */
+  --success-text: 142 71% 28%;
   --warning: 38 92% 50%;
   --warning-text: 38 92% 30%;
   /* FAR-1607: see --warning-foreground in :root - dark ink on the mid-amber fill. */
@@ -551,6 +589,9 @@
   --border: 215 15% 85%;
   --input: 215 15% 85%;
   --ring: 170 95% 26%;
+  /* FAR-1938: the agent block sets a light teal focus ring; light mode needs
+     the dark ring for the same 3:1 non-text contrast reason as --primary-text. */
+  --focus-ring: 170 95% 26%;
   --accent-bright: 169 100% 50%;
   --dot-color: rgba(0, 0, 0, 0.04);
   --shadow-overlay: 0 4px 16px rgba(0,0,0,0.1);
@@ -566,7 +607,7 @@
 .light .badge-context-pink { color: hsl(340 80% 35%); background-color: hsla(340 80% 35% / 0.1); }
 .light .badge-context-rose { color: hsl(350 80% 35%); background-color: hsla(350 80% 35% / 0.1); }
 .light .badge-context-amber { color: hsl(var(--warning-text)); background-color: hsla(38 92% 35% / 0.1); }
-.light .badge-context-green { color: hsl(142 71% 28%); background-color: hsla(142 71% 28% / 0.1); }
+.light .badge-context-green { color: hsl(var(--success-text)); background-color: hsla(142 71% 28% / 0.1); }
 
 [data-theme="agent"] {
   --background: 222 30% 8%;
@@ -577,6 +618,8 @@
   --popover-foreground: 210 30% 96%;
   --primary: 169 100% 55%;
   --primary-foreground: 222 30% 8%;
+  /* FAR-1938: see --primary-text in :root - an exact copy of --primary here. */
+  --primary-text: 169 100% 55%;
   --secondary: 222 25% 18%;
   --secondary-foreground: 210 30% 96%;
   --muted: 222 25% 18%;
@@ -591,6 +634,8 @@
      theme's wider card tint also clears AA (5.10:1 on the tint). */
   --destructive-text: 0 90% 68%;
   --success: 142 80% 50%;
+  /* FAR-1938: see --success-text in :root - an exact copy of --success here. */
+  --success-text: 142 80% 50%;
   --warning: 38 95% 55%;
   --warning-text: 38 95% 55%;
   /* FAR-1607: see --warning-foreground in :root - dark ink on the mid-amber fill. */

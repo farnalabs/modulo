@@ -34,7 +34,7 @@ const paletteItems = [
     label: 'Modulo',
     description: 'Managed by a Modulo pipeline',
     icon: CogIcon,
-    iconClass: 'text-primary',
+    iconClass: 'text-primary-text',
   },
   {
     type: 'external' as StageType,

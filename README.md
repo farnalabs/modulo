@@ -40,7 +40,7 @@
 - [What it is](#what-it-is)
 - [Core concepts](#core-concepts)
 - [Key features](#key-features)
-- [Quick start](#quick-start)
+- [Quick start (five-minute demo)](#quick-start-five-minute-demo)
 - [Documentation](#documentation)
 - [Architecture](#architecture)
 - [Development and testing](#development-and-testing)
@@ -99,7 +99,7 @@ it.
 - Extensible model backends, connectors, Model Context Protocol (MCP) tools, and runtime providers
 - PostgreSQL 16 as the primary database, with conformance support for SQLite and MariaDB/MySQL
 
-## Quick start
+## Quick start (five-minute demo)
 
 The shortest local evaluation uses Docker Desktop and Docker Compose:
 
@@ -109,7 +109,8 @@ cd modulo
 docker compose up -d
 ```
 
-The first run builds the backend and frontend images and may take a few minutes.
+The first run builds the backend and frontend images and may take a few
+minutes; after that, the demo itself takes about five minutes.
 
 After the services become healthy, open <http://localhost:5173> and sign in
 with the local demo credentials `admin` / `admin`. These credentials and the

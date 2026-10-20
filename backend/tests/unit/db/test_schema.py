@@ -25,7 +25,6 @@ def test_initial_schema_contains_required_tables() -> None:
         "error_notification_rules",
         "eval_cases",
         "eval_datasets",
-        "eval_definitions",
         "eval_results",
         "eval_suites",
         "evals",

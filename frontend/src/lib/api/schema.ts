@@ -7582,11 +7582,22 @@ export interface paths {
          *     ``validate_binding`` is called to verify the gate-to-eval binding is
          *     still valid after the update.  Violations are logged at WARNING with
          *     structured context but the caller receives a generic 400 (criteria 5-9).
+         *
+         *     The load-and-mutate runs under the same transaction-scoped advisory lock
+         *     as create/toggle (FAR-1750), so a concurrent POST/PATCH cannot interleave
+         *     with this read-modify-write. A lock-acquisition timeout (SQLSTATE 57014)
+         *     surfaces through the standard 503 DB-error mapping.
          */
         put: operations["update_policy_gate_api_v1_evals__eval_id__policy_gate_put"];
         /**
          * Create Policy Gate
          * @description Create a PolicyGate for an eval (admin only).
+         *
+         *     POST is CREATE-ONLY (FAR-1750, decision of record): an eval that already
+         *     has a live gate is refused with a typed 409 — updating (including
+         *     changing ``evaluation_mode``) is ``PUT``, which is the single replace
+         *     path. With ``evaluation_mode`` omitted, a fresh create defaults to
+         *     ``automatic``.
          *
          *     The gate inherits the eval's edit permission — no separate permission
          *     check is performed (criterion 14).
@@ -7598,8 +7609,9 @@ export interface paths {
          *     (criteria 5-9).
          *
          *     Concurrent creates are serialised via a transaction-scoped advisory lock
-         *     (section 4.4/5).  A ``UniqueViolation`` while holding the lock → 409.
-         *     A lock-acquisition timeout (SQLSTATE 57014) → 503.
+         *     (section 4.4/5).  A POST that finds a live gate while holding the lock →
+         *     409; a ``UniqueViolation`` (true race) → 409. A lock-acquisition timeout
+         *     (SQLSTATE 57014) → 503.
          */
         post: operations["create_policy_gate_api_v1_evals__eval_id__policy_gate_post"];
         /**
@@ -7650,8 +7662,8 @@ export interface paths {
          *     (CO-3).
          *
          *     The load-and-mutate runs under the same transaction-scoped advisory lock
-         *     as create-or-replace (FAR-967 F6) so a concurrent replace cannot
-         *     interleave with this read-modify-write.  A lock-acquisition timeout
+         *     as create/update (FAR-967 F6) so a concurrent write cannot interleave
+         *     with this read-modify-write.  A lock-acquisition timeout
          *     (SQLSTATE 57014) → 503.
          *
          *     An audit-log entry is emitted (best-effort, same path as create/update).
@@ -15232,6 +15244,12 @@ export interface components {
             candidates: components["schemas"]["CandidateItem"][];
             /** Count */
             count: number;
+            /** Status */
+            status: string;
+            /** Error */
+            error?: {
+                [key: string]: string;
+            } | null;
         };
         /** HousekeepingScanResponse */
         HousekeepingScanResponse: {
@@ -38550,7 +38568,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Conflict — concurrent gate creation */
+            /** @description Conflict — a live gate already exists (use PUT), or concurrent creation */
             409: {
                 headers: {
                     [name: string]: unknown;

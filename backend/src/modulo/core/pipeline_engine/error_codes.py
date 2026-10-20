@@ -170,6 +170,23 @@ KNOWN_FIXES: tuple[KnownFix, ...] = (
         ),
         link="https://github.com/farnalabs/modulo/blob/main/docs/agent-config.md",
     ),
+    KnownFix(
+        fix_id="model_insufficient_funds",
+        signature="insufficient account funds",
+        title="Model provider account has insufficient funds (HTTP 402)",
+        body=(
+            'The model provider refused the request with HTTP 402 "Insufficient '
+            'account funds" — the provider account balance is exhausted, so every '
+            "run that calls it fails and a retry re-hits the same wall. Top up the "
+            "model provider's account balance (or point the agent at a backend with "
+            "credit), then re-run. This is a billing fault, not a transient gateway "
+            "error, so raising retries or node timeouts will not help."
+        ),
+        # No ``link``: the curated docs this KB points at (docs/agent-config.md)
+        # do not cover provider billing or credential top-up, and a link to an
+        # unrelated page would be worse than none. The actionable instruction
+        # lives in the body above.
+    ),
 )
 
 
@@ -693,6 +710,21 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="The model backend rate-limited the request (detected from retained stdout).",
     ),
+    # A billing fault is a hard blocker, not a transient one: the provider
+    # answers HTTP 402 "Insufficient account funds" and EVERY retry hits the
+    # same wall (each one burns a sandbox dispatch).  Non-retryable and
+    # critical, like ``model_disabled`` — both are credential/billing faults
+    # that only an operator can clear.  Distinct from ``model.rate_limited``
+    # (a quota that recovers on its own) and ``model.provider_timeout``.
+    "model.insufficient_funds": ErrorCodeSpec(
+        error_class="model",
+        retryable=False,
+        alert_severity="critical",
+        guidance=(
+            "The model provider refused the request for lack of funds (HTTP 402) — "
+            "top up the provider account balance, then re-run; retrying cannot succeed."
+        ),
+    ),
     # --- capacity codes --------------------------------------------------
     _CODE_CAPACITY_ORG: ErrorCodeSpec(
         error_class="capacity",
@@ -962,6 +994,10 @@ LEGACY_ALIASES: dict[str, str] = {
     "model_provider_timeout": "model.provider_timeout",
     "model_connection": "model.connection",
     "model_rate_limited": "model.rate_limited",
+    # Sibling snake_case spelling for the HTTP 402 billing code, so the model
+    # family canonicalizes uniformly through ``map_legacy_code`` /
+    # ``expand_code_variants`` (a filter on either spelling resolves it).
+    "model_insufficient_funds": "model.insufficient_funds",
 }
 
 

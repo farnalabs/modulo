@@ -90,7 +90,7 @@
               :checked="field.required"
               type="checkbox"
               data-testid="schema-editor-field-required"
-              class="rounded border-input text-primary focus:ring-primary"
+              class="rounded border-input text-primary-text focus:ring-primary"
               @change="update({ required: ($event.target as HTMLInputElement).checked })"
             />
             {{ $t('views.SchemaEditorView.required') }}

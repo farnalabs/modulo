@@ -1845,7 +1845,7 @@ async def _ensure_declared_gate(
     a live row with a different action is updated IN PLACE (version bump +
     ``pre_version_raw`` snapshot, mirroring the authoring route); no live row is
     created ENABLED with ``enabled_at`` stamped at creation — the same
-    fresh-create semantics as the authoring ``_create_or_replace_gate``, so the
+    fresh-create semantics as the authoring ``_create_gate``, so the
     ``ck_policy_gates_enabled_timestamps`` symmetric CHECK holds by
     construction.
     """
@@ -2325,7 +2325,7 @@ async def replace_pipeline_graph(
         grants_deny_guardrail_admin=actor.grants_deny_guardrail_admin,
     )
 
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         session,
         old_edges,
         edges,

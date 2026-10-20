@@ -119,7 +119,7 @@
           <div v-for="run in rankedRuns.filter(r => expandedRunIds.has(r.run_id))" :key="run.run_id" class="rounded-lg border bg-card p-4" :data-testid="`variant-batch-detail-${run.run_id}`">
             <div class="mb-2 flex items-center justify-between">
               <span class="font-mono text-xs font-semibold">{{ run.variant_name }}</span>
-              <a :href="`/runs/${run.run_id}`" class="text-xs text-primary hover:underline" :data-testid="`variant-batch-run-link-${run.run_id}`">
+              <a :href="`/runs/${run.run_id}`" class="text-xs text-primary-text hover:underline" :data-testid="`variant-batch-run-link-${run.run_id}`">
                 {{ $t('views.variantBatch.viewRun') }}
               </a>
             </div>
@@ -130,7 +130,7 @@
                   v-for="er in run.eval_results"
                   :key="er.eval_id"
                   class="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] tabular-nums"
-                  :class="er.passed ? 'text-success' : 'text-destructive'"
+                  :class="er.passed ? 'text-success-text' : 'text-destructive'"
                   :title="er.detail ?? undefined"
                 >
                   {{ er.node_id }}: {{ er.score !== null ? er.score.toFixed(2) : '-' }} {{ $t(er.passed ? 'views.variantBatch.pass' : 'views.variantBatch.fail') }}
@@ -187,7 +187,7 @@
   <div class="page-wide mt-8 border-t pt-6">
     <div class="mb-3 flex items-center justify-between">
       <h2 class="text-base font-semibold">{{ $t('views.variantBatch.myComparisons') }}</h2>
-      <router-link to="/variants/compare" class="text-sm text-primary hover:underline" data-testid="variant-batch-new-comparison">
+      <router-link to="/variants/compare" class="text-sm text-primary-text hover:underline" data-testid="variant-batch-new-comparison">
         {{ $t('views.variantBatch.createComparison') }}
       </router-link>
     </div>
@@ -210,7 +210,7 @@
           <tbody>
             <tr v-for="cmp in comparisons" :key="cmp.batch_id" class="border-b last:border-b-0 hover:bg-muted/30">
               <td class="px-4 py-3">
-                <router-link :to="`/variants/compare/${cmp.batch_id}`" class="font-medium text-primary hover:underline" :data-testid="`variant-batch-link-${cmp.batch_id}`">
+                <router-link :to="`/variants/compare/${cmp.batch_id}`" class="font-medium text-primary-text hover:underline" :data-testid="`variant-batch-link-${cmp.batch_id}`">
                   {{ cmp.name }}
                 </router-link>
               </td>

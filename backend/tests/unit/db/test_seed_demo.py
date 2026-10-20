@@ -19,6 +19,7 @@ parameters (which embed the demo account's bcrypt password hash).
 """
 
 import logging
+import re
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
@@ -728,7 +729,7 @@ async def test_seed_sample_data_inserts_recover_after_conflict(
     assert await _count(session, count_model) == counts_before
 
 
-@pytest.mark.parametrize("entity", [Pipeline, PipelineSnapshot, Run, Agent, Team])
+@pytest.mark.parametrize("entity", [Schema, SchemaVersion, Pipeline, PipelineSnapshot, Run, Agent, Team])
 async def test_seed_reraises_when_recovery_finds_no_winner(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch, entity: type
 ) -> None:
@@ -989,6 +990,38 @@ def test_safe_exc_text_handles_plain_exceptions() -> None:
     text = seed_demo_module._safe_exc_text(ValueError("boom"))
 
     assert text == "ValueError: boom"
+
+
+def test_parameters_section_regex_equivalence_on_realistic_forms() -> None:
+    """The S8786 rewrite strips the same spans as the previous ``\\s*[^]]*`` form.
+
+    Real SQLAlchemy renders the bind-parameter section with arbitrary interior
+    whitespace/newlines (``[parameters: ('a',)]``, ``[parameters:\\n  (...)]``,
+    ``[parameters:   ]``). The redundant super-linear ``\\s*`` prefix is removed
+    in the rewrite, so this pins the rewritten pattern against the previous
+    ``\\s*[^]]*`` form across a corpus of realistic and adversarial inputs —
+    identical stripped output on every one.
+    """
+    reference = re.compile(r"\[parameters:\s*[^]]*\]", re.DOTALL)
+    rewritten = seed_demo_module._PARAMETERS_SECTION_RE
+    # Discriminating guard: a revert to the old ``\s*[^]]*`` form would make the
+    # corpus comparisons below pass while reintroducing the super-linear prefix.
+    assert r"\s*" not in rewritten.pattern
+    assert rewritten.pattern != reference.pattern
+    corpus = [
+        "[parameters: ('a',)] trailing",
+        "[parameters: ('a',\n  'b')] x",
+        "[parameters:   ] done",
+        "[parameters: []] nested",
+        "[parameters: ('a',)] mid [parameters: ('b',)]",
+        "no marker here",
+        "[parameters: ('unterminated'",
+        "prefix [parameters: ((1, 2, 3))] suffix",
+    ]
+    for sample in corpus:
+        assert rewritten.sub("", sample) == reference.sub("", sample), sample
+    # The primary real-world case still strips the hash-bearing section outright.
+    assert rewritten.sub("", "[parameters: ('x', '<bcrypt-hash>')] tail") == " tail"
 
 
 def test_seed_failure_log_and_print_never_leak_bind_parameters(

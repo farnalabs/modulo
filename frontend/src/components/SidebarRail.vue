@@ -29,7 +29,7 @@
       :aria-label="$t('components.AppLayout.user_profile_link', { label: userInitial })"
     >
       <div
-        class="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary"
+        class="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary-text"
         :title="userEmail"
       >
         {{ userInitial }}

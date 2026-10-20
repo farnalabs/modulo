@@ -65,7 +65,7 @@
         <router-link
           v-if="notification.action_url"
           :to="notification.action_url"
-          class="text-xs font-medium text-primary hover:underline"
+          class="text-xs font-medium text-primary-text hover:underline"
         >
           {{ isHitlAwaiting ? $t('components.NotificationCard.awaiting_hitl_view_run') : $t('components.NotificationCard.view') }}
         </router-link>
@@ -132,7 +132,7 @@ const levelClass = computed(() => {
   const map: Record<string, string> = {
     error: "bg-destructive/10 text-destructive-text",
     warning: "bg-warning/10 text-warning-text",
-    info: "bg-primary/10 text-primary",
+    info: "bg-primary/10 text-primary-text",
     debug: "bg-muted text-muted-foreground",
   };
   return map[props.notification.level] || "bg-muted text-muted-foreground";
@@ -164,7 +164,7 @@ const runStateLabel = computed(() => runStatusLabel(runStatus.value));
 
 const runStateClass = computed(() => {
   if (runIsTerminal.value) return "text-muted-foreground";
-  return "text-primary";
+  return "text-primary-text";
 });
 
 /** Cancel-reason phrase (FAR-1233 ``runs.cancel_reason``), shown only alongside

@@ -1020,7 +1020,7 @@ async def test_replace_pipeline_graph_allows_guardrail_strip_for_admin(
     monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
     monkeypatch.setattr(
         "modulo.db.crud.pipeline.apply_gated_edge_diff",
-        AsyncMock(
+        MagicMock(
             return_value=DiffResult(
                 weakened_edges=[],
                 has_weakening=False,
@@ -1132,7 +1132,7 @@ async def test_rollback_to_snapshot_allows_guardrail_strip_for_admin(
     monkeypatch.setattr("modulo.db.crud.pipeline_snapshot_versioning.append_audit_event", audit)
     monkeypatch.setattr(
         "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
-        AsyncMock(
+        MagicMock(
             return_value=DiffResult(
                 weakened_edges=[],
                 has_weakening=False,

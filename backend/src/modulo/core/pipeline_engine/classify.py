@@ -247,6 +247,11 @@ _SOURCE_ERROR_CLASSES: frozenset[str] = frozenset(
         "node",
         "connector",
         "provider",
+        # A model-provider failure (``model.*`` — timeout / connection /
+        # rate-limit / the HTTP 402 billing fault) is an upstream-infrastructure
+        # problem, not an agent mistake, so it derives ``source_error`` and
+        # never blames the agent with a ``no_delivery`` verdict.
+        "model",
         "capacity",
         "config",
         "contract",

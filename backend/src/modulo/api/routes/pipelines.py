@@ -5859,9 +5859,34 @@ async def rollback_snapshot_endpoint(
             # mirrored here: it remains a save-time-only rule (ModelBackendHub
             # has no invocation-time visibility gate), so rollbacks are judged
             # on connector bindings only.
-
-            async def _connector_team_gate_after_lock(target: PipelineSnapshot, pipeline: Pipeline) -> None:
+            #
+            # FAR-1845: the contract for the pipeline graph-write surfaces
+            # covered by this ticket — the REST full-graph/PATCH writes, the
+            # MCP full-graph write, and this snapshot rollback — is "sync the
+            # bound Agent rows inside the SAME transaction, BEFORE the graph
+            # write" (FAR-488a: what you save/restore is what runs). (Bundle
+            # import/export in ``modulo.core.workflow_import_export`` is a
+            # separate path and out of scope here.) ``rollback_to_snapshot``
+            # rewrites ``pipeline.graph_nodes_json``
+            # from the target snapshot verbatim, so without this sync the live
+            # graph would claim the restored command while
+            # ``_materialize_agent_fields`` let the stale Agent row win at
+            # run-snapshot time — the rollback would appear to change the
+            # command and the run would execute the old one. The caller owns
+            # the sync because ``rollback_to_snapshot`` (db layer) cannot import
+            # ``modulo.api`` (import-linter db-does-not-import-api), exactly as
+            # the REST graph-write endpoints own theirs.
+            async def _rollback_post_lock_gate(target: PipelineSnapshot, pipeline: Pipeline) -> None:
                 snapshot_nodes = target.graph_json.get("nodes", []) if isinstance(target.graph_json, dict) else []
+                # Sync the bound Agent rows FIRST — never behind an early
+                # return. The connector-team gate below short-circuits a graph
+                # with no connector bindings, but the Agent-row sync must run
+                # for every restored snapshot regardless of connector content.
+                await _sync_agent_row_commands(
+                    session,
+                    org_id=pipeline.organisation_id,
+                    nodes=snapshot_nodes,
+                )
                 stored_bindings = extract_connector_bindings(snapshot_nodes)
                 if not stored_bindings:
                     return
@@ -5882,7 +5907,7 @@ async def rollback_snapshot_endpoint(
                 is_guardrail_admin=_is_guardrail_admin(principal),
                 grants_deny_privilege=_grants_deny_privilege(principal),
                 grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
-                post_lock_gate=_connector_team_gate_after_lock,
+                post_lock_gate=_rollback_post_lock_gate,
             )
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
         await _handle_graph_write_denials(
@@ -5891,6 +5916,13 @@ async def rollback_snapshot_endpoint(
             pipeline_id=pipeline_id,
             exc=exc,
         )
+    except GitContentRefError as exc:
+        # FAR-1845/FAR-220: the rollback's Agent-row command sync validated an
+        # unpinned git content ref in the restored snapshot and failed closed
+        # INSIDE the transaction — the rollback is rolled back with it. Surface
+        # 422 instead of the decorator's 500, the same mapping every graph-write
+        # endpoint uses; a poisoned ref must never be restored silently.
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 

@@ -59,6 +59,11 @@ from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 # langgraph).
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
+
+# FAR-1854: the gate-level record of an EXPIRED-UNANSWERED HITL review. The
+# module is deliberately import-safe (no cron_helpers import), so this edge
+# adds no cycle.
+from modulo.core.hitl_manager.review_expiry import record_review_expiry_outcomes
 from modulo.core.logging_config import org_id_var
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
@@ -8078,10 +8083,12 @@ async def _terminalize_run_facts(
 
     FAR-162 (P6') + FAR-746: record a capped daily fact for every run
     terminalised this tick; FAR-1549: record every such run on its org's
-    uncapped audit chain. All per-org terminalizer transactions have
-    committed by the time this runs — each facts write opens its own
-    RLS-scoped session. Extracted for S3776; ordering (facts, then audits)
-    is unchanged.
+    uncapped audit chain; FAR-1854: record the gate-level outcome for HITL
+    reviews the expiry sweep cancelled without a decision. All per-org
+    terminalizer transactions have committed by the time this runs — each
+    facts write opens its own RLS-scoped session. Extracted for S3776;
+    ordering (facts, then run audits, then gate-level expiry outcomes) is
+    unchanged.
     """
     # FAR-162 (P6') — record a daily fact for every run terminalised this
     # tick (executor_stalled / no_progress / claim_cap_exhausted /
@@ -8109,6 +8116,21 @@ async def _terminalize_run_facts(
     # ONE session per ORG (not one per run) so a terminalizer backlog cannot
     # blow the tick budget the way per-run sessions would.
     await _record_terminalisation_audits(terminalized_run_ids)
+    # FAR-1854 — the run-level sweep event above names the run but never the
+    # gate, and a cancelled run's undecided gate vanishes from every pending
+    # surface. Record the gate-level outcome from the SAME collected ids: the
+    # recorder re-verifies each run's cancel_reason/error_code against the
+    # expiry marker, so ids from the other terminalizers are ignored. Never a
+    # fabricated verdict — an expired review is recorded as undecided.
+    # Fail open WITH a log, exactly like the audit write above: the
+    # cancellations have already committed, so a recorder failure must never
+    # turn a completed sweep into a tick failure.
+    try:
+        await record_review_expiry_outcomes(_open_factory(), terminalized_run_ids)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("cron_helpers.review_expiry_outcomes_failed", exc_info=True)
 
 
 def _dispatcher_summary() -> dict[str, Any]:

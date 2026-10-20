@@ -64,7 +64,7 @@
                 :style="{ width: item.good_pct + '%' }"
               />
             </div>
-            <span class="text-xs tabular-nums" :class="item.good_pct != null && item.good_pct >= 90 ? 'text-success' : item.good_pct != null && item.good_pct >= 50 ? 'text-warning-text' : 'text-destructive'">
+            <span class="text-xs tabular-nums" :class="item.good_pct != null && item.good_pct >= 90 ? 'text-success-text' : item.good_pct != null && item.good_pct >= 50 ? 'text-warning-text' : 'text-destructive'">
               {{ item.good_pct != null ? item.good_pct + '% good' : '—' }}
             </span>
           </div>
@@ -172,7 +172,7 @@ function formatMetricValue(name: string, value: number): string {
 function metricColor(item: SummaryItem): string {
   const thresholds = METRIC_THRESHOLDS[item.metric_name]
   if (!thresholds) return ''
-  if (item.avg_value <= thresholds.good) return 'text-success'
+  if (item.avg_value <= thresholds.good) return 'text-success-text'
   if (item.avg_value <= thresholds.poor) return 'text-warning-text'
   return 'text-destructive'
 }

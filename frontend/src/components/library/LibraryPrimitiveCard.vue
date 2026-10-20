@@ -12,7 +12,7 @@
       </div>
       <span
         v-if="badge === 'modulo' && prim.source === 'modulo'"
-        class="text-xs text-primary font-medium bg-primary/10 px-2 py-0.5 rounded"
+        class="text-xs text-primary-text font-medium bg-primary/10 px-2 py-0.5 rounded"
       >
         {{ $t('views.LibraryView.modulo_badge') }}
       </span>
