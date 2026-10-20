@@ -82,7 +82,7 @@ async function waitForExecutorResume(streamSignal: AbortSignal | null | undefine
   while (isExecutorPaused()) {
     if (Date.now() > pauseDeadline) break
     if (streamSignal?.aborted) break
-    await new Promise(r => setTimeout(r, 200))
+    await new Promise(r => setTimeout(r, 200)) // NOSONAR: pause polling is one tick at a time by design
   }
 }
 
@@ -103,7 +103,7 @@ async function submitUiCommandResults(ctx: AssistantEventContext, results: UiCom
     if (retries >= maxRetries - 1) {
       store.error = `Failed to submit UI command results (${resp.status})`
     } else {
-      await new Promise(r => setTimeout(r, 500 * (retries + 1)))
+      await new Promise(r => setTimeout(r, 500 * (retries + 1))) // NOSONAR: retry backoff must run attempt by attempt
     }
   }
 }
