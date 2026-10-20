@@ -35,7 +35,7 @@ from starlette import status as http_status
 from starlette.responses import StreamingResponse
 
 from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE, MSG_UNEXPECTED_ERROR
-from modulo.api.db_error_handling import raise_session_contract_error
+from modulo.api.db_error_handling import prime_stream, raise_session_contract_error, reemit_primed_stream
 from modulo.api.dependencies import get_or_create_engine, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.analytics.builder import (
@@ -49,6 +49,7 @@ from modulo.core.analytics.guardrails import run_guardrail_scorecard
 from modulo.core.analytics.service import (
     EXPORT_COLUMN_NAMES,
     AnalyticsDatabaseError,
+    AnalyticsError,
     AnalyticsMigrationRequiredError,
     AnalyticsParams,
     AnalyticsQueryTimeoutError,
@@ -920,21 +921,38 @@ async def _scan_body(
 ) -> AsyncIterator[str]:
     """Chunk the primed scan generator into the wire format (NDJSON or CSV).
 
-    ``first`` is the row already fetched by the route to surface pre-stream
-    errors (validation/rate-limit/migration/database) as a proper HTTP status;
-    it is re-emitted here so no row is lost.
+    A thin format adapter over the shared
+    :func:`modulo.api.db_error_handling.reemit_primed_stream` — the
+    first-item-then-the-rest loop lives in ONE place for all three streaming
+    exports. ``first`` is the row already fetched by the route to surface
+    pre-stream errors (validation/rate-limit/migration/database) as a proper
+    HTTP status; it is re-emitted here so no row is lost.
     """
     if format == "csv":
-        yield _csv_stream_line(header=True)
-        if first is not None:
-            yield _csv_stream_line(header=False, item=first)
-        async for item in stream:
-            yield _csv_stream_line(header=False, item=item)
-        return
-    if first is not None:
-        yield json.dumps(first) + "\n"
-    async for item in stream:
-        yield json.dumps(item) + "\n"
+        body = reemit_primed_stream(
+            stream,
+            first,
+            lambda item: _csv_stream_line(header=False, item=item),
+            header=_csv_stream_line(header=True),
+        )
+    else:
+        body = reemit_primed_stream(stream, first, lambda item: json.dumps(item) + "\n")
+    async for chunk in body:
+        yield chunk
+
+
+def _map_analytics_domain_error(exc: Exception) -> HTTPException | None:
+    """Preserve the typed analytics service verdict ahead of the shared classifier.
+
+    Returned to :func:`~modulo.api.db_error_handling.prime_stream` as its
+    ``map_domain_error`` seam: a typed ``AnalyticsError`` keeps its existing
+    REST mapping (rate-limit -> 429, validation -> 422, migration -> 501,
+    timeout/database -> 503); anything else returns ``None`` so the shared DB
+    classifier's arms (409/422/501/503/re-raise/500) apply unchanged.
+    """
+    if isinstance(exc, AnalyticsError):
+        return _map_service_error(exc)
+    return None
 
 
 @router.get("/scan")
@@ -957,28 +975,31 @@ async def analytics_scan(
     is accepted for surface parity but ignored (a scan has no bucketing).
     """
     org_id = _require_org(principal)
+    # The team-boundary resolver owns its own DB-error mapping (503 fail-closed
+    # in ``_resolve_scoped_team_ids``); preserve its existing fallback for a
+    # non-HTTP escape unchanged.
     try:
         team_ids = await _resolve_scoped_team_ids(
             _analytics_session_factory(settings), org_id=org_id, principal=principal
         )
-        stream = stream_export_facts(
-            org_id=org_id,
-            params=params,
-            factory=_analytics_session_factory(settings),
-            settings=settings,
-            account_id=principal.account_id,
-            org_role=principal.org_role,
-            team_ids=team_ids,
-        )
-        # Prime the generator so validation / rate-limit / migration / database
-        # errors surface as a proper HTTP status BEFORE the stream starts.
-        first = await stream.__anext__()
-    except StopAsyncIteration:
-        first = None
+    except HTTPException:
+        raise
     except Exception as exc:
-        if isinstance(exc, HTTPException):
-            raise
         raise _map_service_error(exc) from None
+    stream = stream_export_facts(
+        org_id=org_id,
+        params=params,
+        factory=_analytics_session_factory(settings),
+        settings=settings,
+        account_id=principal.account_id,
+        org_role=principal.org_role,
+        team_ids=team_ids,
+    )
+    # Prime the generator so validation / rate-limit / migration / database
+    # errors surface as a proper HTTP status BEFORE the stream starts. Typed
+    # ``AnalyticsError`` keep their own verdict via the domain-error seam;
+    # everything else goes through the shared DB classifier.
+    first = await prime_stream(stream, "analytics.scan", map_domain_error=_map_analytics_domain_error)
 
     body = _scan_body(stream, first=first, format=format)
     if format == "csv":
