@@ -503,6 +503,7 @@ describe('AdminErrorsView', () => {
     const skeleton = wrapper.find('[data-testid="admin-errors-loading"]')
     expect(skeleton.exists()).toBe(true)
     expect(skeleton.findAll('.animate-pulse').length).toBeGreaterThan(0)
+    expect(skeleton.attributes('aria-hidden')).toBe('true')
 
     resolveGroups({ items: [], total: 0 })
     await flushPromises()
