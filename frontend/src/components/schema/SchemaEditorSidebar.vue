@@ -12,14 +12,12 @@
     </div>
 
     <div class="flex-1 overflow-y-auto">
-      <output
-        v-if="loading"
-        class="block space-y-2 p-4"
-        :aria-label="$t('common.loading')"
-        data-testid="schema-editor-list-loading"
-      >
-        <SkeletonBlock v-for="n in 5" :key="'schema-skeleton-' + n" height-class="h-12 w-full" />
-      </output>
+      <div v-if="loading" class="p-4" data-testid="schema-editor-list-loading">
+        <output class="sr-only" aria-live="polite">{{ $t('common.loading') }}</output>
+        <div class="space-y-2">
+          <SkeletonBlock v-for="n in 5" :key="'schema-skeleton-' + n" height-class="h-12 w-full" />
+        </div>
+      </div>
       <div v-else-if="schemas.length === 0" class="p-4">
         <EmptyState :title="$t('views.SchemaEditorView.no_schemas_yet')" />
       </div>

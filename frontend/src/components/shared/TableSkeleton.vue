@@ -1,9 +1,9 @@
 <template>
-  <output
-    class="block overflow-x-auto rounded-lg border bg-card shadow-sm"
-    aria-busy="true"
-    :aria-label="ariaLabel"
-  >
+  <div class="overflow-x-auto rounded-lg border bg-card shadow-sm" aria-busy="true">
+    <!-- The live region announces only the loading status text; the loading
+         placeholder table is layout, not phrasing content, so it is a sibling
+         rather than a child of <output> (invalid content model). -->
+    <output class="sr-only" aria-live="polite">{{ ariaLabel }}</output>
     <table class="w-full text-left text-sm">
       <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
         <tr>
@@ -36,7 +36,7 @@
         </tr>
       </tbody>
     </table>
-  </output>
+  </div>
 </template>
 
 <script setup lang="ts">

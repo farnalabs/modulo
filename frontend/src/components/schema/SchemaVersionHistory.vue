@@ -1,14 +1,12 @@
 <template>
   <section class="rounded-lg border bg-card p-6 shadow-sm">
     <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaEditorView.version_history') }}</h2>
-    <output
-      v-if="loading"
-      class="block space-y-2"
-      :aria-label="$t('common.loading')"
-      data-testid="schema-editor-versions-loading"
-    >
-      <SkeletonBlock v-for="n in 3" :key="'version-skeleton-' + n" height-class="h-10 w-full" />
-    </output>
+    <div v-if="loading" data-testid="schema-editor-versions-loading">
+      <output class="sr-only" aria-live="polite">{{ $t('common.loading') }}</output>
+      <div class="space-y-2">
+        <SkeletonBlock v-for="n in 3" :key="'version-skeleton-' + n" height-class="h-10 w-full" />
+      </div>
+    </div>
     <EmptyState v-else-if="versions.length === 0" :title="$t('views.SchemaEditorView.no_version_history')" />
     <div v-else class="space-y-2">
       <div
