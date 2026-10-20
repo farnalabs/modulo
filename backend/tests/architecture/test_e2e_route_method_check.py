@@ -945,6 +945,40 @@ def test_optional_chain_method_filter_is_noted() -> None:
     assert any("cannot attribute to a single literal method" in note for note in notes)
 
 
+def test_optional_chained_bracket_method_filter_is_noted() -> None:
+    # An optional chain BEFORE a bracket-keyed method read (``?.['method']``)
+    # matched neither the bracket marker nor the ledger's method-call marker, so
+    # the whole registration vanished: no descriptor, no note, no unanalysed.
+    # All four shapes must at least be noted.
+    for source in (
+        # Inline receiver.
+        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
+        "  if (route.request()?.['method']() === 'PATCH') return route.fulfill({})\n"
+        "})\n",
+        # Reversed comparison order.
+        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
+        "  if ('PATCH' === route.request()?.['method']()) return route.fulfill({})\n"
+        "})\n",
+        # Second callback parameter (the Request).
+        "await page.route('**/api/v1/pipelines/abc/graph', async (route, request) => {\n"
+        "  if (request?.['method']() === 'PATCH') return route.fulfill({})\n"
+        "})\n",
+        # A captured request object.
+        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
+        "  const rq = route.request()\n"
+        "  if (rq?.['method']() === 'PATCH') return route.fulfill({})\n"
+        "})\n",
+    ):
+        notes: list[str] = []
+        unanalysed: list[str] = []
+
+        calls = _checker.extract_http_calls(source, FILENAME, notes, unanalysed)
+
+        assert not calls
+        assert not unanalysed
+        assert any("cannot attribute to a single literal method" in note for note in notes)
+
+
 def test_fetch_method_shorthand_is_not_an_implicit_get() -> None:
     # ``{ method }`` carries the method but no literal here, so the request is
     # unresolvable - assuming GET can fail a valid PR.
@@ -1608,17 +1642,53 @@ def test_fetch_alias_forms_are_unanalysed() -> None:
         assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
 
 
-def test_bracket_request_verb_is_unanalysed() -> None:
+def test_bracket_request_verb_with_a_literal_key_is_noted() -> None:
     # ``page.request['post'](...)`` is an APIRequestContext call whose verb is
-    # dynamic; it was neither extracted nor flagged.
+    # readable but whose bracket spelling the extractor does not model. It is a
+    # candidate the ledger must account for, so it is noted - never a hard
+    # failure, and never silently dropped.
     unanalysed: list[str] = []
+    notes: list[str] = []
     source = "await page.request['post']('/api/v1/pipelines', { data })\n"
 
-    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+    calls = _checker.extract_http_calls(source, FILENAME, notes, unanalysed)
 
     assert not calls
-    assert len(unanalysed) == 1
-    assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
+    assert not unanalysed
+    assert len(notes) == 1
+    assert "bracket-accessed with a literal key" in notes[0]
+
+
+def test_dynamic_bracket_request_key_is_not_an_api_candidate() -> None:
+    # A dynamic key is the documented "dynamic property access is not
+    # enumerated" boundary, so a bracket on a request context whose key is not a
+    # literal must never be a hard failure.
+    for source in (
+        "const key = 'post'\nawait page.request[key]('/api/v1/runs')\n",
+        "const verb = 'delete'\nawait request[verb]('/api/v1/pipelines/1')\n",
+    ):
+        unanalysed: list[str] = []
+        notes: list[str] = []
+
+        calls = _checker.extract_http_calls(source, FILENAME, notes, unanalysed)
+
+        assert not calls
+        assert not unanalysed
+        assert not notes
+
+
+def test_non_verb_literal_bracket_request_key_is_not_an_api_candidate() -> None:
+    # ``page.request['dispose']()`` is ordinary member access, not an HTTP call:
+    # there is no route to check, so it is not a candidate and not a failure.
+    unanalysed: list[str] = []
+    notes: list[str] = []
+    source = "await page.request['dispose']()\n"
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes, unanalysed)
+
+    assert not calls
+    assert not unanalysed
+    assert not notes
 
 
 def test_renamed_request_fixture_binding_is_unanalysed() -> None:

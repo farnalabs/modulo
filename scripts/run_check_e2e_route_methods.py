@@ -65,10 +65,13 @@ What is scanned (``frontend/tests/e2e/**/*.ts``):
   if (isPatch)``) is resolved too. A comparison combined with an in-callback
   URL test (``url.includes`` / ``url.endsWith``) is not guessed - its effective
   path lives in that condition, not in the registration, so it is reported as
-  a note. A method read through a bracket key (``route.request()['method']()``)
-  or an optional chain (``route.request()?.method?.()``) is likewise noted: the
-  comparison passes model only the plain ``.method()`` spelling, and the string
-  key is blanked in the masked source. ``!== '<METHOD>'`` and negated-boolean
+  a note. A method read through a bracket key (``route.request()['method']()``),
+  an optional chain (``route.request()?.method?.()``) or both
+  (``route.request()?.['method']()``, including a captured request
+  ``const rq = route.request(); rq?.['method']()`` and the same read on the
+  second callback parameter) is likewise noted: the comparison passes model only
+  the plain ``.method()`` spelling, and the string key is blanked in the masked
+  source. ``!== '<METHOD>'`` and negated-boolean
   filters are skipped too - they guard a fallback branch rather than selecting
   a method - and any other method reference the extractor cannot attribute to
   one literal method (a
@@ -118,8 +121,9 @@ What the ledger DOES check: it enumerates candidate occurrences for the
 DOCUMENTED callee spellings - the bare forms and their property-qualified /
 bracket / optional-chain variants on the documented roots - ``apiFetch(``,
 ``fetch(``, ``fetchWithTransientRetry(``, the ``page.request`` /
-``context.request`` / ``request`` verb calls (direct, bracket-accessed and
-optional-chain), alias captures made by the documented binding forms (``const f
+``context.request`` / ``request`` verb calls (direct, and bracket-accessed with
+a literal verb key, and optional-chain), alias captures made by the documented
+binding forms (``const f
 = window.fetch``, ``const call = apiFetch``, ``const api = page.request``,
 ``const { fetch: f } = globalThis``, ``const { get } = page.request``, a renamed
 ``request`` fixture), which includes a local name bound by an IMPORT specifier
@@ -165,7 +169,12 @@ access (``helpers[key]``), values passed around as data, or calls reached
 through user-defined higher-order functions (``invoke(page.request.post)``,
 ``const send = helpers[key]; send(...)``). A call reached ONLY through that
 indirection is not enumerated at all - it is not a descriptor, not a note and
-not an unanalysed entry. That boundary is intentional and tested (see
+not an unanalysed entry. A bracket key on a request context that is not a
+literal HTTP verb is the same class: ``page.request[key]`` (a dynamic key) and
+``page.request['dispose']`` (a literal non-verb member) name no route this
+checker can validate, so neither is an API candidate and neither is a hard
+failure. A literal verb key (``page.request['post']``) IS a candidate and is
+noted, never silently dropped. That boundary is intentional and tested (see
 ``test_documented_limitation_dynamic_property_access_is_not_enumerated``), not
 an accident of the current marker list.
 
@@ -337,15 +346,17 @@ _METHOD_CALL_RE = re.compile(r"(?:\?\.|\.)\s*method\s*(?:\?\.)?\s*\(")
 #: The optional-chain spellings alone - the forms the comparison passes do NOT
 #: resolve even though a plain ``.method()`` right beside them would resolve.
 _METHOD_OPTIONAL_CHAIN_CALL_RE = re.compile(r"\?\.\s*method\s*(?:\?\.)?\s*\(|\.\s*method\s*\?\.\s*\(")
-#: A bracket-keyed method read (``route.request()['method']()``). The key is a
-#: string literal, so it is blanked in the masked source and the marker has to
-#: re-read the key from the original: the chain may contain call parentheses
-#: (``route.request()``, ``page.context().request()``), which the flat index
-#: marker used for ``globalThis['fetch']`` does not allow.
+#: A bracket-keyed method read (``route.request()['method']()``), including an
+#: optional chain before the bracket (``route.request()?.['method']()``,
+#: ``rq?.['method']()``). The key is a string literal, so it is blanked in the
+#: masked source and the marker has to re-read the key from the original: the
+#: chain may contain call parentheses (``route.request()``,
+#: ``page.context().request()``), which the flat index marker used for
+#: ``globalThis['fetch']`` does not allow.
 _METHOD_BRACKET_INDEX_RE = re.compile(
     r"(?<![\w$])[A-Za-z_$][\w$]*"
     r"(?:(?:\s*\.\s*[A-Za-z_$][\w$]*)|(?:\s*\([^()]*\)))*"
-    r"\s*(?P<bracket>\[\s*\])"
+    r"\s*(?:\?\.\s*)?(?P<bracket>\[\s*\])"
 )
 #: A ``method`` pulled out of the request object by destructuring
 #: (``const { method } = route.request()``) - a filter form the comparison
@@ -382,8 +393,11 @@ _API_REQUEST_RE = re.compile(
 _HTTP_METHOD_LITERAL_RE = re.compile(r"""['"](?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)['"]""", re.IGNORECASE)
 _LEDGER_IGNORE_RE = re.compile(r"//\s*e2e-route-check:\s*ignore\b")
 #: Bracket access to an APIRequestContext (``page.request['post'](...)``,
-#: ``request[verb](...)``). The verb is dynamic, so the call cannot be modelled
-#: but must still be a candidate occurrence rather than vanish.
+#: ``request['post'](...)``). The KEY is read from the original source by
+#: :func:`_literal_bracket_request_verb_offsets`: only a literal HTTP verb is an
+#: API candidate. A dynamic key is outside this check's contract (see the module
+#: docstring) and a literal non-verb key (``['dispose']``) is ordinary member
+#: access, so neither is enumerated and neither is a hard failure.
 _LEDGER_BRACKET_REQUEST_RE = re.compile(
     r"(?:(?:page|context)\s*(?:\.\s*context\s*\(\s*\))?\s*\.\s*request|(?<![\w.$])request)\s*\["
 )
@@ -469,7 +483,11 @@ _NON_HELPER_CALL_NAMES = frozenset(
 )
 _LEDGER_COMPARISON_RE = re.compile(r"===?|!==?|includes\s*\(")
 _LEDGER_METHOD_WORD_RE = re.compile(r"\bmethod\b")
-_LEDGER_METHOD_CALL_RE = re.compile(r"(?:\?\.|\.)\s*method\s*(?:\?\.)?\s*\(|(?<![\w.$])request\s*\.\s*method\s*\(")
+_LEDGER_METHOD_CALL_RE = re.compile(
+    r"(?:\?\.|\.)\s*method\s*(?:\?\.)?\s*\("
+    r"|(?<![\w.$])request\s*\.\s*method\s*\("
+    r"|\?\.\s*\[\s*\]\s*(?:\?\.\s*)?\("
+)
 _LEDGER_UNMODELLED_METHOD_NOTE = (
     "page.route callback filters on the request method in a form this check cannot "
     "attribute to a single literal method, so its method filter was not checked"
@@ -2245,6 +2263,34 @@ def _bracket_request_verb_offsets(source: str, masked: str) -> list[int]:
     return offsets
 
 
+def _literal_bracket_request_verb_offsets(source: str, masked: str) -> list[int]:
+    """Return offsets of ``page.request['<verb>'](`` calls with a LITERAL verb key.
+
+    The masked source blanks the key, so it is re-read from *source* at the same
+    offset. A literal HTTP verb (``page.request['post']``) names a real
+    APIRequestContext call, so it is a candidate the ledger must account for.
+
+    A key that is NOT a string literal (``page.request[key]``) is dynamic
+    property access: this check does not enumerate it, so it is not an API
+    candidate and never a hard failure - the same boundary the module docstring
+    documents for ``helpers[key]``. A literal NON-verb key
+    (``page.request['dispose']``) is ordinary member access, not an HTTP call,
+    so it is not a candidate either.
+    """
+    offsets: list[int] = []
+    for match in _LEDGER_BRACKET_REQUEST_RE.finditer(masked):
+        closing = source.find("]", match.end())
+        if closing < 0:
+            continue
+        key = source[match.end() : closing].strip()
+        if len(key) < 2 or key[0] not in ("'", '"', "`") or key[-1] != key[0]:
+            continue
+        if key[1:-1].strip().lower() not in _API_REQUEST_VERBS:
+            continue
+        offsets.append(match.start())
+    return offsets
+
+
 def _destructured_request_offsets(masked: str) -> list[int]:
     """Return offsets of ``const { <verb> } = page.request`` bindings.
 
@@ -2400,10 +2446,13 @@ def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
     * member/bracket access to ``apiFetch`` / ``fetchWithTransientRetry``
       (``helpers.apiFetch(...)``, ``helpers['apiFetch'](...)``,
       ``helpers?.apiFetch(...)``).
-    * bracket access to an APIRequestContext (``page.request['post'](...)``),
-      a bracket-accessed ``request`` property
+    * bracket access to an APIRequestContext with a LITERAL HTTP verb key
+      (``page.request['post'](...)``), a bracket-accessed ``request`` property
       (``page['request'].<verb>(...)``) and an optional-chain verb
-      (``page.request?.<verb>(...)``).
+      (``page.request?.<verb>(...)``). A bracket whose key is NOT a literal verb
+      - dynamic (``page.request[key]``) or a non-verb member
+      (``page.request['dispose']``) - is not an HTTP call this checker can
+      validate, so it is not enumerated and is never a hard failure.
     * a ``request`` binding introduced by destructuring/rename
       (``async ({ request: api }) => api.get(...)``).
     * a destructured APIRequestContext verb
@@ -2509,8 +2558,8 @@ def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
             add(match.start())
     for offset in _bracket_request_verb_offsets(source, masked):
         add(offset)
-    for match in _LEDGER_BRACKET_REQUEST_RE.finditer(masked):
-        add(match.start())
+    for offset in _literal_bracket_request_verb_offsets(source, masked):
+        add(offset)
     for offset in _request_binding_offsets(masked):
         # Only a real destructuring BINDING is a candidate. A plain object/type
         # property (``{ request: any }``) binds nothing and is not enumerated.
@@ -2939,6 +2988,18 @@ def extract_http_calls(
                 trailing_glob=trailing_glob,
                 last_segment_prefix=last_prefix,
             )
+        )
+        accounted_offsets.add(offset)
+
+    for offset in _literal_bracket_request_verb_offsets(source, masked):
+        # A literal verb key (``page.request['post']``) IS an APIRequestContext
+        # call, so the ledger must account for it - but the extractor models
+        # only the dotted verb spelling, so it is noted rather than flagged.
+        _add_note(
+            notes,
+            filename,
+            _line_of(source, offset),
+            "page.request/request verb call is bracket-accessed with a literal key, so its route was not checked",
         )
         accounted_offsets.add(offset)
 
