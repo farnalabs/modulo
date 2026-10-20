@@ -6733,7 +6733,17 @@ async def _terminalize_aged_nodeless_zombies(
     must stop burning its org's concurrency slot, so no further re-dispatch is
     attempted — the budget normally decides this at the nodeless window, this
     gate only closes the tail (runs whose repair the row loop never reached).
-    Returns the routed ids (empty when the tick found nothing).
+
+    FAR-1914: the SELECT returns a row SNAPSHOT, so each selected row is
+    re-verified on the FRESH row through
+    :func:`_fresh_row_is_node_started_or_gone` before the terminal write — the
+    same guard the nodeless row loop and the FAR-873 early-detect branch use. A
+    run whose executor dispatched its first node in the SELECT→write window is
+    DEFERRED (counted ``nodeless_fresh_premise_deferred``) rather than
+    terminal-failed on the stale "dispatched no node" premise.
+
+    Returns the ids actually routed to the chokepoint (empty when the tick found
+    nothing, or when every selected row was deferred as no longer nodeless).
     """
     from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
 
@@ -6749,11 +6759,32 @@ async def _terminalize_aged_nodeless_zombies(
             "max_rows": _terminalize_max_rows(max_rows),
         },
     )
-    routed: list[uuid.UUID] = [run_id for (run_id,) in result.all()]
-    for run_id in routed:
+    selected: list[uuid.UUID] = [run_id for (run_id,) in result.all()]
+    routed: list[uuid.UUID] = []
+    for run_id in selected:
+        # FAR-1914: the scan row is a SNAPSHOT — the run's own executor may
+        # have dispatched its first node since the SELECT (run e6131612 was
+        # terminal-failed with dispatch_phase_elapsed=0.3s). Re-verify the
+        # zero-node premise on the FRESH row before the terminal write, exactly
+        # as the nodeless row loop and the FAR-873 early-detect branch do: a
+        # node-started row (or one that left ``running``) is deferred, never
+        # failed on a premise the fresh state has already disproved.
+        if await _fresh_row_is_node_started_or_gone(session, run_id):
+            # Its OWN counter — a routine fresh-premise race, NOT the row-level
+            # belt's regression alarm (``node_started_deferred``).
+            summary["nodeless_fresh_premise_deferred"] += 1
+            _log.warning(
+                "dispatcher_reconcile.aged_nodeless_fresh_premise_blocked run=%s org=%s "
+                "— a node started after the scan (or the row left running); "
+                "held back from the nodeless terminal-fail (FAR-1914)",
+                run_id,
+                org_id,
+            )
+            continue
         # The chokepoint re-checks status='running' itself; inside this
         # transaction the rows were selected running moments ago.
         await _fail_nodeless_run(session, run_id, org_id, summary)
+        routed.append(run_id)
     if routed:
         # Make the ORM terminal writes visible to the raw-SQL terminalizers
         # that follow in this transaction instead of relying on autoflush.

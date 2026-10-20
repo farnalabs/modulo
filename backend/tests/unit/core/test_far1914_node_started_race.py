@@ -10,8 +10,11 @@ the fresh row had started a node.
 
 ``_reconcile_nodeless_repair`` now re-reads the run through
 ``_fresh_row_is_node_started_or_gone`` and DEFERS when the fresh row has started
-a node (or left ``running``) instead of terminalising / re-dispatching it. These
-tests fail without that guard.
+a node (or left ``running``) instead of terminalising / re-dispatching it. The
+age-bound router ``_terminalize_aged_nodeless_zombies`` applies the same
+recheck before its terminal write, so an aged row whose node started in the
+SELECT→write window is deferred rather than failed. These tests fail without
+those guards.
 """
 
 from __future__ import annotations
@@ -66,6 +69,30 @@ class _UnreadableSession:
 
     async def get(self, model: Any, pk: Any) -> Any:
         raise RuntimeError("fresh read failed")
+
+
+class _RouterSession:
+    """Session double for the aged-nodeless router.
+
+    ``execute`` is the router's SELECT snapshot (the aged zero-progress ids it
+    collected); ``get`` is the per-row FRESH re-read the guard performs.
+    """
+
+    def __init__(self, selected: list[uuid.UUID], fresh: Any) -> None:
+        self._selected = selected
+        self._fresh = fresh
+        self.flushed = False
+
+    async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+        result = MagicMock()
+        result.all.return_value = [(run_id,) for run_id in self._selected]
+        return result
+
+    async def get(self, model: Any, pk: Any) -> Any:
+        return self._fresh
+
+    async def flush(self) -> None:
+        self.flushed = True
 
 
 def _summary() -> dict[str, Any]:
@@ -310,6 +337,58 @@ async def test_full_window_repair_returns_handled_with_no_early_detect() -> None
     # Not a tail-guard ``skipped`` either — the widened-window guard was never
     # reached (the fresh-premise guard returned first).
     assert summary["skipped"] == 0
+
+
+@pytest.mark.asyncio
+async def test_aged_nodeless_router_defers_a_freshly_started_node() -> None:
+    """The age-bound router must re-verify the FRESH row before it writes.
+
+    The router's SELECT is a snapshot: an aged zero-progress row it collected
+    can have dispatched its first node by the time the per-row terminal write
+    runs. The fresh read proves the premise false, so the row must be DEFERRED
+    — never handed to the nodeless chokepoint (and therefore never
+    terminal-failed on the stale "dispatched no node" premise). Without the
+    guard the same setup calls ``_fail_nodeless_run`` and returns the id as
+    routed.
+    """
+    run_id = uuid.uuid4()
+    fresh = SimpleNamespace(status="running", dispatch_phase=PHASE_FIRST_NODE_DISPATCHED, node_token_usage=None)
+    summary = _summary()
+    fail = AsyncMock()
+    session = _RouterSession([run_id], fresh)
+    with patch.object(ch, "_fail_nodeless_run", fail):
+        routed = await ch._terminalize_aged_nodeless_zombies(
+            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
+        )
+
+    assert routed == []
+    fail.assert_not_awaited()
+    assert summary["nodeless_fresh_premise_deferred"] == 1
+    # A routine fresh-premise race is NOT the row-level belt's alarm.
+    assert summary["node_started_deferred"] == 0
+
+
+@pytest.mark.asyncio
+async def test_aged_nodeless_router_still_fails_a_fresh_pre_node_row() -> None:
+    """Control: a fresh row that is STILL pre-node is routed as before.
+
+    Proves the router discriminates on the FRESH phase (the stale snapshot is
+    pre-node in both tests), not on the call shape — so the guard cannot be
+    passing by simply deferring everything.
+    """
+    run_id = uuid.uuid4()
+    fresh = SimpleNamespace(status="running", dispatch_phase="claimed", node_token_usage=None)
+    summary = _summary()
+    fail = AsyncMock()
+    session = _RouterSession([run_id], fresh)
+    with patch.object(ch, "_fail_nodeless_run", fail):
+        routed = await ch._terminalize_aged_nodeless_zombies(
+            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
+        )
+
+    assert routed == [run_id]
+    fail.assert_awaited_once()
+    assert summary["nodeless_fresh_premise_deferred"] == 0
 
 
 def test_zero_progress_shape_excludes_a_started_node() -> None:
