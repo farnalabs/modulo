@@ -162,7 +162,7 @@ class TestHeartbeatStaleRetry:
         assert result["retried"] == 1
         # The UPDATE must contain the RETRY path SQL — the CASE expression
         # uses claim_count to choose between 'pending' and 'failed'.
-        release_stmts = [s for s in statements if "status = 'running'" in s]
+        release_stmts = [s for s in statements if "status = 'running'" in s and ":stale_seconds" in s]
         assert len(release_stmts) == 1
         assert "dispatched_at = NULL" in release_stmts[0]
         assert "dispatcher = NULL" in release_stmts[0]
@@ -184,14 +184,14 @@ class TestHeartbeatStaleRetry:
 
         assert result["released"] == 1
         assert result["retried"] == 0
-        release_stmts = [s for s in statements if "status = 'running'" in s]
+        release_stmts = [s for s in statements if "status = 'running'" in s and ":stale_seconds" in s]
         assert len(release_stmts) == 1
         # Terminal-fail path: the CASE expression contains 'failed'.
         # The SQL CASE means both 'pending' and 'failed' appear in the string;
         # we check that released==1 (which means claim_count > budget -> failed branch).
         assert result["released"] == 1
         # Verify the advance was called for the terminal-failed run.
-        advance_stmts = [s for s in statements if "status = 'running'" in s]
+        advance_stmts = [s for s in statements if "status = 'running'" in s and ":stale_seconds" in s]
         assert len(advance_stmts) == 1
 
     async def test_claim_count_at_budget_resets_to_pending(self, monkeypatch: pytest.MonkeyPatch) -> None:
