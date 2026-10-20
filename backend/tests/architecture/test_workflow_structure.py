@@ -27,6 +27,11 @@ invariants of the PR-reviewer / Branch-Fixer / merge-queue triangle:
 - **An undelivered Branch Fixer notification is never silent** — every webhook
   POST in ``merge-queue.yml`` must name the affected PR(s) and comment on them
   when the dispatch ultimately fails (FAR-1939).
+- **A saturated Branch Fixer trigger is retried, never terminally dropped** —
+  both ``ci.yml`` notify steps share one byte-identical retry policy that
+  classifies HTTP 429 as capacity saturation, honours ``Retry-After``, is
+  bounded by a wall-clock budget, and leaves a durable signal when it gives up
+  (2026-10-20).
 - **The git credential is configured exactly once** — one mechanism
   (``url.<base>.insteadOf``), never a second ``http.<url>.extraheader``
   Authorization header, or pushes are rejected with a duplicate header
@@ -949,4 +954,95 @@ def test_workflow_notifications_cannot_be_silently_unpostable() -> None:
         violations.extend(_notification_violations(path.name, _load_yaml(path)))
     assert not violations, "A workflow notification can be silently undeliverable (FAR-2001):\n" + "\n".join(
         str(violation) for violation in violations
+    )
+
+
+# --- A saturated Branch Fixer trigger is retried, never terminally dropped ---
+#
+# 2026-10-20: the "Trigger Branch Fixer" job failed with "dispatch failed after
+# 3 attempt(s) (last HTTP 429: Concurrent run limit of 8 reached)". The retry
+# loop treated a saturated trigger - the state the fix loop is MOST needed in,
+# because it means many runs are in flight - as a terminal dispatch failure
+# after ~40s, so a red CI run never reached the fixer and the only trace was a
+# PR comment. The fixes at the time were a longer/backoff retry that honours
+# `Retry-After` and is bounded by a wall-clock budget, a 429 class distinct from
+# a broken webhook, and a durable signal when the budget runs out.
+#
+# The policy is duplicated across ci.yml's two Branch Fixer notify steps because
+# GitHub Actions has no YAML include. These assertions keep the copies honest:
+# both must carry the marked policy block, both must actually call it, and the
+# block text must be byte-identical.
+
+#: Markers around the retry policy in each Branch Fixer notify step.
+RETRY_POLICY_START = "# ==== BEGIN Branch Fixer dispatch retry policy ===="
+RETRY_POLICY_END = "# ==== END Branch Fixer dispatch retry policy ===="
+
+#: The ci.yml jobs that hand a CI failure to the Branch Fixer.
+BRANCH_FIXER_NOTIFY_JOBS = ("notify-pr-failure", "notify-main-failure")
+
+#: Symbols each notify step must actually use — a step that merely kept the
+#: markers while running its own inline loop would pass a marker-only check.
+REQUIRED_POLICY_SYMBOLS = ("classify_http", "parse_retry_after", "retry_delay", "DISPATCH_BUDGET_SECONDS")
+
+#: The retired fixed schedule that dropped a saturated trigger after ~40s.
+RETIRED_FIXED_SCHEDULE = 'if [ "$i" -eq 1 ]; then DELAY=10; else DELAY=30; fi'
+
+
+def _branch_fixer_dispatch_runs(workflow: dict) -> dict[str, str]:
+    """The ``run`` block of each Branch Fixer dispatch step, keyed by job id."""
+    runs: dict[str, str] = {}
+    jobs = workflow.get("jobs") or {}
+    for job_id in BRANCH_FIXER_NOTIFY_JOBS:
+        job = jobs.get(job_id)
+        assert isinstance(job, dict), f"ci.yml: job {job_id!r} is missing — the Branch Fixer dispatch moved"
+        dispatch = [
+            step
+            for step in (job.get("steps") or [])
+            if isinstance(step, dict) and step.get("name") == "Trigger Modulo Branch Fixer"
+        ]
+        assert len(dispatch) == 1, (
+            f"ci.yml job {job_id!r}: expected exactly one 'Trigger Modulo Branch Fixer' step, found {len(dispatch)}"
+        )
+        runs[job_id] = dispatch[0].get("run") or ""
+    return runs
+
+
+def test_branch_fixer_retry_policy_is_shared_and_retryable() -> None:
+    """429 must stay a bounded, retried capacity condition — not a terminal drop."""
+    runs = _branch_fixer_dispatch_runs(_load_yaml(CI_YML))
+    violations: list[str] = []
+    blocks: list[tuple[str, str]] = []
+    for job_id, run in runs.items():
+        if RETRY_POLICY_START not in run or RETRY_POLICY_END not in run:
+            violations.append(
+                f"  {job_id}: retry-policy markers missing — the shared policy block moved or was inlined; "
+                "update this test deliberately"
+            )
+            continue
+        blocks.append((job_id, run.split(RETRY_POLICY_START, 1)[1].split(RETRY_POLICY_END, 1)[0]))
+        for symbol in REQUIRED_POLICY_SYMBOLS:
+            if symbol not in run:
+                violations.append(f"  {job_id}: does not use {symbol!r} — the step is not running the shared policy")
+        if RETIRED_FIXED_SCHEDULE in run:
+            violations.append(
+                f"  {job_id}: still carries the retired fixed 10s/30s schedule — a saturated trigger would be "
+                "dropped again after ~40s"
+            )
+        if "retry-after" not in run:
+            violations.append(f"  {job_id}: does not read a Retry-After header — the server's own backoff is ignored")
+        if "classify_http" not in run or "capacity" not in run:
+            violations.append(
+                f"  {job_id}: does not name the 429 capacity class — capacity saturation and a broken webhook "
+                "would be reported identically"
+            )
+        if "GITHUB_STEP_SUMMARY" not in run:
+            violations.append(f"  {job_id}: no durable run-summary signal when the dispatch is not delivered")
+    if len(blocks) == len(BRANCH_FIXER_NOTIFY_JOBS):
+        first_job, first_block = blocks[0]
+        for job_id, block in blocks[1:]:
+            if block != first_block:
+                violations.append(f"  {job_id}: retry-policy block differs from {first_job}'s — the copies diverged")
+    assert not violations, (
+        "ci.yml Branch Fixer dispatch retry policy regressed (2026-10-20 capacity-saturation fix):\n"
+        + "\n".join(violations)
     )
