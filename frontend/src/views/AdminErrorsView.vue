@@ -2,7 +2,7 @@
   <FeatureGate feature-name="error_tracking" required-tier="team" show-disabled>
   <div class="page-wide">
     <PageTabs :tabs="[
-      { label: 'Dashboard', to: '/admin/errors' },
+      { label: $t('views.AdminErrorsView.dashboard'), to: '/admin/errors' },
     ]" />
     <PageHeader :title="$t('views.AdminErrorsView.error_dashboard')" :subtitle="$t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation')" />
 
@@ -77,35 +77,21 @@
     <FilterBar
       :search="{ placeholder: $t('views.AdminErrorsView.search_error_messages') }"
       :search-value="filterSearch"
-      :filters="[
-        { key: 'level', label: 'Level', options: [
-          { value: 'error', label: 'Error' },
-          { value: 'warning', label: 'Warning' },
-          { value: 'critical', label: 'Critical' },
-        ]},
-        { key: 'status', label: 'Status', options: [
-          { value: 'new', label: 'New' },
-          { value: 'acknowledged', label: 'Acknowledged' },
-          { value: 'resolved', label: 'Resolved' },
-          { value: 'archived', label: 'Archived' },
-        ]},
-        { key: 'source', label: 'Source', options: [
-          { value: 'backend', label: 'Backend' },
-          { value: 'frontend', label: 'Frontend' },
-          { value: 'saq', label: 'SAQ' },
-          { value: 'celery', label: 'Celery (legacy)' },
-        ]},
-      ]"
+      :filters="filterDefs"
       :filter-values="{ level: filterLevel, status: filterStatus, source: filterSource }"
       @update:search="filterSearch = $event"
       @update:filter="handleFilterUpdate"
     >
       <template #after>
-        <button type="button" class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" data-testid="admin-errors-reset" @click="resetFilters">{{ $t('common.reset') }}</button>
+        <button type="button" class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-testid="admin-errors-reset" @click="resetFilters">{{ $t('common.reset') }}</button>
       </template>
     </FilterBar>
 
-    <LoadingSpinner v-if="loading" />
+    <!-- Skeleton rows (STATE-3): the shared DataTable renders pulse placeholders,
+         so a slow fetch never shows an unqualified indeterminate spinner. -->
+    <div v-if="loading" class="table-wrapper" data-testid="admin-errors-loading">
+      <DataTable :columns="columns" :rows="[]" :loading="true" :loading-rows="5" :row-clickable="false" />
+    </div>
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadGroups" />
 
@@ -118,17 +104,9 @@
     <template v-else>
       <div class="table-wrapper">
         <DataTable
-          :columns="[
-            { key: 'level_peak', label: 'Level' },
-            { key: 'sample_message', label: 'Message' },
-            { key: 'count', label: 'Count', numeric: true },
-            { key: 'first_seen', label: $t('views.AdminErrorDetailView.first_seen') },
-            { key: 'last_seen', label: $t('views.AdminErrorDetailView.last_seen') },
-            { key: 'status', label: 'Status' },
-            { key: 'assignee', label: 'Assignee' },
-          ]"
+          :columns="columns"
           :rows="groups"
-          @row-click="(row: any) => navigateToDetail(row.id)"
+          @row-click="row => navigateToDetail(rowId(row))"
         >
           <template #cell-level_peak="{ value }">
             <span :class="levelBadgeClass(value as string)">
@@ -140,39 +118,29 @@
               <button
                 type="button"
                 class="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                :aria-label="isMessageExpanded((row as any).id) ? $t('views.AdminErrorsView.collapse_message') : $t('views.AdminErrorsView.expand_message')"
-                :aria-expanded="isMessageExpanded((row as any).id)"
-                :data-testid="'admin-errors-expand-' + (row as any).id"
-                @click.stop="toggleMessage((row as any).id)"
+                :aria-label="isMessageExpanded(rowId(row)) ? $t('views.AdminErrorsView.collapse_message') : $t('views.AdminErrorsView.expand_message')"
+                :aria-expanded="isMessageExpanded(rowId(row))"
+                :data-testid="'admin-errors-expand-' + rowId(row)"
+                @click.stop="toggleMessage(rowId(row))"
                 @keydown.stop
               >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
+                <ChevronRight
+                  :size="14"
                   class="transition-transform"
-                  :class="isMessageExpanded((row as any).id) ? 'rotate-90' : ''"
+                  :class="isMessageExpanded(rowId(row)) ? 'rotate-90' : ''"
                   aria-hidden="true"
-                >
-                  <polyline points="9 18 15 12 9 6" />
-                </svg>
+                />
               </button>
               <span
-                v-if="isMessageExpanded((row as any).id)"
+                v-if="isMessageExpanded(rowId(row))"
                 data-testid="admin-errors-message-full"
                 class="min-w-0 max-w-xs whitespace-normal break-words font-medium"
-              >{{ value || '(no message)' }}</span>
+              >{{ value || $t('views.AdminErrorsView.no_message') }}</span>
               <span
                 v-else
                 data-testid="admin-errors-message-truncated"
                 class="min-w-0 max-w-xs truncate font-medium"
-              >{{ value || '(no message)' }}</span>
+              >{{ value || $t('views.AdminErrorsView.no_message') }}</span>
             </div>
           </template>
           <template #cell-first_seen="{ value }">
@@ -187,32 +155,34 @@
             </span>
           </template>
           <template #cell-assignee="{ row }">
-            <span class="text-xs text-muted-foreground font-mono">{{ (row as any).assigned_to ? shortId((row as any).assigned_to) : '—' }}</span>
+            <span class="text-xs text-muted-foreground font-mono">{{ formatAssignee(row) }}</span>
           </template>
         </DataTable>
       </div>
 
       <div class="flex items-center justify-between">
-        <span class="text-sm text-muted-foreground">
-          {{ total }} group{{ total === 1 ? '' : 's' }}
+        <span class="text-sm text-muted-foreground" data-testid="admin-errors-group-count">
+          {{ $t('views.AdminErrorsView.group_count', { count: total }, total) }}
         </span>
         <div class="flex items-center gap-2">
           <button type="button"
             :disabled="offset <= 0"
-            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
+            data-testid="admin-errors-previous-page"
+            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-30 disabled:cursor-not-allowed"
             @click="prevPage"
           >
-            Previous
+            {{ $t('common.previous') }}
           </button>
-          <span class="text-sm text-muted-foreground">
-            Page {{ currentPage }}
+          <span class="text-sm text-muted-foreground" data-testid="admin-errors-page-indicator">
+            {{ $t('common.page_label', { page: currentPage }) }}
           </span>
           <button type="button"
             :disabled="offset + limit >= total"
-            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
+            data-testid="admin-errors-next-page"
+            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-30 disabled:cursor-not-allowed"
             @click="nextPage"
           >
-            Next
+            {{ $t('common.next') }}
           </button>
         </div>
       </div>
@@ -239,19 +209,70 @@ import {
 } from '../lib/api/errors'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { useDataFetch } from '../composables/useDataFetch'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { shortId } from '../utils/format'
 import { formatApiError } from "../lib/api/formatError"
-import { DataTable } from '../components/ui/data-table'
+import { DataTable, type Column, type DataTableRow } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { useI18n } from 'vue-i18n'
+import { ChevronRight } from '@lucide/vue'
 
 const { t } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const { isSystemAdmin } = useCurrentUser()
+
+const columns = computed<Column[]>(() => [
+  { key: 'level_peak', label: t('views.AdminErrorsView.level') },
+  { key: 'sample_message', label: t('views.AdminErrorsView.message') },
+  { key: 'count', label: t('views.AdminErrorsView.count'), numeric: true },
+  { key: 'first_seen', label: t('views.AdminErrorDetailView.first_seen') },
+  { key: 'last_seen', label: t('views.AdminErrorDetailView.last_seen') },
+  { key: 'status', label: t('views.AdminErrorsView.status') },
+  { key: 'assignee', label: t('views.AdminErrorsView.assignee') },
+])
+
+const filterDefs = computed(() => [
+  {
+    key: 'level',
+    label: t('views.AdminErrorsView.level'),
+    options: [
+      { value: 'error', label: t('views.AdminErrorsView.level_error') },
+      { value: 'warning', label: t('views.AdminErrorsView.level_warning') },
+      { value: 'critical', label: t('views.AdminErrorsView.level_critical') },
+    ],
+  },
+  {
+    key: 'status',
+    label: t('views.AdminErrorsView.status'),
+    options: [
+      { value: 'new', label: t('views.AdminErrorsView.status_new') },
+      { value: 'acknowledged', label: t('views.AdminErrorsView.status_acknowledged') },
+      { value: 'resolved', label: t('views.AdminErrorsView.status_resolved') },
+      { value: 'archived', label: t('views.AdminErrorsView.status_archived') },
+    ],
+  },
+  {
+    key: 'source',
+    label: t('views.AdminErrorsView.source'),
+    options: [
+      { value: 'backend', label: t('views.AdminErrorsView.source_backend') },
+      { value: 'frontend', label: t('views.AdminErrorsView.source_frontend') },
+      { value: 'saq', label: t('views.AdminErrorsView.source_saq') },
+      { value: 'celery', label: t('views.AdminErrorsView.source_celery') },
+    ],
+  },
+])
+
+function rowId(row: DataTableRow): string {
+  return String(row.id ?? '')
+}
+
+function formatAssignee(row: DataTableRow): string {
+  const assignedTo = row.assigned_to
+  return typeof assignedTo === 'string' && assignedTo ? shortId(assignedTo) : '—'
+}
 
 // FAR-1547: the instance scope reads the SYSTEM_ORG_ID sentinel partition
 // (system admin only). The query param is the single source of truth so the
@@ -306,7 +327,7 @@ async function fetchGroups(): Promise<ErrorListResponse> {
 const { data: groupsData, loading, error, load: loadGroups } = useDataFetch<{ items: ErrorGroupSummary[]; total: number }>(
   () => fetchGroups().then(
     d => ({ data: d }),
-    e => ({ error: { detail: `Failed to load error groups: ${formatApiError(e)}` } }),
+    e => ({ error: { detail: `${t('views.AdminErrorsView.failed_to_load_error_groups')} ${formatApiError(e)}` } }),
   ),
   { initialValue: { items: [] as ErrorGroupSummary[], total: 0 } },
 )
@@ -330,7 +351,7 @@ const { data: starvationData, load: loadStarvation } = useDataFetch<SchedulerSta
     ? Promise.resolve({ data: { items: [], total: 0, threshold_minutes: 10 } })
     : fetchSchedulerStarvation().then(
         d => ({ data: d }),
-        e => ({ error: { detail: `Failed to load scheduler starvation: ${formatApiError(e)}` } }),
+        e => ({ error: { detail: `${t('views.AdminErrorsView.failed_to_load_scheduler_starvation')} ${formatApiError(e)}` } }),
       )),
   { initialValue: { items: [], total: 0, threshold_minutes: 10 } },
 )

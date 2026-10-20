@@ -479,4 +479,31 @@ describe('AdminErrorsView', () => {
     expect(wrapper.find('[data-testid="scheduler-starvation"]').exists()).toBe(false)
     wrapper.unmount()
   })
+
+  it('renders skeleton table rows while loading instead of an indeterminate spinner (STATE-3)', async () => {
+    let resolveGroups: (value: unknown) => void = () => {}
+    getMock.mockImplementation(() => new Promise(resolve => { resolveGroups = resolve }))
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    const skeleton = wrapper.find('[data-testid="admin-errors-loading"]')
+    expect(skeleton.exists()).toBe(true)
+    expect(skeleton.findAll('.animate-pulse').length).toBeGreaterThan(0)
+
+    resolveGroups({ items: [], total: 0 })
+    await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('exposes data-testids on the pagination controls (VIS-4)', async () => {
+    const wrapper = mountWithLongMessageGroup()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="admin-errors-previous-page"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="admin-errors-next-page"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="admin-errors-page-indicator"]').text()).toContain('Page 1')
+    wrapper.unmount()
+  })
 })
