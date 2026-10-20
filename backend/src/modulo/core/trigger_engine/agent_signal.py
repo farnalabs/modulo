@@ -24,8 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
 from modulo.core.node_output_split import DEFAULT_NODE_TYPE, SPLITTABLE_NODE_TYPES, split_node_output
 from modulo.core.run_admission import (
-    TRIGGER_PENDING_SLOT_GRACE_SECONDS,
-    trigger_slot_count_predicate,
+    count_trigger_slot_occupancy,
 )
 from modulo.core.trigger_engine import is_guardrail_blocked_run, record_dependent_suppressed
 from modulo.db.crud.run import create_run
@@ -479,15 +478,12 @@ async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> in
     """Count the runs occupying this agent-signal trigger's concurrency slots.
 
     FAR-1999: a ``pending`` run counts only inside the create→dispatch grace
-    window; see :func:`modulo.core.run_admission.trigger_slot_count_predicate`.
+    window. Delegates to the shared
+    :func:`modulo.core.run_admission.count_trigger_slot_occupancy`, so the
+    agent-signal lane shares one implementation of the grace semantics with
+    every other lane.
     """
-    from sqlalchemy import func as sa_func
-
-    grace = TRIGGER_PENDING_SLOT_GRACE_SECONDS
-    result = await session.execute(
-        select(sa_func.count()).where(trigger_slot_count_predicate(trigger_id, pending_grace_seconds=grace))
-    )
-    return int(result.scalar_one() or 0)
+    return await count_trigger_slot_occupancy(session, trigger_id)
 
 
 async def _log_signal_event(

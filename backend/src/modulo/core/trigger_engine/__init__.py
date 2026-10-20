@@ -75,12 +75,11 @@ from modulo.core.release_channels import (
     resolve_channel_binding,
 )
 from modulo.core.run_admission import (
-    TRIGGER_PENDING_SLOT_GRACE_SECONDS,
     coalesce_enabled,
+    count_trigger_slot_occupancy,
     derive_ci_failure_coalesce_key,
     derive_webhook_coalesce_key,
     evaluate_backpressure,
-    trigger_slot_count_predicate,
 )
 from modulo.db.crud.pipeline_snapshot_versioning import (
     resolve_snapshot_for_channel,
@@ -1243,14 +1242,11 @@ class TriggerEngine:
         still queued (or capacity-deferred) is not executing and must not
         hold a slot for the whole time it waits — the observed failure mode
         was a single pending run occupying one of eight slots for ~50 minutes
-        with no live dispatch. See
-        :func:`modulo.core.run_admission.trigger_slot_count_predicate`.
+        with no live dispatch. Delegates to the shared
+        :func:`modulo.core.run_admission.count_trigger_slot_occupancy`, so
+        every trigger lane shares one implementation of the grace semantics.
         """
-        grace = TRIGGER_PENDING_SLOT_GRACE_SECONDS
-        result = await session.execute(
-            select(func.count()).where(trigger_slot_count_predicate(trigger_id, pending_grace_seconds=grace))
-        )
-        return int(result.scalar_one() or 0)
+        return await count_trigger_slot_occupancy(session, trigger_id)
 
     async def _store_raw_payload(
         self,

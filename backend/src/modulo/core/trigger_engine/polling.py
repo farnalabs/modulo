@@ -30,8 +30,7 @@ from modulo.connectors.base import (
     ConnectorResult,
 )
 from modulo.core.run_admission import (
-    TRIGGER_PENDING_SLOT_GRACE_SECONDS,
-    trigger_slot_count_predicate,
+    count_trigger_slot_occupancy,
 )
 from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
@@ -445,13 +444,11 @@ async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> in
     """Count the runs occupying this polling trigger's concurrency slots.
 
     FAR-1999: a ``pending`` run counts only inside the create→dispatch grace
-    window; see :func:`modulo.core.run_admission.trigger_slot_count_predicate`.
+    window. Delegates to the shared
+    :func:`modulo.core.run_admission.count_trigger_slot_occupancy`, so polling
+    shares one implementation of the grace semantics with every other lane.
     """
-    grace = TRIGGER_PENDING_SLOT_GRACE_SECONDS
-    result = await session.execute(
-        select(func.count()).where(trigger_slot_count_predicate(trigger_id, pending_grace_seconds=grace))
-    )
-    return int(result.scalar_one() or 0)
+    return await count_trigger_slot_occupancy(session, trigger_id)
 
 
 async def _daily_spend_limit_reached(

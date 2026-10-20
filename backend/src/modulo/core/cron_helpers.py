@@ -1120,21 +1120,16 @@ async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> in
 
     FAR-1999: a ``pending`` run (accepted but not yet dispatched — queued or
     capacity-deferred) counts only inside the create→dispatch grace window,
-    not for its whole time in the queue. See
-    :func:`modulo.core.run_admission.trigger_slot_count_predicate`.
+    not for its whole time in the queue. Delegates to the shared
+    :func:`modulo.core.run_admission.count_trigger_slot_occupancy` — one
+    implementation for every trigger lane, so the grace semantics cannot drift
+    between cron and the other dispatch paths.
     """
-    from sqlalchemy import func
+    # Local import: cron_helpers is reachable from the API layer, so keeping
+    # run_admission off this module's import time defers that surface.
+    from modulo.core.run_admission import count_trigger_slot_occupancy
 
-    from modulo.core.run_admission import (
-        TRIGGER_PENDING_SLOT_GRACE_SECONDS,
-        trigger_slot_count_predicate,
-    )
-
-    grace = TRIGGER_PENDING_SLOT_GRACE_SECONDS
-    result = await session.execute(
-        select(func.count()).where(trigger_slot_count_predicate(trigger_id, pending_grace_seconds=grace))
-    )
-    return int(result.scalar_one() or 0)
+    return await count_trigger_slot_occupancy(session, trigger_id)
 
 
 async def _count_ongoing_runs(session: AsyncSession, trigger_id: uuid.UUID) -> int:

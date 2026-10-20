@@ -107,6 +107,33 @@ def trigger_slot_count_predicate(
     )
 
 
+async def count_trigger_slot_occupancy(session: Any, trigger_id: uuid.UUID) -> int:
+    """Count the runs occupying one of *trigger_id*'s concurrency slots.
+
+    The single shared implementation for EVERY trigger dispatch lane — cron,
+    webhook, polling and agent-signal all delegate here. FAR-1999: a
+    ``pending`` run (accepted but not yet dispatched — queued, or
+    capacity-deferred behind the pipeline/org admission gates) counts only
+    inside the create→dispatch grace window, not for the whole time it sits in
+    the queue. See :func:`trigger_slot_count_predicate` for the predicate and
+    the full semantics.
+
+    Defined once here rather than inlined per lane: the grace window is the
+    observable contract a widening must reach in every lane, and four
+    independent copies is exactly the drift the duplicate-logic architecture
+    gate exists to prevent.
+    """
+    result = await session.execute(
+        select(func.count()).where(
+            trigger_slot_count_predicate(
+                trigger_id,
+                pending_grace_seconds=TRIGGER_PENDING_SLOT_GRACE_SECONDS,
+            )
+        )
+    )
+    return int(result.scalar_one() or 0)
+
+
 # heartbeat_stale is the FAR-604 P1 code for the heartbeat-stale slot
 # force-release: DISTINCT from worker_lost (which maps to
 # harness.dispatch_failed — "never dispatched") so analytics can tell a run
