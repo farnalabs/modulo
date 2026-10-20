@@ -1,5 +1,6 @@
 """Unit tests for db/rls.py multi-backend behavior — set_rls_org, _inject_tenant_filter."""
 
+import logging
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -211,13 +212,15 @@ class TestInjectTenantFilter:
         assert _operation_label(update_state) == "update/delete"
         assert _operation_label(delete_state) == "delete"
 
-    def test_missing_org_context_for_insert_is_silent(self) -> None:
+    def test_missing_org_context_for_insert_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.DEBUG, logger="modulo.db.rls")
         state = _make_execute_state(org_id=None, is_select=False)
         state.is_insert = True
 
         _inject_tenant_filter(state)
 
         state.statement.where.assert_not_called()
+        assert not caplog.records
 
     def test_statement_without_column_descriptions_and_no_mappers_is_untouched(self) -> None:
         state = _make_execute_state(all_mapper_classes=[])

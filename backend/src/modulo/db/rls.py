@@ -364,7 +364,6 @@ def _apply_entity_tenant_filter(stmt: Any, entity: Any, org_id: Any) -> tuple[An
 
 def _inject_from_column_descriptions(
     stmt: Any,
-    execute_state: ORMExecuteState,
     org_id: Any,
 ) -> tuple[Any, bool]:
     """Inject for every entity exposed via ``column_descriptions`` (SELECTs)."""
@@ -410,7 +409,7 @@ def _inject_tenant_filter(execute_state: ORMExecuteState) -> None:
     stmt = execute_state.statement
 
     # SELECT / bulk operations expose entities via column_descriptions.
-    stmt, injected = _inject_from_column_descriptions(stmt, execute_state, org_id)
+    stmt, injected = _inject_from_column_descriptions(stmt, org_id)
 
     # ORM UPDATE/DELETE expose entities via all_mapper_classes.
     if not injected:

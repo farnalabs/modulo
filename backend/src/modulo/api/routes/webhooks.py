@@ -734,15 +734,21 @@ def _replay_ack(
 
 
 #: Intake errors that map one-to-one to a fixed HTTP status/detail pair.
-_INTAKE_ERROR_RESPONSES: dict[type[Exception], tuple[int, str]] = {
-    TriggerNotFoundError: (status.HTTP_404_NOT_FOUND, MSG_TRIGGER_NOT_FOUND),
-    TriggerInactiveError: (status.HTTP_404_NOT_FOUND, MSG_TRIGGER_NOT_FOUND),
-    TriggerConfigInvalidError: (status.HTTP_400_BAD_REQUEST, "Trigger configuration is invalid"),
-    TimestampExpiredError: (status.HTTP_400_BAD_REQUEST, "X-Modulo-Timestamp is outside the ±300s replay window"),
-    HmacValidationError: (status.HTTP_401_UNAUTHORIZED, "HMAC signature verification failed"),
-    DuplicateWebhookError: (status.HTTP_400_BAD_REQUEST, "Duplicate webhook payload"),
-    ReplayNotFoundError: (status.HTTP_404_NOT_FOUND, "Trigger event not found"),
-}
+#:
+#: Ordered, scanned with ``isinstance`` so a SUBCLASS of a mapped error (e.g.
+#: ``CiFailureCoalescedError`` under ``DuplicateWebhookError``) resolves to its
+#: parent's contract instead of raising ``KeyError`` -> 500. The order mirrors
+#: the receive arm's ``except`` tuple; the errors are otherwise disjoint, so a
+#: replay's first match resolves identically.
+_INTAKE_ERROR_RESPONSES: tuple[tuple[type[Exception], tuple[int, str]], ...] = (
+    (TriggerNotFoundError, (status.HTTP_404_NOT_FOUND, MSG_TRIGGER_NOT_FOUND)),
+    (TriggerInactiveError, (status.HTTP_404_NOT_FOUND, MSG_TRIGGER_NOT_FOUND)),
+    (TriggerConfigInvalidError, (status.HTTP_400_BAD_REQUEST, "Trigger configuration is invalid")),
+    (TimestampExpiredError, (status.HTTP_400_BAD_REQUEST, "X-Modulo-Timestamp is outside the ±300s replay window")),
+    (HmacValidationError, (status.HTTP_401_UNAUTHORIZED, "HMAC signature verification failed")),
+    (DuplicateWebhookError, (status.HTTP_400_BAD_REQUEST, "Duplicate webhook payload")),
+    (ReplayNotFoundError, (status.HTTP_404_NOT_FOUND, "Trigger event not found")),
+)
 
 
 @dataclass
@@ -1012,8 +1018,12 @@ def _raise_intake_http_error(exc: Exception, *, trigger_id: uuid.UUID, code: str
     """Map one of the fixed intake errors to its HTTP contract."""
     if isinstance(exc, TriggerConfigInvalidError):
         _log.warning(f"{code}.trigger_config_invalid", extra={"trigger_id": str(trigger_id)})
-    status_code, detail = _INTAKE_ERROR_RESPONSES[type(exc)]
-    raise HTTPException(status_code=status_code, detail=detail) from exc
+    for error_type, (status_code, detail) in _INTAKE_ERROR_RESPONSES:
+        if isinstance(exc, error_type):
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+    # Unreachable: the callers catch exactly the mapped tuple (or a subclass of
+    # it). Fail loud rather than a bare KeyError -> 500 if that ever drifts.
+    raise AssertionError(f"Unmapped intake error: {type(exc).__name__}")
 
 
 def _raise_webhook_db_error(exc: ProgrammingError | SQLAlchemyError, *, code: str, detail: str) -> NoReturn:
@@ -1145,6 +1155,8 @@ async def _raise_receive_refusal(
     # AFTER the unwind, or a rate-limited delivery is refused but invisible in
     # the event log. The 429 status/detail contract is unchanged; unlike the
     # busy and concurrency refusals this arm has never carried a Retry-After.
+    if not isinstance(exc, PipelineRateLimitError):
+        raise AssertionError(f"Unmapped receive refusal: {type(exc).__name__}")
     _log.info(
         "webhooks.receive_webhook.rate_limited trigger=%s pipeline=%s",
         trigger_id,
@@ -1204,6 +1216,8 @@ async def _raise_replay_refusal(
     # _replay_busy_path shape: no duplicate payload row) — the refused replay
     # stays auditable, never silent. 429 reject-and-retry, so it carries a
     # Retry-After consistent with the receive path's refusals.
+    if not isinstance(exc, PipelineRateLimitError):
+        raise AssertionError(f"Unmapped replay refusal: {type(exc).__name__}")
     _log.info(
         "webhooks.replay_webhook.rate_limited trigger=%s pipeline=%s",
         trigger_id,
@@ -1293,6 +1307,8 @@ async def _handle_receive_dispatch_failure(
             log_event="webhooks.receive_webhook.snapshot_lock_busy",
             code=_CODE_WEBHOOKS_RECEIVE_WEBHOOK,
         )
+    if not isinstance(exc, TriggerBusyError):
+        raise AssertionError(f"Unmapped receive dispatch failure: {type(exc).__name__}")
     return await _receive_busy_ack(
         trigger_id=trigger_id,
         state=state,
@@ -1330,6 +1346,8 @@ async def _handle_replay_dispatch_failure(
     # Concurrent same-trigger replays serialize on the engine's advisory lock;
     # the loser is recorded AFTER the unwind in a fresh transaction (see
     # _replay_busy_path) and only then acked 2xx.
+    if not isinstance(exc, TriggerBusyError):
+        raise AssertionError(f"Unmapped replay dispatch failure: {type(exc).__name__}")
     ack = await _replay_busy_path(
         trigger_id=trigger_id,
         trigger=state.trigger,
