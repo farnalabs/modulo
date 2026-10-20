@@ -78,7 +78,7 @@
     >
     <div v-if="chainResult" class="rounded-lg border px-4 py-3 text-sm" :class="chainResult.valid ? 'border-green-500 bg-green-50 text-green-800' : 'border-red-500 bg-red-50 text-red-800'" data-testid="admin-audit-chain-result">
       <strong>{{ chainResult.valid ? $t('views.AdminAuditView.chain_valid') : $t('views.AdminAuditView.chain_broken') }}</strong>
-      <span v-if="chainResult.event_count" class="ml-2">— {{ $t('views.AdminAuditView.events_verified', { count: chainResult.event_count }) }}</span>
+      <span v-if="chainResult.checked_events" class="ml-2">— {{ $t('views.AdminAuditView.events_verified', { count: chainResult.checked_events }) }}</span>
       <span v-if="chainResult.error" class="ml-2">— {{ chainResult.error }}</span>
     </div>
 
@@ -620,11 +620,20 @@ interface SystemAuditPage {
   page_size: number
 }
 
+// Mirrors the dict returned by `verify_chain` /
+// `backend/src/modulo/core/audit_logger/__init__.py::_make_verify_result`.
+// The endpoint publishes an untyped `{[key: string]: unknown}` response, so
+// this interface is the only place the real wire contract is written down.
 interface ChainVerification {
-  valid?: boolean
-  event_count?: number
-  detail?: string
-  error?: string
+  valid: boolean
+  total_events: number
+  checked_events: number
+  truncated: boolean
+  first_gap_index: number | null
+  first_tampered_id: string | null
+  chain_head_match: boolean | null
+  chain_count_mismatch: boolean | null
+  detail: string | null
 }
 
 // The summary heuristic only needs these three fields, so both audit sources
@@ -679,7 +688,7 @@ const expandedEvent = ref<AuditEvent | null>(null)
 const exporting = ref(false)
 const exportingJsonl = ref(false)
 const verifying = ref(false)
-const chainResult = ref<{ valid: boolean; event_count?: number; error?: string } | null>(null)
+const chainResult = ref<{ valid: boolean; checked_events?: number; error?: string } | null>(null)
 
 function formatActor(event: AuditEvent): string {
   // Prefer the semantic actor label the backend composed at emit time
@@ -978,8 +987,8 @@ async function verifyChain() {
     } else if (data) {
       chainResult.value = {
         valid: data.valid !== false,
-        event_count: data.event_count,
-        error: data.detail || data.error,
+        checked_events: data.checked_events,
+        error: data.detail || undefined,
       }
     }
   } catch (e: unknown) {
