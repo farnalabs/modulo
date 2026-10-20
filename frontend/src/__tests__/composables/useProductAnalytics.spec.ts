@@ -75,10 +75,10 @@ describe('useProductAnalytics', () => {
       const body = JSON.parse((init as RequestInit).body as string)
       expect(body.events).toHaveLength(1)
       expect(body.events[0]).toMatchObject({
-        event_id: '1',
         event_type: 'pipeline_created',
         payload: { pipeline_id: 'p-1' },
       })
+      expect(body.events[0].event_id).toMatch(/-1$/)
       expect(body.events[0].recorded_at).toBeTruthy()
     })
 
@@ -204,7 +204,7 @@ describe('useProductAnalytics', () => {
   })
 
   describe('event ID generation', () => {
-    it('uses counter-based IDs starting from 1', () => {
+    it('uses a session prefix plus a counter starting from 1', () => {
       initProductAnalytics(() => true)
       const { track, flush } = useProductAnalytics()
 
@@ -215,9 +215,73 @@ describe('useProductAnalytics', () => {
 
       const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
       const body = JSON.parse((init as RequestInit).body as string)
-      expect(body.events[0].event_id).toBe('1')
-      expect(body.events[1].event_id).toBe('2')
-      expect(body.events[2].event_id).toBe('3')
+      const ids: string[] = body.events.map((event: { event_id: string }) => event.event_id)
+      const prefix = ids[0].slice(0, ids[0].lastIndexOf('-'))
+      expect(ids[0]).toBe(`${prefix}-1`)
+      expect(ids[1]).toBe(`${prefix}-2`)
+      expect(ids[2]).toBe(`${prefix}-3`)
+    })
+
+    it('does not reuse event IDs after a page reload (module re-initialisation)', async () => {
+      initProductAnalytics(() => true)
+      const first = useProductAnalytics()
+      first.track(ANALYTICS_EVENTS.PIPELINE_CREATED)
+      first.flush()
+
+      vi.resetModules()
+      const reloaded = await import('../../composables/useProductAnalytics')
+      reloaded.initProductAnalytics(() => true)
+      const second = reloaded.useProductAnalytics()
+      second.track(ANALYTICS_EVENTS.PIPELINE_CREATED)
+      second.flush()
+
+      const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>
+      const firstBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
+      const secondBody = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)
+      expect(secondBody.events[0].event_id).not.toBe(firstBody.events[0].event_id)
+    })
+
+    it('falls back to CSPRNG bytes when crypto.randomUUID is unavailable', async () => {
+      vi.resetModules()
+      vi.stubGlobal('crypto', {
+        getRandomValues: (bytes: Uint8Array) => {
+          bytes.fill(0xab)
+          return bytes
+        },
+      })
+      try {
+        const mod = await import('../../composables/useProductAnalytics')
+        mod.initProductAnalytics(() => true)
+        const { track, flush } = mod.useProductAnalytics()
+        track(ANALYTICS_EVENTS.PIPELINE_CREATED)
+        flush()
+
+        const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>
+        const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
+        expect(body.events[0].event_id).toMatch(/^(ab){16}-1$/)
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('falls back to a timestamp prefix when no crypto API is available', async () => {
+      const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5)
+      vi.resetModules()
+      vi.stubGlobal('crypto', undefined)
+      try {
+        const mod = await import('../../composables/useProductAnalytics')
+        mod.initProductAnalytics(() => true)
+        const { track, flush } = mod.useProductAnalytics()
+        track(ANALYTICS_EVENTS.PIPELINE_CREATED)
+        flush()
+
+        const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>
+        const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
+        expect(body.events[0].event_id).toMatch(/^[a-z0-9]+-i-1$/)
+      } finally {
+        vi.unstubAllGlobals()
+        randomSpy.mockRestore()
+      }
     })
 
     it('increments counter across flushes', () => {
@@ -232,7 +296,7 @@ describe('useProductAnalytics', () => {
 
       const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[1]
       const body = JSON.parse((init as RequestInit).body as string)
-      expect(body.events[0].event_id).toBe('2')
+      expect(body.events[0].event_id).toMatch(/-2$/)
     })
   })
 

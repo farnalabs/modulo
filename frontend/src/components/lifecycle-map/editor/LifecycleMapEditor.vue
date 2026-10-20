@@ -156,24 +156,11 @@ import FlowControls from '../../shared/FlowControls.vue'
 import ErrorAlert from '../../shared/ErrorAlert.vue'
 import { useApi } from '../../../composables/useApi'
 import { formatApiError } from '../../../lib/api/formatError'
+import { randomId } from '../../../lib/randomId'
 import { computeLifecycleMapLayout } from '../../../stores/lifecycleMaps'
 import { CANVAS_EDGE_STROKE } from '../../../constants/canvas'
 import type { StageType, TriggerType, LifecycleStage, LifecycleEdge, LifecycleMapVersion, PipelineSummary } from '../../../types/lifecycleMap'
 import Button from 'primevue/button'
-
-function genId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  // Fallback for environments without randomUUID — use the CSPRNG, not Math.random.
-  const arr = new Uint8Array(16)
-  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
-    crypto.getRandomValues(arr)
-  } else {
-    for (let i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256) // NOSONAR: only when no CSPRNG exists
-  }
-  return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('')
-}
 
 const props = defineProps<{
   mapId: string
@@ -385,7 +372,7 @@ function onDrop(event: unknown) {
   if (!type) return
 
   const position = screenToFlowCoordinate({ x: event.clientX, y: event.clientY })
-  const id = genId()
+  const id = randomId()
   const stage: LifecycleStage = {
     id,
     name: `New ${type.charAt(0).toUpperCase() + type.slice(1)} Stage`,
@@ -417,7 +404,7 @@ function onPaneClick() {
 }
 
 function onConnect(connection: any) {
-  const id = genId()
+  const id = randomId()
   const edge: LifecycleEdge = {
     id,
     source_stage_id: connection.source,
