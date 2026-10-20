@@ -40,6 +40,10 @@ from modulo.api.dependencies import (
     require_permission,
     system_engine_is_fallback,
 )
+from modulo.api.routes._trigger_events import (
+    org_row_exists,
+    write_paused_trigger_event,
+)
 from modulo.api.routes.runs import pipeline_not_runnable_http
 from modulo.api.trigger_busy import (
     BUSY_ACK_DETAIL,
@@ -86,7 +90,6 @@ from modulo.core.trigger_engine.pre_guardrail import GuardrailBlockedAtIntakeErr
 from modulo.core.trigger_secrets import resolve_trigger_secret_scoped
 from modulo.db.crud import pipeline_snapshot
 from modulo.db.crud.trigger import load_trigger_and_org_global
-from modulo.db.models.organisation import Organisation
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookPayload
@@ -114,17 +117,6 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/triggers", tags=["webhooks"])
 
 _trigger_engine = TriggerEngine()
-
-
-async def _org_row_exists(session: AsyncSession, org_id: uuid.UUID) -> bool:
-    """Whether the org row still exists.
-
-    Orphan-org guard for the ``paused`` TriggerEvent write: a trigger whose org
-    row was HARD-deleted must not attempt the INSERT (it would violate the
-    organisations FK -> 503). Fail-closed with no event row and no crash.
-    """
-    org_exists = await session.execute(select(Organisation.id).where(Organisation.id == org_id))
-    return org_exists.scalar_one_or_none() is not None
 
 
 def _bind_webhook_org_context(request: Request, org_id: uuid.UUID) -> None:
@@ -629,7 +621,7 @@ async def _replay_paused_path(
     so the paused event commits with it; raises ``ReplayNotFoundError`` when
     the source event itself is gone (the outer ladder maps it to 404).
     """
-    if not await _org_row_exists(session, org_id):
+    if not await org_row_exists(session, org_id):
         _log.warning(
             "webhooks.replay_webhook: org %s missing — skipping paused event write for trigger %s",
             org_id,
@@ -807,23 +799,21 @@ async def _write_receive_paused_event(
     org_id: uuid.UUID,
     raw_body: bytes,
 ) -> None:
-    """Commit the ``paused`` TriggerEvent (skipped when the org row is gone)."""
-    if not await _org_row_exists(session, org_id):
-        _log.warning(
-            "webhooks.receive_webhook: org %s missing — skipping paused event write for trigger %s",
-            org_id,
-            trigger_id,
-        )
-        return
-    paused_event = TriggerEvent(
-        organisation_id=org_id,
-        trigger_id=trigger.id,
+    """Commit the ``paused`` TriggerEvent (skipped when the org row is gone).
+
+    The orphan-org guard, the warning text and the in-transaction write live
+    once in :mod:`modulo.api.routes._trigger_events`, shared with the Slack
+    intake path; only the trigger type and log scope are webhook-specific.
+    """
+    await write_paused_trigger_event(
+        session,
+        trigger=trigger,
+        trigger_id=trigger_id,
+        org_id=org_id,
+        raw_body=raw_body,
         trigger_type="webhook",
-        raw_payload_hash=sha256_hex(raw_body),
-        validation_result="paused",
+        log_scope="webhooks.receive_webhook",
     )
-    session.add(paused_event)
-    await session.flush()
 
 
 async def _receive_webhook_intake(
