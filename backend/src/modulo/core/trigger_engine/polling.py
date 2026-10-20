@@ -11,7 +11,6 @@ removed in PR C of the Celery->SAQ migration.
 
 import asyncio
 import datetime
-import hashlib
 import inspect
 import logging
 import uuid
@@ -31,7 +30,6 @@ from modulo.connectors.base import (
 )
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
 from modulo.db.models.trigger import Trigger
-from modulo.db.models.trigger_event import TriggerEvent
 
 _log = logging.getLogger(__name__)
 
@@ -477,27 +475,3 @@ async def _daily_spend_limit_reached(
     if today_cost is not None and today_cost >= limit:
         return today_cost
     return None
-
-
-async def _log_poll_event(
-    session: AsyncSession,
-    *,
-    trigger: Trigger,
-    org_id: uuid.UUID,
-    result: str,
-    run_id: uuid.UUID | None = None,
-    error_detail: str | None = None,
-) -> TriggerEvent:
-    payload_hash = hashlib.sha256(f"polling:{trigger.id}:{result}".encode()).hexdigest()
-    event = TriggerEvent(
-        organisation_id=org_id,
-        trigger_id=trigger.id,
-        trigger_type="polling",
-        raw_payload_hash=payload_hash,
-        validation_result=result,
-        run_id=run_id,
-        error_detail=error_detail,
-    )
-    session.add(event)
-    await session.flush()
-    return event
