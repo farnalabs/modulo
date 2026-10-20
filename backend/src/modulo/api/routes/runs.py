@@ -8,14 +8,14 @@ import uuid
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import Select, func, select, text
+from sqlalchemy import Select, select, text
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as SA_TimeoutError
@@ -354,8 +354,7 @@ _TRIAGE_LOG_TAIL_CHARS = 6000
 def _deadline_triage_from_markers(
     markers: dict[str, Any] | None,
     *,
-    last_output_age_seconds: float | None = None,
-    attempt_count: int | None = None,
+    run_attempt_count: int | None = None,
 ) -> list[dict[str, Any]]:
     """Project cancellation/deadline-kill triage markers for the run detail (FAR-704).
 
@@ -365,15 +364,12 @@ def _deadline_triage_from_markers(
     display tails (the retained marker stays authoritative in the store).
     Sorted by attempt_key for a deterministic response order.
 
-    FAR-1886 B1: every entry also carries ``last_output_age_seconds`` and
-    ``attempt_count``. The age is measured from the run's last durable
-    OUTPUT row (falling back to ``started_at`` when no output was ever
-    recorded) to its terminalisation, so a productive-but-over-budget
-    attempt is distinguishable from a silent stall without reading the
-    4 KB tail. Both values are supplied by the caller (the run-detail read
-    computes them from columns already on the row — no new column); the
-    MCP projection passes the defaults, keeping the two surfaces' shapes in
-    step.
+    FAR-1886 B1: every entry also carries ``run_attempt_count`` — the RUN's
+    ``runs.node_attempt_count`` (how many node executions had been recorded
+    when the read ran), supplied by the caller from the run row it already
+    loaded. It is DATA, never a cause: an attempt proves one started, not why
+    the run stopped. Both the REST and MCP detail surfaces pass it, so their
+    entry shapes stay identical.
     """
     if not isinstance(markers, dict):
         return []
@@ -394,74 +390,24 @@ def _deadline_triage_from_markers(
                 "stdout_length": marker.get("stdout_length"),
                 "stderr_length": marker.get("stderr_length"),
                 "delivery_done": marker.get("delivery_done") is True,
-                "last_output_age_seconds": last_output_age_seconds,
-                "attempt_count": attempt_count,
+                "run_attempt_count": run_attempt_count,
             }
         )
     return entries
 
 
-async def _deadline_triage_output_stats(
-    session: AsyncSession,
-    run_id: uuid.UUID,
-) -> tuple[float | None, int | None]:
-    """Last durable output age + node-attempt count for the triage envelope.
-
-    FAR-1886 B1. Derived entirely from columns already on the run row and the
-    ``run_node_outputs`` store — no new column, no migration:
-
-    * last output = ``max(updated_at)`` over the run's OUTPUT/telemetry rows
-      (``raw_output_markers IS NULL``). Marker rows are excluded because the
-      synthetic terminal-triage entry itself is written at terminalisation
-      time and would otherwise report an age of ~0.
-    * age = terminalisation (``completed_at``, else now) - last output, with a
-      fallback to ``started_at`` when the run never wrote an output row (the
-      age then measures the whole silent run).
-    * attempt count = ``runs.node_attempt_count`` — the durable per-node
-      attempt counter.
-
-    Best-effort: any read failure degrades to ``(None, None)``; triage
-    evidence must never fail the run-detail response.
-    """
-    try:
-        last_output_at = (
-            await session.execute(
-                select(func.max(RunNodeOutput.updated_at)).where(
-                    RunNodeOutput.run_id == run_id,
-                    RunNodeOutput.raw_output_markers.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-        run_row = (
-            await session.execute(
-                select(Run.started_at, Run.completed_at, Run.node_attempt_count).where(Run.id == run_id)
-            )
-        ).first()
-    except Exception:
-        _log.warning(
-            "runs.deadline_triage_stats_unavailable",
-            extra={"run_id": str(run_id)},
-            exc_info=True,
-        )
-        return None, None
-    if run_row is None:
-        return None, None
-    attempt_count = run_row.node_attempt_count if isinstance(run_row.node_attempt_count, int) else None
-    reference = run_row.completed_at if isinstance(run_row.completed_at, datetime) else datetime.now(UTC)
-    last_evidence = last_output_at if isinstance(last_output_at, datetime) else run_row.started_at
-    if not isinstance(last_evidence, datetime):
-        return None, attempt_count
-    if reference.tzinfo is None:
-        reference = reference.replace(tzinfo=UTC)
-    if last_evidence.tzinfo is None:
-        last_evidence = last_evidence.replace(tzinfo=UTC)
-    return max((reference - last_evidence).total_seconds(), 0.0), attempt_count
+def _run_attempt_count(run: Any) -> int | None:
+    """The run's ``node_attempt_count`` as an int, or ``None`` when absent."""
+    value = getattr(run, "node_attempt_count", None)
+    return value if isinstance(value, int) else None
 
 
 async def _do_get_deadline_triage(
     factory: async_sessionmaker[AsyncSession],
     principal: TenantPrincipal,
     run_id: uuid.UUID,
+    *,
+    run_attempt_count: int | None = None,
 ) -> list[dict[str, Any]] | None:
     """Load the run's deadline-kill triage evidence (FAR-704).
 
@@ -469,23 +415,15 @@ async def _do_get_deadline_triage(
     projects the ``deadline_triage``-signed ones. Best-effort like
     ``_do_get_workspace_inputs``: a DB failure degrades to None (the run
     response is valid without triage evidence); empty list when the run has
-    no triage markers.
+    no triage markers. ``run_attempt_count`` is the caller's already-loaded
+    run value (FAR-1886 B1) — no second read, and the same value the MCP
+    detail surface passes.
     """
     try:
         async with factory() as session, session.begin():
             await set_rls_org(session, principal.organisation_id)
             markers = await read_run_markers(session, run_id=run_id, organisation_id=principal.organisation_id)
-            entries = _deadline_triage_from_markers(markers)
-            if not entries:
-                return entries
-            # FAR-1886 B1: the envelope's last-output age and attempt count
-            # are derived at read time from durable columns already on the
-            # row/store, so the terminal writers need not persist them.
-            last_output_age_seconds, attempt_count = await _deadline_triage_output_stats(session, run_id)
-            for entry in entries:
-                entry["last_output_age_seconds"] = last_output_age_seconds
-                entry["attempt_count"] = attempt_count
-            return entries
+            return _deadline_triage_from_markers(markers, run_attempt_count=run_attempt_count)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -1180,12 +1118,14 @@ class RunResponse(BaseModel):
     # node envelope reached the Agent Return Contract columns. Empty list
     # when the run has no such marker; None on a failed read.
     #
-    # FAR-1886 B1: entries also carry ``last_output_age_seconds`` and
-    # ``attempt_count`` (read-time-derived from the last durable output row /
-    # ``runs.node_attempt_count``), and the age-gate ``run.no_progress`` and
-    # ``harness.worker_lost`` terminal paths now write a synthetic run-level
-    # entry (``no_output_reason`` = "no attempts" / "executor lost"), so
-    # those runs are no longer indistinguishable from a silent stall.
+    # FAR-1886 B1: entries also carry ``run_attempt_count`` (the run's
+    # ``runs.node_attempt_count``, read from the run row), and every
+    # run-level terminal path — the age gate and stranded-pending backstop
+    # (``run.no_progress``), the node-deadline reaper and
+    # ``harness.worker_lost`` — now writes a synthetic run-level entry
+    # carrying the reason that path observed, so those runs are no longer
+    # indistinguishable from a silent stall. The reason is the observation,
+    # not a cause inferred from the counter.
     deadline_triage: list[dict[str, Any]] | None = None
 
 
@@ -2019,7 +1959,17 @@ async def get_run_status(
             lambda: _do_get_run_observability(factory, principal, run)
         )
         workspace_inputs = await _run_with_retry(lambda: _do_get_workspace_inputs(factory, principal, run_id))
-        deadline_triage = await _run_with_retry(lambda: _do_get_deadline_triage(factory, principal, run_id))
+        deadline_triage = await _run_with_retry(
+            lambda: _do_get_deadline_triage(
+                factory,
+                principal,
+                run_id,
+                # FAR-1886 B1: the attempt counter is data on the triage
+                # envelope; take it from the run row already loaded above so
+                # the REST and MCP detail surfaces cannot diverge.
+                run_attempt_count=_run_attempt_count(run),
+            )
+        )
     except IntegrityError:
         _log.exception(_CODE_RUNS_GET_RUN_STATUS)
         raise HTTPException(

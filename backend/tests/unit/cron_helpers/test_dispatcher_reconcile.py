@@ -3853,6 +3853,9 @@ class TestAgeGateTerminalTriage:
         assert kwargs["organisation_id"] == ORG
         # The truthful age-gate code rides the marker — never the supersede code.
         assert kwargs["error_code"] == "no_progress"
+        # The reason is the gate's OWN observation, not an "executor lost"
+        # cause inferred from the attempt counter.
+        assert kwargs["reason"] == ch._TERMINAL_TRIAGE_REASON_AGE_BOUND
 
     @pytest.mark.asyncio
     async def test_mid_graph_wedge_writes_no_triage_when_no_rows_are_collected(self) -> None:

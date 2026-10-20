@@ -1355,13 +1355,16 @@ async def _persist_worker_lost_triage(
     FAR-1886 B1. The worker was shut down mid-run, so the executor that would
     have written a per-attempt cancellation marker is gone; without this the
     run's ``deadline_triage`` is ``[]`` and an operator cannot tell "executor
-    died" from "silent stall". The marker (and its "executor lost" / "no
-    attempts" reason) is written by ``cron_helpers.
-    persist_terminal_triage_marker`` in its own RLS-scoped session; ANY
-    failure is logged and swallowed — triage must never fail the terminal
-    write that already committed.
+    died" from "silent stall". The marker is written by
+    ``cron_helpers.persist_terminal_triage_marker`` in its own RLS-scoped
+    session, with the reason this path actually observed; ANY failure is
+    logged and swallowed — triage must never fail the terminal write that
+    already committed.
     """
-    from modulo.core.cron_helpers import persist_terminal_triage_marker
+    from modulo.core.cron_helpers import (
+        _TERMINAL_TRIAGE_REASON_WORKER_LOST,
+        persist_terminal_triage_marker,
+    )
 
     try:
         factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
@@ -1372,6 +1375,11 @@ async def _persist_worker_lost_triage(
                 run_id=uuid.UUID(run_id),
                 organisation_id=uuid.UUID(org_id),
                 error_code=_WORKER_LOST_TRIAGE_ERROR_CODE,
+                # The reason states the observation this path can make: the
+                # worker that owned the run is gone, so no further output can
+                # arrive. It is NOT derived from the run's attempt counter (an
+                # attempt merely proves one started).
+                reason=_TERMINAL_TRIAGE_REASON_WORKER_LOST,
             )
     except asyncio.CancelledError:
         raise

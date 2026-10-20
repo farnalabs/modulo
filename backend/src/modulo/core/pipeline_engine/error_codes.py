@@ -536,9 +536,12 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         guidance=(
             "A node did not complete within its configured timeout_seconds "
             "(the node-deadline watchdog ended the dispatch). The cause is "
-            "not asserted here: deadline_triage carries the retained output "
-            "tail, and last_output_age_seconds distinguishes a productive "
-            "attempt that ran over budget from one that produced no output."
+            "not asserted here: deadline_triage carries what the terminaliser "
+            "observed. A SANDBOX node may additionally have a retained "
+            "per-attempt output and log tail plus no_output_reason and "
+            "stdout_length; nodes with no sandbox attempt (and run-level "
+            "entries) have no per-attempt tail, so read run_attempt_count as "
+            "data and the run's error_detail for the terminaliser's reason."
         ),
     ),
     _CODE_NODE_RUNAWAY: ErrorCodeSpec(

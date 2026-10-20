@@ -1026,6 +1026,9 @@ interface ChildRunRef {
 // FAR-704: one cancelled sandbox attempt's retained triage evidence
 // (RunResponse.deadline_triage). All strings arrive pre-redacted from the
 // backend marker store.
+// FAR-1886 B1: run-level entries (age gate, stranded pending, node-deadline
+// reaper, worker handoff) have no per-attempt tail; every entry carries the
+// run's node-attempt counter as data. It is not a cause.
 interface DeadlineTriageEntry {
   node_id?: string | null
   attempt_key?: string | null
@@ -1035,6 +1038,7 @@ interface DeadlineTriageEntry {
   stdout_length?: number | null
   stderr_length?: number | null
   delivery_done?: boolean
+  run_attempt_count?: number | null
 }
 
 interface CostBreakdownEntry {
