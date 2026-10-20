@@ -96,8 +96,12 @@ rate-limited by the `TriggerEngine`.
       naturally; **manual / MCP** → exempt (no backpressure check; capacity
       gates may still DEFER its dispatch but never refuse it). The invariant:
       *a pending run may wait indefinitely while its pipeline makes progress; a
-      pipeline making NO progress stops accepting new work.* Every refusal is
-      operator-visible: the `backpressure_skipped` event appears in
+      pipeline making NO progress stops accepting new work.* An admitted
+      delivery is never silently lost to a queue timeout: a capacity-queued run
+      waits indefinitely by default (FAR-1883), and only the pipeline's opt-in
+      `queue_timeout_seconds` ends it - as a `queue.expired` supersession, not a
+      failure. Every refusal is operator-visible: the `backpressure_skipped`
+      event appears in
       `/api/v1/admin/trigger-events` and the per-trigger event log, is counted
       in the capacity-outcome summary, and the FAR-1344 wedge alert evaluates
       the SAME predicate on every dispatcher-reconcile tick, so a skip is
