@@ -147,3 +147,34 @@ describe('schema-definition', () => {
     })
   })
 })
+
+describe('parseDefinitionToFields default formatting', () => {
+  it('stringifies every supported default type explicitly', () => {
+    const symbolDefault = Symbol('sym')
+    const functionDefault = function namedDefault() { return 1 }
+    const fields = parseDefinitionToFields({
+      properties: {
+        missing: {},
+        objectDefault: { default: { a: 1 } },
+        stringDefault: { default: 'text' },
+        trueDefault: { default: true },
+        falseDefault: { default: false },
+        numberDefault: { default: 7 },
+        bigintDefault: { default: BigInt(8) },
+        symbolDefault: { default: symbolDefault },
+        functionDefault: { default: functionDefault },
+      },
+    })
+    const values = Object.fromEntries(fields.map((f) => [f.name, f.defaultValue]))
+
+    expect(values.missing).toBe('')
+    expect(values.objectDefault).toBe('{"a":1}')
+    expect(values.stringDefault).toBe('text')
+    expect(values.trueDefault).toBe('true')
+    expect(values.falseDefault).toBe('false')
+    expect(values.numberDefault).toBe('7')
+    expect(values.bigintDefault).toBe('8')
+    expect(values.symbolDefault).toBe('Symbol(sym)')
+    expect(values.functionDefault).toContain('namedDefault')
+  })
+})

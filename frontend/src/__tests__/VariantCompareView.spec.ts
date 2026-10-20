@@ -553,4 +553,84 @@ describe('VariantCompareView', () => {
     // selection_strategy null falls back to an em dash (the `||` arm)
     expect(text).toContain('—')
   })
+
+  it('skips a poll with no data and reports a failed terminal status', async () => {
+    vi.useFakeTimers()
+    let runCalls = 0
+
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        runCalls += 1
+        if (runCalls === 1) return Promise.resolve({ data: null, error: undefined })
+        return Promise.resolve({
+          data: { run_id: 'r1', status: 'failed', total_cost_usd: null, token_consumption: null },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const wrapper = mount(VariantCompareView, {
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await nextTick()
+
+    const vm = wrapper.vm as any
+    vm.runEntries.set('var-a', {
+      runId: 'r1',
+      variantName: 'var-a',
+      runStatus: 'pending',
+      totalCostUsd: null,
+      tokenConsumption: null,
+      nodeOutputs: null,
+      evalResults: [],
+    })
+    vm.runningVariants.add('var-a')
+
+    const poll = vm.pollRunStatus('r1', 'var-a')
+    await vi.advanceTimersByTimeAsync(2000)
+    await vi.advanceTimersByTimeAsync(2000)
+    await poll
+
+    expect(runCalls).toBe(2)
+    expect(vm.error).toContain('views.variantCompare.runFailedStatus')
+    expect(vm.runningVariants.has('var-a')).toBe(false)
+    vi.useRealTimers()
+  })
+
+  it('does not create an entry when polling a run with no local entry', async () => {
+    vi.useFakeTimers()
+
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({
+          data: { run_id: 'r1', status: 'complete', total_cost_usd: 0, token_consumption: null },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const wrapper = mount(VariantCompareView, {
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await nextTick()
+
+    const vm = wrapper.vm as any
+    expect(vm.runEntries.has('ghost')).toBe(false)
+
+    const poll = vm.pollRunStatus('r1', 'ghost')
+    await vi.advanceTimersByTimeAsync(2000)
+    await poll
+
+    expect(vm.runEntries.has('ghost')).toBe(false)
+    expect(vm.runningVariants.has('ghost')).toBe(false)
+    vi.useRealTimers()
+  })
 })
