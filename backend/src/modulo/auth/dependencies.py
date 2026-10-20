@@ -1,12 +1,13 @@
 """FastAPI auth dependencies for v1 user management."""
 
 import logging
-from typing import Any
+import uuid
+from typing import TYPE_CHECKING, cast
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import InvalidTokenError as JWTError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.auth.jwt import (
@@ -18,6 +19,12 @@ from modulo.auth.jwt import (
 from modulo.auth.permissions import _clamp_role
 from modulo.core.logging_config import org_id_var
 from modulo.settings import Settings, get_settings
+
+if TYPE_CHECKING:
+    # Typing only: importing the ORM model at module scope would pull the SQLAlchemy
+    # model layer into every ``modulo.auth.dependencies`` import, so the annotation is
+    # quoted and the runtime import stays inside ``_lookup_api_key_org``.
+    from modulo.db.models.api_key import OrgApiKey
 
 _log = logging.getLogger(__name__)
 
@@ -295,7 +302,7 @@ async def _resolve_api_key_principal(
     return _bind_api_key_principal(request, key, live_role, key_grants)
 
 
-async def _lookup_api_key_org(factory: Any, token: str) -> Any:
+async def _lookup_api_key_org(factory: async_sessionmaker[AsyncSession], token: str) -> uuid.UUID | None:
     """Resolve the key's org without RLS filtering (SECURITY DEFINER on Postgres)."""
     from sqlalchemy import select, text
 
@@ -318,12 +325,15 @@ async def _lookup_api_key_org(factory: Any, token: str) -> Any:
     async with factory() as session, session.begin():
         dialect = await _ensure_active_transaction(session)
         if dialect == "postgresql":
-            return (
+            resolved_org = (
                 await session.execute(
                     text("SELECT public.lookup_api_key_org(:prefix)"),
                     {"prefix": prefix},
                 )
             ).scalar_one_or_none()
+            # A raw scalar SELECT is untyped at the SQLAlchemy layer (`Any`),
+            # but the SECURITY DEFINER function returns the org uuid or NULL.
+            return cast(uuid.UUID | None, resolved_org)
         key_record = (
             await session.execute(
                 select(OrgApiKey).where(
@@ -335,7 +345,11 @@ async def _lookup_api_key_org(factory: Any, token: str) -> Any:
         return key_record.organisation_id if key_record is not None else None
 
 
-async def _validate_api_key_in_org(factory: Any, token: str, org_id: Any) -> tuple[Any, str | None]:
+async def _validate_api_key_in_org(
+    factory: async_sessionmaker[AsyncSession],
+    token: str,
+    org_id: uuid.UUID,
+) -> tuple["OrgApiKey", str | None]:
     """Re-validate the key inside its org's RLS context and read the live role."""
     from modulo.auth.api_key import validate_api_key
     from modulo.db.rls import set_rls_org
@@ -358,7 +372,7 @@ async def _validate_api_key_in_org(factory: Any, token: str, org_id: Any) -> tup
 
 def _bind_api_key_principal(
     request: Request | None,
-    key: Any,
+    key: "OrgApiKey",
     live_role: str | None,
     key_grants: frozenset[str] | None,
 ) -> TenantPrincipal:
