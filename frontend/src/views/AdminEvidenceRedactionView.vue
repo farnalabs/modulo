@@ -294,7 +294,7 @@ const ROLES: readonly Role[] = ['admin', 'operator', 'viewer']
  * class with a 422 (never a silent no-op), and a class added there must be
  * added here in the same change.
  */
-const REDACTION_CLASSES: readonly string[] = ['sensitive_output', 'internal_metadata']
+const REDACTION_CLASSES: ReadonlySet<string> = new Set(['sensitive_output', 'internal_metadata'])
 
 /** The seeded catch-all pair (migration 0320 / org creation). */
 const CATCH_ALL_PATTERN = '*'
@@ -319,7 +319,8 @@ const {
   { initialValue: [] as RedactionRule[], silentRefetch: true },
 )
 
-const rules = computed(() => rulesData.value ?? [])
+// useDataFetch was initialised with `[]`, so the data ref is never undefined.
+const rules = computed(() => rulesData.value)
 
 /**
  * Split the fetch failure by WHEN it happened. Before the first successful
@@ -328,16 +329,14 @@ const rules = computed(() => rulesData.value ?? [])
  * failure surfaces as a retry-able inline banner instead.
  */
 const initialLoadError = computed(() => (fetched.value ? null : loadError.value))
-const refetchLoadError = computed(() => (fetched.value ? loadError.value : null))
+// Only rendered once the first load has succeeded (the `v-else` branch below),
+// so an error reaching here is always a refetch failure.
+const refetchLoadError = computed(() => loadError.value)
 
 async function loadRules(): Promise<void> {
-  try {
-    await fetchRules()
-  } catch (e: unknown) {
-    // vue-query usually reports a failure through its error state rather than
-    // by rejecting; record a rejection the same way instead of swallowing it.
-    loadError.value = formatApiError(e)
-  }
+  // useDataFetch reports a failed request through its `error` state; `refetch`
+  // resolves rather than rejecting, so there is nothing to catch here.
+  await fetchRules()
 }
 
 const formOpen = ref(false)
@@ -371,7 +370,7 @@ const formRoleOptions = computed(() => {
  * that makes the rule unsaveable.
  */
 const classOptions = computed(() => {
-  const extras = form.value.redacted_fields.filter(item => !REDACTION_CLASSES.includes(item))
+  const extras = form.value.redacted_fields.filter(item => !REDACTION_CLASSES.has(item))
   return [...REDACTION_CLASSES, ...extras]
 })
 

@@ -410,4 +410,78 @@ describe('AdminEvidenceRedactionView', () => {
       true,
     )
   })
+
+  it('renders an em dash for a rule that redacts no classes', async () => {
+    mockRules([{ ...SCOPED, id: 'rule-empty', redacted_fields: [] }])
+    const wrapper = mountView()
+    await settle()
+
+    const cells = ruleRows(wrapper)[0].findAll('td')
+    expect(cells[2].text()).toBe('—')
+  })
+
+  it('rejects a key pattern longer than 255 characters without calling the API', async () => {
+    const wrapper = mountView()
+    await settle()
+
+    await openCreateForm(wrapper)
+    await fillRequiredFields(wrapper, 'a'.repeat(256), 'admin')
+    const classBoxes = wrapper.findAll('[data-testid="admin-evidence-redaction-field-checkbox"]')
+    await classBoxes[0].setValue(true)
+    await wrapper.find('form').trigger('submit')
+    await settle()
+
+    expect(mockPut).not.toHaveBeenCalled()
+    const error = wrapper.find('[data-testid="admin-evidence-redaction-form-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('255 characters or fewer')
+  })
+
+  it('ignores a second submit while a save is already in flight', async () => {
+    let resolvePut!: (value: { data: RedactionRule; error: undefined }) => void
+    mockPut.mockReturnValueOnce(
+      new Promise(resolve => {
+        resolvePut = resolve
+      }),
+    )
+    const wrapper = mountView()
+    await settle()
+
+    await openCreateForm(wrapper)
+    await fillRequiredFields(wrapper, 'evidence.*', 'admin')
+    const classBoxes = wrapper.findAll('[data-testid="admin-evidence-redaction-field-checkbox"]')
+    await classBoxes[0].setValue(true)
+
+    await wrapper.find('form').trigger('submit')
+    await vueNextTick()
+    await wrapper.find('form').trigger('submit')
+    await vueNextTick()
+
+    expect(mockPut).toHaveBeenCalledTimes(1)
+
+    resolvePut({ data: { ...CATCH_ALL }, error: undefined })
+    await settle()
+
+    expect(mockPut).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the form open and reports a save that throws instead of returning an error', async () => {
+    mockPut.mockRejectedValueOnce(new Error('network down'))
+    const wrapper = mountView()
+    await settle()
+
+    await openCreateForm(wrapper)
+    await fillRequiredFields(wrapper, 'evidence.*', 'admin')
+    const classBoxes = wrapper.findAll('[data-testid="admin-evidence-redaction-field-checkbox"]')
+    await classBoxes[0].setValue(true)
+    await wrapper.find('form').trigger('submit')
+    await settle()
+
+    expect(mockPut).toHaveBeenCalledTimes(1)
+    const error = wrapper.find('[data-testid="admin-evidence-redaction-form-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('network down')
+    expect(wrapper.find('[data-testid="admin-evidence-redaction-form-title"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="admin-evidence-redaction-status"]').exists()).toBe(false)
+  })
 })
