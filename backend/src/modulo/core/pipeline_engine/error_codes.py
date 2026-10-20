@@ -1121,6 +1121,33 @@ def is_retryable(code: str | None) -> bool:
     return spec.retryable
 
 
+def should_notify_terminal_failure(code: str | None) -> bool:
+    """Whether a terminal run failure with *code* should dispatch ``EVENT_RUN_FAILED``.
+
+    DELIBERATELY NARROW (noise control): notify only for a code that is BOTH
+    non-retryable AND ``alert_severity == "critical"`` — the operator-actionable
+    class (billing/credential faults such as ``model.insufficient_funds`` and
+    ``provider.authentication``) where every retry re-hits the same wall and a
+    silent failure can strand a pipeline indefinitely.
+
+    Everything else stays silent: retryable codes (a transient infra blip,
+    including ``sandbox.no_output_json``), non-critical codes
+    (``run.no_progress``, ``agent.no_op``), and the derived-cost paths. An
+    unknown, absent or unmapped code resolves through ``harness.unknown``
+    (non-retryable, ``warning``) and therefore does NOT notify — fail closed on
+    noise, never on safety. Never raises.
+    """
+    try:
+        canonical = map_legacy_code(code)
+    except Exception:  # pragma: no cover - map_legacy_code is total, defence in depth
+        _log.warning("error_codes.notify_severity_lookup_failed", extra={"code": str(code)}, exc_info=True)
+        return False
+    spec = ERROR_CODE_REGISTRY.get(canonical)
+    if spec is None:
+        return False
+    return (not spec.retryable) and spec.alert_severity == "critical"
+
+
 def expand_code_variants(code: str) -> set[str]:
     """All raw DB values equivalent to *code* (dotted, legacy, or exception class name).
 
