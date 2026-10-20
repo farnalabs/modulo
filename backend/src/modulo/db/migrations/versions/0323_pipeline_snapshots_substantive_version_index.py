@@ -45,8 +45,8 @@ Uses plain ``CREATE INDEX IF NOT EXISTS`` (idempotent, consistent with
 Deploy-safety: index creation takes a SHARE lock (blocking writes) proportional
 to table size; schedule outside peaks.
 
-Revision ID: 0322_pipeline_snapshots_substantive_version_index
-Revises: 0321_organisation_cost_state
+Revision ID: 0323_pipeline_snapshots_substantive_version_index
+Revises: 0322_pipeline_queue_timeout
 Create Date: 2026-10-18
 """
 
@@ -54,8 +54,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0322_pipeline_snapshots_substantive_version_index"
-down_revision = "0321_organisation_cost_state"
+revision = "0323_pipeline_snapshots_substantive_version_index"
+down_revision = "0322_pipeline_queue_timeout"
 branch_labels = None
 depends_on = None
 
