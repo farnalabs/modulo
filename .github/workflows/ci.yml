@@ -1501,6 +1501,20 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+      # The sync is its own step with a plain-scalar `run:` so the NOSONAR
+      # comment is a real YAML comment. Inside a `run: |` block scalar it is
+      # shell text, which the YAML analyzer cannot read as a suppression, so
+      # githubactions:S8541 was still raised against the command line.
+      - name: Sync backend dependencies
+        if: needs.changes.outputs.e2e_route_methods == 'true'
+        working-directory: backend
+        shell: bash
+        # NOSONAR githubactions:S8541: the backend lockfile pins source-archive
+        # deps (pytest-bdd has no wheel, ibm-cos-sdk is sdist-only), so
+        # `--no-build` hard-fails this sync on a cold uv cache. `--frozen`
+        # pins the exact revisions, so the builds are deterministic and
+        # trusted (no untrusted setup scripts execute).
+        run: uv sync --frozen  # NOSONAR
       - name: Check E2E HTTP calls match live API routes
         # Step-level gate (never job-level): a docs-only PR skips the check
         # while the job still reports success, matching the other path-gated
@@ -1513,14 +1527,7 @@ jobs:
           SECRET_KEY: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           FERNET_KEY: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
           MODULO_CSRF_ENABLED: "false"
-        run: |
-          # NOSONAR githubactions:S8541: the backend lockfile pins source-archive
-          # deps (pytest-bdd has no wheel, ibm-cos-sdk is sdist-only), so
-          # `--no-build` hard-fails this sync on a cold uv cache. `--frozen`
-          # pins the exact revisions, so the builds are deterministic and
-          # trusted (no untrusted setup scripts execute).
-          uv sync --frozen  # NOSONAR
-          uv run --no-build --no-sync python ../scripts/run_check_e2e_route_methods.py
+        run: uv run --no-build --no-sync python ../scripts/run_check_e2e_route_methods.py
 
   # Break-glass deploy gate = acceptance (b) of the break-glass admin recovery
   # plan sec. 3: automated staging verification = the boot-time allow-list assertion
