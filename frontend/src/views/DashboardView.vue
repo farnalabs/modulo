@@ -114,7 +114,9 @@
             <tr v-for="team in summary.teams" :key="team.id"
                 :data-testid="'dashboard-team-row-' + team.id"
                 class="border-b last:border-0 hover:bg-muted/50"
-                @click="toggleTeam(team.id)">
+                @click="toggleTeam(team.id)"
+                @keydown.enter.self="toggleTeam(team.id)"
+                @keydown.space.self.prevent="toggleTeam(team.id)">
               <td class="py-2.5 font-medium">
                 <button
                   type="button"

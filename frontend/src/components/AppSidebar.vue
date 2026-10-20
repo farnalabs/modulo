@@ -72,6 +72,7 @@
       :aria-label="$t('components.AppLayout.main_navigation')"
       class="fixed top-0 left-0 z-40 m-0 h-full w-64 max-h-none max-w-none border-r bg-background p-4 flex flex-col overflow-y-auto text-foreground backdrop:bg-black/50 md:hidden"
       @click="onMobilePanelBackdropClick"
+      @keydown.escape="closeMobilePanel"
       @cancel="closeMobilePanel"
       @close="mobileExpanded = false"
     >

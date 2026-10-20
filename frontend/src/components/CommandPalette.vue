@@ -6,6 +6,7 @@
       class="mx-auto mt-[15vh] w-full max-w-lg rounded-lg border bg-background p-0 text-foreground shadow-xl backdrop:bg-black/50"
       :aria-label="$t('components.CommandPalette.label')"
       @click="onBackdropClick"
+      @keydown.escape="close"
       @close="isOpen = false"
     >
       <div class="flex items-center gap-2 border-b px-4">

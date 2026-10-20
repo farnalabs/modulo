@@ -71,6 +71,8 @@
           :key="m.id"
           class="card card-hover w-full p-5 text-left cursor-pointer"
           @click="openMap(m)"
+          @keydown.enter.self="openMap(m)"
+          @keydown.space.self.prevent="openMap(m)"
           data-testid="lifecycle-map-list-card"
         >
           <div class="flex items-start justify-between gap-2 mb-2">

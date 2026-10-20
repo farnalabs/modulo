@@ -69,6 +69,8 @@
           ]"
           :style="{ paddingLeft: `${12 + element.depth * 16}px`, paddingRight: '8px' }"
           @click="$emit('select-folder', element.folder.id)"
+          @keydown.enter.self="$emit('select-folder', element.folder.id)"
+          @keydown.space.self.prevent="$emit('select-folder', element.folder.id)"
           @dragover.prevent
           @drop="onFolderDrop(element.folder.id, $event)"
         >

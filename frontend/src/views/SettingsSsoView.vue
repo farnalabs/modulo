@@ -44,6 +44,8 @@
             class="card cursor-pointer transition-colors hover:bg-accent/30"
             data-testid="settings-sso-provider-row"
             @click="openEditForm(provider)"
+            @keydown.enter.self="openEditForm(provider)"
+            @keydown.space.self.prevent="openEditForm(provider)"
           >
             <div class="flex items-center justify-between p-4">
               <button
