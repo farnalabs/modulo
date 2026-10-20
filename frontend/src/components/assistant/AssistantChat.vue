@@ -434,37 +434,46 @@ function executeSlashCommand(cmd: SlashCommand) {
   inputText.value = ''
 }
 
+function moveSlashHighlight(delta: number) {
+  const count = filteredSlashCommands.value.length
+  slashHighlightIdx.value = (slashHighlightIdx.value + delta + count) % count
+}
+
+function selectSlashCommand() {
+  // A command with typed arguments is complete — execute it with the full
+  // input so commands like "/rename Foo" receive their arguments.
+  const withArgs = slashCommandWithArgs(inputText.value)
+  if (withArgs) {
+    executeSlashCommand(withArgs)
+    return
+  }
+  const cmd = filteredSlashCommands.value[slashHighlightIdx.value]
+  if (cmd.command === '/exit' || cmd.command === '/delete') {
+    executeSlashCommand(cmd)
+    return
+  }
+  inputText.value = cmd.command + ' '
+  showSlashMenu.value = false
+  nextTick(() => {
+    textareaRef.value?.focus()
+  })
+}
+
 function onInputKeydown(e: KeyboardEvent) {
   if (showSlashMenu.value && filteredSlashCommands.value.length > 0) {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      slashHighlightIdx.value = (slashHighlightIdx.value + 1) % filteredSlashCommands.value.length
+      moveSlashHighlight(1)
       return
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault()
-      slashHighlightIdx.value = (slashHighlightIdx.value - 1 + filteredSlashCommands.value.length) % filteredSlashCommands.value.length
+      moveSlashHighlight(-1)
       return
     }
     if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault()
-      // A command with typed arguments is complete — execute it with the
-      // full input so commands like "/rename Foo" receive their arguments.
-      const withArgs = slashCommandWithArgs(inputText.value)
-      if (withArgs) {
-        executeSlashCommand(withArgs)
-        return
-      }
-      const cmd = filteredSlashCommands.value[slashHighlightIdx.value]
-      if (cmd.command === '/exit' || cmd.command === '/delete') {
-        executeSlashCommand(cmd)
-      } else {
-        inputText.value = cmd.command + ' '
-        showSlashMenu.value = false
-        nextTick(() => {
-          textareaRef.value?.focus()
-        })
-      }
+      selectSlashCommand()
       return
     }
     if (e.key === 'Escape') {
@@ -751,8 +760,8 @@ function renderMarkdown(text: string): string {
     '<ul class="assistant-ul">$&</ul>',
   );
 
-  html = html.replace(/\n\n/g, '</p><p class="assistant-p">');
-  html = html.replace(/\n/g, "<br/>");
+  html = html.replaceAll(/\n\n/g, '</p><p class="assistant-p">');
+  html = html.replaceAll(/\n/g, "<br/>");
 
   if (!html.trim().startsWith('<')) {
     html = '<p class="assistant-p">' + html + "</p>";
@@ -930,11 +939,12 @@ function renderMarkdown(text: string): string {
 }
 .assistant-nogo-badge {
   @apply text-[10px] font-semibold px-1.5 py-0.5 rounded;
+  --assistant-nogo-text: 0 72% 72%;
   background-color: hsl(0 72% 51% / 0.15);
-  color: hsl(0 72% 72%);
+  color: hsl(var(--assistant-nogo-text));
 }
 .light .assistant-nogo-badge {
-  color: hsl(0 72% 40%);
+  --assistant-nogo-text: 0 72% 40%;
 }
 .assistant-permission-actions {
   @apply flex items-center gap-2;
@@ -1002,18 +1012,20 @@ function renderMarkdown(text: string): string {
   @apply text-xs font-medium px-2 py-0.5 rounded-full;
 }
 .tool-badge.success {
+  --tool-badge-text: 142 76% 52%;
   background-color: hsl(142 76% 36% / 0.15);
-  color: hsl(142 76% 52%);
+  color: hsl(var(--tool-badge-text));
 }
 .tool-badge.failed {
+  --tool-badge-text: 0 72% 72%;
   background-color: hsl(0 72% 51% / 0.15);
-  color: hsl(0 72% 72%);
+  color: hsl(var(--tool-badge-text));
 }
 .light .tool-badge.success {
-  color: hsl(142 76% 26%);
+  --tool-badge-text: 142 76% 26%;
 }
 .light .tool-badge.failed {
-  color: hsl(0 72% 40%);
+  --tool-badge-text: 0 72% 40%;
 }
 .tool-chevron {
   @apply text-xs transition-transform duration-200;
