@@ -567,167 +567,102 @@ _SANDBOX_AGENT_ENVELOPE: dict[str, Any] = {
 }
 
 
+_ABSENT = object()
+
+
 class TestFireAgentSignalChildPayloadShape:
     """FAR-131: fire_agent_signal embeds the node's PURE RETURN — never the
     legacy mixed envelope — and persists node outputs into the CHILD input
-    payload only (never the source run's node-output store)."""
+    payload only (never the source run's node-output store).
 
-    async def test_splittable_type_embeds_pure_return(
+    The contract is type-driven: a splittable node type (agent / sandbox_agent
+    / gate) hands the child its pure return, while an unknown type or an
+    omitted type keeps the caller's value verbatim (the pre-FAR-131 contract).
+    """
+
+    @pytest.mark.parametrize(
+        ("node_type", "node_output", "expected", "completed_node_id"),
+        [
+            pytest.param(
+                "sandbox_agent",
+                _SANDBOX_AGENT_ENVELOPE,
+                {"pr_url": "https://example/1", "changed_files": ["a.py"]},
+                "my-node",
+                id="sandbox-agent-embeds-pure-return-not-envelope",
+            ),
+            pytest.param(
+                "router",
+                {"artifacts": [{"x": 1}], "output": {"result": "ok"}},
+                {"artifacts": [{"x": 1}], "output": {"result": "ok"}},
+                "my-node",
+                id="unknown-node-type-keeps-value-verbatim",
+            ),
+            pytest.param(
+                None,
+                _SANDBOX_AGENT_ENVELOPE,
+                _SANDBOX_AGENT_ENVELOPE,
+                "my-node",
+                id="omitted-node-type-keeps-legacy-verbatim",
+            ),
+            pytest.param(
+                "agent",
+                {"output": {"result": "ok"}, "status": "complete", "summary": "done"},
+                {"result": "ok"},
+                "my-node",
+                id="agent-embeds-pure-return",
+            ),
+            pytest.param(
+                "",
+                {"output": {"result": "ok"}, "status": "complete"},
+                {"result": "ok"},
+                "my-node",
+                id="empty-node-type-resolves-as-agent",
+            ),
+            pytest.param(
+                "gate",
+                {"artifacts": [{"status": "approved", "human_data": {"decision": "ok"}}], "status": "complete"},
+                {"decision": "ok"},
+                "hitl_review_a_b",
+                id="gate-embeds-human-data-pure-return",
+            ),
+        ],
+    )
+    async def test_child_payload_carries_the_pure_return(
         self,
         mock_session: MagicMock,
         mock_create_run: AsyncMock,
+        node_type: str | None,
+        node_output: Any,
+        expected: Any,
+        completed_node_id: str,
     ) -> None:
-        """A sandbox_agent node hands the child pipeline its contract output,
-        not the envelope that carries status/summary/cost telemetry."""
+        """The child's ``node_output`` is the node's pure return, resolved by type."""
         org_id = uuid.uuid4()
         source_pipeline_id = uuid.uuid4()
         trigger = _make_trigger(
             org_id=org_id,
             source_pipeline_id=source_pipeline_id,
-            source_node_id="my-node",
+            source_node_id=completed_node_id,
         )
         _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
 
+        # ``node_type=None`` models a caller that omits the argument entirely
+        # (the pre-FAR-131 contract) rather than passing an explicit null.
+        type_kwargs = {} if node_type is None else {"node_type": node_type}
         results = await fire_agent_signal(
             mock_session,
             org_id=org_id,
             source_run_id=uuid.uuid4(),
             source_pipeline_id=source_pipeline_id,
-            completed_node_id="my-node",
-            node_output=_SANDBOX_AGENT_ENVELOPE,
-            node_type="sandbox_agent",
+            completed_node_id=completed_node_id,
+            node_output=node_output,
+            **type_kwargs,
         )
 
         assert len(results) == 1
         assert results[0]["status"] == "fired"
         payload = mock_create_run.call_args[1]["input_payload"]
-        assert payload["node_output"] == {"pr_url": "https://example/1", "changed_files": ["a.py"]}
-        # The legacy envelope telemetry never reaches the child.
-        assert "artifacts" not in payload["node_output"]
-        assert "output" not in payload["node_output"]
-
-    async def test_unknown_node_type_embeds_value_verbatim(
-        self,
-        mock_session: MagicMock,
-        mock_create_run: AsyncMock,
-    ) -> None:
-        """An unsplittable/unknown node type keeps the value verbatim."""
-        org_id = uuid.uuid4()
-        source_pipeline_id = uuid.uuid4()
-        trigger = _make_trigger(
-            org_id=org_id,
-            source_pipeline_id=source_pipeline_id,
-            source_node_id="my-node",
-        )
-        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
-        legacy_value = {"artifacts": [{"x": 1}], "output": {"result": "ok"}}
-
-        results = await fire_agent_signal(
-            mock_session,
-            org_id=org_id,
-            source_run_id=uuid.uuid4(),
-            source_pipeline_id=source_pipeline_id,
-            completed_node_id="my-node",
-            node_output=legacy_value,
-            node_type="router",
-        )
-
-        assert len(results) == 1
-        payload = mock_create_run.call_args[1]["input_payload"]
-        assert payload["node_output"] == legacy_value
-
-    async def test_omitted_node_type_embeds_value_verbatim(
-        self,
-        mock_session: MagicMock,
-        mock_create_run: AsyncMock,
-    ) -> None:
-        """A caller that supplies no node type (the pre-FAR-131 contract) keeps
-        the legacy verbatim behaviour — even for a splittable-looking value."""
-        org_id = uuid.uuid4()
-        source_pipeline_id = uuid.uuid4()
-        trigger = _make_trigger(
-            org_id=org_id,
-            source_pipeline_id=source_pipeline_id,
-            source_node_id="my-node",
-        )
-        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
-
-        results = await fire_agent_signal(
-            mock_session,
-            org_id=org_id,
-            source_run_id=uuid.uuid4(),
-            source_pipeline_id=source_pipeline_id,
-            completed_node_id="my-node",
-            node_output=_SANDBOX_AGENT_ENVELOPE,
-        )
-
-        assert len(results) == 1
-        payload = mock_create_run.call_args[1]["input_payload"]
-        assert payload["node_output"] == _SANDBOX_AGENT_ENVELOPE
-
-    async def test_default_agent_type_embeds_pure_return(
-        self,
-        mock_session: MagicMock,
-        mock_create_run: AsyncMock,
-    ) -> None:
-        """The common ``agent`` node type hands the child its pure return (the
-        outer ``output`` key) — never the surrounding envelope."""
-        org_id = uuid.uuid4()
-        source_pipeline_id = uuid.uuid4()
-        trigger = _make_trigger(
-            org_id=org_id,
-            source_pipeline_id=source_pipeline_id,
-            source_node_id="my-node",
-        )
-        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
-        agent_envelope = {"output": {"result": "ok"}, "status": "complete", "summary": "done"}
-
-        results = await fire_agent_signal(
-            mock_session,
-            org_id=org_id,
-            source_run_id=uuid.uuid4(),
-            source_pipeline_id=source_pipeline_id,
-            completed_node_id="my-node",
-            node_output=agent_envelope,
-            node_type="agent",
-        )
-
-        assert len(results) == 1
-        payload = mock_create_run.call_args[1]["input_payload"]
-        assert payload["node_output"] == {"result": "ok"}
-
-    async def test_empty_string_node_type_resolves_as_default_agent(
-        self,
-        mock_session: MagicMock,
-        mock_create_run: AsyncMock,
-    ) -> None:
-        """A graph node that declares no ``node_type`` compiles as the default
-        ``agent`` type, but the derived type map records it as ``""``. The
-        empty string must resolve exactly like ``agent`` so the node hands the
-        child its pure return, not the legacy envelope (FAR-131)."""
-        org_id = uuid.uuid4()
-        source_pipeline_id = uuid.uuid4()
-        trigger = _make_trigger(
-            org_id=org_id,
-            source_pipeline_id=source_pipeline_id,
-            source_node_id="my-node",
-        )
-        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
-        agent_envelope = {"output": {"result": "ok"}, "status": "complete"}
-
-        results = await fire_agent_signal(
-            mock_session,
-            org_id=org_id,
-            source_run_id=uuid.uuid4(),
-            source_pipeline_id=source_pipeline_id,
-            completed_node_id="my-node",
-            node_output=agent_envelope,
-            node_type="",
-        )
-
-        assert len(results) == 1
-        payload = mock_create_run.call_args[1]["input_payload"]
-        assert payload["node_output"] == {"result": "ok"}
+        assert payload["node_output"] == expected
 
     async def test_does_not_write_node_outputs_to_source_run(
         self,
@@ -741,8 +676,8 @@ class TestFireAgentSignalChildPayloadShape:
 
         This also pins the discriminating pure-return contract: the child
         payload carries the sandbox_agent's pure return, not the envelope
-        (``test_splittable_type_embeds_pure_return`` asserts the same shape from
-        the other direction), so it cannot pass on a verbatim-envelope
+        (``test_child_payload_carries_the_pure_return`` asserts the same shape
+        from the other direction), so it cannot pass on a verbatim-envelope
         regression.
         """
         org_id = uuid.uuid4()
@@ -802,13 +737,38 @@ class TestFireAgentSignalNonDictPureReturn:
     """A splittable node whose pure return is not a dict must STILL hand the
     child the pure value — the envelope leak FAR-131 exists to remove."""
 
-    async def test_manual_scalar_return_embeds_scalar(
+    @pytest.mark.parametrize(
+        ("node_type", "node_output", "expected"),
+        [
+            pytest.param(
+                "manual",
+                {"manual_output": 42, "status": "recovered"},
+                42,
+                id="manual-embeds-scalar-pure-return",
+            ),
+            pytest.param(
+                "connector",
+                {"output": [1, 2, 3], "status": "complete"},
+                [1, 2, 3],
+                id="connector-embeds-list-pure-return",
+            ),
+            pytest.param(
+                "sandbox_agent",
+                {"output": {"status": "complete", "summary": "done"}},
+                _ABSENT,
+                id="sandbox-agent-without-contract-output-omits-key",
+            ),
+        ],
+    )
+    async def test_non_dict_pure_returns_never_leak_the_envelope(
         self,
         mock_session: MagicMock,
         mock_create_run: AsyncMock,
+        node_type: str,
+        node_output: dict[str, Any],
+        expected: Any,
     ) -> None:
-        """A ``manual`` node's scalar pure return reaches the child as a scalar,
-        not the surrounding envelope."""
+        """Scalar, list and absent pure returns all reach the child unwrapped."""
         org_id = uuid.uuid4()
         source_pipeline_id = uuid.uuid4()
         trigger = _make_trigger(
@@ -817,7 +777,6 @@ class TestFireAgentSignalNonDictPureReturn:
             source_node_id="my-node",
         )
         _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
-        envelope = {"manual_output": 42, "status": "recovered"}
 
         results = await fire_agent_signal(
             mock_session,
@@ -825,113 +784,17 @@ class TestFireAgentSignalNonDictPureReturn:
             source_run_id=uuid.uuid4(),
             source_pipeline_id=source_pipeline_id,
             completed_node_id="my-node",
-            node_output=envelope,
-            node_type="manual",
+            node_output=node_output,
+            node_type=node_type,
         )
 
         assert len(results) == 1
         assert results[0]["status"] == "fired"
         payload = mock_create_run.call_args[1]["input_payload"]
-        assert payload["node_output"] == 42
-
-    async def test_connector_list_return_embeds_list(
-        self,
-        mock_session: MagicMock,
-        mock_create_run: AsyncMock,
-    ) -> None:
-        """A ``connector`` node's list pure return reaches the child as a list."""
-        org_id = uuid.uuid4()
-        source_pipeline_id = uuid.uuid4()
-        trigger = _make_trigger(
-            org_id=org_id,
-            source_pipeline_id=source_pipeline_id,
-            source_node_id="my-node",
-        )
-        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
-        envelope = {"output": [1, 2, 3], "status": "complete"}
-
-        results = await fire_agent_signal(
-            mock_session,
-            org_id=org_id,
-            source_run_id=uuid.uuid4(),
-            source_pipeline_id=source_pipeline_id,
-            completed_node_id="my-node",
-            node_output=envelope,
-            node_type="connector",
-        )
-
-        assert len(results) == 1
-        assert results[0]["status"] == "fired"
-        payload = mock_create_run.call_args[1]["input_payload"]
-        assert payload["node_output"] == [1, 2, 3]
-
-    async def test_sandbox_agent_without_dict_output_omits_node_output_key(
-        self,
-        mock_session: MagicMock,
-        mock_create_run: AsyncMock,
-    ) -> None:
-        """A splittable type whose split yields no contract output OMITS the
-        ``node_output`` key — the child never receives the envelope, and never
-        a bare ``None``."""
-        org_id = uuid.uuid4()
-        source_pipeline_id = uuid.uuid4()
-        trigger = _make_trigger(
-            org_id=org_id,
-            source_pipeline_id=source_pipeline_id,
-            source_node_id="my-node",
-        )
-        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
-        envelope = {"output": {"status": "complete", "summary": "done"}}
-
-        results = await fire_agent_signal(
-            mock_session,
-            org_id=org_id,
-            source_run_id=uuid.uuid4(),
-            source_pipeline_id=source_pipeline_id,
-            completed_node_id="my-node",
-            node_output=envelope,
-            node_type="sandbox_agent",
-        )
-
-        assert len(results) == 1
-        assert results[0]["status"] == "fired"
-        payload = mock_create_run.call_args[1]["input_payload"]
-        assert "node_output" not in payload
-
-    async def test_gate_type_embeds_human_data_pure_return(
-        self,
-        mock_session: MagicMock,
-        mock_create_run: AsyncMock,
-    ) -> None:
-        """A ``gate`` node's pure return (its human decision ``human_data``)
-        reaches the child — gate nodes resolve by type, never to the envelope."""
-        org_id = uuid.uuid4()
-        source_pipeline_id = uuid.uuid4()
-        trigger = _make_trigger(
-            org_id=org_id,
-            source_pipeline_id=source_pipeline_id,
-            source_node_id="hitl_review_a_b",
-        )
-        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
-        envelope = {
-            "artifacts": [{"status": "approved", "human_data": {"decision": "ok"}}],
-            "status": "complete",
-        }
-
-        results = await fire_agent_signal(
-            mock_session,
-            org_id=org_id,
-            source_run_id=uuid.uuid4(),
-            source_pipeline_id=source_pipeline_id,
-            completed_node_id="hitl_review_a_b",
-            node_output=envelope,
-            node_type="gate",
-        )
-
-        assert len(results) == 1
-        assert results[0]["status"] == "fired"
-        payload = mock_create_run.call_args[1]["input_payload"]
-        assert payload["node_output"] == {"decision": "ok"}
+        if expected is _ABSENT:
+            assert "node_output" not in payload
+        else:
+            assert payload["node_output"] == expected
 
 
 # ---------------------------------------------------------------------------
