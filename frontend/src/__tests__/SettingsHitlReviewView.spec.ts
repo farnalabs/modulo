@@ -1382,6 +1382,67 @@ describe('SettingsHitlReviewView', () => {
     }
   })
 
+  it('bulk reject is sequential: only one reject request is in flight at a time', async () => {
+    const { api } = await import('../lib/api/client')
+    const claimed = claimedGate({ claimed_by_me: true })
+    const claimed2 = { ...claimed, review_id: 'deploy-gate-1', run_id: '550e8400-e29b-41d4-a716-446655440002' }
+    ;(api.GET as any).mockResolvedValue(gatesResponse([claimed, claimed2]))
+
+    // Hold each reject request open until the test releases it, recording how
+    // many are concurrently in flight. A Promise.all implementation would start
+    // BOTH before either resolves (maxInFlight 2) — the regression this pins,
+    // mirroring the bulkClaim sequential test.
+    let inFlight = 0
+    let maxInFlight = 0
+    const release: Array<() => void> = []
+    ;(api.POST as any).mockImplementation((url: string) => {
+      if (!url.endsWith('/reject')) {
+        return Promise.resolve({ data: { ok: true }, error: undefined })
+      }
+      inFlight += 1
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      return new Promise((resolve) => {
+        release.push(() => {
+          inFlight -= 1
+          resolve({ data: { ok: true }, error: undefined })
+        })
+      })
+    })
+
+    resetHitlReviewState()
+    useHitlReviewState(claimed.run_id, claimed.review_id).setClaimToken('tok-seq-1')
+    useHitlReviewState(claimed2.run_id, claimed2.review_id).setClaimToken('tok-seq-2')
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper!.find('[data-testid="hitl-review-select-all"]').setValue(true)
+    await flushPromises()
+    await nextTick()
+    await wrapper!.find('[data-testid="hitl-review-bulk-reject"]').trigger('click')
+    await nextTick()
+    await wrapper!.find('[data-testid="hitl-review-bulk-reject-confirm"]').trigger('click')
+    await nextTick()
+
+    // First reject is still pending — the second must not have started.
+    expect(release).toHaveLength(1)
+    expect(maxInFlight).toBe(1)
+
+    release.shift()!()
+    await flushPromises()
+    expect(release).toHaveLength(1)
+    expect(maxInFlight).toBe(1)
+
+    release.shift()!()
+    await flushPromises()
+    await nextTick()
+    expect(maxInFlight).toBe(1)
+    expect(wrapper!.find('[data-testid="hitl-review-bulk-outcomes"]').exists()).toBe(true)
+  })
+
   it('bulk reject reports partial failure when some gates fail', async () => {
     const { api } = await import('../lib/api/client')
     const claimed = claimedGate({ claimed_by_me: true })
