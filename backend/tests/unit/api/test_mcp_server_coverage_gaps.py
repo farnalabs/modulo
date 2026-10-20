@@ -3416,7 +3416,7 @@ class TestCreatePipelineQueueTimeout(_AuthContext):
         """FAR-1883: the MCP create tool enforces the same 1..604800 envelope as
         the REST/Pydantic layer and the DB CHECK, up front, so an out-of-range
         value is a clean tool error rather than a DB IntegrityError."""
-        result = await ms.create_pipeline(name="p", timeouts=ms.PipelineTimeoutOverrides(queue_timeout_seconds=bad))
+        result = await ms.create_pipeline(name="p", queue_timeout_seconds=bad)
         assert result["error"] == "validation_failed"
         assert result["field"] == "queue_timeout_seconds"
         assert "1 and 604800" in result["detail"]
@@ -3424,9 +3424,7 @@ class TestCreatePipelineQueueTimeout(_AuthContext):
     async def test_in_bounds_queue_timeout_threaded_to_crud(self) -> None:
         pipeline = self._pipeline_double()
         with patch("modulo.db.crud.pipeline.create_pipeline", new=AsyncMock(return_value=pipeline)) as create:
-            result = await ms.create_pipeline(
-                name="p", timeouts=ms.PipelineTimeoutOverrides(queue_timeout_seconds=3600)
-            )
+            result = await ms.create_pipeline(name="p", queue_timeout_seconds=3600)
         assert result["id"] == str(pipeline.id)
         assert create.await_args.kwargs["queue_timeout_seconds"] == 3600
 
