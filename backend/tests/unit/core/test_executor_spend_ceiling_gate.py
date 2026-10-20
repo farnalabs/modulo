@@ -24,7 +24,6 @@ from modulo.core.pipeline_engine.executor import (
 )
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED
 from modulo.db.crud.run_node_outputs import DualWriteError
-from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
 
 
@@ -33,13 +32,17 @@ async def _acm(obj):
     yield obj
 
 
-def _make_session(org: Organisation | None) -> MagicMock:
+def _make_session(state: MagicMock | None) -> MagicMock:
     session = AsyncMock()
 
-    def _execute(stmt):
+    def _execute(stmt, *_args, **_kwargs):
         result = MagicMock()
         text = str(stmt).lower()
-        result.scalar_one_or_none = MagicMock(return_value=org if "organisations" in text else None)
+        # FAR-1833: the pre-gate reads the ceiling from the per-org cost-state
+        # row; the org row itself is only read for existence (same object here).
+        result.scalar_one_or_none = MagicMock(
+            return_value=state if ("organisation_cost_state" in text or "organisations" in text) else None
+        )
         return result
 
     session.execute = AsyncMock(side_effect=_execute)
@@ -51,20 +54,24 @@ def _make_session(org: Organisation | None) -> MagicMock:
     return session
 
 
-def _make_self(org: Organisation | None, run: Run | None) -> tuple[MagicMock, MagicMock]:
-    session = _make_session(org)
+def _make_self(state: MagicMock | None, run: Run | None) -> tuple[MagicMock, MagicMock]:
+    session = _make_session(state)
     fake_self = MagicMock()
     fake_self._session_factory = MagicMock(return_value=_acm(session))
     fake_self._log = MagicMock()
     return fake_self, session
 
 
-def _org(*, spend_ceiling_cents, org_cumulative_spend_cents=0) -> Organisation:
-    org = MagicMock(spec=Organisation)
-    org.id = uuid.uuid4()
-    org.spend_ceiling_cents = spend_ceiling_cents
-    org.org_cumulative_spend_cents = org_cumulative_spend_cents
-    return org
+def _org(*, spend_ceiling_cents, org_cumulative_spend_cents=0) -> MagicMock:
+    """The per-org cost-state row (FAR-1833) — the pre-gate's ceiling source.
+
+    Also doubles as the org-existence read result (the session mock returns it
+    for both queries): the pre-gate only needs the row to be non-None."""
+    state = MagicMock()
+    state.id = uuid.uuid4()
+    state.spend_ceiling_cents = spend_ceiling_cents
+    state.org_cumulative_spend_cents = org_cumulative_spend_cents
+    return state
 
 
 def _run() -> Run:

@@ -33,8 +33,10 @@ from modulo.core.runner_capacity import (
     build_dispatch_marker,
     build_hitl_tombstone,
     classify_sweep_action,
+    lock_org_cost_state,
     mark_runner_dispatch_cleared_at_hitl,
     marker_is_fence_component,
+    org_cost_state_lock_keys,
     parse_marker_provider,
     parse_marker_state,
     parse_marker_written_at,
@@ -159,6 +161,45 @@ def test_sweep_dedup_keys_distinct_from_per_org_keys() -> None:
     assert runner_marker_sweep_lock_keys() != runner_capacity_lock_keys(_ORG)
     for _ in range(200):
         assert runner_marker_sweep_lock_keys() != runner_capacity_lock_keys(uuid.uuid4())
+
+
+def test_org_cost_state_lock_keys_are_stable_and_namespaced() -> None:
+    """FAR-1833: the cost advisory is per-org and shares no key with the
+    runner-capacity gate or the marker sweep, so it cannot reintroduce a
+    lock-ordering coupling through a shared key."""
+    assert org_cost_state_lock_keys(_ORG) == org_cost_state_lock_keys(_ORG)
+    assert org_cost_state_lock_keys(_ORG) != org_cost_state_lock_keys(uuid.uuid4())
+    assert org_cost_state_lock_keys(_ORG) != runner_capacity_lock_keys(_ORG)
+    assert org_cost_state_lock_keys(_ORG) != runner_marker_sweep_lock_keys()
+
+
+async def test_lock_org_cost_state_takes_the_advisory_on_postgres() -> None:
+    session = AsyncMock()
+    with (
+        patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=AsyncMock()) as bound,
+        patch("modulo.db.crud.run.get_dialect_name", new=AsyncMock(return_value="postgresql")),
+    ):
+        await lock_org_cost_state(session, _ORG)
+
+    bound.assert_awaited_once_with(session)
+    session.execute.assert_awaited_once()
+    statement = session.execute.await_args.args[0]
+    assert "pg_advisory_xact_lock" in str(statement)
+    k1, k2 = org_cost_state_lock_keys(_ORG)
+    assert session.execute.await_args.args[1] == {"k1": k1, "k2": k2}
+
+
+async def test_lock_org_cost_state_noops_off_postgres() -> None:
+    """SQLite unit fixtures have no ``pg_advisory_xact_lock``: the helper is a
+    documented no-op after the (also dialect-gated) lock-timeout bound."""
+    session = AsyncMock()
+    with (
+        patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.db.crud.run.get_dialect_name", new=AsyncMock(return_value="sqlite")),
+    ):
+        await lock_org_cost_state(session, _ORG)
+
+    session.execute.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
