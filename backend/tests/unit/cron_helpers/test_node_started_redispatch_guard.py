@@ -664,7 +664,7 @@ class TestSlotSweepExcludesNodeStartedFromRetryOnly:
 
         assert result["released"] == 0
         assert result["retried"] == 0
-        release_stmts = [s for s in statements if "status = 'running'" in s]
+        release_stmts = [s for s in statements if "status = 'running'" in s and ":stale_seconds" in s]
         assert len(release_stmts) == 1
         sql = release_stmts[0]
         # The exclusion is OR'd with the over-budget arm, not AND'd onto the

@@ -31,7 +31,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import DateTime, and_, bindparam, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
@@ -333,6 +333,127 @@ _RECONCILE_RUNS_SQL = text(
     "RETURNING id, organisation_id, pipeline_id, claim_count"
 )
 
+#: FAR-2005: the floor (seconds) of the terminal-fail-only dead-heartbeat
+#: bound. Five minutes — ten ``RUN_HEARTBEAT_SECONDS`` beats at the shipped
+#: 30s cadence. THE BOUND, not a heuristic window: the executor's heartbeat
+#: writes ``heartbeat_at`` every ``RUN_HEARTBEAT_SECONDS`` regardless of node
+#: progress, so a heartbeat this old has missed ten consecutive writes while no
+#: process death was observed — evidence the executor is gone, not evidence the
+#: node is slow (a slow node still heartbeats).
+DEAD_HEARTBEAT_REAP_FLOOR_SECONDS = 300
+
+#: FAR-2005: a configured ``RUN_HEARTBEAT_SECONDS`` may be as high as 120s
+#: (``Settings`` bounds it ``ge=1, le=120``), where a flat 300s would be only
+#: 2.5 missed beats. Require at least this many consecutive missed beats as
+#: well, so the bound never tightens below the liveness evidence it relies on.
+#: At the shipped 30s cadence this adds nothing (5 x 30 = 150s < the floor).
+DEAD_HEARTBEAT_REAP_MIN_MISSED_BEATS = 5
+
+#: Fallback cadence for a settings double that does not expose the field (the
+#: production default mirror of ``pipeline_execution.RUN_HEARTBEAT_SECONDS``;
+#: that module is deliberately NOT imported here — it pulls langgraph, and
+#: ``run_admission`` is reachable from the API layer).
+_DEFAULT_RUN_HEARTBEAT_SECONDS = 30
+
+#: Synthetic detail stamped on a dead-heartbeat reap. Names BOTH the evidence
+#: (the executor stopped heartbeating) and the deliberate absence of a
+#: re-dispatch (a started node may already have executed side effects —
+#: FAR-1649), so an operator reading the row alone cannot mistake it for a
+#: pipeline code failure.
+_DEAD_HEARTBEAT_REAP_DETAIL = (
+    "Slot reconciliation: node started (dispatch_phase=first_node_dispatched) but its "
+    "executor stopped heartbeating past the dead-heartbeat bound; run terminal-failed "
+    "without re-dispatch (a started node may already have executed side effects — "
+    "FAR-1649; FAR-2005)."
+)
+
+# FAR-2005 — the terminal-fail-ONLY arm split out of ``_RECONCILE_RUNS_SQL``.
+#
+# FAR-1999 reaps a node-started, zero-progress run at its DURABLE node deadline
+# (~55 min for the Branch Fixer). FAR-2000 established that is still far too
+# long: the heartbeat fires every ``RUN_HEARTBEAT_SECONDS`` (30s) regardless of
+# node progress, so a heartbeat that has stopped proves the executor is dead
+# long before any node budget expires. This arm reaps that class at a short
+# stale-heartbeat bound instead.
+#
+# Why a SEPARATE statement rather than shortening ``_RECONCILE_RUNS_SQL``
+# (whose re-dispatch exclusion is deliberately untouched):
+#
+# * ``_RECONCILE_RUNS_SQL`` RESETS an in-budget row to ``pending`` — a
+#   re-dispatch. A durably node-STARTED row is excluded from that arm
+#   (FAR-1649: re-dispatching re-executes the started node, whose side effects
+#   can duplicate). This arm is TERMINAL-FAIL ONLY, so that concern does not
+#   apply and no bound needs shortening on the re-dispatch path.
+# * Splitting the arms keeps the two decisions independently legible: the
+#   retry-reset arm remains exactly as shipped (same predicate, same 30-min
+#   ``stale_seconds`` window, same exclusion), while this arm can carry the
+#   much shorter bound its evidence justifies and the narrower scope that
+#   evidence licenses.
+#
+# Premises, all re-checked in the UPDATE's own ``WHERE`` (which takes the row
+# lock and re-evaluates against the locked row version, so a heartbeat written
+# between the sweep's scan and this statement makes the row stop matching — the
+# same lock-and-recheck discipline FAR-1999 uses row-by-row):
+#
+# * ``status = 'running'`` — an in-flight attempt; a terminalised row is never
+#   touched.
+# * ``dispatcher = 'saq'`` — the heartbeat contract this bound relies on is the
+#   SAQ executor's. A row owned by another dispatcher keeps the legacy 30-min
+#   window (its liveness contract is unknown here, so a 5-min bound is NOT safe
+#   for it).
+# * ``dispatch_phase = 'first_node_dispatched'`` — a node STARTED, so
+#   re-dispatch is forbidden (FAR-1649) and terminal-fail is the only safe
+#   outcome for a dead executor.
+# * ``COALESCE(heartbeat_at, started_at, created_at)`` is older than the bound
+#   — the SAME liveness reference the sibling arm and FAR-1808's reclaim use.
+#   A NULL ``heartbeat_at`` therefore still has a truthful age anchor.
+# * ``guardrail_override_resume_pending = false`` — FAR-1728's override-resume
+#   class carries a DEDICATED ``resume_run`` recovery (checkpoint resume, never
+#   re-execution) and stamps its heartbeat into the past at flip time by
+#   design. Terminalising it here would pre-empt a strictly better recovery, so
+#   that class is left to its own leg.
+# * ``cancellation_requested = false`` — parity with the sibling arm; the
+#   cancel path owns a cancellation-requested row.
+#
+# The recorded code is the sibling arm's raw ``heartbeat_stale`` spelling (the
+# read boundary canonicalizes it to the registered ``harness.heartbeat_stale``,
+# guidance: "Heartbeat stale past threshold; concurrency slot force-released by
+# reconciliation"). That is the established ``harness.*`` vocabulary for this
+# outcome: it names a harness/executor failure, NOT a pipeline code failure, and
+# is distinct from ``harness.dispatch_failed`` ("never dispatched") and
+# ``harness.worker_lost`` ("worker shut down, handed back for re-dispatch" —
+# wrong for a terminal reap). No new vocabulary value is introduced.
+#
+# The cutoff and completion time are bound datetimes (not ``now()`` arithmetic)
+# so the predicate is executable under the in-memory SQLite fixture, which is
+# how the dead-vs-live-heartbeat behaviour is proven rather than asserted as
+# SQL text.
+_REAP_DEAD_HEARTBEAT_NODE_STARTED_SQL = text(
+    "UPDATE runs SET "
+    "status = 'failed', "
+    "error_code = 'heartbeat_stale', "
+    "error_detail = :detail, "
+    "completed_at = :completed_at, "
+    "dispatched_at = NULL, "
+    "dispatcher = NULL, "
+    "heartbeat_at = NULL "
+    "WHERE status = 'running' "
+    "AND organisation_id = :oid "
+    "AND cancellation_requested = false "
+    "AND dispatcher = :saq_dispatcher "
+    "AND dispatch_phase = :first_node_phase "
+    "AND guardrail_override_resume_pending = false "
+    "AND COALESCE(heartbeat_at, started_at, created_at) < :dead_heartbeat_cutoff "
+    "RETURNING id, organisation_id, pipeline_id, claim_count, dispatch_phase"
+).bindparams(
+    # Explicit DateTime types: the parameters are datetimes, and an untyped
+    # bind on the SQLite test dialect falls through to sqlite3's deprecated
+    # default datetime adapter (an error under the suite's `filterwarnings`).
+    # The production dialects are unaffected.
+    bindparam("dead_heartbeat_cutoff", type_=DateTime(timezone=True)),
+    bindparam("completed_at", type_=DateTime(timezone=True)),
+)
+
 #: FAR-1257: floor on the park margin — five ``dispatcher_reconcile`` ticks
 #: (60s each). ``HITL_PARK_GRACE_SECONDS`` may be configured down to its own
 #: ``ge=60`` floor, which would otherwise let the park sweep match in the same
@@ -359,6 +480,27 @@ def _park_margin_seconds(park_grace_seconds: int) -> int:
     park candidate at all (park requires source status ``awaiting_human``).
     """
     return max(int(park_grace_seconds), _PARK_MARGIN_FLOOR_SECONDS)
+
+
+def dead_heartbeat_reap_seconds() -> int:
+    """FAR-2005: the terminal-fail-only stale-heartbeat bound, in seconds.
+
+    ``max(DEAD_HEARTBEAT_REAP_FLOOR_SECONDS, DEAD_HEARTBEAT_REAP_MIN_MISSED_BEATS
+    x RUN_HEARTBEAT_SECONDS)``. At the shipped 30s cadence this is the 300s
+    floor (ten missed beats); a slower configured cadence widens it so the
+    bound never encodes fewer than five consecutive missed heartbeats.
+
+    A settings double that does not expose ``run_heartbeat_seconds`` falls back
+    to the production default rather than treating a mock attribute as an int
+    (the same fail-safe shape ``cron_helpers._settings_int`` uses).
+    """
+    cadence = getattr(get_settings(), "run_heartbeat_seconds", None)
+    if isinstance(cadence, bool) or not isinstance(cadence, int) or cadence <= 0:
+        cadence = _DEFAULT_RUN_HEARTBEAT_SECONDS
+    return max(
+        DEAD_HEARTBEAT_REAP_FLOOR_SECONDS,
+        DEAD_HEARTBEAT_REAP_MIN_MISSED_BEATS * cadence,
+    )
 
 
 async def _sweep_org_ids(async_engine: AsyncEngine) -> list[uuid.UUID]:
@@ -598,17 +740,49 @@ async def _reconcile_one_org(
     *,
     window: int,
     retry_budget: int,
+    dead_heartbeat_seconds: int,
     released: list[Any],
     retried: list[Any],
+    reaped: list[Any],
 ) -> None:
     """Sweep one org's stale ``running`` runs inside its bounded transaction.
+
+    FAR-2005: the terminal-fail-only dead-heartbeat reap runs FIRST, so the
+    shorter (stronger) evidence wins over the legacy 30-min arm — a
+    node-started row past the short bound is terminal-failed rather than
+    waiting for the legacy window (or, when in-budget, the node deadline).
+    Both statements run in the SAME org transaction, so a row touched by the
+    reap is already ``failed`` when the legacy UPDATE evaluates it.
 
     A bounded-wait expiry (SQLSTATE 55P03) is SKIPPED with a WARNING (the org
     transaction rolled back whole); every other failure re-raises into the
     ``SlotReconciliationError`` contract.
     """
+    now = datetime.now(UTC)
     try:
         async with _org_lock_bounded_conn(async_engine, org_id) as conn:
+            # FAR-2005: terminal-fail ONLY — never a reset to pending, so a
+            # started node is never re-executed (FAR-1649). The UPDATE's WHERE
+            # is the row lock + premise re-check: Postgres re-evaluates it
+            # against the locked row version, so a heartbeat refreshed between
+            # the tick's scan and this statement stops the row matching.
+            reap_result = await conn.execute(
+                _REAP_DEAD_HEARTBEAT_NODE_STARTED_SQL,
+                {
+                    "oid": str(org_id),
+                    "saq_dispatcher": "saq",
+                    "first_node_phase": PHASE_FIRST_NODE_DISPATCHED,
+                    "dead_heartbeat_cutoff": now - timedelta(seconds=dead_heartbeat_seconds),
+                    "completed_at": now,
+                    "detail": _DEAD_HEARTBEAT_REAP_DETAIL,
+                },
+            )
+            # RETURNING only ever yields node-started rows; this re-check
+            # keeps a row source that omits the phase (test doubles) out of
+            # the reap count rather than silently mislabelling it.
+            reaped.extend(
+                row for row in reap_result.all() if getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED
+            )
             result = await conn.execute(
                 _RECONCILE_RUNS_SQL,
                 {
@@ -654,12 +828,14 @@ async def _finalise_reconciled_runs(
     async_engine: AsyncEngine,
     released: list[Any],
     retried: list[Any],
+    reaped: list[Any],
     *,
     window: int,
     retry_budget: int,
+    dead_heartbeat_seconds: int,
     per_pipeline: Counter[str],
 ) -> None:
-    """Emit the per-run events and advance journeys for released runs."""
+    """Emit the per-run events and advance journeys for terminalised runs."""
     # Post-release advance — only for terminal-failed runs (FAR-779): retried
     # runs (reset to pending) are NOT terminal and must NOT get their journeys
     # + daily facts advanced — they will be re-dispatched by
@@ -677,6 +853,23 @@ async def _finalise_reconciled_runs(
             retry_budget,
         )
         await _advance_released_run(async_engine, row.id, row.organisation_id)
+    # FAR-2005: a node-started run whose executor heartbeat stopped is
+    # terminal-failed at the short bound — never re-dispatched (a started node
+    # may already have executed side effects). It IS terminal, so it gets the
+    # same journey/facts advance as the legacy terminal-fail arm.
+    for row in reaped:
+        per_pipeline[str(row.pipeline_id)] += 1
+        _log.info(
+            "slot_reconciliation.dead_heartbeat_reaped run=%s pipeline=%s org=%s "
+            "(node-started run, heartbeat stale past %ss, claim_count=%d — "
+            "terminal-failed without re-dispatch)",
+            row.id,
+            row.pipeline_id,
+            row.organisation_id,
+            dead_heartbeat_seconds,
+            getattr(row, "claim_count", 0),
+        )
+        await _advance_released_run(async_engine, row.id, row.organisation_id)
     for row in retried:
         per_pipeline[str(row.pipeline_id)] += 1
         _log.warning(
@@ -690,12 +883,13 @@ async def _finalise_reconciled_runs(
             getattr(row, "claim_count", 0),
             retry_budget,
         )
-    total_swept = len(released) + len(retried)
+    total_swept = len(released) + len(retried) + len(reaped)
     if total_swept:
         _log.info(
-            "slot_reconciliation.swept released=%d retried=%d pipelines=%d",
+            "slot_reconciliation.swept released=%d retried=%d reaped=%d pipelines=%d",
             len(released),
             len(retried),
+            len(reaped),
             len(per_pipeline),
         )
 
@@ -723,6 +917,18 @@ async def reconcile_pipeline_slots(
     ``awaiting_human`` runs are deliberately NOT swept (a human decision may
     legitimately take days) and fresh-heartbeat runs are never swept.
 
+    FAR-2005: a node-STARTED run (``dispatch_phase='first_node_dispatched'``,
+    ``dispatcher='saq'``) is terminal-failed at a much shorter bound
+    (:func:`dead_heartbeat_reap_seconds` — 5 minutes at the shipped 30s
+    heartbeat cadence) instead of waiting for its ~55-minute node deadline
+    (FAR-1999) or the 30-minute legacy window. A stopped heartbeat is proof the
+    executor is dead (the beat fires regardless of node progress), and
+    terminal-failing re-executes nothing, so the FAR-1649 "never re-execute a
+    started node" concern does not apply — the arm NEVER resets to ``pending``.
+    The legacy retry-reset/over-budget arm and its node-started exclusion are
+    unchanged; the two arms run in the same per-org transaction with this one
+    first.
+
     Failure contract (FAR-604 F6): the sweep RAISES
     :class:`SlotReconciliationError` on failure (so the SAQ cron's
     ``retries=2`` engages) — it never swallows into a returned error dict.
@@ -743,17 +949,21 @@ async def reconcile_pipeline_slots(
     the remaining orgs still run. Any other failure keeps the F6 contract
     above.
 
-    Returns ``{"released": int, "retried": int,
+    Returns ``{"released": int, "retried": int, "reaped": int,
     "per_pipeline": {pipeline_id: count}}``: ``released`` counts heartbeat-stale
     runs terminal-failed as ``heartbeat_stale`` (``claim_count`` over budget),
     ``retried`` counts those reset to ``pending`` for re-dispatch (``claim_count``
-    within budget), and ``per_pipeline`` totals both classes per pipeline.
+    within budget), ``reaped`` counts node-started runs terminal-failed at the
+    FAR-2005 short dead-heartbeat bound (never re-dispatched), and
+    ``per_pipeline`` totals all three classes per pipeline.
     """
     settings = get_settings()
     window = stale_seconds if stale_seconds is not None else settings.slot_reconcile_stale_seconds
     retry_budget = settings.heartbeat_stale_retry_budget
+    dead_heartbeat_seconds = dead_heartbeat_reap_seconds()
     released: list[Any] = []
     retried: list[Any] = []
+    reaped: list[Any] = []
     per_pipeline: Counter[str] = Counter()
     sweep_error: BaseException | None = None
     try:
@@ -765,8 +975,10 @@ async def reconcile_pipeline_slots(
                 org_id,
                 window=window,
                 retry_budget=retry_budget,
+                dead_heartbeat_seconds=dead_heartbeat_seconds,
                 released=released,
                 retried=retried,
+                reaped=reaped,
             )
     except asyncio.CancelledError:
         raise
@@ -778,18 +990,25 @@ async def reconcile_pipeline_slots(
             async_engine,
             released,
             retried,
+            reaped,
             window=window,
             retry_budget=retry_budget,
+            dead_heartbeat_seconds=dead_heartbeat_seconds,
             per_pipeline=per_pipeline,
         )
 
     if sweep_error is not None:
         raise SlotReconciliationError(
             "slot reconciliation sweep failed",
-            released=len(released) + len(retried),
+            released=len(released) + len(retried) + len(reaped),
             per_pipeline=dict(per_pipeline),
         ) from sweep_error
-    return {"released": len(released), "retried": len(retried), "per_pipeline": dict(per_pipeline)}
+    return {
+        "released": len(released),
+        "retried": len(retried),
+        "reaped": len(reaped),
+        "per_pipeline": dict(per_pipeline),
+    }
 
 
 # ---------------------------------------------------------------------------
