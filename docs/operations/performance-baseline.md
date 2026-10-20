@@ -13,12 +13,12 @@
 | **OS** | Ubuntu 22.04 LTS (Docker host) |
 | **Docker** | 24.0+ with Compose V2 |
 | **Postgres** | 16-alpine, shared_buffers=512MB, max_connections=200, work_mem=16MB |
-| **Redis** | 8-alpine, maxmemory=256mb, maxmemory-policy=volatile-lru |
+| **Redis** | 8-alpine, Redis defaults (no `maxmemory` bound, `maxmemory-policy=noeviction`) |
 | **Backend** | 4 uvicorn workers, 3 async DB pool connections per worker |
 | **Python** | 3.12+ |
 | **Network** | Loopback (localhost) |
 
-**Why `volatile-lru` and not `allkeys-lru`:** a `volatile-*` policy evicts only keys that carry a TTL, which in the SAQ key space is the job hashes. The queue's structural keys (`queued` / `active` lists, `incomplete` zset) carry no TTL and are therefore never evicted. An `allkeys-*` policy can evict a structural key and strand queued work, because there is no job hash left for `dispatcher_reconcile` to detect and repair. The `256 MB` default is raised with `REDIS_MAXMEMORY` on Compose; keep the policy whatever the bound. A managed/external Redis reached via `REDIS_URL` sets its own policy and is not controlled by the bundled artifacts.
+**Eviction policy when Redis memory is bounded:** the Compose stack this baseline is measured on sets no memory bound, so Redis runs its defaults (`maxmemory=0`, `noeviction`) and evicts nothing. Bound it and the policy matters: use a `volatile-*` policy (`volatile-lru`), never an `allkeys-*` one. A `volatile-*` policy evicts only keys that carry a TTL; the queue's structural keys (`queued` / `active` lists, `incomplete` zset) carry none, so they are never evicted. An `allkeys-*` policy can evict a structural key and drop queued work. Of the bundled artifacts only the Helm chart bounds Redis (256 MB, `allkeys-lru`); a managed/external Redis reached via `REDIS_URL` sets its own policy and is outside the bundled artifacts.
 
 ## Methodology
 
@@ -65,7 +65,7 @@ Measured with 50 concurrent pipeline users, 20 HITL users, 10 WebSocket users.
 | DB connection pool | 80% of max_connections | 90% | Increase pool or scale DB |
 | DB query time (p95) | <200ms | <500ms | Add index, tune query |
 | Backend response (p95) | <1s | <3s | Profile, add caching |
-| Redis memory | 60% of maxmemory | 80% | Increase maxmemory |
+| Redis memory | 60% of maxmemory (when bounded) | 80% | Increase maxmemory |
 | WS subscriber count | 100 per run | 500 per run | Shard event broker |
 | Concurrent runs | 50 | 100 | Increase workers |
 | Error rate | <1% | <5% | Investigate and fix |
