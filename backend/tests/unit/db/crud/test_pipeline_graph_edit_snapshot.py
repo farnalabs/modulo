@@ -252,7 +252,7 @@ class TestEditSnapshotMaterializesPostSyncAgentRow:
 
         with patch("modulo.db.crud.pipeline.create_snapshot_edit", new=_capture):
             # Route order: FAR-488a sync FIRST, then the write mints the snapshot.
-            await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=saved)
+            await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=saved, pipeline_id=_PIPELINE_ID)
             await _patch_graph(session, saved, [])
 
         assert captured["nodes"][0]["agent_commands"] == ["run --new"]
