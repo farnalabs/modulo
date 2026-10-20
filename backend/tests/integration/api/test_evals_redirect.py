@@ -2,10 +2,10 @@
 
 Criterion 1-6 (real numbering; supporting tests unnumbered).
 
-Every eval-definition write endpoint now persists to ``evals`` (+ a
-``PolicyGate`` where the shared helper says so) instead of ``eval_definitions``.
-These tests drive the REAL endpoints over a real Postgres (testcontainers)
-and assert the persisted shape against the new tables:
+Every eval-definition write endpoint persists to ``evals`` (+ a ``PolicyGate``
+where the shared helper says so). These tests drive the REAL endpoints over a
+real Postgres (testcontainers) and assert the persisted shape against the live
+tables:
 
  * criterion 1     W1: POST /evals (node-scoped) -> Eval row + PolicyGate row
  * criterion 2     W2: POST /evals/from-run -> Eval row via the shared helper
@@ -17,8 +17,12 @@ and assert the persisted shape against the new tables:
  * supporting     W3 guardrail-typed feedback publish: PUT /evals/{id} guardrail variant -> still no PolicyGate
 
 Shared invariant for every test: after the write, the executor's live read
-(``_load_eval_defs_for_pipeline``) surfaces the persisted eval, and the legacy
-``eval_definitions`` table stays EMPTY for the org (no legacy writes).
+(``_load_eval_defs_for_pipeline``) surfaces the persisted eval.
+
+The second half of that invariant — "the legacy ``eval_definitions`` table
+stays EMPTY for the org" — was retired with the table itself: migration
+``0324_purge_eval_definitions`` (FAR-1962) drops it, so a legacy write is no
+longer expressible.
 
 Criteria text lives in the internal chunk-3b spec (not in this public repo).
 """
@@ -289,7 +293,12 @@ async def _assert_cutover_shape(
     wants_gate: bool,
     wants_version: int = 1,
 ) -> None:
-    """Persisted-shape + executor-read + no-legacy-write assertions."""
+    """Persisted-shape + executor-read assertions.
+
+    A former third half — "nothing landed in the legacy table" — was retired
+    with ``eval_definitions``: migration ``0324_purge_eval_definitions``
+    (FAR-1962) drops it, so that assertion has no table to read.
+    """
     from modulo.core.pipeline_engine.executor import PipelineExecutor
 
     rows = await _load_eval_rows(env, name)
@@ -329,15 +338,6 @@ async def _assert_cutover_shape(
         else:
             assert not gates, f"guardrail eval must have NO PolicyGate, found {len(gates)}"
 
-        # Cutover invariant: nothing landed in the legacy table.
-        legacy_count = (
-            await session.execute(
-                text("SELECT COUNT(*) FROM eval_definitions WHERE organisation_id = :oid"),
-                {"oid": str(env.org_id)},
-            )
-        ).scalar_one()
-        assert int(legacy_count) == 0
-
 
 # ---------------------------------------------------------------------------
 # Criterion 1-4 (real numbering; supporting tests unnumbered)
@@ -345,7 +345,7 @@ async def _assert_cutover_shape(
 
 
 async def test_w1_rest_create_persists_eval_and_gate(env: Chunk3bEnv, client: AsyncClient) -> None:
-    """Criterion 1     POST /evals writes Eval + PolicyGate, never eval_definitions."""
+    """Criterion 1     POST /evals writes Eval + PolicyGate."""
     payload = {
         "pipeline_id": str(env.pipeline_id),
         "node_id": str(_NODE_ID_1),
@@ -462,14 +462,6 @@ async def test_w4_rest_update_bumps_version_and_updates_gate(env: Chunk3bEnv, cl
         assert gates[0].node_id == _NODE_ID_1
         assert gates[0].action == "warn"
         assert gates[0].deleted_at is None
-
-        legacy_count = (
-            await session.execute(
-                text("SELECT COUNT(*) FROM eval_definitions WHERE organisation_id = :oid"),
-                {"oid": str(env.org_id)},
-            )
-        ).scalar_one()
-        assert int(legacy_count) == 0
 
     """Supporting (guardrail variant of criterion 1): POST /evals guardrail-typed persists Eval only."""
     payload = {

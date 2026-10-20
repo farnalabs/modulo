@@ -6,6 +6,14 @@ factory pointed at a real RLS-migrated database - no mocks under the write
 path. Soft-delete filters and org scoping are enforced by the real schema.
 
 Criteria text lives in the internal chunk-3b spec (not in this public repo).
+
+Retirement note (FAR-1962): ``test_eval_definitions_table_shape_unchanged``
+formerly asserted the legacy ``eval_definitions`` table stayed shape-compatible
+with a frozen column set. Migration ``0324_purge_eval_definitions`` drops that
+table, so the test was retired rather than retargeted — see the note at its
+former location below, and
+``tests/integration/db/test_migration_0324_purge_eval_definitions.py`` for the
+migration's own coverage.
 """
 
 import uuid
@@ -138,8 +146,13 @@ def mcp_on(pg_env: McpEnv) -> SimpleNamespace:
 
 
 async def test_mcp_create_persists_eval_and_gate(pg_env: McpEnv, mcp_on: SimpleNamespace) -> None:
-    """Criterion 10     MCP create persists Eval + PolicyGate on a real DB and
-    writes nothing to eval_definitions."""
+    """Criterion 10     MCP create persists Eval + PolicyGate on a real DB.
+
+    The former "writes nothing to ``eval_definitions``" half was retired with
+    the table itself (migration ``0324_purge_eval_definitions``, FAR-1962):
+    the write path no longer has a legacy branch, so ``evals`` is the only
+    place a row can land.
+    """
     from modulo.api.mcp_server import create_eval_definition
 
     try:
@@ -154,7 +167,6 @@ async def test_mcp_create_persists_eval_and_gate(pg_env: McpEnv, mcp_on: SimpleN
 
         assert result["name"] == "pg-created"
         assert (await pg_env_sql_count(pg_env, "evals", "name = 'pg-created'")) == 1
-        assert (await pg_env_sql_count(pg_env, "eval_definitions")) == 0
 
         row = await pg_env.one("SELECT version, node_id, eval_type FROM evals WHERE name = 'pg-created'")
         assert row.version == 1
@@ -415,10 +427,6 @@ async def test_guardrail_config_apply_persists_eval_without_gate(
     )
     assert gate_count == 0, "guardrail evals must never produce a PolicyGate row"
 
-    # Nothing leaks into eval_definitions.
-    legacy_twin = int(await pg_env.scalar("SELECT COUNT(*) FROM eval_definitions WHERE name = :n", {"n": gid}))
-    assert legacy_twin == 0
-
 
 async def test_guardrail_config_reapply_upserts_with_version_snapshot(
     pg_env: McpEnv,
@@ -465,48 +473,19 @@ async def test_guardrail_config_reapply_upserts_with_version_snapshot(
 
 
 # ---------------------------------------------------------------------------
-# Criteria 14 / 24 - schema-shape, suite-scoped no-gate
+# Criterion 24 - suite-scoped no-gate
 # ---------------------------------------------------------------------------
 
-
-async def test_eval_definitions_table_shape_unchanged(db_engine: AsyncEngine) -> None:
-    """Criterion 14 - reflect ``eval_definitions`` from the migrated schema
-    and compare against its frozen column set.
-
-    The legacy ORM entity was deleted (FAR-1961); the table itself must stay
-    byte-for-byte shape-compatible until a later slice drops it, so the
-    expected columns are frozen here rather than read from a model.
-    """
-    from sqlalchemy import inspect
-
-    def _reflect(sync_conn):
-        return sorted(c["name"] for c in inspect(sync_conn).get_columns("eval_definitions"))
-
-    async with db_engine.connect() as conn:
-        columns = await conn.run_sync(_reflect)
-    expected = sorted(
-        [
-            "account_id",
-            "config_json",
-            "created_at",
-            "deleted_at",
-            "deleted_by",
-            "eval_suite_id",
-            "eval_type",
-            "failure_behaviour",
-            "id",
-            "name",
-            "node_id",
-            "organisation_id",
-            "pass_threshold",
-            "pipeline_id",
-            "pre_version_raw",
-            "suite_id",
-            "updated_at",
-            "version",
-        ]
-    )
-    assert columns == expected
+# RETIRED BY FAR-1962 (deliberately, not disabled):
+#
+# ``test_eval_definitions_table_shape_unchanged`` reflected the legacy
+# ``eval_definitions`` table and compared its columns against a frozen set, to
+# prove the table stayed shape-compatible while the write/read cutover
+# completed. Migration ``0324_purge_eval_definitions`` (assert -> delete ->
+# drop) removes that table, so the test's entire subject no longer exists and
+# there is nothing left to assert. Retargeting it at ``evals`` would be a
+# different test, not a migration of this one. The migration's drop is covered
+# by ``tests/integration/db/test_migration_0324_purge_eval_definitions.py``.
 
 
 async def test_policy_gate_action_matches_failure_behaviour(pg_env: McpEnv) -> None:
@@ -571,11 +550,3 @@ async def test_suite_scoped_non_guardrail_persists_with_no_gate(pg_env: McpEnv) 
         )
     )
     assert gate_count == 0
-    # The write must land ONLY in evals; C12's own seeds aside, the suite-24
-    # eval must have no legacy twin.
-    legacy_twin = int(
-        await pg_env.scalar(
-            "SELECT COUNT(*) FROM eval_definitions WHERE name = 'pg-suitescoped'",
-        )
-    )
-    assert legacy_twin == 0
