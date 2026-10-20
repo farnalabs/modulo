@@ -421,18 +421,32 @@ async def _deny_join(provider: SsoProvider, org_id: uuid.UUID) -> None:
 
 
 async def _audit_invite_consumed_fail_open(session: AsyncSession, org_id: uuid.UUID, invitation_id: uuid.UUID) -> None:
-    """Record the SSO-consumed invitation; audit failure never fails the login."""
+    """Record the SSO-consumed invitation; audit failure never fails the login.
+
+    FAR-1825: ``append_audit_event`` takes the per-org audit-chain-head row lock
+    (``FOR UPDATE``) and the SSO JIT transaction now bounds its lock waits
+    (C17 ``get_live_for_email``). A contended chain head can therefore raise
+    SQLSTATE 55P03, and without a savepoint that error aborts the CALLER's
+    transaction: the swallowed exception lets ``async with session.begin()``
+    exit "normally", COMMIT degrades to ROLLBACK, and the token-issue writes
+    that follow fail — contradicting "audit failure never fails the login".
+
+    The savepoint rolls back ONLY the audit append, so the fail-open contract
+    holds for a lock timeout exactly as it does for any other audit failure.
+    Mirrors the REST twin in ``api/routes/auth.py``.
+    """
     from modulo.core.audit_logger import append_audit_event
 
     try:
-        await append_audit_event(
-            session,
-            org_id=org_id,
-            event_type="invite_consumed",
-            resource_type="invitation",
-            resource_id=invitation_id,
-            payload_json={"invitation_id": str(invitation_id), "via": "sso"},
-        )
+        async with session.begin_nested():
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type="invite_consumed",
+                resource_type="invitation",
+                resource_id=invitation_id,
+                payload_json={"invitation_id": str(invitation_id), "via": "sso"},
+            )
     except Exception:
         _log.warning("sso.jit_invite_audit_failed", exc_info=True)
 

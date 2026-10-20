@@ -2084,15 +2084,28 @@ def _tool_lock_timeout_error(exc: SQLAlchemyError, log_key: str) -> dict[str, An
     FAR-1825: the category-C CRUD sweep gave every reachable row lock a
     transaction-scoped ``lock_timeout`` (``set_mutation_row_lock_timeout``), so
     SQLSTATE 55P03 (``lock_not_available``) is now reachable from the MCP tools
-    that front those helpers (``update_parameter_set`` / ``update_parameter_schema``
-    / the agent prompt writers / ...). An ``except SQLAlchemyError`` arm that
+    that front one of those helpers. An ``except SQLAlchemyError`` arm that
     merely returns ``database_unavailable`` reports a busy-row CONFLICT as a
     database OUTAGE — a retry-now signal against the very lock that is busy.
 
-    The SAME classification already exists on two tools (``cancel_run``,
-    ``update_pipeline_graph``), which map 55P03 to ``lock_timeout`` inline. This
-    helper is the shared rendering those arms and every other MCP arm can call,
-    returning ``None`` for every other SQLAlchemy error so the caller's existing
+    Call sites are deliberately SCOPED to the paths where 55P03 is actually
+    reachable, not sprayed onto every MCP tool:
+
+    * ``_tool_exception_error`` (below) — the shared generic-``Exception``
+      mapper every tool's backstop runs, so a bounded tool whose error escapes
+      its narrower arms still classifies (e.g. ``set_hitl_email_alerts``, which
+      reaches C8 ``_get_account_locked`` through the generic arm);
+    * the explicit ``except SQLAlchemyError`` arms of the two MCP tools whose
+      CRUD helper a request path now bounds — ``update_parameter_schema``
+      (C14 ``update_schema``) and ``update_parameter_set`` (C7 ``update_set``).
+
+    Every other MCP tool's CRUD path takes no newly-bounded lock, so an arm
+    there would be dead code asserting a reachability it does not have (the
+    pre-PR gate rejected exactly that blanket application). ``cancel_run`` and
+    ``update_pipeline_graph`` keep their bespoke inline ``lock_timeout``
+    payloads (FAR-1610 / FAR-1845).
+
+    Returns ``None`` for every other SQLAlchemy error so the caller's existing
     ``database_unavailable`` / re-raise handling is unchanged.
     """
     if sqlstate_of(exc) != LOCK_NOT_AVAILABLE_SQLSTATE:
@@ -2280,10 +2293,6 @@ async def _run_db_shell[**TOOL_SHELL_P](
         # generic "failed to <tool>" fallback either.
         if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
             return contract_error
-        # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict;
-        # report the branchable ``lock_timeout`` rather than an outage.
-        if (lock_timeout_error := _tool_lock_timeout_error(exc, log_key)) is not None:
-            return lock_timeout_error
         if cfg.db_errors_to_fallback:
             _log.exception(cfg.log_constant)
             return _tool_error(cfg.fallback, code="database_unavailable")
@@ -9518,9 +9527,6 @@ async def create_api_key(
     except SQLAlchemyError as exc:
         if (contract_error := _tool_session_contract_error(exc, "mcp.create_api_key")) is not None:
             return contract_error
-        # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict.
-        if (lock_timeout_error := _tool_lock_timeout_error(exc, "mcp.create_api_key")) is not None:
-            return lock_timeout_error
         _log.exception(_MSG_CREATE_API_KEY_FAILED)
         return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE, code="database_unavailable")
     except Exception as exc:
@@ -9553,9 +9559,6 @@ async def list_api_keys() -> dict[str, Any]:
     except SQLAlchemyError as exc:
         if (contract_error := _tool_session_contract_error(exc, "mcp.list_api_keys")) is not None:
             return contract_error
-        # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict.
-        if (lock_timeout_error := _tool_lock_timeout_error(exc, "mcp.list_api_keys")) is not None:
-            return lock_timeout_error
         _log.exception(_MSG_LIST_API_KEYS_FAILED)
         return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE, code="database_unavailable")
     except Exception as exc:
@@ -9620,9 +9623,6 @@ async def revoke_api_key(key_id: str) -> dict[str, Any]:
     except SQLAlchemyError as exc:
         if (contract_error := _tool_session_contract_error(exc, "mcp.revoke_api_key")) is not None:
             return contract_error
-        # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict.
-        if (lock_timeout_error := _tool_lock_timeout_error(exc, "mcp.revoke_api_key")) is not None:
-            return lock_timeout_error
         _log.exception(_MSG_REVOKE_API_KEY_FAILED)
         return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE, code="database_unavailable")
     except Exception as exc:
@@ -11174,9 +11174,6 @@ async def create_schema(
     except SQLAlchemyError as exc:
         if (contract_error := _tool_session_contract_error(exc, "mcp.create_schema")) is not None:
             return contract_error
-        # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict.
-        if (lock_timeout_error := _tool_lock_timeout_error(exc, "mcp.create_schema")) is not None:
-            return lock_timeout_error
         _log.exception(_MSG_CREATE_SCHEMA_FAILED)
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception as exc:
@@ -11425,9 +11422,6 @@ async def create_parameter_schema(
     except SQLAlchemyError as exc:
         if (contract_error := _tool_session_contract_error(exc, "mcp.create_parameter_schema")) is not None:
             return contract_error
-        # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict.
-        if (lock_timeout_error := _tool_lock_timeout_error(exc, "mcp.create_parameter_schema")) is not None:
-            return lock_timeout_error
         _log_tool_failure("create_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception as exc:
@@ -11587,9 +11581,6 @@ async def delete_parameter_schema(
     except SQLAlchemyError as exc:
         if (contract_error := _tool_session_contract_error(exc, "mcp.delete_parameter_schema")) is not None:
             return contract_error
-        # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict.
-        if (lock_timeout_error := _tool_lock_timeout_error(exc, "mcp.delete_parameter_schema")) is not None:
-            return lock_timeout_error
         _log_tool_failure("delete_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception as exc:
@@ -11648,9 +11639,6 @@ async def restore_parameter_schema(
     except SQLAlchemyError as exc:
         if (contract_error := _tool_session_contract_error(exc, "mcp.restore_parameter_schema")) is not None:
             return contract_error
-        # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict.
-        if (lock_timeout_error := _tool_lock_timeout_error(exc, "mcp.restore_parameter_schema")) is not None:
-            return lock_timeout_error
         _log_tool_failure("restore_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception as exc:
@@ -11847,9 +11835,6 @@ async def create_parameter_set(
     except SQLAlchemyError as exc:
         if (contract_error := _tool_session_contract_error(exc, "mcp.create_parameter_set")) is not None:
             return contract_error
-        # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict.
-        if (lock_timeout_error := _tool_lock_timeout_error(exc, "mcp.create_parameter_set")) is not None:
-            return lock_timeout_error
         _log_tool_failure("create_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception as exc:
@@ -12025,9 +12010,6 @@ async def delete_parameter_set(
     except SQLAlchemyError as exc:
         if (contract_error := _tool_session_contract_error(exc, "mcp.delete_parameter_set")) is not None:
             return contract_error
-        # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict.
-        if (lock_timeout_error := _tool_lock_timeout_error(exc, "mcp.delete_parameter_set")) is not None:
-            return lock_timeout_error
         _log_tool_failure("delete_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception as exc:
@@ -12084,9 +12066,6 @@ async def restore_parameter_set(
     except SQLAlchemyError as exc:
         if (contract_error := _tool_session_contract_error(exc, "mcp.restore_parameter_set")) is not None:
             return contract_error
-        # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict.
-        if (lock_timeout_error := _tool_lock_timeout_error(exc, "mcp.restore_parameter_set")) is not None:
-            return lock_timeout_error
         _log_tool_failure("restore_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception as exc:

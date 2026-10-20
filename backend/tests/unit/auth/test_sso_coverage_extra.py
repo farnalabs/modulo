@@ -13,9 +13,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.sso import (
+    _audit_invite_consumed_fail_open,
     _decode_saml_response,
     _exchange_code,
     _fetch_discovery,
@@ -765,3 +767,72 @@ def test_saml_parse_idp_metadata_no_sso_service() -> None:
 def test_decode_saml_response_invalid_base64() -> None:
     with pytest.raises(ValueError, match="Invalid base64 SAML response"):
         _decode_saml_response("!!!not-base64!!!")
+
+
+# ---------------------------------------------------------------------------
+# _audit_invite_consumed_fail_open — FAR-1825 lock-timeout containment
+# ---------------------------------------------------------------------------
+
+
+class _LockTimeoutDriverError(Exception):
+    """Driver-error double carrying an asyncpg ``sqlstate``."""
+
+    def __init__(self, state: str) -> None:
+        super().__init__(f"driver error {state}")
+        self.sqlstate = state
+
+
+def _lock_timeout_error() -> OperationalError:
+    return OperationalError("SELECT ... FOR UPDATE", {}, _LockTimeoutDriverError("55P03"))
+
+
+async def test_sso_audit_lock_timeout_is_contained_in_a_savepoint() -> None:
+    """A 55P03 from the audit append rolls back ONLY the savepoint.
+
+    ``get_live_for_email`` (C17) is now bounded, so the per-org audit-chain-head
+    lock taken by ``append_audit_event`` can raise 55P03 in the same SSO JIT
+    transaction. Without a savepoint that error would abort the CALLER's
+    transaction, so the swallow below would hide a dead transaction and the
+    token-issue writes would fail — contradicting the fail-open contract.
+    """
+    session = AsyncMock(spec=AsyncSession)
+    nested = MagicMock()
+    nested.__aenter__ = AsyncMock(return_value=None)
+    observed_exception_types: list[type[BaseException] | None] = []
+
+    async def _exit(exc_type: type[BaseException] | None, exc: BaseException | None, tb: object) -> bool:
+        observed_exception_types.append(exc_type)
+        return False
+
+    nested.__aexit__ = AsyncMock(side_effect=_exit)
+    session.begin_nested = MagicMock(return_value=nested)
+    audit = AsyncMock(side_effect=_lock_timeout_error())
+
+    with patch("modulo.core.audit_logger.append_audit_event", audit):
+        # Fail-open: the helper must NOT re-raise.
+        await _audit_invite_consumed_fail_open(session, uuid.uuid4(), uuid.uuid4())
+
+    session.begin_nested.assert_called_once()
+    audit.assert_awaited_once()
+    # The savepoint observed (and did not suppress) the lock timeout — the
+    # mechanism that keeps the outer transaction usable.
+    assert observed_exception_types == [OperationalError]
+
+
+async def test_sso_audit_success_runs_inside_the_savepoint() -> None:
+    """The append still happens, inside a savepoint, when the audit succeeds."""
+    session = AsyncMock(spec=AsyncSession)
+    nested = MagicMock()
+    nested.__aenter__ = AsyncMock(return_value=None)
+    nested.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested)
+    audit = AsyncMock(return_value=None)
+
+    with patch("modulo.core.audit_logger.append_audit_event", audit):
+        await _audit_invite_consumed_fail_open(session, uuid.uuid4(), uuid.uuid4())
+
+    session.begin_nested.assert_called_once()
+    audit.assert_awaited_once()
+    _, kwargs = audit.await_args
+    assert kwargs["event_type"] == "invite_consumed"
+    assert kwargs["payload_json"]["via"] == "sso"

@@ -116,6 +116,7 @@ from modulo.api.mcp_server import (
     search_library,
     set_org_triggers_paused,
     update_eval_definition,
+    update_parameter_schema,
     update_parameter_set,
     update_pipeline_graph,
     update_trigger,
@@ -3441,9 +3442,11 @@ class TestCreatePipelineQueueTimeout(_AuthContext):
 
 # ---------------------------------------------------------------------------
 # FAR-1825: SQLSTATE 55P03 on a bounded row lock is `lock_timeout`, not a
-# database outage. The category-C CRUD sweep bounded every reachable row lock,
-# so a contended identifier/set row now raises from update_parameter_set and
-# from every other tool fronting a swept helper.
+# database outage. The arms are SCOPED to the MCP tools whose CRUD helper the
+# category-C sweep actually bounded — `update_parameter_schema` (C14) and
+# `update_parameter_set` (C7) — plus the shared generic-Exception mapper
+# (`_tool_exception_error`) that every tool's backstop uses. Other tools'
+# paths take no newly-bounded lock, so they deliberately carry no arm.
 # ---------------------------------------------------------------------------
 
 
@@ -3491,3 +3494,44 @@ class TestLockTimeoutMapping(_AuthContext):
 
         assert result["error"] == "lock_timeout"
         assert "another change is in progress" in result["detail"]
+
+    async def test_update_parameter_set_keeps_a_generic_db_error_as_database_unavailable(self) -> None:
+        """The retained arm's false branch: a non-55P03 error keeps the 503 shape."""
+        sid = uuid.uuid4()
+        pset = SimpleNamespace(id=uuid.uuid4(), parameter_schema_id=sid, organisation_id=_ORG_ID)
+        schema = SimpleNamespace(id=sid, organisation_id=_ORG_ID)
+        with (
+            patch.object(ms, "validate_current_auth", AsyncMock(return_value=True)),
+            patch("modulo.db.crud.parameter_schema.get_schema", AsyncMock(return_value=schema)),
+            patch("modulo.db.crud.parameter_set.get_set", AsyncMock(return_value=pset)),
+            patch("modulo.db.crud.parameter_set.update_set", AsyncMock(side_effect=SQLAlchemyError("dead"))),
+        ):
+            result = await update_parameter_set(schema_id=str(sid), set_id=str(pset.id), version=1)
+
+        assert result["error"] == "database_unavailable"
+
+    async def test_update_parameter_schema_maps_55p03_to_lock_timeout(self) -> None:
+        sid = uuid.uuid4()
+        schema = SimpleNamespace(id=sid, organisation_id=_ORG_ID)
+        with (
+            patch.object(ms, "validate_current_auth", AsyncMock(return_value=True)),
+            patch("modulo.db.crud.parameter_schema.get_schema", AsyncMock(return_value=schema)),
+            patch("modulo.db.crud.parameter_schema.update_schema", AsyncMock(side_effect=_lock_timeout_error())),
+        ):
+            result = await update_parameter_schema(schema_id=str(sid), version=1)
+
+        assert result["error"] == "lock_timeout"
+        assert "another change is in progress" in result["detail"]
+
+    async def test_update_parameter_schema_keeps_a_generic_db_error_as_database_unavailable(self) -> None:
+        """The retained arm's false branch: a non-55P03 error keeps the 503 shape."""
+        sid = uuid.uuid4()
+        schema = SimpleNamespace(id=sid, organisation_id=_ORG_ID)
+        with (
+            patch.object(ms, "validate_current_auth", AsyncMock(return_value=True)),
+            patch("modulo.db.crud.parameter_schema.get_schema", AsyncMock(return_value=schema)),
+            patch("modulo.db.crud.parameter_schema.update_schema", AsyncMock(side_effect=SQLAlchemyError("dead"))),
+        ):
+            result = await update_parameter_schema(schema_id=str(sid), version=1)
+
+        assert result["error"] == "database_unavailable"

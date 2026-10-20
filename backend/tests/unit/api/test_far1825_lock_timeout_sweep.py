@@ -14,9 +14,11 @@ lock named only in a comment/docstring cannot satisfy it, and an import alias is
 resolved. It re-derives the category-C disposition for every site rather than
 trusting a prose list, and fails if any swept site loses its bound, if a
 category-C file gains/loses a row-lock call, if a NEW file outside the known
-inventory gains a row-lock call, if a route arm fronting a bound CRUD helper
-stops classifying 55P03, or if a deliberately-unbounded site becomes reachable
-from a request path.
+inventory gains a row-lock call, if a JSON/API route arm fronting a bound CRUD
+helper stops classifying 55P03, or if a deliberately-unbounded site becomes
+reachable from a request path. The ONE documented exception is the
+browser-redirect SSO callback (see
+``test_sso_callback_redirect_surface_is_an_explicit_55p03_exception``).
 
 Known residual: a NEW transitive helper that calls a row lock from a file not in
 ``_ROW_LOCK_FILES`` fails the repo-wide file-set assertion, so the inventory and
@@ -29,7 +31,15 @@ of scope.
 from __future__ import annotations
 
 import ast
+import uuid
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi import HTTPException
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
 _SRC = _BACKEND_ROOT / "src" / "modulo"
@@ -131,12 +141,15 @@ _BOUND_SITES: tuple[tuple[str, str], ...] = (
     ("core/assistant/context_source_service.py", "_upsert_context_source"),
 )
 
-# Route arms that front a now-bounded CRUD helper: a 55P03 reaching the arm's
-# local ``except SQLAlchemyError`` must be classified as a 409 conflict by
-# ``raise_lock_timeout_conflict_if`` before the arm's own 503/500 reply. Without
-# it the busy-row conflict is reported as a database outage (FAR-1825 pre-PR
-# gate finding 1). The bound itself is pinned by the category-C tests above;
-# this pins the MAPPING at each reachable surface.
+# JSON/API route arms that front a now-bounded CRUD helper: a 55P03 reaching
+# the arm's local ``except SQLAlchemyError`` must be classified as a 409
+# conflict by ``raise_lock_timeout_conflict_if`` before the arm's own 503/500
+# reply. Without it the busy-row conflict is reported as a database outage
+# (FAR-1825 pre-PR gate finding 1). The bound itself is pinned by the
+# category-C tests above; this pins the MAPPING at each reachable JSON/API
+# surface. The browser-redirect SSO callback (``api/routes/sso.py``) is the ONE
+# documented exception — it cannot deliver JSON and keeps
+# ``provider_unavailable``; pinned separately below so it cannot drift.
 _MAPPED_55P03_ROUTE_ARMS: tuple[tuple[str, str], ...] = (
     ("api/routes/model_backends.py", "create_model_backend_endpoint"),
     ("api/routes/parameter_schemas.py", "update_parameter_schema_endpoint"),
@@ -156,6 +169,9 @@ _MAPPED_55P03_ROUTE_ARMS: tuple[tuple[str, str], ...] = (
     ("api/routes/admin_assistant.py", "set_org_context_source"),
 )
 _CLASSIFIER_NAME = "raise_lock_timeout_conflict_if"
+# The browser-redirect SSO callback: the one reachable arm deliberately left on
+# a generic mapping (see the pinned-exception test at the end of this module).
+_SSO_CALLBACK_FUNCTION = "_run_sso_callback_process"
 
 # C5/C6 are bounded one level up: the shared org JSON-column patch calls
 # ``_take_settings_patch_lock_wait`` before dispatching to the locked generic
@@ -325,13 +341,21 @@ def test_every_swept_site_sets_the_lock_bound_before_its_first_lock() -> None:
 
 
 def test_route_arms_fronting_bounded_crud_classify_55p03_as_a_conflict() -> None:
-    """Every route arm in front of a bounded CRUD helper maps 55P03 to 409.
+    """Every JSON/API route arm in front of a bounded helper maps 55P03 to 409.
 
     The pre-PR gate found the bounds correct but the promised mapping absent on
     most swept routes: their local ``except SQLAlchemyError`` arms answered
     503/500, so a busy-row conflict read as a database outage. A representative
     route test proves the mapping at runtime; this guard proves it is present at
-    EVERY reachable arm, so a new arm cannot silently reintroduce the defect.
+    every reachable JSON/API arm, so a new arm cannot silently reintroduce the
+    defect.
+
+    Scope: JSON/API arms only. The SSO callback is a BROWSER-REDIRECT surface
+    (the IdP navigates the user there, so a JSON 409 cannot be delivered and no
+    SSO contention error code exists); its 55P03 stays deliberately mapped to
+    ``provider_unavailable``. That exclusion is pinned explicitly by
+    ``test_sso_callback_redirect_surface_is_an_explicit_55p03_exception`` so it
+    cannot drift silently.
     """
     failures: list[str] = []
     for rel, function_name in _MAPPED_55P03_ROUTE_ARMS:
@@ -355,6 +379,51 @@ def test_route_arms_fronting_bounded_crud_classify_55p03_as_a_conflict() -> None
         if not classified:
             failures.append(f"{rel}::{function_name} has no except SQLAlchemyError arm calling {_CLASSIFIER_NAME}")
     assert not failures, "\n".join(failures)
+
+
+def test_sso_callback_redirect_surface_is_an_explicit_55p03_exception() -> None:
+    """Pin the ONE non-409 arm: the browser-redirect SSO callback stays generic.
+
+    ``api/routes/sso.py::_run_sso_callback_process`` opens the SSO JIT
+    transaction, whose first row lock (C17 ``get_live_for_email``) is now
+    bounded, so a 55P03 is reachable there too. But the IdP navigates the
+    BROWSER to this endpoint: the error surface is a 303 login redirect, not
+    JSON, and no SSO contention error code exists. The arm therefore
+    deliberately keeps ``provider_unavailable`` rather than adding a new
+    SPA-facing code in this ticket.
+
+    This test records the exclusion so it cannot drift: the arm must still
+    exist, still raise ``SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE)``, and
+    stay OUT of the JSON/API mapping list (adding it there would fail the
+    classifier assertion above, because it does not call
+    ``raise_lock_timeout_conflict_if``).
+    """
+    module = _parse("api/routes/sso.py")
+    function = _function_node(module, _SSO_CALLBACK_FUNCTION)
+    arms = [
+        handler
+        for handler in ast.walk(function)
+        if isinstance(handler, ast.ExceptHandler)
+        and isinstance(handler.type, ast.Name)
+        and handler.type.id == "SQLAlchemyError"
+    ]
+    assert len(arms) == 1, "the SSO callback should keep exactly one SQLAlchemyError arm"
+
+    raised = [
+        node
+        for node in ast.walk(arms[0])
+        if isinstance(node, ast.Raise)
+        and isinstance(node.exc, ast.Call)
+        and isinstance(node.exc.func, ast.Name)
+        and node.exc.func.id == "SsoCallbackError"
+    ]
+    assert raised, "the SSO callback SQLAlchemyError arm no longer raises SsoCallbackError"
+    error_codes = {_dotted_name(arg) for call in raised for arg in call.exc.args if isinstance(arg, ast.expr)}
+    assert "SSO_ERROR_PROVIDER_UNAVAILABLE" in error_codes, (
+        "the redirect surface's documented 55P03 mapping changed; update the inventory's "
+        "'Mapping truth' table and this pinned exception in the same change"
+    )
+    assert ("api/routes/sso.py", _SSO_CALLBACK_FUNCTION) not in _MAPPED_55P03_ROUTE_ARMS
 
 
 def test_c5_c6_generic_fallback_is_bounded_by_the_shared_patch_caller() -> None:
@@ -427,3 +496,116 @@ def test_row_lock_helper_remains_transaction_scoped_and_postgres_only() -> None:
     helper = _read("db/crud/row_lock.py")
     assert "set_config('lock_timeout', :val, true)" in helper
     assert '== "postgresql"' in helper
+
+
+# ---------------------------------------------------------------------------
+# Runtime coverage for the three swept-line groups the AST guard can only
+# assert structurally, and for the C9 CRUD bound (whose only production caller
+# patches ``observe_node`` out in its route tests, so no unit test reached the
+# helper at all). Each test fails if its bound/classifier line is removed.
+# ---------------------------------------------------------------------------
+
+
+class _LockTimeoutDriverError(Exception):
+    """Driver-error double carrying an asyncpg ``sqlstate``."""
+
+    def __init__(self, state: str) -> None:
+        super().__init__(f"driver error {state}")
+        self.sqlstate = state
+
+
+def _lock_timeout_error() -> OperationalError:
+    return OperationalError("SELECT ... FOR UPDATE", {}, _LockTimeoutDriverError("55P03"))
+
+
+def _begin_session() -> AsyncMock:
+    """An ``AsyncSession`` double whose ``async with session.begin()`` works."""
+    session = AsyncMock(spec=AsyncSession)
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    return session
+
+
+async def test_replace_bindings_route_maps_55p03_to_409() -> None:
+    """The agents replace-bindings arm classifies a bounded-lock 55P03."""
+    from modulo.api.routes import agents as agents_routes
+
+    principal = SimpleNamespace(organisation_id=uuid.uuid4(), account_id=uuid.uuid4(), org_role="admin")
+    agent = SimpleNamespace(organisation_id=principal.organisation_id)
+
+    with (
+        patch.object(agents_routes, "set_rls_org", AsyncMock()),
+        patch.object(agents_routes, "get_agent", AsyncMock(return_value=agent)),
+        patch.object(agents_routes, "list_bindings_for_agent", AsyncMock(return_value=[])),
+        patch.object(agents_routes, "replace_agent_bindings", AsyncMock(side_effect=_lock_timeout_error())),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await agents_routes.replace_bindings_endpoint(
+            agent_id=uuid.uuid4(),
+            req=SimpleNamespace(bindings=[]),
+            session=_begin_session(),
+            principal=principal,
+        )
+
+    assert exc_info.value.status_code == 409
+
+
+async def test_in_app_notifications_update_preferences_maps_55p03_to_409() -> None:
+    """The dashboard-preferences arm classifies its first-write lock timeout.
+
+    ``update_preferences`` bounds at the top of the transaction because its
+    first write (the preference DML) precedes the Account-row lock; a 55P03
+    from that first bound must be a 409, not the arm's 500.
+    """
+    from modulo.api.routes import in_app_notifications as notification_routes
+
+    principal = SimpleNamespace(organisation_id=uuid.uuid4(), account_id=uuid.uuid4(), org_role="admin")
+    req = SimpleNamespace(dashboard_level=None, notification_opt_outs=None)
+    request = SimpleNamespace(state=SimpleNamespace())
+
+    with (
+        patch.object(
+            notification_routes,
+            "set_mutation_row_lock_timeout",
+            AsyncMock(side_effect=_lock_timeout_error()),
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await notification_routes.update_preferences(
+            req=req,
+            request=request,
+            session=_begin_session(),
+            principal=principal,
+        )
+
+    assert exc_info.value.status_code == 409
+
+
+async def test_observe_node_bounds_the_observation_lock_before_its_query() -> None:
+    """C9 ``observe_node`` issues the transaction-scoped bound before its lock.
+
+    Its only production caller is the REST observe-node route, whose unit tests
+    patch ``observe_node`` out — so without this direct test the bound is never
+    executed by the unit suite (and the changed-lines gate cannot see it).
+    """
+    from modulo.db.crud.node_observation import observe_node
+
+    existing = SimpleNamespace(id=uuid.uuid4())
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = existing
+    session = AsyncMock(spec=AsyncSession)
+    session.execute = AsyncMock(return_value=result)
+    bound = AsyncMock()
+
+    with patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", bound):
+        observed = await observe_node(
+            session,
+            organisation_id=uuid.uuid4(),
+            run_id=uuid.uuid4(),
+            node_id=str(uuid.uuid4()),
+        )
+
+    bound.assert_awaited_once_with(session)
+    assert observed is existing
