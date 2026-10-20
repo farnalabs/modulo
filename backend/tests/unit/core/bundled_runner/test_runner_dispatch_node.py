@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -1607,3 +1608,43 @@ async def test_teardown_and_clear_closes_the_loop_intercept_bridge_server() -> N
         dispatch_marker_set=False,
     )
     assert closed.is_set(), "the loop-intercept bridge server must be closed during teardown"
+
+
+# ---------------------------------------------------------------------------
+# _provision_workspace — llm-mode oversized input truncation
+# ---------------------------------------------------------------------------
+
+
+async def test_provision_workspace_truncates_oversized_llm_input(patch_node_runner, monkeypatch) -> None:
+    """An llm-mode input over 10 KiB is replaced with a truncation marker so a
+    giant run context never bloats the sandbox input file (the key count is
+    preserved as evidence)."""
+    written: dict[str, str] = {}
+
+    async def _fake_write(_provider, _ref, path, content):
+        written[path] = content
+
+    monkeypatch.setattr(runner_dispatch, "_write_file_via_exec", _fake_write)
+    provider = _FakeProvider()
+    raw_input = {"blob": "x" * 20_000}
+    request = runner_dispatch._ProvisionRequest(
+        state=_state(),
+        org_id=str(uuid.uuid4()),
+        run_id="run-1",
+        node_id="node-1",
+        route=_route(provider),
+        org_uuid=None,
+        run_uuid=None,
+        sandbox_mode="llm",
+        context_files={},
+        input_json=json.dumps(raw_input),
+        raw_input=raw_input,
+        rendered_prompt="prompt",
+    )
+
+    result = await runner_dispatch._provision_workspace(lambda: _session_cm(), request)
+
+    payload = json.loads(written[runner_dispatch._INPUT_JSON_PATH])
+    assert payload == {"_truncated": True, "_key_count": 1}
+    assert written[runner_dispatch._PROMPT_PATH] == "prompt"
+    assert result.attempt_key == "attempt-key"

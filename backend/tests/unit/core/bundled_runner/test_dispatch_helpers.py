@@ -172,3 +172,64 @@ def test_render_agent_template_model_class_without_value_fails_closed() -> None:
             node_id="n1",
             node_def={"model_class": "builder"},
         )
+
+
+# ---------------------------------------------------------------------------
+# Output-parse classification + retention artifacts
+# ---------------------------------------------------------------------------
+
+
+def test_output_parse_error_non_dict_payload_names_the_type() -> None:
+    assert rd._output_parse_error("[]", [1, 2]) == "output.json parsed to non-dict type list"
+
+
+def test_output_parse_error_invalid_json() -> None:
+    assert rd._output_parse_error("{not json", None) == "output.json is not valid JSON"
+
+
+def test_output_parse_error_empty_output() -> None:
+    """No raw output (and no parsed value) is a DISTINCT reason from bad JSON —
+    the marker must say the file was empty/null, not that it failed to parse."""
+    assert rd._output_parse_error("", None) == "output.json is empty or JSON null"
+
+
+def test_runner_retention_artifacts_persists_over_cap_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An over-cap stderr stream gets its own side-car pointer while stdout
+    stays inline (FAR-879 parity on the Bundled Runner path)."""
+    import modulo.core.pipeline_engine.node_runner as nrm
+
+    persisted: dict[str, dict[str, object]] = {}
+    stderr_pointer = {"rel_path": "stderr.zst", "stream": "stderr", "truncated": False, "redacted": True}
+
+    def _persist_stdout(**kwargs: object) -> dict[str, object]:
+        persisted["stdout"] = kwargs
+        return {"rel_path": "stdout.zst", "stream": "stdout"}
+
+    def _persist_stderr(**kwargs: object) -> dict[str, object]:
+        persisted["stderr"] = kwargs
+        return stderr_pointer
+
+    monkeypatch.setattr(nrm, "_persist_full_stdout_artifact", _persist_stdout)
+    monkeypatch.setattr(nrm, "_persist_full_stderr_artifact", _persist_stderr)
+    monkeypatch.setattr(nrm, "_redact_raw_output", lambda text: text)
+
+    stdout, stderr, _stdout_len, stderr_len, stdout_truncated, stdout_artifact, stderr_artifact = (
+        rd._runner_retention_artifacts(
+            node_id="node-1",
+            run_id="run-1",
+            org_id="org-1",
+            attempt_key="attempt-1",
+            agent_stdout_raw="short",
+            agent_stderr_raw="e" * 64,
+            stdout_cap=16,
+        )
+    )
+
+    assert stdout == "short"
+    assert stdout_truncated is False
+    assert stdout_artifact is None
+    assert stderr == "e" * 16
+    assert stderr_len == 64
+    assert stderr_artifact == stderr_pointer
+    assert persisted["stderr"]["redacted_stderr"] == "e" * 64
+    assert persisted["stderr"]["node_cap"] == 16

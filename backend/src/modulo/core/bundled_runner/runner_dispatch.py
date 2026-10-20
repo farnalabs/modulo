@@ -66,6 +66,8 @@ from modulo.util import validate_workspace_network
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError, ScriptInvalidOutputError
+
 
 _log = logging.getLogger(__name__)
 
@@ -1375,8 +1377,15 @@ def _output_parse_error(raw_output_str: str, output_json: Any) -> str:
     return "output.json is empty or JSON null"
 
 
-def _no_output_error(node_id: str, sandbox_mode: str, script_lease_claimed: bool) -> Exception:
-    """The typed error for a genuinely-empty output.json (script vs runner)."""
+def _no_output_error(
+    node_id: str, sandbox_mode: str, script_lease_claimed: bool
+) -> SandboxNodeFailedError | ScriptInvalidOutputError:
+    """The typed error for a genuinely-empty output.json (script vs runner).
+
+    The return annotation names the two CONCRETE exception types rather than
+    bare ``Exception`` so the raise site is typed (Sonar S112) and callers can
+    narrow on the specific failure.
+    """
     from modulo.core.pipeline_engine.node_runner import (
         SandboxNodeFailedError,
         ScriptInvalidOutputError,

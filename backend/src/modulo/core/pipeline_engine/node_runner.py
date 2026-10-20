@@ -1391,7 +1391,7 @@ def _build_file_io_provider(api_key: str) -> "RuntimeProvider | None":
     return _build_log_tail_provider(api_key)
 
 
-async def _file_io_provider_for(
+async def _file_io_provider_for(  # NOSONAR S7503 - async seam, see docstring
     sandbox_id: str | None,
     *,
     provider_type: str | None = None,
@@ -1419,6 +1419,11 @@ async def _file_io_provider_for(
     instead of building a hub per call. Only consulted on the profile arm
     (the legacy E2B arm is byte-for-byte unchanged); ownership stays with
     the caller — a borrowed provider is never closed here.
+
+    Kept ``async`` deliberately (Sonar S7503): it is a provider SEAM — every
+    caller awaits it and tests patch it with an async seam — so converting it
+    to a plain function would ripple through the dispatch/test contract for no
+    behavioural gain. The body itself performs no I/O.
     """
     from modulo.core.runtime_config.key_bridge import get_e2b_api_key
     from modulo.core.runtime_provider import RuntimeProviderError
@@ -1684,7 +1689,9 @@ async def _close_seam_provider(provider: "RuntimeProvider | None") -> None:
         _log.debug("sandbox_agent.seam_provider_close_failed", exc_info=True)
 
 
-async def _build_dispatch_provider(provider_type: str | None = None) -> "RuntimeProvider | None":
+async def _build_dispatch_provider(  # NOSONAR S7503 - async seam, see docstring
+    provider_type: str | None = None,
+) -> "RuntimeProvider | None":
     """FAR-1050 R4 dispatch: resolve the run's RuntimeProvider.
 
     Builds a PER-DISPATCH fresh hub through :func:`build_hub` — the same
@@ -1706,6 +1713,11 @@ async def _build_dispatch_provider(provider_type: str | None = None) -> "Runtime
     THIS name (the hub is never constructed in that case). The ephemeral
     hub's other registrations hold no external resources until used, so the
     returned provider is the only handle the dispatch needs to dispose.
+
+    Kept ``async`` deliberately (Sonar S7503): it is a dispatch SEAM — the
+    create/stream call sites await it and the test bridge patches it with an
+    async seam — so converting it to a plain function would ripple through the
+    dispatch/test contract for no behavioural gain. The body only builds a hub.
     """
     if not _is_legacy_e2b_route(provider_type):
         return _build_profile_provider(str(provider_type))
@@ -10159,13 +10171,14 @@ async def _resolve_sandbox_git_content_config(config: _SandboxNodeConfig) -> _Sa
         node_id=config.node_id,
         field="agent_command",
     )
-    # ``dataclasses.replace`` is typed as returning ``_DataclassInstance``; pin
-    # the concrete config type via an annotated local so the declared return
-    # type is honoured on every analyser, not just mypy (S5886).
-    resolved: _SandboxNodeConfig = _dc_replace(
-        config, agent_prompt_template=resolved_prompt, agent_command=resolved_command
+    # ``dataclasses.replace`` already returns the concrete dataclass as far as
+    # mypy is concerned, but SonarCloud's analyser only sees the stdlib's
+    # ``_DataclassInstance`` return type (S5886/S5890). Cast for the analyser
+    # and tell mypy the cast is deliberate.
+    return cast(  # type: ignore[redundant-cast]
+        _SandboxNodeConfig,
+        _dc_replace(config, agent_prompt_template=resolved_prompt, agent_command=resolved_command),
     )
-    return resolved
 
 
 async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegates to extracted helpers (FAR-310)
