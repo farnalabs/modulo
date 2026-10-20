@@ -145,7 +145,7 @@ Rules:
 
 `frontend/tests/e2e/setup/realstack-api.ts` takes the method as a string-literal argument (`apiFetch(base, token, 'PATCH', path)`), and `@regression` specs carry `route.request().method() === '<VERB>'` interceptor filters. Rotating a verb (`PATCH` → `PUT`) either fails the harness call or - worse - leaves the interceptor filter matching nothing, so the spec keeps passing while asserting a request that was never intercepted. Both are deploy-critical: `deploy.yml` runs `playwright test --grep "@regression"` against staging before promoting to production.
 
-The structural guard is CI job `e2e-route-methods-check` (pre-commit hook `check-e2e-route-methods`, `scripts/run_check_e2e_route_methods.py`). It fails on a stale descriptor or an API-shaped call it cannot analyse.
+The structural guard is CI job `e2e-route-methods-check` (pre-commit hook `check-e2e-route-methods`, `scripts/run_check_e2e_route_methods.py`). It fails on a stale descriptor, an API-shaped call it cannot analyse, and a callee captured as a value it cannot follow (for example `const orig = globalThis.fetch`).
 
 Rules:
 

@@ -45,8 +45,11 @@ What is scanned (``frontend/tests/e2e/**/*.ts``):
   trusted. ``new URL(<path>, <base>)`` and ``new Request(<path>, <init>)``
   targets unwrap to the path literal, and a ``Request``'s own ``method`` is read
   from its init. A ``method`` property present without a literal value (the
-  ``{ method }`` shorthand, a quoted key, or any other non-literal value) is
-  unresolvable, not an implicit GET, and is reported as a note.
+  ``{ method }`` shorthand, ``{ method: verb }``, or any other non-literal
+  value), a spread anywhere in the init, or a computed key
+  (``{ ['method']: 'PATCH' }``) is unresolvable - not an implicit GET, and not
+  a literal key silently trusted - so it is reported as a note. A quoted
+  literal key (``{ "method": "PATCH" }``) IS resolved.
 * ``page.request.<verb>(<url>)`` / ``context.request.<verb>(<url>)`` /
   ``page.context().request.<verb>(<url>)`` / ``request.<verb>(<url>)`` calls on
   a Playwright ``APIRequestContext`` (the verb is the method).
@@ -62,9 +65,13 @@ What is scanned (``frontend/tests/e2e/**/*.ts``):
   if (isPatch)``) is resolved too. A comparison combined with an in-callback
   URL test (``url.includes`` / ``url.endsWith``) is not guessed - its effective
   path lives in that condition, not in the registration, so it is reported as
-  a note. ``!== '<METHOD>'`` and negated-boolean filters are skipped too - they
-  guard a fallback branch rather than selecting a method - and any other method
-  reference the extractor cannot attribute to one literal method (a
+  a note. A method read through a bracket key (``route.request()['method']()``)
+  or an optional chain (``route.request()?.method?.()``) is likewise noted: the
+  comparison passes model only the plain ``.method()`` spelling, and the string
+  key is blanked in the masked source. ``!== '<METHOD>'`` and negated-boolean
+  filters are skipped too - they guard a fallback branch rather than selecting
+  a method - and any other method reference the extractor cannot attribute to
+  one literal method (a
    destructured ``const { method } = route.request()``, an array-membership
    ``['PATCH', 'PUT'].includes(...)`` test) leaves a note for its registration,
    so the filter shape is reported rather than dropped. A callback that DELEGATES
@@ -323,7 +330,23 @@ _API_PREFIX = "/api/"
 #: a nested ``method`` inside a body/headers object, or inside a comment, is not
 #: the request method, and a regex scan read it as one.
 _TS_OBJECT_ASSERTION_RE = re.compile(r"(?:as|satisfies)\b")
-_METHOD_CALL_RE = re.compile(r"\.\s*method\s*\(")
+#: A method read through a member call. The optional-chain spellings
+#: (``request?.method?.()``) are included: the comparison passes cannot model
+#: them, so they must reach the note paths rather than vanish.
+_METHOD_CALL_RE = re.compile(r"(?:\?\.|\.)\s*method\s*(?:\?\.)?\s*\(")
+#: The optional-chain spellings alone - the forms the comparison passes do NOT
+#: resolve even though a plain ``.method()`` right beside them would resolve.
+_METHOD_OPTIONAL_CHAIN_CALL_RE = re.compile(r"\?\.\s*method\s*(?:\?\.)?\s*\(|\.\s*method\s*\?\.\s*\(")
+#: A bracket-keyed method read (``route.request()['method']()``). The key is a
+#: string literal, so it is blanked in the masked source and the marker has to
+#: re-read the key from the original: the chain may contain call parentheses
+#: (``route.request()``, ``page.context().request()``), which the flat index
+#: marker used for ``globalThis['fetch']`` does not allow.
+_METHOD_BRACKET_INDEX_RE = re.compile(
+    r"(?<![\w$])[A-Za-z_$][\w$]*"
+    r"(?:(?:\s*\.\s*[A-Za-z_$][\w$]*)|(?:\s*\([^()]*\)))*"
+    r"\s*(?P<bracket>\[\s*\])"
+)
 #: A ``method`` pulled out of the request object by destructuring
 #: (``const { method } = route.request()``) - a filter form the comparison
 #: passes below cannot attribute to a literal method.
@@ -446,7 +469,7 @@ _NON_HELPER_CALL_NAMES = frozenset(
 )
 _LEDGER_COMPARISON_RE = re.compile(r"===?|!==?|includes\s*\(")
 _LEDGER_METHOD_WORD_RE = re.compile(r"\bmethod\b")
-_LEDGER_METHOD_CALL_RE = re.compile(r"\.\s*method\s*\(|(?<![\w.$])request\s*\.\s*method\s*\(")
+_LEDGER_METHOD_CALL_RE = re.compile(r"(?:\?\.|\.)\s*method\s*(?:\?\.)?\s*\(|(?<![\w.$])request\s*\.\s*method\s*\(")
 _LEDGER_UNMODELLED_METHOD_NOTE = (
     "page.route callback filters on the request method in a form this check cannot "
     "attribute to a single literal method, so its method filter was not checked"
@@ -1410,7 +1433,12 @@ def _init_method(text: str) -> tuple[str | None, bool, bool]:
     Only a depth-1 property can be the request method: ``{ body: JSON.stringify({
     method: 'DELETE' }) }`` is an implicit GET, not a DELETE, and a ``method``
     inside a comment is not a property at all. The FIRST top-level ``method``
-    property wins, so property order does not change the result.
+    property wins when more than one literal key is present.
+
+    A spread anywhere (a later one can override a literal key) or a computed key
+    (``{ ['method']: 'PATCH' }``, ``{ [key]: verb }``) makes the init
+    unreadable: it is reported as unresolved so the caller notes it, never
+    silently resolved to a literal key or to an implicit GET.
     """
     stripped = text.strip()
     parsed = _object_property_spans(stripped)
@@ -1420,13 +1448,26 @@ def _init_method(text: str) -> tuple[str | None, bool, bool]:
     trailing = stripped[after:].strip()
     if trailing and not _TS_OBJECT_ASSERTION_RE.match(trailing):
         return None, True, False
+    # A spread ANYWHERE may supply ``method`` - and one AFTER a literal key
+    # overrides it, so property order cannot be used to resolve the init. A
+    # computed key is the same class: ``{ ['method']: 'PATCH' }`` and
+    # ``{ [key]: verb }`` both name the request method at runtime, so the init
+    # is not readable. Both were silently resolved before (to the literal key
+    # or to implicit GET respectively) - a request checked against the wrong
+    # method is worse than a note.
     for start, end in spans:
         chunk = stripped[start:end].strip()
         if not chunk:
             continue
         if chunk.startswith("..."):
-            # A spread may supply ``method``; the init is not readable.
             return None, True, False
+        raw_key = _property_parts(chunk)[0].strip()
+        if raw_key.startswith("["):
+            return None, True, False
+    for start, end in spans:
+        chunk = stripped[start:end].strip()
+        if not chunk:
+            continue
         raw_key, raw_value, has_colon = _property_parts(chunk)
         if _property_key(raw_key) != "method":
             continue
@@ -1445,10 +1486,12 @@ def _fetch_method(init_arguments: list[str]) -> tuple[str | None, bool]:
 
     Returns ``(method, unresolved)``. No init, or an object literal without a
     ``method`` key, is an implicit GET - that is a real request the guard must
-    check. A ``method`` key whose value is not a single string literal - the
-    ``{ method }`` shorthand, a quoted key, an expression - a spread that may
-    supply one, or a non-literal init object cannot be resolved statically, so
-    the caller notes it rather than assuming GET.
+    check. A ``method`` key whose value is not a single string literal (the
+    ``{ method }`` shorthand, ``{ method: verb }``, any other expression), a
+    spread anywhere in the init, a computed key, or a non-literal init object
+    cannot be resolved statically, so the caller notes it rather than assuming
+    GET. A quoted literal key (``{ "method": "PATCH" }``) IS resolved - only its
+    VALUE has to be a literal.
     """
     for argument in init_arguments:
         text = argument.strip()
@@ -1462,16 +1505,38 @@ def _fetch_method(init_arguments: list[str]) -> tuple[str | None, bool]:
     return None, False
 
 
-def _has_unmodelled_method_reference(masked_body: str) -> bool:
+def _has_unmodelled_method_reference(masked_body: str, text_body: str = "") -> bool:
     """True when a route callback reads the request method in a form we cannot attribute.
 
     The comparison passes resolve ``x.method() === '<METHOD>'`` and its
     siblings. Anything else that still reads the method - a destructured
     ``const { method } = route.request()``, an ``['PATCH', 'PUT'].includes(...)``
-    array test - selects a branch this checker cannot map to one literal
-    method, so the caller emits a note rather than dropping it silently.
+    array test, a bracket-keyed read (``route.request()['method']()``) or an
+    optional-chain read (``request?.method?.()``) - selects a branch this
+    checker cannot map to one literal method, so the caller emits a note rather
+    than dropping it silently.
     """
-    return bool(_METHOD_CALL_RE.search(masked_body) or _DESTRUCTURED_METHOD_RE.search(masked_body))
+    if _METHOD_CALL_RE.search(masked_body) or _DESTRUCTURED_METHOD_RE.search(masked_body):
+        return True
+    # The bracket key is a string literal, so it is blanked in the masked body;
+    # read it back from the original (aligned offsets).
+    return bool(_bracket_method_offsets(text_body, masked_body))
+
+
+def _has_unresolvable_method_read(masked_body: str, text_body: str) -> bool:
+    """True when a callback reads the method in a spelling no comparison pass resolves.
+
+    The comparison passes model the plain ``.method()`` form only. A
+    bracket-keyed read (``route.request()['method']()``) or an optional-chain
+    read (``route.request()?.method?.()``) never matches them, so a
+    literal-path registration would otherwise produce neither a descriptor nor
+    a note - a silent interceptor filter. The plain form is deliberately NOT
+    reported here: it is resolved by the passes above (or by the ledger's
+    method-reference line when it is not), so noting it again would be noise.
+    """
+    return bool(_METHOD_OPTIONAL_CHAIN_CALL_RE.search(masked_body)) or bool(
+        _bracket_method_offsets(text_body, masked_body)
+    )
 
 
 def _delegates_method_filter(masked_body: str, params: list[str]) -> bool:
@@ -1685,9 +1750,10 @@ def _extract_route_interceptors(
     A callback that reads the method in a form the comparison passes cannot
     attribute to one literal method - a destructured
     ``const { method } = route.request()``, an
-    ``['PATCH', 'PUT'].includes(route.request().method())`` array test, or a
-    ``!==`` fallback guard - produces one note for that registration instead of
-    vanishing silently.
+    ``['PATCH', 'PUT'].includes(route.request().method())`` array test, a
+    bracket-keyed ``route.request()['method']()``, an optional-chain
+    ``route.request()?.method?.()``, or a ``!==`` fallback guard - produces one
+    note for that registration instead of vanishing silently.
     """
     notes = notes if notes is not None else []
     calls: list[HttpCall] = []
@@ -1712,7 +1778,9 @@ def _extract_route_interceptors(
             handler_text = text[handler_span[0] : handler_span[1]].strip()
             handler_params = _callback_params(handler_text)
             delegates = _delegates_method_filter(handler_masked, handler_params)
-            if not _has_string_literal(first) and (_has_unmodelled_method_reference(handler_masked) or delegates):
+            if not _has_string_literal(first) and (
+                _has_unmodelled_method_reference(handler_masked, handler_text) or delegates
+            ):
                 # A hoisted URL variable (``const pattern = '**/api/...'``;
                 # ``page.route(pattern, ...)``) carries the real path, and the
                 # callback still filters on the method. Skipping it means the
@@ -1743,7 +1811,7 @@ def _extract_route_interceptors(
             # mocks specific routes by URL and filters on the method CAN hide a
             # stale one, so that shape is noted.
             handler_masked = masked[handler_span[0] : handler_span[1]]
-            if _has_unmodelled_method_reference(handler_masked):
+            if _has_unmodelled_method_reference(handler_masked, text[handler_span[0] : handler_span[1]]):
                 _add_note(
                     notes,
                     filename,
@@ -1953,6 +2021,14 @@ def _extract_route_interceptors(
         if _DESTRUCTURED_METHOD_RE.search(masked[span_start:span_end]):
             _add_note(notes, filename, _line_of(text, span_start), _LEDGER_UNMODELLED_METHOD_NOTE)
 
+        # A bracket-keyed (``route.request()['method']()``) or optional-chain
+        # (``route.request()?.method?.()``) method read is never matched by the
+        # comparison passes. Without this the registration produced no
+        # descriptor AND no note - the silent interceptor gap this guard exists
+        # to remove - even though the plain spelling beside it resolves.
+        if _has_unresolvable_method_read(masked[span_start:span_end], text[span_start:span_end]):
+            _add_note(notes, filename, _line_of(text, span_start), _LEDGER_UNMODELLED_METHOD_NOTE)
+
         # A callback that hands the route/request to a helper
         # (``if (isMethod(route, 'PATCH'))``) reads no ``.method()`` here, so
         # every pass above sees nothing and the registration was silent. That
@@ -2124,6 +2200,24 @@ def _bracket_key_offsets(source: str, masked: str, keys: frozenset[str]) -> list
 def _bracket_fetch_offsets(source: str, masked: str) -> list[int]:
     """Return offsets of bracket-accessed ``fetch`` (``globalThis['fetch']``)."""
     return _bracket_key_offsets(source, masked, frozenset({"fetch"}))
+
+
+def _bracket_method_offsets(source: str, masked: str) -> list[int]:
+    """Return offsets of bracket-keyed ``method`` reads (``request['method']``).
+
+    The key is blanked in *masked*, so it is re-read from *source* at the same
+    offsets. Unlike ``_bracket_key_offsets`` the member chain may contain CALL
+    parentheses - ``route.request()['method']`` and
+    ``page.context().request()['method']`` are the shapes a ``page.route``
+    callback uses, and a flat index marker never matched them.
+    """
+    offsets: list[int] = []
+    for match in _METHOD_BRACKET_INDEX_RE.finditer(masked):
+        raw = source[match.start("bracket") : match.end("bracket")]
+        key = raw[1:-1].strip()
+        if len(key) >= 2 and key[0] in ("'", '"', "`") and key[-1] == key[0] and key[1:-1].strip() == "method":
+            offsets.append(match.start("bracket"))
+    return offsets
 
 
 def _bracket_request_verb_offsets(source: str, masked: str) -> list[int]:
@@ -2378,11 +2472,16 @@ def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
     for match in _RETRY_FETCH_RE.finditer(masked):
         if _is_function_declaration(masked, match.start()):
             continue
+        # An import/export specifier is a BINDING, not a call. This exclusion is
+        # load-bearing, exactly as it is for ``fetch``: without it the value-read
+        # branch below enumerates the binding. A value read OUTSIDE a specifier
+        # (``const send = fetchWithTransientRetry``) stays a candidate - its
+        # call sites cannot be followed statically.
         if _in_import_or_export_specifier(masked, match.start()):
             continue
-        if _find_open_paren(masked, match.end()) is None:
-            continue
-        add(match.start())
+        is_call = _find_open_paren(masked, match.end()) is not None
+        if is_call or _is_fetch_value_reference(masked, match.start(), match.end()):
+            add(match.start())
     for match in _FETCH_RE.finditer(masked):
         if _is_function_declaration(masked, match.start()):
             continue
@@ -2447,6 +2546,10 @@ def _method_ref_lines(source: str, masked: str) -> set[int]:
     the line covers it, and an unaccounted one is noted (never dropped).
     """
     lines: set[int] = set()
+    # A bracket-keyed read leaves only ``[ ]`` in the masked line, so its key
+    # is read from the original at the same offsets.
+    for offset in _bracket_method_offsets(source, masked):
+        lines.add(_line_of(source, offset))
     raw_lines = source.splitlines()
     for index, masked_line in enumerate(masked.splitlines()):
         line = index + 1

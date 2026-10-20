@@ -590,11 +590,11 @@ def test_interceptor_combined_with_url_condition_on_a_specific_route_is_not_gues
 
 def test_real_tree_scan_yields_plausible_descriptor_floor() -> None:
     # FAR-1847: the check must be pinned against the REAL tree, not only
-    # synthetic sources. This is a COLLAPSE DETECTOR, not an exact count: 122
-    # were observed at green on this branch (119 before the implicit-GET fetch
-    # shape). The floor leaves headroom so a legitimate added/removed call does
-    # not turn a behavioural pin into a brittle one - a regression that loses a
-    # whole class of shapes still trips it.
+    # synthetic sources. This is a COLLAPSE DETECTOR, not an exact count: 123
+    # were observed at green on this branch. The floor leaves headroom so a
+    # legitimate added/removed call does not turn a behavioural pin into a
+    # brittle one - a regression that loses a whole class of shapes still trips
+    # it.
     calls = _checker.collect_calls()
 
     assert len(calls) >= 100
@@ -907,6 +907,44 @@ def test_includes_method_filter_is_noted() -> None:
     assert "cannot attribute to a single literal method" in notes[0]
 
 
+def test_bracket_accessed_method_filter_is_noted() -> None:
+    # ``route.request()['method']()`` reads the method through a quoted key. The
+    # key is blanked in the masked source, so the plain ``.method(`` markers
+    # missed it entirely: no descriptor, no note, no unanalysed entry - a silent
+    # interceptor filter. It must at least be noted.
+    notes: list[str] = []
+    source = (
+        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
+        "  if (route.request()['method']() === 'PATCH') {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes)
+
+    assert not calls
+    assert any("cannot attribute to a single literal method" in note for note in notes)
+
+
+def test_optional_chain_method_filter_is_noted() -> None:
+    # The same read through an optional chain: the comparison passes only model
+    # the plain ``.method()`` spelling, so ``?.method?.()`` must not vanish.
+    notes: list[str] = []
+    source = (
+        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
+        "  if (route.request()?.method?.() === 'PATCH') {\n"
+        "    return route.fulfill({ status: 200 })\n"
+        "  }\n"
+        "})\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes)
+
+    assert not calls
+    assert any("cannot attribute to a single literal method" in note for note in notes)
+
+
 def test_fetch_method_shorthand_is_not_an_implicit_get() -> None:
     # ``{ method }`` carries the method but no literal here, so the request is
     # unresolvable - assuming GET can fail a valid PR.
@@ -928,6 +966,42 @@ def test_fetch_quoted_method_key_is_not_an_implicit_get() -> None:
         FILENAME,
         notes,
     )
+
+    assert not calls
+    assert len(notes) == 1
+    assert "method" in notes[0]
+
+
+def test_fetch_quoted_literal_method_key_is_resolved() -> None:
+    # ``{ "method": "DELETE" }`` has a quoted KEY and a literal VALUE, so it is
+    # resolvable - only a non-literal value (or a computed key / spread) is not.
+    calls = _calls('await fetch("/api/v1/pipelines", { "method": "DELETE" })\n')
+
+    assert len(calls) == 1
+    assert calls[0].method == "DELETE"
+
+
+def test_fetch_spread_after_a_literal_method_is_not_silently_resolved() -> None:
+    # ``{ method: 'GET', ...init }`` used to return the literal key before it
+    # ever saw the spread, silently checking GET even though ``init`` may
+    # override it. It must be noted instead.
+    notes: list[str] = []
+
+    calls = _checker.extract_http_calls(
+        "await fetch('/api/v1/pipelines', { method: 'GET', ...init })\n", FILENAME, notes
+    )
+
+    assert not calls
+    assert len(notes) == 1
+    assert "method" in notes[0]
+
+
+def test_fetch_computed_method_key_is_not_an_implicit_get() -> None:
+    # ``{ ['method']: 'PATCH' }`` names the request method at runtime; treating
+    # it as an implicit GET would check the wrong verb.
+    notes: list[str] = []
+
+    calls = _checker.extract_http_calls("await fetch('/api/v1/pipelines', { ['method']: 'PATCH' })\n", FILENAME, notes)
 
     assert not calls
     assert len(notes) == 1
@@ -1281,6 +1355,11 @@ def test_coverage_ledger_notes_a_method_filter_even_when_the_callback_yields_a_d
 
 
 def test_coverage_ledger_does_not_flag_the_api_fetch_declaration() -> None:
+    # Capture the NOTES sink as well as ``unanalysed``: with
+    # ``_is_api_fetch_declaration`` forced to ``False`` the declaration is read
+    # as an unresolved call and emits a note, so a test that discarded notes
+    # passed vacuously.
+    notes: list[str] = []
     unanalysed: list[str] = []
     source = (
         "export async function apiFetch<T>(\n"
@@ -1293,9 +1372,10 @@ def test_coverage_ledger_does_not_flag_the_api_fetch_declaration() -> None:
         "}\n"
     )
 
-    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+    calls = _checker.extract_http_calls(source, FILENAME, notes, unanalysed)
 
     assert not calls
+    assert not notes
     assert not unanalysed
 
 
@@ -2140,6 +2220,11 @@ def test_fetch_import_and_export_bindings_are_not_candidates() -> None:
 
 
 def test_retry_fetch_import_and_export_bindings_are_not_candidates() -> None:
+    # A bare import/export specifier is a BINDING, not a call. The exclusion is
+    # load-bearing: a value READ of the helper is enumerated (an alias the
+    # checker cannot follow), so without it all three lines below would be
+    # unanalysed. An open-paren-only shape would pin nothing - a specifier can
+    # never satisfy ``_find_open_paren``.
     unanalysed: list[str] = []
     source = (
         "import { fetchWithTransientRetry } from './realstack-api'\n"
@@ -2151,6 +2236,15 @@ def test_retry_fetch_import_and_export_bindings_are_not_candidates() -> None:
 
     assert not calls
     assert not unanalysed
+
+    # The sibling shape that WOULD otherwise be a candidate: the same helper
+    # read as a value outside a specifier. This is what makes the assertions
+    # above discriminating.
+    alias_unanalysed: list[str] = []
+    _checker.extract_http_calls("const send = fetchWithTransientRetry\n", FILENAME, [], alias_unanalysed)
+
+    assert len(alias_unanalysed) == 1
+    assert alias_unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
 
 
 def test_request_property_on_types_and_object_literals_is_not_a_binding() -> None:

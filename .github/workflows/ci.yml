@@ -1479,7 +1479,8 @@ jobs:
     # it keeps passing while asserting nothing. Imports the backend app under
     # the same template env as schema-freshness (no DB, no network) and
     # matches every method/path pair extracted from frontend/tests/e2e/**
-    # against the live OpenAPI route table.
+    # against the live route objects (`app.routes`), not the OpenAPI document -
+    # it omits `include_in_schema=False` routes and flattens path converters.
     name: E2E route methods
     needs: [changes]
     runs-on: ubicloud-standard-2
