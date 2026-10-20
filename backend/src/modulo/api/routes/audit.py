@@ -18,7 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.responses import StreamingResponse
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    prime_stream,
+    raise_session_contract_error,
+    reemit_primed_stream,
+)
 from modulo.api.dependencies import (
     get_db_session,
     get_or_create_engine,
@@ -304,21 +309,24 @@ async def _scan_body(
 ) -> AsyncIterator[str]:
     """Chunk the primed scan generator into the wire format (NDJSON or CSV).
 
-    ``first`` is the row already fetched by the route to surface pre-stream
-    errors (validation/permission/database) as a proper HTTP status; it is
-    re-emitted here so no event is lost.
+    A thin format adapter over the shared
+    :func:`modulo.api.db_error_handling.reemit_primed_stream` — the
+    first-item-then-the-rest loop lives in ONE place for all three streaming
+    exports. ``first`` is the row already fetched by the route to surface
+    pre-stream errors (validation/permission/database) as a proper HTTP status;
+    it is re-emitted here so no event is lost.
     """
     if format == "csv":
-        yield _csv_stream_line(header=True)
-        if first is not None:
-            yield _csv_stream_line(header=False, item=first)
-        async for item in stream:
-            yield _csv_stream_line(header=False, item=item)
-        return
-    if first is not None:
-        yield json.dumps(first) + "\n"
-    async for item in stream:
-        yield json.dumps(item) + "\n"
+        body = reemit_primed_stream(
+            stream,
+            first,
+            lambda item: _csv_stream_line(header=False, item=item),
+            header=_csv_stream_line(header=True),
+        )
+    else:
+        body = reemit_primed_stream(stream, first, lambda item: json.dumps(item) + "\n")
+    async for chunk in body:
+        yield chunk
 
 
 @router.get("/scan", dependencies=[require_feature("audit_viewer")])
@@ -353,44 +361,22 @@ async def scan_chain_endpoint(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid user_id format: {actor_user_id!r}. Must be a valid UUID.",
             ) from None
-    try:
-        stream = stream_export_chain(
-            factory=_audit_session_factory(settings),
-            org_id=principal.organisation_id,
-            event_type=event_type,
-            actor_user_id=actor_uid,
-            resource_type=resource_type,
-            from_date=from_date,
-            to_date=to_date,
-            principal_kind=principal_kind,
-            page_size=SCAN_KEYSET_PAGE_SIZE,
-        )
-        # Prime the generator so the RLS write and the first keyset page surface
-        # pre-stream DB errors as a proper HTTP status BEFORE the response starts.
-        first = await stream.__anext__()
-    except StopAsyncIteration:
-        first = None
-    except ProgrammingError:
-        _log.exception("audit.scan_chain_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "audit.scan_chain_endpoint")
-        _log.exception("scan_chain_endpoint: database error")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_CONNECTION_FAILED_PLEASE,
-        ) from None
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("Unexpected error in scan_chain_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_INTERNAL_SERVER_ERROR,
-        ) from None
+    stream = stream_export_chain(
+        factory=_audit_session_factory(settings),
+        org_id=principal.organisation_id,
+        event_type=event_type,
+        actor_user_id=actor_uid,
+        resource_type=resource_type,
+        from_date=from_date,
+        to_date=to_date,
+        principal_kind=principal_kind,
+        page_size=SCAN_KEYSET_PAGE_SIZE,
+    )
+    # Prime the generator so the RLS write and the first keyset page surface
+    # pre-stream DB errors as a proper HTTP status BEFORE the response starts —
+    # routed through the shared classifier (409/422/501/503/re-raise), not a
+    # hand-rolled subset.
+    first = await prime_stream(stream, "audit.scan_chain_endpoint")
 
     body = _scan_body(stream, first=first, format=format)
     if format == "csv":
