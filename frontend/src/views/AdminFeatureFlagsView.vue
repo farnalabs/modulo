@@ -2,9 +2,10 @@
   <div data-theme="agent" class="page-wide">
     <header>
       <PageHeader :title="$t('views.AdminFeatureFlagsView.feature_flags')" :subtitle="$t('views.AdminFeatureFlagsView.all_known_feature_flags_and_their_current_activation_status')" />
-      <div v-if="planStore.isLoading" class="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
-        <div class="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-        {{ $t('views.AdminFeatureFlagsView.loading_plan_info') }}
+      <div v-if="planStore.isLoading" class="mt-2 flex flex-wrap items-center gap-4 text-sm text-muted-foreground" role="status">
+        <span class="sr-only">{{ $t('views.AdminFeatureFlagsView.loading_plan_info') }}</span>
+        <div aria-hidden="true" class="h-4 w-28 animate-pulse rounded bg-muted/50" />
+        <div aria-hidden="true" class="h-4 w-40 animate-pulse rounded bg-muted/50" />
       </div>
       <div v-else class="mt-2 flex flex-wrap gap-4 text-sm text-muted-foreground">
         <span>
@@ -174,7 +175,8 @@
                     </td>
                     <td class="table-cell">
                       <span
-                        class="font-mono text-sm font-medium cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2"
+                        class="rounded font-mono text-sm font-medium cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        tabindex="0"
                         :data-testid="'flag-name-' + flag.name"
                         v-tooltip.top="flagTooltip(flag)"
                       >
