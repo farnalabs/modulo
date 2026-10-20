@@ -1092,6 +1092,62 @@ def _coerce_event_token(value: Any) -> int | None:
     return coerce_reported_token(value)
 
 
+#: FAR-1994: a ``step_finish`` event's ``tokens`` keys that map to the producer
+#: ``token_usage`` shape unchanged, and its ``cache`` sub-object keys that map
+#: onto the ``cache_*`` producer keys.
+_STEP_FINISH_TOKEN_PAIRS: tuple[tuple[str, str], ...] = (
+    ("input", "input"),
+    ("output", "output"),
+    ("total", "total"),
+)
+_STEP_FINISH_CACHE_PAIRS: tuple[tuple[str, str], ...] = (("read", "cache_read"), ("write", "cache_write"))
+
+#: FAR-1994: every producer ``token_usage`` key the recovery can emit, in the
+#: canonical order. Only keys an event actually carried are returned.
+_RECOVERED_TOKEN_KEYS: tuple[str, ...] = ("input", "output", "total", "cache_read", "cache_write")
+
+
+def _parse_step_finish_tokens(line: str) -> dict[str, Any] | None:
+    """The ``tokens`` object of one opencode ``step_finish`` JSONL line, or ``None``.
+
+    Cheap pre-filter first: only a line that even mentions the event type can be
+    a candidate, so a 512KB blob of ordinary text is not JSON-parsed. Non-JSON
+    lines, non-dict payloads and other event types yield ``None``.
+    """
+    if _OPENCODE_STEP_FINISH_EVENT not in line:
+        return None
+    try:
+        event = json.loads(line)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(event, dict) or event.get("type") != _OPENCODE_STEP_FINISH_EVENT:
+        return None
+    tokens = event.get("tokens")
+    return tokens if isinstance(tokens, dict) else None
+
+
+def _accumulate_token_counters(
+    totals: dict[str, int],
+    seen: set[str],
+    source: dict[str, Any],
+    key_pairs: tuple[tuple[str, str], ...],
+) -> None:
+    """Add every plausible *source* counter into *totals*, recording *seen* keys."""
+    for source_key, producer_key in key_pairs:
+        coerced = _coerce_event_token(source.get(source_key))
+        if coerced is not None:
+            totals[producer_key] += coerced
+            seen.add(producer_key)
+
+
+def _seen_token_totals(totals: dict[str, int], seen: set[str]) -> dict[str, int]:
+    """Project *totals* onto the canonical key order, keeping only *seen* keys.
+
+    A key an event never carried must not masquerade as a reported zero.
+    """
+    return {key: totals[key] for key in _RECOVERED_TOKEN_KEYS if key in seen}
+
+
 def _recover_token_usage_from_raw_output(raw_output: str | None) -> dict[str, int]:
     """Sum opencode ``step_finish`` token counters from a retained raw stream.
 
@@ -1119,41 +1175,23 @@ def _recover_token_usage_from_raw_output(raw_output: str | None) -> dict[str, in
     """
     if not isinstance(raw_output, str) or not raw_output:
         return {}
-    totals: dict[str, int] = {"input": 0, "output": 0, "total": 0, "cache_read": 0, "cache_write": 0}
+    totals: dict[str, int] = dict.fromkeys(_RECOVERED_TOKEN_KEYS, 0)
     seen: set[str] = set()
     found_event = False
     for line in raw_output.splitlines():
-        # Cheap pre-filter: only a line that even mentions the event type can
-        # be a candidate, so a 512KB blob of ordinary text is not JSON-parsed.
-        if _OPENCODE_STEP_FINISH_EVENT not in line:
-            continue
-        try:
-            event = json.loads(line)
-        except (TypeError, ValueError):
-            continue
-        if not isinstance(event, dict) or event.get("type") != _OPENCODE_STEP_FINISH_EVENT:
-            continue
-        tokens = event.get("tokens")
-        if not isinstance(tokens, dict):
+        tokens = _parse_step_finish_tokens(line)
+        if tokens is None:
             continue
         found_event = True
-        for producer_key in ("input", "output", "total"):
-            coerced = _coerce_event_token(tokens.get(producer_key))
-            if coerced is not None:
-                totals[producer_key] += coerced
-                seen.add(producer_key)
+        _accumulate_token_counters(totals, seen, tokens, _STEP_FINISH_TOKEN_PAIRS)
         cache = tokens.get("cache")
         if isinstance(cache, dict):
-            for event_key, producer_key in (("read", "cache_read"), ("write", "cache_write")):
-                coerced = _coerce_event_token(cache.get(event_key))
-                if coerced is not None:
-                    totals[producer_key] += coerced
-                    seen.add(producer_key)
+            _accumulate_token_counters(totals, seen, cache, _STEP_FINISH_CACHE_PAIRS)
     if not found_event:
         return {}
     # Only emit a key an event actually carried — a missing ``total`` must not
     # masquerade as a reported zero.
-    return {key: totals[key] for key in ("input", "output", "total", "cache_read", "cache_write") if key in seen}
+    return _seen_token_totals(totals, seen)
 
 
 def _attach_recovered_token_usage(exc: BaseException, raw_output: str | None) -> None:

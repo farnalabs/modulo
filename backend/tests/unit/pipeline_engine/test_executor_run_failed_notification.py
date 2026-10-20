@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.pipeline_engine import error_codes as error_codes_module
 from modulo.core.pipeline_engine.error_codes import should_notify_terminal_failure
 from modulo.core.pipeline_engine.executor import PipelineExecutor
 
@@ -193,6 +194,108 @@ async def test_unknown_code_is_not_dispatched_and_does_not_raise() -> None:
     )
 
     notifier.dispatch_event.assert_not_awaited()
+
+
+def test_unresolvable_registry_entry_does_not_notify(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A canonical code with no registry entry is a silent no-notify, never a raise."""
+    monkeypatch.setattr(error_codes_module, "ERROR_CODE_REGISTRY", {})
+
+    assert not should_notify_terminal_failure("model.insufficient_funds")
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_pipeline_name_omits_the_payload_key() -> None:
+    """No pipeline name means the payload simply lacks ``pipeline_name``."""
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock()
+    executor = _executor_with_notifier(notifier)
+    executor._notification_pipeline_name = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+    await executor._dispatch_run_failed(
+        org_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        pipeline_id=uuid.uuid4(),
+        error_code="model.insufficient_funds",
+    )
+
+    payload = notifier.dispatch_event.await_args.kwargs["payload"]
+    assert "pipeline_name" not in payload
+    assert set(payload) == {"run_id", "error_code"}
+
+
+@pytest.mark.asyncio
+async def test_pipeline_name_lookup_without_a_session_factory_is_none() -> None:
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = None
+
+    name = await executor._notification_pipeline_name(
+        org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), run_id=uuid.uuid4()
+    )
+
+    assert name is None
+
+
+@pytest.mark.asyncio
+async def test_pipeline_name_lookup_reads_through_the_session() -> None:
+    """Success path: org + execution RLS set, then the shared name reader."""
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = _make_session_factory()  # type: ignore[assignment]
+    org_id = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()) as set_org,
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()) as set_exec,
+        patch(
+            "modulo.core.pipeline_engine.executor._safe_pipeline_name",
+            new=AsyncMock(return_value="Pipeline X"),
+        ) as read_name,
+    ):
+        name = await executor._notification_pipeline_name(org_id=org_id, pipeline_id=pipeline_id, run_id=uuid.uuid4())
+
+    assert name == "Pipeline X"
+    set_org.assert_awaited_once()
+    set_exec.assert_awaited_once()
+    read_name.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_name_lookup_failure_returns_none_and_logs() -> None:
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = _make_session_factory()  # type: ignore[assignment]
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch(
+            "modulo.core.pipeline_engine.executor._safe_pipeline_name",
+            new=AsyncMock(side_effect=RuntimeError("lookup boom")),
+        ),
+        patch("modulo.core.pipeline_engine.executor._log.warning") as warn,
+    ):
+        name = await executor._notification_pipeline_name(
+            org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), run_id=uuid.uuid4()
+        )
+
+    assert name is None
+    warn.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_name_lookup_cancellation_propagates() -> None:
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = _make_session_factory()  # type: ignore[assignment]
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch(
+            "modulo.core.pipeline_engine.executor._safe_pipeline_name",
+            new=AsyncMock(side_effect=asyncio.CancelledError()),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await executor._notification_pipeline_name(org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), run_id=uuid.uuid4())
 
 
 @pytest.mark.asyncio

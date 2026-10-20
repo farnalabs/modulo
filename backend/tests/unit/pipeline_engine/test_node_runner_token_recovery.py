@@ -19,6 +19,7 @@ from modulo.core.pipeline_engine.node_runner import (
     RECOVERED_TOKEN_USAGE_ATTR,
     RECOVERED_TOKEN_USAGE_PROVENANCE,
     SandboxNodeFailedError,
+    _attach_recovered_token_usage,
     _recover_token_usage_from_raw_output,
     merge_recovered_token_usage,
     recovered_reported_token_usage,
@@ -93,9 +94,63 @@ def test_malformed_and_partial_json_lines_are_skipped() -> None:
     assert usage == {"input": 12, "output": 8, "total": 20}
 
 
+def test_non_event_payloads_mentioning_step_finish_are_skipped() -> None:
+    """A JSON line that merely CONTAINS the event type is not an event.
+
+    The cheap substring pre-filter lets two non-events reach the JSON parse: a
+    payload that is not an object, and an object whose ``type`` is a different
+    (longer) event name. Neither may contribute counters.
+    """
+    raw = "\n".join(
+        [
+            json.dumps(["step_finish"]),  # valid JSON, not an object
+            json.dumps({"type": "step_finish_extra", "tokens": {"total": 999}}),  # wrong type
+            json.dumps(_step_finish(total=5, input_tokens=2, output_tokens=3)),
+        ]
+    )
+
+    usage = _recover_token_usage_from_raw_output(raw)
+
+    assert usage == {"input": 2, "output": 3, "total": 5}
+
+
+def test_invalid_cache_counter_is_skipped_without_dropping_its_sibling() -> None:
+    """An implausible cache counter is ignored; the valid sibling still sums."""
+    raw = json.dumps(
+        {
+            "type": "step_finish",
+            "tokens": {"total": 10, "input": 6, "output": 4, "cache": {"read": 3, "write": None}},
+        }
+    )
+
+    usage = _recover_token_usage_from_raw_output(raw)
+
+    assert usage == {"input": 6, "output": 4, "total": 10, "cache_read": 3}
+    assert "cache_write" not in usage
+
+
 def test_none_and_empty_input_are_fail_open() -> None:
     assert not _recover_token_usage_from_raw_output(None)
     assert not _recover_token_usage_from_raw_output("")
+
+
+def test_attach_sets_the_recovered_usage_on_the_exception() -> None:
+    """The raise-site hook carries the recovered shape on the exception."""
+    exc = SandboxNodeFailedError("no output", node_id="node-1")
+    raw = _blob([_step_finish(total=12, input_tokens=7, output_tokens=5)])
+
+    _attach_recovered_token_usage(exc, raw)
+
+    assert getattr(exc, RECOVERED_TOKEN_USAGE_ATTR) == {"input": 7, "output": 5, "total": 12}
+
+
+def test_attach_is_a_noop_without_a_step_finish_event() -> None:
+    """No recoverable event attaches NOTHING — the exception is untouched."""
+    exc = SandboxNodeFailedError("no output", node_id="node-1")
+
+    _attach_recovered_token_usage(exc, "\n".join([json.dumps({"type": "text", "part": {"text": "hi"}})]))
+
+    assert not hasattr(exc, RECOVERED_TOKEN_USAGE_ATTR)
 
 
 def test_large_blob_completes_quickly_and_sums_correctly() -> None:
