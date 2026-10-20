@@ -348,7 +348,7 @@ async def test_watchdog_drain_probe_routes_through_the_provider(fake_file_io) ->
 # ---------------------------------------------------------------------------
 
 
-async def test_build_file_io_provider_constructs_real_e2b_provider(
+def test_build_file_io_provider_constructs_real_e2b_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The real builder body runs the hub factory — no network, no injection.
@@ -360,22 +360,22 @@ async def test_build_file_io_provider_constructs_real_e2b_provider(
     from tests.unit._e2b_sandbox_bridge import original_seam
 
     monkeypatch.setattr(nr, "_build_log_tail_provider", original_seam("_build_log_tail_provider"))
-    provider = await _build_file_io_provider("test-key")
+    provider = _build_file_io_provider("test-key")
     assert isinstance(provider, E2BRuntimeProvider)
 
 
-async def test_build_file_io_provider_returns_none_when_hub_init_fails(
+def test_build_file_io_provider_returns_none_when_hub_init_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from modulo.core.runtime_provider.hub import RuntimeProviderHub
     from tests.unit._e2b_sandbox_bridge import original_seam
 
-    async def _boom(self: RuntimeProviderHub, config: dict[str, Any]) -> None:
+    def _boom(self: RuntimeProviderHub, config: dict[str, Any]) -> None:
         raise RuntimeError("hub exploded")
 
     monkeypatch.setattr(RuntimeProviderHub, "initialise", _boom)
     monkeypatch.setattr(nr, "_build_log_tail_provider", original_seam("_build_log_tail_provider"))
-    assert await _build_file_io_provider("test-key") is None
+    assert _build_file_io_provider("test-key") is None
 
 
 async def test_provider_resolution_fails_closed_without_a_sandbox_ref(fake_file_io) -> None:
@@ -392,12 +392,12 @@ async def test_provider_resolution_fails_closed_without_a_credential(
 ) -> None:
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
-    builder = AsyncMock(side_effect=AssertionError("must not build a provider without a key"))
+    builder = MagicMock(side_effect=AssertionError("must not build a provider without a key"))
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_file_io_provider", builder)
 
     with pytest.raises(RuntimeProviderError, match="E2B runtime provider"):
         await _file_io_provider_for("sbx-nokey")
-    builder.assert_not_awaited()
+    builder.assert_not_called()
 
 
 async def test_provider_resolution_fails_closed_when_the_builder_yields_nothing(
@@ -406,7 +406,7 @@ async def test_provider_resolution_fails_closed_when_the_builder_yields_nothing(
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_file_io_provider",
-        AsyncMock(return_value=None),
+        MagicMock(return_value=None),
     )
     with pytest.raises(RuntimeProviderError, match="E2B runtime provider"):
         await _file_io_provider_for("sbx-none")

@@ -157,6 +157,29 @@ def _deep_merge(current: Any, incoming: Any) -> Any:
     return incoming
 
 
+def _merge_list_item(merged_list: list[Any], idx: int, item: Any) -> None:
+    """Merge ONE incoming element into ``merged_list`` at ``idx`` in place.
+
+    A dict / list element at a position already holding the same kind is merged
+    recursively; otherwise it is appended. A masked echo is skipped (stored
+    value preserved); any other element replaces the stored one at its index,
+    or is appended when the incoming list is longer.
+    """
+    existing = merged_list[idx] if idx < len(merged_list) else None
+    if isinstance(item, dict) and isinstance(existing, dict):
+        merged_list[idx] = _deep_merge(existing, item)
+    elif isinstance(item, list) and isinstance(existing, list):
+        merged_list[idx] = _merge_list(existing, item)
+    elif isinstance(item, (dict, list)):
+        merged_list.append(item)
+    elif _is_masked_echo(item):
+        return
+    elif idx < len(merged_list):
+        merged_list[idx] = item
+    else:
+        merged_list.append(item)
+
+
 def _merge_list(current: Any, incoming: list[Any]) -> list[Any]:
     """Merge an incoming list into a stored list, skipping masked echoes.
 
@@ -182,22 +205,7 @@ def _merge_list(current: Any, incoming: list[Any]) -> list[Any]:
         return list(incoming)
     merged_list: list[Any] = list(current) if isinstance(current, list) else []
     for idx, item in enumerate(incoming):
-        if isinstance(item, dict):
-            if idx < len(merged_list) and isinstance(merged_list[idx], dict):
-                merged_list[idx] = _deep_merge(merged_list[idx], item)
-            else:
-                merged_list.append(item)
-        elif isinstance(item, list):
-            if idx < len(merged_list) and isinstance(merged_list[idx], list):
-                merged_list[idx] = _merge_list(merged_list[idx], item)
-            else:
-                merged_list.append(item)
-        elif _is_masked_echo(item):
-            continue
-        elif idx < len(merged_list):
-            merged_list[idx] = item
-        else:
-            merged_list.append(item)
+        _merge_list_item(merged_list, idx, item)
     return merged_list
 
 
@@ -246,6 +254,77 @@ class RevealResponse(BaseModel):
     expires_in_seconds: int = 30
 
 
+async def _fetch_connector_value(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    resource_uuid: uuid.UUID,
+    field: str | None,
+) -> str:
+    """Reveal a connector's config field (or whole config) for its own org."""
+    from modulo.db.models.connector_instance import ConnectorInstance
+
+    connector_result = await session.execute(
+        select(ConnectorInstance).where(
+            ConnectorInstance.id == resource_uuid,
+            ConnectorInstance.organisation_id == principal.organisation_id,
+        )
+    )
+    ci = connector_result.scalar_one_or_none()
+    if ci is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+    raw = ci.config_json.get(field, "") if field else json.dumps(ci.config_json)
+    return raw if isinstance(raw, str) else json.dumps(raw)
+
+
+async def _fetch_sso_provider_value(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    resource_uuid: uuid.UUID,
+    settings: Settings,
+) -> str:
+    """Decrypt and reveal an SSO provider's stored client secret for its org."""
+    provider_result = await session.execute(
+        select(SsoProvider).where(
+            SsoProvider.id == resource_uuid,
+            SsoProvider.organisation_id == principal.organisation_id,
+        )
+    )
+    provider = provider_result.scalar_one_or_none()
+    if provider is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SSO provider not found")
+    if provider.client_secret is None:
+        return ""
+    try:
+        return await decode_stored_secret_scoped(
+            session, provider.client_secret, settings.fernet_key, org_id=principal.organisation_id
+        )
+    except SecretStorageError:
+        _log.exception("middleware.sensitive_mask.invalid_sso_secret")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Stored SSO provider secret is invalid",
+        ) from None
+
+
+async def _fetch_observability_value(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    field: str | None,
+) -> str:
+    """Reveal the current org's observability (OTel) config field or whole config."""
+    from modulo.db.models.organisation import Organisation
+
+    config_result = await session.execute(
+        select(Organisation.otel_config_json).where(Organisation.id == principal.organisation_id)
+    )
+    row = config_result.scalar_one_or_none()
+    config: dict[str, Any] = row or {}
+    if field:
+        value = config.get(field, "")
+        return value if isinstance(value, str) else json.dumps(value)
+    return json.dumps(config)
+
+
 async def _fetch_value(
     payload: RevealRequest,
     session: AsyncSession,
@@ -267,55 +346,11 @@ async def _fetch_value(
         ) from exc
 
     if payload.resource_type == "connector":
-        from modulo.db.models.connector_instance import ConnectorInstance
-
-        connector_result = await session.execute(
-            select(ConnectorInstance).where(
-                ConnectorInstance.id == resource_uuid,
-                ConnectorInstance.organisation_id == principal.organisation_id,
-            )
-        )
-        ci = connector_result.scalar_one_or_none()
-        if ci is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
-        raw = ci.config_json.get(field, "") if field else json.dumps(ci.config_json)
-        return raw if isinstance(raw, str) else json.dumps(raw)
-
+        return await _fetch_connector_value(session, principal, resource_uuid, field)
     if payload.resource_type == "sso_provider":
-        provider_result = await session.execute(
-            select(SsoProvider).where(
-                SsoProvider.id == resource_uuid,
-                SsoProvider.organisation_id == principal.organisation_id,
-            )
-        )
-        provider = provider_result.scalar_one_or_none()
-        if provider is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SSO provider not found")
-        if provider.client_secret is None:
-            return ""
-        try:
-            return await decode_stored_secret_scoped(
-                session, provider.client_secret, settings.fernet_key, org_id=principal.organisation_id
-            )
-        except SecretStorageError:
-            _log.exception("middleware.sensitive_mask.invalid_sso_secret")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Stored SSO provider secret is invalid",
-            ) from None
-
+        return await _fetch_sso_provider_value(session, principal, resource_uuid, settings)
     if payload.resource_type == "observability":
-        from modulo.db.models.organisation import Organisation
-
-        config_result = await session.execute(
-            select(Organisation.otel_config_json).where(Organisation.id == principal.organisation_id)
-        )
-        row = config_result.scalar_one_or_none()
-        config: dict[str, Any] = row or {}
-        if field:
-            value = config.get(field, "")
-            return value if isinstance(value, str) else json.dumps(value)
-        return json.dumps(config)
+        return await _fetch_observability_value(session, principal, field)
 
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
@@ -378,6 +413,49 @@ async def reveal_sensitive_value(
 _GRAPH_NODE_SECRET_FIELDS: tuple[str, ...] = GRAPH_NODE_SECRET_FIELDS
 
 
+def _mask_env_vars(env: dict[str, Any]) -> dict[str, Any]:
+    """Mask one node's ``env_vars``: whole-value for sensitive keys, else value-scan."""
+    return {
+        key: (mask_sensitive_value(value) if is_sensitive_env_key(key) else mask_secret_values_in_text(value))
+        if isinstance(value, str)
+        else value
+        for key, value in env.items()
+    }
+
+
+def _mask_context_files(contexts: dict[str, Any]) -> dict[str, Any]:
+    """Value-scan one node's ``context_files`` entries for embedded secrets."""
+    return {
+        key: mask_secret_values_in_text(value) if isinstance(value, str) else value for key, value in contexts.items()
+    }
+
+
+def _masked_node_fields(node: dict[str, Any]) -> dict[str, Any]:
+    """Build the masked copy of *node* (raises only if a shipped masker raises)."""
+    masked = dict(node)
+    env = node.get("env_vars")
+    if isinstance(env, dict):
+        masked["env_vars"] = _mask_env_vars(env)
+    contexts = node.get("context_files")
+    if isinstance(contexts, dict):
+        masked["context_files"] = _mask_context_files(contexts)
+    for field in ("composite_parameter_values", "parameter_overrides"):
+        values = node.get(field)
+        if isinstance(values, dict):
+            masked[field] = mask_config_json(values)
+    return masked
+
+
+def _scrub_node_secrets(node: dict[str, Any]) -> dict[str, Any]:
+    """Fail-closed wholesale scrub of every credential-bearing node field."""
+    scrubbed = dict(node)
+    for field in _GRAPH_NODE_SECRET_FIELDS:
+        values = node.get(field)
+        if isinstance(values, dict):
+            scrubbed[field] = {key: SENSITIVE_VALUE_MASK for key, value in values.items() if isinstance(key, str)}
+    return scrubbed
+
+
 def mask_pipeline_graph_node(node: dict[str, Any]) -> dict[str, Any]:
     """Mask credential-bearing fields on a pipeline graph node dict (FAR-1181).
 
@@ -398,34 +476,10 @@ def mask_pipeline_graph_node(node: dict[str, Any]) -> dict[str, Any]:
     rather than returned raw.
     """
     try:
-        masked = dict(node)
-        env = node.get("env_vars")
-        if isinstance(env, dict):
-            masked["env_vars"] = {
-                key: (mask_sensitive_value(value) if is_sensitive_env_key(key) else mask_secret_values_in_text(value))
-                if isinstance(value, str)
-                else value
-                for key, value in env.items()
-            }
-        contexts = node.get("context_files")
-        if isinstance(contexts, dict):
-            masked["context_files"] = {
-                key: mask_secret_values_in_text(value) if isinstance(value, str) else value
-                for key, value in contexts.items()
-            }
-        for field in ("composite_parameter_values", "parameter_overrides"):
-            values = node.get(field)
-            if isinstance(values, dict):
-                masked[field] = mask_config_json(values)
-        return masked
+        return _masked_node_fields(node)
     except Exception:
         _log.exception("pipeline_graph_node_masking_failed: fail-closed scrub")
-        scrubbed = dict(node)
-        for field in _GRAPH_NODE_SECRET_FIELDS:
-            values = node.get(field)
-            if isinstance(values, dict):
-                scrubbed[field] = {key: SENSITIVE_VALUE_MASK for key, value in values.items() if isinstance(key, str)}
-        return scrubbed
+        return _scrub_node_secrets(node)
 
 
 def _scrub_fail_closed(incoming_field: dict[str, Any], stored_field: dict[str, Any]) -> dict[str, Any]:

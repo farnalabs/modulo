@@ -65,7 +65,7 @@ const validFixes = computed<RenderableKnownFix[]>(() => {
         :href="fix.link"
         target="_blank"
         rel="noopener noreferrer"
-        class="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+        class="inline-flex items-center gap-1 text-xs font-medium text-primary-text hover:underline"
       >
         {{ $t('views.RunDetailView.known_fix_reference') }}
       </a>

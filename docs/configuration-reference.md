@@ -38,11 +38,11 @@ matrix.
 Controls a 98% hard-stop that refuses new runs when database capacity is nearly full.
 
 Capacity is **auto-detected by default**; there is normally nothing to configure. The
-monitor resolves a capacity figure from the first available source and compares it with
-that source's usage numerator: the measured database size (`pg_database_size`) for
-`env`, or the mounted volume's used space (`total - free`) for `filesystem`. The
-hard-stop applies in `DB_CAPACITY_MODE=fixed` only (the default), refusing to create
-new runs once usage reaches `DB_CAPACITY_HARD_STOP_PCT`.
+monitor resolves a capacity figure from the first available source and compares
+it with that source's usage numerator: the measured database size (`pg_database_size`) for
+`env` and `platform`, or the mounted volume's used space (`total - free`) for
+`filesystem`. The hard-stop applies in `DB_CAPACITY_MODE=fixed` only (the default),
+refusing to create new runs once usage reaches `DB_CAPACITY_HARD_STOP_PCT`.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -52,6 +52,10 @@ new runs once usage reaches `DB_CAPACITY_HARD_STOP_PCT`.
 | `DB_CAPACITY_BYTES` | No | `None` | Explicit capacity in bytes. An **override**, not a requirement - see below |
 | `DB_CAPACITY_BYPASS` | No | `false` | Operator bypass for the 98% hard-stop (e.g. deliberate migrations) |
 | `DB_CAPACITY_HARD_STOP_PCT` | No | `98.0` | Percent of capacity at/above which new runs are refused (mode=fixed only) |
+| `DB_CAPACITY_PLATFORM_PROVIDER` | No | `auto` | Provider capacity probe for an unmountable DB volume: `auto`/`fly`, or `none` to disable |
+| `DB_CAPACITY_FLY_APP` | For the Fly probe | - | Fly **app** whose volume holds the Postgres data directory (e.g. `modulo-app-db`) |
+| `DB_CAPACITY_FLY_VOLUME` | No | - | Fly volume name (or id) to read; empty means the app's single volume |
+| `DB_CAPACITY_FLY_API_TOKEN` | For the Fly probe | - | Fly API token (read access to that app's volumes). Set as a secret, never inline |
 
 #### How capacity is detected
 
@@ -59,7 +63,7 @@ new runs once usage reaches `DB_CAPACITY_HARD_STOP_PCT`.
 
 | Value | Behaviour |
 |-------|-----------|
-| `auto` (default) | Tries `env`, then `filesystem`; uses the first source that resolves |
+| `auto` (default) | Tries `env`, then `filesystem`, then `platform`; uses the first source that resolves |
 | `env` | Uses `DB_CAPACITY_BYTES` only. The pre-auto-detection behaviour, kept as an escape hatch |
 | `filesystem` | Measures the filesystem at `DB_CAPACITY_PATH` only |
 | `disabled` | Resolves nothing at all, even when `DB_CAPACITY_BYTES` is set |
@@ -74,14 +78,52 @@ An unrecognised value falls back to `auto`.
   workers that create runs (cron and polling triggers). If the path is missing or
   unreadable the source resolves nothing - the monitor never judges capacity from a
   filesystem it cannot actually see.
+- **`platform`** is the last auto source: it asks the hosting provider's API for the
+  capacity of the volume that holds the database, and pairs it with the measured
+  database size as the numerator. It exists for deployments where the database volume
+  is **not mountable** into the app - on Fly the application and the Postgres machine
+  are separate apps, so a `filesystem` probe can never see the volume. It is reported
+  as `source: "platform"`, so an operator can always tell which mechanism produced the
+  number.
+
+##### The provider/platform probe
+
+The probe is optional and provider-agnostic: it is injected into the DB layer at
+startup, so enabling or adding a provider never changes the DB layer and never
+weakens the `db → core` import contract. It is only consulted in the `auto` chain
+(after `filesystem`) and is reported as `source: "platform"`.
+
+Today one provider is implemented - **Fly** (the Machines API volumes endpoint,
+`GET /v1/apps/{app}/volumes`):
+
+- `DB_CAPACITY_PLATFORM_PROVIDER` selects the probe. `auto` (the default) builds it
+  when its config is complete and is a no-op otherwise; `fly` is the same, stated
+  explicitly; `none` disables it. An unrecognised value disables it (with a warning)
+  rather than guessing a provider.
+- `DB_CAPACITY_FLY_APP` (required) names the **Fly app whose volume holds the Postgres
+  data directory** - not the app serving the UI. `DB_CAPACITY_FLY_VOLUME` is optional;
+  leave it empty when that app has a single volume.
+- `DB_CAPACITY_FLY_API_TOKEN` (required) is a Fly token with read access to that app's
+  volumes.
+
+With the Fly probe configured, a Fly deployment reports `source: "platform"` and a real
+`capacity_percent` with **no** `DB_CAPACITY_BYTES`. The capacity is the volume's
+**configured size**; the numerator is `pg_database_size`, because the volumes API
+reports capacity, not consumption - so WAL, temp files and other databases on the
+volume are not counted. It is therefore a late signal (like `env`), while `filesystem`
+remains the accurate one wherever the volume *is* mountable.
+
+The probe fails **open**: missing credentials/config, an ambiguous volume selection
+(zero or multiple volumes and no selector), an HTTP error or a malformed body all
+resolve nothing, so the chain falls through to `none` and the hard-stop stays inert.
+It never guesses a volume.
 
 **An auto-detected candidate is rejected when it is physically impossible.** A volume
 whose total is *smaller than the database it holds* cannot exist, so the `filesystem`
-reading is the wrong volume: the monitor discards it and logs a warning. `filesystem`
-is last in the `auto` order (`env`, then `filesystem`) and is the sole candidate when
-selected explicitly, so a discarded reading has no next source to fall through to - it
-resolves nothing (`source: "none"`) and the hard-stop goes inert. This is an
-impossibility test, not a margin, so a small-but-valid
+or `platform` reading is the wrong volume: the monitor discards it and logs a warning.
+The `auto` order is `env`, `filesystem`, `platform`; a discarded candidate falls
+through to the next one, and if none resolves the monitor reports `source: "none"` and
+the hard-stop goes inert. This is an impossibility test, not a margin, so a small-but-valid
 volume whose total is genuinely just above the database size still resolves and still
 arms the hard-stop. The check is scoped to **auto-detected** sources only - an explicit
 `DB_CAPACITY_BYTES` (`env`) is the operator asserting the capacity and is never
@@ -92,20 +134,21 @@ second-guessed, so a deliberately-small override still enforces.
 Detection failure never **raises** - every failure fails open - but it does not always
 leave the monitor inert, because the two failure kinds differ:
 
-- **No source resolved, or the filesystem probe itself fails** - `capacity_percent:
-  null`, `source: "none"`, alert level `ok`, hard-stop inert.
+- **No source resolved, or the filesystem/platform probe itself fails or is
+  unconfigured** - `capacity_percent: null`, `source: "none"`, alert level `ok`,
+  hard-stop inert.
 - **A `pg_database_size` query failure** - the resolved source still resolves. For `env`
-  the capacity comes from `DB_CAPACITY_BYTES` with the numerator unknown, so the status
-  reads `source: "env"` and `capacity_percent: null`, and the hard-stop is inert. For
-  `filesystem` the numerator is the mount's own `total - free`, which does not depend on
-  the database, so the percent and alert level stay real and the hard-stop **stays
+  and `platform` the capacity is known with the numerator unknown, so the status reads
+  `source: "env"`/`"platform"` and `capacity_percent: null`, and the hard-stop is inert.
+  For `filesystem` the numerator is the mount's own `total - free`, which does not depend
+  on the database, so the percent and alert level stay real and the hard-stop **stays
   armed**.
 
 On the default self-hosted Compose deployment `filesystem` is the source that resolves,
 so a database blip on a near-full volume does not disarm the gate - new runs can still
 be refused. Detection is a safety advisory, and it fails open. The resolved source is
 reported by `GET /api/v1/admin/db-capacity` so an operator can see which mechanism is
-active (`env`, `filesystem`, or `none`).
+active (`env`, `filesystem`, `platform`, or `none`).
 
 `DB_CAPACITY_BYTES` is therefore optional everywhere: set it to pin capacity explicitly
 (pair it with `DB_CAPACITY_SOURCE=env` to pin it exclusively), or leave it unset and let

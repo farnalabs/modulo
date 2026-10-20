@@ -65,7 +65,7 @@
           </span>
           <span
             v-else
-            class="text-xs text-primary italic"
+            class="text-xs text-primary-text italic"
           >
             {{ $t('components.assistant.AssistantContextSources.overridden') }}
           </span>

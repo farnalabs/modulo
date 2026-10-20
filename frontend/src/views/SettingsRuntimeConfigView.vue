@@ -69,7 +69,7 @@
                   <code class="text-sm font-mono">********</code>
                   <button
                     type="button"
-                    class="text-xs text-primary hover:underline"
+                    class="text-xs text-primary-text hover:underline"
                     @click="revealKey(entry.key)"
                   >
                     {{ $t('views.SettingsRuntimeConfigView.reveal') }}
@@ -97,7 +97,7 @@
                   <code class="text-sm font-mono text-muted-foreground">********</code>
                   <button
                     type="button"
-                    class="text-xs text-primary hover:underline"
+                    class="text-xs text-primary-text hover:underline"
                     @click="revealKey(entry.key)"
                   >
                     {{ $t('views.SettingsRuntimeConfigView.reveal') }}
@@ -115,7 +115,7 @@
                   <code class="text-sm text-muted-foreground">********</code>
                   <button
                     type="button"
-                    class="text-xs text-primary hover:underline"
+                    class="text-xs text-primary-text hover:underline"
                     @click="revealKey(entry.key)"
                   >
                     {{ $t('views.SettingsRuntimeConfigView.reveal') }}
@@ -137,7 +137,7 @@
               <button
                 type="button"
                 v-if="isEdited(entry.key)"
-                class="text-sm text-primary hover:underline"
+                class="text-sm text-primary-text hover:underline"
                 data-testid="settings-runtime-config-apply"
                 :disabled="saving"
                 @click="applyOverride(entry.key)"
@@ -163,7 +163,7 @@
     <!-- Save action error: no refetch loader; the Save button is the retry
          path. -->
     <ErrorAlert v-if="formError" :message="formError" :retryable="false" />
-    <div v-if="formSuccess" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success">
+    <div v-if="formSuccess" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success-text">
       {{ formSuccess }}
     </div>
     </FeatureGate>

@@ -172,7 +172,12 @@ def test_self_reported_entry_shape() -> None:
     assert entry["formula_applied"] == "reported"
     assert entry["amount_usd"] == "0.040000"
     assert entry["missing_self_report"] is False
-    assert total == Decimal("0.040000")
+    # FAR-1780: a self_reported entry renders with ``provenance: reported``
+    # and ``billable: False`` and contributes ZERO to the total — the
+    # agent's declared cost is display-only (never summed money).
+    assert entry["provenance"] == "reported"
+    assert entry["billable"] is False
+    assert total == Decimal(0)
 
 
 def test_missing_self_report_when_no_report_for_key() -> None:
@@ -191,6 +196,12 @@ def test_missing_self_report_when_no_report_for_key() -> None:
     breakdown, total = build_cost_breakdown(tele, [comp])
     assert breakdown[0]["missing_self_report"] is True
     assert total == Decimal(0)
+    # The missing-report marker carries NO ``provenance: reported`` stamp:
+    # the stamp attests a report the agent ACTUALLY made, and no genuine
+    # report exists on a missing gate. The marker does stay non-billable
+    # (it can never bill).
+    assert "provenance" not in breakdown[0]
+    assert breakdown[0]["billable"] is False
 
 
 def test_clamp_reported_rejects_invalid() -> None:

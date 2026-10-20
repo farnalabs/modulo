@@ -250,6 +250,17 @@ def _start_detached(data_dir: Path, bin_dir: Path | None, *, clear_degraded: boo
         sys.stderr.flush()
         os.close(write_fd)
         return 1
+    except BaseException as exc:
+        # SystemExit/KeyboardInterrupt must still propagate (S5754), but the
+        # detached child should leave the operator a diagnostic first: write the
+        # handshake line and the launcher-log line, then re-raise unchanged.
+        message = f"failed: {exc}".encode()
+        with contextlib.suppress(OSError):
+            os.write(write_fd, message)
+        sys.stderr.write(f"detached boot failed: {exc}\n")
+        sys.stderr.flush()
+        os.close(write_fd)
+        raise
     os.close(write_fd)
     return code
 

@@ -9,15 +9,18 @@ name: "Release: Cut / Recut / Promote"
 #   release - promote vX.Y.Z GA at the validated RC commit and lift the freeze (requires a successful rc-validate run recorded as validated/<rc>)
 #   dry-run - rehearse the whole release: build every artefact, publish NOTHING
 #
-# Dry-run (FAR-1867): the "publishes nothing" guarantee is STRUCTURAL, not a
-# prose promise. A dry-run pushes no tag of any kind - not `v*`, not
-# `release-freeze`, not `validated/*` (a single `v*` push would itself fire
-# publish-images.yml and push container images) - performs no registry push, and
-# creates no GitHub Release, CHANGELOG commit, PyPI package, Helm OCI tag,
-# attestation or deploy. It is therefore safe to run during an active freeze.
-# Any publish-shaped job added below MUST be gated with
-# `if: inputs.action != 'dry-run'`, which is what keeps that property true as the
-# workflow grows. See docs/release-process.md.
+# Dry-run (FAR-1867, extended by FAR-1868): the "publishes nothing" guarantee is
+# STRUCTURAL, not a prose promise. A dry-run pushes no tag of any kind - not
+# `v*`, not `release-freeze`, not `validated/*` (a single `v*` push would itself
+# fire publish-images.yml and push container images) - performs no registry push,
+# and creates no GitHub Release, CHANGELOG commit, PyPI package, Helm OCI tag,
+# attestation or deploy. It DOES build and upload an SBOM as a workflow
+# ARTEFACT (the `produce-sbom` job, which runs for every action): generating a
+# file inside the run is not publishing - the artefact never leaves the run,
+# reaches no registry or release, and creates no attestation. It is therefore
+# safe to run during an active freeze. Any publish-shaped job added below MUST
+# be gated with `if: inputs.action != 'dry-run'`, which is what keeps that
+# property true as the workflow grows. See docs/release-process.md.
 #
 # platforms: v1 ships the container images for linux/amd64 ONLY. That is what
 #   publish-images.yml actually builds and pushes today, and it is asserted here
@@ -408,7 +411,165 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
   # ===========================================================================
-  # Deliberate stubs for the later release slices (FAR-1868 .. FAR-1872).
+  # SBOM production (FAR-1868, release slice 4)
+  #
+  # Runs for EVERY action, dry-run included: a dry-run must prove the SBOM
+  # builds. Generating the file and uploading it as a workflow ARTEFACT is not a
+  # publish - the artefact stays inside the run, reaches no registry and no
+  # release, and creates no attestation (see the header guarantee above).
+  # ===========================================================================
+  produce-sbom:
+    name: Produce CycloneDX SBOM
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The SBOM must describe the release source, not whichever ref the
+          # dispatch happened to target (the `release` job promotes main's HEAD).
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+
+      # `--with pyyaml` installs PyYAML into the ephemeral environment and
+      # pins the run to the Python 3.12 above (UV_PYTHON), so it does not
+      # depend on an unversioned `python` existing on the runner's PATH.
+      - name: Generate the CycloneDX SBOM
+        run: uv run --no-project --with pyyaml python backend/scripts/generate-sbom.py --output sbom.json
+
+      # Exiting 0 only proves the script ran. Assert the FILE is a usable
+      # CycloneDX document, so an empty/degenerate SBOM cannot ship green.
+      - name: Verify the SBOM is valid CycloneDX
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-project python - <<'PY'
+          import json
+          import sys
+
+          with open("sbom.json", encoding="utf-8") as handle:
+              bom = json.load(handle)
+
+          if bom.get("bomFormat") != "CycloneDX":
+              sys.exit(f"sbom.json is not CycloneDX: bomFormat={bom.get('bomFormat')!r}")
+          components = bom.get("components") or []
+          if not components:
+              sys.exit("sbom.json has no components - an SBOM with no dependencies is not a release artefact")
+          print(f"Valid CycloneDX SBOM: specVersion={bom.get('specVersion')} components={len(components)}")
+          PY
+
+      - name: Upload the SBOM artefact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-cyclonedx
+          path: sbom.json
+          if-no-files-found: error
+          retention-days: 30
+
+  # ===========================================================================
+  # Build provenance attestations (FAR-1868, release slice 4)
+  #
+  # This is the PRODUCER for the fail-closed `gh attestation verify` gate in
+  # native-release-smoke.yml. Attestations are publish-shaped (they are uploaded
+  # to the repo's attestations API), so the job is gated off for dry-run.
+  #
+  # Subjects attested here are the released FILE artefacts. Today that is the
+  # SBOM, which `produce-sbom` generates for every action. The release bundle's
+  # file artefacts - the tarball, `SHA256SUMS` and `RELEASE_MANIFEST.json` - are
+  # produced by `publish-release-bundle`, still a FAR-1869 stub; when that job
+  # becomes real it stages them into `release-artefacts/` and the SAME glob
+  # attests them with no per-file step. Nothing here fabricates a subject for a
+  # file that was not produced: the SBOM is a hard requirement (this job `needs`
+  # the producer), and a partially-staged bundle fails rather than being
+  # attested as if complete.
+  #
+  # Container images are NOT attested here: their publish path
+  # (`publish-images`) is also a FAR-1869 stub, so no registry digest exists
+  # yet. Attesting an image requires that digest - inventing one is forbidden -
+  # so the image attestation is a named gap owned by FAR-1869, recorded in the
+  # job summary below.
+  # ===========================================================================
+  attest-artefacts:
+    name: Attest released artefacts
+    needs: produce-sbom
+    if: inputs.action != 'dry-run'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # actions/attest-build-provenance signs with the workflow's OIDC identity
+      # and uploads to the repo's attestations API.
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the SBOM artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sbom-cyclonedx
+          path: release-artefacts
+
+      - name: Check the file-artefact subject set
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The SBOM is produced for every action by `produce-sbom`, which this
+          # job `needs`. A missing SBOM is a hard failure - never a silently
+          # skipped attestation.
+          if [ ! -f release-artefacts/sbom.json ]; then
+            echo "::error::sbom.json is missing from the sbom-cyclonedx artefact - refusing to attest a subject that was not produced"
+            exit 1
+          fi
+
+          # The release-bundle file artefacts are staged here by
+          # `publish-release-bundle` (FAR-1869). While that job is a stub they
+          # do not exist; once it lands, a bundle that is only PARTIALLY staged
+          # must never be attested as if it were complete.
+          shopt -s nullglob
+          tarballs=(release-artefacts/modulo-*.tar.gz)
+          sums=(release-artefacts/SHA256SUMS)
+          manifests=(release-artefacts/RELEASE_MANIFEST.json)
+
+          present=0
+          if [ "${#tarballs[@]}" -gt 0 ]; then present=$((present + 1)); fi
+          if [ "${#sums[@]}" -gt 0 ]; then present=$((present + 1)); fi
+          if [ "${#manifests[@]}" -gt 0 ]; then present=$((present + 1)); fi
+
+          if [ "$present" -ne 0 ] && [ "$present" -ne 3 ]; then
+            echo "::error::partial release bundle staged for attestation (${present}/3 artefact sets) - refusing to attest an incomplete bundle"
+            exit 1
+          fi
+          if [ "$present" -eq 0 ]; then
+            echo "::notice::release-bundle file artefacts are not produced yet (publish-release-bundle is a FAR-1869 stub) - this run attests the SBOM only."
+          fi
+
+      - name: Attest the file artefacts
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          # One glob over the staged directory: the SBOM today, plus the
+          # tarball/SHA256SUMS/manifest once FAR-1869 stages them. The action
+          # hard-fails if no subject matches, so this cannot pass vacuously.
+          subject-path: release-artefacts/*
+
+      - name: Record the artefact sets this job does not attest
+        shell: bash
+        run: |
+          {
+            echo "## Build attestations"
+            echo ""
+            echo "| Artefact set | Status |"
+            echo "|---|---|"
+            echo "| File artefacts (the SBOM today; the bundle tarball / SHA256SUMS / RELEASE_MANIFEST.json once FAR-1869 produces them) | Attested in this job |"
+            echo "| Container images (all-in-one, backend, frontend, runner) | **Not attested - no image digest exists yet.** Publishing is a stub owned by FAR-1869; an image attestation needs its registry digest, and no digest is invented here. |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # Deliberate stubs for the later release slices (FAR-1869 .. FAR-1872).
   #
   # Each is a named, visible no-op: the slot exists so the release path is
   # legible end-to-end, and it can never run, so it can never be mistaken for
@@ -449,21 +610,6 @@ jobs:
           echo "STUB (FAR-1869, release slice 5): build, sign and attest the native release bundle"
           echo "from scripts/bundle-versions.env, push bundle-v*, create the GitHub Release with its"
           echo "assets, and push the Helm chart to OCI. Owned by FAR-1869."
-
-  # FAR-1868 (release slice 4) - attestation and SBOM production.
-  produce-sbom-and-attestations:
-    name: "STUB FAR-1868 - SBOM and build attestations"
-    if: inputs.action == 'never'
-    runs-on: ubicloud-standard-2
-    permissions:
-      contents: read
-    steps:
-      - name: Not implemented yet
-        run: |
-          echo "STUB (FAR-1868, release slice 4): produce a build attestation for every published"
-          echo "artefact and a SBOM via backend/scripts/generate-sbom.py. Owned by FAR-1868 - note"
-          echo "that native-release-smoke.yml already runs 'gh attestation verify', which has no"
-          echo "producer on the release path until this job lands."
 
   # FAR-1870 (release slice 6) - the deterministic RC soak.
   dispatch-rc-soak:

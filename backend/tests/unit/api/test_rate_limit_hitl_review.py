@@ -221,7 +221,7 @@ class TestHitlReviewRateLimit:
 
         assert resp.status_code == status.HTTP_200_OK
         mock_registry.check.assert_awaited_once()
-        max_requests = mock_registry.check.await_args.kwargs["max_requests"]
+        max_requests = mock_registry.check.await_args.args[1]
         assert max_requests == 20
 
     def test_hitl_get_not_rate_limited(self) -> None:

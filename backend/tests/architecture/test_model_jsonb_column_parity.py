@@ -159,6 +159,18 @@ _DROPPED_0147_PAIRS: dict[tuple[str, str], str] = {
     ("workspace_leases", "output_artifact_refs_json"): "0179_drop_workspace_leases",
 }
 
+#: A TRANSITIONAL state between "mapped" and "dropped": the ORM entity is gone
+#: but the physical table still exists until a later slice drops it, so there is
+#: no ORM declaration left to check. Every such pair must be named here with
+#: the change that removed the model; the parity test asserts the table really
+#: is absent from ``Base.metadata`` so the entry cannot go stale while a model
+#: still exists.
+_NO_ORM_MODEL_0147_PAIRS: dict[tuple[str, str], str] = {
+    # FAR-1961 (chunk 13 slice 1) deleted the legacy EvalDefinition entity; the
+    # table is dropped by a later chunk-13 slice, not here.
+    ("eval_definitions", "config_json"): "FAR-1961",
+}
+
 
 def _load_migration() -> ModuleType:
     assert _MIGRATION_PATH.exists(), f"Migration file missing: {_MIGRATION_PATH}"
@@ -417,6 +429,14 @@ def test_0147_pairs_that_still_resolve_are_jsonb_on_postgres() -> None:
                 )
             continue
 
+        if pair in _NO_ORM_MODEL_0147_PAIRS:
+            if table_name in Base.metadata.tables:
+                violations.append(
+                    f"{table_name}.{column_name}: recorded in _NO_ORM_MODEL_0147_PAIRS by "
+                    f"{_NO_ORM_MODEL_0147_PAIRS[pair]} but the table is mapped again in Base.metadata"
+                )
+            continue
+
         resolved_table, resolved_column = _resolved_pair(pair)
         table = Base.metadata.tables.get(resolved_table)
         if table is None:
@@ -450,12 +470,12 @@ def test_0147_pairs_that_still_resolve_are_jsonb_on_postgres() -> None:
 def test_0147_pair_resolution_is_complete_and_justified() -> None:
     """Every absent 0147 pair is justified, and no justification is stale."""
     pairs = set(_load_migration()._JSON_TO_JSONB)
-    justified = set(_RENAMED_0147_PAIRS) | set(_DROPPED_0147_PAIRS)
+    justified = set(_RENAMED_0147_PAIRS) | set(_DROPPED_0147_PAIRS) | set(_NO_ORM_MODEL_0147_PAIRS)
 
     stale = sorted(justified - pairs)
     assert not stale, (
-        "_RENAMED_0147_PAIRS/_DROPPED_0147_PAIRS name pairs 0147 does not convert "
-        f"(a stale exception would hide whatever it still claims): {stale}"
+        "_RENAMED_0147_PAIRS/_DROPPED_0147_PAIRS/_NO_ORM_MODEL_0147_PAIRS name pairs 0147 "
+        f"does not convert (a stale exception would hide whatever it still claims): {stale}"
     )
 
     unmapped_absent = sorted(
@@ -463,7 +483,7 @@ def test_0147_pair_resolution_is_complete_and_justified() -> None:
     )
     assert not unmapped_absent, (
         "0147 pairs whose table is absent from Base.metadata and are not justified in "
-        f"_RENAMED_0147_PAIRS/_DROPPED_0147_PAIRS: {unmapped_absent}"
+        f"_RENAMED_0147_PAIRS/_DROPPED_0147_PAIRS/_NO_ORM_MODEL_0147_PAIRS: {unmapped_absent}"
     )
 
     for renamed_from, destination in _RENAMED_0147_PAIRS.items():

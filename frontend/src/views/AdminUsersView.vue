@@ -72,7 +72,7 @@
 </Select>
             </td>
             <td class="table-cell">
-              <span v-if="u.is_active" class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success">
+              <span v-if="u.is_active" class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success-text">
                 <span class="h-1.5 w-1.5 rounded-full bg-success" aria-hidden="true" />
                 {{ $t('views.AdminUsersView.active') }}
               </span>
@@ -185,7 +185,7 @@
       </div>
     </section>
 
-    <div v-if="flashMessage" :class="['rounded-lg border px-4 py-3 text-sm', flashMessage.type === 'success' ? 'border-success/50 bg-success/10 text-success' : 'border-destructive/50 bg-destructive/10 text-destructive-text']">
+    <div v-if="flashMessage" :class="['rounded-lg border px-4 py-3 text-sm', flashMessage.type === 'success' ? 'border-success/50 bg-success/10 text-success-text' : 'border-destructive/50 bg-destructive/10 text-destructive-text']">
       {{ flashMessage.text }}
     </div>
 

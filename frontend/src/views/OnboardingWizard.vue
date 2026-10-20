@@ -27,14 +27,14 @@
       <!-- Step 0: Welcome -->
       <div v-if="currentStep === 0" class="space-y-4 text-center">
         <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
-          <Layers class="h-8 w-8 text-primary" aria-hidden="true" />
+          <Layers class="h-8 w-8 text-primary-text" aria-hidden="true" />
         </div>
         <p class="text-muted-foreground">
           {{ $t('views.OnboardingWizard.wizard_guide_before') }} <strong>{{ $t('views.OnboardingWizard.wizard_guide_steps') }}</strong> {{ $t('views.OnboardingWizard.wizard_guide_after') }}
         </p>
         <ul class="mx-auto max-w-md space-y-2 text-left text-sm text-muted-foreground">
           <li v-for="(s, i) in steps.slice(1)" :key="i" class="flex items-start gap-2">
-            <span class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-medium text-primary">{{ i + 1 }}</span>
+            <span class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-medium text-primary-text">{{ i + 1 }}</span>
             <span><strong>{{ s.title }}:</strong> {{ s.subtitle }}</span>
           </li>
         </ul>
@@ -49,7 +49,7 @@
         </div>
         <ErrorAlert v-else-if="connectorsError" :message="connectorsError" :on-retry="loadConnectors" />
         <div v-else-if="connectors.length === 0" class="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          {{ $t('views.OnboardingWizard.no_connectors_found') }} <a href="/settings/connectors" data-testid="onboarding-wizard-create-connector" class="text-primary underline">{{ $t('views.OnboardingWizard.create_one') }}</a> {{ $t('views.OnboardingWizard.first_then_come_back') }}
+          {{ $t('views.OnboardingWizard.no_connectors_found') }} <a href="/settings/connectors" data-testid="onboarding-wizard-create-connector" class="text-primary-text underline">{{ $t('views.OnboardingWizard.create_one') }}</a> {{ $t('views.OnboardingWizard.first_then_come_back') }}
         </div>
         <div v-else class="space-y-2">
           <span class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.select_connector_instance') }}</span>
@@ -121,7 +121,7 @@
                 <td class="py-2 font-mono text-xs">{{ field.name }}</td>
                 <td class="py-2 font-mono text-xs text-muted-foreground">{{ field.type }}</td>
                 <td class="py-2">
-                  <span class="inline-block rounded px-1.5 py-0.5 text-xs font-medium" :class="field.required ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'">
+                  <span class="inline-block rounded px-1.5 py-0.5 text-xs font-medium" :class="field.required ? 'bg-primary/10 text-primary-text' : 'bg-muted text-muted-foreground'">
                     {{ field.required ? $t('views.SchemaInferenceView.yes') : $t('views.SchemaInferenceView.no') }}
                   </span>
                 </td>
@@ -175,7 +175,7 @@
                   <td class="py-2 font-mono text-xs">{{ field.name }}</td>
                   <td class="py-2 font-mono text-xs text-muted-foreground">{{ field.type }}</td>
                   <td class="py-2">
-                    <span class="inline-block rounded px-1.5 py-0.5 text-xs font-medium" :class="field.required ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'">{{ field.required ? $t('views.SchemaInferenceView.yes') : $t('views.SchemaInferenceView.no') }}</span>
+                    <span class="inline-block rounded px-1.5 py-0.5 text-xs font-medium" :class="field.required ? 'bg-primary/10 text-primary-text' : 'bg-muted text-muted-foreground'">{{ field.required ? $t('views.SchemaInferenceView.yes') : $t('views.SchemaInferenceView.no') }}</span>
                   </td>
                   <td class="py-2 text-xs text-muted-foreground">{{ field.description ?? '—' }}</td>
                 </tr>
@@ -188,7 +188,7 @@
           </Button>
           </div>
           <div v-if="schemaSaveError" class="text-sm text-destructive">{{ schemaSaveError }}</div>
-          <div v-if="wizardState.publishedSchemaId" class="rounded-lg bg-success/10 p-3 text-sm text-success">
+          <div v-if="wizardState.publishedSchemaId" class="rounded-lg bg-success/10 p-3 text-sm text-success-text">
             {{ $t('views.OnboardingWizard.schema_saved', { name: editableSchemaName }) }}
           </div>
         </template>
@@ -243,7 +243,7 @@
                   <p v-if="item.description" class="mt-0.5 text-xs text-muted-foreground line-clamp-2">{{ item.description }}</p>
                 </div>
                 <div v-if="wizardState.selectedLibraryItemId === item.id" class="mt-1">
-                  <Check class="h-5 w-5 text-primary" aria-hidden="true" />
+                  <Check class="h-5 w-5 text-primary-text" aria-hidden="true" />
                 </div>
               </div>
               <div v-if="item.tags && item.tags.length > 0" class="mt-2 flex flex-wrap gap-1">
@@ -287,7 +287,7 @@
           </Button>
         </div>
         <div v-if="pipelineCreateError" class="text-sm text-destructive">{{ pipelineCreateError }}</div>
-        <div v-if="wizardState.createdPipelineId" class="rounded-lg bg-success/10 p-3 text-sm text-success">
+        <div v-if="wizardState.createdPipelineId" class="rounded-lg bg-success/10 p-3 text-sm text-success-text">
           {{ $t('views.OnboardingWizard.pipeline_label') }} "{{ wizardState.pipelineName }}" {{ $t('views.OnboardingWizard.created_suffix') }}.
         </div>
       </div>
@@ -300,7 +300,7 @@
         <div v-else>
           <div class="rounded-lg border border-dashed p-6 text-center">
             <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
-              <ChartLine class="h-6 w-6 text-primary" :stroke-width="1.5" aria-hidden="true" />
+              <ChartLine class="h-6 w-6 text-primary-text" :stroke-width="1.5" aria-hidden="true" />
             </div>
             <h3 class="text-lg font-semibold">{{ $t('views.OnboardingWizard.telemetry_heading') }}</h3>
             <p class="mt-2 text-sm text-muted-foreground">
@@ -311,15 +311,15 @@
             </p>
             <ul class="mx-auto mt-3 max-w-md space-y-1 text-left text-sm text-muted-foreground">
               <li class="flex items-start gap-2">
-                <span class="mt-0.5 text-primary" aria-hidden="true">&#8226;</span>
+                <span class="mt-0.5 text-primary-text" aria-hidden="true">&#8226;</span>
                 {{ $t('views.OnboardingWizard.telemetry_item_pipeline_runs') }}
               </li>
               <li class="flex items-start gap-2">
-                <span class="mt-0.5 text-primary" aria-hidden="true">&#8226;</span>
+                <span class="mt-0.5 text-primary-text" aria-hidden="true">&#8226;</span>
                 {{ $t('views.OnboardingWizard.telemetry_item_error_rates') }}
               </li>
               <li class="flex items-start gap-2">
-                <span class="mt-0.5 text-primary" aria-hidden="true">&#8226;</span>
+                <span class="mt-0.5 text-primary-text" aria-hidden="true">&#8226;</span>
                 {{ $t('views.OnboardingWizard.telemetry_item_feature_usage') }}
               </li>
             </ul>
@@ -340,7 +340,7 @@
               role="alert"
               aria-live="assertive"
             />
-            <div v-if="telemetrySaved" data-testid="onboarding-wizard-telemetry-saved" class="mt-3 rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success" role="status">
+            <div v-if="telemetrySaved" data-testid="onboarding-wizard-telemetry-saved" class="mt-3 rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success-text" role="status">
               {{ $t('views.OnboardingWizard.telemetry_enabled_success') }}
             </div>
             <div class="mt-6 flex items-center justify-center gap-3">
@@ -372,7 +372,7 @@
       <!-- Step 7: Done -->
       <div v-if="currentStep === 7" class="space-y-6 py-4 text-center">
         <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-success/10">
-          <Check class="h-8 w-8 text-success" aria-hidden="true" />
+          <Check class="h-8 w-8 text-success-text" aria-hidden="true" />
         </div>
         <h3 class="text-2xl font-bold">{{ $t('views.OnboardingWizard.all_set') }}</h3>
         <p class="text-muted-foreground">
@@ -382,23 +382,23 @@
         </p>
         <ul class="mx-auto max-w-sm space-y-2 text-left text-sm">
           <li v-if="wizardState.connectorName" class="flex items-center gap-2 text-muted-foreground">
-            <Check class="h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+            <Check class="h-4 w-4 shrink-0 text-success-text" aria-hidden="true" />
             {{ $t('views.OnboardingWizard.connected') }} <strong>{{ wizardState.connectorName }}</strong>
           </li>
           <li v-if="wizardState.draftSchema" class="flex items-center gap-2 text-muted-foreground">
-            <Check class="h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+            <Check class="h-4 w-4 shrink-0 text-success-text" aria-hidden="true" />
             {{ $t('views.OnboardingWizard.inferred_schema') }} <strong>{{ wizardState.draftSchema.name }}</strong>
           </li>
           <li v-if="wizardState.publishedSchemaId" class="flex items-center gap-2 text-muted-foreground">
-            <Check class="h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+            <Check class="h-4 w-4 shrink-0 text-success-text" aria-hidden="true" />
             {{ $t('views.OnboardingWizard.published_to_schema_registry') }}
           </li>
           <li v-if="wizardState.selectedLibraryItemId" class="flex items-center gap-2 text-muted-foreground">
-            <Check class="h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+            <Check class="h-4 w-4 shrink-0 text-success-text" aria-hidden="true" />
             {{ $t('views.OnboardingWizard.selected_library_item') }}
           </li>
           <li v-if="wizardState.createdPipelineId" class="flex items-center gap-2 text-muted-foreground">
-            <Check class="h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+            <Check class="h-4 w-4 shrink-0 text-success-text" aria-hidden="true" />
             {{ $t('views.OnboardingWizard.pipeline_label') }} <strong>{{ wizardState.pipelineName }}</strong> {{ $t('views.OnboardingWizard.created_suffix') }}
           </li>
         </ul>
@@ -417,7 +417,7 @@
         <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning-text" data-testid="onboarding-wizard-run-empty-warning">
           {{ emptyRunWarning }}
         </div>
-        <div v-if="runResult" class="rounded-lg bg-success/10 p-3 text-sm text-success">
+        <div v-if="runResult" class="rounded-lg bg-success/10 p-3 text-sm text-success-text">
           {{ $t('views.OnboardingWizard.pipeline_started') }} <router-link :to="{ name: 'dashboard' }" data-testid="onboarding-wizard-view-runs" class="underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{{ $t('views.OnboardingWizard.view_runs_on_dashboard') }}</router-link>.
         </div>
         <div v-if="pipelineRunError" class="text-sm text-destructive">{{ pipelineRunError }}</div>
@@ -582,7 +582,7 @@ const selectedLibraryItem = computed(() => {
 
 function stepCircleClass(i: number): string {
   if (i < currentStep.value) return 'bg-primary text-primary-foreground'
-  if (i === currentStep.value) return 'border-2 border-primary text-primary'
+  if (i === currentStep.value) return 'border-2 border-primary text-primary-text'
   return 'border-2 border-border text-muted-foreground'
 }
 

@@ -337,7 +337,7 @@
               </div>
 
               <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
-              <div v-if="formSuccess" class="text-sm text-success">{{ formSuccess }}</div>
+              <div v-if="formSuccess" class="text-sm text-success-text">{{ formSuccess }}</div>
             </div>
           </div>
         </div>
@@ -373,7 +373,7 @@
                 <div class="min-w-0 flex-1">
                   <p class="truncate font-medium">{{ ev.name }}</p>
                   <div class="mt-1 flex flex-wrap items-center gap-2">
-                    <span class="inline-block rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">{{ ev.eval_type }}</span>
+                    <span class="inline-block rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary-text">{{ ev.eval_type }}</span>
                     <span
                       v-if="evalGateActions[ev.id]"
                       class="inline-block rounded px-2 py-0.5 text-xs font-medium"
@@ -734,6 +734,92 @@ async function onPipelineChange() {
   await Promise.all([loadNodes(), loadEvals()])
 }
 
+function buildEvalBody(configParsed: Record<string, unknown>) {
+  return {
+    pipeline_id: selectedPipelineId.value,
+    node_id: form.node_id === '__all__' ? null : form.node_id,
+    name: form.name.trim(),
+    eval_type: form.eval_type,
+    config_json: configParsed,
+    pass_threshold: form.pass_threshold,
+  }
+}
+
+// Phase 1 result: `ok: false` means the write failed (formError is set);
+// `evalId: null` means the create succeeded but the response carried no id —
+// the original flow still reported success in that case, so the two must stay
+// distinguishable.
+type PersistEvalResult = { ok: true; evalId: string | null } | { ok: false }
+
+// Phase 1: persist the eval definition itself.
+async function persistEval(configParsed: Record<string, unknown>): Promise<PersistEvalResult> {
+  try {
+    const evalId = editingEvalId.value
+    if (evalId) {
+      await api.PUT('/api/v1/evals/{eval_id}', {
+        params: { path: { eval_id: evalId } },
+        body: buildEvalBody(configParsed),
+      })
+      return { ok: true, evalId }
+    }
+    const { data: created } = await api.POST('/api/v1/evals', { body: buildEvalBody(configParsed) })
+    const createdId = (created as any)?.id ?? null
+    if (createdId) {
+      track(ANALYTICS_EVENTS.EVAL_CREATED, { eval_id: createdId })
+    }
+    return { ok: true, evalId: createdId }
+  } catch (e: unknown) {
+    formError.value = formatApiError(e)
+    return { ok: false }
+  }
+}
+
+// Phase 2a: update the existing policy gate. Returns false on an envelope error.
+async function updatePolicyGate(evalId: string): Promise<boolean> {
+  const res = await api.PUT('/api/v1/evals/{eval_id}/policy-gate', {
+    params: { path: { eval_id: evalId } },
+    body: { action: policyGate.action },
+  })
+  // openapi-fetch resolves non-2xx as { data: undefined, error } — it never
+  // throws, so the envelope error must be checked here.
+  if (res.error || !res.data) return false
+  const d = res.data as any
+  policyGate.id = d.id ?? policyGate.id
+  policyGate.version = d.version ?? policyGate.version + 1
+  gateSnapshot.action = policyGate.action
+  return true
+}
+
+// Phase 2b: create the policy gate. Returns false on an envelope error.
+async function createPolicyGate(evalId: string): Promise<boolean> {
+  const res = await api.POST('/api/v1/evals/{eval_id}/policy-gate', {
+    params: { path: { eval_id: evalId } },
+    body: { action: policyGate.action },
+  })
+  if (res.error || !res.data) return false
+  const d = res.data as any
+  policyGate.id = d.id ?? null
+  policyGate.exists = true
+  policyGate.version = d.version ?? 1
+  gateSnapshot.action = policyGate.action
+  return true
+}
+
+// Phase 2: save the policy gate (if modified or new). Two-phase reporting
+// (§3.3): the eval half reports its own success even when the gate half fails,
+// and the form is NOT reset so the retry stays available.
+async function persistPolicyGateIfModified(savedEvalId: string): Promise<boolean> {
+  const gateModified = policyGate.action !== gateSnapshot.action || !policyGate.exists
+  if (!gateModified) return true
+  try {
+    if (policyGate.exists && policyGate.id) return await updatePolicyGate(savedEvalId)
+    return await createPolicyGate(savedEvalId)
+  } catch {
+    // Network-level failure — same two-phase reporting path.
+    return false
+  }
+}
+
 async function saveEval() {
   if (!canSave.value) return
 
@@ -754,91 +840,26 @@ async function saveEval() {
     return
   }
 
-  const body = {
-    pipeline_id: selectedPipelineId.value,
-    node_id: form.node_id === '__all__' ? null : form.node_id,
-    name: form.name.trim(),
-    eval_type: form.eval_type,
-    config_json: configParsed,
-    pass_threshold: form.pass_threshold,
-  }
-
-  // Phase 1: save the eval
-  let savedEvalId: string | null = null
-  try {
-    const evalId = editingEvalId.value
-    if (evalId) {
-      await api.PUT('/api/v1/evals/{eval_id}', {
-        params: { path: { eval_id: evalId } },
-        body,
-      })
-      savedEvalId = evalId
-    } else {
-      const { data: created } = await api.POST('/api/v1/evals', { body })
-      savedEvalId = (created as any)?.id ?? null
-      if (savedEvalId) {
-        track(ANALYTICS_EVENTS.EVAL_CREATED, { eval_id: savedEvalId })
-      }
-    }
-  } catch (e: unknown) {
-    formError.value = formatApiError(e)
+  const persisted = await persistEval(configParsed)
+  if (!persisted.ok) {
     saving.value = false
     return
   }
 
-  // Phase 2: save the policy gate (if modified or new). Two-phase reporting
-  // (§3.3): the eval half reports its own success even when the gate half
-  // fails, and the form is NOT reset so the retry stays available.
-  const gateModified = policyGate.action !== gateSnapshot.action || !policyGate.exists
-  if (gateModified && savedEvalId) {
-    let gateSaveFailed = false
-    try {
-      if (policyGate.exists && policyGate.id) {
-        // Update existing gate
-        const res = await api.PUT('/api/v1/evals/{eval_id}/policy-gate', {
-          params: { path: { eval_id: savedEvalId } },
-          body: { action: policyGate.action },
-        })
-        // openapi-fetch resolves non-2xx as { data: undefined, error } — it
-        // never throws, so the envelope error must be checked here.
-        if (res.error || !res.data) {
-          gateSaveFailed = true
-        } else {
-          const d = res.data as any
-          policyGate.id = d.id ?? policyGate.id
-          policyGate.version = d.version ?? policyGate.version + 1
-          gateSnapshot.action = policyGate.action
-        }
-      } else {
-        // Create new gate
-        const res = await api.POST('/api/v1/evals/{eval_id}/policy-gate', {
-          params: { path: { eval_id: savedEvalId } },
-          body: { action: policyGate.action },
-        })
-        if (res.error || !res.data) {
-          gateSaveFailed = true
-        } else {
-          const d = res.data as any
-          policyGate.id = d.id ?? null
-          policyGate.exists = true
-          policyGate.version = d.version ?? 1
-          gateSnapshot.action = policyGate.action
-        }
-      }
-    } catch {
-      // Network-level failure — same two-phase reporting path.
-      gateSaveFailed = true
-    }
-    if (gateSaveFailed) {
-      gateError.value = true
-      gatePendingEvalId.value = savedEvalId
-      formSuccess.value = wasEditing
-        ? t('views.EvalEditorView.eval_updated')
-        : t('views.EvalEditorView.eval_created')
-      await loadEvals()
-      saving.value = false
-      return
-    }
+  // Phase 2 is skipped when the create returned no id (nothing to attach the
+  // gate to) — the eval half still reports success, as before.
+  const gateSaved = persisted.evalId
+    ? await persistPolicyGateIfModified(persisted.evalId)
+    : true
+  if (!gateSaved) {
+    gateError.value = true
+    gatePendingEvalId.value = persisted.evalId
+    formSuccess.value = wasEditing
+      ? t('views.EvalEditorView.eval_updated')
+      : t('views.EvalEditorView.eval_created')
+    await loadEvals()
+    saving.value = false
+    return
   }
 
   // Reset and show success
@@ -903,16 +924,12 @@ function onGateDialogKeydown(e: KeyboardEvent) {
     if (focusable.length === 0) return
     const first = focusable[0]
     const last = focusable[focusable.length - 1]
-    if (e.shiftKey) {
-      if (document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      }
-    } else {
-      if (document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
     }
   }
 }
@@ -961,16 +978,12 @@ function onDirtyDialogKeydown(e: KeyboardEvent) {
     if (focusable.length === 0) return
     const first = focusable[0]
     const last = focusable[focusable.length - 1]
-    if (e.shiftKey) {
-      if (document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      }
-    } else {
-      if (document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
     }
   }
 }
@@ -1090,16 +1103,12 @@ function onGateToggleDialogKeydown(e: KeyboardEvent) {
     if (focusable.length === 0) return
     const first = focusable[0]
     const last = focusable[focusable.length - 1]
-    if (e.shiftKey) {
-      if (document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      }
-    } else {
-      if (document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
     }
   }
 }

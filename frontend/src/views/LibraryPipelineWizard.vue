@@ -166,7 +166,7 @@
 
         <div
           v-if="result"
-          class="mt-6 rounded-lg border border-success/50 bg-success/10 p-4 text-success"
+          class="mt-6 rounded-lg border border-success/50 bg-success/10 p-4 text-success-text"
         >
           <p class="font-medium">{{ $t('views.LibraryPipelineWizard.pipeline_created') }}</p>
           <p class="text-sm mt-1">

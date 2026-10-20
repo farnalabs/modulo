@@ -47,7 +47,6 @@ from modulo.db.crud.run import create_run
 from modulo.db.models.account import Account
 from modulo.db.models.base import Base
 from modulo.db.models.eval import Eval
-from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -250,19 +249,6 @@ async def _seed(session: AsyncSession) -> None:
         "field": "body",
         "pattern": r"SECRET_[A-Z0-9]{8}",
     }
-    session.add(
-        EvalDefinition(
-            id=uuid.uuid4(),
-            organisation_id=_ORG,
-            pipeline_id=_PIPELINE,
-            node_id=None,
-            name="no-secrets",
-            eval_type="guardrail",
-            config_json=config,
-            failure_behaviour="block",
-            account_id=_ACCOUNT,
-        )
-    )
     session.add(
         Eval(
             id=uuid.uuid4(),
