@@ -362,7 +362,7 @@
   /* Each badge's text colour lives in a local custom property so the light
      mode override below changes only the value. The tint behind the text is
      translucent, so the rendered contrast is measured against the composited
-     surface, not the raw tint - see the .light overrides for the dark values. */
+     surface, not the raw tint - see the .light overrides for their values. */
   .badge-context-purple {
     --badge-context-text: 270 60% 70%;
     background-color: hsla(270 60% 50% / 0.12);
