@@ -1483,6 +1483,7 @@ export default {
       "version_missing_body": "It may have been deleted, or this link may be out of date.",
       "version_missing_open_latest": "Open the latest version",
       "version_load_failed": "Failed to load this version: {error}",
+      "version_chip_unavailable": "Version unavailable — retry",
       "unsaved_changes_title": "Unsaved changes",
       "unsaved_changes_body": "You have unsaved changes to this pipeline's graph. Open the historical version anyway? Your unsaved changes stay in the latest editor.",
       "unsaved_changes_continue": "Open version"
@@ -2455,6 +2456,7 @@ export default {
       "retry_all_request_failed": "Retry all request failed:",
       "retrying_all": "Retrying All…",
       "run_failed": "Run Failed",
+      "provider_failure": "Provider Failure",
       "hitl_awaiting": "HITL Awaiting",
       "endpoint_url": "Endpoint URL",
       "hitl_overdue": "HITL Overdue",
@@ -4599,6 +4601,7 @@ export default {
       "retry": "Retry",
       "hitl_awaiting": "HITL Awaiting",
       "run_failed": "Run Failed",
+      "provider_failure": "Provider Failure",
       "run_stalled": "Run Stalled",
       "claim_expired": "Claim Expired",
       "hitl_overdue": "HITL Overdue",
@@ -4684,6 +4687,8 @@ export default {
       "select_version_aria": "Select v{version} for compare or restore",
       "ran_times": "ran {count}x",
       "ran_earlier": "ran {count}x on earlier versions",
+      "ran_unattributed": "ran {count}x (version not in the loaded history)",
+      "no_version_in_window": "No version in the loaded history.",
       "truncated_notice": "Showing the most recent {loaded} of {total} versions.",
       "load_more": "Load more",
       "load_more_failed": "Could not load more history.",
@@ -4970,6 +4975,7 @@ export default {
     "provider": {
       "unavailable": "Provider unavailable",
       "authentication": "Authentication failed",
+      "billing": "Provider account unfunded",
       "rate_limited": "Provider rate limited",
       "connection": "Provider connection error"
     },
@@ -5051,6 +5057,7 @@ export default {
     "provider": {
       "unavailable": "The LLM provider is currently unavailable.",
       "authentication": "Authentication with the LLM provider failed.",
+      "billing": "The LLM provider refused the request for billing reasons (402 — insufficient funds, quota exhausted, or payment required). This failure is not retried.",
       "rate_limited": "The LLM provider returned a rate-limit error.",
       "connection": "A network error occurred while calling the LLM provider."
     },

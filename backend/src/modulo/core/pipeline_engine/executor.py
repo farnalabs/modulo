@@ -75,7 +75,7 @@ from modulo.core.node_output_split import (
     node_telemetry,
     resolve_node_contract_output,
 )
-from modulo.core.notifier import EVENT_HITL_AWAITING
+from modulo.core.notifier import EVENT_HITL_AWAITING, EVENT_PROVIDER_FAILURE
 from modulo.core.pipeline_engine import retry_compensation as rc
 from modulo.core.pipeline_engine.decorator import (
     _RESERVED_RUN_CONTEXT_KEYS,
@@ -111,7 +111,11 @@ from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_o
 from modulo.core.pipeline_engine.hitl_context import HitlReviewContext, build_hitl_review_context
 from modulo.core.pipeline_engine.idempotency import read_before_write_suppression
 from modulo.core.pipeline_engine.llm_judge import resolve_llm_judge_callable
-from modulo.core.pipeline_engine.model_backend_errors import classify_provider_error
+from modulo.core.pipeline_engine.model_backend_errors import (
+    NON_RETRYABLE_PROVIDER_CODES,
+    classify_provider_error,
+    non_retryable_provider_code,
+)
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import (
     MODULO_SYNTHETIC_FAILURE_MARKER,
@@ -772,9 +776,18 @@ def _failure_event_matches(
     # spelling the generic catch publishes.
     if mapped in _NEVER_RETRYABLE_SCRIPT_CODES or code in _NEVER_RETRYABLE_SCRIPT_RAW:
         return False
-    # FAR-1800: a provider billing/provisioning refusal cannot recover on retry,
-    # so a ``failure`` policy must not re-dispatch it.
-    if mapped in _NEVER_RETRYABLE_PROVIDER_CODES or code in _NEVER_RETRYABLE_PROVIDER_CODES:
+    # FAR-2006: a provider credential / funding refusal (401 / 402) is
+    # permanent. A ``failure`` policy must never re-dispatch it — three
+    # attempts on a 402 is pure waste (~10 min each) and a whole night ran at
+    # zero throughput that way. The shared constant is the same set the two
+    # retry paths use, so this exclusion cannot drift from them.
+    # FAR-1800: main's narrower billing/provisioning set (``model_disabled``)
+    # is kept alongside it, and matched on the raw code spelling too.
+    if (
+        mapped in NON_RETRYABLE_PROVIDER_CODES
+        or mapped in _NEVER_RETRYABLE_PROVIDER_CODES
+        or code in _NEVER_RETRYABLE_PROVIDER_CODES
+    ):
         return False
     # FAR-136 Gap 2: exclude sandbox-agent hang deaths.
     is_cancel = code == "node_cancelled" or mapped == "node.cancelled"
@@ -5110,6 +5123,18 @@ class PipelineExecutor:
         if final_run is None:
             raise RunNotFoundError(run_id)
 
+        # FAR-2006: a non-retryable provider auth/billing refusal is exactly
+        # the class that must page. Dispatched from the ONE shared finalization
+        # tail so every terminal path (transient short-circuit, retry-policy
+        # exhaustion, generic catch) is covered without a second call site.
+        await self._alert_provider_failure(
+            run_id=run_id,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            final_status=final_status,
+            error_code=error_code,
+        )
+
         # FAR-152 §15.3 — post-commit async evidence probe (same rule as
         # execute()). Bounded ≤3s per node, gated by the EvidenceProvider seam.
         await self._run_post_terminal_evidence_probes(
@@ -5132,6 +5157,70 @@ class PipelineExecutor:
         except Exception:
             _log.exception("run_teardown.seal_failed", extra={"run_id": str(run_id)})
         return final_run
+
+    async def _alert_provider_failure(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        final_status: str,
+        error_code: str | None,
+    ) -> None:
+        """Dispatch the provider-refusal alert (FAR-2006) — failure-isolated.
+
+        A 401/402 provider refusal is terminal and never retried, so without a
+        real alert the only trace is a log line plus an ``error_code`` row —
+        exactly how a whole night ran at zero throughput with nothing
+        surfaced. Uses the existing Notifier path (webhook + in-app) with a
+        DEDICATED event so an operator can page on provider refusals without
+        subscribing to every failed run.
+
+        Called from the one shared finalization tail, so every terminal path
+        is covered. Fail-open WITH a log: an alerting failure must never crash
+        terminalization (the run is already terminal), but it also must never
+        be silent.
+        """
+        if self._notifier is None or final_status != "failed":
+            return
+        canonical = map_legacy_code(error_code)
+        if canonical not in NON_RETRYABLE_PROVIDER_CODES:
+            return
+
+        pipeline_name: str | None = None
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                pipeline_name = await _safe_pipeline_name(session, pipeline_id, org_id, run_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "pipeline.provider_failure_alert_name_lookup_failed",
+                extra={"run_id": str(run_id), "pipeline_id": str(pipeline_id)},
+                exc_info=True,
+            )
+
+        payload: dict[str, Any] = {
+            "run_id": str(run_id),
+            "pipeline_id": str(pipeline_id),
+            "pipeline_name": pipeline_name or "unknown pipeline",
+            "error_code": canonical,
+        }
+        try:
+            await self._notifier.dispatch_event(
+                org_id=org_id,
+                event_type=EVENT_PROVIDER_FAILURE,
+                payload=payload,
+                run_id=run_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "pipeline.provider_failure_alert_failed",
+                extra={"run_id": str(run_id), "error_code": canonical},
+            )
 
     async def _seal_run_teardown(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
         """Run the sealed joint revoke+destroy step for a terminalized run (FAR-1690 A3).
@@ -5426,6 +5515,14 @@ class PipelineExecutor:
             )
             final_status = "failed"
             error_code = type(exc).__name__
+            # FAR-2006: a provider 401/402 raised out of a model backend is a
+            # provider refusal, not a generic exception. The raw class name
+            # (``APIStatusError``) resolved to ``harness.unknown``; classify
+            # the message so the run records provider.authentication /
+            # provider.billing and the terminal-path alert fires.
+            _provider_refusal = non_retryable_provider_code(str(exc)) or non_retryable_provider_code(error_detail)
+            if _provider_refusal is not None:
+                error_code = _provider_refusal
 
         # Retry policy: if the run ended in a state the pipeline's
         # retry_policy says to retry and the attempt budget remains, reset the
@@ -5632,6 +5729,30 @@ class PipelineExecutor:
                 "error_code": _ERROR_CODE_HARNESS_IDEMPOTENCY_GATE,
                 "error_detail": "delivery already sent; transient retry suppressed by idempotency gate",
                 "gated_node_id": _gated_node_id,
+            }
+        # FAR-2006: a provider credential / funding refusal is NON-RETRYABLE.
+        # Classify it from the retained sandbox output carried in the
+        # exception BEFORE the retry gate: re-dispatching a 401/402 can never
+        # succeed, so retrying only burns a slot (the measured failure mode
+        # was three ~10-minute attempts per run, a whole night at zero
+        # throughput). The idempotency gate above keeps priority (a delivery
+        # already sent is still the stronger fact).
+        provider_code = non_retryable_provider_code(str(exc))
+        if provider_code is not None:
+            error_detail = _sanitize_detail(
+                f"Model provider refused the run ({provider_code}); not retried — re-dispatching cannot succeed: {exc}",
+                limit=5000,
+            )
+            _log.warning(
+                "pipeline.provider_failure_terminal",
+                extra={"run_id": str(run_id), "error_code": provider_code, "exc_type": type(exc).__name__},
+            )
+            broker.publish("run_failed", {"error": provider_code, "detail": error_detail})
+            return {
+                "decision": "terminal",
+                "final_status": "failed",
+                "error_code": provider_code,
+                "error_detail": error_detail,
             }
         # FAR-1800: classify the transient failure's retained stdout ONCE, so the
         # requeue gate and the terminal code agree. The exception message embeds

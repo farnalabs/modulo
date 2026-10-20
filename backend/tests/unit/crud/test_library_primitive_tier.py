@@ -161,9 +161,14 @@ async def test_cursor_pagination_applies_filters() -> None:
     assert "primitive_type = 'schema'" in sql
 
 
-async def test_copy_to_adapt_propagates_tier() -> None:
-    """copy_to_adapt must carry the source tier so preview/in_dev primitives
-    do not silently downgrade to native (server_default) in the target org."""
+@pytest.mark.parametrize("source_tier", ["preview", "native"])
+async def test_copy_to_adapt_propagates_the_source_tier(source_tier: str) -> None:
+    """copy_to_adapt must carry the source tier verbatim.
+
+    A preview/in_dev primitive that silently downgrades to native
+    (server_default) would be promoted into the target org; a native one that
+    loses its tier would be mislabelled. Both directions are one case each.
+    """
     source = MagicMock(spec=LibraryPrimitive)
     source.id = uuid.uuid4()
     source.version = "1.2"
@@ -174,7 +179,7 @@ async def test_copy_to_adapt_propagates_tier() -> None:
     source.author = "publisher"
     source.tags = ["preview"]
     source.content_json = {"fields": []}
-    source.tier = "preview"
+    source.tier = source_tier
     session = mock_session()
     session.flush = AsyncMock()
     copied_row = MagicMock()
@@ -196,41 +201,4 @@ async def test_copy_to_adapt_propagates_tier() -> None:
 
     assert session.add.call_count == 1
     added = session.add.call_args[0][0]
-    assert added.tier == "preview"
-
-
-async def test_copy_to_adapt_native_tier_preserved() -> None:
-    """Native sources keep native tier on copy (explicit, not server_default)."""
-    source = MagicMock(spec=LibraryPrimitive)
-    source.id = uuid.uuid4()
-    source.version = "1.0"
-    source.primitive_type = "workflow"
-    source.name = "Native Flow"
-    source.slug = "native-flow"
-    source.description = None
-    source.author = "org"
-    source.tags = []
-    source.content_json = {"steps": []}
-    source.tier = "native"
-    session = mock_session()
-    session.flush = AsyncMock()
-    copied_row = MagicMock()
-    copied_row.scalar_one_or_none.return_value = copied_row
-    session.execute = AsyncMock(return_value=copied_row)
-
-    with patch(
-        "modulo.db.crud.library_primitive.get_library_primitive",
-        new_callable=AsyncMock,
-        return_value=source,
-    ):
-        await copy_to_adapt(
-            session,
-            primitive_id=source.id,
-            target_org_id=uuid.uuid4(),
-            target_team_id=None,
-            account_id=None,
-        )
-
-    assert session.add.call_count == 1
-    added = session.add.call_args[0][0]
-    assert added.tier == "native"
+    assert added.tier == source_tier
