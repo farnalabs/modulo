@@ -10,6 +10,8 @@ gate), the server-measured token derivation, the legacy-fallback DE-TRUSTS
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -18,7 +20,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.cost_controller.breakdown.constants import MAX_REPORTABLE_BAND_USD
+from modulo.core.cost_controller.breakdown.constants import (
+    COST_COLUMN_CAP,
+    MAX_REPORTABLE_BAND_USD,
+    TOTAL_CLAMPED_MARKER,
+)
 from modulo.core.cost_controller.breakdown.params import (
     MAX_REPORTABLE_TOKEN_COUNT,
     REPORTED_TOKEN_CHAIN,
@@ -43,6 +49,7 @@ from modulo.core.cost_controller.finalize import (
     derive_node_type_map,
     finalize_cancelled_run,
     finalize_cost,
+    finalize_failed_run,
 )
 from modulo.db.crud.run_node_outputs import RunBlobs
 
@@ -1050,6 +1057,400 @@ async def test_finalize_cancelled_run_streamed_with_prior_pause_finalizes() -> N
     assert kwargs["segment_node_token_usage"] == stored_usage
     assert kwargs["segment_completed_node_outputs"] == stored_outputs
     assert kwargs["is_terminal"] is True
+
+
+# ---------------------------------------------------------------------------
+# finalize_failed_run — the node-deadline DERIVED cost (FAR-1993)
+# ---------------------------------------------------------------------------
+
+
+async def test_finalize_failed_run_derived_hours_book_run_level_cost() -> None:
+    """An empty segment + derived wall-clock books DERIVED sandbox spend.
+
+    A deadline-killed sandbox node never wrote ``output.json``, so nothing is
+    in the stored sets. With ``derived_sandbox_wall_hours`` the run must still
+    carry a non-zero cost, explicitly marked ``source="derived"``. Without the
+    derived branch the write would be total 0 (or nothing at all).
+
+    The derived spend must ALSO reach the terminal ledger block (spend ceiling
+    + ``org_daily_run_counts`` + circuit breaker) — not just the run row and the
+    analytics fact — otherwise the controls the ticket names stay blind.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()) as mock_facts,
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=0.5,
+        )
+    mock_urs.assert_awaited_once()
+    kwargs = mock_urs.await_args.kwargs
+    assert mock_urs.await_args.args[2] == "failed"
+    assert kwargs["error_code"] == "node_deadline_exceeded"
+    assert kwargs["error_detail"] == "node 'n1' exceeded its deadline"
+    assert kwargs["total_cost_usd"] == Decimal("0.065")
+    entries = kwargs["cost_breakdown"]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["component"] == "sandbox_infra"
+    assert entry["source"] == "derived"
+    assert entry["basis"]["derived_from"] == "node_deadline_watchdog"
+    assert entry["basis"]["wall_clock_hours"] == 0.5
+    mock_facts.assert_awaited_once()
+    # The ledger block receives the SAME persisted total, org and run date.
+    mock_block.assert_awaited_once()
+    ledger_kwargs = mock_block.await_args.kwargs
+    assert ledger_kwargs["total"] == Decimal("0.065")
+    assert ledger_kwargs["org_id"] == _ORG_ID
+    assert ledger_kwargs["status"] == "failed"
+    assert ledger_kwargs["owner_team_id"] == run.owner_team_id
+    assert ledger_kwargs["run_date"] == run.started_at.astimezone(UTC).date()
+    assert ledger_kwargs["finalize_fields"]["total_cost_usd"] == Decimal("0.065")
+
+
+async def test_finalize_failed_run_empty_segment_without_derived_hours_invents_no_cost() -> None:
+    """No stored sets AND no derived duration: nothing is attributed to the run.
+
+    Pins the no-regression case — the pre-fix partial-spend-lost outcome is
+    unchanged and no synthetic cost is invented.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=None,
+        )
+    mock_urs.assert_not_awaited()
+    logged = [str(c) for c in mock_log.warning.call_args_list]
+    assert any("cost_components_partial_spend_lost" in line for line in logged)
+
+
+async def test_finalize_failed_run_with_real_segment_ignores_derived_hours() -> None:
+    """A run WITH stored node data routes through the normal component build.
+
+    The derived shortcut must not run (the node's own server-verified
+    wall-clock is the authority) and the failed status + error fields are
+    forwarded to ``finalize_cost``.
+    """
+    stored_usage = {"node-a": {"input_tokens": 5, "output_tokens": 3, "total_tokens": 8}}
+    stored_outputs = {"node-a": {"output": {"status": "completed", "wall_clock_time_ms": 1000}}}
+    stored_telemetry = {"node-a": {"status": "completed", "wall_clock_time_ms": 1000}}
+    run = _make_run(
+        node_token_usage=stored_usage,
+        outputs_json=stored_outputs,
+        node_telemetry_json=stored_telemetry,
+        snapshot_id=uuid.uuid4(),
+    )
+    session = AsyncMock()
+    session.execute = AsyncMock(
+        side_effect=[
+            MagicMock(scalar_one_or_none=MagicMock(return_value=run)),  # the run row
+            MagicMock(scalar_one_or_none=MagicMock(return_value={"nodes": [{"id": "node-a"}]})),  # graph_json
+        ]
+    )
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch(
+            "modulo.core.cost_controller.finalize._write_derived_deadline_terminal",
+            new=AsyncMock(),
+        ) as mock_derived,
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=0.5,
+        )
+    mock_derived.assert_not_awaited()
+    mock_finalize.assert_awaited_once()
+    kwargs = mock_finalize.await_args.kwargs
+    assert kwargs["status"] == "failed"
+    assert kwargs["error_code"] == "node_deadline_exceeded"
+    assert kwargs["error_detail"] == "node 'n1' exceeded its deadline"
+    assert kwargs["segment_node_token_usage"] == stored_usage
+    assert kwargs["segment_completed_node_outputs"] == stored_outputs
+    assert kwargs["is_terminal"] is True
+
+
+def test_finalize_failed_run_derived_from_default_is_deadline_watchdog() -> None:
+    """Regression pin: the default provenance label is the deadline watchdog.
+
+    PR #2044's deadline path calls ``finalize_failed_run`` without
+    ``derived_from``; its recorded breakdown basis must stay
+    ``"node_deadline_watchdog"``. A changed default silently relabels every
+    deadline-derived cost, so the default is pinned directly.
+    """
+    default = inspect.signature(finalize_failed_run).parameters["derived_from"].default
+    assert default == "node_deadline_watchdog"
+
+
+async def test_finalize_failed_run_threads_supplied_derived_from() -> None:
+    """A caller-supplied ``derived_from`` is what lands in the breakdown basis.
+
+    The reconcile age gate attributes from the heartbeat window, not the node
+    deadline, so the label must follow the caller — hardcoding the deadline
+    label would misattribute that spend.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="no_progress",
+            error_detail="No node progress within the 135m age bound",
+            derived_sandbox_wall_hours=1.0,
+            derived_from="reconcile_age_gate_heartbeat",
+        )
+    entry = mock_urs.await_args.kwargs["cost_breakdown"][0]
+    assert entry["basis"]["derived_from"] == "reconcile_age_gate_heartbeat"
+    assert entry["basis"]["wall_clock_hours"] == 1.0
+
+
+class _SqlstateError(Exception):
+    """A stand-in DBAPI error carrying a SQLSTATE (no SQLAlchemy class)."""
+
+    def __init__(self, sqlstate: str) -> None:
+        super().__init__(f"sqlstate={sqlstate}")
+        self.sqlstate = sqlstate
+
+
+def _empty_derived_session(run: MagicMock | None) -> AsyncMock:
+    """A session whose single execute returns *run* (or None for a missing row)."""
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    return session
+
+
+async def test_finalize_failed_run_clamps_derived_cost_to_the_column_cap() -> None:
+    """An implausibly long derived duration is clamped to the Numeric(14,6) cap.
+
+    The clamp marker must lead the breakdown and the CLAMPED total — not the
+    unbounded product — is what reaches the run row and the spend ledger.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    session = _empty_derived_session(run)
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=1e18,
+        )
+    kwargs = mock_urs.await_args.kwargs
+    assert kwargs["total_cost_usd"] == COST_COLUMN_CAP
+    breakdown = kwargs["cost_breakdown"]
+    assert breakdown[0] == TOTAL_CLAMPED_MARKER
+    assert breakdown[1]["amount_usd"] == format(COST_COLUMN_CAP, "f")
+    assert mock_block.await_args.kwargs["total"] == COST_COLUMN_CAP
+
+
+async def test_finalize_failed_run_without_started_at_writes_no_ledger_row() -> None:
+    """A derived total with no ``started_at`` has no run date, so no ledger row
+    is written — the run row still records the derived spend."""
+    run = _make_run(node_token_usage=None, outputs_json=None, started_at=None)
+    session = _empty_derived_session(run)
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=0.5,
+        )
+    mock_urs.assert_awaited_once()
+    mock_block.assert_not_awaited()
+
+
+async def test_finalize_failed_run_rereises_cancelled_from_the_ledger_block() -> None:
+    """Worker shutdown is not ours to swallow: a CancelledError raised by the
+    ledger block propagates out of both envelopes."""
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    session = _empty_derived_session(run)
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch(
+            "modulo.core.cost_controller.finalize._ledger_block",
+            new=AsyncMock(side_effect=asyncio.CancelledError()),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=0.5,
+        )
+
+
+async def test_finalize_failed_run_rereises_lock_abort_from_the_ledger_block() -> None:
+    """A genuine lock abort aborts the whole transaction, so BOTH envelopes must
+    re-raise it to the ownership layer rather than log it as a lost write."""
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    session = _empty_derived_session(run)
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch(
+            "modulo.core.cost_controller.finalize._ledger_block",
+            new=AsyncMock(side_effect=_SqlstateError("40P01")),
+        ),
+        pytest.raises(_SqlstateError),
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=0.5,
+        )
+
+
+async def test_finalize_failed_run_swallows_non_lock_ledger_error() -> None:
+    """A non-lock ledger failure is logged and swallowed: the run row and the
+    analytics fact still land, and nothing is raised to the caller."""
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    session = _empty_derived_session(run)
+    ledger = AsyncMock(side_effect=RuntimeError("ledger boom"))
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()) as mock_facts,
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=ledger),
+        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=0.5,
+        )
+    ledger.assert_awaited_once()
+    mock_facts.assert_awaited_once()
+    assert mock_log.exception.call_args.args[0] == "cost_ledger.derived_deadline_block_failed"
+
+
+async def test_finalize_failed_run_missing_run_writes_nothing() -> None:
+    """A run row that no longer exists is logged and skipped — no cost write."""
+    session = _empty_derived_session(None)
+    with (
+        patch("modulo.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=uuid.uuid4(),
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=0.5,
+        )
+    mock_blobs.assert_not_awaited()
+    mock_urs.assert_not_awaited()
+    assert mock_log.warning.call_args.args[0] == "cost_finalize.failed_run_not_found"
+
+
+async def test_finalize_failed_run_envelope_swallows_non_lock_failure() -> None:
+    """The fail-open envelope logs an ordinary failure instead of raising it."""
+    failure = AsyncMock(side_effect=RuntimeError("finalize boom"))
+    with (
+        patch("modulo.core.cost_controller.finalize._finalize_failed_run", new=failure),
+        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+    ):
+        await finalize_failed_run(
+            AsyncMock(),
+            run_id=uuid.uuid4(),
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=0.5,
+        )
+    failure.assert_awaited_once()
+    assert mock_log.warning.call_args.args[0] == "cost_finalize.failed_run_finalize_failed"
 
 
 # ---------------------------------------------------------------------------
