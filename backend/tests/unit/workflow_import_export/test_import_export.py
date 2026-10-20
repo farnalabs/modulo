@@ -1657,10 +1657,90 @@ async def test_materialize_syncs_node_agent_commands_into_bound_agent_row(
         ],
     )
 
+    audit = AsyncMock()
+    monkeypatch.setattr(mod, "append_audit_event", audit)
+
     await materialize_import(_FakeSession(agent_row_result), _ORG_ID, _ACCOUNT_ID, bundle)
 
     assert created["agent"].await_args.kwargs["agent_commands"] == [bundle_command]
     assert created_agent.agent_commands == [node_command]
+    # FAR-2008: import is the untrusted-input writer, so the sync that rewrites
+    # a created Agent row leaves a durable audit event naming the changed row.
+    audit.assert_awaited_once()
+    audit_kwargs = audit.await_args.kwargs
+    assert audit_kwargs["event_type"] == "pipeline.agent_commands_synced"
+    assert audit_kwargs["actor_user_id"] == _ACCOUNT_ID
+    assert audit_kwargs["resource_type"] == "pipeline"
+    assert audit_kwargs["payload_json"] == {
+        "agent_count": 1,
+        "agent_ids": [str(created_agent.id)],
+    }
+
+
+async def test_materialize_never_syncs_a_pre_existing_agent_the_bundle_does_not_declare(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-2008 trust boundary: a crafted bundle node may name an EXISTING
+    organisation Agent that the bundle does not declare.
+
+    ``_rewire_graph_nodes`` only rewrites ids present in ``agent_id_map``; an
+    unknown id is left verbatim. Passing every node to the org-scoped sync
+    would therefore let the bundle overwrite that pre-existing Agent row and
+    silently change unrelated pipelines. Only nodes bound to an Agent CREATED
+    by this import may be synced.
+    """
+    created = _patch_crud(monkeypatch)
+    sync_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr(mod, "sync_agent_row_commands", sync_mock)
+    existing_agent_id = uuid.uuid4()
+    bundle = _make_bundle(
+        pipeline={
+            "name": "Imported",
+            "description": "d",
+            "graph_nodes_json": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "agent_id": str(existing_agent_id),
+                    "agent_commands": ["hijack the existing agent"],
+                }
+            ],
+            "retry_policy": {},
+            "node_timeout_seconds": 900,
+            "run_context_defaults": {},
+        },
+        agents=[],
+    )
+
+    await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
+
+    created["agent"].assert_not_awaited()
+    sync_mock.assert_awaited_once()
+    assert not sync_mock.await_args.kwargs["nodes"]
+
+
+async def test_materialize_drops_malformed_agent_commands_with_a_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-2008: a bundle is untrusted input, so ``agent_commands`` is accepted
+    only as a non-empty list of non-empty strings. A mixed-type list is
+    dropped with a disclosed warning — never silently coerced into the JSONB
+    column (a malformed row would be materialised over bound nodes)."""
+    created = _patch_crud(monkeypatch)
+    bundle = _make_bundle(
+        agents=[
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Malformed Agent",
+                "prompt_template": "pt",
+                "agent_commands": ["opencode run -- ok", 3],
+            }
+        ],
+    )
+
+    result = await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
+
+    assert created["agent"].await_args.kwargs["agent_commands"] is None
+    assert any("malformed agent_commands" in warning for warning in result["warnings"])
 
 
 async def test_materialize_rejects_unpinned_git_ref_in_bundled_agent_commands(

@@ -26,6 +26,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.agent_command_sync import sync_agent_row_commands
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.graph_validator import GraphValidator, check_sandbox_only_field_placement
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.pipeline_engine.git_content import GitContentRefError, validate_agent_git_content_values
@@ -1541,12 +1542,43 @@ async def _materialize_pipeline_and_edges(
     # and every run execute another (FAR-488-class). The sync is the shared
     # ``core.agent_command_sync`` helper every other graph writer uses, which
     # is why it lives in core rather than api.
-    await sync_agent_row_commands(
+    #
+    # TRUST BOUNDARY (FAR-2008 security): a bundle is untrusted input, and
+    # ``_rewire_graph_nodes`` only rewrites an ``agent_id`` that the bundle
+    # DECLARED (present in ``agent_id_map``). An unrecognised id is left
+    # verbatim — which, in an attacker-crafted bundle, can name ANY Agent
+    # already in this organisation. Feeding every node to the org-scoped sync
+    # would then let the bundle overwrite that pre-existing Agent's commands
+    # and silently change unrelated pipelines. So only nodes bound to an Agent
+    # CREATED by this import are eligible; a node bound to a pre-existing Agent
+    # is left untouched (the pre-FAR-2008 behaviour), never silently synced.
+    created_agent_ids = set(agent_id_map.values())
+    import_bound_nodes = [
+        node for node in graph_nodes if isinstance(node, dict) and str(node.get("agent_id")) in created_agent_ids
+    ]
+    synced_agent_ids = await sync_agent_row_commands(
         ctx.session,
         org_id=ctx.org_id,
-        nodes=graph_nodes,
+        nodes=import_bound_nodes,
         pipeline_id=pipeline.id,
     )
+    # Attribution (FAR-2008): import is the untrusted-input writer, so a sync
+    # that rewrites a newly created Agent row must leave a durable audit trail
+    # naming the pipeline, the actor and every changed Agent id — the same
+    # event/payload shape the rollback writer emits.
+    if synced_agent_ids:
+        await append_audit_event(
+            ctx.session,
+            org_id=ctx.org_id,
+            event_type="pipeline.agent_commands_synced",
+            actor_user_id=ctx.created_by,
+            resource_type="pipeline",
+            resource_id=pipeline.id,
+            payload_json={
+                "agent_count": len(synced_agent_ids),
+                "agent_ids": [str(agent_id) for agent_id in synced_agent_ids],
+            },
+        )
     pipeline.graph_nodes_json = list(graph_nodes)
     # FAR-889: detect imports that recreate schema-less manual nodes.  Unlike
     # the REST write path, import tolerates legacy bundles (FAR-874) and keeps
@@ -2022,10 +2054,32 @@ def _base_agent_args(
     bundle and import used to drop it, so an imported Agent bound by a node
     that relies on its row-level command started with a NULL ``agent_commands``
     — which ``_apply_agent_fields`` then cannot materialise, losing the
-    bundle's command entirely. A non-list value (malformed bundle) is dropped
-    rather than persisted into a JSONB column.
+    bundle's command entirely.
+
+    A bundle is untrusted input, so the value is accepted only when it is a
+    non-empty list whose every item is a non-empty string. Anything else
+    (a scalar, a mixed-type list, ``[None]``, an empty list) is DROPPED with a
+    disclosed warning rather than silently coerced: persisting a malformed or
+    empty list would make snapshot materialisation overwrite the bound node's
+    command with junk or with no command at all (FAR-488-class).
     """
     agent_commands = ad.get("agent_commands")
+    resolved_commands: list[str] | None = None
+    if agent_commands is not None:
+        # ``any`` rather than ``all``: an EMPTY list must be rejected too, and
+        # ``all`` over an empty list is vacuously true (semgrep
+        # all-empty-iterable). ``any`` over the negated predicate is False for
+        # an empty list, and the separate emptiness check below rejects it.
+        malformed = not isinstance(agent_commands, list) or any(
+            not isinstance(command, str) or not command for command in agent_commands
+        )
+        if malformed or not agent_commands:
+            ctx.warnings.append(
+                f"Agent '{aname}' declares malformed agent_commands (expected a non-empty list of "
+                "non-empty strings). The commands will be omitted."
+            )
+        else:
+            resolved_commands = list(agent_commands)
     return {
         "session": ctx.session,
         "org_id": ctx.org_id,
@@ -2037,7 +2091,7 @@ def _base_agent_args(
         "evals": ad.get("evals"),
         "retry_policy": ad.get("retry_policy"),
         "token_budget": ad.get("token_budget"),
-        "agent_commands": agent_commands if isinstance(agent_commands, list) else None,
+        "agent_commands": resolved_commands,
     }
 
 

@@ -5784,9 +5784,11 @@ async def rollback_snapshot_endpoint(
                 # (one Agent may be bound by several pipelines). The structured
                 # log line attributes the agent, but only an audit event makes
                 # the mutation durable and queryable, so emit one in the SAME
-                # transaction whenever the sync actually changed a row. A no-op
-                # rollback writes nothing and therefore records nothing.
-                if synced > 0:
+                # transaction whenever the sync actually changed a row — naming
+                # every changed Agent id, not just a count, so the audit chain
+                # identifies the mutated rows. A no-op rollback writes nothing
+                # and therefore records nothing.
+                if synced:
                     await append_audit_event(
                         session,
                         org_id=pipeline.organisation_id,
@@ -5794,7 +5796,10 @@ async def rollback_snapshot_endpoint(
                         actor_user_id=principal.account_id,
                         resource_type="pipeline",
                         resource_id=pipeline_id,
-                        payload_json={"agent_count": synced},
+                        payload_json={
+                            "agent_count": len(synced),
+                            "agent_ids": [str(agent_id) for agent_id in synced],
+                        },
                     )
                 stored_bindings = extract_connector_bindings(snapshot_nodes)
                 if not stored_bindings:

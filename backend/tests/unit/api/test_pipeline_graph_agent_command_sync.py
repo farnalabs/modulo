@@ -152,9 +152,9 @@ async def test_sync_updates_agent_row_when_command_differs() -> None:
     session = _session_returning([agent])
     nodes = [_node(uuid.uuid4(), agent_id=agent_id, agent_commands=["new-command"])]
 
-    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
+    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes, pipeline_id=_PIPELINE_ID)
 
-    assert changed == 1
+    assert changed == [agent_id]
     assert agent.agent_commands == ["new-command"]
 
 
@@ -166,9 +166,9 @@ async def test_sync_skips_agent_row_with_null_command() -> None:
     session = _session_returning([agent])
     nodes = [_node(uuid.uuid4(), agent_id=agent_id, agent_commands=["node-command"])]
 
-    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
+    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes, pipeline_id=_PIPELINE_ID)
 
-    assert changed == 0
+    assert not changed
     assert agent.agent_commands is None
 
 
@@ -178,9 +178,9 @@ async def test_sync_noop_when_command_already_equal() -> None:
     session = _session_returning([agent])
     nodes = [_node(uuid.uuid4(), agent_id=agent_id, agent_commands=["same"])]
 
-    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
+    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes, pipeline_id=_PIPELINE_ID)
 
-    assert changed == 0
+    assert not changed
 
 
 async def test_sync_preserves_multi_item_list() -> None:
@@ -191,9 +191,9 @@ async def test_sync_preserves_multi_item_list() -> None:
     session = _session_returning([agent])
     nodes = [_node(uuid.uuid4(), agent_id=agent_id, agent_commands=["a", "b", "c"])]
 
-    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
+    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes, pipeline_id=_PIPELINE_ID)
 
-    assert changed == 1
+    assert changed == [agent_id]
     assert agent.agent_commands == ["a", "b", "c"]
 
 
@@ -205,9 +205,9 @@ async def test_sync_noop_when_multi_item_already_equal() -> None:
     session = _session_returning([agent])
     nodes = [_node(uuid.uuid4(), agent_id=agent_id, agent_commands=["a", "b", "c"])]
 
-    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
+    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes, pipeline_id=_PIPELINE_ID)
 
-    assert changed == 0
+    assert not changed
     assert agent.agent_commands == ["a", "b", "c"]
 
 
@@ -218,9 +218,9 @@ async def test_sync_detects_change_for_reordered_multi_item() -> None:
     session = _session_returning([agent])
     nodes = [_node(uuid.uuid4(), agent_id=agent_id, agent_commands=["b", "a"])]
 
-    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
+    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes, pipeline_id=_PIPELINE_ID)
 
-    assert changed == 1
+    assert changed == [agent_id]
     assert agent.agent_commands == ["b", "a"]
 
 
@@ -229,9 +229,9 @@ async def test_sync_noop_without_bound_nodes() -> None:
     session = _session_returning([])
     nodes = [_node(uuid.uuid4(), agent_id=None, agent_commands=["standalone"])]
 
-    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
+    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes, pipeline_id=_PIPELINE_ID)
 
-    assert changed == 0
+    assert not changed
     session.execute.assert_not_awaited()
 
 
@@ -240,11 +240,12 @@ async def test_sync_only_writes_agent_commands() -> None:
     ``agent_commands``.
 
     The other four Agent-authoritative fields (``token_budget``,
-    ``prompt_template``, ``model_backend_id``, ``parameter_schema_id``) and the
-    node-authoritative ``schema_profile`` are NOT node-editable on the typed
-    graph model, so a save/restore must never copy node values onto the shared
-    Agent row. Widening the sync would let a rollback silently revert an Agent
-    edit made after the snapshot was taken.
+    ``prompt_template``, ``model_backend_id``, ``parameter_schema_id``) are not
+    node-editable on the typed graph model, so a save/restore must never copy
+    node values onto the shared Agent row. ``schema_profile`` is the sixth
+    field, node-authoritative via ``setdefault``, and is outside this contract
+    entirely (synced in neither direction). Widening the sync would let a
+    rollback silently revert an Agent edit made after the snapshot was taken.
     """
     agent_id = uuid.uuid4()
     model_backend_id = uuid.uuid4()
@@ -268,7 +269,7 @@ async def test_sync_only_writes_agent_commands() -> None:
 
     changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=[node], pipeline_id=_PIPELINE_ID)
 
-    assert changed == 1
+    assert changed == [agent_id]
     assert agent.agent_commands == ["new-command"]
     assert agent.token_budget == 10
     assert agent.prompt_template == "agent-prompt"
@@ -453,9 +454,9 @@ def test_put_graph_endpoint_syncs_agent_rows_before_the_graph_write(client: Test
     validation.issues = []
     order: list[str] = []
 
-    async def _record_sync(*_args: Any, **_kwargs: Any) -> int:
+    async def _record_sync(*_args: Any, **_kwargs: Any) -> list[uuid.UUID]:
         order.append("sync")
-        return 1
+        return [agent_id]
 
     async def _record_replace(*_args: Any, **_kwargs: Any) -> tuple[list[dict[str, Any]], list[Any]]:
         order.append("replace")
@@ -487,9 +488,9 @@ async def test_save_graph_syncs_agent_rows_before_the_graph_write() -> None:
 
     order: list[str] = []
 
-    async def _record_sync(*_args: Any, **_kwargs: Any) -> int:
+    async def _record_sync(*_args: Any, **_kwargs: Any) -> list[uuid.UUID]:
         order.append("sync")
-        return 0
+        return []
 
     async def _record_replace(*_args: Any, **_kwargs: Any) -> tuple[list[dict[str, Any]], list[Any]]:
         order.append("replace")
@@ -530,7 +531,7 @@ async def test_sync_rejects_unpinned_git_ref_from_agent_type_node() -> None:
     nodes = [_agent_node(uuid.uuid4(), agent_id=agent_id, agent_commands=[_UNPINNED_REF])]
 
     with pytest.raises(GitContentRefError):
-        await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
+        await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes, pipeline_id=_PIPELINE_ID)
 
     assert agent.agent_commands == ["old-command"]
     session.execute.assert_not_awaited()
@@ -547,7 +548,7 @@ async def test_sync_rejects_unpinned_git_ref_before_row_read_even_when_equal() -
     nodes = [_agent_node(uuid.uuid4(), agent_id=agent_id, agent_commands=[_UNPINNED_REF])]
 
     with pytest.raises(GitContentRefError):
-        await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
+        await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes, pipeline_id=_PIPELINE_ID)
 
     session.execute.assert_not_awaited()
 
@@ -560,9 +561,9 @@ async def test_sync_allows_pinned_git_ref_from_agent_type_node() -> None:
     session = _session_returning([agent])
     nodes = [_agent_node(uuid.uuid4(), agent_id=agent_id, agent_commands=[_PINNED_REF])]
 
-    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
+    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes, pipeline_id=_PIPELINE_ID)
 
-    assert changed == 1
+    assert changed == [agent_id]
     assert agent.agent_commands == [_PINNED_REF]
 
 
@@ -722,10 +723,10 @@ async def test_rollback_endpoint_syncs_agent_rows_from_the_restored_snapshot(cli
         order.append("graph_write")
         return new_snapshot
 
-    async def _record_sync(*_args: Any, **kwargs: Any) -> int:
+    async def _record_sync(*_args: Any, **kwargs: Any) -> list[uuid.UUID]:
         order.append("sync")
         sync_calls.append(kwargs)
-        return 1
+        return [agent_id]
 
     async def _record_gate(*_args: Any, **_kwargs: Any) -> None:
         order.append("connector_gate")
@@ -762,9 +763,9 @@ async def test_rollback_endpoint_syncs_even_without_connector_bindings(client: T
         await kwargs["post_lock_gate"](target, pipeline)
         return _snapshot_for_response()
 
-    async def _record_sync(*_args: Any, **kwargs: Any) -> int:
+    async def _record_sync(*_args: Any, **kwargs: Any) -> list[uuid.UUID]:
         sync_calls.append(kwargs)
-        return 1
+        return [agent_id]
 
     gate_mock = AsyncMock()
     with (
@@ -786,7 +787,7 @@ async def test_rollback_endpoint_audits_agent_command_sync(client: TestClient) -
     """FAR-2008 attribution: when the rollback's sync actually rewrites Agent
     rows, a durable ``pipeline.agent_commands_synced`` event is appended in the
     SAME transaction (the route transaction), naming the pipeline, the actor
-    and the number of Agent rows changed.
+    and every changed Agent row id.
 
     The structured log line alone is not enough: a rollback can rewrite a
     SHARED Agent row (one Agent bound by several pipelines), so the mutation
@@ -805,7 +806,7 @@ async def test_rollback_endpoint_audits_agent_command_sync(client: TestClient) -
     audit = AsyncMock()
     with (
         patch("modulo.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=3)),
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=[agent_id])),
         patch("modulo.api.routes.pipelines.append_audit_event", new=audit),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAP_ID}/rollback")
@@ -818,7 +819,7 @@ async def test_rollback_endpoint_audits_agent_command_sync(client: TestClient) -
     assert kwargs["actor_user_id"] == _USER_ID
     assert kwargs["resource_type"] == "pipeline"
     assert kwargs["resource_id"] == _PIPELINE_ID
-    assert kwargs["payload_json"] == {"agent_count": 3}
+    assert kwargs["payload_json"] == {"agent_count": 1, "agent_ids": [str(agent_id)]}
 
 
 async def test_rollback_endpoint_does_not_audit_a_noop_sync(client: TestClient) -> None:
@@ -837,7 +838,7 @@ async def test_rollback_endpoint_does_not_audit_a_noop_sync(client: TestClient) 
     audit = AsyncMock()
     with (
         patch("modulo.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=0)),
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=[])),
         patch("modulo.api.routes.pipelines.append_audit_event", new=audit),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAP_ID}/rollback")
@@ -912,9 +913,9 @@ async def test_mcp_graph_writer_syncs_agent_rows_before_the_graph_write() -> Non
         order.append("lock")
         return _LockResult()
 
-    async def _record_sync(*_args: Any, **_kwargs: Any) -> int:
+    async def _record_sync(*_args: Any, **_kwargs: Any) -> list[uuid.UUID]:
         order.append("sync")
-        return 1
+        return []
 
     async def _record_replace(*_args: Any, **_kwargs: Any) -> tuple[list[Any], list[Any]]:
         order.append("replace")
@@ -936,7 +937,7 @@ async def test_mcp_graph_writer_syncs_agent_rows_before_the_graph_write() -> Non
         patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
         patch("modulo.db.crud.pipeline.replace_pipeline_graph", new=_record_replace),
         patch("modulo.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
+        patch("modulo.core.agent_command_sync.sync_agent_row_commands", new=_record_sync),
     ):
         result = await ms._replace_pipeline_graph_txn(
             _ORG_ID,

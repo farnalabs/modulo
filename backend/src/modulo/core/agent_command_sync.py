@@ -41,14 +41,18 @@ bound Agent row — these are Agent-authoritative:
 and it only supplies a DEFAULT for ``schema_profile`` (``setdefault``), which
 is node-authoritative — an explicit node value wins over the Agent row.
 
-Of those six, ``agent_commands`` is the ONLY field the typed graph model
-(``PipelineNode``) exposes as a node-level editable field. It is therefore the
-only field this sync covers: a save/restore writes exactly the command the
-caller declared, so "what you save/restore is what runs". The other four
-Agent-authoritative fields stay owned by the Agent: copying a historical
-snapshot's stale values onto a SHARED Agent row would silently revert an Agent
-edit made after that snapshot was taken (one Agent row can be bound by many
-pipelines). Adding them here is explicitly out of scope.
+Of those five Agent-authoritative fields, ``agent_commands`` is the ONLY one
+the typed REST graph model (``PipelineGraphNode``) exposes as a node-level
+editable field. It is therefore the only field this sync covers: a save/restore
+writes exactly the command the caller declared, so "what you save/restore is
+what runs". The other four Agent-authoritative fields stay owned by the Agent:
+copying a historical snapshot's stale values onto a SHARED Agent row would
+silently revert an Agent edit made after that snapshot was taken (one Agent row
+can be bound by many pipelines). Adding them here is explicitly out of scope.
+
+``schema_profile`` is the sixth field in the list above, but it is NOT part of
+this contract: it is node-authoritative (``_apply_agent_fields`` only supplies
+it via ``setdefault``), so it is intentionally neither synced nor claimed here.
 """
 
 from __future__ import annotations
@@ -105,8 +109,8 @@ async def sync_agent_row_commands(
     *,
     org_id: uuid.UUID,
     nodes: list[dict[str, Any]],
-    pipeline_id: uuid.UUID | None = None,
-) -> int:
+    pipeline_id: uuid.UUID,
+) -> list[uuid.UUID]:
     """FAR-488a: sync a written node ``agent_commands`` into the bound Agent row.
 
     At snapshot time ``_apply_agent_fields`` overwrites a bound node's
@@ -121,12 +125,12 @@ async def sync_agent_row_commands(
     (the node value already stands at snapshot time); an incoming list equal to
     the row value (no-op — including a multi-item list already matching the
     node, so re-saving an unchanged multi-item bound node does NOT drop items).
-    Returns the number of Agent rows updated.
+    Returns the IDs of the Agent rows updated (empty when nothing changed).
 
-    ``pipeline_id`` is optional attribution ONLY (FAR-2008): every caller that
-    knows which pipeline's graph it is writing passes it so the structured log
-    line names the pipeline as well as the Agent. It never affects which rows
-    are selected or written.
+    ``pipeline_id`` is required attribution (FAR-2008): every caller knows
+    which pipeline's graph it is writing, so the structured log line names the
+    pipeline as well as the Agent. It never affects which rows are selected or
+    written.
 
     FAR-220: every incoming command list passes the shared Agent save gate
     (:func:`validate_agent_git_content_values`) BEFORE any write. The graph
@@ -140,7 +144,7 @@ async def sync_agent_row_commands(
     """
     updates = extract_agent_command_sync_updates(nodes)
     if not updates:
-        return 0
+        return []
     # Fail closed before any read or write: an unpinned ref is invalid input
     # regardless of the row's current value, so even a no-op PATCH carrying
     # one is rejected (the row itself must be remediated through the gated
@@ -148,7 +152,7 @@ async def sync_agent_row_commands(
     for incoming_commands in updates.values():
         validate_agent_git_content_values(agent_commands=incoming_commands)
     result = await session.execute(select(Agent).where(Agent.id.in_(list(updates)), Agent.organisation_id == org_id))
-    changed = 0
+    changed: list[uuid.UUID] = []
     for agent in result.scalars():
         incoming = updates.get(agent.id)
         if incoming is None or agent.agent_commands is None or agent.agent_commands == incoming:
@@ -158,9 +162,9 @@ async def sync_agent_row_commands(
             extra={
                 "agent_id": str(agent.id),
                 "organisation_id": str(org_id),
-                "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
+                "pipeline_id": str(pipeline_id),
             },
         )
         agent.agent_commands = list(incoming)
-        changed += 1
+        changed.append(agent.id)
     return changed
