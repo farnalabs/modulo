@@ -717,12 +717,16 @@ describe('SettingsSsoView — row click opens edit (FAR-974 #2)', () => {
     expect(row.find('button').exists()).toBe(true)
   })
 
-  it('the row primary button opens the edit form (native Enter/Space semantics)', async () => {
+  it('the row primary button opens the edit form from the keyboard (Enter)', async () => {
     const wrapper = mountView()
     await nextTick()
 
     const row = wrapper.find('[data-testid="settings-sso-provider-row"]')
-    await row.find('button').trigger('click')
+    const primary = row.find('button')
+    // In the natural tab order: no tabindex override, not disabled.
+    expect(primary.attributes('tabindex')).toBeUndefined()
+    expect((primary.element as HTMLButtonElement).disabled).toBe(false)
+    await primary.trigger('keydown', { key: 'Enter' })
     await nextTick()
 
     expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)

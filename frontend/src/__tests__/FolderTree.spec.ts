@@ -251,7 +251,7 @@ describe('FolderTree rendering and selection', () => {
     expect(wrapper.emitted('select-folder')![1]).toEqual([null])
   })
 
-  it('selects a folder through its native button (keyboard-activatable)', async () => {
+  it('selects a folder from its native button in the tab order', async () => {
     const wrapper = await mountTreeWithFolders([makeFolder()])
     const item = wrapper.find('[data-testid="folder-tree-item-f1"]')
     // Web:S6819: the row itself carries no custom button role/tabindex; the
@@ -260,9 +260,12 @@ describe('FolderTree rendering and selection', () => {
     expect(item.attributes('tabindex')).toBeUndefined()
     const button = item.find('button')
     expect(button.exists()).toBe(true)
-    await button.trigger('click')
-    await button.trigger('click')
-    expect(wrapper.emitted('select-folder')).toHaveLength(2)
+    // In the natural tab order: no tabindex override, not disabled.
+    expect(button.attributes('tabindex')).toBeUndefined()
+    expect((button.element as HTMLButtonElement).disabled).toBe(false)
+    await button.trigger('keydown', { key: 'Enter' })
+    expect(wrapper.emitted('select-folder')).toHaveLength(1)
+    expect(wrapper.emitted('select-folder')![0]).toEqual(['f1'])
   })
 
   it('highlights the selected folder', async () => {

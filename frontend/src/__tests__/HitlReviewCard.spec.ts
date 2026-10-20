@@ -789,6 +789,16 @@ describe('HitlReviewCard', () => {
     expect(option.exists()).toBe(true)
     expect(option.attributes('type')).toBe('radio')
     expect(wrapper.text()).toContain('Deploy the change now.')
+
+    // The visible label is actually bound to the sr-only radio: label[for]
+    // must resolve to the input's id, so clicking/announcing the label targets
+    // this option rather than an orphaned label.
+    const label = wrapper.find('label[for="hitl-choice-ship"]')
+    expect(label.exists()).toBe(true)
+    expect(label.text()).toContain('Ship it')
+    const input = wrapper.find('input#hitl-choice-ship')
+    expect(input.exists()).toBe(true)
+    expect(input.element).toBe(option.element)
   })
 
   it('submits the selected option as the approve answer (FAR-860)', async () => {
