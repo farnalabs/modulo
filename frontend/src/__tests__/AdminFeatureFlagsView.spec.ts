@@ -135,14 +135,29 @@ describe('AdminFeatureFlagsView', () => {
     expect(wrapper.text()).toMatch(/[Tt]eam/i)
   })
 
-  it('shows loading spinner while fetching', async () => {
+  it('shows a loading skeleton, not an indeterminate spinner, while fetching', async () => {
     api.GET = vi.fn().mockReturnValue(new Promise(() => {}))
     const pinia = createPinia()
     setActivePinia(pinia)
     const wrapper = mount(AdminFeatureFlagsView, {
       global: { plugins: [pinia] },
     })
-    expect(wrapper.find('.animate-spin').exists()).toBe(true)
+    const header = wrapper.find('header')
+    expect(header.find('.animate-pulse').exists()).toBe(true)
+    expect(header.find('.animate-spin').exists()).toBe(false)
+    const status = header.find('output')
+    expect(status.exists()).toBe(true)
+    expect(status.attributes('aria-busy')).toBe('true')
+    expect(status.text()).toContain('Loading plan info')
+  })
+
+  it('makes the flag-name tooltip trigger keyboard-focusable', async () => {
+    const wrapper = await mountView()
+    const flagName = wrapper.find('[data-testid="flag-name-flag-connectors"]')
+    expect(flagName.exists()).toBe(true)
+    expect(flagName.element.tagName).toBe('BUTTON')
+    expect(flagName.attributes('type')).toBe('button')
+    expect(flagName.attributes('tabindex')).toBeUndefined()
   })
 
   it('shows error message with retry on API error', async () => {
