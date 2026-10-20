@@ -271,11 +271,8 @@ or `psql` is missing from `PATH` the script exits non-zero naming the missing
 tool; if `SECRET_KEY` or `FERNET_KEY` is unset it prints a notice and generates
 a throwaway value for that run rather than requiring deployment secrets.
 
-To trigger the CI job manually:
-
-```bash
-gh workflow run backup-restore-nightly.yml
-```
+To run the gate on demand, use the workflow's **Run workflow** control in the
+Actions tab - it declares `workflow_dispatch` for exactly that.
 
 ## Full Restoration Walkthrough
 
