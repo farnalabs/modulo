@@ -98,7 +98,7 @@ purging old run data.
       `confirm: true` (`run_retention.feature`)
 - [x] The run-retention export wire contract (FAR-1924): the body is NDJSON
       with exactly one run record per line, and the FINAL line is
-      `{"_complete":true}` — emitted ONLY when the export stream ran to
+      `{"_complete":true}`, emitted ONLY when the export stream ran to
       exhaustion. Its absence means the export was truncated (a mid-stream
       failure still returns HTTP 200 with no error), so an external compliance
       consumer must check for the final sentinel before treating the file as a

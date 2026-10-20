@@ -46,7 +46,7 @@ maintain the rules the boundary consults.
 - [x] Redaction rules are readable and editable by org admins only:
       `GET /api/v1/evidence/redaction-rules` lists the org's rules and
       `PUT /api/v1/evidence/redaction-rules` upserts one by
-      `(key_pattern, role, redacted_fields)` — gated by
+      `(key_pattern, role, redacted_fields)`, gated by
       `evidence.redaction.manage` (admin) via `require_system_or_org_admin`,
       with unknown redaction classes rejected 422 (a rule can never be a silent
       no-op); writes are audited (`evidence_redaction_rule_upserted`)

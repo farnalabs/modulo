@@ -33,7 +33,12 @@ from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from modulo.db.crud import run_retention as rr
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
-from tests.unit.crud.helpers import compile_sql, fake_nested_cm, is_statement_timeout_plumbing
+from tests.unit.crud.helpers import (
+    compile_sql,
+    fake_nested_cm,
+    is_statement_timeout_plumbing,
+    where_column_names,
+)
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 # Literal-binds compilation under the sqlite dialect (Uuid → 32-char hex) —
@@ -61,6 +66,17 @@ def _compile_with_literal_binds(conditions: list[object]) -> str:
 
     stmt = select(Run.id).where(*conditions)  # type: ignore[arg-type]
     return compile_sql(stmt, sqlite.dialect())
+
+
+def _condition_columns(conditions: list[object]) -> frozenset[str]:
+    """Column keys the conditions filter on — structural, not substring.
+
+    ``_retention_conditions`` returns expression objects, so asserting on
+    ``str(condition)`` only proves a column NAME appears; compiling the WHERE
+    clause and inspecting its column references proves which column the
+    predicate actually constrains.
+    """
+    return where_column_names(select(Run.id).where(*conditions))  # type: ignore[arg-type]
 
 
 def _run(status: str, *, thread_id: str | None = None) -> Run:
@@ -97,7 +113,10 @@ class TestRetentionConditions:
         conds = rr._retention_conditions(
             org_id=_ORG, date_from=None, date_to=None, pipeline_id=None, status=None, statuses=None
         )
-        assert any("organisation_id" in str(c) for c in conds)
+        # The caller's org must be the BOUND VALUE, not merely a column name:
+        # `"organisation_id" in str(c)` passes on an equality against any org.
+        assert f"runs.organisation_id = '{_ORG.hex}'" in _compile_with_literal_binds(conds)
+        assert _condition_columns(conds) == frozenset({"organisation_id"})
 
     def test_no_org_scope_for_cross_org(self) -> None:
         conds = rr._retention_conditions(
@@ -111,9 +130,28 @@ class TestRetentionConditions:
         conds = rr._retention_conditions(
             org_id=None, date_from=start, date_to=end, pipeline_id=None, status=None, statuses=None
         )
-        text = "\n".join(str(c) for c in conds)
-        assert ">=" in text
-        assert "<=" in text
+        sql = _compile_with_literal_binds(conds)
+        # Both bounds must target created_at with the caller's values in the
+        # right direction — bare ">="/"<=" substring checks pass on a single
+        # bound, on the wrong column, or on a reversed range.
+        assert f"runs.created_at >= '{start:%Y-%m-%d %H:%M:%S.%f}'" in sql
+        assert f"runs.created_at <= '{end:%Y-%m-%d %H:%M:%S.%f}'" in sql
+        assert sql.index(">=") < sql.index("<=")
+        assert _condition_columns(conds) == frozenset({"created_at"})
+
+    def test_pipeline_scope_added_when_pipeline_id_given(self) -> None:
+        conds = rr._retention_conditions(
+            org_id=None, date_from=None, date_to=None, pipeline_id=_ORG, status=None, statuses=None
+        )
+        assert f"runs.pipeline_id = '{_ORG.hex}'" in _compile_with_literal_binds(conds)
+        assert _condition_columns(conds) == frozenset({"pipeline_id"})
+
+    def test_status_exact_match_used_when_no_whitelist_is_given(self) -> None:
+        conds = rr._retention_conditions(
+            org_id=None, date_from=None, date_to=None, pipeline_id=None, status="failed", statuses=None
+        )
+        assert "runs.status = 'failed'" in _compile_with_literal_binds(conds)
+        assert _condition_columns(conds) == frozenset({"status"})
 
     def test_terminal_status_whitelist_limits_status_expression(self) -> None:
         conds = rr._retention_conditions(
@@ -139,9 +177,13 @@ class TestRetentionConditions:
         )
         sql = _compile_with_literal_binds(conds)
         # The terminal whitelist collides with the requested live status, so the
-        # purge can never match anything.
+        # purge can never match anything. Assert the fail-closed predicate the
+        # builder actually emits (`Run.id IS NULL` plus an unsatisfiable
+        # whitelist) rather than a loose three-way fallback that would also
+        # pass on any incidental "false" in the rendered SQL.
         assert "running" not in sql
-        assert "id IS NULL" in sql or "1 != 1" in sql or "false" in sql.lower()
+        assert "runs.id IS NULL" in sql
+        assert "1!=1" in sql
 
 
 # ---------------------------------------------------------------------------

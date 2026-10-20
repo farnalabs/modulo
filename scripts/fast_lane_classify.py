@@ -249,6 +249,112 @@ def _is_permission_error(stderr: str) -> bool:
     return "resource not accessible" in lowered or "http 403" in lowered or "forbidden" in lowered
 
 
+def _run_gh_variable(
+    repo: str,
+    variable: str,
+    env: dict[str, str],
+) -> tuple[subprocess.CompletedProcess[str] | None, str | None]:
+    """Fetch one repository variable via ``gh api``.
+
+    Returns ``(result, error)`` where *error* describes a spawn/timeout
+    failure and *result* is ``None`` in that case.
+    """
+    cmd = [
+        "gh",
+        "api",
+        f"repos/{repo}/actions/variables/{variable}",
+        "--jq",
+        ".value",
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+            env=env,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        return None, str(exc)
+    return result, None
+
+
+def _suspension_read_failure(stderr: str) -> tuple[bool, str] | None:
+    """Map an expected ``gh api`` failure to a verdict, else ``None``."""
+    if _is_missing_variable(stderr):
+        return True, "no active suspension (variable not set)"
+    if _is_permission_error(stderr):
+        # The token cannot read repository variables at all — a
+        # configuration fault, not an unknown suspension state.  Naming it
+        # explicitly keeps the fail-closed denial diagnosable instead of
+        # looking like a transient API error.  Fix: authenticate the
+        # classifier step with a token that can read variables (the
+        # reviewer PAT), mirroring fast-lane-suspension.yml.
+        return False, (
+            "suspension check denied (fail-closed): token cannot read repository "
+            f"variables — authenticate the classifier with a variables-read token "
+            f"(MODULO_REVIEWBOT_TOKEN): {stderr.strip()}"
+        )
+    return None
+
+
+def _suspension_api_failure(result: subprocess.CompletedProcess[str]) -> tuple[bool, str] | None:
+    """Return the fail-closed verdict for a non-zero ``gh api`` exit, else ``None``."""
+    # gh api exits 0 on success; non-zero means the variable does not exist
+    # or the token lacks vars:read — the latter is "cannot determine" → fail
+    # closed.  A missing variable surfaces as an HTTP 404 (gh exit code 1 with
+    # stderr "gh: Not Found (HTTP 404)"), which is treated as "not suspended".
+    if result.returncode == 0:
+        return None
+    failure = _suspension_read_failure(result.stderr)
+    if failure is not None:
+        return failure
+    return False, f"suspension check denied (fail-closed): API error: {result.stderr.strip()}"
+
+
+def _read_suspension_reason(repo: str, env: dict[str, str]) -> str:
+    """Read the best-effort suspension reason; empty string when unavailable."""
+    reason_result, _ = _run_gh_variable(repo, _SUSPENSION_REASON_VAR, env)
+    if reason_result is not None and reason_result.returncode == 0:
+        return reason_result.stdout.strip()
+    return ""
+
+
+def _suspension_from_value(
+    safe_repo: str,
+    raw_value: str,
+    env: dict[str, str],
+) -> tuple[bool, str]:
+    """Turn a variable value into the suspension verdict."""
+    if not raw_value:
+        return True, "no active suspension (variable empty)"
+
+    try:
+        suspended_until = datetime.fromisoformat(raw_value)
+    except (ValueError, TypeError):
+        return False, f"suspension check denied (fail-closed): unparseable timestamp {raw_value!r}"
+
+    # ``datetime.fromisoformat`` accepts tz-naive strings; ``datetime.now(tz=UTC)``
+    # is aware.  Normalise so the comparison never raises TypeError on a naive
+    # stored timestamp (treated as UTC).
+    if suspended_until.tzinfo is None:
+        suspended_until = suspended_until.replace(tzinfo=UTC)
+
+    now = datetime.now(tz=UTC)
+    if now < suspended_until:
+        # Active suspension — read the reason variable (best-effort; missing
+        # reason is acceptable).
+        reason = _read_suspension_reason(safe_repo, env)
+        reason_text = f" — reason: {reason}" if reason else ""
+        return (
+            False,
+            (f"fast lane suspended until {suspended_until.isoformat()}{reason_text} (current time {now.isoformat()})"),
+        )
+
+    return True, f"suspension expired at {suspended_until.isoformat()} (current time {now.isoformat()})"
+
+
 def check_suspension(
     repo: str,
     gh_token: str | None = None,
@@ -272,94 +378,15 @@ def check_suspension(
     if safe_repo is None:
         return False, "suspension check denied (fail-closed): invalid repo"
 
-    cmd = [
-        "gh",
-        "api",
-        f"repos/{safe_repo}/actions/variables/{_SUSPENSION_VAR}",
-        "--jq",
-        ".value",
-    ]
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-            env=env,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
-        return False, f"suspension check denied (fail-closed): {exc}"
+    result, read_error = _run_gh_variable(safe_repo, _SUSPENSION_VAR, env)
+    if result is None:
+        return False, f"suspension check denied (fail-closed): {read_error}"
 
-    # gh api exits 0 on success; non-zero means the variable does not exist
-    # or the token lacks vars:read — the latter is "cannot determine" → fail
-    # closed.  A missing variable surfaces as an HTTP 404 (gh exit code 1 with
-    # stderr "gh: Not Found (HTTP 404)"), which is treated as "not suspended".
-    if result.returncode != 0:
-        if _is_missing_variable(result.stderr):
-            return True, "no active suspension (variable not set)"
-        if _is_permission_error(result.stderr):
-            # The token cannot read repository variables at all — a
-            # configuration fault, not an unknown suspension state.  Naming it
-            # explicitly keeps the fail-closed denial diagnosable instead of
-            # looking like a transient API error.  Fix: authenticate the
-            # classifier step with a token that can read variables (the
-            # reviewer PAT), mirroring fast-lane-suspension.yml.
-            return False, (
-                "suspension check denied (fail-closed): token cannot read repository "
-                f"variables — authenticate the classifier with a variables-read token "
-                f"(MODULO_REVIEWBOT_TOKEN): {result.stderr.strip()}"
-            )
-        return False, f"suspension check denied (fail-closed): API error: {result.stderr.strip()}"
+    failure = _suspension_api_failure(result)
+    if failure is not None:
+        return failure
 
-    raw_value = result.stdout.strip()
-    if not raw_value:
-        return True, "no active suspension (variable empty)"
-
-    try:
-        suspended_until = datetime.fromisoformat(raw_value)
-    except (ValueError, TypeError):
-        return False, f"suspension check denied (fail-closed): unparseable timestamp {raw_value!r}"
-
-    # ``datetime.fromisoformat`` accepts tz-naive strings; ``datetime.now(tz=UTC)``
-    # is aware.  Normalise so the comparison never raises TypeError on a naive
-    # stored timestamp (treated as UTC).
-    if suspended_until.tzinfo is None:
-        suspended_until = suspended_until.replace(tzinfo=UTC)
-
-    now = datetime.now(tz=UTC)
-    if now < suspended_until:
-        # Active suspension — read the reason variable (best-effort; missing
-        # reason is acceptable).
-        reason = ""
-        reason_cmd = [
-            "gh",
-            "api",
-            f"repos/{safe_repo}/actions/variables/{_SUSPENSION_REASON_VAR}",
-            "--jq",
-            ".value",
-        ]
-        try:
-            reason_result = subprocess.run(
-                reason_cmd,
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=False,
-                env=env,
-            )
-            if reason_result.returncode == 0:
-                reason = reason_result.stdout.strip()
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
-
-        reason_text = f" — reason: {reason}" if reason else ""
-        return (
-            False,
-            (f"fast lane suspended until {suspended_until.isoformat()}{reason_text} (current time {now.isoformat()})"),
-        )
-
-    return True, f"suspension expired at {suspended_until.isoformat()} (current time {now.isoformat()})"
+    return _suspension_from_value(safe_repo, result.stdout.strip(), env)
 
 
 # ---------------------------------------------------------------------------
@@ -689,7 +716,8 @@ def check_sha_pinning(
 # ---------------------------------------------------------------------------
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the fast-lane classifier argument parser."""
     parser = argparse.ArgumentParser(
         description="Fast-lane classifier and guardrails for the merge-queue.",
     )
@@ -742,22 +770,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="fast-lane",
         help="Name of the CI check to verify SHA-pinning against",
     )
+    return parser
 
-    args = parser.parse_args(argv)
 
-    gh_token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-
-    # S8705: bound the operator-supplied repo slug and PR number before argv.
-    safe_repo = _safe_repo(args.repo)
-    safe_pr = _safe_pr(args.pr_number)
-    if safe_repo is None or safe_pr is None:
-        print(
-            f"::error::fast-lane: invalid --repo {args.repo!r} / --pr-number {args.pr_number!r}",
-            file=sys.stderr,
-        )
-        return 2
-
-    # --- Step 1: classify changed paths ---
+def _fetch_pr_paths(
+    safe_repo: str,
+    safe_pr: str,
+    pr_number: int,
+    gh_token: str | None,
+) -> tuple[list[str] | None, int]:
+    """Fetch the PR's changed paths; returns ``(paths, 0)`` or ``(None, exit_code)``."""
     cmd = [
         "gh",
         "pr",
@@ -776,25 +798,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             check=False,
             env={**os.environ, **({"GH_TOKEN": gh_token} if gh_token else {})},
         )
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            # GitHub's pulls.diff endpoint returns HTTP 406 ("diff exceeded the
-            # maximum number of lines (20000)") for very large PRs, which made
-            # `gh pr diff` fail. A PR that large can never be class-A
-            # test-infra work, so report it ineligible (rc=1, neutral) rather
-            # than a classifier error (rc=2, red check).
-            if "exceeded the maximum number of lines" in stderr:
-                print(
-                    f"PR #{args.pr_number} is class-B — diff too large to classify "
-                    f"(>20000 lines) — not fast-lane eligible"
-                )
-                return 1
-            print(
-                f"::error::fast-lane: could not fetch PR diff: {stderr}",
-                file=sys.stderr,
-            )
-            return 2
-        paths = [p.strip() for p in result.stdout.strip().splitlines() if p.strip()]
     except subprocess.TimeoutExpired as exc:
         # A timeout fetching the diff means GitHub was slow, so eligibility
         # cannot be determined right now. That is a DENY — the PR takes the
@@ -807,23 +810,48 @@ def main(argv: Sequence[str] | None = None) -> int:
         # `fast-lane-eligible`). Fail open to "ineligible" with a warning.
         print(
             f"::warning::fast-lane: could not fetch PR diff in time ({exc}); "
-            f"treating PR #{args.pr_number} as not fast-lane eligible (standard lane)",
+            f"treating PR #{pr_number} as not fast-lane eligible (standard lane)",
             file=sys.stderr,
         )
-        return 1
+        return None, 1
     except FileNotFoundError as exc:
         # `gh` is missing from the runner image: a deterministic config error,
         # not a transient blip, so it stays a genuine classifier error (red).
         print(f"::error::fast-lane: could not fetch PR diff: {exc}", file=sys.stderr)
-        return 2
+        return None, 2
 
-    classification = classify_paths(paths)
-    print(f"PR #{args.pr_number}: {len(paths)} changed file(s), class={classification}")
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        # GitHub's pulls.diff endpoint returns HTTP 406 ("diff exceeded the
+        # maximum number of lines (20000)") for very large PRs, which made
+        # `gh pr diff` fail. A PR that large can never be class-A
+        # test-infra work, so report it ineligible (rc=1, neutral) rather
+        # than a classifier error (rc=2, red check).
+        if "exceeded the maximum number of lines" in stderr:
+            print(f"PR #{pr_number} is class-B — diff too large to classify (>20000 lines) — not fast-lane eligible")
+            return None, 1
+        print(
+            f"::error::fast-lane: could not fetch PR diff: {stderr}",
+            file=sys.stderr,
+        )
+        return None, 2
 
-    if classification == "B":
-        print(f"PR #{args.pr_number} is class-B — not fast-lane eligible")
-        return 1
+    return [p.strip() for p in result.stdout.strip().splitlines() if p.strip()], 0
 
+
+def _print_test_weakening_violations(violations: list[str]) -> None:
+    """Print each detected test-weakening violation."""
+    for violation in violations:
+        print(f"  test-weakening: {violation}")
+
+
+def _run_guardrails(
+    args: argparse.Namespace,
+    safe_repo: str,
+    safe_pr: str,
+    gh_token: str | None,
+) -> int | None:
+    """Run label + guardrail checks; return an exit code on failure, else ``None``."""
     # Read the label live from the GitHub API instead of relying on the
     # caller-supplied --has-label (which is frozen at event time and cannot
     # reflect label changes — FAR-1132).
@@ -858,8 +886,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "HEAD",
     )
     if weaken_violations:
-        for v in weaken_violations:
-            print(f"  test-weakening: {v}")
+        _print_test_weakening_violations(weaken_violations)
     if not weaken_ok:
         print("::error::fast-lane: test-weakening detected — demoted to class-B")
         return 1
@@ -875,6 +902,40 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not pin_ok:
         print(f"::error::fast-lane: {pin_detail}")
         return 1
+    return None
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    gh_token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+
+    # S8705: bound the operator-supplied repo slug and PR number before argv.
+    safe_repo = _safe_repo(args.repo)
+    safe_pr = _safe_pr(args.pr_number)
+    if safe_repo is None or safe_pr is None:
+        print(
+            f"::error::fast-lane: invalid --repo {args.repo!r} / --pr-number {args.pr_number!r}",
+            file=sys.stderr,
+        )
+        return 2
+
+    # --- Step 1: classify changed paths ---
+    paths, error_code = _fetch_pr_paths(safe_repo, safe_pr, args.pr_number, gh_token)
+    if paths is None:
+        return error_code
+
+    classification = classify_paths(paths)
+    print(f"PR #{args.pr_number}: {len(paths)} changed file(s), class={classification}")
+
+    if classification == "B":
+        print(f"PR #{args.pr_number} is class-B — not fast-lane eligible")
+        return 1
+
+    guardrail_exit = _run_guardrails(args, safe_repo, safe_pr, gh_token)
+    if guardrail_exit is not None:
+        return guardrail_exit
 
     print(f"PR #{args.pr_number}: class-A fast-lane ELIGIBLE")
     return 0

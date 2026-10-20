@@ -7,7 +7,7 @@ and the subscribable webhook subset in ``api/routes.admin_notifications.py``
   - HITL:             hitl_awaiting, hitl_overdue, hitl_deadline_warning,
                       claim_expired, hitl_approve_sweep_suspected
   - Runs / cost:      run_failed, run_stalled, budget_exceeded,
-                      circuit_breaker_tripped
+                      circuit_breaker_tripped, provider_failure (FAR-2006)
   - Triggers:         trigger_deactivated, trigger_streak_alert,
                       org_triggers_auto_paused
   - Evals:            eval_regression, eval_blocked
@@ -76,6 +76,7 @@ __all__ = [
     "EVENT_HITL_DEADLINE_WARNING",
     "EVENT_HITL_OVERDUE",
     "EVENT_ORG_TRIGGERS_AUTO_PAUSED",
+    "EVENT_PROVIDER_FAILURE",
     "EVENT_QUEUE_PRESSURE_CRITICAL",
     "EVENT_QUEUE_PRESSURE_NOTICE",
     "EVENT_QUEUE_PRESSURE_WARNING",
@@ -214,6 +215,11 @@ RETRY_DELAYS = [1.0, 5.0, 30.0]
 EVENT_HITL_AWAITING = "hitl_awaiting"
 EVENT_RUN_FAILED = "run_failed"
 EVENT_RUN_STALLED = "run_stalled"
+# FAR-2006 — a non-retryable model-provider refusal (401 invalid/expired key,
+# 402 unfunded account / exhausted quota). A DEDICATED event (not run_failed)
+# so an operator can page on provider refusals specifically; the refusal is
+# never retried, so one alert per terminal run is the whole signal.
+EVENT_PROVIDER_FAILURE = "provider_failure"
 EVENT_BUDGET_EXCEEDED = "budget_exceeded"
 EVENT_CIRCUIT_BREAKER_TRIPPED = "circuit_breaker_tripped"
 EVENT_CLAIM_EXPIRED = "claim_expired"

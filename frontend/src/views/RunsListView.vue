@@ -96,7 +96,7 @@
                 :title="runStatusDescription(value as string, t, (row as RunListItem).error_code)"
                 :aria-label="runStatusDescription(value as string, t, (row as RunListItem).error_code)"
               >
-                {{ isSupersededRun(value as string, (row as RunListItem).error_code) ? $t('views.RunsListView.status_superseded') : value }}
+                {{ runStatusShortLabel(value as string, (row as RunListItem).error_code, $t, value as string) }}
               </span>
               <!-- STATE-5 (ux-conformance): a capacity-blocked run must say *why*
                    it is waiting, not just "queued". The cell keeps the short
@@ -274,7 +274,7 @@ import { DataTable, type Column } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import RunPipelineVersionLink from '../components/runs/RunPipelineVersionLink.vue'
-import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, heartbeatDisplayText, isHeartbeatStale, triggerTypeLabel, runStatusDescription, isDispatchedRun, isSupersededRun, queuedCapacityReason } from '../utils/runUtils'
+import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, heartbeatDisplayText, isHeartbeatStale, triggerTypeLabel, runStatusDescription, runStatusShortLabel, isDispatchedRun, queuedCapacityReason } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
 import { isNonTerminalStatus, isTerminalStatus } from '../constants/runStatuses'
 import { formatMoney } from '../lib/money'

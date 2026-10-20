@@ -89,24 +89,28 @@ rate-limited by the `TriggerEngine`.
 - [x] A **wedged** pipeline (queued runs, no progress) stops accepting NEW
       work, refused per funnel (FAR-1342, the FAR-604 D3 backpressure guard):
       **webhook** → HTTP 429 and no run (the sender retries); **cron** → the
-      fire is CONSUMED and RECORDED — a `backpressure_skipped` TriggerEvent
+      fire is CONSUMED and RECORDED: a `backpressure_skipped` TriggerEvent
       plus `last_fired_at` stamped, with `next_fire_at` already advanced at
-      enqueue time — so the fire is a documented loss, never a silent one;
+      enqueue time, so the fire is a documented loss, never a silent one;
       **polling** → skipped and recorded, and the next poll interval re-fires
       naturally; **manual / MCP** → exempt (no backpressure check; capacity
       gates may still DEFER its dispatch but never refuse it). The invariant:
       *a pending run may wait indefinitely while its pipeline makes progress; a
-      pipeline making NO progress stops accepting new work.* Every refusal is
-      operator-visible: the `backpressure_skipped` event appears in
+      pipeline making NO progress stops accepting new work.* An admitted
+      delivery is never silently lost to a queue timeout: a capacity-queued run
+      waits indefinitely by default (FAR-1883), and only the pipeline's opt-in
+      `queue_timeout_seconds` ends it - as a `queue.expired` supersession, not a
+      failure. Every refusal is operator-visible: the `backpressure_skipped`
+      event appears in
       `/api/v1/admin/trigger-events` and the per-trigger event log, is counted
       in the capacity-outcome summary, and the FAR-1344 wedge alert evaluates
       the SAME predicate on every dispatcher-reconcile tick, so a skip is
-      paired with a notification. Detection is the interim shape-based guard —
+      paired with a notification. Detection is the interim shape-based guard:
       pending depth over `max(3 x max_concurrent_runs, 5)`, or the oldest
       genuinely-wedged pending run older than
       `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` (default 60 min;
       `org_capacity_limited` rows are excluded from the age leg, while
-      `pipeline_capacity` rows still count) — so a slow-but-progressing
+      `pipeline_capacity` rows still count), so a slow-but-progressing
       pipeline can still be refused until FAR-1355's progress-based detection
       replaces it. The check fails OPEN (admits, with a warning) on a read
       error, and webhook replays bypass it (an intentional re-fire is never

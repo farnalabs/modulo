@@ -161,7 +161,7 @@ class TestReconcilePipelineSlots:
 
         assert result["released"] == 1
         assert result["per_pipeline"] == {str(PIPELINE_ID): 1}
-        release_stmts = [s for s in statements if "status = 'running'" in s]
+        release_stmts = [s for s in statements if "status = 'running'" in s and ":stale_seconds" in s]
         assert len(release_stmts) == 1
         assert "error_code = 'heartbeat_stale'" in release_stmts[0]
         assert "COALESCE(heartbeat_at, started_at, created_at)" in release_stmts[0]
@@ -210,7 +210,7 @@ class TestReconcilePipelineSlots:
 
         assert result["released"] == 0
         assert not result["per_pipeline"]
-        release_stmts = [s for s in statements if "status = 'running'" in s]
+        release_stmts = [s for s in statements if "status = 'running'" in s and ":stale_seconds" in s]
         assert len(release_stmts) == 1
         # The predicate only matches rows whose heartbeat is OLDER than the
         # window — a fresh heartbeat (or awaiting_human, never SELECTed)
@@ -355,13 +355,16 @@ class TestReconcilePipelineSlots:
         set_config_vals = [p["val"] for p in engine.params_seen if "val" in p]
         assert set_config_vals == [str(ORG_ID)], "the GUC must be set for the enumerated org only"
         bound_oids = [p["oid"] for p in engine.params_seen if "oid" in p]
-        assert bound_oids == [str(ORG_ID)], "the per-org UPDATE must bind the enumerated org"
+        # FAR-2005 added a second per-org UPDATE (the dead-heartbeat reap);
+        # BOTH statements must bind only the enumerated org.
+        assert bound_oids
+        assert all(oid == str(ORG_ID) for oid in bound_oids), "every per-org UPDATE must bind the enumerated org"
         assert str(org2) not in set_config_vals
         assert str(org2) not in bound_oids
         # The UPDATE is defence-in-depth on top of the GUC: the org predicate
         # is IN the statement itself, so a missed set_config can never widen
         # the sweep across orgs.
-        release_stmts = [s for s in statements if "status = 'running'" in s]
+        release_stmts = [s for s in statements if "status = 'running'" in s and ":stale_seconds" in s]
         assert all("organisation_id = :oid" in s for s in release_stmts)
 
 

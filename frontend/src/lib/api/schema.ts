@@ -1645,8 +1645,11 @@ export interface paths {
          * Oidc Callback
          * @description Handle the OIDC provider's callback (authorization code exchange).
          *
-         *     On success, redirects the browser to the frontend callback URL with
-         *     access and refresh tokens as query parameters.
+         *     On success, responds with a 307 redirect to the frontend callback URL. The
+         *     access token is carried in the URL fragment (``#access_token=...``); the
+         *     refresh token is never placed in the URL and is delivered only as the
+         *     httpOnly ``modulo_refresh`` cookie set on the same redirect, alongside the
+         *     ``XSRF-TOKEN`` double-submit CSRF cookie.
          */
         get: operations["oidc_callback_api_v1_auth_oidc__provider__callback_get"];
         put?: never;
@@ -1773,8 +1776,11 @@ export interface paths {
          * Saml Acs
          * @description Handle the SAML Assertion Consumer Service POST from the IdP.
          *
-         *     On success, redirects the browser to the frontend callback URL with
-         *     access and refresh tokens as query parameters.
+         *     On success, responds with a 307 redirect to the frontend callback URL. The
+         *     access token is carried in the URL fragment (``#access_token=...``); the
+         *     refresh token is never placed in the URL and is delivered only as the
+         *     httpOnly ``modulo_refresh`` cookie set on the same redirect, alongside the
+         *     ``XSRF-TOKEN`` double-submit CSRF cookie.
          */
         post: operations["saml_acs_api_v1_auth_saml_acs_post"];
         delete?: never;
@@ -2952,7 +2958,21 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Snapshot Endpoint */
+        /**
+         * List Snapshot Endpoint
+         * @description List a pipeline's snapshots, newest version first.
+         *
+         *     ``exclude_created_kind`` optionally drops rows of the given ``created_kind``
+         *     values from both the page and ``total``. It lets a consumer resolve e.g.
+         *     the newest substantive version with ``page_size=1`` and
+         *     ``exclude_created_kind=run`` — a query that cannot be starved by an
+         *     arbitrarily long streak of run-start snapshots, unlike reading the head of
+         *     an unfiltered page. ``exclude_drafts=true`` drops in-progress editor
+         *     auto-saves too: a draft is ``created_kind='edit'`` with a real
+         *     ``snapshot_version``, so it would otherwise outrank the last COMMITTED
+         *     version. Both are optional, so the unfiltered history every existing
+         *     caller reads is unchanged.
+         */
         get: operations["list_snapshot_endpoint_api_v1_pipelines__pipeline_id__snapshots_get"];
         put?: never;
         /**
@@ -28742,6 +28762,8 @@ export interface operations {
             query?: {
                 page?: number;
                 page_size?: number;
+                exclude_created_kind?: ("initial" | "edit" | "rollback" | "run")[] | null;
+                exclude_drafts?: boolean;
                 _fresh?: boolean;
             };
             header?: never;

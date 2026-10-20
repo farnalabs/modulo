@@ -23,7 +23,6 @@ from tests.unit.crud.helpers import (
     compile_sql,
     find_count_statement,
     find_entity_statement,
-    is_count_select,
     where_column_names,
 )
 
@@ -101,8 +100,13 @@ async def test_returns_rows_and_total() -> None:
     assert rows == [row]
     assert total == 7
     # One COUNT statement + one page statement, both inside the caller's tx.
+    # The two shape-routed finds fail loudly if either is missing, so the
+    # length check plus both lookups pin the exact query shape (a bare
+    # `is_count_select(find_count_statement(...))` re-asserts the lookup's own
+    # precondition and can never fail).
     assert len(session.statements) == 2
-    assert is_count_select(find_count_statement(session.statements))
+    find_count_statement(session.statements)
+    assert _page_stmt(session) is not None
 
 
 async def test_no_filters_builds_an_unfiltered_query() -> None:

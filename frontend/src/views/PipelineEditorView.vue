@@ -84,6 +84,22 @@
               :mode="isViewing ? 'viewing' : 'latest'"
               @open-timeline="openVersionTimeline"
             />
+            <!-- FAR-1895: the chip resolves through an AUXILIARY filtered
+                 request. On failure the chip falls back to the substantive
+                 version in the loaded catalog; if the catalog's first page has
+                 no substantive version, the chip is hidden and the failure is
+                 surfaced via `versionChipError` / retry. It never serves a
+                 STALE version. -->
+            <button
+              v-if="versionChipError && !isViewing"
+              type="button"
+              class="shrink-0 rounded text-xs text-destructive hover:underline"
+              :title="versionChipError"
+              data-testid="pipeline-editor-version-chip-error"
+              @click="loadCurrentVersionSnapshot()"
+            >
+              {{ $t('views.PipelineEditorView.version_chip_unavailable') }}
+            </button>
           </div>
           <span :class="groupDividerClass" />
           <!-- Group: graph file actions -->
@@ -1977,6 +1993,7 @@
       v-if="showVersionTimeline"
       ref="timelineRef"
       :pipeline-id="pipelineId"
+      :current-version="currentVersionSnapshot"
       @close="showVersionTimeline = false"
       @view="requestViewSnapshot"
       @restore="openRestoreConfirm"
@@ -2031,7 +2048,7 @@ import { useProductAnalytics } from '../composables/useProductAnalytics'
 import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import { useEnvironmentProfilesStore } from '../stores/environmentProfiles'
 import { runnerTierLabelKeyForProvider } from '../lib/runnerTiers'
-import { currentSubstantiveVersion, SNAPSHOT_PAGE_SIZE } from '../lib/pipelineVersion'
+import { currentSubstantiveVersion, NON_VERSION_CREATED_KINDS, SNAPSHOT_PAGE_SIZE } from '../lib/pipelineVersion'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import { Pencil as PencilIcon, LoaderCircle as LoaderCircleIcon, Download as DownloadIcon, Play as PlayIcon, Plus as PlusIcon, Maximize2 as Maximize2Icon, X as XIcon, ExternalLink as ExternalLinkIcon } from '@lucide/vue'
@@ -2139,6 +2156,24 @@ const connectors = ref<any[]>([])
 const modelBackends = ref<any[]>([])
 const schemas = ref<any[]>([])
 const snapshots = ref<any[]>([])
+// FAR-1895: the newest SUBSTANTIVE version, resolved by a server-filtered
+// query (`exclude_created_kind=<NON_VERSION_CREATED_KINDS>` + `exclude_drafts`,
+// enough rows to survive the version-0 post-filter). Deliberately separate from
+// `snapshots` (the unfiltered catalog page the compare pickers use): the chip
+// must not depend on a substantive version happening to fall inside a
+// fixed-size page of run-streaked history.
+//
+// This is an AUXILIARY request. On failure `currentVersionSnapshot` falls back
+// to the substantive version in the already-loaded catalog; if that catalog's
+// first page has no substantive version, the chip is hidden and the failure is
+// surfaced via `versionChipError` / retry. It never serves a STALE version (the
+// loader clears `currentVersionSnapshots` on every failure).
+const currentVersionSnapshots = ref<any[]>([])
+const versionChipError = ref<string | null>(null)
+// Monotonic token: loadCatalog re-runs on mount and after a rollback, so a
+// stale in-flight filtered response must never overwrite a newer one (same
+// guard as versionLookupToken for the `?version=` alias search).
+let versionChipToken = 0
 
 const showAgentPicker = ref(false)
 const showRevertDialog = ref(false)
@@ -3299,15 +3334,31 @@ async function loadGraph() {
 // at page_size=100 + a binary search), so a partial or failed catalog load
 // can never make an existing deep version read as missing.
 //
-// FAR-1816/1817 parity: fetch the SAME widened window the timeline fetches
-// (lib/pipelineVersion SNAPSHOT_PAGE_SIZE), never the endpoint's 20-row
-// default. With the default, a run-heavy recent history (one `run` snapshot
-// per run) pushes the newest substantive version off page 1 and
-// currentSubstantiveVersion returns null, so the chip silently disappears
-// while the 100-row timeline still shows that version. One shared constant
-// keeps the two surfaces reading the same history.
+// FAR-1816/1817: the catalog fetches the same widened window the timeline
+// fetches (lib/pipelineVersion SNAPSHOT_PAGE_SIZE) for the compare pickers.
+//
+// FAR-1895: the CHIP does not read that window. Run-start snapshots are
+// created unconditionally per run and never pruned, so any fixed page can be
+// entirely `run` rows on a long-lived scheduled pipeline. The chip therefore
+// asks the server for the newest version directly — an `exclude_created_kind`
+// filter plus `exclude_drafts` — a query that cannot be starved by history
+// size. It is resolved by loadCurrentVersionSnapshot BELOW, on a request that
+// is STARTED alongside this catalog load but is NOT awaited by it: its failure
+// and its latency (including its own deadline) degrade the chip, never the
+// whole catalog.
 async function loadCatalog() {
   pageError.value = null
+  // FAR-1895: start the chip's candidate request CONCURRENTLY with the catalog
+  // and DO NOT await it. It is an independent auxiliary request; a stalled
+  // filtered query sits until its own request deadline, and awaiting it here
+  // (as this previously did) carried that deadline onto the editor's load —
+  // loadCatalog is one leg of the useDataFetch Promise.all, so the whole-page
+  // spinner waited on it. The catalog below resolves and the editor paints
+  // without this request; the chip resolves or degrades when it settles.
+  // loadCurrentVersionSnapshot records its own failure in `versionChipError`
+  // and never rejects, so this can neither blank the catalog nor produce an
+  // unhandled rejection.
+  void loadCurrentVersionSnapshot()
   try {
     const [a, c, mb, s, snaps, ps] = await Promise.all([
       withTimeout((signal) => api.GET('/api/v1/agents', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
@@ -3328,6 +3379,63 @@ async function loadCatalog() {
     paramSchemas.value = ps
   } catch (e) {
     console.warn('Failed to load pipeline data', e)
+  }
+}
+
+/**
+ * FAR-1895: resolve the newest VERSION (substantive kind, not a draft) with a
+ * server-filtered query that no run streak can starve.
+ *
+ * Failure handling is the point of this helper. The typed client returns
+ * `{ error }` WITHOUT throwing on 4xx/5xx, and `withTimeout` can reject on its
+ * own deadline, so both HTTP failures and timeouts are caught here and recorded
+ * in `versionChipError`. `currentVersionSnapshots` is CLEARED on failure — not
+ * merely left untouched — so `currentVersionSnapshot` falls back to the
+ * already-loaded unfiltered catalog even when a PREVIOUS query succeeded. That
+ * matters after a rollback: the reload re-queries this endpoint, and without the
+ * clear a failed re-query would keep serving the pre-rollback version. On
+ * failure the chip falls back to the substantive version in the loaded catalog;
+ * if the catalog's first page has no substantive version, the chip is hidden and
+ * the failure is surfaced via `versionChipError` / retry. It never serves a
+ * STALE version.
+ */
+async function loadCurrentVersionSnapshot() {
+  const token = ++versionChipToken
+  versionChipError.value = null
+  try {
+    // page_size 2, not 1: the shared client predicate post-filters
+    // `snapshot_version > 0` (a version-0 placeholder must never be the chip),
+    // so a single row could be consumed by that filter and collapse the chip.
+    // (pipeline_id, snapshot_version) is unique, so at most one version-0 row
+    // exists; two rows are enough to survive it. `exclude_drafts` keeps an
+    // in-progress autosave (created_kind='edit', real version) from being
+    // labelled the current version — the sibling channel resolver filters
+    // drafts the same way.
+    const { data, error } = await withTimeout((signal) => api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
+      params: {
+        path: { pipeline_id: pipelineId },
+        query: { page_size: 2, exclude_created_kind: [...NON_VERSION_CREATED_KINDS], exclude_drafts: true },
+      },
+      signal,
+    }))
+    if (token !== versionChipToken) return
+    if (error) {
+      // Clear the previous success FIRST. This ref is only reassigned on
+      // success, so without the clear a failed RE-query (e.g. the reload after
+      // a rollback) would leave the pre-rollback list in place; the `??` in
+      // currentVersionSnapshot prefers it over the fresh catalog, so the chip
+      // would show the OLD version and the documented catalog fallback would be
+      // unreachable. Emptying it makes the fallback real and the docstring true.
+      currentVersionSnapshots.value = []
+      versionChipError.value = formatApiError(error)
+      return
+    }
+    currentVersionSnapshots.value = ((data as any)?.items ?? []).filter((sn: any) => sn.snapshot_version > 0)
+  } catch (e: unknown) {
+    if (token !== versionChipToken) return
+    console.warn('Failed to resolve the pipeline version chip', e)
+    currentVersionSnapshots.value = []
+    versionChipError.value = formatApiError(e)
   }
 }
 
@@ -4464,9 +4572,11 @@ const requestedVersion = computed(() => {
 // page-1 list, so a partial or failed catalog load cannot make an existing
 // deep version read as missing either.
 //
-// FAR-1816/1817: SNAPSHOT_PAGE_SIZE is the shared window both the chip and
-// the timeline fetch (lib/pipelineVersion), so the lookup, the catalog and the
-// timeline can never drift onto three different page sizes.
+// FAR-1816/1817: SNAPSHOT_PAGE_SIZE is the shared window this lookup and the
+// timeline fetch (lib/pipelineVersion). The chip no longer uses it (FAR-1895:
+// it resolves through a server-filtered query), so the number is NOT a
+// chip/timeline parity guarantee — that parity is structural (see
+// currentVersionSnapshot below and PipelineSnapshotTimeline's groupHistory).
 const SNAPSHOT_LOOKUP_MAX_PROBES = 12
 
 type VersionLookupStatus = 'idle' | 'loading' | 'found' | 'absent' | 'failed'
@@ -4675,13 +4785,37 @@ const historicResolving = computed(
 // current SUBSTANTIVE version. FAR-1817: a version is a substantive snapshot
 // (created_kind initial/edit/rollback) — run snapshots are NOT versions, so
 // the chip must NOT label the newest snapshot (which after any run is a run
-// snapshot) as the current version. The predicate is shared with the timeline
-// (lib/pipelineVersion) so the two surfaces can never disagree. loadCatalog
-// filters version 0. Hidden only when there is no substantive version yet.
-const versionChipSnapshot = computed(() => {
-  if (isViewing.value) return viewSnapshot.value
-  return currentSubstantiveVersion(snapshots.value)
-})
+// snapshot) as the current version.
+//
+// FAR-1895: the candidate list comes from a SERVER-FILTERED query
+// (`exclude_created_kind` + `exclude_drafts`), not from the head of the
+// unfiltered catalog page. Run snapshots accumulate without bound and are
+// never pruned, so any fixed page can be 100% run rows; the filtered query
+// always returns the newest version regardless of history size. The shared
+// client predicate (lib/pipelineVersion) still validates the row, so the chip
+// can never label a run or a draft as a version even if the server filter were
+// wrong.
+//
+// FALLBACK: when the auxiliary filtered request FAILED, `currentVersionSnapshots`
+// is empty (the loader CLEARS it on every failure, so a failed re-query after a
+// rollback cannot leave a stale pre-rollback list behind) and this falls back to
+// the already-loaded unfiltered catalog — the pre-FAR-1895 behaviour. A version
+// inside that window therefore still labels the chip even though one auxiliary
+// request failed; if that first page has no substantive version either, the chip
+// is hidden. Either way the failure is surfaced separately by `versionChipError`
+// (with a retry) so degraded is never silent, and a stale version is never
+// served.
+//
+// `currentVersionSnapshot` (viewing-independent) is ALSO handed to the
+// timeline: when the timeline's own window has no substantive row it anchors
+// on this exact value instead of fabricating one from a run row (FAR-1895), so
+// the two surfaces cannot show different current versions.
+const currentVersionSnapshot = computed(
+  () =>
+    currentSubstantiveVersion(currentVersionSnapshots.value)
+    ?? currentSubstantiveVersion(snapshots.value),
+)
+const versionChipSnapshot = computed(() => (isViewing.value ? viewSnapshot.value : currentVersionSnapshot.value))
 
 const viewedVersionDate = computed(() => formatDateShort(viewSnapshot.value?.created_at ?? null))
 const viewedVersionAuthor = computed(() => {

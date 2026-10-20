@@ -94,7 +94,7 @@ annotate, delete, rollback, diff) is the data layer under
       `backend/src/modulo/api/routes/runs.py`,
       `frontend/src/__tests__/RunPipelineVersionLink.spec.ts`)
 - [x] Snapshot save, list, get, diff and rollback are Community-tier: the
-      `pipeline_diff_rollback` plan gate is RETIRED (FAR-1819) — the
+      `pipeline_diff_rollback` plan gate is RETIRED (FAR-1819): the
       `require_feature` guard is gone from the routes and the key is removed
       from the feature registry, and migration
       `0317_drop_retired_pipeline_diff_rollback_flag` sweeps the stale

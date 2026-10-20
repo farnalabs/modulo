@@ -4,8 +4,9 @@
 event mapper but had NO dispatch call site anywhere in the backend, so a
 terminal run failure produced no notification at all. These tests pin the
 deliberately narrow wiring: notify ONLY for a code that is BOTH non-retryable
-AND ``alert_severity == "critical"``, and never let the attempt block or alter
-the terminal write.
+AND ``alert_severity == "critical"``, never for the provider-refusal codes that
+FAR-2006 already pages via its dedicated ``EVENT_PROVIDER_FAILURE`` alert, and
+never let the attempt block or alter the terminal write.
 """
 
 from __future__ import annotations
@@ -118,7 +119,7 @@ async def test_non_retryable_critical_code_dispatches() -> None:
         org_id=org_id,
         run_id=run_id,
         pipeline_id=pipeline_id,
-        error_code="model.insufficient_funds",
+        error_code="model_disabled",
     )
 
     kwargs = notifier.dispatch_event.await_args.kwargs
@@ -127,7 +128,7 @@ async def test_non_retryable_critical_code_dispatches() -> None:
     assert kwargs["run_id"] == run_id
     assert kwargs["payload"] == {
         "run_id": str(run_id),
-        "error_code": "model.insufficient_funds",
+        "error_code": "model_disabled",
         "pipeline_name": "My Pipeline",
     }
 
@@ -142,10 +143,10 @@ async def test_payload_carries_the_canonical_dotted_code_for_a_legacy_spelling()
         org_id=uuid.uuid4(),
         run_id=uuid.uuid4(),
         pipeline_id=uuid.uuid4(),
-        error_code="model_insufficient_funds",
+        error_code="scope_violation",
     )
 
-    assert notifier.dispatch_event.await_args.kwargs["payload"]["error_code"] == "model.insufficient_funds"
+    assert notifier.dispatch_event.await_args.kwargs["payload"]["error_code"] == "scope.violation"
 
 
 @pytest.mark.asyncio
@@ -196,6 +197,24 @@ async def test_unknown_code_is_not_dispatched_and_does_not_raise() -> None:
     notifier.dispatch_event.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["provider.authentication", "provider.billing", "model.insufficient_funds"])
+async def test_provider_refusal_code_is_left_to_the_dedicated_alert(code: str) -> None:
+    """FAR-2006 already pages for these from the same tail — never notify twice."""
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock()
+    executor = _executor_with_notifier(notifier)
+
+    await executor._dispatch_run_failed(
+        org_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        pipeline_id=uuid.uuid4(),
+        error_code=code,
+    )
+
+    notifier.dispatch_event.assert_not_awaited()
+
+
 def test_unresolvable_registry_entry_does_not_notify(monkeypatch: pytest.MonkeyPatch) -> None:
     """A canonical code with no registry entry is a silent no-notify, never a raise."""
     monkeypatch.setattr(error_codes_module, "ERROR_CODE_REGISTRY", {})
@@ -215,7 +234,7 @@ async def test_unresolvable_pipeline_name_omits_the_payload_key() -> None:
         org_id=uuid.uuid4(),
         run_id=uuid.uuid4(),
         pipeline_id=uuid.uuid4(),
-        error_code="model.insufficient_funds",
+        error_code="model_disabled",
     )
 
     payload = notifier.dispatch_event.await_args.kwargs["payload"]
@@ -323,7 +342,7 @@ async def test_notifier_exception_is_swallowed_and_logged() -> None:
             org_id=uuid.uuid4(),
             run_id=uuid.uuid4(),
             pipeline_id=uuid.uuid4(),
-            error_code="model.insufficient_funds",
+            error_code="model_disabled",
         )
 
     assert notifier.dispatch_event.await_count == 1
@@ -341,7 +360,7 @@ async def test_cancelled_error_is_re_raised() -> None:
             org_id=uuid.uuid4(),
             run_id=uuid.uuid4(),
             pipeline_id=uuid.uuid4(),
-            error_code="model.insufficient_funds",
+            error_code="model_disabled",
         )
 
 
