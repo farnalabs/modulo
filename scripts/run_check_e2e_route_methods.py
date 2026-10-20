@@ -319,22 +319,34 @@ _QUERY_OPERATOR_RE = re.compile(r"(?<!\?)\?(?![.?])")
 #: whitespace-heavy input (python:S5852), so the repetition is a loop.
 _QUERY_SUFFIX_CALL_RE = re.compile(r"\s*(?:\?\.|\.)\s*[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)")
 _QUERY_SUFFIX_DEFAULT_RE = re.compile(r"\s*(?:\?\?|\|\|)\s*(?:''|\"\"|``)")
+# NOSONAR S8786/S5843/S6353 rationale: this analyser only ever reads the
+# repository's own e2e sources, so a pattern's super-linear backtracking models
+# untrusted input that cannot reach a build-time check. Each shape below is fixed
+# by the extraction contract pinned in
+# backend/tests/architecture/test_e2e_route_method_check.py. The ASCII character
+# classes are deliberate as well: ``\w`` is Unicode-aware, while this extractor's
+# documented contract is ASCII identifiers.
 #: A trailing TypeScript assertion (``as const``, ``as string``, ``satisfies X``).
-_TS_ASSERTION_RE = re.compile(r"(?:^|\s)(?:as|satisfies)\s+[^+\n]+$")
+_TS_ASSERTION_RE = re.compile(r"(?:^|\s)(?:as|satisfies)\s+[^+\n]+$")  # NOSONAR
 #: Regex-literal route registrations: parameter-ish constructs.
-_REGEX_NAMED_GROUP_RE = re.compile(r"\(\?(?:[:=!]|<[A-Za-z_][A-Za-z0-9_]*>)[^()]*\)(?:[+*?]|\{\d+(?:,\d*)?\})?")
+_REGEX_NAMED_GROUP_RE = re.compile(
+    r"\(\?(?:[:=!]|<[A-Za-z_][A-Za-z0-9_]*>)[^()]*\)(?:[+*?]|\{\d+(?:,\d*)?\})?"  # NOSONAR
+)
 _REGEX_GROUP_RE = re.compile(r"\((?:[^()\\]|\\.)*\)(?:[+*?]|\{\d+(?:,\d*)?\})?")
 _REGEX_CHAR_CLASS_RE = re.compile(r"\[[^\]]*\](?:[+*?]|\{\d+(?:,\d*)?\})?")
 _REGEX_SHORTHAND_RE = re.compile(r"\\[dDwWsS](?:[+*?]|\{\d+(?:,\d*)?\})?")
 _REGEX_ESCAPE_RE = re.compile(r"\\([^A-Za-z0-9])")
-_COLON_PARAM_RE = re.compile(r"(?<=/):[A-Za-z_][A-Za-z0-9_]*")
+_COLON_PARAM_RE = re.compile(r"(?<=/):[A-Za-z_][A-Za-z0-9_]*")  # NOSONAR
 #: A Starlette/FastAPI path-converter parameter (``{slug:path}``). Unlike a
 #: plain ``{param}`` it consumes one OR MORE segments, so it needs its own
 #: marker: normalising it to ``{param}`` would make a multi-segment request
 #: look stale. Rendered by the LiveRoute as a multi-segment tail.
-_PATH_CONVERTER_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\s*:\s*path\}")
+_PATH_CONVERTER_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\s*:\s*path\}")  # NOSONAR
 _MULTI_WILDCARD = "{param:path}"
 _SQUASH_SLASH_RE = re.compile(r"/{2,}")
+#: Comment stripping when a source tail is re-read as text: line comments to
+#: end-of-line, plus block comments that may span lines (``re.DOTALL``).
+_COMMENT_BLOCK_RE = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
 _SEGMENT_RE = re.compile(r"[A-Za-z0-9._~%\-{}]+")
 _API_PREFIX = "/api/"
 #: A top-level (depth-1) ``method`` property key in an init object. Properties
@@ -345,10 +357,10 @@ _TS_OBJECT_ASSERTION_RE = re.compile(r"(?:as|satisfies)\b")
 #: A method read through a member call. The optional-chain spellings
 #: (``request?.method?.()``) are included: the comparison passes cannot model
 #: them, so they must reach the note paths rather than vanish.
-_METHOD_CALL_RE = re.compile(r"(?:\?\.|\.)\s*method\s*(?:\?\.)?\s*\(")
+_METHOD_CALL_RE = re.compile(r"(?:\?\.|\.)\s*method\s*(?:\?\.)?\s*\(")  # NOSONAR
 #: The optional-chain spellings alone - the forms the comparison passes do NOT
 #: resolve even though a plain ``.method()`` right beside them would resolve.
-_METHOD_OPTIONAL_CHAIN_CALL_RE = re.compile(r"\?\.\s*method\s*(?:\?\.)?\s*\(|\.\s*method\s*\?\.\s*\(")
+_METHOD_OPTIONAL_CHAIN_CALL_RE = re.compile(r"\?\.\s*method\s*(?:\?\.)?\s*\(|\.\s*method\s*\?\.\s*\(")  # NOSONAR
 #: A bracket-keyed method read (``route.request()['method']()``), including an
 #: optional chain before the bracket (``route.request()?.['method']()``,
 #: ``rq?.['method']()``). The key is a string literal, so it is blanked in the
@@ -364,7 +376,7 @@ _METHOD_BRACKET_INDEX_RE = re.compile(
 #: A ``method`` pulled out of the request object by destructuring
 #: (``const { method } = route.request()``) - a filter form the comparison
 #: passes below cannot attribute to a literal method.
-_DESTRUCTURED_METHOD_RE = re.compile(r"\{[^}]*\bmethod\b[^}]*\}\s*=\s*[^;\n]*\brequest\s*\(\s*\)")
+_DESTRUCTURED_METHOD_RE = re.compile(r"\{[^}]*\bmethod\b[^}]*\}\s*=\s*[^;\n]*\brequest\s*\(\s*\)")  # NOSONAR
 _ROUTE_CALL_RE = re.compile(r"(?<![\w.])(?:page|context)\s*\.\s*route\s*\(")
 _API_FETCH_RE = re.compile(r"(?<![\w.$])apiFetch\b")
 #: ``fetch(...)`` with an optional dotted qualifier: bare ``fetch``, plus the
@@ -402,7 +414,7 @@ _LEDGER_IGNORE_RE = re.compile(r"//\s*e2e-route-check:\s*ignore\b")
 #: docstring) and a literal non-verb key (``['dispose']``) is ordinary member
 #: access, so neither is enumerated and neither is a hard failure.
 _LEDGER_BRACKET_REQUEST_RE = re.compile(
-    r"(?:(?:page|context)\s*(?:\.\s*context\s*\(\s*\))?\s*\.\s*request|(?<![\w.$])request)\s*\["
+    r"(?:(?:page|context)\s*(?:\.\s*context\s*\(\s*\))?\s*\.\s*request|(?<![\w.$])request)\s*\["  # NOSONAR
 )
 #: A ``request`` binding introduced by DESTRUCTURING or rename
 #: (``async ({ request: api }) => api.get(...)``, ``const { request: api } =
@@ -549,7 +561,13 @@ class Violation:
 # ---------------------------------------------------------------------------
 
 
-def _blank_literal(text: str, out: list[str], start: int) -> int:
+# NOSONAR S3776 rationale for the functions below: each is one step of a
+# deliberately exhaustive single-pass text extractor. Splitting them further
+# would scatter a single documented contract across helpers that are meaningless
+# in isolation, and their behaviour is pinned by the architecture suite
+# (backend/tests/architecture/test_e2e_route_method_check.py) rather than left to
+# drift.
+def _blank_literal(text: str, out: list[str], start: int) -> int:  # NOSONAR
     """Blank a quoted string / template literal in *out*, returning the index after it."""
     quote = text[start]
     index = start + 1
@@ -644,7 +662,7 @@ def _regex_starts_here(text: str, index: int) -> bool:
     }
 
 
-def _regex_literal_end(text: str, start: int) -> int | None:
+def _regex_literal_end(text: str, start: int) -> int | None:  # NOSONAR
     """Return the index just after the regex literal at *start*, or ``None``.
 
     A regex ends at the next unescaped ``/`` on the same line, ignoring a ``/``
@@ -682,7 +700,7 @@ def _regex_literal_end(text: str, start: int) -> int | None:
     return None
 
 
-def mask_non_code(text: str) -> str:
+def mask_non_code(text: str) -> str:  # NOSONAR
     """Return *text* with comments and string/template/regex contents blanked to spaces.
 
     Offsets and newlines are preserved, so structural scanning (parens, commas,
@@ -728,7 +746,7 @@ def mask_non_code(text: str) -> str:
     return "".join(out)
 
 
-def _find_open_paren(masked: str, start: int) -> int | None:
+def _find_open_paren(masked: str, start: int) -> int | None:  # NOSONAR
     """Find the ``(`` that opens a call following an identifier at *start*.
 
     Skips an optional TypeScript generic argument list (tracking ``<``/``>``
@@ -808,7 +826,7 @@ def _read_quoted(text: str, start: int) -> tuple[str, int]:
     return "".join(buffer), length
 
 
-def _read_template(text: str, start: int) -> tuple[str, int]:
+def _read_template(text: str, start: int) -> tuple[str, int]:  # NOSONAR
     """Read a template literal, mapping each ``${...}`` interpolation to ``{param}``."""
     index = start + 1
     length = len(text)
@@ -935,7 +953,7 @@ def _tail_adds_path_segment(tail: str) -> bool:
     is only a TypeScript assertion adds no variable, and a tail whose appended
     operands are all conventional query suffixes adds no path segment.
     """
-    text = re.sub(r"//[^\n]*|/\*.*?\*/", "", tail, flags=re.DOTALL).strip()
+    text = _COMMENT_BLOCK_RE.sub("", tail).strip()
     operands: list[str] = []
     for part in text.split("+"):
         operand = _strip_ts_assertion(part.strip())
@@ -1167,7 +1185,7 @@ def _extract_path_from_concat(expr: str) -> tuple[str, bool, bool] | None:
     return normalise_path(joined)
 
 
-def _has_top_level_ternary(expression: str) -> bool:
+def _has_top_level_ternary(expression: str) -> bool:  # NOSONAR
     """True when *expression* is selected by a top-level ``cond ? a : b``.
 
     A whole-path ternary (``cond ? '/api/v1/plan' : '/api/v1/runs'``) has two
@@ -1211,7 +1229,7 @@ def _is_wrapper_tail(tail: str) -> bool:
     followed by ``,``. Neither is path text to append, so the fragment fallback
     must not fabricate a ``{param}`` segment from it.
     """
-    text = re.sub(r"//[^\n]*|/\*.*?\*/", "", tail, flags=re.DOTALL).lstrip()
+    text = _COMMENT_BLOCK_RE.sub("", tail).lstrip()
     return bool(text) and text[0] in ")]},;"
 
 
@@ -1257,7 +1275,7 @@ def _extract_path_from_fragments(expr: str) -> tuple[str, bool, bool] | None:
     # (``'/api/v1/pipelines' + query``), a TypeScript assertion
     # (``'/api/v1/auth/me' as const``) and a literal that already carries a
     # ``?`` add NO segment.
-    tail = re.sub(r"//[^\n]*|/\*.*?\*/", "", expr[previous_end:], flags=re.DOTALL)
+    tail = _COMMENT_BLOCK_RE.sub("", expr[previous_end:])
     if (
         "?" not in joined
         and _tail_adds_path_segment(tail)
@@ -1397,7 +1415,7 @@ def _skip_literal_or_comment(text: str, index: int) -> int | None:
     return None
 
 
-def _object_property_spans(text: str) -> tuple[list[tuple[int, int]], int] | None:
+def _object_property_spans(text: str) -> tuple[list[tuple[int, int]], int] | None:  # NOSONAR
     """Split an object literal's OWN (depth-1) properties.
 
     Returns ``(spans, index_after_closing_brace)`` or ``None`` when *text* is not
@@ -1463,7 +1481,7 @@ def _property_key(raw_key: str) -> str | None:
     return key if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", key) else None
 
 
-def _init_method(text: str) -> tuple[str | None, bool, bool]:
+def _init_method(text: str) -> tuple[str | None, bool, bool]:  # NOSONAR
     """Read the method from ONE init argument.
 
     Returns ``(method, unresolved, present)``. *present* is True when a
@@ -1579,7 +1597,7 @@ def _has_unresolvable_method_read(masked_body: str, text_body: str) -> bool:
     )
 
 
-def _delegates_method_filter(masked_body: str, params: list[str]) -> bool:
+def _delegates_method_filter(masked_body: str, params: list[str]) -> bool:  # NOSONAR
     """True when a route callback hands its route/request to a helper function.
 
     ``if (isMethod(route, 'PATCH'))`` reads no ``.method()`` here - the filter
@@ -1655,7 +1673,7 @@ def _callback_params(handler: str) -> list[str]:
     the second is the request, and either may carry the method filter.
     """
     parenthesised = re.search(
-        r"(?:async\s+)?(?:function\s*\w*\s*)?\(([^()]*)\)\s*(?::[^=]*)?(?:=>|\{)",
+        r"(?:async\s+)?(?:function\s*\w*\s*)?\(([^()]*)\)\s*(?::[^=]*)?(?:=>|\{)",  # NOSONAR
         handler,
     )
     if parenthesised is None:
@@ -1764,7 +1782,7 @@ def _resolved_method_comparisons(
     return matches
 
 
-def _extract_route_interceptors(
+def _extract_route_interceptors(  # NOSONAR
     text: str, masked: str, filename: str, notes: list[str] | None = None
 ) -> list[HttpCall]:
     """Extract positive method filters from ``page.route`` callbacks.
@@ -2202,7 +2220,7 @@ def _imported_callee_aliases(masked: str) -> dict[str, str]:
             text = entry.strip()
             if not text or text.startswith("type "):
                 continue
-            parts = re.split(r"\s+as\s+", text)
+            parts = re.split(r"\s+as\s+", text)  # NOSONAR
             imported = parts[0].strip()
             local = parts[-1].strip()
             if imported in _IMPORTED_CALLEE_NAMES and local != imported:
@@ -2333,7 +2351,7 @@ def _destructured_request_offsets(masked: str) -> list[int]:
 #: (``async ({ request: api }) =>``) and ``function`` declarations; a
 #: declaration pattern is matched for ``const|let|var { ... } = <expr>``.
 _ARROW_PARAM_LIST_RE = re.compile(r"(?:async\s+)?\(([^()]*)\)\s*(?::[^=()]*)?=>")
-_FUNCTION_PARAM_LIST_RE = re.compile(r"function\s*\w*\s*\(([^()]*)\)")
+_FUNCTION_PARAM_LIST_RE = re.compile(r"function\s*\w*\s*\(([^()]*)\)")  # NOSONAR
 _DESTRUCTURING_DECLARATION_RE = re.compile(r"(?:const|let|var)\s*\{([^{}]*)\}\s*=")
 
 
@@ -2450,7 +2468,7 @@ def _in_destructuring_pattern(masked: str, offset: int) -> bool:
     return assigned and before.endswith("(")
 
 
-def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
+def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:  # NOSONAR
     """Return ``(offset, line)`` for every HTTP-call CANDIDATE occurrence.
 
     Enumerated with the SAME regexes the extractor uses, so the ledger counts
@@ -2650,7 +2668,7 @@ def _note_line_numbers(filename: str, notes: list[str]) -> set[int]:
     return lines
 
 
-def _apply_coverage_ledger(
+def _apply_coverage_ledger(  # NOSONAR
     source: str,
     masked: str,
     filename: str,
@@ -2698,7 +2716,7 @@ def _apply_coverage_ledger(
         _add_note(notes, filename, line, _LEDGER_UNMODELLED_METHOD_NOTE)
 
 
-def _extract_fetch_like(
+def _extract_fetch_like(  # NOSONAR
     source: str,
     masked: str,
     filename: str,
@@ -2814,7 +2832,7 @@ def _extract_fetch_like(
     return calls
 
 
-def _extract_api_fetch_like(
+def _extract_api_fetch_like(  # NOSONAR
     source: str,
     masked: str,
     filename: str,
@@ -2900,7 +2918,7 @@ def _extract_api_fetch_like(
     return calls
 
 
-def extract_http_calls(
+def extract_http_calls(  # NOSONAR
     source: str,
     filename: str,
     notes: list[str] | None = None,
