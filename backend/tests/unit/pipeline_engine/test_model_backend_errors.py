@@ -16,6 +16,8 @@ from modulo.core.pipeline_engine.error_codes import (
     map_legacy_code,
 )
 from modulo.core.pipeline_engine.model_backend_errors import (
+    _INSUFFICIENT_FUNDS_PATTERN,
+    _PROVIDER_BILLING_PATTERN,
     NON_RETRYABLE_PROVIDER_CODES,
     classify_provider_error,
     non_retryable_provider_code,
@@ -177,6 +179,27 @@ class TestClassifyProviderError:
         retryable.
         """
         stdout = '{"type":"error","error":{"name":"APIError","data":{"message":"Payment required","statusCode":402}}}'
+        assert classify_provider_error(stdout) == "model.insufficient_funds"
+
+    def test_insufficient_funds_outranks_provider_billing_when_both_match(self):
+        """The 402 precedence is an ORDERING decision between TWO matching patterns.
+
+        A single JSONL event can match both billing signatures: the message
+        ``insufficient_quota`` is the provider-billing spelling, and the sibling
+        ``"statusCode":402`` is the insufficient-funds spelling. Both patterns
+        match this one line, so the classifier's answer is decided purely by
+        ``_SIGNATURE_PATTERNS`` order. ``model.insufficient_funds`` is
+        deliberately FIRST (both are permanent; the more specific code wins).
+
+        This is the pin: a future merge that reorders the two patterns would
+        silently flip every JSONL 402 to ``provider.billing`` and change the
+        recorded ``runs.error_code`` — the assertions below fail if it does.
+        """
+        stdout = '{"type":"error","error":{"name":"APIError","data":{"message":"insufficient_quota","statusCode":402}}}'
+        # Prove it is a genuine tie between the two billing signatures, so the
+        # expected code is an ordering decision and not the only possible match.
+        assert _INSUFFICIENT_FUNDS_PATTERN.search(stdout) is not None
+        assert _PROVIDER_BILLING_PATTERN.search(stdout) is not None
         assert classify_provider_error(stdout) == "model.insufficient_funds"
 
     def test_insufficient_quota_is_provider_billing(self):
