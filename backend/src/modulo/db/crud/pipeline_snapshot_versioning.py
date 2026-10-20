@@ -127,36 +127,61 @@ async def list_snapshots(
     pipeline_id: uuid.UUID,
     page: int = 1,
     page_size: int = 20,
+    *,
+    exclude_created_kinds: Iterable[str] | None = None,
+    exclude_drafts: bool = False,
 ) -> tuple[list[PipelineSnapshot], int]:
     """List snapshots for a pipeline ordered by version descending.
 
     Returns (snapshots, total_count) where total_count is the total
     number of snapshots for the pipeline across all pages.
+
+    ``exclude_created_kinds`` optionally drops rows whose ``created_kind`` is
+    in the given set, on BOTH the page query and the count. It exists so a
+    caller can ask for the newest USER-RECOGNISABLE version without paging an
+    unbounded history: run-start snapshots (``created_kind='run'``) are created
+    unconditionally per run and are never pruned by run retention, so an
+    unfiltered first page can be entirely run snapshots and starve a
+    "current version" read. The filter is EXCLUSION rather than inclusion on
+    purpose: the pipeline editor treats every kind other than ``run`` as
+    substantive (including any future kind), so an inclusion list would be a
+    second copy of the vocabulary that could silently hide a real version.
+    Pass ``None``/empty for the unfiltered behaviour existing callers rely on.
+
+    ``exclude_drafts`` additionally drops in-progress editor auto-saves
+    (``draft IS true``). A draft carries ``created_kind='edit'`` and a real
+    ``snapshot_version``, so without this predicate the newest "substantive"
+    row can be an autosave that was never committed — the same class of false
+    "current version" the created-kind filter removes. Mirrors the sibling
+    ``resolve_snapshot_for_channel`` predicate (``draft.is_(False)``).
     """
     offset = (page - 1) * page_size
+    excluded = tuple(exclude_created_kinds or ())
+    filters = [
+        PipelineSnapshot.pipeline_id == pipeline_id,
+        Pipeline.deleted_at.is_(None),
+    ]
+    if excluded:
+        filters.append(PipelineSnapshot.created_kind.not_in(excluded))
+    if exclude_drafts:
+        filters.append(PipelineSnapshot.draft.is_(False))
     result = await session.execute(
         select(PipelineSnapshot)
         .join(Pipeline, PipelineSnapshot.pipeline_id == Pipeline.id)
-        .where(
-            PipelineSnapshot.pipeline_id == pipeline_id,
-            Pipeline.deleted_at.is_(None),
-        )
+        .where(*filters)
         .order_by(PipelineSnapshot.snapshot_version.desc())
         .offset(offset)
         .limit(page_size)
     )
     snapshots = list(result.scalars())
 
-    # Get total count
+    # Get total count (same scope as the page, so total matches what is listed)
     try:
         count_result = await session.execute(
             select(func.count())
             .select_from(PipelineSnapshot)
             .join(Pipeline, PipelineSnapshot.pipeline_id == Pipeline.id)
-            .where(
-                PipelineSnapshot.pipeline_id == pipeline_id,
-                Pipeline.deleted_at.is_(None),
-            )
+            .where(*filters)
         )
         total = count_result.scalar() or 0
     except ProgrammingError:
