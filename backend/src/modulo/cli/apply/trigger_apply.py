@@ -76,29 +76,43 @@ def _resolve_config_json(
 
 def _resolve_value(value: Any, env: dict[str, str]) -> tuple[Any, str | None]:
     if isinstance(value, str):
-        match = ENV_REF_PATTERN.fullmatch(value)
-        if match is not None:
-            var = match.group(1)
-            resolved = env.get(var)
-            if resolved is None:
-                return None, f"unresolved env ref: ${{env:{var}}} is not set"
-            if not resolved.strip():
-                return None, f"unresolved env ref: ${{env:{var}}} resolves to an empty value"
-            return resolved, None
-        if value.startswith("secretref://"):
-            return None, _SECRETREF_BLOCK_REASON
-        return value, None
+        return _resolve_string(value, env)
     if isinstance(value, dict):
         return _resolve_config_json(value, env)
     if isinstance(value, list):
-        resolved_items: list[Any] = []
-        for item in value:
-            resolved_item, failure = _resolve_value(item, env)
-            if failure is not None:
-                return None, failure
-            resolved_items.append(resolved_item)
-        return resolved_items, None
+        return _resolve_list(value, env)
     return value, None
+
+
+def _resolve_string(value: str, env: dict[str, str]) -> tuple[Any, str | None]:
+    """Resolve one string: an env ref, a blocked secretref, or a literal."""
+    match = ENV_REF_PATTERN.fullmatch(value)
+    if match is not None:
+        return _resolve_env_ref(match.group(1), env)
+    if value.startswith("secretref://"):
+        return None, _SECRETREF_BLOCK_REASON
+    return value, None
+
+
+def _resolve_env_ref(var: str, env: dict[str, str]) -> tuple[Any, str | None]:
+    """Look up one env var, refusing missing or blank values."""
+    resolved = env.get(var)
+    if resolved is None:
+        return None, f"unresolved env ref: ${{env:{var}}} is not set"
+    if not resolved.strip():
+        return None, f"unresolved env ref: ${{env:{var}}} resolves to an empty value"
+    return resolved, None
+
+
+def _resolve_list(value: list[Any], env: dict[str, str]) -> tuple[Any, str | None]:
+    """Resolve every item of a list; the first failure wins."""
+    resolved_items: list[Any] = []
+    for item in value:
+        resolved_item, failure = _resolve_value(item, env)
+        if failure is not None:
+            return None, failure
+        resolved_items.append(resolved_item)
+    return resolved_items, None
 
 
 def build_desired_views(
@@ -141,48 +155,61 @@ def build_desired_views(
         composite_key = entity.display_key()
         if (KIND_TRIGGER, composite_key) in blocked_keys:
             continue
-        upstream_reason = pipeline_block_reasons.get(entity.pipeline)
-        if upstream_reason is not None:
-            blocked.append(
-                (
-                    KIND_TRIGGER,
-                    composite_key,
-                    f"pipeline {entity.pipeline!r} blocked upstream: {upstream_reason}",
-                )
-            )
+        failure = _trigger_block_reason(
+            entity,
+            current_pipelines=current_pipelines,
+            declared_pipelines=declared_pipelines,
+            ambiguous_pipelines=ambiguous_pipelines,
+            pipeline_block_reasons=pipeline_block_reasons,
+        )
+        if failure is not None:
+            blocked.append((KIND_TRIGGER, composite_key, failure))
             continue
-        ambiguous_count = ambiguous_pipelines.get(entity.pipeline)
-        if ambiguous_count is not None:
-            blocked.append(
-                (
-                    KIND_TRIGGER,
-                    composite_key,
-                    f"pipeline {entity.pipeline!r}: ambiguous name, {ambiguous_count} matches",
-                )
-            )
-            continue
-        if entity.pipeline not in current_pipelines and entity.pipeline not in declared_pipelines:
-            blocked.append(
-                (
-                    KIND_TRIGGER,
-                    composite_key,
-                    (
-                        f"pipeline {entity.pipeline!r} not found - declare it in this config (same or an "
-                        "earlier document) or apply the pipeline first"
-                    ),
-                )
-            )
-            continue
-        resolved_config = resolved_configs.get(composite_key)
-        hash_entity = entity.with_resolved_config(resolved_config) if resolved_config is not None else entity
-        view = hash_entity.managed_view()
-        # Refresh criterion is the RESOLVED config: an entry the drift hash
-        # strips (sensitive key, or a resolved value the server would mask)
-        # is invisible to rotation detection and must be re-sent.
-        if refresh_secrets and config_declares_secrets(hash_entity.config_json):
-            view["secrets_refresh"] = True
-        desired[KIND_TRIGGER].append((composite_key, view))
+        desired[KIND_TRIGGER].append(
+            (composite_key, _trigger_desired_view(entity, composite_key, resolved_configs, refresh_secrets))
+        )
     return desired, blocked
+
+
+def _trigger_block_reason(
+    entity: TriggerEntity,
+    *,
+    current_pipelines: dict[str, Any],
+    declared_pipelines: set[str],
+    ambiguous_pipelines: dict[str, Any],
+    pipeline_block_reasons: dict[str, str],
+) -> str | None:
+    """Return the blocking reason for a trigger's pipeline ref, or None."""
+    upstream_reason = pipeline_block_reasons.get(entity.pipeline)
+    if upstream_reason is not None:
+        return f"pipeline {entity.pipeline!r} blocked upstream: {upstream_reason}"
+    ambiguous_count = ambiguous_pipelines.get(entity.pipeline)
+    if ambiguous_count is not None:
+        return f"pipeline {entity.pipeline!r}: ambiguous name, {ambiguous_count} matches"
+    if entity.pipeline not in current_pipelines and entity.pipeline not in declared_pipelines:
+        return (
+            f"pipeline {entity.pipeline!r} not found - declare it in this config (same or an "
+            "earlier document) or apply the pipeline first"
+        )
+    return None
+
+
+def _trigger_desired_view(
+    entity: TriggerEntity,
+    composite_key: str,
+    resolved_configs: dict[str, dict[str, Any]],
+    refresh_secrets: bool,
+) -> dict[str, Any]:
+    """Build the hashed desired view for one resolved trigger."""
+    resolved_config = resolved_configs.get(composite_key)
+    hash_entity = entity.with_resolved_config(resolved_config) if resolved_config is not None else entity
+    view = hash_entity.managed_view()
+    # Refresh criterion is the RESOLVED config: an entry the drift hash
+    # strips (sensitive key, or a resolved value the server would mask)
+    # is invisible to rotation detection and must be re-sent.
+    if refresh_secrets and config_declares_secrets(hash_entity.config_json):
+        view["secrets_refresh"] = True
+    return view
 
 
 def _apply_one_trigger(
