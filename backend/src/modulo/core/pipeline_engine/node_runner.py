@@ -634,6 +634,13 @@ _IDEMPOTENCY_GATE_READ_TIMEOUT = 3.0
 # FAR-228: best-effort marker persist bounded inside a caught CancelledError
 # (5s — the node is being cancelled, the write must not delay the re-raise).
 _IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT = 5.0
+#: FAR-1914 B2: bounded post-cancel grace before the final retention drain.
+#: A ``gh pr create`` line can be flushed by the sandbox process just AFTER the
+#: cancellation lands; one extra look at the log tail after this short wait is
+#: what lets the delivery evidence (``pr_url`` / sentinel) reach the marker.
+#: Deliberately tiny: the node is already cancelled, so this must not delay the
+#: re-raise beyond the existing bounded persist budget.
+_CANCEL_DELIVERY_GRACE_SECONDS = 0.5
 # FAR-458: the per-connector-per-write ``on_unknown`` modes and default live in
 # ONE place — ``modulo.connectors.base`` (a stdlib-only leaf imported by both
 # the pipeline engine's gate read and the REST connector's config validation)
@@ -12820,18 +12827,34 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # persist a delivery_done marker when the sentinel is a full-line
         # match in the drained tail.
         if _drain_fn is not None and sandbox is not None:
-            try:
-                await asyncio.wait_for(asyncio.shield(_drain_fn()), timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT)
-            # Nested cancellation here is deliberate — idempotency-gate cleanup
-            # must not re-raise early or the delivery-done marker is skipped
-            # (FAR-228 fix); the original cancellation re-raises at line 4566.
-            except asyncio.CancelledError:  # NOSONAR
-                _uncancel_current_task()
-            except Exception:
-                _log.exception(
-                    "sandbox_agent.cancel_retention_drain_failed",
-                    extra={"node_id": node_id, "run_id": run_id},
-                )
+
+            async def _final_drain_once() -> None:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(_drain_fn()), timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT
+                    )
+                # Nested cancellation here is deliberate — idempotency-gate
+                # cleanup must not re-raise early or the delivery-done marker is
+                # skipped (FAR-228 fix); the original cancellation re-raises.
+                except asyncio.CancelledError:  # NOSONAR
+                    _uncancel_current_task()
+                except Exception:
+                    _log.exception(
+                        "sandbox_agent.cancel_retention_drain_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
+
+            await _final_drain_once()
+            # FAR-1914 B2: one bounded second look. A delivered-then-killed run
+            # can flush its `gh pr create` line just after the cancellation
+            # lands; without this grace the marker is built from a tail that
+            # predates the delivery and the run reads as a bare failure.
+            if _CANCEL_DELIVERY_GRACE_SECONDS > 0:
+                try:
+                    await asyncio.sleep(_CANCEL_DELIVERY_GRACE_SECONDS)
+                except asyncio.CancelledError:  # NOSONAR
+                    _uncancel_current_task()
+                await _final_drain_once()
         # FAR-704: retain cancellation TRIAGE evidence whenever a sandbox
         # existed. The absolute node-deadline watchdog (pipeline_execution)
         # cancels this dispatch before output.json is ever read, so no node
@@ -12877,6 +12900,15 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             _cancel_sentinel_hit = bool(
                 delivery_sentinel and _source_contains_delivery_sentinel(_drained_tail, delivery_sentinel)
             )
+            _cancel_pr_url = _extract_pr_url(_drained_tail)
+            # FAR-1914 B2: a created PR IS a delivered side effect. The agent
+            # may never print the configured full-line sentinel (the live
+            # node's is ``PR_CREATED``) but ``gh pr create`` emits the PR URL —
+            # treating that as delivery evidence is what makes "killed after
+            # delivering" machine-readable instead of a bare failure. The
+            # marker's ``delivery_done`` is the existing API surface
+            # (``deadline_triage[].delivery_done`` / ``gate_fired``).
+            _cancel_delivery_observed = _cancel_sentinel_hit or bool(_cancel_pr_url)
             _cancel_no_output_reason = (
                 stall_reason
                 or "Sandbox attempt cancelled before a terminal node envelope was produced "
@@ -12889,11 +12921,15 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     "Sandbox agent cancelled after delivery sentinel observed — "
                     "delivery_done retained (idempotency gate)"
                     if _cancel_sentinel_hit
-                    else "Sandbox agent cancelled — triage evidence retained (FAR-704)"
+                    else (
+                        "Sandbox agent cancelled after delivery evidence observed — delivery_done retained (PR url)"
+                        if _cancel_delivery_observed
+                        else "Sandbox agent cancelled — triage evidence retained (FAR-704)"
+                    )
                 ),
                 "raw_output": _redact_raw_output(_drained_tail)[:_stdout_cap],
                 "parse_error": "",
-                "pr_url": _extract_pr_url(_drained_tail),
+                "pr_url": _cancel_pr_url,
                 "exit_code": -1,
                 "stdout_length": len(_drained_tail),
                 "stderr_length": 0,
@@ -12905,7 +12941,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 "no_output_reason": sanitize_error_text(_cancel_no_output_reason),
                 "sandbox_log_tail": sanitize_error_text(_redact_raw_output(_cancel_log_tail)),
             }
-            if _cancel_sentinel_hit:
+            if _cancel_delivery_observed:
                 _cancel_marker["delivery_done"] = True
             try:
                 await _sandbox_cancel_retention_persist(

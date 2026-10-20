@@ -1321,3 +1321,52 @@ def test_capacity_retry_budget_setting_default_and_override(monkeypatch: pytest.
     assert Settings().saq_capacity_retry_budget == 3
     monkeypatch.setenv("SAQ_CAPACITY_RETRY_BUDGET", "7")
     assert Settings().saq_capacity_retry_budget == 7
+
+
+# ---------------------------------------------------------------------------
+# FAR-1914 B2 — the deadline kill waits for the executor's cancel cleanup
+# ---------------------------------------------------------------------------
+
+
+async def test_deadline_kill_waits_for_cancel_cleanup_before_terminalising():
+    """The cancelled executor's cleanup must run BEFORE the terminal write.
+
+    The cleanup is what persists the delivery/triage marker (including the
+    ``pr_url`` a run opened seconds before it was killed). Without the bounded
+    settle wait the terminal write races it — the c4222006 shape, recorded as a
+    bare failure even though the PR was created.
+    """
+    order: list[str] = []
+
+    async def _exec_body() -> None:
+        try:
+            await asyncio.sleep(999)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0)
+            order.append("cleanup")
+            raise
+
+    async def _fail(*args: Any, **kwargs: Any) -> bool:
+        order.append("terminal")
+        return True
+
+    exec_task = asyncio.create_task(_exec_body())
+    # Let the executor task actually START before the watchdog cancels it. A
+    # never-scheduled task is cancelled before its body runs, so its
+    # cancellation cleanup would never execute — that is a test artefact, not
+    # the production shape (the node has been in flight for its full deadline).
+    await asyncio.sleep(0)
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    done = asyncio.Event()
+    stall = asyncio.Event()
+    with (
+        patch("modulo.core.pipeline_execution.fail_run_terminal", _fail),
+        patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new=AsyncMock()),
+        patch("modulo.core.pipeline_execution._record_derived_deadline_cost", new=AsyncMock()),
+    ):
+        await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall)
+    if not exec_task.done():
+        exec_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await exec_task
+    assert order == ["cleanup", "terminal"]

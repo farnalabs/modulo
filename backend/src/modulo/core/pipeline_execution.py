@@ -739,6 +739,15 @@ _TRANSIENT_DBAPI_ORIG_CLASSES = frozenset(
 # is capped.
 _WATCHDOG_AWAIT_BOUND_SECONDS = 5.0
 
+#: FAR-1914 B2: how long the node-deadline watchdog lets the CANCELLED executor
+#: run its cancellation cleanup before terminalising the run. The cleanup is
+#: the sandbox node's bounded retention pass — a short delivery grace plus a
+#: log-tail fetch and a marker persist, each bounded to 5s — so 12s covers the
+#: worst case with headroom. Without this wait the terminal write can land
+#: BEFORE the marker, and a run killed seconds after opening its PR is recorded
+#: as a bare failure.
+_EXECUTOR_CANCEL_SETTLE_SECONDS = 12.0
+
 
 class ClaimSupersededError(Exception):
     """A fenced heartbeat/lease write matched zero rows — this executor must abort.
@@ -2081,6 +2090,16 @@ async def _fail_overdue_node(
         retry_hook, run_id, final_status="failed", error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE
     ):
         return
+    # FAR-1914 B2: on the TERMINAL branch only, give the cancelled executor a
+    # SHORT BOUNDED window to run its cancellation cleanup before the run is
+    # terminalised — node_runner drains the sandbox tail one final time and
+    # persists the delivery/triage marker (including a ``pr_url`` opened
+    # seconds before the kill). ``asyncio.wait`` (never ``await exec_task``) so
+    # the expected CancelledError is not re-raised here; a cleanup failure or a
+    # timed-out cleanup must not stop the terminal write below. This is placed
+    # AFTER the retry consult on purpose: the consult stands down on
+    # ``exec_task.done()``, so settling first would disable re-dispatch.
+    await asyncio.wait({exec_task}, timeout=_EXECUTOR_CANCEL_SETTLE_SECONDS)
     error_detail = (
         f"Node '{node_id}' did not complete within its configured timeout_seconds "
         f"({_timeout}s) — node-deadline watchdog ended the dispatch. The cause is "

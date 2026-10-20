@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -41,6 +42,8 @@ from modulo.core.cost_controller.finalize import (
     _merge,
     _node_output_dict,
     _record_node_schema_drift,
+    _recover_retained_step_evidence,
+    _salvage_from_markers,
     _seed_union,
     _split_merge_outputs,
     _token_cost,
@@ -2329,3 +2332,282 @@ async def test_finalize_cost_run_not_found() -> None:
         )
     # Should log a warning and return without calling update_run_status
     assert any("run_not_found" in str(c) for c in mock_log.warning.call_args_list)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1914 B1 — salvage the killed attempt's own spend from retained markers
+# ---------------------------------------------------------------------------
+
+
+def _step_finish_marker(
+    *,
+    cost: float = 0.000478,
+    total_tokens: int = 78_000,
+    node_id: str = "n1",
+    pr_url: str | None = None,
+    raw_output: str | None = None,
+) -> dict[str, Any]:
+    """A retained cancellation marker shaped like the live ``c4222006`` one.
+
+    The stored ``raw_output`` is the opencode JSONL stream the cancelled
+    sandbox left behind: a ``step_finish`` event carrying the agent's own
+    ``tokens`` and ``cost`` — the ONLY surviving spend record once
+    ``output.json`` never gets written.
+    """
+    event = {
+        "type": "step_finish",
+        "tokens": {"total": total_tokens, "input": total_tokens - 10_000, "output": 10_000},
+        "cost": cost,
+        "part": {"cost": cost},
+    }
+    return {
+        "_modulo_marker": True,
+        "status": "failed",
+        "summary": "Sandbox agent cancelled — triage evidence retained (FAR-704)",
+        "raw_output": json.dumps(event) if raw_output is None else raw_output,
+        "parse_error": "",
+        "pr_url": pr_url,
+        "exit_code": -1,
+        "stdout_length": 0,
+        "stderr_length": 0,
+        "attempt_key": "run:00000000-0000-0000-0000-000000000002:node:n1:1",
+        "node_id": node_id,
+        "deadline_triage": True,
+        "no_output_reason": "cancelled before a terminal node envelope",
+        "sandbox_log_tail": "",
+    }
+
+
+async def test_finalize_failed_run_salvages_agent_cost_from_retained_marker() -> None:
+    """A deadline-killed attempt reports the spend its own tail proves.
+
+    ``c4222006``-shaped: no stored node data (no ``output.json`` ever
+    written), but the retained marker carries per-step token cost. Without the
+    salvage the run's breakdown holds only the FAR-1993 derived sandbox line;
+    with it the agent-reported cost is visible with ``reported`` provenance.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker()}
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=0.5,
+        )
+
+    kwargs = mock_urs.await_args.kwargs
+    # FAR-1993 derived sandbox spend still drives the billable total.
+    assert kwargs["total_cost_usd"] == Decimal("0.065")
+    assert mock_block.await_args.kwargs["total"] == Decimal("0.065")
+    breakdown = kwargs["cost_breakdown"]
+    assert len(breakdown) == 2
+    assert breakdown[0]["component"] == "sandbox_infra"
+    assert breakdown[0]["source"] == "derived"
+    salvaged = breakdown[1]
+    assert salvaged["component"] == "model_tokens"
+    assert salvaged["source"] == "self_reported"
+    assert salvaged["billable"] is False
+    assert salvaged["provenance"] == "reported"
+    assert salvaged["amount_usd"] == "0.000478"
+    assert salvaged["basis"]["salvaged_from"] == "retained_raw_output_step_finish"
+    assert salvaged["basis"]["tokens_reported"]["total"] == 78_000
+
+
+def test_recover_retained_step_evidence_sums_cost_and_tokens_across_steps() -> None:
+    """The reader sums EVERY ``step_finish`` event, never last-event-only."""
+    events = [
+        {"type": "step_start", "part": {}},
+        {
+            "type": "step_finish",
+            "tokens": {"total": 48_000, "input": 38_000, "output": 10_000},
+            "cost": 0.0003,
+        },
+        {"type": "text", "part": {"text": "working"}},
+        {
+            "type": "step_finish",
+            "tokens": {"total": 30_000, "input": 22_000, "output": 8_000, "cache": {"read": 5, "write": 1}},
+            "part": {"cost": 0.000178},
+        },
+    ]
+
+    evidence = _recover_retained_step_evidence("\n".join(json.dumps(event) for event in events))
+
+    assert evidence.cost_usd == Decimal("0.000478")
+    assert evidence.token_usage == {
+        "input": 60_000,
+        "output": 18_000,
+        "total": 78_000,
+        "cache_read": 5,
+        "cache_write": 1,
+    }
+
+
+def test_recover_retained_step_evidence_invents_nothing_without_an_event() -> None:
+    """No ``step_finish`` event means NO cost and NO tokens — never a zero."""
+    evidence = _recover_retained_step_evidence(json.dumps({"type": "text", "part": {"text": "hi"}}))
+
+    assert evidence.cost_usd is None
+    assert not evidence.token_usage
+
+
+def test_recover_retained_step_evidence_skips_implausible_costs() -> None:
+    """A nonsense per-step cost is skipped; a valid sibling still sums."""
+    events = [
+        {"type": "step_finish", "tokens": {"total": 5}, "cost": "not-a-number"},
+        {"type": "step_finish", "tokens": {"total": 5}, "cost": -1},
+        {"type": "step_finish", "tokens": {"total": 5}, "cost": 0.001},
+    ]
+
+    evidence = _recover_retained_step_evidence("\n".join(json.dumps(event) for event in events))
+
+    assert evidence.cost_usd == Decimal("0.001")
+
+
+def test_salvage_from_markers_sums_attempts_and_picks_delivery_facts() -> None:
+    """Costs/tokens sum across attempts; the first PR url and delivery win."""
+    markers = {
+        "attempt-1": _step_finish_marker(cost=0.0003, total_tokens=40_000, node_id="n1"),
+        "attempt-2": _step_finish_marker(
+            cost=0.000178,
+            total_tokens=38_000,
+            node_id="n1",
+            pr_url="https://github.com/farnalabs/modulo/pull/1837",
+        ),
+    }
+
+    salvage = _salvage_from_markers(markers)
+
+    assert salvage.agent_cost_usd == Decimal("0.000478")
+    assert salvage.token_usage["total"] == 78_000
+    assert salvage.node_ids == ("n1",)
+    assert salvage.pr_url == "https://github.com/farnalabs/modulo/pull/1837"
+    assert salvage.has_evidence is True
+
+
+def test_salvage_from_markers_without_evidence_has_none() -> None:
+    """Markers that prove no work and no delivery must yield no evidence."""
+    markers = {"attempt-1": _step_finish_marker(raw_output="working\n")}
+
+    salvage = _salvage_from_markers(markers)
+
+    assert salvage.agent_cost_usd is None
+    assert not salvage.token_usage
+    assert salvage.pr_url is None
+    assert salvage.has_evidence is False
+
+
+async def test_finalize_failed_run_marker_without_cost_evidence_keeps_one_entry() -> None:
+    """A retained marker with NO ``step_finish`` event proves no spend.
+
+    The tail may exist (triage evidence) but with no per-step cost there is
+    nothing to attribute — the run keeps the single FAR-1993 derived entry and
+    nothing is fabricated from the marker's mere presence.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(raw_output="no events")}
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=0.5,
+        )
+
+    breakdown = mock_urs.await_args.kwargs["cost_breakdown"]
+    assert len(breakdown) == 1
+    assert breakdown[0]["component"] == "sandbox_infra"
+
+
+async def test_finalize_cancelled_run_salvages_agent_cost_on_the_cancel_path() -> None:
+    """A user-cancelled productive attempt reports its cost, not a bare zero.
+
+    The cancel path never had a cost attribution at all (FAR-1993 covered only
+    the deadline/age-gate paths). The retained marker supplies the agent's own
+    per-step cost, and the run's last-liveness window supplies the derived
+    sandbox duration — labelled ``cancel_liveness_window`` so the provenance of
+    the duration travels with it.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    run.started_at = datetime(2026, 10, 20, 10, 0, tzinfo=UTC)
+    run.completed_at = datetime(2026, 10, 20, 11, 0, tzinfo=UTC)
+    run.heartbeat_at = run.completed_at
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    markers = {
+        "run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(
+            pr_url="https://github.com/farnalabs/modulo/pull/1837"
+        )
+    }
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
+    ):
+        await finalize_cancelled_run(session, run_id=run.id, org_id=_ORG_ID)
+
+    assert mock_urs.await_args.args[2] == "cancelled"
+    kwargs = mock_urs.await_args.kwargs
+    # 1 hour of proven liveness at $0.13/h — derived, not fabricated.
+    assert kwargs["total_cost_usd"] == Decimal("0.13")
+    breakdown = kwargs["cost_breakdown"]
+    assert [entry["component"] for entry in breakdown] == ["sandbox_infra", "model_tokens"]
+    assert breakdown[0]["basis"]["derived_from"] == "cancel_liveness_window"
+    assert breakdown[1]["amount_usd"] == "0.000478"
+    assert breakdown[1]["billable"] is False
+    assert mock_block.await_args.kwargs["status"] == "cancelled"
+
+
+async def test_finalize_cancelled_run_without_marker_evidence_forfeits() -> None:
+    """A cancelled run with no retained evidence keeps the pre-existing path.
+
+    No marker means no proof the attempt did any work — the run is not given a
+    fabricated cost, and the partial-spend diagnostic still fires.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+    ):
+        await finalize_cancelled_run(session, run_id=run.id, org_id=_ORG_ID)
+
+    mock_urs.assert_not_awaited()
+    logged = [str(c) for c in mock_log.warning.call_args_list]
+    assert any("cost_components_partial_spend_lost" in line for line in logged)

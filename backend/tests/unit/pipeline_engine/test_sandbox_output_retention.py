@@ -23,6 +23,7 @@ the retryable raise into a terminal ``node_timeout``.
 import asyncio
 import logging
 import re
+import time
 import uuid
 from types import SimpleNamespace
 from typing import Any, Self
@@ -887,6 +888,76 @@ async def test_cancelled_node_without_sentinel_retains_triage_marker():
     assert marker.get("delivery_done") is not True, "no sentinel observed -> no delivery_done"
     assert marker["status"] == "failed"
     assert "triage evidence retained" in marker["summary"]
+
+
+async def test_cancelled_node_treats_pr_url_as_delivery_evidence():
+    """FAR-1914 B2: a created PR is a delivered side effect.
+
+    The live Prompt-to-PR node's ``delivery_sentinel`` is ``PR_CREATED``, but
+    the agent often only echoes the ``gh pr create`` URL — no full-line
+    sentinel. Treating that URL as delivery evidence is what makes
+    "killed after delivering" machine-readable on the existing
+    ``delivery_done`` surface instead of recording a bare failure.
+    """
+    log_content = f"opened the PR\n{_PR_456}\n"
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    row = _FakeRunRow()
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["delivery_done"] is True
+    assert marker["pr_url"] == _PR_456
+    assert "delivery evidence observed" in marker["summary"]
+
+
+async def test_cancelled_node_captures_a_pr_url_flushed_during_the_grace():
+    """FAR-1914 B2: the bounded post-cancel grace catches a late-flushed URL.
+
+    A delivered-then-killed attempt can write its ``gh pr create`` output just
+    AFTER the cancellation lands. The first final drain sees only the prior
+    content; the second look (after the grace) must capture the delivery.
+    """
+    early = "agent working\n"
+    late = f"{early}{_PR_777}\n"
+    started = time.monotonic()
+
+    async def _read(path: Any, format: str = "text", **kwargs: Any) -> Any:
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        return late if time.monotonic() - started >= 0.02 else early
+
+    sandbox = _make_sandbox_mock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(late)))
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    row = _FakeRunRow()
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._CANCEL_DELIVERY_GRACE_SECONDS", 0.05),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["delivery_done"] is True
+    assert marker["pr_url"] == _PR_777
 
 
 async def test_cancelled_during_provisioning_reraises_cleanly():

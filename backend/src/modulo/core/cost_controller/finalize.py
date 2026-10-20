@@ -29,11 +29,13 @@ imports ``modulo.api`` or ``modulo.db.crud.run``'s caller graph.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import uuid
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, NamedTuple
@@ -3053,10 +3055,12 @@ async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, or
     ``run.node_telemetry_json``) and passes THOSE to ``finalize_cost`` (§4.2
     DATA SOURCE PINNED). A streamed run that HAS PAUSED at least once has
     stored sets → a partial breakdown + ONE ledger row. A NEVER-PAUSED in-flight
-    run has NO stored sets → its accrued cost is FORFEITED and only the
-    ``cost_components_partial_spend_lost`` diagnostic log fires (run_id only —
-    the cancel process lacks the in-memory dicts, so the accrued segment count
-    is never determinable).
+    run has NO stored sets → FAR-1914 B1 salvages what the killed attempt left
+    behind: its retained raw-output marker's per-step agent cost (reported,
+    non-billable) plus a derived sandbox duration from the run's last-liveness
+    window. A run with NO retained evidence at all still forfeits its accrued
+    cost and only the ``cost_components_partial_spend_lost`` diagnostic log
+    fires — nothing is fabricated.
 
     Both stored output columns are re-fed (FAR-125 P1b): the reassembled
     outputs as the segment and the reassembled telemetry as the split signal
@@ -3072,7 +3076,28 @@ async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, or
     # for the re-feed decision + the segment payload below.
     stored_blobs = await read_run_blobs(session, run_id=run_id, organisation_id=run.organisation_id)
     if not (stored_blobs.outputs or run.node_token_usage or stored_blobs.telemetry):
-        _log.warning("cost_components_partial_spend_lost", extra={"run_id": str(run_id)})
+        # FAR-1914 B1: the never-paused in-flight run has no stored cumulative
+        # sets, but the KILLED attempt's retained marker may carry the agent's
+        # own ``step_finish`` cost/tokens — the only surviving spend evidence
+        # for a sandbox node that never wrote ``output.json``. Attribute it
+        # instead of forfeiting it. Requires actual evidence (a recovered cost
+        # or a PR url); a marker with none keeps the old no-fabrication path.
+        salvage = _salvage_from_markers(stored_blobs.markers)
+        if not salvage.has_evidence:
+            _log.warning("cost_components_partial_spend_lost", extra={"run_id": str(run_id)})
+            return
+        await _write_derived_deadline_terminal(
+            session,
+            run=run,
+            run_id=run_id,
+            org_id=org_id,
+            status="cancelled",
+            error_code=getattr(run, "error_code", None),
+            error_detail=getattr(run, "error_detail", None),
+            wall_hours=_cancel_liveness_wall_hours(run),
+            derived_from="cancel_liveness_window",
+            salvage=salvage,
+        )
         return
     node_type_map = await _load_node_type_map(session, run.snapshot_id)
     await finalize_cost(
@@ -3088,34 +3113,280 @@ async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, or
     )
 
 
+@dataclass(frozen=True)
+class _SalvagedAttemptEvidence:
+    """Agent-reported spend/evidence recovered from retained attempt markers.
+
+    FAR-1914 B1: a killed sandbox node never writes ``output.json``, so the
+    normal self-report (``cost_estimate_usd`` / ``model_cost_usd``) never
+    exists. Its retained raw-output marker does hold the opencode
+    ``step_finish`` events, each carrying the agent's own ``tokens`` and
+    ``cost``. This is the ONLY surviving record of the work the attempt did.
+
+    ``agent_cost_usd`` is ``None`` when no usable per-step cost was found —
+    never coerced to zero. ``has_evidence`` gates the salvage: a marker with
+    no recovered cost and no delivery fact must not invent spend.
+    """
+
+    node_ids: tuple[str, ...]
+    agent_cost_usd: Decimal | None
+    token_usage: dict[str, int]
+    pr_url: str | None
+    delivery_done: bool
+
+    @property
+    def has_evidence(self) -> bool:
+        return self.agent_cost_usd is not None or bool(self.token_usage) or bool(self.pr_url) or self.delivery_done
+
+
+#: The opencode JSONL event type that closes one model step and carries the
+#: per-step ``tokens`` and ``cost`` (mirrors node_runner's FAR-1994 reader).
+_STEP_FINISH_EVENT = "step_finish"
+_STEP_FINISH_CACHE_KEYS: tuple[tuple[str, str], ...] = (("read", "cache_read"), ("write", "cache_write"))
+
+
+@dataclass(frozen=True)
+class _RetainedStepEvidence:
+    """One retained raw stream's recovered per-step tokens + cost."""
+
+    token_usage: dict[str, int]
+    cost_usd: Decimal | None
+
+
+def _recover_step_cost(event: dict[str, Any]) -> Decimal | None:
+    """The per-step model cost an opencode ``step_finish`` event carries, or ``None``.
+
+    The CLI emits it as ``cost`` (and mirrors it at ``part.cost``); accept the
+    first plausible non-negative finite value. An implausible value is REJECTED
+    (``None``), never coerced to 0 — a present-but-unusable report must stay
+    distinguishable from a genuine zero.
+    """
+    candidates = [event.get("cost")]
+    part = event.get("part")
+    if isinstance(part, dict):
+        candidates.append(part.get("cost"))
+    for raw in candidates:
+        if isinstance(raw, bool):
+            continue
+        try:
+            value = Decimal(str(raw))
+        except (TypeError, ValueError, ArithmeticError):
+            continue
+        if value.is_finite() and value >= 0:
+            return value
+    return None
+
+
+def _recover_retained_step_evidence(raw_output: str | None) -> _RetainedStepEvidence:
+    """Recover the agent's OWN per-step tokens + cost from a retained stream.
+
+    A killed sandbox node never writes ``output.json``, so the normal
+    ``cost_estimate_usd`` / ``model_cost_usd`` self-report never exists. The
+    retained raw-output marker still holds the opencode JSONL ``step_finish``
+    events — the only place the agent's own spend survives the kill.
+
+    Deliberately a LOCAL copy of the node_runner event-shape reader rather than
+    an import: ``finalize`` is reachable from the API layer
+    (``api.routes.runs`` → ``finalize_cancelled_run``) and importing
+    ``node_runner`` would drag ``langgraph`` into ``modulo.api``, breaking the
+    pinned import-linter contract.
+
+    BOUNDED and fail-open: one linear pass, line by line; non-JSON lines, other
+    event types and invalid counters/costs are skipped; ANY failure degrades to
+    empty evidence — this never raises and never changes the run's failure
+    semantics. An empty ``token_usage`` / ``None`` cost means "no usable
+    ``step_finish`` event found", distinct from a genuine zero report.
+    """
+    empty = _RetainedStepEvidence(token_usage={}, cost_usd=None)
+    if not isinstance(raw_output, str) or not raw_output:
+        return empty
+    totals: dict[str, int] = {"input": 0, "output": 0, "total": 0, "cache_read": 0, "cache_write": 0}
+    seen: set[str] = set()
+    cost_total = Decimal(0)
+    found_event = False
+    found_cost = False
+    for line in raw_output.splitlines():
+        # Cheap pre-filter: only a line naming the event type can be a candidate.
+        if _STEP_FINISH_EVENT not in line:
+            continue
+        try:
+            event = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(event, dict) or event.get("type") != _STEP_FINISH_EVENT:
+            continue
+        found_event = True
+        tokens = event.get("tokens")
+        if isinstance(tokens, dict):
+            for key in ("input", "output", "total"):
+                coerced = coerce_reported_token(tokens.get(key))
+                if coerced is not None:
+                    totals[key] += coerced
+                    seen.add(key)
+            cache = tokens.get("cache")
+            if isinstance(cache, dict):
+                for source_key, target_key in _STEP_FINISH_CACHE_KEYS:
+                    coerced = coerce_reported_token(cache.get(source_key))
+                    if coerced is not None:
+                        totals[target_key] += coerced
+                        seen.add(target_key)
+        event_cost = _recover_step_cost(event)
+        if event_cost is not None:
+            cost_total += event_cost
+            found_cost = True
+    token_usage = {key: value for key, value in totals.items() if key in seen} if found_event else {}
+    return _RetainedStepEvidence(token_usage=token_usage, cost_usd=cost_total if found_cost else None)
+
+
+def _salvage_from_markers(markers: dict[str, Any] | None) -> _SalvagedAttemptEvidence:
+    """Recover the killed attempt's own spend + delivery facts from markers.
+
+    Every retained marker's ``raw_output`` is scanned with the local
+    ``step_finish`` reader, so the recovered figures keep the agent-reported
+    provenance class by construction. Costs and tokens are SUMMED across
+    attempts: each attempt really did burn them.
+
+    Fail-open: a non-dict ``markers`` value, a marker without ``raw_output``,
+    or a malformed line yields nothing — never an exception on the terminal
+    path.
+    """
+    if not isinstance(markers, dict):
+        return _SalvagedAttemptEvidence((), None, {}, None, False)
+    node_ids: list[str] = []
+    token_totals: dict[str, int] = {}
+    cost_total = Decimal(0)
+    found_cost = False
+    pr_url: str | None = None
+    delivery_done = False
+    for marker in markers.values():
+        if not isinstance(marker, dict):
+            continue
+        node_id = marker.get("node_id")
+        if isinstance(node_id, str) and node_id and node_id not in node_ids:
+            node_ids.append(node_id)
+        raw_output = marker.get("raw_output")
+        evidence = _recover_retained_step_evidence(raw_output if isinstance(raw_output, str) else None)
+        if evidence.cost_usd is not None:
+            cost_total += evidence.cost_usd
+            found_cost = True
+        for key, value in evidence.token_usage.items():
+            token_totals[key] = token_totals.get(key, 0) + int(value)
+        marker_pr_url = marker.get("pr_url")
+        if pr_url is None and isinstance(marker_pr_url, str) and marker_pr_url:
+            pr_url = marker_pr_url
+        if marker.get("delivery_done") is True:
+            delivery_done = True
+    accepted = clamp_reported(cost_total) if found_cost else None
+    return _SalvagedAttemptEvidence(
+        node_ids=tuple(node_ids),
+        agent_cost_usd=accepted[0] if accepted is not None else None,
+        token_usage=token_totals,
+        pr_url=pr_url,
+        delivery_done=delivery_done,
+    )
+
+
+def _cancel_liveness_wall_hours(run: Run) -> float | None:
+    """The proven liveness window for a cancelled run, in hours (FAR-1914 B1).
+
+    Same basis the FAR-1993 reconcile age gate uses: ``started_at`` to the
+    LAST liveness proof (``heartbeat_at``, else ``completed_at``). It is NOT an
+    arbitrary bound — a running run's heartbeat is refreshed while the
+    executor is alive, so a row whose executor died long ago credits only to
+    its last heartbeat. Returns ``None`` when there is no usable window (no
+    ``started_at``, non-positive, or non-finite), so no duration is fabricated.
+    """
+    started = getattr(run, "started_at", None)
+    if not isinstance(started, datetime):
+        return None
+    completed = getattr(run, "completed_at", None)
+    end = completed if isinstance(completed, datetime) else datetime.now(UTC)
+    heartbeat = getattr(run, "heartbeat_at", None)
+    if isinstance(heartbeat, datetime) and heartbeat < end:
+        end = heartbeat
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=UTC)
+    seconds = (end - started).total_seconds()
+    if not math.isfinite(seconds) or seconds <= 0:
+        return None
+    return seconds / 3600.0
+
+
+def _salvage_breakdown_entry(salvage: _SalvagedAttemptEvidence) -> dict[str, Any]:
+    """The ``self_reported`` breakdown entry for salvaged agent spend.
+
+    Provenance is the cost table's own ``self_reported`` class (``reported``):
+    the number came from the agent's own event stream, not from a Modulo
+    observation. It is therefore NON-BILLABLE — declared money never enters
+    ``total_cost_usd`` (FAR-1780) — but it is now VISIBLE on the breakdown of a
+    killed run instead of vanishing with the missing ``output.json``.
+    """
+    amount = salvage.agent_cost_usd or Decimal(0)
+    basis: dict[str, Any] = {
+        "reported": float(amount),
+        "raw_reported": float(amount),
+        "node_count": len(salvage.node_ids),
+        "salvaged_from": "retained_raw_output_step_finish",
+    }
+    if salvage.token_usage:
+        basis["tokens_reported"] = {key: int(value) for key, value in salvage.token_usage.items()}
+    return {
+        "component": "model_tokens",
+        "display_name": "Model cost (self-reported, salvaged from retained output)",
+        "source": "self_reported",
+        "billable": False,
+        PROVENANCE_KEY: PROVENANCE_REPORTED,
+        "amount_usd": _entry_amount(amount),
+        "formula_applied": "reported",
+        "rate_usd": None,
+        "basis": basis,
+    }
+
+
 async def _write_derived_deadline_terminal(
     session: AsyncSession,
     *,
     run: Run,
     run_id: uuid.UUID,
     org_id: uuid.UUID,
-    error_code: str,
-    error_detail: str,
-    wall_hours: float,
+    status: str = "failed",
+    error_code: str | None,
+    error_detail: str | None,
+    wall_hours: float | None,
     derived_from: str,
+    salvage: _SalvagedAttemptEvidence | None = None,
 ) -> None:
-    """Write DERIVED sandbox cost for a terminal-failed run (FAR-1993).
+    """Write DERIVED sandbox cost (FAR-1993) + salvaged agent cost (FAR-1914).
 
     A terminal writer that never ran the normal finalize (the node-deadline
-    watchdog, the reconcile age gate) leaves the run with no cost, so nothing
-    contributes a ``wall_clock_time_ms`` to the cost machinery and the normal
-    finalize computes $0 — while the sandbox really did run for a duration the
-    caller has proven independently. This writer attributes that spend at the
-    RUN level, explicitly marked ``source="derived"`` with
+    watchdog, the reconcile age gate, the cancel path) leaves the run with no
+    cost, so nothing contributes a ``wall_clock_time_ms`` to the cost machinery
+    and the normal finalize computes $0 — while the sandbox really did run for
+    a duration the caller has proven independently. This writer attributes that
+    spend at the RUN level, explicitly marked ``source="derived"`` with
     ``basis.derived_from = derived_from`` so it is never confused with
     agent-reported (``self_reported``) or component-calculated spend. The label
     says WHICH liveness proof produced the duration (the node's configured
     deadline for the node-deadline watchdog; the run's last heartbeat for the
-    reconcile age gate) — provenance travels with the number.
+    reconcile age gate / cancel path) — provenance travels with the number.
+
+    FAR-1914 B1: *salvage* carries the killed attempt's own agent-reported
+    spend (recovered from its retained ``step_finish`` events). It is appended
+    as a ``self_reported`` entry with ``provenance: reported`` and
+    ``billable: false`` — the cost table's own semantics for declared money
+    (FAR-1780) — so it is VISIBLE on a run that previously reported a bare
+    zero, without inflating ``total_cost_usd`` with an agent declaration.
+
+    *wall_hours* is optional: the deadline/age-gate callers always supply a
+    proven duration; the cancel path supplies the run's last-liveness window,
+    which may be unavailable. When neither a duration nor a salvaged cost
+    exists, NOTHING is written (no fabricated spend).
 
     The function name is historical: it was introduced for the deadline path
-    and now serves any terminal-failed run whose liveness-proven duration is
-    known.
+    and now serves any terminal-failed/cancelled run whose liveness-proven
+    duration and/or retained evidence is known.
 
     The status/cost write is SHAPE-IDENTICAL to ``_write_empty_terminal`` —
     total 0 there, the derived total here — so no new raw UPDATE is invented.
@@ -3134,43 +3405,53 @@ async def _write_derived_deadline_terminal(
     wedge with no node progress long before the bound fires, so crediting the
     full bound would OVERSTATE spend and could falsely trip the spend ceiling);
     it passes ``min(heartbeat_at, completed_at) - started_at`` instead, from
-    the run's own last-liveness stamp.
+    the run's own last-liveness stamp — the same basis the cancel path uses.
     """
-    rate = _e2b_rate()
-    total = Decimal(str(wall_hours)) * rate
-    if total > COST_COLUMN_CAP:
-        total = COST_COLUMN_CAP
-        clamped = True
-    else:
-        clamped = False
-    breakdown: list[dict[str, Any]] = [
-        {
-            "component": "sandbox_infra",
-            "display_name": "Sandbox Infrastructure",
-            "source": "derived",
-            "amount_usd": _entry_amount(total),
-            "formula_applied": "rate * wall_clock_hours",
-            "rate_usd": str(rate),
-            "basis": {
-                "wall_clock_hours": wall_hours,
-                "derived_from": derived_from,
-            },
-        }
-    ]
+    total = Decimal(0)
+    breakdown: list[dict[str, Any]] = []
+    clamped = False
+    if wall_hours is not None and math.isfinite(wall_hours) and wall_hours > 0:
+        rate = _e2b_rate()
+        total = Decimal(str(wall_hours)) * rate
+        if total > COST_COLUMN_CAP:
+            total = COST_COLUMN_CAP
+            clamped = True
+        breakdown.append(
+            {
+                "component": "sandbox_infra",
+                "display_name": "Sandbox Infrastructure",
+                "source": "derived",
+                "amount_usd": _entry_amount(total),
+                "formula_applied": "rate * wall_clock_hours",
+                "rate_usd": str(rate),
+                "basis": {
+                    "wall_clock_hours": wall_hours,
+                    "derived_from": derived_from,
+                },
+            }
+        )
+    if salvage is not None and salvage.agent_cost_usd is not None:
+        breakdown.append(_salvage_breakdown_entry(salvage))
+    if not breakdown:
+        # Nothing provable — do not write a fabricated terminal.
+        _log.warning("cost_finalize.no_attributable_cost", extra={"run_id": str(run_id)})
+        return
     if clamped:
         breakdown.insert(0, dict(TOTAL_CLAMPED_MARKER))
     _log.warning(
         "cost_finalize.derived_deadline_cost",
         extra={
             "run_id": str(run_id),
+            "status": status,
             "wall_clock_hours": wall_hours,
             "total_cost_usd": str(total),
+            "salvaged_agent_cost_usd": str(salvage.agent_cost_usd) if salvage and salvage.agent_cost_usd else None,
         },
     )
     await update_run_status(
         session,
         run_id,
-        "failed",
+        status,
         error_code=error_code,
         error_detail=error_detail,
         total_cost_usd=total,
@@ -3182,7 +3463,7 @@ async def _write_derived_deadline_terminal(
     # makes the derived spend visible to the spend ceiling, the daily ledger
     # (``org_daily_run_counts``) and the circuit breaker. ``run_date`` is
     # ``None`` for a zero total / missing ``started_at``, so no ledger row is
-    # written in that case.
+    # written in that case (a salvage-only breakdown legitimately totals 0).
     run_date = _ledger_run_date(True, total, run)
     if run_date is not None:
         try:
@@ -3190,7 +3471,7 @@ async def _write_derived_deadline_terminal(
                 session,
                 run_id=run_id,
                 org_id=org_id,
-                status="failed",
+                status=status,
                 total=total,
                 owner_team_id=run.owner_team_id,
                 run_date=run_date,
@@ -3211,7 +3492,7 @@ async def _write_derived_deadline_terminal(
                 # transaction is aborted, so the ownership layer must own it.
                 raise
             _log.exception("cost_ledger.derived_deadline_block_failed", extra={"run_id": str(run_id)})
-    await _record_terminal_analytics(session, run, "failed", {}, writer=_WRITER_EARLY_RETURN)
+    await _record_terminal_analytics(session, run, status, {}, writer=_WRITER_EARLY_RETURN)
 
 
 async def _finalize_failed_run(
@@ -3231,11 +3512,17 @@ async def _finalize_failed_run(
         return
     stored_blobs = await read_run_blobs(session, run_id=run_id, organisation_id=run.organisation_id)
     if not (stored_blobs.outputs or run.node_token_usage or stored_blobs.telemetry):
-        if (
+        # FAR-1914 B1: the killed attempt's retained marker is the only
+        # surviving spend record. Recover the agent's own per-step cost from it
+        # and report it alongside the FAR-1993 derived sandbox cost, so a
+        # productive-but-killed run stops reporting a bare zero.
+        salvage = _salvage_from_markers(stored_blobs.markers)
+        has_derived_duration = (
             derived_sandbox_wall_hours is not None
             and math.isfinite(derived_sandbox_wall_hours)
             and derived_sandbox_wall_hours > 0
-        ):
+        )
+        if has_derived_duration or salvage.has_evidence:
             await _write_derived_deadline_terminal(
                 session,
                 run=run,
@@ -3243,12 +3530,13 @@ async def _finalize_failed_run(
                 org_id=org_id,
                 error_code=error_code,
                 error_detail=error_detail,
-                wall_hours=derived_sandbox_wall_hours,
+                wall_hours=derived_sandbox_wall_hours if has_derived_duration else None,
                 derived_from=derived_from,
+                salvage=salvage if salvage.has_evidence else None,
             )
             return
-        # No node data AND no derived wall-clock: nothing can be attributed.
-        # Same diagnostic + outcome as the cancel path (accrued spend forfeited).
+        # No node data, no proven duration AND no retained evidence: nothing can
+        # be attributed (never fabricate). Same diagnostic as before.
         _log.warning("cost_components_partial_spend_lost", extra={"run_id": str(run_id)})
         return
     # A run WITH real node data goes through the normal component build — never
@@ -3292,8 +3580,11 @@ async def finalize_failed_run(
     number, the cost is attributed at the RUN level from that DERIVED duration.
     The caller supplies the duration and its proof: the node's configured
     deadline (the watchdog fired because the node ran to it) or the run's
-    heartbeat-proven liveness window (the reconcile age gate). This is not
-    agent-reported telemetry. *derived_from* labels WHICH proof produced it and
+    heartbeat-proven liveness window (the reconcile age gate). FAR-1914 B1 also
+    folds in the killed attempt's own agent-reported spend, recovered from its
+    retained raw-output marker (``self_reported`` provenance, non-billable), so
+    a productive-but-killed run stops reporting a bare zero. This is not
+    server-measured telemetry. *derived_from* labels WHICH proof produced it and
     defaults to ``"node_deadline_watchdog"``, preserving the deadline path's
     provenance exactly; the age gate passes
     ``"reconcile_age_gate_heartbeat"``. See
