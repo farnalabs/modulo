@@ -37,6 +37,17 @@ interface TiersPayload {
 }
 
 /**
+ * The caller-scoped `GET /api/v1/auth/permissions` payload (FAR-2020): every
+ * permission name the caller's LIVE org role resolves to, read straight from
+ * the backend registry. The access token deliberately carries no `permissions`
+ * claim (200+ names would bloat every request and go stale on a role change),
+ * so this read is the nav's only source for permission-gated items.
+ */
+interface PermissionsPayload {
+  permissions: string[];
+}
+
+/**
  * Run one plan request to settlement: apply on success, record on failure.
  * Never rejects — the request is built INSIDE a thunk so even a synchronous
  * throw from `api.GET` lands in this function's catch rather than escaping
@@ -329,6 +340,68 @@ export const usePlanStore = defineStore("plan", () => {
 
   const orgOverrides = ref<Record<string, boolean | null>>({});
 
+  // ---------------------------------------------------------------------
+  // FAR-2020: the caller's effective permission names for nav gating.
+  //
+  // Resolved ONCE per session from the caller-scoped registry read, because
+  // the access token carries no `permissions` claim and duplicating the
+  // backend's role -> permission map in the SPA would drift. `permissionsSource`
+  // is the settle state: 'none' = not attempted, 'server' = a payload applied,
+  // 'unavailable' = settled without one (terminal for the session, so a broken
+  // endpoint is not hammered by every component that builds a nav context).
+  // Both resolved states are FAIL CLOSED for gating: the list is the source of
+  // truth, and an empty list denies every permission-gated item.
+  // ---------------------------------------------------------------------
+  const userPermissions = ref<string[]>([]);
+  const permissionsSource = ref<"none" | "server" | "unavailable">("none");
+  let fetchPermissionsPromise: Promise<void> | null = null;
+
+  async function fetchPermissions(): Promise<void> {
+    if (permissionsSource.value !== "none") return;
+    if (fetchPermissionsPromise) return fetchPermissionsPromise;
+    fetchPermissionsPromise = doFetchPermissions();
+    try {
+      await fetchPermissionsPromise;
+    } finally {
+      fetchPermissionsPromise = null;
+    }
+  }
+
+  async function doFetchPermissions(): Promise<void> {
+    try {
+      const res = await withTimeout(
+        api.GET("/api/v1/auth/permissions"),
+        15000,
+        "Permissions request",
+      );
+      const permissions = (res.data as PermissionsPayload | undefined)?.permissions;
+      if (Array.isArray(permissions)) {
+        userPermissions.value = permissions.filter(
+          (name): name is string => typeof name === "string",
+        );
+        permissionsSource.value = "server";
+        return;
+      }
+      // Settled without a payload (4xx / 5xx / timeout / no body): stay fail
+      // closed and record it once — the nav degrades to its empty-list
+      // behaviour rather than throwing or blocking the render. `console.warn`
+      // (not debug) because the lint rule permits only warn/error, and this is
+      // the same best-effort-degraded shape the flag-cache persist path warns
+      // on; it fires at most once per session (permissionsSource is terminal).
+      permissionsSource.value = "unavailable";
+      console.warn(
+        "[plan] Permissions request settled without a payload - permission-gated nav items stay hidden",
+        res.error ?? null,
+      );
+    } catch (e: unknown) {
+      permissionsSource.value = "unavailable";
+      console.warn(
+        "[plan] Permissions request failed - permission-gated nav items stay hidden",
+        e,
+      );
+    }
+  }
+
   async function fetchOrgFlagOverride(flagName: string): Promise<boolean | null> {
     try {
       const res = await api.GET(
@@ -384,7 +457,10 @@ export const usePlanStore = defineStore("plan", () => {
     tierLabels,
     tierRanks,
     orgOverrides,
+    userPermissions,
+    permissionsSource,
     fetchPlan,
+    fetchPermissions,
     featureEnabled,
     getTierLabel,
     isAtMinimumTier,

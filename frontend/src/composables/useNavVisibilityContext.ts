@@ -30,19 +30,30 @@ export function useNavVisibilityContext(
 ) {
   const planStore = usePlanStore()
   const { jwtPayload } = useCurrentUser()
+  // FAR-2020: kick off the caller's permission read ONCE per session. The
+  // access token carries no `permissions` claim, and `required_permissions`
+  // gates would otherwise deny for every user (empty list). Deliberately
+  // fire-and-forget: the store dedupes the request, swallows failures and
+  // leaves the list empty (fail closed), so building a nav context never
+  // blocks a render and never rejects.
+  void planStore.fetchPermissions()
   return computed<NavVisibilityContext>(() => {
     const o = toValue(overrides)
+    const claimPermissions = jwtPayload.value?.permissions
     return {
       isSystemAdmin: o?.isSystemAdmin ?? (jwtPayload.value?.is_system_admin === true),
       userRole:
         o?.userRole !== undefined
           ? o.userRole || null
           : (jwtPayload.value?.org_role as string | null) || null,
+      // A `permissions` claim, when a token carries one, is an OVERRIDE
+      // (highest precedence); otherwise the registry-backed list the plan
+      // store resolved for this session.
       userPermissions:
         o?.userPermissions ??
-        (Array.isArray(jwtPayload.value?.permissions)
-          ? (jwtPayload.value!.permissions as string[])
-          : []),
+        (Array.isArray(claimPermissions)
+          ? (claimPermissions as string[])
+          : planStore.userPermissions),
       devMode: planStore.devMode,
       tierInfoLoaded: !!planStore.tierRanks && Object.keys(planStore.tierRanks).length > 0,
       isAtMinimumTier: (tier: string) => planStore.isAtMinimumTier(tier),

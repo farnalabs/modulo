@@ -41,6 +41,8 @@ from modulo.auth.passwords import (
     hash_password,
     validate_password_strength,
 )
+from modulo.auth.permissions import PERMISSIONS
+from modulo.auth.team_rbac import org_role_level
 from modulo.auth.ws_token import create_ws_token
 from modulo.core.audit_coverage import audited, audited_system, bind_audit_org
 from modulo.core.audit_logger import append_audit_event
@@ -1522,6 +1524,72 @@ async def me(
         created_at=account.created_at.isoformat(),
         is_system_admin=current_user.is_system_admin,
         must_change_password=bool(account.must_change_password),
+    )
+
+
+class PermissionsResponse(BaseModel):
+    """The caller's effective permission names (FAR-2020).
+
+    Sorted, so a client comparing the set is deterministic and the response is
+    diff-stable. Scoped to the CALLER: the route takes no parameters, so there
+    is no way to read another account's permissions through it.
+    """
+
+    permissions: list[str]
+
+
+def _effective_permission_names(org_role: str | None, *, is_system_admin: bool) -> list[str]:
+    """Resolve the registry names an org role is granted (FAR-2020).
+
+    ONE source of truth: the names come from ``PERMISSIONS`` (permission ->
+    minimum org role) compared through ``org_role_level`` — the same hierarchy
+    comparison ``assert_org_role`` enforces — so this cannot drift from what a
+    request would actually be allowed to do. A narrower role simply matches
+    fewer keys; an unknown or absent role matches none (fail closed).
+
+    ``is_system_admin`` holds the admin floor: the strict system gates are
+    ``is_system_admin``-only (they ignore the org hierarchy entirely), so a
+    system admin's set must include them rather than resolve solely to whatever
+    org role they happen to carry.
+    """
+    if is_system_admin:
+        level = org_role_level("admin")
+    elif org_role:
+        level = org_role_level(org_role)
+    else:
+        level = -1
+    if level < 0:
+        return []
+    return [name for name, min_role in sorted(PERMISSIONS.items()) if org_role_level(min_role) <= level]
+
+
+@router.get("/permissions")
+@handle_db_errors("auth.permissions")
+async def permissions(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> PermissionsResponse:
+    """Return the CALLER's effective permission names (FAR-2020).
+
+    The frontend gates nav/route entries on ``required_permissions`` (see
+    ``frontend/src/config/navigation.ts``); the access token deliberately
+    carries no ``permissions`` claim (200+ names would bloat every request and
+    go stale the moment a role changes), so the nav resolves them from this
+    registry-backed read instead.
+
+    Authenticated only. The role is the LIVE membership role (ADR 047), not the
+    token claim, so a demoted user's nav follows the reduction immediately and
+    a removed member is denied. A system admin gets the full admin floor
+    without a membership lookup.
+    """
+    live_org_role = await _resolve_live_org_role(
+        session,
+        account_id=str(current_user.account_id),
+        org_id=str(current_user.organisation_id) if current_user.organisation_id is not None else None,
+        username=current_user.username,
+    )
+    return PermissionsResponse(
+        permissions=_effective_permission_names(live_org_role, is_system_admin=current_user.is_system_admin),
     )
 
 
