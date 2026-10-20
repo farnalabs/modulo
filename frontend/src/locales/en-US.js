@@ -1474,6 +1474,7 @@ export default {
       "version_missing_body": "It may have been deleted, or this link may be out of date.",
       "version_missing_open_latest": "Open the latest version",
       "version_load_failed": "Failed to load this version: {error}",
+      "version_chip_unavailable": "Version unavailable — retry",
       "unsaved_changes_title": "Unsaved changes",
       "unsaved_changes_body": "You have unsaved changes to this pipeline's graph. Open the historical version anyway? Your unsaved changes stay in the latest editor.",
       "unsaved_changes_continue": "Open version"
@@ -4659,6 +4660,8 @@ export default {
       "select_version_aria": "Select v{version} for compare or restore",
       "ran_times": "ran {count}x",
       "ran_earlier": "ran {count}x on earlier versions",
+      "ran_unattributed": "ran {count}x (version not in the loaded history)",
+      "no_version_in_window": "No version in the loaded history.",
       "truncated_notice": "Showing the most recent {loaded} of {total} versions.",
       "load_more": "Load more",
       "load_more_failed": "Could not load more history.",
