@@ -499,12 +499,13 @@ routes:
         sidebar_order: 9
         type: form_page
         <<: *community
-        # Role-gated, not permission-gated: the sidebar/router permission gate
-        # reads a `permissions` client claim that the signed-in session does
-        # not carry, so a required_permissions gate here would hide the page
-        # from every user. The underlying endpoint is granted to the lowest
-        # role, so listing all four org roles is the accurate gate.
-        required_roles: [viewer, runner, operator, admin]
+        # Per-user settings: visible to EVERY org role, so role gating stays
+        # null (from *community) rather than listing all four roles - an
+        # explicit role list on a community route is reserved for admin-only
+        # nav (tests/unit/assistant/test_manifest.py). A required_permissions
+        # gate is not usable either: the sidebar gate reads a `permissions`
+        # client claim the signed-in session does not carry, so it would hide
+        # the page from every user.
         deprecated: false
     /settings/email:
         name: settings-email
