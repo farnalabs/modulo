@@ -490,6 +490,17 @@ routes:
         deprecated: false
 
         <<: *team
+    /settings/notifications:
+        name: settings-notifications
+        breadcrumb: Notification Preferences
+        parent: /
+        product_map: [feat-notifications]
+        sidebar_group: monitor
+        sidebar_order: 9
+        type: form_page
+        <<: *community
+        required_permissions: [notification.self]
+        deprecated: false
     /settings/email:
         name: settings-email
         breadcrumb: Email
@@ -5010,6 +5021,28 @@ elements:
         dynamic_testid: false
       - testid: json-viewer-string-expand
         type: button
+        dynamic_testid: false
+    /settings/notifications:
+      - testid: settings-notifications-loading
+        type: element
+        dynamic_testid: false
+      - testid: settings-notifications-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-notifications-list
+        type: element
+        dynamic_testid: false
+      - testid: settings-notifications-empty
+        type: element
+        dynamic_testid: false
+      - testid: settings-notifications-level
+        type: select
+        dynamic_testid: false
+      - testid: settings-notifications-status
+        type: element
+        dynamic_testid: false
+      - testid: settings-notifications-save-error
+        type: element
         dynamic_testid: false
     /settings/email:
       - testid: feature-gate
