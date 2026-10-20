@@ -408,6 +408,22 @@ describe('CompositeEditorView', () => {
     wrapper.unmount()
   })
 
+  it('re-opening an already-open save-as dialog is a guarded no-op', async () => {
+    const wrapper = mountView()
+    await flush()
+
+    await wrapper.findAll('button').find((b) => b.text().trim() === 'Save as composite')!.trigger('click')
+    await nextTick()
+    const dialogEl = wrapper.find('dialog').element as HTMLDialogElement
+    expect(dialogEl.open).toBe(true)
+
+    const vm = wrapper.vm as unknown as { openSaveAsDialog: () => void }
+    // A second showModal() would throw InvalidStateError; the guard no-ops.
+    expect(() => vm.openSaveAsDialog()).not.toThrow()
+    expect(dialogEl.open).toBe(true)
+    wrapper.unmount()
+  })
+
   it('closes the save-as dialog on a backdrop click', async () => {
     const wrapper = mountView(true)
     await flush()

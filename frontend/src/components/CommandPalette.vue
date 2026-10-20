@@ -41,7 +41,7 @@
         >
           <SvgIcon :name="item.icon" class="h-4 w-4 shrink-0 text-muted-foreground" />
           <span class="flex-1 truncate">{{ item.label }}</span>
-          <span v-if="item.section" class="shrink-0 text-xs text-muted-foreground">{{ item.section }}</span>
+          <span class="shrink-0 text-xs text-muted-foreground">{{ item.section }}</span>
         </button>
       </div>
       <div class="border-t px-4 py-2 text-xs text-muted-foreground text-right">

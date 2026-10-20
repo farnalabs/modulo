@@ -2,6 +2,7 @@ import { mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
+import { useRouter } from 'vue-router'
 import CommandPalette from '../components/CommandPalette.vue'
 
 // Track mounted wrappers so afterEach can unmount them. CommandPalette is
@@ -110,6 +111,49 @@ describe('CommandPalette', () => {
     expect(document.querySelector('input[placeholder="Search pages..."]')).toBeNull()
   })
 
+  it('moves the selection with ArrowUp and clamps at the first item', async () => {
+    await openPalette()
+    const input = paletteInput()
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    await nextTick()
+    expect(resultButtons().indexOf(highlightedButton()!)).toBe(2)
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+    await nextTick()
+    expect(resultButtons().indexOf(highlightedButton()!)).toBe(1)
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+    await nextTick()
+    expect(resultButtons().indexOf(highlightedButton()!)).toBe(0)
+  })
+
+  it('highlights the hovered and focused result and navigates on click', async () => {
+    const wrapper = await openPalette()
+    const push = useRouter().push as unknown as ReturnType<typeof vi.fn>
+    push.mockClear()
+
+    const buttons = resultButtons()
+    buttons[2].dispatchEvent(new MouseEvent('mouseenter'))
+    await nextTick()
+    expect(highlightedButton()).toBe(buttons[2])
+
+    buttons[1].focus()
+    await nextTick()
+    expect(highlightedButton()).toBe(buttons[1])
+
+    await typeQuery('pipelines')
+    const only = resultButtons()[0]
+    only.click()
+    await nextTick()
+
+    expect(push).toHaveBeenCalledWith('/pipelines')
+    expect(document.querySelector('input[placeholder="Search pages..."]')).toBeNull()
+    wrapper.unmount()
+    mounted.pop()
+  })
+
   it('is a genuinely modal dialog (opened with showModal, focus inside)', async () => {
     const showModal = vi.spyOn(HTMLDialogElement.prototype, 'showModal')
     await openPalette()
@@ -121,6 +165,12 @@ describe('CommandPalette', () => {
     expect(showModal).toHaveBeenCalledTimes(1)
     expect(dialog!.open).toBe(true)
     expect(dialog!.contains(document.activeElement)).toBe(true)
+
+    // Re-opening an already-open palette is guarded: a second showModal() on
+    // an open dialog throws InvalidStateError.
+    await (mounted[mounted.length - 1].vm as unknown as { open: () => Promise<void> }).open()
+    await nextTick()
+    expect(showModal).toHaveBeenCalledTimes(1)
     showModal.mockRestore()
   })
 
@@ -128,9 +178,34 @@ describe('CommandPalette', () => {
     await openPalette()
     expect(paletteInput()).not.toBeNull()
 
-    // A click whose target is the dialog itself is a ::backdrop click.
+    // A click whose target is the dialog itself is a ::backdrop click. The
+    // second dispatch lands while the (still-rendered) dialog is already
+    // closed, exercising the guarded no-op path.
     const dialog = document.querySelector('dialog') as HTMLDialogElement
     dialog.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    dialog.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await nextTick()
+
+    expect(document.querySelector('input[placeholder="Search pages..."]')).toBeNull()
+  })
+
+  it('does not close when the click originates inside the dialog', async () => {
+    await openPalette()
+    const input = paletteInput()
+    input.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await nextTick()
+
+    expect(paletteInput()).not.toBeNull()
+  })
+
+  it('closes safely when Escape arrives before the dialog has mounted', async () => {
+    const wrapper = mount(CommandPalette, { attachTo: document.body })
+    mounted.push(wrapper)
+    const opening = (wrapper.vm as unknown as { open: () => Promise<void> }).open()
+    // open() has set isOpen but has not awaited its nextTick, so the dialog
+    // does not exist yet when Escape closes it.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await opening
     await nextTick()
 
     expect(document.querySelector('input[placeholder="Search pages..."]')).toBeNull()

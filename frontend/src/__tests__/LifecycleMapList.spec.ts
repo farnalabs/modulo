@@ -712,6 +712,64 @@ describe('LifecycleMapList create dialog', () => {
     expect(wrapper.find('dialog').exists()).toBe(false)
   })
 
+  it('creates a map, closes the dialog and opens the editor', async () => {
+    const created = { ...summaryMap, id: 'map-new', name: 'New Map' }
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return Promise.resolve(okJson(created))
+      return Promise.resolve(okJson({ items: [] }))
+    }))
+    const ButtonStub = {
+      template: '<button :disabled="disabled" @click="$emit(\'click\', $event)"><slot /></button>',
+      props: ['disabled'],
+    }
+    routerPushMock.mockClear()
+    const wrapper = mount(LifecycleMapList, {
+      attachTo: document.body,
+      global: {
+        plugins: [i18n],
+        stubs: { PageHeader: true, FilterBar: true, Button: ButtonStub },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-testid="lifecycle-map-list-create-name"]').setValue('New Map')
+    await wrapper.find('[data-testid="lifecycle-map-list-create-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(routerPushMock).toHaveBeenCalledWith({
+      name: 'lifecycle-map-editor',
+      params: { id: 'map-new' },
+    })
+    expect(wrapper.find('dialog').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('re-opening an already-open create dialog is a guarded no-op', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
+    const wrapper = mount(LifecycleMapList, {
+      attachTo: document.body,
+      global: {
+        plugins: [i18n],
+        stubs: { PageHeader: true, FilterBar: true, ErrorAlert: true, Button: true },
+      },
+    })
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { openCreateDialog: () => void }
+    await wrapper.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    const dialogEl = wrapper.find('dialog').element as HTMLDialogElement
+    expect(dialogEl.open).toBe(true)
+
+    // A second showModal() would throw InvalidStateError; the guard makes it
+    // a no-op.
+    expect(() => vm.openCreateDialog()).not.toThrow()
+    expect(dialogEl.open).toBe(true)
+    wrapper.unmount()
+  })
+
   it('closes create dialog when Cancel is clicked', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
     const wrapper = mount(LifecycleMapList, {
