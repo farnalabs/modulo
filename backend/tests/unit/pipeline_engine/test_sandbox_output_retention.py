@@ -34,6 +34,7 @@ from modulo.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
     _marker_delivery_done_for_node,
     _persist_raw_output_marker,
+    _RawOutputMarkerRequest,
     _retain_raw_output_marker,
     make_sandbox_agent_fn,
 )
@@ -746,17 +747,19 @@ async def _retain(row: _FakeRunRow, *, source: str, sentinel: str | None, summar
 
     await _retain_raw_output_marker(
         _factory,
-        run_id="run-1",
-        org_id_raw=_ORG_ID,
-        node_id="n1",
-        attempt_key=_ATTEMPT_KEY,
-        summary=summary,
-        source=source,
-        parse_error="boom",
-        exit_code=1,
-        stdout_length=len(source),
-        stderr_length=0,
-        delivery_sentinel=sentinel,
+        _RawOutputMarkerRequest(
+            run_id="run-1",
+            org_id_raw=_ORG_ID,
+            node_id="n1",
+            attempt_key=_ATTEMPT_KEY,
+            summary=summary,
+            source=source,
+            parse_error="boom",
+            exit_code=1,
+            stdout_length=len(source),
+            stderr_length=0,
+            delivery_sentinel=sentinel,
+        ),
     )
 
 
@@ -1884,3 +1887,34 @@ async def test_far879_exc_path_over_cap_stderr_emits_pointer(tmp_path):
     assert pointer["stream"] == "stderr"
     assert pointer["size_bytes"] == len(big_stderr)
     assert pointer["redacted"] is True
+
+
+async def test_marker_carries_both_stream_artifact_pointers_when_present():
+    """FAR-792/FAR-879: the marker builder copies BOTH side-car pointers when
+    the dispatch produced them, so the node-output view can surface the full
+    over-cap stdout AND stderr transcripts."""
+    row = _FakeRunRow()
+    stdout_pointer = {"rel_path": "stdout.zst", "stream": "stdout", "size_bytes": 8000}
+    stderr_pointer = {"rel_path": "stderr.zst", "stream": "stderr", "size_bytes": 9000}
+
+    await _retain_raw_output_marker(
+        lambda: _RetentionSession(row),
+        _RawOutputMarkerRequest(
+            run_id="run-1",
+            org_id_raw=_ORG_ID,
+            node_id="n1",
+            attempt_key=_ATTEMPT_KEY,
+            summary="stalled",
+            source="partial output",
+            parse_error="timeout",
+            exit_code=1,
+            stdout_length=8000,
+            stderr_length=9000,
+            stdout_artifact=stdout_pointer,
+            stderr_artifact=stderr_pointer,
+        ),
+    )
+
+    marker = _single_marker(row)
+    assert marker["stdout_artifact"] == stdout_pointer
+    assert marker["stderr_artifact"] == stderr_pointer

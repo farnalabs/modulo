@@ -78,7 +78,7 @@ def test_parse_uuid_roundtrip_and_none() -> None:
     assert rd._parse_uuid(object()) is None
 
 
-async def test_render_agent_template_uses_shared_sandbox_jinja_environment(
+def test_render_agent_template_uses_shared_sandbox_jinja_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The bundled-runner renderer resolves the shared FAR-226 helper.
@@ -99,7 +99,7 @@ async def test_render_agent_template_uses_shared_sandbox_jinja_environment(
 
     monkeypatch.setattr(sandbox_mode, "sandbox_jinja_environment", _spy)
 
-    result = await rd._render_agent_template(
+    result = rd._render_agent_template(
         sandbox_mode="llm",
         agent_command="echo hi",
         agent_prompt_template="hello",
@@ -119,10 +119,10 @@ async def test_render_agent_template_uses_shared_sandbox_jinja_environment(
 # ---------------------------------------------------------------------------
 
 
-async def test_render_agent_template_injects_baked_model_value() -> None:
+def test_render_agent_template_injects_baked_model_value() -> None:
     """The Bundled Runner path interpolates `{{ model }}` from the SNAPSHOT's
     baked `_resolved_model` — parity with the E2B node-runner render."""
-    result = await rd._render_agent_template(
+    result = rd._render_agent_template(
         sandbox_mode="llm",
         agent_command="opencode run --model {{ model }} --auto",
         agent_prompt_template="hello",
@@ -138,10 +138,10 @@ async def test_render_agent_template_injects_baked_model_value() -> None:
     assert rendered_command == "opencode run --model opencode-go/mimo-v2.6-flash --auto"
 
 
-async def test_render_agent_template_run_override_beats_baked_value() -> None:
+def test_render_agent_template_run_override_beats_baked_value() -> None:
     """Rung 1 folds in pre-dispatch: the run's frozen `_run_overrides.model`
     overrides the baked value for that run."""
-    result = await rd._render_agent_template(
+    result = rd._render_agent_template(
         sandbox_mode="llm",
         agent_command="opencode run --model {{ model }} --auto",
         agent_prompt_template="hello",
@@ -157,11 +157,11 @@ async def test_render_agent_template_run_override_beats_baked_value() -> None:
     assert rendered_command == "opencode run --model opencode-go/variant-choice --auto"
 
 
-async def test_render_agent_template_model_class_without_value_fails_closed() -> None:
+def test_render_agent_template_model_class_without_value_fails_closed() -> None:
     """An opted-in node with no baked model and no run override refuses before
     any workspace provisioning (ADR 037 D3) — no blank --model dispatch."""
     with pytest.raises(ValueError, match="no model was resolved at snapshot mint"):
-        await rd._render_agent_template(
+        rd._render_agent_template(
             sandbox_mode="llm",
             agent_command="opencode run --model {{ model }} --auto",
             agent_prompt_template="hello",
@@ -172,3 +172,64 @@ async def test_render_agent_template_model_class_without_value_fails_closed() ->
             node_id="n1",
             node_def={"model_class": "builder"},
         )
+
+
+# ---------------------------------------------------------------------------
+# Output-parse classification + retention artifacts
+# ---------------------------------------------------------------------------
+
+
+def test_output_parse_error_non_dict_payload_names_the_type() -> None:
+    assert rd._output_parse_error("[]", [1, 2]) == "output.json parsed to non-dict type list"
+
+
+def test_output_parse_error_invalid_json() -> None:
+    assert rd._output_parse_error("{not json", None) == "output.json is not valid JSON"
+
+
+def test_output_parse_error_empty_output() -> None:
+    """No raw output (and no parsed value) is a DISTINCT reason from bad JSON —
+    the marker must say the file was empty/null, not that it failed to parse."""
+    assert rd._output_parse_error("", None) == "output.json is empty or JSON null"
+
+
+def test_runner_retention_artifacts_persists_over_cap_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An over-cap stderr stream gets its own side-car pointer while stdout
+    stays inline (FAR-879 parity on the Bundled Runner path)."""
+    import modulo.core.pipeline_engine.node_runner as nrm
+
+    persisted: dict[str, dict[str, object]] = {}
+    stderr_pointer = {"rel_path": "stderr.zst", "stream": "stderr", "truncated": False, "redacted": True}
+
+    def _persist_stdout(**kwargs: object) -> dict[str, object]:
+        persisted["stdout"] = kwargs
+        return {"rel_path": "stdout.zst", "stream": "stdout"}
+
+    def _persist_stderr(**kwargs: object) -> dict[str, object]:
+        persisted["stderr"] = kwargs
+        return stderr_pointer
+
+    monkeypatch.setattr(nrm, "_persist_full_stdout_artifact", _persist_stdout)
+    monkeypatch.setattr(nrm, "_persist_full_stderr_artifact", _persist_stderr)
+    monkeypatch.setattr(nrm, "_redact_raw_output", lambda text: text)
+
+    stdout, stderr, _stdout_len, stderr_len, stdout_truncated, stdout_artifact, stderr_artifact = (
+        rd._runner_retention_artifacts(
+            node_id="node-1",
+            run_id="run-1",
+            org_id="org-1",
+            attempt_key="attempt-1",
+            agent_stdout_raw="short",
+            agent_stderr_raw="e" * 64,
+            stdout_cap=16,
+        )
+    )
+
+    assert stdout == "short"
+    assert stdout_truncated is False
+    assert stdout_artifact is None
+    assert stderr == "e" * 16
+    assert stderr_len == 64
+    assert stderr_artifact == stderr_pointer
+    assert persisted["stderr"]["redacted_stderr"] == "e" * 64
+    assert persisted["stderr"]["node_cap"] == 16

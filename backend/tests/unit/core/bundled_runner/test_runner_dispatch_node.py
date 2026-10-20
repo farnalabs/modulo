@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -403,8 +404,8 @@ async def test_run_schema_validation_failure_llm_raises_retryable(patch_node_run
 
     retained = {}
 
-    async def _retain(*a, **k):
-        retained.update(k)
+    async def _retain(_session_factory, request):
+        retained["request"] = request
 
     monkeypatch.setattr(nrm, "_validate_against_schema", _bad_schema, raising=False)
     monkeypatch.setattr(nrm, "_retain_raw_output_marker", _retain, raising=False)
@@ -413,8 +414,8 @@ async def test_run_schema_validation_failure_llm_raises_retryable(patch_node_run
     with pytest.raises(_FakeError) as excinfo:
         await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))
     assert "schema validation" in str(excinfo.value)
-    assert retained.get("parse_error") == "schema mismatch"
-    assert '{"summary":"ok"}' in retained.get("source", "")
+    assert retained["request"].parse_error == "schema mismatch"
+    assert '{"summary":"ok"}' in retained["request"].source
 
 
 async def test_run_schema_validation_failure_llm_retryable_real_schema(patch_node_runner, monkeypatch) -> None:
@@ -457,8 +458,8 @@ async def test_run_delivery_sentinel_retained(patch_node_runner, monkeypatch) ->
 
     retained = {}
 
-    async def _retain(*a, **k):
-        retained.update(k)
+    async def _retain(_session_factory, request):
+        retained["request"] = request
 
     monkeypatch.setattr(nrm, "_retain_raw_output_marker", _retain, raising=False)
     monkeypatch.setattr(runner_dispatch, "_read_file_via_exec", AsyncMock(return_value='{"summary":"done"}'))
@@ -467,7 +468,7 @@ async def test_run_delivery_sentinel_retained(patch_node_runner, monkeypatch) ->
         _config(sandbox_mode="llm", delivery_sentinel="DONE"),
         _route(_FakeProvider(stream_chunks=[("stdout", "DONE observed")], stream_exit=0)),
     )
-    assert retained.get("delivery_sentinel") == "DONE"
+    assert retained["request"].delivery_sentinel == "DONE"
 
 
 async def test_run_stream_error_raises_retryable(patch_node_runner, monkeypatch) -> None:
@@ -588,15 +589,15 @@ async def test_run_full_retention_caps_raw_output_marker(patch_node_runner, monk
 
     retained = {}
 
-    async def _retain(*a, **k):
-        retained.update(k)
+    async def _retain(_session_factory, request):
+        retained["request"] = request
 
     monkeypatch.setattr(nrm, "_retain_raw_output_marker", _retain, raising=False)
     monkeypatch.setattr(runner_dispatch, "_read_file_via_exec", AsyncMock(return_value="not json {"))
     cfg = _config(node_def={"capability_scope": {}, "stdout_retention_mode": "full", "stdout_max_bytes": 2048})
     with pytest.raises(_FakeError):
         await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))
-    assert retained.get("max_artifact_bytes") == 2048
+    assert retained["request"].max_artifact_bytes == 2048
 
 
 async def test_run_stdout_org_ceiling_clamps_cap(patch_node_runner, monkeypatch) -> None:
@@ -1607,3 +1608,43 @@ async def test_teardown_and_clear_closes_the_loop_intercept_bridge_server() -> N
         dispatch_marker_set=False,
     )
     assert closed.is_set(), "the loop-intercept bridge server must be closed during teardown"
+
+
+# ---------------------------------------------------------------------------
+# _provision_workspace — llm-mode oversized input truncation
+# ---------------------------------------------------------------------------
+
+
+async def test_provision_workspace_truncates_oversized_llm_input(patch_node_runner, monkeypatch) -> None:
+    """An llm-mode input over 10 KiB is replaced with a truncation marker so a
+    giant run context never bloats the sandbox input file (the key count is
+    preserved as evidence)."""
+    written: dict[str, str] = {}
+
+    async def _fake_write(_provider, _ref, path, content):
+        written[path] = content
+
+    monkeypatch.setattr(runner_dispatch, "_write_file_via_exec", _fake_write)
+    provider = _FakeProvider()
+    raw_input = {"blob": "x" * 20_000}
+    request = runner_dispatch._ProvisionRequest(
+        state=_state(),
+        org_id=str(uuid.uuid4()),
+        run_id="run-1",
+        node_id="node-1",
+        route=_route(provider),
+        org_uuid=None,
+        run_uuid=None,
+        sandbox_mode="llm",
+        context_files={},
+        input_json=json.dumps(raw_input),
+        raw_input=raw_input,
+        rendered_prompt="prompt",
+    )
+
+    result = await runner_dispatch._provision_workspace(lambda: _session_cm(), request)
+
+    payload = json.loads(written[runner_dispatch._INPUT_JSON_PATH])
+    assert payload == {"_truncated": True, "_key_count": 1}
+    assert written[runner_dispatch._PROMPT_PATH] == "prompt"
+    assert result.attempt_key == "attempt-key"
