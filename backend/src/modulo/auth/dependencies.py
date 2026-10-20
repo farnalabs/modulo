@@ -1,6 +1,7 @@
 """FastAPI auth dependencies for v1 user management."""
 
 import logging
+from typing import Any
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -217,146 +218,7 @@ async def get_current_tenant_user_or_api_key(
 
     token = credentials.credentials
     if token.startswith("mk_"):
-        from sqlalchemy import select, text
-        from sqlalchemy.exc import SQLAlchemyError
-
-        from modulo.api.dependencies import (
-            get_or_create_engine,
-            get_or_create_session_factory,
-        )
-        from modulo.auth.api_key import (
-            _MK_PREFIX,
-            _PREFIX_LEN,
-            ApiKeyGrantsUnavailableError,
-            ApiKeyInvalidError,
-            resolve_key_grants,
-            validate_api_key,
-        )
-        from modulo.db.models.api_key import OrgApiKey
-        from modulo.db.rls import _ensure_active_transaction, set_rls_org
-
-        engine = get_or_create_engine(settings)
-        factory = get_or_create_session_factory(engine)
-        try:
-            # org_api_keys has RLS enabled (migration 0005, _STRICT_RLS) and the
-            # key's org is unknown until the record is read — a plain lookup in
-            # an empty org context would be filtered out by RLS and reject every
-            # valid key. On Postgres the runtime app role is RLS-subject (a
-            # non-owner DML-granted role), so the org is resolved through a
-            # SECURITY DEFINER function owned by the migration role rather than
-            # SET row_security TO OFF (which only bypasses RLS for owners and
-            # raises for a regular role). On generic backends there is no RLS
-            # and the tenant filter only injects when an org context is set, so
-            # a plain prefix scan works. Then re-validate inside the org
-            # context before trusting the key.
-            prefix = token[len(_MK_PREFIX) :][:_PREFIX_LEN]
-            async with factory() as session, session.begin():
-                dialect = await _ensure_active_transaction(session)
-                if dialect == "postgresql":
-                    org_id = (
-                        await session.execute(
-                            text("SELECT public.lookup_api_key_org(:prefix)"),
-                            {"prefix": prefix},
-                        )
-                    ).scalar_one_or_none()
-                else:
-                    key_record = (
-                        await session.execute(
-                            select(OrgApiKey).where(
-                                OrgApiKey.lookup_prefix == prefix,
-                                OrgApiKey.revoked_at.is_(None),
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    org_id = key_record.organisation_id if key_record is not None else None
-            if org_id is None:
-                raise ApiKeyInvalidError
-
-            async with factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                key = await validate_api_key(session, token, org_id=org_id)
-
-                # ADR 047 live-role re-read: clamp the minted role to the
-                # account's current membership role, matching the MCP auth
-                # path (api/mcp_server.py:770-790). A demoted or removed
-                # member's key must not retain elevated privileges.
-                live_role = await resolve_role_from_membership(
-                    session,
-                    str(key.account_id),
-                    str(key.organisation_id),
-                )
-            # FAR-1477: tri-state grant-set (None = legacy role bundle, no
-            # flag read). A grant-bearing key with the flag OFF is denied.
-            # Resolved AFTER the validation session closes: for grant-bearing
-            # keys the flag read opens its own pooled session, and holding two
-            # connections per request risks pool-exhaustion deadlock.
-            key_grants = await resolve_key_grants(key)
-        except ApiKeyInvalidError:
-            raise InvalidToken from None
-        except ApiKeyGrantsUnavailableError:
-            # Grant flag unreadable: fail closed with 503 (retryable), not 401.
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="API key grants temporarily unavailable.",
-            ) from None
-        except SQLAlchemyError as exc:
-            # FAR-1481: session-contract violations (InvalidRequestError and
-            # subclasses, incl. MissingGreenlet) are local programming bugs,
-            # not a DB outage — the shared classifier answers 500 for them and
-            # RETURNS for genuine transient errors so the 503 below is
-            # unchanged.
-            raise_session_contract_error(exc, "dependencies.get_current_tenant_user_or_api_key")
-            _log.warning("auth.api_key_verify_failed", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database temporarily unavailable.",
-            ) from None
-        # Clamp: if the account has no active membership, reject.
-        # If the live role is lower than the minted role, use the live role.
-        if live_role is None:
-            _log.warning(
-                "auth.api_key_membership_not_found",
-                extra={"account_id": str(key.account_id), "org_id": str(key.organisation_id)},
-            )
-            raise OrganisationMembershipNotFound
-        clamped_role = _clamp_role(key.role, live_role)
-        if not clamped_role:
-            _log.warning(
-                "auth.api_key_clamp_failed",
-                extra={
-                    "account_id": str(key.account_id),
-                    "org_id": str(key.organisation_id),
-                    "minted_role": key.role,
-                    "live_role": live_role,
-                },
-            )
-            raise OrganisationMembershipNotFound
-        return bind_principal_context(
-            request,
-            TenantPrincipal(
-                username=key.name,
-                organisation_id=key.organisation_id,
-                account_id=key.account_id,
-                org_role=clamped_role,
-                is_system_admin=False,
-                # FAR-681: thread the key's team scope into the principal so the
-                # team-gate dependency can enforce the boundary (a team-A-scoped
-                # key must not mutate team-B resources even when its OWNER is a
-                # member of team B). Org-wide keys carry team_id=None. getattr for
-                # duck-typed key fakes in existing tests (the real OrgApiKey row
-                # always carries the column).
-                team_id=getattr(key, "team_id", None),
-                # FAR-610: the credential is an org API key, not a browser-login
-                # JWT. human_only HITL gates deny API-key principals on decision
-                # actions; this marker is the mechanism that distinguishes them.
-                via_api_key=True,
-                # FAR-634: an API key is a programmatic credential by definition —
-                # the human_only enforcement's ``client_kind != browser`` rule
-                # subsumes the via_api_key check through this stamp.
-                client_kind=CLIENT_KIND_PROGRAMMATIC,
-                key_grants=key_grants,
-            ),
-        )
+        return await _resolve_api_key_principal(token, settings, request)
 
     try:
         principal = decode_principal(token, settings.secret_key)
@@ -371,6 +233,182 @@ async def get_current_tenant_user_or_api_key(
     # org context is bound here — same carriers, same moment-as-soon-as-known.
     tenant = await get_current_tenant_user(principal)
     return bind_principal_context(request, tenant)
+
+
+async def _resolve_api_key_principal(
+    token: str,
+    settings: Settings,
+    request: Request | None,
+) -> TenantPrincipal:
+    """Resolve an ``mk_`` API-key credential into a tenant principal.
+
+    Failure ordering is load-bearing and must stay: invalid key -> 401,
+    unreadable grant flag -> 503, DB error -> classify then 503, and only
+    after a successful read is the membership/role clamp evaluated.
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from modulo.api.dependencies import (
+        get_or_create_engine,
+        get_or_create_session_factory,
+    )
+    from modulo.auth.api_key import (
+        ApiKeyGrantsUnavailableError,
+        ApiKeyInvalidError,
+        resolve_key_grants,
+    )
+
+    engine = get_or_create_engine(settings)
+    factory = get_or_create_session_factory(engine)
+    try:
+        org_id = await _lookup_api_key_org(factory, token)
+        if org_id is None:
+            raise ApiKeyInvalidError
+
+        key, live_role = await _validate_api_key_in_org(factory, token, org_id)
+        # FAR-1477: tri-state grant-set (None = legacy role bundle, no
+        # flag read). A grant-bearing key with the flag OFF is denied.
+        # Resolved AFTER the validation session closes: for grant-bearing
+        # keys the flag read opens its own pooled session, and holding two
+        # connections per request risks pool-exhaustion deadlock.
+        key_grants = await resolve_key_grants(key)
+    except ApiKeyInvalidError:
+        raise InvalidToken from None
+    except ApiKeyGrantsUnavailableError:
+        # Grant flag unreadable: fail closed with 503 (retryable), not 401.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="API key grants temporarily unavailable.",
+        ) from None
+    except SQLAlchemyError as exc:
+        # FAR-1481: session-contract violations (InvalidRequestError and
+        # subclasses, incl. MissingGreenlet) are local programming bugs,
+        # not a DB outage — the shared classifier answers 500 for them and
+        # RETURNS for genuine transient errors so the 503 below is
+        # unchanged.
+        raise_session_contract_error(exc, "dependencies.get_current_tenant_user_or_api_key")
+        _log.warning("auth.api_key_verify_failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+    return _bind_api_key_principal(request, key, live_role, key_grants)
+
+
+async def _lookup_api_key_org(factory: Any, token: str) -> Any:
+    """Resolve the key's org without RLS filtering (SECURITY DEFINER on Postgres)."""
+    from sqlalchemy import select, text
+
+    from modulo.auth.api_key import _MK_PREFIX, _PREFIX_LEN
+    from modulo.db.models.api_key import OrgApiKey
+    from modulo.db.rls import _ensure_active_transaction
+
+    # org_api_keys has RLS enabled (migration 0005, _STRICT_RLS) and the
+    # key's org is unknown until the record is read — a plain lookup in
+    # an empty org context would be filtered out by RLS and reject every
+    # valid key. On Postgres the runtime app role is RLS-subject (a
+    # non-owner DML-granted role), so the org is resolved through a
+    # SECURITY DEFINER function owned by the migration role rather than
+    # SET row_security TO OFF (which only bypasses RLS for owners and
+    # raises for a regular role). On generic backends there is no RLS
+    # and the tenant filter only injects when an org context is set, so
+    # a plain prefix scan works. Then re-validate inside the org
+    # context before trusting the key.
+    prefix = token[len(_MK_PREFIX) :][:_PREFIX_LEN]
+    async with factory() as session, session.begin():
+        dialect = await _ensure_active_transaction(session)
+        if dialect == "postgresql":
+            return (
+                await session.execute(
+                    text("SELECT public.lookup_api_key_org(:prefix)"),
+                    {"prefix": prefix},
+                )
+            ).scalar_one_or_none()
+        key_record = (
+            await session.execute(
+                select(OrgApiKey).where(
+                    OrgApiKey.lookup_prefix == prefix,
+                    OrgApiKey.revoked_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        return key_record.organisation_id if key_record is not None else None
+
+
+async def _validate_api_key_in_org(factory: Any, token: str, org_id: Any) -> tuple[Any, str | None]:
+    """Re-validate the key inside its org's RLS context and read the live role."""
+    from modulo.auth.api_key import validate_api_key
+    from modulo.db.rls import set_rls_org
+
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        key = await validate_api_key(session, token, org_id=org_id)
+
+        # ADR 047 live-role re-read: clamp the minted role to the
+        # account's current membership role, matching the MCP auth
+        # path (api/mcp_server.py:770-790). A demoted or removed
+        # member's key must not retain elevated privileges.
+        live_role = await resolve_role_from_membership(
+            session,
+            str(key.account_id),
+            str(key.organisation_id),
+        )
+    return key, live_role
+
+
+def _bind_api_key_principal(
+    request: Request | None,
+    key: Any,
+    live_role: str | None,
+    key_grants: frozenset[str] | None,
+) -> TenantPrincipal:
+    """Clamp the minted role to the live role, then build the principal."""
+    # Clamp: if the account has no active membership, reject.
+    # If the live role is lower than the minted role, use the live role.
+    if live_role is None:
+        _log.warning(
+            "auth.api_key_membership_not_found",
+            extra={"account_id": str(key.account_id), "org_id": str(key.organisation_id)},
+        )
+        raise OrganisationMembershipNotFound
+    clamped_role = _clamp_role(key.role, live_role)
+    if not clamped_role:
+        _log.warning(
+            "auth.api_key_clamp_failed",
+            extra={
+                "account_id": str(key.account_id),
+                "org_id": str(key.organisation_id),
+                "minted_role": key.role,
+                "live_role": live_role,
+            },
+        )
+        raise OrganisationMembershipNotFound
+    return bind_principal_context(
+        request,
+        TenantPrincipal(
+            username=key.name,
+            organisation_id=key.organisation_id,
+            account_id=key.account_id,
+            org_role=clamped_role,
+            is_system_admin=False,
+            # FAR-681: thread the key's team scope into the principal so the
+            # team-gate dependency can enforce the boundary (a team-A-scoped
+            # key must not mutate team-B resources even when its OWNER is a
+            # member of team B). Org-wide keys carry team_id=None. getattr for
+            # duck-typed key fakes in existing tests (the real OrgApiKey row
+            # always carries the column).
+            team_id=getattr(key, "team_id", None),
+            # FAR-610: the credential is an org API key, not a browser-login
+            # JWT. human_only HITL gates deny API-key principals on decision
+            # actions; this marker is the mechanism that distinguishes them.
+            via_api_key=True,
+            # FAR-634: an API key is a programmatic credential by definition —
+            # the human_only enforcement's ``client_kind != browser`` rule
+            # subsumes the via_api_key check through this stamp.
+            client_kind=CLIENT_KIND_PROGRAMMATIC,
+            key_grants=key_grants,
+        ),
+    )
 
 
 async def resolve_role_from_membership(session: AsyncSession, account_id: str, organisation_id: str) -> str | None:
