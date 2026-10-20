@@ -8,7 +8,7 @@
         <button
           type="button"
           :disabled="verifying"
-          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           data-testid="admin-audit-verify-chain"
           @click="verifyChain"
         >
@@ -17,7 +17,7 @@
         <button
           type="button"
           :disabled="exporting"
-          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           data-testid="admin-audit-export-csv"
           @click="exportCsv"
         >
@@ -26,7 +26,7 @@
         <button
           type="button"
           :disabled="exportingJsonl"
-          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           data-testid="admin-audit-export-jsonl"
           @click="exportJsonl"
         >
@@ -48,7 +48,7 @@
         role="tab"
         :aria-selected="auditSource === 'org'"
         aria-controls="admin-audit-source-org"
-        class="rounded-lg border border-input px-4 py-2 text-sm font-medium"
+        class="rounded-lg border border-input px-4 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         :class="auditSource === 'org' ? 'bg-accent' : 'bg-background hover:bg-accent'"
         data-testid="admin-audit-tab-org"
         @click="auditSource = 'org'"
@@ -61,7 +61,7 @@
         role="tab"
         :aria-selected="auditSource === 'system'"
         aria-controls="admin-audit-source-system"
-        class="rounded-lg border border-input px-4 py-2 text-sm font-medium"
+        class="rounded-lg border border-input px-4 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         :class="auditSource === 'system' ? 'bg-accent' : 'bg-background hover:bg-accent'"
         data-testid="admin-audit-tab-system"
         @click="auditSource = 'system'"
@@ -148,7 +148,7 @@
           />
         </div>
         <div>
-          <label for="adminauditview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.target_type') }}</label>
+          <span class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.target_type') }}</span>
           <Select
   :aria-label="$t('views.AdminAuditView.target_type')"
   v-model="filterTargetType"
@@ -168,7 +168,7 @@
       <div class="mt-3 flex items-center gap-2">
         <button
           type="button"
-          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           data-testid="admin-audit-reset"
           @click="resetFilters"
         >
@@ -230,7 +230,7 @@
             <tr
               v-for="event in events"
               :key="event.id"
-              class="cursor-pointer transition-colors hover:bg-muted/30"
+              class="cursor-pointer transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               :data-testid="'admin-audit-event-row-' + event.id"
               tabindex="0"
               @click="toggleExpand(event.id)"
@@ -306,7 +306,7 @@
         <button
           type="button"
           :disabled="!prevCursor"
-          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
+          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-30 disabled:cursor-not-allowed"
           data-testid="admin-audit-previous"
           @click="() => goToPage(prevCursor)"
         >
@@ -318,7 +318,7 @@
         <button
           type="button"
           :disabled="!nextCursor"
-          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
+          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-30 disabled:cursor-not-allowed"
           data-testid="admin-audit-next"
           @click="() => goToPage(nextCursor)"
         >
@@ -387,7 +387,7 @@
         <div class="mt-3 flex items-center gap-2">
           <button
             type="button"
-            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             data-testid="admin-audit-system-reset"
             @click="resetSystemFilters"
           >
@@ -456,7 +456,7 @@
               <tr
                 v-for="event in systemEvents"
                 :key="event.id"
-                class="cursor-pointer transition-colors hover:bg-muted/30"
+                class="cursor-pointer transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 :data-testid="'admin-audit-system-event-row-' + event.id"
                 tabindex="0"
                 @click="toggleSystemExpand(event.id)"
@@ -530,7 +530,7 @@
           <button
             type="button"
             :disabled="systemPage <= 1"
-            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
+            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-30 disabled:cursor-not-allowed"
             data-testid="admin-audit-system-previous"
             @click="goSystemPage(systemPage - 1)"
           >
@@ -542,7 +542,7 @@
           <button
             type="button"
             :disabled="systemPage * SYSTEM_PAGE_SIZE >= systemTotal"
-            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
+            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-30 disabled:cursor-not-allowed"
             data-testid="admin-audit-system-next"
             @click="goSystemPage(systemPage + 1)"
           >
@@ -618,6 +618,13 @@ interface SystemAuditPage {
   total: number
   page: number
   page_size: number
+}
+
+interface ChainVerification {
+  valid?: boolean
+  event_count?: number
+  detail?: string
+  error?: string
 }
 
 // The summary heuristic only needs these three fields, so both audit sources
@@ -919,7 +926,16 @@ async function exportCsv() {
       page++
     }
 
-    const headers = ['Timestamp', 'Event Type', 'Actor ID', 'Target Type', 'Target ID', 'Summary', 'Request ID', 'Previous Hash']
+    const headers = [
+      t('views.AdminAuditView.timestamp'),
+      t('views.AdminAuditView.event_type'),
+      t('views.AdminAuditView.actor_id'),
+      t('views.AdminAuditView.target_type'),
+      t('views.AdminAuditView.target_id'),
+      t('views.AdminAuditView.summary'),
+      t('views.AdminAuditView.request_id'),
+      t('views.AdminAuditView.previous_hash'),
+    ]
     const rows = allEvents.map(e => [
       e.created_at ?? '',
       e.event_type,
@@ -954,8 +970,8 @@ async function verifyChain() {
   chainResult.value = null
   error.value = null
   try {
-    const res = await (api as any).GET('/api/v1/admin/audit/verify')
-    const data = res.data as any
+    const res = await api.GET('/api/v1/admin/audit/verify')
+    const data = res.data as unknown as ChainVerification | undefined
     const err = res.error
     if (err) {
       chainResult.value = { valid: false, error: formatError(err) }
