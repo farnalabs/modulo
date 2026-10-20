@@ -56,11 +56,20 @@ _CODE_APP_NOTIFICATIONS_GET_PREFERENCES = "in_app_notifications.get_preferences"
 _CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES = "in_app_notifications.update_preferences"
 
 # The dashboard level an account gets when it has never stored one. This is the
-# SINGLE source of truth for the default: ``NotificationPreferencesResponse``'s
-# declared default (which is the published OpenAPI contract) and
-# ``_load_dashboard_level``'s fallback both read this constant, so the contract
-# and the behaviour cannot drift apart (FAR-2024: the model declared "warning"
-# while every real GET returned "info", publishing an unreachable contract).
+# single source of truth for the default WITHIN this module:
+# ``NotificationPreferencesResponse``'s declared default (which is the published
+# OpenAPI contract) and ``_load_dashboard_level``'s fallback both read this
+# constant, so the contract and the behaviour cannot drift apart (FAR-2024: the
+# model declared "warning" while every real GET returned "info", publishing an
+# unreachable contract).
+#
+# It is not a process-wide source of truth: the crud read helpers in
+# ``db/crud/notifications.py`` (``get_dashboard_notifications`` and
+# ``get_unread_count``) keep ``min_level="warning"`` signature defaults. Every
+# production caller here passes ``min_level`` explicitly from
+# ``_load_dashboard_level``, so those defaults never decide the user-facing
+# default. Imports flow api -> db, so the crud module cannot read this constant
+# without a cycle.
 _DEFAULT_DASHBOARD_LEVEL = "info"
 
 
