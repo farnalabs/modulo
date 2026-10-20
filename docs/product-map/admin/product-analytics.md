@@ -196,7 +196,8 @@ intentional, not an open question:
   discarded every one of them - analytics undercounted for the rest of the
   dedup window, with a green suite because the tests asserted the counter
   format rather than cross-session uniqueness. IDs are now a per-session prefix
-  (random UUID, with a timestamp/random fallback) plus the monotonic counter,
+  (random UUID, falling back to CSPRNG bytes and only then to a
+  timestamp/random suffix) plus the monotonic counter,
   so reloads and concurrent tabs cannot collide; the regression test
   re-initialises the module and proves the new session's ID differs from the
   first (`frontend/src/composables/useProductAnalytics.ts`,

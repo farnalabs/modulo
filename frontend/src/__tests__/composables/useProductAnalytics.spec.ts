@@ -241,7 +241,30 @@ describe('useProductAnalytics', () => {
       expect(secondBody.events[0].event_id).not.toBe(firstBody.events[0].event_id)
     })
 
-    it('falls back to a timestamp prefix when crypto.randomUUID is unavailable', async () => {
+    it('falls back to CSPRNG bytes when crypto.randomUUID is unavailable', async () => {
+      vi.resetModules()
+      vi.stubGlobal('crypto', {
+        getRandomValues: (bytes: Uint8Array) => {
+          bytes.fill(0xab)
+          return bytes
+        },
+      })
+      try {
+        const mod = await import('../../composables/useProductAnalytics')
+        mod.initProductAnalytics(() => true)
+        const { track, flush } = mod.useProductAnalytics()
+        track(ANALYTICS_EVENTS.PIPELINE_CREATED)
+        flush()
+
+        const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>
+        const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
+        expect(body.events[0].event_id).toMatch(/^(ab){16}-1$/)
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('falls back to a timestamp prefix when no crypto API is available', async () => {
       const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5)
       vi.resetModules()
       vi.stubGlobal('crypto', undefined)
