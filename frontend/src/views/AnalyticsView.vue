@@ -303,7 +303,7 @@ function arrowGlyph(direction: TrendDirection): string {
 }
 
 function arrowClass(direction: TrendDirection): string {
-  if (direction === "up") return "text-success";
+  if (direction === "up") return "text-success-text";
   if (direction === "down") return "text-destructive";
   return "text-muted-foreground";
 }

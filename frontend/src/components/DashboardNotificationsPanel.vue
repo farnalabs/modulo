@@ -36,7 +36,7 @@
         <button
           type="button"
           data-testid="panel-dismiss-all"
-          class="rounded px-2 py-1 text-xs font-medium text-primary hover:bg-muted transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          class="rounded px-2 py-1 text-xs font-medium text-primary-text hover:bg-muted transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="dismissingAll || total === 0"
           @click="onDismissAll"
         >
@@ -123,7 +123,7 @@
       <div v-if="!loading && !error" class="mt-3 text-center">
         <router-link
           to="/notifications"
-          class="text-xs font-medium text-primary hover:underline"
+          class="text-xs font-medium text-primary-text hover:underline"
         >
           {{ $t('components.DashboardNotificationsPanel.view_all') }} &rarr;
         </router-link>

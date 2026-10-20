@@ -22,7 +22,7 @@
               v-if="isDispatchedRun(run.execution_origin)"
               data-testid="run-detail-dispatched"
               :title="$t('common.execution_origin.dispatched_hint')"
-              class="inline-flex items-center rounded-full bg-cyan-500/10 px-2 py-0.5 text-xs font-medium text-cyan-600 dark:bg-cyan-900 dark:text-cyan-300"
+              class="inline-flex items-center rounded-full bg-cyan-500/10 px-2 py-0.5 text-xs font-medium text-cyan-700 dark:bg-cyan-900 dark:text-cyan-300"
             >{{ $t('common.execution_origin.dispatched') }}</span>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
@@ -41,7 +41,7 @@
               type="button"
               data-testid="run-detail-copy-run-id"
               :aria-label="$t('views.RunDetailView.copy_run_id')"
-              class="ml-1 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
+              class="ml-1 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary-text hover:bg-primary/10"
               @click="copyRunId"
             >
               {{ copied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.copy') }}
@@ -55,7 +55,7 @@
           <button
             type="button"
             data-testid="run-detail-share-summary"
-            class="mt-2 inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10"
+            class="mt-2 inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-medium text-primary-text hover:bg-primary/10"
             @click="copyShareSummary"
           >
             {{ shareCopied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.share_summary') }}
@@ -142,7 +142,7 @@
         v-if="hitlMessage"
         data-testid="run-detail-hitl-message"
         class="mb-4 text-sm"
-        :class="hitlMessage.type === 'error' ? 'text-destructive' : 'text-success'"
+        :class="hitlMessage.type === 'error' ? 'text-destructive' : 'text-success-text'"
       >
         {{ hitlMessage.text }}
       </div>
@@ -216,7 +216,7 @@
           <h3 class="text-sm font-semibold">{{ $t('views.RunDetailView.run_input') }}</h3>
           <button
             type="button"
-            class="text-xs text-primary hover:bg-primary/10 rounded px-2 py-1"
+            class="text-xs text-primary-text hover:bg-primary/10 rounded px-2 py-1"
             data-testid="run-detail-copy-input"
             @click="copyInputPayload"
           >
@@ -262,7 +262,7 @@
             <router-link
               :to="`/runs/${child.run_id}`"
               :data-testid="`run-detail-child-link-${child.run_id}`"
-              class="font-medium text-primary hover:underline"
+              class="font-medium text-primary-text hover:underline"
             >
               {{ child.run_number != null ? `#${child.run_number}` : shortId(child.run_id) }}
             </router-link>
@@ -317,7 +317,7 @@
           type="button"
           data-testid="run-detail-copy-trace-id"
           :aria-label="$t('views.RunDetailView.copy_trace_id')"
-          class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+          class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary-text hover:bg-primary/10"
           @click="copyTraceId"
         >
           {{ copied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.copy') }}
@@ -328,7 +328,7 @@
           target="_blank"
           rel="noopener noreferrer"
           data-testid="run-detail-view-trace"
-          class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+          class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary-text hover:bg-primary/10"
         >
           <ExternalLink aria-hidden="true" class="h-3.5 w-3.5" />
           {{ $t('views.RunDetailView.view_trace') }}
@@ -509,7 +509,7 @@
                   type="button"
                   data-testid="run-detail-copy-node-id"
                   :aria-label="$t('views.RunDetailView.copy_node_id')"
-                  class="ml-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
+                  class="ml-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-primary-text hover:bg-primary/10"
                   @click="copyText(node.name)"
                 >
                   <Copy aria-hidden="true" class="h-3 w-3" />
@@ -535,7 +535,7 @@
                   <span
                     v-if="node.costProvenance"
                     data-testid="run-detail-node-cost-reported"
-                    class="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary align-middle"
+                    class="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary-text align-middle"
                     :title="$t('views.RunDetailView.reported_by_agent_tooltip')"
                   >{{ $t('views.RunDetailView.reported_by_agent') }}</span>
                 </template>
@@ -560,7 +560,7 @@
                   v-if="node.io"
                   type="button"
                   data-testid="run-detail-toggle-io"
-                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary-text hover:bg-primary/10"
                   @click="toggleNodeIO(node.name)"
                 >
                   {{ expandedNodes.has(node.name) ? $t('views.RunDetailView.hide') : $t('views.RunDetailView.show') }}
@@ -572,7 +572,7 @@
                   v-if="node.hasLogs || node.telemetry"
                   type="button"
                   data-testid="run-detail-toggle-logs"
-                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary-text hover:bg-primary/10"
                   @click="toggleNodeLogs(node.name)"
                 >
                   {{ expandedLogs.has(node.name) ? $t('views.RunDetailView.hide') : $t('views.RunDetailView.view') }}
@@ -583,7 +583,7 @@
                 <button
                   type="button"
                   data-testid="run-detail-show-prompt"
-                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
+                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary-text hover:bg-primary/10 disabled:opacity-50"
                   :disabled="promptLoading.has(node.name)"
                   @click="revealPrompt(node.name)"
                 >
@@ -626,7 +626,7 @@
                   class="rounded-lg border border-primary/40 bg-muted p-4"
                   data-testid="run-detail-live-output"
                 >
-                  <h4 class="mb-2 text-xs font-semibold text-primary">{{ $t('views.RunDetailView.live_output') }}</h4>
+                  <h4 class="mb-2 text-xs font-semibold text-primary-text">{{ $t('views.RunDetailView.live_output') }}</h4>
                   <pre class="max-h-96 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ liveOutput[node.name] }}</code></pre>
                 </div>
                 <div v-if="node.telemetry" class="rounded-lg border bg-muted p-4" data-testid="run-detail-node-telemetry">
@@ -711,7 +711,7 @@
                   aria-live="polite"
                 >
                   <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.full_logs') }}</h4>
-                  <p v-if="isNodeLogTruncated(node.name, 'agent_stdout') || isNodeLogTruncated(node.name, 'agent_stderr')" class="mb-2 text-xs text-primary font-medium">
+                  <p v-if="isNodeLogTruncated(node.name, 'agent_stdout') || isNodeLogTruncated(node.name, 'agent_stderr')" class="mb-2 text-xs text-primary-text font-medium">
                     {{ $t('views.RunDetailView.full_log_download_hint') }}
                   </p>
                   <ul class="flex flex-wrap gap-2">
@@ -720,7 +720,7 @@
                         :href="artifactDownloadUrl(run?.run_id, node.name, art.attempt_key, art.stream)"
                         target="_blank"
                         rel="noopener noreferrer"
-                        class="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+                        class="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-primary-text hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
                         :data-testid="`run-detail-artifact-${art.stream}`"
                         :aria-label="artifactAriaLabel(art)"
                       >
@@ -741,7 +741,7 @@
                   <span>{{ $t('views.RunDetailView.artifact_load_error') }}</span>
                   <button
                     type="button"
-                    class="rounded-md border border-border bg-background px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+                    class="rounded-md border border-border bg-background px-2 py-0.5 text-xs font-medium text-primary-text hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
                     :aria-label="$t('views.RunDetailView.artifact_load_retry_aria')"
                     data-testid="run-detail-artifact-retry"
                     @click="retryNodeArtifacts(node.name)"
@@ -816,7 +816,7 @@
                       <span
                         v-if="entry.agentReported"
                         data-testid="run-detail-cost-reported-badge"
-                        class="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary align-middle"
+                        class="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary-text align-middle"
                         :title="$t('views.RunDetailView.reported_by_agent_tooltip')"
                       >{{ $t('views.RunDetailView.reported_by_agent') }}</span>
                     </template>
@@ -844,7 +844,7 @@
                       >{{ $t('views.RunDetailView.not_reported') }}</span>
                     </template>
                     <template v-else>
-                      <span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs" :class="entry.source === 'self_reported' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'">
+                      <span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs" :class="entry.source === 'self_reported' ? 'bg-primary/10 text-primary-text' : 'bg-muted text-muted-foreground'">
                         {{ entry.source === 'self_reported' ? $t('views.RunDetailView.reported') : $t('views.RunDetailView.estimated') }}
                       </span>
                     </template>
@@ -925,7 +925,7 @@
             :data-testid="overrideMessage.type === 'error' ? 'run-detail-override-error' : 'run-detail-override-success'"
             :aria-label="overrideMessage.text"
             class="block text-sm font-medium"
-            :class="overrideMessage.type === 'error' ? 'text-destructive' : 'text-success'"
+            :class="overrideMessage.type === 'error' ? 'text-destructive' : 'text-success-text'"
           >
             {{ overrideMessage.text }}
           </output>
@@ -1159,7 +1159,7 @@ const guardrailBuckets = computed(() => {
 function bucketClass(key: string): string {
   const classes: Record<string, string> = {
     evaluated: 'bg-muted text-muted-foreground',
-    passed: 'bg-success/10 text-success',
+    passed: 'bg-success/10 text-success-text',
     violated: 'bg-destructive/10 text-destructive-text',
     observed: 'bg-warning/10 text-warning-text',
     errored: 'bg-destructive/10 text-destructive-text',
@@ -2225,7 +2225,7 @@ function nodeStateLabel(state: NodeProgressState): string {
 
 function chipClass(state: NodeProgressState): string {
   const map: Record<NodeProgressState, string> = {
-    completed: 'bg-success/10 text-success border border-success/30',
+    completed: 'bg-success/10 text-success-text border border-success/30',
     running: 'bg-warning/10 text-warning-text border border-warning/30',
     failed: 'bg-destructive/10 text-destructive-text border border-destructive/30',
     pending: 'bg-muted text-muted-foreground border border-border',

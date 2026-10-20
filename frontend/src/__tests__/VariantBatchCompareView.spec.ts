@@ -152,6 +152,34 @@ describe('VariantBatchCompareView', () => {
     expect(batchMocks.fetchVariantBatch).toHaveBeenCalledWith('b1')
   })
 
+  it('styles a failed eval result with the destructive token', async () => {
+    batchMocks.fetchVariantBatch.mockResolvedValue({
+      data: mockBatch({
+        runs: [
+          run({
+            eval_results: [{ eval_id: 'e1', node_id: 'node-a', passed: false, score: 0.1 }],
+          }),
+        ],
+      }),
+      error: undefined,
+    })
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="variant-batch-expand-r1"]').trigger('click')
+    await nextTick()
+
+    const evalTag = wrapper
+      .findAll('span')
+      .find((s) => s.text().includes('node-a:') && s.text().includes('FAIL'))
+    expect(evalTag).toBeDefined()
+    expect(evalTag!.classes()).toContain('text-destructive')
+    wrapper.unmount()
+  })
+
   it('maps per-variant status badges to the RUN_STATUS vocabulary', async () => {
     batchMocks.fetchVariantBatch.mockResolvedValue({
       data: mockBatch({

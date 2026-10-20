@@ -59,7 +59,7 @@
 
           <div class="flex flex-wrap gap-1.5">
             <span
-              class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+              class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary-text"
               data-testid="envprofile-list-tier-badge"
             >
               {{ tierLabel(row.profile.provider_type) }}
@@ -339,10 +339,10 @@ function healthLabel(row: ProfileRow): string {
 
 function healthBadgeClass(row: ProfileRow): string {
   if (row.health?.placeholder_digest) return 'bg-warning/10 text-warning-text'
-  if (row.profile.provider_type !== 'runner_docker') return 'bg-success/10 text-success'
+  if (row.profile.provider_type !== 'runner_docker') return 'bg-success/10 text-success-text'
   switch (row.health?.health_state) {
     case 'healthy':
-      return 'bg-success/10 text-success'
+      return 'bg-success/10 text-success-text'
     case 'engine_unreachable':
       return 'bg-destructive/10 text-destructive-text'
     case 'image_not_pulled':

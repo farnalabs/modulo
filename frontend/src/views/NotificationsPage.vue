@@ -33,7 +33,7 @@
         <button
           type="button"
           data-testid="notifications-dismiss-all"
-          class="rounded-md border px-4 py-2 text-sm font-medium text-primary hover:bg-muted transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          class="rounded-md border px-4 py-2 text-sm font-medium text-primary-text hover:bg-muted transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="dismissingAll || loading || total === 0 || filterStatus !== 'active'"
           @click="onDismissAll"
         >
@@ -97,7 +97,7 @@
     </output>
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadNotifications" />
     <EmptyState v-else-if="notifications.length === 0" :title="$t('views.NotificationsPage.no_notifications')" :description="$t('views.NotificationsPage.no_notifications_matching_filters')">
-      <button type="button" data-testid="notifications-clear-filters" class="text-sm text-primary hover:underline" @click="resetFilters">{{ $t('views.NotificationsPage.clear_filters') }}</button>
+      <button type="button" data-testid="notifications-clear-filters" class="text-sm text-primary-text hover:underline" @click="resetFilters">{{ $t('views.NotificationsPage.clear_filters') }}</button>
     </EmptyState>
     <template v-else>
       <div class="space-y-2">
