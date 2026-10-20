@@ -721,66 +721,95 @@ class ApplyExecutor:
             for entry in list(report[status]):
                 if entry["kind"] != KIND_SCHEMA:
                     continue
-                entity = None
-                try:
-                    entity = _find(entities[KIND_SCHEMA], entry["name"])
-                    assert isinstance(entity, SchemaEntity)
-                    if status == "created":
-                        response = self._post(
-                            _PATH_SCHEMAS,
-                            {
-                                "name": entity.name,
-                                "description": entity.description,
-                                "abstract_name": entity.abstract_name,
-                            },
-                        )
-                        schema_id = response["id"]
-                    else:
-                        current = current_entities[KIND_SCHEMA][entity.name]
-                        schema_id = current["id"]
-                        payload: dict[str, Any] = {}
-                        if entity.description != current.get("description"):
-                            payload["description"] = entity.description
-                        if entity.abstract_name != current.get("abstract_name"):
-                            payload["abstract_name"] = entity.abstract_name
-                        if payload:
-                            self._patch(f"/schemas/{schema_id}", payload)
-                    existing_versions = (
-                        {v["version"] for v in current_entities[KIND_SCHEMA][entity.name].get("versions") or []}
-                        if status == "updated"
-                        else set()
-                    )
-                    for spec in entity.versions:
-                        if spec.version in existing_versions:
-                            continue
-                        try:
-                            self._post(
-                                f"/schemas/{schema_id}/versions",
-                                {
-                                    "version": spec.version,
-                                    "version_number": spec.version_number,
-                                    "definition_json": spec.definition_json,
-                                    "published": spec.published,
-                                },
-                            )
-                        except (ApplyHttpError, httpx.HTTPError, KeyError, ValueError) as exc:
-                            # The schema itself was created/updated; only the
-                            # version failed. Keep the entity entry (truthful)
-                            # and add a version-scoped failed entry.
-                            message = _failure_message(exc)
-                            _log.warning("apply schema version failed: %s/%s: %s", entity.name, spec.version, message)
-                            report["failed"].append(
-                                {
-                                    "kind": "schema_version",
-                                    "name": f"{entity.name}/{spec.version}",
-                                    "error": message,
-                                }
-                            )
-                except (ApplyHttpError, httpx.HTTPError, KeyError, ValueError) as exc:
-                    message = _failure_message(exc)
-                    _log.warning("apply schema failed: %s: %s", entity.name if entity else entry["name"], message)
-                    report[status].remove(entry)
-                    report["failed"].append({"kind": KIND_SCHEMA, "name": entry["name"], "error": message})
+                self._apply_schema_entry(status, entry, entities, current_entities, report)
+
+    def _apply_schema_entry(
+        self,
+        status: str,
+        entry: dict[str, Any],
+        entities: dict[str, list[tuple[str, Any]]],
+        current_entities: dict[str, dict[str, dict[str, Any]]],
+        report: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        """Apply one schema plan entry, containing any failure to that entity."""
+        entity = None
+        try:
+            entity = _find(entities[KIND_SCHEMA], entry["name"])
+            assert isinstance(entity, SchemaEntity)
+            if status == "created":
+                schema_id = self._create_schema(entity)
+            else:
+                schema_id = self._update_schema(entity, current_entities[KIND_SCHEMA][entity.name])
+            existing_versions = (
+                {v["version"] for v in current_entities[KIND_SCHEMA][entity.name].get("versions") or []}
+                if status == "updated"
+                else set()
+            )
+            self._apply_schema_versions(entity, schema_id, existing_versions, report)
+        except (ApplyHttpError, httpx.HTTPError, KeyError, ValueError) as exc:
+            message = _failure_message(exc)
+            _log.warning("apply schema failed: %s: %s", entity.name if entity else entry["name"], message)
+            report[status].remove(entry)
+            report["failed"].append({"kind": KIND_SCHEMA, "name": entry["name"], "error": message})
+
+    def _create_schema(self, entity: SchemaEntity) -> Any:
+        """POST a new schema and return its server id."""
+        response = self._post(
+            _PATH_SCHEMAS,
+            {
+                "name": entity.name,
+                "description": entity.description,
+                "abstract_name": entity.abstract_name,
+            },
+        )
+        return response["id"]
+
+    def _update_schema(self, entity: SchemaEntity, current: dict[str, Any]) -> Any:
+        """PATCH only the changed schema fields; return the existing id."""
+        schema_id = current["id"]
+        payload: dict[str, Any] = {}
+        if entity.description != current.get("description"):
+            payload["description"] = entity.description
+        if entity.abstract_name != current.get("abstract_name"):
+            payload["abstract_name"] = entity.abstract_name
+        if payload:
+            self._patch(f"/schemas/{schema_id}", payload)
+        return schema_id
+
+    def _apply_schema_versions(
+        self,
+        entity: SchemaEntity,
+        schema_id: Any,
+        existing_versions: set[Any],
+        report: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        """POST every missing schema version, containing per-version failures."""
+        for spec in entity.versions:
+            if spec.version in existing_versions:
+                continue
+            try:
+                self._post(
+                    f"/schemas/{schema_id}/versions",
+                    {
+                        "version": spec.version,
+                        "version_number": spec.version_number,
+                        "definition_json": spec.definition_json,
+                        "published": spec.published,
+                    },
+                )
+            except (ApplyHttpError, httpx.HTTPError, KeyError, ValueError) as exc:
+                # The schema itself was created/updated; only the
+                # version failed. Keep the entity entry (truthful)
+                # and add a version-scoped failed entry.
+                message = _failure_message(exc)
+                _log.warning("apply schema version failed: %s/%s: %s", entity.name, spec.version, message)
+                report["failed"].append(
+                    {
+                        "kind": "schema_version",
+                        "name": f"{entity.name}/{spec.version}",
+                        "error": message,
+                    }
+                )
 
     def apply_backends(
         self,
@@ -799,56 +828,76 @@ class ApplyExecutor:
             for entry in list(report[status]):
                 if entry["kind"] != KIND_BACKEND:
                     continue
-                entity = None
-                try:
-                    entity = _find(entities[KIND_BACKEND], entry["name"])
-                    assert isinstance(entity, ModelBackendEntity)
-                    if status == "created":
-                        response = self._post(
-                            _PATH_MODEL_BACKENDS,
-                            {
-                                "name": entity.name,
-                                "display_name": entity.display_name,
-                                "provider": entity.provider,
-                                "model_id": entity.model_id,
-                                "api_key": resolved_api_keys[entity.name],
-                                "default_params": entity.default_params,
-                                "visibility": entity.visibility,
-                                "tier": entity.tier,
-                            },
-                        )
-                        backend_id = response["id"]
-                    else:
-                        current = current_entities[KIND_BACKEND][entity.name]
-                        backend_id = current["id"]
-                        self._patch(
-                            f"/model-backends/{backend_id}",
-                            {
-                                "display_name": entity.display_name,
-                                "model_id": entity.model_id,
-                                "default_params": entity.default_params,
-                                "visibility": entity.visibility,
-                                "tier": entity.tier,
-                            },
-                        )
-                    health_error = self._verify_backend_health(backend_id, entity.name)
-                except (ApplyHttpError, httpx.HTTPError, KeyError, ValueError) as exc:
-                    message = _failure_message(exc)
-                    displayed_name = entity.name if entity else entry["name"]
-                    _log.warning("apply model backend failed: %s: %s", displayed_name, message)
-                    report[status].remove(entry)
-                    report["failed"].append({"kind": KIND_BACKEND, "name": entry["name"], "error": message})
-                else:
-                    if health_error:
-                        _log.warning("apply model backend unhealthy: %s: %s", entity.name, health_error)
-                        report[status].remove(entry)
-                        report["failed"].append(
-                            {
-                                "kind": KIND_BACKEND,
-                                "name": entry["name"],
-                                "error": f"{status} but failed health check - {health_error}",
-                            }
-                        )
+                self._apply_backend_entry(status, entry, entities, current_entities, resolved_api_keys, report)
+
+    def _apply_backend_entry(
+        self,
+        status: str,
+        entry: dict[str, Any],
+        entities: dict[str, list[tuple[str, Any]]],
+        current_entities: dict[str, dict[str, dict[str, Any]]],
+        resolved_api_keys: dict[str, str],
+        report: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        """Apply one model-backend plan entry, containing any failure."""
+        entity = None
+        try:
+            entity = _find(entities[KIND_BACKEND], entry["name"])
+            assert isinstance(entity, ModelBackendEntity)
+            if status == "created":
+                backend_id = self._create_backend(entity, resolved_api_keys)
+            else:
+                backend_id = self._update_backend(entity, current_entities[KIND_BACKEND][entity.name])
+            health_error = self._verify_backend_health(backend_id, entity.name)
+        except (ApplyHttpError, httpx.HTTPError, KeyError, ValueError) as exc:
+            message = _failure_message(exc)
+            displayed_name = entity.name if entity else entry["name"]
+            _log.warning("apply model backend failed: %s: %s", displayed_name, message)
+            report[status].remove(entry)
+            report["failed"].append({"kind": KIND_BACKEND, "name": entry["name"], "error": message})
+        else:
+            if health_error:
+                _log.warning("apply model backend unhealthy: %s: %s", entity.name, health_error)
+                report[status].remove(entry)
+                report["failed"].append(
+                    {
+                        "kind": KIND_BACKEND,
+                        "name": entry["name"],
+                        "error": f"{status} but failed health check - {health_error}",
+                    }
+                )
+
+    def _create_backend(self, entity: ModelBackendEntity, resolved_api_keys: dict[str, str]) -> Any:
+        """POST a new model backend and return its server id."""
+        response = self._post(
+            _PATH_MODEL_BACKENDS,
+            {
+                "name": entity.name,
+                "display_name": entity.display_name,
+                "provider": entity.provider,
+                "model_id": entity.model_id,
+                "api_key": resolved_api_keys[entity.name],
+                "default_params": entity.default_params,
+                "visibility": entity.visibility,
+                "tier": entity.tier,
+            },
+        )
+        return response["id"]
+
+    def _update_backend(self, entity: ModelBackendEntity, current: dict[str, Any]) -> Any:
+        """PATCH an existing model backend; return its id."""
+        backend_id = current["id"]
+        self._patch(
+            f"/model-backends/{backend_id}",
+            {
+                "display_name": entity.display_name,
+                "model_id": entity.model_id,
+                "default_params": entity.default_params,
+                "visibility": entity.visibility,
+                "tier": entity.tier,
+            },
+        )
+        return backend_id
 
     def run(
         self,
