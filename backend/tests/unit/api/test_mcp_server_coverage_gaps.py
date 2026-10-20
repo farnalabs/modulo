@@ -1786,7 +1786,7 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=sync),
+            patch("modulo.core.agent_command_sync.sync_agent_row_commands", new=sync),
             patch("modulo.db.crud.pipeline.replace_pipeline_graph", new=replace),
         ):
             result = await update_pipeline_graph(pipeline_id=pipeline_id, nodes=nodes, edges=edges)
