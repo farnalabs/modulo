@@ -913,6 +913,15 @@ async def _enqueue_suite_run_execution(suite_run_id: str, org_id: str) -> str | 
     ``Run`` and checks pipeline/org capacity) does not apply. The job key is
     deterministic so SAQ dedupe never double-runs a suite, and a re-fire uses a
     fresh suite_run anyway (each fire is a distinct SuiteRun row).
+
+    FAR-2002: this enqueue deliberately does NOT apply the status-gated queued
+    TTL. A SuiteRun is created ``pending`` and its execution job is the ONLY
+    thing that advances it — nothing reconciles a stranded ``pending`` SuiteRun
+    (``_fail_suite_run_on_enqueue_error`` covers an enqueue EXCEPTION, not a
+    hash that later expires), so a queued TTL here would terminalise nothing and
+    silently lose the run forever. The job hash therefore stays unbounded while
+    queued (the deployment's ``maxmemory`` bound and the capacity alert are the
+    backstop) and SAQ's finish-origin ``ttl`` still bounds it once it completes.
     """
     from saq.queue.redis import RedisQueue
 
