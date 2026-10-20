@@ -6692,8 +6692,10 @@ async def _terminalize_stranded_pending_runs(
     (``saq_zero_progress_max_age_minutes``, ~135 min >> SAQ's own run timeout),
     anchored on ``dispatched_at`` (NOT ``created_at``) so a run that waited a
     long time for admission is never counted as aged from its creation.
-    Capacity-marked rows are excluded (``capacity_timeout`` owns their budget
-    grace). Idempotent: the single guarded UPDATE re-validates the whole
+    Capacity-marked rows are excluded: the stale-run sweep's per-pipeline queue
+    expiry (``queue.expired``) is the only bound on them, and NULL
+    ``queue_timeout_seconds`` means they wait indefinitely. Idempotent: the
+    single guarded UPDATE re-validates the whole
     predicate at execution time, so a row a reclaim leg recovered (or that
     terminalised elsewhere) between ticks no longer matches.
 

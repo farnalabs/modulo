@@ -577,6 +577,23 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity=None,
         guidance="Superseded by a newer run.",
     ),
+    # FAR-1883: a capacity-queued run whose PIPELINE set a ``queue_timeout`` and
+    # whose created_at ("time queued") passed that window. This is a
+    # SUPERSESSION, not a failure: the run is ENDED (status ``rejected``)
+    # before it ever started, so it is visible and filterable and gets its own
+    # analytics bucket, but it must never enter failure counts/thresholds or
+    # page anyone. Deliberately distinct from ``capacity.timeout`` (the retired
+    # 120-minute terminal-FAIL): reusing that code's meaning would collapse a
+    # supersession into a failure. The queue-state alert (FAR-1343/FAR-1344)
+    # is the escalation path and fires whether or not a timeout is configured.
+    "queue.expired": ErrorCodeSpec(
+        error_class="run",
+        retryable=False,
+        alert_severity=None,
+        guidance=(
+            "Waited in the capacity queue past this pipeline's queue_timeout; the run was superseded before it started."
+        ),
+    ),
     # FAR-1329: the dispatcher_reconcile AGE gate (``_terminalize_mid_graph_wedges``)
     # writes the raw ``no_progress`` spelling — registered (and aliased below) in
     # the same change that started writing it, so it never resolves through the
@@ -727,11 +744,17 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity=None,
         guidance="Claim capacity exhausted.",
     ),
+    # HISTORICAL ONLY (FAR-1883): the stale-run sweep no longer writes
+    # ``capacity_timeout`` - capacity-queued runs wait indefinitely unless the
+    # pipeline opts into ``queue_timeout_seconds``, whose expiry writes the
+    # distinct ``queue.expired`` supersession code below. Retained so a
+    # pre-FAR-1883 row still resolves to its own class instead of
+    # ``harness.unknown``.
     "capacity.timeout": ErrorCodeSpec(
         error_class="capacity",
         retryable=True,
         alert_severity=None,
-        guidance="Capacity wait timed out.",
+        guidance="Capacity wait timed out (historical; superseded by queue.expired).",
     ),
     # --- hitl codes --------------------------------------------------------
     # FAR-648: the dispatcher_reconcile expired-HITL-gate terminalizer writes

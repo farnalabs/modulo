@@ -1195,6 +1195,11 @@ export default {
       "hitl_review_window_help": "Seconds an unanswered human review gate waits before the run is cancelled and its concurrency slot released. Allowed range 60 to 604800 seconds. Leave empty to clear the override and inherit the organisation default.",
       "hitl_review_window_out_of_range": "The HITL review window must be a whole number of seconds between {min} and {max}.",
       "hitl_review_window_update_failed": "Failed to update the HITL review window: {error}",
+      "queue_timeout_label": "Queue timeout (s)",
+      "queue_timeout_never": "never",
+      "queue_timeout_help": "How long a run may wait in the capacity queue before it is dropped. Anchored on the time the run was queued. Leave empty (never) by default: the run waits indefinitely and the queue-state alert is the escalation path. Allowed range 1 to 604800 seconds. On expiry the run ends as a supersession (queue.expired), not a failure. Cron pipelines should set this to their period (a 1h cron to 3600) so a stale fire self-drops; webhook, manual and MCP pipelines should leave it empty.",
+      "queue_timeout_out_of_range": "The queue timeout must be a whole number of seconds between {min} and {max}.",
+      "queue_timeout_update_failed": "Failed to update the queue timeout: {error}",
       "ownerless_gate_advisory": "This gate is human-only and has no required team, and this pipeline has no owner. Nobody is assigned to review it, so it will time out at the review window and the run will be cancelled. Set a required team or a pipeline owner to avoid this.",
       "autonomy_manual_approval": "Manual approval",
       "autonomy_notify_on_complete": "Notify on complete",
@@ -4947,6 +4952,7 @@ export default {
       "cancelled": "Node cancelled"
     },
     "run": { "superseded": "Run superseded", "no_progress": "Run made no progress" },
+    "queue": { "expired": "Queue wait expired" },
     "connector": {
       "invalid_key": "Invalid connector key",
       "permission": "Connector permission denied",
@@ -5028,6 +5034,7 @@ export default {
       "cancelled": "The node was cancelled before completion."
     },
     "run": { "superseded": "This run was superseded by a newer run." },
+    "queue": { "expired": "The run waited in the capacity queue past this pipeline's queue timeout and was dropped before it started. It was superseded, not failed." },
     "connector": {
       "invalid_key": "The connector key is invalid or missing.",
       "permission": "The connector does not have permission to access the resource.",
@@ -5073,6 +5080,7 @@ export default {
     "compensation_failed": "A watched node and its compensation path both failed.",
     "rejected": "A reviewer rejected the run at a human review gate with no reject route, so the run ended.",
     "superseded": "A newer version of the work item replaced this run's waiting review, so the run ended. No reviewer rejected it.",
+    "queue_expired": "The run waited in the capacity queue past this pipeline's queue timeout and was dropped before it started. It was superseded, not rejected by a reviewer.",
     "pending": "The run is queued and waiting to start.",
     "running": "The run is currently executing.",
     "awaiting_human": "The run is waiting for a human decision at a HITL gate.",

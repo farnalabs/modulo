@@ -72,6 +72,20 @@ rate-limited by the `TriggerEngine`.
 
 ## Behaviours
 
+- [x] Per-funnel queueing is bounded per state class, and the capacity queue
+      waits INDEFINITELY by default (FAR-1883): the old instance-wide
+      120-minute `capacity_timeout` terminalisation is retired. An operator may
+      set the pipeline's nullable `queue_timeout_seconds` (anchored on
+      `created_at`, "time queued"); on expiry the capacity-queued run is ENDED
+      as a supersession - status `rejected`, code `queue.expired` - which is
+      visible/filterable and counted in its own analytics bucket but is NOT a
+      failure and pages nobody (the queue-state alert is the escalation path,
+      and fires whether or not a timeout is configured). Never-dispatched rows
+      keep their own 300s path and enqueue-failed rows their own TTL. Guidance:
+      a cron pipeline should set the timeout to its period (a 1h cron → `3600`)
+      so a stale fire self-drops; webhook pipelines leave it NULL (each
+      delivery is discrete and coalescing folds repeats); manual/MCP pipelines
+      leave it NULL (a human action)
 - [x] A **wedged** pipeline (queued runs, no progress) stops accepting NEW
       work, refused per funnel (FAR-1342, the FAR-604 D3 backpressure guard):
       **webhook** → HTTP 429 and no run (the sender retries); **cron** → the

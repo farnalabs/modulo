@@ -725,6 +725,24 @@ class PipelineCreate(TeamVisibilityMixin):
             "(inherit). Resolved once at gate fire time."
         ),
     )
+    queue_timeout_seconds: int | None = Field(
+        None,
+        ge=1,
+        le=604800,
+        description=(
+            "Per-pipeline capacity-queue timeout in seconds (1..604800 = 7 days). "
+            "null (default) = NEVER expire: a capacity-queued run waits "
+            "indefinitely and the queue-state alert is the escalation path. When "
+            "set, a pending run carrying a capacity marker older than this window "
+            "(anchored on created_at, the time it was queued) is ended as a "
+            "SUPERSESSION (status rejected, error_code queue.expired) - never a "
+            "failure, never paged. Applies ONLY to capacity-queued runs; "
+            "never-dispatched and enqueue-failed runs keep their own timeouts. "
+            "Cron pipelines should set this to their period (e.g. 3600 for an "
+            "hourly cron) so a stale fire self-drops; webhook/manual/MCP "
+            "pipelines should leave it null."
+        ),
+    )
     run_context_defaults: dict[str, Any] = Field(default_factory=dict)
     default_autonomy_level: str = "manual_approval"
     max_autonomy_level: str | None = Field(
@@ -862,6 +880,18 @@ class PipelineUpdate(TeamVisibilityMixin):
         description=(
             "Per-pipeline HITL review window override (60-604800s). Omit to leave "
             "unchanged; null clears the override (inherit the org/instance default)."
+        ),
+    )
+    queue_timeout_seconds: int | None = Field(
+        None,
+        ge=1,
+        le=604800,
+        description=(
+            "Per-pipeline capacity-queue timeout (1..604800s). Omit to leave "
+            "unchanged; null clears it (never expire - the default). On expiry a "
+            "capacity-queued run is ended as a supersession (queue.expired), not a "
+            "failure. Cron pipelines should set it to their period; webhook/"
+            "manual/MCP pipelines should leave it null."
         ),
     )
     run_context_defaults: dict[str, Any] | None = None
@@ -1080,6 +1110,8 @@ class PipelineResponse(BaseModel):
     # FAR-1257: nullable per-pipeline HITL review-window override; null = no
     # override (inherit org default, then instance default).
     hitl_review_window_seconds: int | None = None
+    # FAR-1883: nullable per-pipeline capacity-queue timeout; NULL = never.
+    queue_timeout_seconds: int | None = None
     run_context_defaults: dict[str, Any]
     default_autonomy_level: str | None = None
     # FAR-1163: nullable ceiling (NULL = effective ceiling is the default).
@@ -3033,6 +3065,7 @@ async def create_pipeline_endpoint(
                 lock_wait_timeout_seconds=req.lock_wait_timeout_seconds,
                 node_timeout_seconds=req.node_timeout_seconds,
                 hitl_review_window_seconds=req.hitl_review_window_seconds,
+                queue_timeout_seconds=req.queue_timeout_seconds,
                 run_context_defaults=req.run_context_defaults,
                 default_autonomy_level=req.default_autonomy_level,
                 max_autonomy_level=req.max_autonomy_level,

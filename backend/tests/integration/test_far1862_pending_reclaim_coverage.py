@@ -28,12 +28,13 @@ These tests run against a REAL Postgres and drive the REAL code:
 * the composed reclaim predicate the 60s reconcile selects with
   (``reconciler_recovery_predicate`` AND the capacity-marker exclusion);
 * the real age backstops (``_sweep_org_stale_runs``'s never-dispatched /
-  capacity-timeout branches and ``_terminalize_stranded_pending_runs``).
+  queue-expired branches and ``_terminalize_stranded_pending_runs``).
 
 They ENUMERATE the ``pending`` cross-product of
 ``(dispatched_at, dispatcher, enqueue_failed_at, error_code, heartbeat)`` and
 assert every combination is either reclaimed by a leg, terminalised by a
-backstop, or deliberately owned by the enqueue-failed handler — a test covering
+backstop, deliberately owned by the enqueue-failed handler, or (FAR-1883)
+deliberately left queued by the capacity-queue design — a test covering
 only the shape that was fixed would pass while a sibling gap stayed open. They
 additionally assert the backstop LEAVES ALONE every still-executable shape, so
 the over-reach is caught, not just the gap.
@@ -63,8 +64,10 @@ from modulo.db.models.run import Run
 pytestmark = pytest.mark.integration
 
 # Rows are seeded three hours old: comfortably past every window used below
-# (never-dispatched 300s, capacity TTL 120 min, stranded-pending age bound
-# 135 min, heartbeat/dispatch staleness 120s).
+# (never-dispatched 300s, stranded-pending age bound 135 min, heartbeat/dispatch
+# staleness 120s). FAR-1883 retired the global 120-minute capacity TTL: a
+# capacity-queued run now waits indefinitely unless its pipeline sets
+# ``queue_timeout_seconds`` (the seeded pipeline leaves it NULL).
 _OLD_MINUTES = 180
 _RUNS_PER_ORG = 1000
 
@@ -283,10 +286,34 @@ async def test_every_pending_shape_is_reclaimed_or_backstopped(
         if combo[1] is None and combo[2] is not None
     }
 
+    # FAR-1883: capacity-marked pending runs are the SECOND deliberate
+    # "waits by design" class. Before this change the stale-run sweep
+    # terminalised them on a global 120-minute TTL; FAR-1883 removed that leg,
+    # so a capacity-queued run now waits indefinitely unless its PIPELINE opts
+    # into ``queue_timeout_seconds`` (the seeded pipeline leaves it NULL) — the
+    # queue-state alert (FAR-1343/FAR-1344) is the escalation path. A run whose
+    # heartbeat is still FRESH is actively being handled: the reconciler's
+    # capacity-marker exclusion (_reconcile_capacity_marker_exclusion) admits
+    # only a STALE/NULL-heartbeat capacity row, and neither age backstop owns a
+    # capacity-marked row. This set is scoped to exactly that fresh-heartbeat
+    # shape, so a genuinely stranded capacity row (stale heartbeat) is still
+    # required to be reclaimed above.
+    capacity_queued_owned = {
+        run_id
+        for run_id, combo in seeded.items()
+        # combo = (dispatched_at, dispatcher, enqueue_failed_at, error_code, heartbeat)
+        if combo[3] in ("org_capacity_limited", "pipeline_capacity") and combo[4] == fresh
+    }
+
     # Now run the real backstops over the remaining rows.
     backstopped: set[uuid.UUID] = set()
     async with db_engine.connect() as conn, conn.begin():
         sweep_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
+        # FAR-1883: the sweep's queue-expiry leg terminalises a capacity-queued
+        # run whose pipeline set a queue_timeout. The seeded pipeline leaves
+        # queue_timeout_seconds NULL (never expires), but capture the real ids
+        # so the totality assertion below stays honest if that ever changes.
+        queue_expired_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
         await _sweep_org_stale_runs(
             conn,
             org_id=far1862_env.org_id,
@@ -294,8 +321,10 @@ async def test_every_pending_shape_is_reclaimed_or_backstopped(
             wl_window=_WL_WINDOW,
             stranded_rows=[],
             terminalised_run_ids=sweep_ids,
+            queue_expired_run_ids=queue_expired_ids,
         )
     backstopped.update(run_id for run_id, _ in sweep_ids)
+    backstopped.update(run_id for run_id, _ in queue_expired_ids)
     async with db_engine.connect() as conn, conn.begin():
         stranded = await _terminalize_stranded_pending_runs(
             conn,  # type: ignore[arg-type]
@@ -309,12 +338,16 @@ async def test_every_pending_shape_is_reclaimed_or_backstopped(
     # terminalised by a sweep/backstop, or owned by the enqueue-failed handler
     # (which keeps its row ``pending`` BY DESIGN while Redis is unverifiable —
     # those marker-owned shapes are exactly the ones the backstop must not
-    # collect, so they are the one deliberate exception to "reclaimed-or-
-    # terminalised").
+    # collect) or (FAR-1883) deliberately left queued by the capacity-queue
+    # design. Those two classes are the deliberate exceptions to "reclaimed-or-
+    # terminalised".
     uncovered = [
         seeded[run_id]
         for run_id in seeded
-        if run_id not in reclaimed and run_id not in backstopped and run_id not in marker_owned
+        if run_id not in reclaimed
+        and run_id not in backstopped
+        and run_id not in marker_owned
+        and run_id not in capacity_queued_owned
     ]
     assert not uncovered, f"pending shapes left with no reclaim leg and no age backstop: {uncovered}"
 
