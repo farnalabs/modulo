@@ -14,18 +14,38 @@ lock named only in a comment/docstring cannot satisfy it, and an import alias is
 resolved. It re-derives the category-C disposition for every site rather than
 trusting a prose list, and fails if any swept site loses its bound, if a
 category-C file gains/loses a row-lock call, if a NEW file outside the known
-inventory gains a row-lock call, if a JSON/API route arm fronting a bound CRUD
-helper stops classifying 55P03, or if a deliberately-unbounded site becomes
-reachable from a request path. The ONE documented exception is the
-browser-redirect SSO callback (see
-``test_sso_callback_redirect_surface_is_an_explicit_55p03_exception``).
+inventory gains a row-lock call, if a JSON/API route DIRECTLY calling a swept
+helper stops classifying 55P03 (the caller set is derived from the route
+module's imports, NOT from a hand-maintained arm list, so a new caller cannot be
+missed by forgetting to enumerate it), if an enumerated arm stops classifying,
+or if a deliberately-unbounded site becomes reachable from a request path.
 
-Known residual: a NEW transitive helper that calls a row lock from a file not in
-``_ROW_LOCK_FILES`` fails the repo-wide file-set assertion, so the inventory and
-this guard must be updated in the same change. ``set_parent_node``'s no-caller
-check is alias-aware for the direct ``from ... import`` / module-attribute
-shapes; a call reached through a hand-built string or dynamic ``getattr`` is out
-of scope.
+The mapping guard's coverage is stated precisely: it proves the classifier is
+present on every ENUMERATED arm and on every route function that DIRECTLY calls
+a swept helper. It does NOT prove it on a **transitive service-level caller** —
+see the residuals below.
+
+Known residuals (accepted and recorded, not claimed closed):
+
+* **Transitive service callers are out of the derived check.** A route that
+  reaches a bounded lock only through an intermediate service function is not
+  discovered. The concrete case is
+  ``api/routes/library.py::create_lifecycle_map_from_primitive_endpoint``: it
+  reaches C20 via ``core/lifecycle_map/import_export.py::
+  materialize_map_from_primitive`` → ``save_map_version`` →
+  ``get_lifecycle_map_for_update``, and its local ``except SQLAlchemyError`` arm
+  still maps to 503. The lock is on a row INSERTED IN THE SAME TRANSACTION (the
+  copy path creates the map, then saves its first version), so no other
+  transaction can hold it and 55P03 is not practically reachable; the arm is an
+  explicit, pinned exception
+  (``test_library_materialise_arm_is_a_recorded_transitive_residual``) rather
+  than a conversion.
+* A NEW transitive helper that calls a row lock from a file not in
+  ``_ROW_LOCK_FILES`` fails the repo-wide file-set assertion, so the inventory
+  and this guard must be updated in the same change.
+* ``set_parent_node``'s no-caller check is alias-aware for the direct
+  ``from ... import`` / module-attribute shapes; a call reached through a
+  hand-built string or dynamic ``getattr`` is out of scope.
 """
 
 from __future__ import annotations
@@ -174,6 +194,77 @@ _CLASSIFIER_NAME = "raise_lock_timeout_conflict_if"
 # a generic mapping (see the pinned-exception test at the end of this module).
 _SSO_CALLBACK_FUNCTION = "_run_sso_callback_process"
 
+# Swept helpers a route can call DIRECTLY, keyed by the module that defines them.
+# The bound lives inside the helper's caller-owned transaction, so the request
+# arm that invoked it is where 55P03 must become a 409. Resolution is
+# import-aware: ``api/routes/schemas.py`` also calls an ``update_schema``, but
+# its symbol comes from ``db.crud.schema`` (not swept) — a bare token scan would
+# falsely flag it, so the callee is resolved through the module's imports.
+#
+# The lifecycle-map and assistant entries are the SERVICE wrappers that call the
+# bounded lock helper (``get_lifecycle_map_for_update`` /
+# ``_upsert_context_source``) — a route calls those wrappers, so they are the
+# route's direct sweep surface for C20/C22/C23.
+_SWEPT_HELPER_MODULES: dict[str, frozenset[str]] = {
+    "modulo.db.crud.account": frozenset({"_get_account_locked"}),
+    "modulo.db.crud.agent": frozenset({"add_prompt_version", "rollback_prompt_version"}),
+    "modulo.db.crud.agent_runner_binding": frozenset({"replace_agent_bindings"}),
+    "modulo.db.crud.invitations": frozenset({"get_live_for_email", "get_valid_by_token_hash"}),
+    "modulo.db.crud.node_observation": frozenset({"observe_node"}),
+    "modulo.db.crud.parameter_schema": frozenset({"update_schema"}),
+    "modulo.db.crud.parameter_set": frozenset({"update_set"}),
+    "modulo.db.crud.sso_provider": frozenset({"create_provider", "update_provider"}),
+    "modulo.core.lifecycle_map.service": frozenset({"update_lifecycle_map", "save_map_version", "graduate_stage"}),
+    "modulo.core.assistant.context_source_service": frozenset({"set_user_override", "set_org_default"}),
+}
+_SWEPT_HELPER_NAMES: frozenset[str] = frozenset(name for names in _SWEPT_HELPER_MODULES.values() for name in names)
+_HANDLE_DB_ERRORS_NAME = "handle_db_errors"
+
+# The direct callers the discovery must keep seeing. Asserting a SUPERSET makes a
+# stale/over-narrow discovery fail loudly instead of passing on an empty set —
+# a discovery bug that silently finds nothing is the failure mode this guard
+# exists to prevent.
+_KNOWN_SWEPT_CALLERS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("api/routes/admin_assistant.py", "set_org_context_source"),
+        ("api/routes/admin_sso.py", "create_provider_endpoint"),
+        ("api/routes/admin_sso.py", "update_provider_endpoint"),
+        ("api/routes/agents.py", "apply_optimized_prompt"),
+        ("api/routes/agents.py", "rollback_prompt"),
+        ("api/routes/agents.py", "replace_bindings_endpoint"),
+        ("api/routes/auth.py", "accept_invite"),
+        ("api/routes/lifecycle_maps.py", "graduate_lifecycle_map_stage_endpoint"),
+        ("api/routes/lifecycle_maps.py", "save_lifecycle_map_version_endpoint"),
+        ("api/routes/lifecycle_maps.py", "update_lifecycle_map_endpoint"),
+        ("api/routes/lifecycle_maps.py", "update_lifecycle_map_version_endpoint"),
+        ("api/routes/me.py", "set_user_context_source"),
+        ("api/routes/parameter_schemas.py", "update_parameter_schema_endpoint"),
+        ("api/routes/parameter_schemas.py", "update_parameter_set_endpoint"),
+        ("api/routes/runs.py", "observe_run_node"),
+    }
+)
+
+# (file, function) -> written reason. An entry opts a function OUT of the
+# derived classifier check; the reason is part of the contract, and the pinned
+# tests below assert each entry still matches the code it excuses.
+_MAPPING_EXCEPTION_REASONS: dict[tuple[str, str], str] = {
+    (
+        "api/routes/sso.py",
+        _SSO_CALLBACK_FUNCTION,
+    ): (
+        "browser-redirect surface: the IdP navigates the user here, so a JSON 409 cannot be "
+        "delivered and no SSO contention error code exists; 55P03 stays provider_unavailable"
+    ),
+    (
+        "api/routes/library.py",
+        "create_lifecycle_map_from_primitive_endpoint",
+    ): (
+        "TRANSITIVE residual (not a direct caller): reaches C20 via materialize_map_from_primitive "
+        "-> save_map_version -> get_lifecycle_map_for_update; the lock is on a row inserted in the "
+        "SAME transaction, so 55P03 is not practically reachable and the 503 arm is accepted"
+    ),
+}
+
 # C5/C6 are bounded one level up: the shared org JSON-column patch calls
 # ``_take_settings_patch_lock_wait`` before dispatching to the locked generic
 # fallback (the Postgres path never reaches a row lock at all).
@@ -289,6 +380,132 @@ def _set_parent_node_call_sites() -> list[str]:
     return sites
 
 
+def _iter_functions(module: ast.Module) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Every function/method defined in *module* (routes may nest handlers)."""
+    return [node for node in ast.walk(module) if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef)]
+
+
+def _imported_symbols(module: ast.Module) -> dict[str, tuple[str, str]]:
+    """Local name -> (defining module, original symbol) for ``from X import y``."""
+    imported: dict[str, tuple[str, str]] = {}
+    for node in ast.walk(module):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            for name in node.names:
+                imported[name.asname or name.name] = (node.module, name.name)
+    return imported
+
+
+def _imported_module_aliases(module: ast.Module) -> dict[str, str]:
+    """Local binding -> module path for ``import a.b.c [as x]``."""
+    aliases: dict[str, str] = {}
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            for name in node.names:
+                aliases[name.asname or name.name.split(".")[0]] = name.name
+    return aliases
+
+
+def _resolve_attribute_owner(attribute: ast.Attribute, module_aliases: dict[str, str]) -> str | None:
+    """Dotted module path for an attribute call's receiver when it is a module."""
+    owner = _dotted_name(attribute.value)
+    if owner is None:
+        return None
+    head, _, rest = owner.partition(".")
+    root = module_aliases.get(head)
+    if root is None:
+        return None
+    return root if not rest else f"{root}.{rest}"
+
+
+def _swept_helper_calls(function: ast.AST, module: ast.Module) -> set[str]:
+    """Swept helpers *function* calls DIRECTLY, resolved through the module's imports.
+
+    Three call shapes are resolved:
+
+    * ``from modulo.db.crud.X import helper [as y]`` → ``y(...)``;
+    * ``import modulo.db.crud.X [as m]`` → ``m.helper(...)`` / ``modulo.db.crud.X.helper(...)``;
+    * a METHOD call on a service instance (``service.set_org_default(...)``) —
+      accepted when the attribute name is a swept helper AND the module imports
+      from at least one swept module (the receiver's concrete type is not
+      inferable without type analysis, and these method names are unique).
+    """
+    imported_symbols = _imported_symbols(module)
+    module_aliases = _imported_module_aliases(module)
+    imports_a_swept_module = any(dotted[0] in _SWEPT_HELPER_MODULES for dotted in imported_symbols.values())
+    hits: set[str] = set()
+    for call in (node for node in ast.walk(function) if isinstance(node, ast.Call)):
+        callee = call.func
+        if isinstance(callee, ast.Name):
+            source = imported_symbols.get(callee.id)
+            if source is not None and source[1] in _SWEPT_HELPER_MODULES.get(source[0], frozenset()):
+                hits.add(f"{source[0]}.{source[1]}")
+        elif isinstance(callee, ast.Attribute) and callee.attr in _SWEPT_HELPER_NAMES:
+            owner = _resolve_attribute_owner(callee, module_aliases)
+            if owner is not None:
+                if callee.attr in _SWEPT_HELPER_MODULES.get(owner, frozenset()):
+                    hits.add(f"{owner}.{callee.attr}")
+            elif imports_a_swept_module:
+                hits.add(f"<service>.{callee.attr}")
+    return hits
+
+
+def _direct_swept_callers() -> dict[tuple[str, str], set[str]]:
+    """``(route file, function)`` -> the swept helpers that function calls directly.
+
+    Scans ``api/routes/*.py`` (excluding underscore-prefixed shared helpers,
+    which own no request arm). This is the mechanically derived caller set the
+    enumerated ``_MAPPED_55P03_ROUTE_ARMS`` list cannot provide.
+    """
+    routes_dir = _SRC / "api" / "routes"
+    discovered: dict[tuple[str, str], set[str]] = {}
+    for path in sorted(routes_dir.glob("*.py")):
+        if path.name.startswith("_"):
+            continue
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        rel = path.relative_to(_SRC).as_posix()
+        for function in _iter_functions(module):
+            hits = _swept_helper_calls(function, module)
+            if hits:
+                discovered[(rel, function.name)] = hits
+    return discovered
+
+
+def _calls_classifier(function: ast.AST) -> bool:
+    """Whether *function* itself calls ``raise_lock_timeout_conflict_if``."""
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = node.func
+        if isinstance(callee, ast.Name) and callee.id == _CLASSIFIER_NAME:
+            return True
+        if isinstance(callee, ast.Attribute) and callee.attr == _CLASSIFIER_NAME:
+            return True
+    return False
+
+
+def _local_sqlalchemy_arms(function: ast.AST) -> list[ast.ExceptHandler]:
+    """The function's OWN ``except SQLAlchemyError`` arms (nested handlers included)."""
+    arms: list[ast.ExceptHandler] = []
+    for handler in ast.walk(function):
+        if not isinstance(handler, ast.ExceptHandler) or handler.type is None:
+            continue
+        candidates = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+        if any(isinstance(candidate, ast.Name) and candidate.id == "SQLAlchemyError" for candidate in candidates):
+            arms.append(handler)
+    return arms
+
+
+def _is_handle_db_errors_decorated(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Whether the shared ``@handle_db_errors`` backstop wraps *function*."""
+    for decorator in function.decorator_list:
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if isinstance(target, ast.Name) and target.id == _HANDLE_DB_ERRORS_NAME:
+            return True
+        if isinstance(target, ast.Attribute) and target.attr == _HANDLE_DB_ERRORS_NAME:
+            return True
+    return False
+
+
 def test_category_c_site_counts_match_the_inventory() -> None:
     """The §3 category-C row-lock set is exactly 20 SQLAlchemy sites."""
     measured: dict[str, int] = {}
@@ -342,14 +559,20 @@ def test_every_swept_site_sets_the_lock_bound_before_its_first_lock() -> None:
 
 
 def test_route_arms_fronting_bounded_crud_classify_55p03_as_a_conflict() -> None:
-    """Every JSON/API route arm in front of a bounded helper maps 55P03 to 409.
+    """Every ENUMERATED JSON/API route arm in front of a bounded helper maps 55P03 to 409.
 
     The pre-PR gate found the bounds correct but the promised mapping absent on
     most swept routes: their local ``except SQLAlchemyError`` arms answered
     503/500, so a busy-row conflict read as a database outage. A representative
-    route test proves the mapping at runtime; this guard proves it is present at
-    every reachable JSON/API arm, so a new arm cannot silently reintroduce the
-    defect.
+    route test proves the mapping at runtime; this guard proves it is present on
+    every arm in ``_MAPPED_55P03_ROUTE_ARMS``.
+
+    This list is hand-maintained, so on its own it cannot prove completeness —
+    a new arm that nobody added would pass silently. That gap is closed by
+    ``test_every_direct_route_caller_of_a_swept_helper_classifies_55p03``,
+    which DERIVES the caller set from the route modules' imports. Transitive
+    service-level callers remain an accepted residual (see this module's
+    docstring and ``_MAPPING_EXCEPTION_REASONS``).
 
     Scope: JSON/API arms only. The SSO callback is a BROWSER-REDIRECT surface
     (the IdP navigates the user there, so a JSON 409 cannot be delivered and no
@@ -425,6 +648,131 @@ def test_sso_callback_redirect_surface_is_an_explicit_55p03_exception() -> None:
         "'Mapping truth' table and this pinned exception in the same change"
     )
     assert ("api/routes/sso.py", _SSO_CALLBACK_FUNCTION) not in _MAPPED_55P03_ROUTE_ARMS
+
+
+def test_every_direct_route_caller_of_a_swept_helper_classifies_55p03() -> None:
+    """Derive the route callers of every swept helper and require a 55P03 mapping.
+
+    The enumerated ``_MAPPED_55P03_ROUTE_ARMS`` list cannot prove its own
+    completeness: a NEW route that calls a bounded helper and forgets
+    ``raise_lock_timeout_conflict_if`` is simply absent from it and passes. This
+    guard closes that gap mechanically, in the spirit of the FAR-1832
+    writer-discovery check: it token-resolves every ``api/routes/*.py`` function
+    that DIRECTLY calls a swept helper (``_SWEPT_HELPER_MODULES``, import-aware
+    so the unrelated ``db.crud.schema.update_schema`` is not mistaken for the
+    swept ``db.crud.parameter_schema.update_schema``).
+
+    A discovered function passes when ANY of these holds:
+
+    * it calls ``raise_lock_timeout_conflict_if`` itself; or
+    * it has NO local ``except SQLAlchemyError`` arm — the error escapes to
+      ``@handle_db_errors``, whose backstop maps 55P03 → 409; or
+    * it is a recorded exception in ``_MAPPING_EXCEPTION_REASONS`` (a written
+      reason, pinned by its own test).
+
+    It FAILS when a local ``except SQLAlchemyError`` arm answers 503/500 without
+    the classifier, and when a function has neither the classifier nor the
+    shared backstop. The known-caller superset assertion keeps the discovery
+    itself from silently going blind.
+
+    Not covered (accepted residual, see the module docstring): a TRANSITIVE
+    service-level caller — e.g. ``library.py`` reaching C20 through
+    ``materialize_map_from_primitive``. That arm is recorded explicitly.
+    """
+    callers = _direct_swept_callers()
+
+    assert callers, (
+        "swept-helper caller discovery found NOTHING — the import resolution or helper table is "
+        "stale, which is not the same as every caller being mapped"
+    )
+    missing_known = _KNOWN_SWEPT_CALLERS - set(callers)
+    assert not missing_known, (
+        f"discovery no longer sees known direct swept-helper callers {sorted(missing_known)} — "
+        "fix the discovery, do not weaken the guard"
+    )
+
+    failures: list[str] = []
+    for (rel, function_name), helpers in sorted(callers.items()):
+        function = _function_node(_parse(rel), function_name)
+        if _calls_classifier(function):
+            continue
+        if (rel, function_name) in _MAPPING_EXCEPTION_REASONS:
+            continue
+        if _local_sqlalchemy_arms(function):
+            failures.append(
+                f"{rel}::{function_name} directly calls {sorted(helpers)} and its local "
+                f"except SQLAlchemyError arm never calls {_CLASSIFIER_NAME} — a contended row "
+                "would answer 503/500 instead of a 409 conflict"
+            )
+            continue
+        if not _is_handle_db_errors_decorated(function):
+            failures.append(
+                f"{rel}::{function_name} directly calls {sorted(helpers)} but has neither "
+                f"{_CLASSIFIER_NAME} nor the @{_HANDLE_DB_ERRORS_NAME} backstop"
+            )
+    assert not failures, "\n".join(failures)
+
+
+def test_every_recorded_mapping_exception_still_matches_the_code() -> None:
+    """Every exception entry names a real function and states a reason.
+
+    An exception is a promise about code that is deliberately NOT converted; if
+    the function is renamed or deleted the entry becomes dead prose that silently
+    excuses nothing. The reasons are non-trivial by construction.
+    """
+    for (rel, function_name), reason in _MAPPING_EXCEPTION_REASONS.items():
+        function = _function_node(_parse(rel), function_name)  # raises if renamed/removed
+        assert len(reason) >= 40, f"{rel}::{function_name} exception reason is too thin: {reason!r}"
+        assert not _calls_classifier(function), (
+            f"{rel}::{function_name} now classifies 55P03 — remove its mapping exception and re-record the behaviour"
+        )
+
+    # sso.py's callback is pinned separately; library.py's arm is the transitive
+    # residual. Both must stay OUT of the enumerated arm list (they do not call
+    # the classifier, so adding them there would fail the classifier assertion).
+    assert ("api/routes/sso.py", _SSO_CALLBACK_FUNCTION) not in _MAPPED_55P03_ROUTE_ARMS
+    assert (
+        "api/routes/library.py",
+        "create_lifecycle_map_from_primitive_endpoint",
+    ) not in _MAPPED_55P03_ROUTE_ARMS
+
+
+def _unavailable_reply(handler: ast.ExceptHandler) -> bool:
+    """Whether *handler* raises the route's generic 503 helper for a DB error."""
+    return any(
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_unavailable_error"
+        for node in ast.walk(handler)
+    )
+
+
+def test_library_materialise_arm_is_a_recorded_transitive_residual() -> None:
+    """Pin the concrete transitive residual so it cannot drift silently.
+
+    ``create_lifecycle_map_from_primitive_endpoint`` reaches C20
+    (``get_lifecycle_map_for_update``) only through the materialise/import
+    chain, so the derived direct-caller guard does not see it. Its local
+    ``except SQLAlchemyError`` arm still answers 503. Accepted because the lock
+    is taken on a row INSERTED IN THE SAME TRANSACTION as the lock acquisition —
+    no other transaction can hold it, so 55P03 is not practically reachable.
+
+    If that arm is ever converted (the classifier added), this test fails and the
+    exception record must be removed in the same change.
+    """
+    rel = "api/routes/library.py"
+    function_name = "create_lifecycle_map_from_primitive_endpoint"
+    function = _function_node(_parse(rel), function_name)
+
+    arms = _local_sqlalchemy_arms(function)
+    assert len(arms) == 1, "the library materialise arm should keep exactly one SQLAlchemyError handler"
+    assert not _calls_classifier(function), (
+        f"{rel}::{function_name} now classifies 55P03 — remove it from "
+        "_MAPPING_EXCEPTION_REASONS and from the inventory's residual table"
+    )
+    assert _unavailable_reply(arms[0]), (
+        "the recorded residual expects the arm to answer _unavailable_error() (503); if the mapping "
+        "changed, re-record the residual"
+    )
+    assert (rel, function_name) in _MAPPING_EXCEPTION_REASONS
 
 
 def test_c5_c6_generic_fallback_is_bounded_by_the_shared_patch_caller() -> None:
