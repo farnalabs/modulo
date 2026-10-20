@@ -44,15 +44,26 @@ upward migration chain, so each statement runs with a transaction-scoped
 only its own savepoint and retries; the final failure propagates so the
 migration aborts loudly and release.sh's bounded migrator owns the retry.
 
-The downgrade RESTORES THE DATA, not just the columns. It re-adds the three
-columns and copies each value back from ``organisation_cost_state`` — the exact
-inverse of 0321's backfill — so a rewind loses none of the values that lived on
-``organisations`` before this migration. That cost-state table is still present
-at this revision (0321 only drops it in its OWN downgrade, which runs after
-this one), so the restore source is guaranteed. An organisation with no
-cost-state row — possible for an org created after 0321 that never set a ceiling
-and never accrued spend — keeps the column defaults (NULL ceilings, ``0``
-consumed), which is exactly the pre-cutover semantic for such an org.
+The downgrade RESTORES THE COLUMNS AND THEIR VALUES from
+``organisation_cost_state``, which is the AUTHORITATIVE store after FAR-1833
+(every reader and writer moved there under the per-org cost-state advisory
+lock). It is therefore not a byte-for-byte inverse of the pre-cutover state,
+and this module does not claim it is: a value that an old-code instance wrote
+to ``organisations`` only, during the rollout window this split exists to
+remove, is SUPERSEDED by the cost-state value. That precedence is the
+cutover's intent, not data loss. That cost-state table is still present at
+this revision (0321 only drops it in its OWN downgrade, which runs after this
+one), so the restore source is guaranteed.
+
+The one class the drop must not lose is an organisation with NO cost-state
+row. 0321 backfills only the organisations that existed when it ran, and the
+application never creates the row eagerly (a missing row means "no ceilings,
+``0`` spent"; the row appears on first write), so an organisation created
+after 0321 legitimately has no row — and its ``organisations`` values are then
+the only copy. ``upgrade()`` inserts a cost-state row for exactly those
+organisations from their current column values BEFORE any column is dropped,
+so a rewind restores them from the surviving store like every other
+organisation (and keeps their pre-cutover values).
 
 SQLite parity (0322 pattern): SQLite has no ``ADD COLUMN IF NOT EXISTS`` /
 ``ADD CONSTRAINT`` / ``DROP COLUMN IF EXISTS``, so both directions branch to
@@ -121,16 +132,65 @@ _VALIDATE_CHECK_SQL = (
     "END IF; END $$;"
 )
 
-#: Downgrade restore — the exact inverse of 0321's backfill. ``UPDATE ... FROM``
-#: touches only organisations that HAVE a cost-state row; the rest keep the
-#: column defaults, which is their pre-cutover semantic (no ceilings, 0 spent).
+#: The correlation that defines "this organisation HAS a cost-state row".
+#: ONE constant, referenced by the pre-drop backfill's anti-join, the Postgres
+#: restore and the SQLite restore, so the dialect branches cannot drift apart.
+#: The Postgres branch is covered by the testcontainers integration test; the
+#: SQLite branch runs inside Alembic batch mode and can only be exercised as
+#: raw SQL, so a branch that is free to re-derive its own predicate is exactly
+#: how the two came to disagree (the SQLite one aborted on a no-row org).
+_COST_STATE_MATCH_PREDICATE = "s.org_id = o.id"
+
+#: Pre-drop backfill — give every organisation WITHOUT a cost-state row one
+#: carrying its current ``organisations`` values, BEFORE those columns are
+#: dropped, so the drop is lossless for that class. 0321 backfills only the
+#: organisations that existed when it ran and the application creates the row
+#: lazily, so an organisation created after 0321 has none. A plain
+#: INSERT..SELECT on two rows-per-org tables: no ``ALTER``, so it takes no
+#: ACCESS EXCLUSIVE lock on ``organisations`` and cannot invert the lock order
+#: against the DDL below. The migration connection is the DDL/admin role
+#: (env.py selects ``DATABASE_ADMIN_URL``, provisioned BYPASSRLS), so the FORCE
+#: RLS policy on ``organisation_cost_state`` does not filter this cross-org
+#: insert.
+_BACKFILL_MISSING_SQL = (
+    "INSERT INTO organisation_cost_state "  # noqa: S608  # nosec B608 - module constants only
+    "(org_id, max_run_cost_cents, spend_ceiling_cents, org_cumulative_spend_cents) "
+    "SELECT o.id, o.max_run_cost_cents, o.spend_ceiling_cents, o.org_cumulative_spend_cents "
+    "FROM organisations o "
+    "WHERE NOT EXISTS (SELECT 1 FROM organisation_cost_state s WHERE " + _COST_STATE_MATCH_PREDICATE + ")"
+)
+
+#: Postgres downgrade restore. ``UPDATE ... FROM`` touches only organisations
+#: that HAVE a cost-state row (the upgrade's backfill guarantees every
+#: organisation that predates the drop does), so the rest keep the column
+#: defaults. See the module docstring for the precedence this encodes.
 _RESTORE_SQL = (
-    "UPDATE organisations o SET "
+    "UPDATE organisations o SET "  # noqa: S608  # nosec B608 - module constants only
     "max_run_cost_cents = s.max_run_cost_cents, "
     "spend_ceiling_cents = s.spend_ceiling_cents, "
     "org_cumulative_spend_cents = s.org_cumulative_spend_cents "
     "FROM organisation_cost_state s "
-    "WHERE s.org_id = o.id"
+    "WHERE " + _COST_STATE_MATCH_PREDICATE
+)
+
+#: SQLite downgrade restore — the SAME predicate, expressed as the
+#: ``WHERE EXISTS`` anti-join SQLite needs. The scalar subqueries previously
+#: used here yielded NULL for an organisation with no cost-state row, and the
+#: NOT NULL cumulative column rejected the whole UPDATE, aborting the
+#: downgrade; ``WHERE EXISTS`` restores only matching rows and leaves the rest
+#: on the column default, exactly like the Postgres ``UPDATE ... FROM``.
+#: ``COALESCE`` on the cumulative total keeps the statement from ever writing
+#: NULL into a NOT NULL column even if the source row is malformed.
+_RESTORE_SQLITE_SQL = (
+    "UPDATE organisations AS o SET "  # noqa: S608  # nosec B608 - module constants only
+    "max_run_cost_cents = (SELECT s.max_run_cost_cents FROM organisation_cost_state s "
+    "WHERE " + _COST_STATE_MATCH_PREDICATE + "), "
+    "spend_ceiling_cents = (SELECT s.spend_ceiling_cents FROM organisation_cost_state s "
+    "WHERE " + _COST_STATE_MATCH_PREDICATE + "), "
+    "org_cumulative_spend_cents = COALESCE("
+    "(SELECT s.org_cumulative_spend_cents FROM organisation_cost_state s "
+    "WHERE " + _COST_STATE_MATCH_PREDICATE + "), 0) "
+    "WHERE EXISTS (SELECT 1 FROM organisation_cost_state s WHERE " + _COST_STATE_MATCH_PREDICATE + ")"
 )
 
 _DDL_LOCK_TIMEOUT = "30s"
@@ -192,6 +252,11 @@ def _sqlite_table_exists(bind: Connection, table: str) -> bool:
 
 
 def _upgrade_sqlite(bind: Connection) -> None:
+    # Backfill BEFORE the batch recreate drops the columns: the recreate is
+    # what destroys their values, so a no-row organisation must be captured
+    # first or the SQLite drop is as lossy as the Postgres one would be.
+    if _sqlite_table_exists(bind, _COST_STATE_TABLE):
+        bind.execute(sa.text(_BACKFILL_MISSING_SQL))
     constraints = _sqlite_check_constraints(bind, _TABLE)
     with op.batch_alter_table(_TABLE) as batch:
         if _CHECK_NAME in constraints:
@@ -212,17 +277,7 @@ def _downgrade_sqlite(bind: Connection) -> None:
         if _CHECK_NAME not in constraints:
             batch.create_check_constraint(_CHECK_NAME, _CHECK_PREDICATE)
     if has_cost_state:
-        bind.execute(
-            sa.text(
-                "UPDATE organisations SET "
-                "max_run_cost_cents = (SELECT s.max_run_cost_cents FROM organisation_cost_state s "
-                "WHERE s.org_id = organisations.id), "
-                "spend_ceiling_cents = (SELECT s.spend_ceiling_cents FROM organisation_cost_state s "
-                "WHERE s.org_id = organisations.id), "
-                "org_cumulative_spend_cents = (SELECT s.org_cumulative_spend_cents FROM organisation_cost_state s "
-                "WHERE s.org_id = organisations.id)"
-            )
-        )
+        bind.execute(sa.text(_RESTORE_SQLITE_SQL))
 
 
 def upgrade() -> None:
@@ -232,6 +287,17 @@ def upgrade() -> None:
         return
 
     bind.execute(sa.text("SET search_path TO public"))
+
+    # Lossless drop: capture the values of any organisation that has no
+    # cost-state row BEFORE anything is dropped. 0321 backfilled only the
+    # organisations existing at its own run and the application creates the row
+    # lazily, so an organisation created since then has none — and its
+    # ``organisations`` values are the only copy this migration could destroy.
+    backfilled = bind.execute(sa.text(_BACKFILL_MISSING_SQL)).rowcount or 0
+    _log.info(
+        "FAR-1902: backfilled %d organisation(s) with no cost-state row before the drop",
+        backfilled,
+    )
 
     # Drop the CHECK FIRST so the intent is explicit in the deploy log; the
     # column drop would otherwise cascade it silently (a CHECK that references
