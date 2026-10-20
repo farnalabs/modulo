@@ -28,11 +28,45 @@ import { WCAG_TAGS, filterViolations } from './setup/wcag'
  * accessibility.
  */
 
+/**
+ * Wait until the dialog has finished its own enter transition.
+ *
+ * PrimeVue's Dialog focuses its close button in `after-enter`
+ * (`Dialog.onAfterEnter` → `focus()`), which fires when the `p-dialog`
+ * transition ends. Until that has happened the dialog is still holding
+ * "where should focus go?", and it will take focus away from whatever moved
+ * it first.
+ *
+ * That matters here because the keyboard case below drives the Select from the
+ * combobox. If it starts before the transition ends, the dialog steals focus
+ * mid-walk; PrimeVue's Select clears `focusedOptionIndex` when it blurs
+ * (`onBlur`, deferred 100 ms), so the next `ArrowDown` restarts from the
+ * selected option and the walk lands one option short (FAR-2018). The dialog
+ * settling first is what a real user does — opening the dialog and reaching the
+ * Select takes far longer than the 200 ms transition — so waiting for it here
+ * is removing a harness race, not relaxing the assertion.
+ *
+ * Two frames first: Vue adds the transition's enter classes on the frame after
+ * the element is inserted, so an immediate `getAnimations()` can return an
+ * empty list while the transition is about to start and resolve too early.
+ */
+async function waitForDialogEnterTransition(page: Page) {
+  await page.locator('.p-dialog').evaluate(async (el) => {
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    )
+    await Promise.all(
+      el.getAnimations().map((animation) => animation.finished.catch(() => undefined)),
+    )
+  })
+}
+
 /** Open the create-user dialog without opening any Select overlay. */
 async function openCreateUserDialog(page: Page) {
   await page.goto('/admin/users')
   await page.getByTestId('admin-users-add-user').click()
   await expect(page.getByRole('dialog')).toBeVisible()
+  await waitForDialogEnterTransition(page)
 }
 
 /** Open the dialog and its role Select overlay via a pointer click. */
@@ -111,7 +145,9 @@ test.describe('Dialog Select overlay', { tag: "@regression" }, () => {
     await trigger.focus()
     await expect(trigger).toBeFocused()
 
-    // Enter on a closed Select opens the overlay and activates the first option.
+    // Enter on a closed Select opens the overlay with the SELECTED option
+    // active. The form defaults `org_role` to 'runner', which is the first
+    // option, so the two ArrowDowns below walk Runner -> Operator -> Admin.
     await trigger.press('Enter')
     await expect(page.getByRole('listbox')).toBeVisible()
     // Focus must remain on the trigger; PrimeVue tracks the active option via
