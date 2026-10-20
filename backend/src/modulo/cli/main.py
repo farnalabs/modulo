@@ -478,41 +478,14 @@ def logs(
 ) -> None:
     """Show a data-dir log: app (launcher/supervisor) or bundled postgres/redis child logs."""
     _scrub_for_launcher_command()
-    import time
 
-    from modulo.launcher.supervisor import log_paths, rotate_log
+    from modulo.launcher.supervisor import log_paths
 
     resolved = _resolve_data_dir(data_dir)
     path = log_paths(resolved)[component]
     click.echo(f"# modulo {_package_version()} — {component} log: {path}")
     if rotate:
-        if component != "app":
-            # Child logs (postgres/redis) are written-append by the running
-            # bundled process; rotating under a live holder redirects post-rename
-            # writes into the rotated-away inode. We do not rotate them.
-            click.echo("rotation applies to the app log only")
-            return
-        # rotate_log is only safe when no process holds the log open for
-        # appending; an attached launcher redirects post-rename writes into
-        # the rotated-away inode. Refuse rather than silently corrupt the log.
-        from modulo.launcher.supervisor import LOCK_SUFFIX, _pid_alive, _read_lock_holder
-
-        lock_path = resolved.parent / (resolved.name + LOCK_SUFFIX)
-        holder = _read_lock_holder(lock_path)
-        if holder is not None and _pid_alive(holder.pid):
-            click.echo(
-                "refused: the launcher is still running — rotating launcher.log while the "
-                "launcher holds it open for appending would redirect writes into the "
-                "rotated-away inode. Stop the launcher (`modulo stop`) first, then re-run "
-                "`modulo logs --rotate`.",
-                err=True,
-            )
-            raise SystemExit(1)
-        rotated = rotate_log(path)
-        if rotated:
-            click.echo(f"rotated: {path} -> {path.with_suffix(path.suffix + '.1')}")
-        else:
-            click.echo("no rotation (absent or below the size threshold)")
+        _rotate_log_or_exit(resolved, path, component)
         return
     if not path.is_file():
         click.echo(
@@ -520,27 +493,70 @@ def logs(
             "log to the terminal, not to a file; bundled children land logs in data-dir/logs/*."
         )
         raise SystemExit(1)
+    _echo_log_contents(path, follow=follow)
+
+
+def _rotate_log_or_exit(resolved: Path, path: Path, component: str) -> None:
+    """Rotate the app log, refusing while a launcher holds it open."""
+    if component != "app":
+        # Child logs (postgres/redis) are written-append by the running
+        # bundled process; rotating under a live holder redirects post-rename
+        # writes into the rotated-away inode. We do not rotate them.
+        click.echo("rotation applies to the app log only")
+        return
+    # rotate_log is only safe when no process holds the log open for
+    # appending; an attached launcher redirects post-rename writes into
+    # the rotated-away inode. Refuse rather than silently corrupt the log.
+    from modulo.launcher.supervisor import LOCK_SUFFIX, _pid_alive, _read_lock_holder, rotate_log
+
+    lock_path = resolved.parent / (resolved.name + LOCK_SUFFIX)
+    holder = _read_lock_holder(lock_path)
+    if holder is not None and _pid_alive(holder.pid):
+        click.echo(
+            "refused: the launcher is still running — rotating launcher.log while the "
+            "launcher holds it open for appending would redirect writes into the "
+            "rotated-away inode. Stop the launcher (`modulo stop`) first, then re-run "
+            "`modulo logs --rotate`.",
+            err=True,
+        )
+        raise SystemExit(1)
+    rotated = rotate_log(path)
+    if rotated:
+        click.echo(f"rotated: {path} -> {path.with_suffix(path.suffix + '.1')}")
+    else:
+        click.echo("no rotation (absent or below the size threshold)")
+
+
+def _echo_log_contents(path: Path, *, follow: bool) -> None:
+    """Echo the log's current contents, optionally following new writes."""
     contents = path.read_text(encoding="utf-8", errors="replace")
     if contents:
         click.echo(contents, nl=False)
     if follow:
-        click.echo("— following (Ctrl-C to stop) —")
-        offset = path.stat().st_size
-        try:
-            while True:
-                time.sleep(0.5)
-                size = path.stat().st_size
-                if size > offset:
-                    click.echo(
-                        path.read_bytes()[offset:].decode("utf-8", errors="replace"),
-                        nl=False,
-                    )
-                    offset = size
-        except KeyboardInterrupt:
-            return
-        except OSError as exc:
-            click.echo(f"log write/read failed: {exc}")
-            raise SystemExit(1) from exc
+        _follow_log(path)
+
+
+def _follow_log(path: Path) -> None:
+    """Tail the log until Ctrl-C, exiting 1 on a read failure."""
+    import time
+
+    click.echo("— following (Ctrl-C to stop) —")
+    offset = path.stat().st_size
+    try:
+        while True:
+            time.sleep(0.5)
+            size = path.stat().st_size
+            if size > offset:
+                click.echo(
+                    path.read_bytes()[offset:].decode("utf-8", errors="replace"),
+                    nl=False,
+                )
+                offset = size
+    except KeyboardInterrupt:
+        return
+    except OSError as exc:
+        click.echo(f"log write/read failed: {exc}")
+        raise SystemExit(1) from exc
 
 
 # ---------------------------------------------------------------------------

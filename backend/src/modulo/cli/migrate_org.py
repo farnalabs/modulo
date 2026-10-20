@@ -158,33 +158,45 @@ def _validate_bundle(bundle: Any) -> list[str]:
     instead of being accepted and failing unpredictably mid-import (iterating a
     dict's keys as rows, crashing on a non-object root, etc.).
     """
-    errors: list[str] = []
-
     if not isinstance(bundle, dict):
         return [f"Import bundle must be a JSON object, got {type(bundle).__name__}"]
 
+    errors: list[str] = []
+    _validate_bundle_root(bundle, errors)
+    for table_name, _model_cls in ENTITY_ORDER:
+        _validate_bundle_table(bundle, table_name, errors)
+    return errors
+
+
+def _validate_bundle_root(bundle: dict[str, Any], errors: list[str]) -> None:
+    """Validate the bundle's top-level metadata objects."""
     if not isinstance(bundle.get("__meta__"), dict):
         errors.append("Bundle missing '__meta__' object (export metadata)")
 
     if not isinstance(bundle.get("organisation"), dict):
         errors.append("Bundle 'organisation' must be a JSON object")
 
-    for table_name, _model_cls in ENTITY_ORDER:
-        rows = bundle.get(table_name)
-        if rows is None:
-            continue
-        if not isinstance(rows, list):
-            errors.append(f"Bundle '{table_name}' must be a JSON array, got {type(rows).__name__}")
-            continue
-        for idx, row in enumerate(rows):
-            if not isinstance(row, dict):
-                errors.append(f"Bundle '{table_name}' row {idx} must be a JSON object, got {type(row).__name__}")
-                continue
-            rid = row.get("id")
-            if rid is not None and not isinstance(rid, str):
-                errors.append(f"Bundle '{table_name}' row {idx} 'id' must be a string, got {type(rid).__name__}")
 
-    return errors
+def _validate_bundle_table(bundle: dict[str, Any], table_name: str, errors: list[str]) -> None:
+    """Validate one table's row array (a missing table is allowed)."""
+    rows = bundle.get(table_name)
+    if rows is None:
+        return
+    if not isinstance(rows, list):
+        errors.append(f"Bundle '{table_name}' must be a JSON array, got {type(rows).__name__}")
+        return
+    for idx, row in enumerate(rows):
+        _validate_bundle_row(table_name, idx, row, errors)
+
+
+def _validate_bundle_row(table_name: str, idx: int, row: Any, errors: list[str]) -> None:
+    """Validate one row: a JSON object whose optional ``id`` is a string."""
+    if not isinstance(row, dict):
+        errors.append(f"Bundle '{table_name}' row {idx} must be a JSON object, got {type(row).__name__}")
+        return
+    rid = row.get("id")
+    if rid is not None and not isinstance(rid, str):
+        errors.append(f"Bundle '{table_name}' row {idx} 'id' must be a string, got {type(rid).__name__}")
 
 
 # ── Export ─────────────────────────────────────────────────────────────────────
@@ -372,42 +384,103 @@ async def _import_row(
     old_id_str = str(old_id) if old_id is not None else None
 
     # ── skip ──
-    if existing is not None and strategy == "skip":
-        if old_id_str:
-            id_map[old_id_str] = str(existing.id)
-        counts["skipped"] += 1
+    if _skip_existing_row(existing, old_id_str, strategy, id_map, counts):
         return
 
     # ── rename ──
-    if existing is not None and strategy == "rename" and name_val and name_field:
-        row[name_field] = await _resolve_unique_name(session, model_cls, org_id, name_field, name_val)
-        existing = None
+    existing = await _rename_conflicting_row(session, model_cls, org_id, row, name_field, name_val, existing, strategy)
 
-    # ── build row data ──
+    # ── build row data / write ──
+    row_data = _build_row_data(row, table_name, skip_cols, id_map)
+    async with session.begin_nested():
+        if existing is not None and strategy == "overwrite":
+            _overwrite_existing_row(existing, row_data, old_id_str, id_map, counts)
+        else:
+            await _create_row(session, model_cls, org_id, row_data, old_id_str, id_map, counts)
+
+
+def _skip_existing_row(
+    existing: Any,
+    old_id_str: str | None,
+    strategy: ConflictStrategy,
+    id_map: dict[str, str],
+    counts: dict[str, int],
+) -> bool:
+    """Handle the ``skip`` strategy; True when the row was skipped."""
+    if existing is None or strategy != "skip":
+        return False
+    if old_id_str:
+        id_map[old_id_str] = str(existing.id)
+    counts["skipped"] += 1
+    return True
+
+
+async def _rename_conflicting_row(
+    session: Any,
+    model_cls: Any,
+    org_id: uuid.UUID,
+    row: dict[str, Any],
+    name_field: str | None,
+    name_val: str | None,
+    existing: Any,
+    strategy: ConflictStrategy,
+) -> Any:
+    """Apply the ``rename`` strategy; returns the (possibly cleared) existing row."""
+    if existing is None or strategy != "rename" or not name_val or not name_field:
+        return existing
+    row[name_field] = await _resolve_unique_name(session, model_cls, org_id, name_field, name_val)
+    return None
+
+
+def _build_row_data(
+    row: dict[str, Any],
+    table_name: str,
+    skip_cols: set[str],
+    id_map: dict[str, str],
+) -> dict[str, Any]:
+    """Remap FKs and strip identity/tenant/timestamp columns before writing."""
     row_data = _remap_fk(row, table_name=table_name, id_map=id_map)
     row_data.pop("organisation_id", None)
     row_data.pop("id", None)
     for col in skip_cols:
         row_data.pop(col, None)
+    return row_data
 
-    # ── write ──
-    async with session.begin_nested():
-        if existing is not None and strategy == "overwrite":
-            for col, val in row_data.items():
-                if hasattr(existing, col):
-                    setattr(existing, col, val)
-            if old_id_str:
-                id_map[old_id_str] = str(existing.id)
-            counts["overwritten"] += 1
-        else:
-            if hasattr(model_cls, "organisation_id"):
-                row_data["organisation_id"] = org_id
-            obj = model_cls(**row_data)
-            session.add(obj)
-            await session.flush()
-            if old_id_str:
-                id_map[old_id_str] = str(obj.id)
-            counts["created"] += 1
+
+def _overwrite_existing_row(
+    existing: Any,
+    row_data: dict[str, Any],
+    old_id_str: str | None,
+    id_map: dict[str, str],
+    counts: dict[str, int],
+) -> None:
+    """Copy remapped columns onto an existing row (``overwrite`` strategy)."""
+    for col, val in row_data.items():
+        if hasattr(existing, col):
+            setattr(existing, col, val)
+    if old_id_str:
+        id_map[old_id_str] = str(existing.id)
+    counts["overwritten"] += 1
+
+
+async def _create_row(
+    session: Any,
+    model_cls: Any,
+    org_id: uuid.UUID,
+    row_data: dict[str, Any],
+    old_id_str: str | None,
+    id_map: dict[str, str],
+    counts: dict[str, int],
+) -> None:
+    """Insert a new row (``skip`` on a fresh row, or ``rename``)."""
+    if hasattr(model_cls, "organisation_id"):
+        row_data["organisation_id"] = org_id
+    obj = model_cls(**row_data)
+    session.add(obj)
+    await session.flush()
+    if old_id_str:
+        id_map[old_id_str] = str(obj.id)
+    counts["created"] += 1
 
 
 async def _do_import(
@@ -420,42 +493,7 @@ async def _do_import(
 
     try:
         async with AsyncSessionLocal() as session:
-            for table_name, model_cls in tqdm(ENTITY_ORDER, desc="Importing tables", unit="table"):
-                rows: list[dict[str, Any]] = bundle.get(table_name, [])
-                name_field = NAME_CONFLICT_FIELD.get(table_name)
-                skip_cols = IMPORT_SKIP_COLS.get(table_name, {"id", "organisation_id", "created_at", "updated_at"})
-
-                for row in tqdm(rows, desc=f"  {table_name}", unit="row", leave=False):
-                    try:
-                        name_val: str | None = row.get(name_field) if name_field else None
-
-                        existing = None
-                        if name_val and name_field:
-                            existing = await _find_existing_by_name(session, model_cls, org_id, name_field, name_val)
-
-                        await _import_row(
-                            session,
-                            model_cls,
-                            org_id,
-                            table_name,
-                            row,
-                            name_field,
-                            name_val,
-                            existing,
-                            strategy,
-                            id_map,
-                            counts,
-                            skip_cols,
-                        )
-
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        rid = row.get("id", "?")
-                        _log.exception("Error importing %s row %s", table_name, rid)
-                        tqdm.write(f"  ERROR importing {table_name} row {rid}: {exc}")
-                        counts["errors"] += 1
-
+            await _import_tables(session, bundle, org_id, strategy, counts, id_map)
             await session.commit()
     except asyncio.CancelledError:
         raise
@@ -464,6 +502,83 @@ async def _do_import(
         raise SystemExit(msg) from exc
 
     return counts
+
+
+async def _import_tables(
+    session: Any,
+    bundle: dict[str, Any],
+    org_id: uuid.UUID,
+    strategy: ConflictStrategy,
+    counts: dict[str, int],
+    id_map: dict[str, str],
+) -> None:
+    """Import every entity table in dependency order."""
+    for table_name, model_cls in tqdm(ENTITY_ORDER, desc="Importing tables", unit="table"):
+        await _import_table(session, bundle, org_id, table_name, model_cls, strategy, counts, id_map)
+
+
+async def _import_table(
+    session: Any,
+    bundle: dict[str, Any],
+    org_id: uuid.UUID,
+    table_name: str,
+    model_cls: Any,
+    strategy: ConflictStrategy,
+    counts: dict[str, int],
+    id_map: dict[str, str],
+) -> None:
+    """Import one table's rows, counting per-row failures."""
+    rows: list[dict[str, Any]] = bundle.get(table_name, [])
+    name_field = NAME_CONFLICT_FIELD.get(table_name)
+    skip_cols = IMPORT_SKIP_COLS.get(table_name, {"id", "organisation_id", "created_at", "updated_at"})
+
+    for row in tqdm(rows, desc=f"  {table_name}", unit="row", leave=False):
+        try:
+            await _import_one_row(
+                session, model_cls, org_id, table_name, row, name_field, strategy, id_map, counts, skip_cols
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            rid = row.get("id", "?")
+            _log.exception("Error importing %s row %s", table_name, rid)
+            tqdm.write(f"  ERROR importing {table_name} row {rid}: {exc}")
+            counts["errors"] += 1
+
+
+async def _import_one_row(
+    session: Any,
+    model_cls: Any,
+    org_id: uuid.UUID,
+    table_name: str,
+    row: dict[str, Any],
+    name_field: str | None,
+    strategy: ConflictStrategy,
+    id_map: dict[str, str],
+    counts: dict[str, int],
+    skip_cols: set[str],
+) -> None:
+    """Resolve the conflict target, then import a single row."""
+    name_val: str | None = row.get(name_field) if name_field else None
+
+    existing = None
+    if name_val and name_field:
+        existing = await _find_existing_by_name(session, model_cls, org_id, name_field, name_val)
+
+    await _import_row(
+        session,
+        model_cls,
+        org_id,
+        table_name,
+        row,
+        name_field,
+        name_val,
+        existing,
+        strategy,
+        id_map,
+        counts,
+        skip_cols,
+    )
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────

@@ -244,40 +244,81 @@ def register_apply(group: click.Group) -> None:
         json_flag: bool,
     ) -> None:
         """Apply a declarative config file (schemas, model backends, pipelines, triggers)."""
-        try:
-            config = load_apply_file(config_path)
-        except ApplyLoadError as exc:
-            raise click.ClickException(str(exc)) from None
-        base_url = os.environ.get(_ENV_URL)
-        api_key = os.environ.get(_ENV_API_KEY)
-        if not base_url or not api_key:
-            msg = f"{_ENV_URL} and {_ENV_API_KEY} environment variables are required"
-            raise click.ClickException(msg)
-        try:
-            report = run_apply(
-                config,
-                base_url=base_url,
-                api_key=api_key,
-                dry_run=dry_run,
-                refresh_secrets=refresh_secrets,
-                drift=diff_mode,
-            )
-        except ApplyHttpError as exc:
-            raise click.ClickException(_http_error_message(exc)) from None
-        except (httpx.HTTPError, KeyError, ValueError) as exc:
-            raise click.ClickException(f"apply failed: {exc}") from None
-        if json_flag:
-            output_format = "json"
-        if output_format == "json":
-            click.echo(json.dumps(report, indent=2, sort_keys=True))
-        else:
-            click.echo(render_table(report))
-        if diff_mode:
-            from modulo.cli.apply.drift import has_drift
+        config = _load_config_or_fail(config_path)
+        base_url, api_key = _require_env_credentials()
+        report = _apply_or_fail(
+            config,
+            base_url=base_url,
+            api_key=api_key,
+            dry_run=dry_run,
+            refresh_secrets=refresh_secrets,
+            diff_mode=diff_mode,
+        )
+        _emit_apply_report(report, output_format=output_format, json_flag=json_flag)
+        _exit_for_apply(report, diff_mode=diff_mode, dry_run=dry_run)
 
-            if has_drift(report):
-                ctx = click.get_current_context()
-                ctx.exit(1)
-        elif not dry_run and has_blockers(report):
+
+def _load_config_or_fail(config_path: Path) -> ApplyConfig:
+    """Load the apply config, surfacing load errors as ClickExceptions."""
+    try:
+        return load_apply_file(config_path)
+    except ApplyLoadError as exc:
+        raise click.ClickException(str(exc)) from None
+
+
+def _require_env_credentials() -> tuple[str, str]:
+    """Read MODULO_URL / MODULO_API_KEY, refusing when either is absent."""
+    base_url = os.environ.get(_ENV_URL)
+    api_key = os.environ.get(_ENV_API_KEY)
+    if not base_url or not api_key:
+        msg = f"{_ENV_URL} and {_ENV_API_KEY} environment variables are required"
+        raise click.ClickException(msg)
+    return base_url, api_key
+
+
+def _apply_or_fail(
+    config: ApplyConfig,
+    *,
+    base_url: str,
+    api_key: str,
+    dry_run: bool,
+    refresh_secrets: bool,
+    diff_mode: bool,
+) -> dict[str, Any]:
+    """Run the apply, translating executor failures into ClickExceptions."""
+    try:
+        return run_apply(
+            config,
+            base_url=base_url,
+            api_key=api_key,
+            dry_run=dry_run,
+            refresh_secrets=refresh_secrets,
+            drift=diff_mode,
+        )
+    except ApplyHttpError as exc:
+        raise click.ClickException(_http_error_message(exc)) from None
+    except (httpx.HTTPError, KeyError, ValueError) as exc:
+        raise click.ClickException(f"apply failed: {exc}") from None
+
+
+def _emit_apply_report(report: dict[str, Any], *, output_format: str, json_flag: bool) -> None:
+    """Echo the report as JSON or a rendered table."""
+    if json_flag:
+        output_format = "json"
+    if output_format == "json":
+        click.echo(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        click.echo(render_table(report))
+
+
+def _exit_for_apply(report: dict[str, Any], *, diff_mode: bool, dry_run: bool) -> None:
+    """Apply the command's exit-code contract after the report is echoed."""
+    if diff_mode:
+        from modulo.cli.apply.drift import has_drift
+
+        if has_drift(report):
             ctx = click.get_current_context()
             ctx.exit(1)
+    elif not dry_run and has_blockers(report):
+        ctx = click.get_current_context()
+        ctx.exit(1)
