@@ -760,8 +760,8 @@ function renderMarkdown(text: string): string {
     '<ul class="assistant-ul">$&</ul>',
   );
 
-  html = html.replaceAll(/\n\n/g, '</p><p class="assistant-p">');
-  html = html.replaceAll(/\n/g, "<br/>");
+  html = html.replaceAll('\n\n', '</p><p class="assistant-p">');
+  html = html.replaceAll('\n', "<br/>");
 
   if (!html.trim().startsWith('<')) {
     html = '<p class="assistant-p">' + html + "</p>";
