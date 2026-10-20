@@ -1,20 +1,10 @@
 import { formatApiError } from '../lib/api/formatError'
 import { spotlight } from './useSpotlight'
+import { randomId } from '../lib/randomId'
 
 import router from '@/router'
 
-const TAB_ID = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Date.now().toString(36)
-
-// CSPRNG-backed random suffix for internal (non-security) coordination message IDs.
-// Avoids Math.random() so IDs are not predictable.
-function randomSuffix(): string {
-  const arr = new Uint8Array(8)
-  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
-    crypto.getRandomValues(arr)
-    return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('')
-  }
-  return Math.random().toString(36).slice(2) // NOSONAR: only when no CSPRNG exists
-}
+const TAB_ID = randomId('tab')
 
 interface LockState {
   selector: string
@@ -105,7 +95,7 @@ async function acquireElementLock(selector: string, timeout = 5000): Promise<boo
   registerBeforeUnload()
 
   return new Promise<boolean>(resolve => {
-    const msgId = `${TAB_ID}:${Date.now()}:${randomSuffix()}`
+    const msgId = `${TAB_ID}:${Date.now()}:${randomId()}`
     const { onMessage, timeout: onTimeout } = buildLockResponseHandler(channel, selector, msgId, resolve)
 
     channel.addEventListener('message', onMessage)

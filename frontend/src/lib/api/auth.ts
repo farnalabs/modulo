@@ -1,5 +1,6 @@
 import { getAutoLoginConfig } from '../../config/runtime'
 import { clearFlagCache } from '../../config/flagCache'
+import { randomId } from '../randomId'
 
 const TOKEN_KEY = 'modulo_access_token'
 // FAR-1197: the refresh token is no longer persisted in localStorage. It rides
@@ -57,10 +58,7 @@ let _refreshingPromise: Promise<boolean> | null = null
 
 // Stable per-tab identifier so other tabs can tell refresh hints apart when
 // adopting rotated tokens across tabs (pattern: useUiCommandExecutor TAB_ID).
-const TAB_ID =
-  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : Date.now().toString(36)
+const TAB_ID = randomId('tab')
 
 let _authChannel: BroadcastChannel | null = null
 let _authChannelInitialized = false
