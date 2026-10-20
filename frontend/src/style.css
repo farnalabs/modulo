@@ -449,13 +449,11 @@
   /* !important is required here: component-scoped <style> blocks declare their
      own animations/transitions at higher specificity, so without it the reset
      would lose and reduce-motion users would still get the motion. */
-  /* stylelint-disable sonar/declaration-no-important -- reduced-motion reset must override scoped component animations */
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
-  /* stylelint-enable sonar/declaration-no-important */
 }
 @media (prefers-reduced-motion: no-preference) {
   html {
