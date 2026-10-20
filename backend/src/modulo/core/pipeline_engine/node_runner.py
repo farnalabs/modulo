@@ -1061,6 +1061,195 @@ def _build_token_usage_fields(output_json: Any) -> dict[str, Any]:
     return fields
 
 
+#: FAR-1994: the opencode JSONL event type that closes one model step and
+#: carries the authoritative token counters (``tokens.total`` / ``input`` /
+#: ``output`` / ``cache.read`` / ``cache.write``).
+_OPENCODE_STEP_FINISH_EVENT = "step_finish"
+
+#: FAR-1994: provenance class of token counters recovered from a retained
+#: agent raw-output stream. The numbers are parsed from the AGENT'S OWN
+#: opencode event stream — agent-reported, never server-measured — so they
+#: ride the existing ``reported_*`` union family (FAR-491) and are never
+#: written into the canonical server-measured counters.
+RECOVERED_TOKEN_USAGE_PROVENANCE: str = PROVENANCE_REPORTED
+
+#: FAR-1994: attribute under which a raised ``SandboxNodeFailedError`` carries
+#: the recovered producer-shape ``token_usage``. ``sandbox_errors`` owns the
+#: exception type, so the attribute is attached at the raise site with
+#: ``setattr`` and read with ``getattr`` — the shared exception module is not
+#: modified.
+RECOVERED_TOKEN_USAGE_ATTR: str = "recovered_token_usage"
+
+
+def _coerce_event_token(value: Any) -> int | None:
+    """A plausible non-negative opencode token counter, or ``None``.
+
+    Reuses the shared reported-token coercion (accepts an integral float,
+    rejects bool / negative / non-numeric / above the plausibility ceiling) so
+    a recovered count obeys the SAME trust-boundary rule as a producer
+    ``token_usage`` report.
+    """
+    return coerce_reported_token(value)
+
+
+#: FAR-1994: a ``step_finish`` event's ``tokens`` keys that map to the producer
+#: ``token_usage`` shape unchanged, and its ``cache`` sub-object keys that map
+#: onto the ``cache_*`` producer keys.
+_STEP_FINISH_TOKEN_PAIRS: tuple[tuple[str, str], ...] = (
+    ("input", "input"),
+    ("output", "output"),
+    ("total", "total"),
+)
+_STEP_FINISH_CACHE_PAIRS: tuple[tuple[str, str], ...] = (("read", "cache_read"), ("write", "cache_write"))
+
+#: FAR-1994: every producer ``token_usage`` key the recovery can emit, in the
+#: canonical order. Only keys an event actually carried are returned.
+_RECOVERED_TOKEN_KEYS: tuple[str, ...] = ("input", "output", "total", "cache_read", "cache_write")
+
+
+def _parse_step_finish_tokens(line: str) -> dict[str, Any] | None:
+    """The ``tokens`` object of one opencode ``step_finish`` JSONL line, or ``None``.
+
+    Cheap pre-filter first: only a line that even mentions the event type can be
+    a candidate, so a 512KB blob of ordinary text is not JSON-parsed. Non-JSON
+    lines, non-dict payloads and other event types yield ``None``.
+    """
+    if _OPENCODE_STEP_FINISH_EVENT not in line:
+        return None
+    try:
+        event = json.loads(line)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(event, dict) or event.get("type") != _OPENCODE_STEP_FINISH_EVENT:
+        return None
+    tokens = event.get("tokens")
+    return tokens if isinstance(tokens, dict) else None
+
+
+def _accumulate_token_counters(
+    totals: dict[str, int],
+    seen: set[str],
+    source: dict[str, Any],
+    key_pairs: tuple[tuple[str, str], ...],
+) -> None:
+    """Add every plausible *source* counter into *totals*, recording *seen* keys."""
+    for source_key, producer_key in key_pairs:
+        coerced = _coerce_event_token(source.get(source_key))
+        if coerced is not None:
+            totals[producer_key] += coerced
+            seen.add(producer_key)
+
+
+def _seen_token_totals(totals: dict[str, int], seen: set[str]) -> dict[str, int]:
+    """Project *totals* onto the canonical key order, keeping only *seen* keys.
+
+    A key an event never carried must not masquerade as a reported zero.
+    """
+    return {key: totals[key] for key in _RECOVERED_TOKEN_KEYS if key in seen}
+
+
+def _recover_token_usage_from_raw_output(raw_output: str | None) -> dict[str, int]:
+    """Sum opencode ``step_finish`` token counters from a retained raw stream.
+
+    FAR-1994: a ``sandbox_agent`` node that produces no parseable ``output.json``
+    still burns tokens — the opencode CLI emits one JSONL ``step_finish`` event
+    per model step, each carrying a ``tokens`` object — but the node output that
+    normally carries ``token_usage`` never exists, so the run records zero.
+    The retained raw output (up to the node's retention cap) holds those events;
+    this recovers them.
+
+    Returns the PRODUCER ``token_usage`` shape
+    ``{"input", "output", "total", "cache_read"?, "cache_write"?}`` — the same
+    shape ``_build_token_usage_fields`` extracts — with every key SUMMED across
+    every ``step_finish`` event present in the blob. ``cache_*`` keys appear
+    only when the event stream carried a ``tokens.cache`` object.
+
+    Agent-reported, not server-measured: callers route the result through the
+    ``reported_*`` family (see :func:`recovered_reported_token_usage`).
+
+    BOUNDED and fail-open: one linear pass, line by line; non-JSON lines, other
+    event types, and invalid counters are skipped; ANY failure degrades to
+    ``{}`` — this never raises and never changes the failure semantics of the
+    run. An EMPTY dict means "no step_finish event found", which is distinct
+    from a genuine zero report (a present event with zero counters).
+    """
+    if not isinstance(raw_output, str) or not raw_output:
+        return {}
+    totals: dict[str, int] = dict.fromkeys(_RECOVERED_TOKEN_KEYS, 0)
+    seen: set[str] = set()
+    found_event = False
+    for line in raw_output.splitlines():
+        tokens = _parse_step_finish_tokens(line)
+        if tokens is None:
+            continue
+        found_event = True
+        _accumulate_token_counters(totals, seen, tokens, _STEP_FINISH_TOKEN_PAIRS)
+        cache = tokens.get("cache")
+        if isinstance(cache, dict):
+            _accumulate_token_counters(totals, seen, cache, _STEP_FINISH_CACHE_PAIRS)
+    if not found_event:
+        return {}
+    # Only emit a key an event actually carried — a missing ``total`` must not
+    # masquerade as a reported zero.
+    return _seen_token_totals(totals, seen)
+
+
+def _attach_recovered_token_usage(exc: BaseException, raw_output: str | None) -> None:
+    """Attach any recovered ``token_usage`` to *exc* for the executor to fold.
+
+    Fail-open: no event (or a parse failure) attaches nothing, leaving the
+    exception exactly as it was raised.
+    """
+    recovered = _recover_token_usage_from_raw_output(raw_output)
+    if recovered:
+        setattr(exc, RECOVERED_TOKEN_USAGE_ATTR, recovered)
+
+
+def recovered_reported_token_usage(exc: BaseException) -> dict[str, int]:
+    """The AGENT-REPORTED union token keys recovered for *exc*, or ``{}``.
+
+    Maps the recovered producer shape onto the existing ``reported_*`` union
+    family via the shared ``REPORTED_TOKEN_CHAIN`` — the SAME chain the
+    producer -> ``model_tokens_*`` -> ``reported_*`` -> counter path uses — so
+    the recovered figures are marked as agent-reported by construction and can
+    never be mistaken for server-measured counters.
+
+    Returns ``{}`` for any exception that carries no recovered usage (the
+    common case) or an unusable one; never raises.
+    """
+    recovered = getattr(exc, RECOVERED_TOKEN_USAGE_ATTR, None)
+    if not isinstance(recovered, dict) or not recovered:
+        return {}
+    fields = _build_token_usage_fields({"token_usage": recovered})
+    return {
+        binding.union_key: fields[binding.node_field]
+        for binding in REPORTED_TOKEN_CHAIN
+        if binding.node_field in fields
+    }
+
+
+def merge_recovered_token_usage(node_token_usage: dict[str, Any] | None, exc: BaseException) -> dict[str, Any] | None:
+    """Fold *exc*'s recovered agent-reported tokens into a run accumulator.
+
+    Returns ``node_token_usage`` unchanged when nothing was recovered (or the
+    exception carries no node id), otherwise a NEW mapping whose entry for the
+    failed node carries the recovered ``reported_*`` keys. The caller passes the
+    result to ``finalize_cost``; the reported family is folded into the
+    canonical counters ONLY for a node the server never measured (FAR-1033).
+
+    Never raises.
+    """
+    reported = recovered_reported_token_usage(exc)
+    node_id = getattr(exc, "node_id", None)
+    if not reported or not isinstance(node_id, str) or not node_id:
+        return node_token_usage
+    merged = dict(node_token_usage or {})
+    entry = dict(merged.get(node_id) or {})
+    entry.update(reported)
+    merged[node_id] = entry
+    return merged
+
+
 def _build_model_cost_fields(output_json: Any) -> dict[str, Any]:
     """Build the node-output model-cost fields (audit + display + flags).
 
@@ -12096,10 +12285,16 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     "Script-mode sandbox terminated mid-execution (side effect unknown): "
                     + (command_error or f"no output within {sandbox_timeout}s")
                 )
-            raise SandboxNodeFailedError(
+            # FAR-1994: the agent burned tokens before the stall/timeout. The
+            # retained raw stdout carries opencode ``step_finish`` counters; the
+            # failure records ZERO without them. Recover them (agent-reported)
+            # so the terminal write prices the work the agent actually did.
+            _stall_failure = SandboxNodeFailedError(
                 command_error or f"Sandbox agent command failed (no output within {sandbox_timeout}s)",
                 node_id=node_id,
             )
+            _attach_recovered_token_usage(_stall_failure, _stall_source)
+            raise _stall_failure
 
         raw_output: str = ""
         output_read_error: str = ""
@@ -12204,7 +12399,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             log_tail=_no_output_log_tail,
                         )
                     )
-                raise SandboxNodeFailedError(
+                # FAR-1994: no parseable output.json, but the retained raw
+                # output (the FULL pre-display-slice source) still carries the
+                # agent's opencode ``step_finish`` token counters. Recover them
+                # as agent-reported usage so the terminal write is not a false
+                # zero; a parse failure attaches nothing (fail-open).
+                _no_output_failure = SandboxNodeFailedError(
                     _build_no_output_message(
                         exit_code=exit_code,
                         stdout_raw=agent_stdout_raw,
@@ -12216,6 +12416,8 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     ),
                     node_id=node_id,
                 )
+                _attach_recovered_token_usage(_no_output_failure, _raw_combined)
+                raise _no_output_failure
             # Parseable non-dict output: retain the marker, do NOT raise —
             # fall through to the shared shaping path below.
             await _retain_raw_output_marker(

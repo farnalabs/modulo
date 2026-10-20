@@ -75,7 +75,7 @@ from modulo.core.node_output_split import (
     node_telemetry,
     resolve_node_contract_output,
 )
-from modulo.core.notifier import EVENT_HITL_AWAITING, EVENT_PROVIDER_FAILURE
+from modulo.core.notifier import EVENT_HITL_AWAITING, EVENT_PROVIDER_FAILURE, EVENT_RUN_FAILED
 from modulo.core.pipeline_engine import retry_compensation as rc
 from modulo.core.pipeline_engine.decorator import (
     _RESERVED_RUN_CONTEXT_KEYS,
@@ -92,6 +92,7 @@ from modulo.core.pipeline_engine.error_codes import (
     LEGACY_ALIASES,
     map_legacy_code,
     sanitize_error_text,
+    should_notify_terminal_failure,
 )
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
 from modulo.core.pipeline_engine.eval_persist_order import (
@@ -125,6 +126,7 @@ from modulo.core.pipeline_engine.node_runner import (
     SupersededNodeError,
     _idempotency_gate_skipped_envelope,
     _marker_delivery_done_for_node,
+    merge_recovered_token_usage,
     set_conformance_ctx,
 )
 from modulo.core.pipeline_engine.output_filter import OutputRejectedError
@@ -5098,6 +5100,20 @@ class PipelineExecutor:
             work_intact=work_intact,
         )
 
+        # Terminal-failure notification. Fired ONLY after the
+        # terminal write above has COMMITTED and ONLY for a non-retryable
+        # critical code (see ``should_notify_terminal_failure``) — routine
+        # retryable failures stay silent, and a finalize lock retry (which
+        # re-runs the transaction) can never double-notify because the dispatch
+        # sits outside the retry loop. Failure-isolated inside the helper.
+        if final_status == "failed":
+            await self._dispatch_run_failed(
+                org_id=org_id,
+                run_id=run_id,
+                pipeline_id=pipeline_id,
+                error_code=error_code,
+            )
+
         # FAR-291: run-termination compensation for a guardrail-blocked
         # MID-RUN terminalization. The terminal status write (finalize_cost
         # above) has already landed; a run whose earlier nodes pushed a PR /
@@ -5435,6 +5451,13 @@ class PipelineExecutor:
             error_code = "router.no_match"
             error_detail = _sanitize_detail(str(exc), limit=None)
         except (NodeCancelledError, SandboxNodeFailedError) as exc:
+            # FAR-1994: a sandbox failure that produced no parseable node output
+            # records ZERO token usage by default. node_runner recovers the
+            # agent's own opencode ``step_finish`` counters from the retained
+            # raw output and attaches them to the exception; fold them into the
+            # accumulator as the AGENT-REPORTED family so the terminal write
+            # stops reporting a false zero (a no-op when nothing was recovered).
+            node_token_usage = merge_recovered_token_usage(node_token_usage, exc)
             # FAR-592 (D6 F2): the Local-tier refusal is a DETERMINISTIC config
             # fault — the profile opt-in cannot change mid-run, so requeueing
             # it would burn the retry budget on a refusal that cannot succeed.
@@ -7251,6 +7274,95 @@ class PipelineExecutor:
                 "hitl_review.awaiting_notification_failed",
                 extra={"run_id": str(run_id), "org_id": str(org_id), "review_id": review_id},
             )
+
+    async def _dispatch_run_failed(
+        self,
+        *,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        error_code: str | None,
+    ) -> None:
+        """Dispatch the ``run_failed`` webhook/in-app notification.
+
+        Until now ``EVENT_RUN_FAILED`` was declared and fully rendered by the
+        notifier's event mapper but had NO dispatch call site, so a terminal run
+        failure produced no notification at all — a billing/credential fault
+        that broke two pipelines went unnoticed for six days.
+
+        DELIBERATELY NARROW: the gate is :func:`should_notify_terminal_failure`
+        (non-retryable AND ``alert_severity == "critical"``), so routine
+        retryable failures and non-critical terminalisations stay silent. The
+        payload supplies exactly the fields the mapper's ``EVENT_RUN_FAILED``
+        title/body/deep-link templates render: ``pipeline_name``, ``error_code``
+        and the run-scoped ``run_id`` (the action URL is ``/runs/{run_id}``).
+
+        The non-retryable provider-refusal codes are EXCLUDED: FAR-2006 already
+        dispatches a DEDICATED ``EVENT_PROVIDER_FAILURE`` alert for exactly
+        those, from the same finalization tail, so sending the generic
+        ``EVENT_RUN_FAILED`` as well would page an operator twice for one
+        refusal.
+
+        Failure-isolated: a missing notifier, a name-lookup failure, or a
+        dispatch exception is logged and never blocks or alters the terminal
+        write (mirrors ``_dispatch_hitl_awaiting``).
+        """
+        if self._notifier is None:
+            return
+        if not should_notify_terminal_failure(error_code):
+            return
+        canonical_code = map_legacy_code(error_code)
+        if canonical_code in NON_RETRYABLE_PROVIDER_CODES:
+            return
+        payload: dict[str, Any] = {
+            "run_id": str(run_id),
+            "error_code": canonical_code,
+        }
+        pipeline_name = await self._notification_pipeline_name(
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            run_id=run_id,
+        )
+        if pipeline_name is not None:
+            payload["pipeline_name"] = pipeline_name
+        try:
+            await self._notifier.dispatch_event(
+                org_id=org_id,
+                event_type=EVENT_RUN_FAILED,
+                payload=payload,
+                run_id=run_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "pipeline.run_failed_notification_failed",
+                extra={"run_id": str(run_id), "org_id": str(org_id), "error_code": canonical_code},
+            )
+
+    async def _notification_pipeline_name(
+        self,
+        *,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        run_id: uuid.UUID,
+    ) -> str | None:
+        """Best-effort pipeline name for a notification payload (never raises)."""
+        if self._session_factory is None:
+            return None
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
+                return await _safe_pipeline_name(session, pipeline_id, org_id, run_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "pipeline.notification_pipeline_name_lookup_failed",
+                extra={"run_id": str(run_id), "pipeline_id": str(pipeline_id)},
+            )
+            return None
 
     async def _handle_chain_end_event(
         self,
