@@ -1907,6 +1907,60 @@ async def _record_node_deadline_watchdog_firing(
         )
 
 
+async def _record_derived_deadline_cost(
+    aengine: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    error_detail: str,
+    derived_sandbox_wall_hours: float,
+) -> None:
+    """Book the DERIVED sandbox cost for a node-deadline-killed run (FAR-1993).
+
+    A deadline-killed ``sandbox_agent`` node never wrote ``output.json``, so the
+    normal finalize sees an empty segment and records $0 while the sandbox ran
+    for the node's configured deadline. ``finalize_failed_run`` attributes that
+    spend at the RUN level, marked ``source="derived"`` (see
+    ``cost_controller.finalize._write_derived_deadline_terminal``).
+
+    PROVENANCE: the credited hours are the node's CONFIGURED deadline
+    (``_timeout``) — a DERIVED value, not agent-reported telemetry. The watchdog
+    fired because the node ran to its deadline, so the node really did occupy
+    the sandbox for approximately that long.
+
+    Called only AFTER ``fail_run_terminal`` returned ``True``: the terminal
+    write actually landed, so this is a compensating write on an already-failed
+    run. Never on the re-dispatch branch — that run continues and will be
+    finalised normally.
+
+    Fail-open: any failure logs and is swallowed so a completed terminal
+    failure is never turned into a raised error. ``asyncio.CancelledError`` is
+    re-raised (worker shutdown is not ours to swallow).
+    """
+    from modulo.core.cost_controller.finalize import finalize_failed_run
+
+    try:
+        factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
+        async with factory() as session, session.begin():
+            await set_rls_org(session, uuid.UUID(org_id))
+            await finalize_failed_run(
+                session,
+                run_id=uuid.UUID(run_id),
+                org_id=uuid.UUID(org_id),
+                error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+                error_detail=error_detail,
+                derived_sandbox_wall_hours=derived_sandbox_wall_hours,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "pipeline_execution.deadline_cost_record_failed run=%s",
+            run_id,
+            exc_info=True,
+        )
+
+
 async def _fail_overdue_node(
     aeng: AsyncEngine,
     run_id: str,
@@ -1966,16 +2020,30 @@ async def _fail_overdue_node(
         retry_hook, run_id, final_status="failed", error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE
     ):
         return
-    await fail_run_terminal(
+    error_detail = (
+        f"Node '{node_id}' did not complete within its configured timeout_seconds "
+        f"({_timeout}s) — absolute node-deadline watchdog (half-alive stall)"
+    )
+    terminal_written = await fail_run_terminal(
         aeng,
         run_id,
         org_id,
         error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
-        error_detail=(
-            f"Node '{node_id}' did not complete within its configured timeout_seconds "
-            f"({_timeout}s) — absolute node-deadline watchdog (half-alive stall)"
-        ),
+        error_detail=error_detail,
     )
+    if terminal_written:
+        # FAR-1993: the run is now terminally failed but the raw writer recorded
+        # no cost. Attribute the node's configured deadline as DERIVED sandbox
+        # spend (the sandbox really did run for approximately that long — this
+        # is not agent-reported data). Only after a terminal write that LANDED:
+        # the re-dispatch branch above returns before reaching here.
+        await _record_derived_deadline_cost(
+            aeng,
+            run_id,
+            org_id,
+            error_detail=error_detail,
+            derived_sandbox_wall_hours=_timeout / 3600.0,
+        )
 
 
 async def node_deadline_watchdog(

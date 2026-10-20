@@ -106,13 +106,12 @@ async def _seed_pipeline(
     from sqlalchemy import inspect
 
     pipeline_id = uuid.uuid4()
-    params = {
+    params: dict[str, Any] = {
         "id": str(pipeline_id),
         "oid": str(org_id),
         "name": name,
         "uid": str(account_id),
         "mcr": max_concurrent,
-        "qts": queue_timeout_seconds,
     }
     # The test_migration_* suites seed a private database stalled at their own
     # alembic revision, so the INSERT must name only columns the LIVE table
@@ -121,7 +120,9 @@ async def _seed_pipeline(
     # historical-revision suites) predates it. Probe on the SAME connection and
     # inside the SAME transaction as the insert — a private database can cross
     # the 0322 boundary inside one test's own alembic upgrade, so a cached
-    # column set would be wrong.
+    # column set would be wrong. Name the column only when the caller actually
+    # sets a value as well: at head the NULL default is equivalent, matching
+    # ``_seed_run``'s live-column discipline.
     with_queue_timeout = text(
         "INSERT INTO pipelines (id, organisation_id, name, account_id, "
         "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
@@ -141,10 +142,10 @@ async def _seed_pipeline(
         existing_columns = await conn.run_sync(
             lambda sync_conn: {col["name"] for col in inspect(sync_conn).get_columns("pipelines")}
         )
-        await conn.execute(
-            with_queue_timeout if "queue_timeout_seconds" in existing_columns else without_queue_timeout,
-            params,
-        )
+        include_queue_timeout = queue_timeout_seconds is not None and "queue_timeout_seconds" in existing_columns
+        if include_queue_timeout:
+            params["qts"] = queue_timeout_seconds
+        await conn.execute(with_queue_timeout if include_queue_timeout else without_queue_timeout, params)
     return pipeline_id
 
 

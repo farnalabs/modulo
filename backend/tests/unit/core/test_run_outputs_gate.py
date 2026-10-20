@@ -451,6 +451,11 @@ _GUARDED_SITES: set[tuple[str, str]] = {
 }
 _UNGUARDED_SITES: set[tuple[str, str]] = {
     ("core/cost_controller/finalize.py", "_write_empty_terminal"),
+    # FAR-1993: the derived-duration terminal writer is shape-identical to
+    # ``_write_empty_terminal`` — status + cost columns only, NEVER
+    # outputs_json/node_telemetry_json — so it cannot raise DualWriteError and
+    # needs no guard.
+    ("core/cost_controller/finalize.py", "_write_derived_deadline_terminal"),
     # FAR-1610: the capacity claim/demote ``update_run_status`` calls moved with
     # the method body into ``_claim_under_capacity`` (``_check_capacity`` now
     # delegates to it); the source-scan pin is keyed by the enclosing function.

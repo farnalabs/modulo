@@ -146,6 +146,7 @@ __all__ = [
     "derive_node_type_map",
     "finalize_cancelled_run",
     "finalize_cost",
+    "finalize_failed_run",
     "load_live_components",
 ]
 
@@ -3085,3 +3086,244 @@ async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, or
         is_terminal=True,
         session_factory=None,
     )
+
+
+async def _write_derived_deadline_terminal(
+    session: AsyncSession,
+    *,
+    run: Run,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    error_code: str,
+    error_detail: str,
+    wall_hours: float,
+    derived_from: str,
+) -> None:
+    """Write DERIVED sandbox cost for a terminal-failed run (FAR-1993).
+
+    A terminal writer that never ran the normal finalize (the node-deadline
+    watchdog, the reconcile age gate) leaves the run with no cost, so nothing
+    contributes a ``wall_clock_time_ms`` to the cost machinery and the normal
+    finalize computes $0 — while the sandbox really did run for a duration the
+    caller has proven independently. This writer attributes that spend at the
+    RUN level, explicitly marked ``source="derived"`` with
+    ``basis.derived_from = derived_from`` so it is never confused with
+    agent-reported (``self_reported``) or component-calculated spend. The label
+    says WHICH liveness proof produced the duration (the node's configured
+    deadline for the node-deadline watchdog; the run's last heartbeat for the
+    reconcile age gate) — provenance travels with the number.
+
+    The function name is historical: it was introduced for the deadline path
+    and now serves any terminal-failed run whose liveness-proven duration is
+    known.
+
+    The status/cost write is SHAPE-IDENTICAL to ``_write_empty_terminal`` —
+    total 0 there, the derived total here — so no new raw UPDATE is invented.
+    It additionally drives the SAME terminal ledger block as
+    ``_fallback_finalize`` (spend-ceiling gate + ``org_daily_run_counts``
+    accrual + circuit breaker), because the premise is that this spend must not
+    stay invisible to those controls. ``_write_empty_terminal`` writes no ledger
+    row and correctly does not: its total is 0, so ``_ledger_run_date`` returns
+    ``None``. The terminal analytics fact is recorded the same way every other
+    terminal writer does (``record_run_facts`` inside
+    ``_record_terminal_analytics``), so ``run_daily_facts`` agrees with the run
+    row.
+
+    The caller owns the duration proof. This writer never invents a duration:
+    the reconcile age gate deliberately does NOT pass its age bound (a run can
+    wedge with no node progress long before the bound fires, so crediting the
+    full bound would OVERSTATE spend and could falsely trip the spend ceiling);
+    it passes ``min(heartbeat_at, completed_at) - started_at`` instead, from
+    the run's own last-liveness stamp.
+    """
+    rate = _e2b_rate()
+    total = Decimal(str(wall_hours)) * rate
+    if total > COST_COLUMN_CAP:
+        total = COST_COLUMN_CAP
+        clamped = True
+    else:
+        clamped = False
+    breakdown: list[dict[str, Any]] = [
+        {
+            "component": "sandbox_infra",
+            "display_name": "Sandbox Infrastructure",
+            "source": "derived",
+            "amount_usd": _entry_amount(total),
+            "formula_applied": "rate * wall_clock_hours",
+            "rate_usd": str(rate),
+            "basis": {
+                "wall_clock_hours": wall_hours,
+                "derived_from": derived_from,
+            },
+        }
+    ]
+    if clamped:
+        breakdown.insert(0, dict(TOTAL_CLAMPED_MARKER))
+    _log.warning(
+        "cost_finalize.derived_deadline_cost",
+        extra={
+            "run_id": str(run_id),
+            "wall_clock_hours": wall_hours,
+            "total_cost_usd": str(total),
+        },
+    )
+    await update_run_status(
+        session,
+        run_id,
+        "failed",
+        error_code=error_code,
+        error_detail=error_detail,
+        total_cost_usd=total,
+        cost_breakdown=breakdown,
+        total_tokens=0,
+    )
+    # FAR-1993: the terminal ledger write — same pattern and same ordering as
+    # ``_fallback_finalize`` (write, then ledger, then analytics). This is what
+    # makes the derived spend visible to the spend ceiling, the daily ledger
+    # (``org_daily_run_counts``) and the circuit breaker. ``run_date`` is
+    # ``None`` for a zero total / missing ``started_at``, so no ledger row is
+    # written in that case.
+    run_date = _ledger_run_date(True, total, run)
+    if run_date is not None:
+        try:
+            await _ledger_block(
+                session,
+                run_id=run_id,
+                org_id=org_id,
+                status="failed",
+                total=total,
+                owner_team_id=run.owner_team_id,
+                run_date=run_date,
+                finalize_fields={
+                    "error_code": error_code,
+                    "error_detail": error_detail,
+                    "total_cost_usd": total,
+                },
+                session_factory=None,
+                claim_token=None,
+                metric_sink=None,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if is_lock_abort(exc):
+                # Do NOT swallow a whole-transaction lock abort — the outer
+                # transaction is aborted, so the ownership layer must own it.
+                raise
+            _log.exception("cost_ledger.derived_deadline_block_failed", extra={"run_id": str(run_id)})
+    await _record_terminal_analytics(session, run, "failed", {}, writer=_WRITER_EARLY_RETURN)
+
+
+async def _finalize_failed_run(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    error_code: str,
+    error_detail: str,
+    derived_sandbox_wall_hours: float | None,
+    derived_from: str,
+) -> None:
+    """Body of :func:`finalize_failed_run` (fail-open envelope lives there)."""
+    run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
+    if run is None:
+        _log.warning("cost_finalize.failed_run_not_found", extra={"run_id": str(run_id)})
+        return
+    stored_blobs = await read_run_blobs(session, run_id=run_id, organisation_id=run.organisation_id)
+    if not (stored_blobs.outputs or run.node_token_usage or stored_blobs.telemetry):
+        if (
+            derived_sandbox_wall_hours is not None
+            and math.isfinite(derived_sandbox_wall_hours)
+            and derived_sandbox_wall_hours > 0
+        ):
+            await _write_derived_deadline_terminal(
+                session,
+                run=run,
+                run_id=run_id,
+                org_id=org_id,
+                error_code=error_code,
+                error_detail=error_detail,
+                wall_hours=derived_sandbox_wall_hours,
+                derived_from=derived_from,
+            )
+            return
+        # No node data AND no derived wall-clock: nothing can be attributed.
+        # Same diagnostic + outcome as the cancel path (accrued spend forfeited).
+        _log.warning("cost_components_partial_spend_lost", extra={"run_id": str(run_id)})
+        return
+    # A run WITH real node data goes through the normal component build — never
+    # the derived shortcut (the node's own server-verified wall-clock wins).
+    node_type_map = await _load_node_type_map(session, run.snapshot_id)
+    await finalize_cost(
+        session,
+        run_id=run_id,
+        org_id=org_id,
+        status="failed",
+        segment_node_token_usage=run.node_token_usage,
+        segment_completed_node_outputs=stored_blobs.outputs,
+        node_type_map=node_type_map,
+        error_code=error_code,
+        error_detail=error_detail,
+        is_terminal=True,
+        session_factory=None,
+    )
+
+
+async def finalize_failed_run(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    error_code: str,
+    error_detail: str,
+    derived_sandbox_wall_hours: float | None = None,
+    derived_from: str = "node_deadline_watchdog",
+) -> None:
+    """Finalise a run already terminalised ``failed`` by a raw writer (FAR-1993).
+
+    The node-deadline watchdog and the reconcile age gate both terminalise a
+    run with a raw UPDATE (no cost columns). This re-reads the stored cumulative
+    sets and finalises through :func:`finalize_cost` exactly like
+    :func:`finalize_cancelled_run`, but with ``status="failed"`` and the error
+    fields.
+
+    When the run has NO stored node data (a deadline-killed sandbox node never
+    wrote ``output.json``) and *derived_sandbox_wall_hours* is a positive finite
+    number, the cost is attributed at the RUN level from that DERIVED duration.
+    The caller supplies the duration and its proof: the node's configured
+    deadline (the watchdog fired because the node ran to it) or the run's
+    heartbeat-proven liveness window (the reconcile age gate). This is not
+    agent-reported telemetry. *derived_from* labels WHICH proof produced it and
+    defaults to ``"node_deadline_watchdog"``, preserving the deadline path's
+    provenance exactly; the age gate passes
+    ``"reconcile_age_gate_heartbeat"``. See
+    :func:`_write_derived_deadline_terminal` for the provenance marker.
+
+    FAIL-OPEN: this is a compensating write on a path that has already
+    terminalised the run, so ordinary failures log and are swallowed.
+    ``asyncio.CancelledError`` is re-raised (worker shutdown is not ours to
+    swallow) and a genuine lock abort (40P01 / 55P03) is re-raised too — the
+    caller's ownership layer must own a whole-transaction abort rather than
+    have it silently logged as a lost write (the same convention used by the
+    ledger helpers in this module).
+    """
+    try:
+        await _finalize_failed_run(
+            session,
+            run_id=run_id,
+            org_id=org_id,
+            error_code=error_code,
+            error_detail=error_detail,
+            derived_sandbox_wall_hours=derived_sandbox_wall_hours,
+            derived_from=derived_from,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if is_lock_abort(exc):
+            raise
+        _log.warning(
+            "cost_finalize.failed_run_finalize_failed",
+            extra={"run_id": str(run_id), "error_code": error_code},
+            exc_info=True,
+        )
