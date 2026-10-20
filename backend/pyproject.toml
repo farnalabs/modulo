@@ -718,4 +718,9 @@ dev = [
 # PYSEC-2026-3721: pip < 26.2 vulnerable. Constrain to a fixed minimum so
 # pip-audit (run in CI Lint (Backend)) passes on the transitively-installed pip
 # (pulled in via pip-api -> pip-audit).
-constraint-dependencies = ["pip>=26.2"]
+#
+# GHSA-6q48-6c7w-9gw2: certifi < 2026.10.19 still bundles emSign roots whose
+# intermediates have compromised/revoked private keys, so an on-path attacker
+# could present valid-looking certificates. certifi is transitive (requests /
+# httpx / urllib3), so it is pinned via a constraint rather than a direct dep.
+constraint-dependencies = ["pip>=26.2", "certifi>=2026.10.19"]
