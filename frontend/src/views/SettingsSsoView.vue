@@ -51,7 +51,6 @@
                 class="flex min-w-0 items-center gap-3 text-left"
                 :aria-label="`${$t('views.SettingsSsoView.edit_provider')}: ${provider.name}`"
                 @click.stop="openEditForm(provider)"
-                @keydown.enter.prevent.stop="openEditForm(provider)"
               >
                 <span
                   class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-sm font-bold"

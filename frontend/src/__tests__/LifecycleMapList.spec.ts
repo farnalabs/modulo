@@ -735,7 +735,9 @@ describe('LifecycleMapList create dialog', () => {
     const cancelBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Cancel')
     expect(cancelBtn).toBeDefined()
     await cancelBtn!.trigger('click')
-    await wrapper.vm.$nextTick()
+    // The native close event is queued (shim models the browser), so the
+    // @close handler that unmounts the v-if branch lands a tick later.
+    await flushPromises()
 
     // Dialog should be closed (no longer shows "Create Lifecycle Map")
     expect(wrapper.text()).not.toContain('Create Lifecycle Map')
@@ -754,11 +756,84 @@ describe('LifecycleMapList create dialog', () => {
     expect(dialogEl.contains(focused)).toBe(true)
 
     focused!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-    await wrapper.vm.$nextTick()
+    await flushPromises()
 
     expect(dialogEl.open).toBe(false)
     expect(wrapper.text()).not.toContain('Create Lifecycle Map')
     wrapper.unmount()
+  })
+
+  it('closes the create dialog on a backdrop click', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
+    const wrapper = mount(LifecycleMapList, {
+      attachTo: document.body,
+      global: {
+        plugins: [i18n],
+        stubs: { PageHeader: true, FilterBar: true, ErrorAlert: true, Button: true },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    const dialog = wrapper.find('dialog')
+    expect((dialog.element as HTMLDialogElement).open).toBe(true)
+
+    // A click whose target is the dialog itself is a ::backdrop click.
+    await dialog.trigger('click')
+    await flushPromises()
+
+    expect((dialog.element as HTMLDialogElement).open).toBe(false)
+    expect(wrapper.text()).not.toContain('Create Lifecycle Map')
+    wrapper.unmount()
+  })
+
+  it('returns focus to the trigger after the dialog closes', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
+    // PrimeVue's Button is stubbed here (a non-focusable <button-stub>), so
+    // stand in a real focusable trigger to model the keyboard user's origin.
+    const trigger = document.createElement('button')
+    document.body.appendChild(trigger)
+    trigger.focus()
+    expect(document.activeElement).toBe(trigger)
+
+    const wrapper = mount(LifecycleMapList, {
+      attachTo: document.body,
+      global: {
+        plugins: [i18n],
+        stubs: { PageHeader: true, FilterBar: true, ErrorAlert: true, Button: true },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    const dialogEl = wrapper.find('dialog').element as HTMLDialogElement
+    expect(dialogEl.contains(document.activeElement as HTMLElement)).toBe(true)
+
+    const cancel = wrapper.findAll('button').find((b) => b.text().trim() === 'Cancel')!
+    await cancel.trigger('click')
+    await flushPromises()
+
+    expect(document.activeElement).toBe(trigger)
+    wrapper.unmount()
+    trigger.remove()
+  })
+
+  it('unmounts safely while the create dialog is open', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
+    const wrapper = mount(LifecycleMapList, {
+      attachTo: document.body,
+      global: {
+        plugins: [i18n],
+        stubs: { PageHeader: true, FilterBar: true, ErrorAlert: true, Button: true },
+      },
+    })
+    await flushPromises()
+    await wrapper.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect((wrapper.find('dialog').element as HTMLDialogElement).open).toBe(true)
+    expect(() => wrapper.unmount()).not.toThrow()
   })
 
   it('shows error when create fails', async () => {
@@ -916,7 +991,7 @@ describe('LifecycleMapList card content', () => {
     expect(card.text()).toContain('Launch Flow')
   })
 
-  it('supports keyboard navigation through the card native button', async () => {
+  it('opens a map through the card native button (click, as produced by Enter/Space)', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [summaryMap] }))))
     const wrapper = mount(LifecycleMapList, {
       global: {
@@ -934,20 +1009,19 @@ describe('LifecycleMapList card content', () => {
 
     const card = wrapper.find('[data-testid="lifecycle-map-list-card"]')
     // Web:S6819: the card no longer carries role=button/tabindex; the title is
-    // a native button inside the restored <h3> heading, in the tab order.
+    // a native button inside an <h2> heading (h1 → h2, no skipped level), in
+    // the natural tab order.
     expect(card.attributes('role')).toBeUndefined()
     expect(card.attributes('tabindex')).toBeUndefined()
-    expect(card.find('h3').exists()).toBe(true)
-    const titleButton = card.find('h3 button')
+    expect(card.find('h2').exists()).toBe(true)
+    const titleButton = card.find('h2 button')
     expect(titleButton.exists()).toBe(true)
     expect(titleButton.attributes('tabindex')).toBeUndefined()
     expect((titleButton.element as HTMLButtonElement).disabled).toBe(false)
-    await titleButton.trigger('keydown', { key: 'Enter' })
-    expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
-
-    // The pointer path still works on the same native button.
+    // A native button's Enter/Space activation produces a click; there is no
+    // bespoke keydown handler re-implementing it.
     await titleButton.trigger('click')
-    expect(routerPushMock).toHaveBeenCalledTimes(2)
+    expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
   })
 
   it('clicking the card body still opens the map for mouse users', async () => {

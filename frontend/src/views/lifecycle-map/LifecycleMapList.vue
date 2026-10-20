@@ -74,14 +74,13 @@
           data-testid="lifecycle-map-list-card"
         >
           <div class="flex items-start justify-between gap-2 mb-2">
-            <h3 class="min-w-0">
+            <h2 class="min-w-0">
               <button
                 type="button"
                 class="max-w-full truncate text-left text-base font-medium text-foreground"
                 @click.stop="openMap(m)"
-                @keydown.enter.prevent.stop="openMap(m)"
               >{{ m.name }}</button>
-            </h3>
+            </h2>
             <div class="flex shrink-0 items-center gap-1">
               <span class="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                 v{{ m.current_version }}
@@ -159,7 +158,7 @@
       @close="showCreateDialog = false"
     >
       <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
-        <h3 id="lifecycle-map-create-title" class="mb-4 text-base font-semibold">{{ $t('views.LifecycleMapList.create_lifecycle_map') }}</h3>
+        <h2 id="lifecycle-map-create-title" class="mb-4 text-base font-semibold">{{ $t('views.LifecycleMapList.create_lifecycle_map') }}</h2>
         <div class="space-y-4">
           <div>
             <label for="lifecyclemaplist-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.LifecycleMapList.name') }}</label>
@@ -308,7 +307,8 @@ watch(
 )
 
 function openCreateDialog(): void {
-  createDialogRef.value?.showModal()
+  const dialog = createDialogRef.value
+  if (dialog && !dialog.open) dialog.showModal()
 }
 
 function closeCreateDialog(): void {

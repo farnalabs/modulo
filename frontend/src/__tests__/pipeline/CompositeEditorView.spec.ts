@@ -408,6 +408,54 @@ describe('CompositeEditorView', () => {
     wrapper.unmount()
   })
 
+  it('closes the save-as dialog on a backdrop click', async () => {
+    const wrapper = mountView(true)
+    await flush()
+
+    await wrapper.findAll('button').find((b) => b.text().trim() === 'Save as composite')!.trigger('click')
+    await nextTick()
+    const dialog = wrapper.find('dialog')
+    expect((dialog.element as HTMLDialogElement).open).toBe(true)
+
+    // A click whose target is the dialog itself is a ::backdrop click.
+    await dialog.trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect((dialog.element as HTMLDialogElement).open).toBe(false)
+    expect(wrapper.find('#compositeeditorview-field-2').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('returns focus to the Save as composite trigger after the dialog closes', async () => {
+    const wrapper = mountView(true)
+    await flush()
+
+    const trigger = wrapper.findAll('button').find((b) => b.text().trim() === 'Save as composite')!
+    ;(trigger.element as HTMLElement).focus()
+    await trigger.trigger('click')
+    await nextTick()
+    const dialogEl = wrapper.find('dialog').element as HTMLDialogElement
+    expect(dialogEl.contains(document.activeElement as HTMLElement)).toBe(true)
+
+    await wrapper.findAll('button').find((b) => b.text().trim() === 'Cancel')!.trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(document.activeElement).toBe(trigger.element)
+    wrapper.unmount()
+  })
+
+  it('unmounts safely while the save-as dialog is open', async () => {
+    const wrapper = mountView(true)
+    await flush()
+
+    await wrapper.findAll('button').find((b) => b.text().trim() === 'Save as composite')!.trigger('click')
+    await nextTick()
+    expect((wrapper.find('dialog').element as HTMLDialogElement).open).toBe(true)
+    expect(() => wrapper.unmount()).not.toThrow()
+  })
+
   it('save-as dialog renders a POST failure inline (role=alert) and stays open', async () => {
     // The saveAsError row only mounts when the dialog is open AND a save has
     // failed; handleSaveAs keeps the dialog open on error so the user can fix

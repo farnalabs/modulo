@@ -1,10 +1,13 @@
 <template>
-  <div class="overflow-x-auto rounded-lg border bg-card shadow-sm" aria-busy="true">
+  <div class="overflow-x-auto rounded-lg border bg-card shadow-sm">
     <!-- The live region announces only the loading status text; the loading
          placeholder table is layout, not phrasing content, so it is a sibling
-         rather than a child of <output> (invalid content model). -->
+         rather than a child of <output> (invalid content model). `aria-busy`
+         must NOT sit on the live region's ancestor: AT holds the announcement
+         until the busy wrapper clears (and this wrapper unmounts instead), so
+         it belongs on the placeholder table it actually describes. -->
     <output class="sr-only" aria-live="polite">{{ ariaLabel }}</output>
-    <table class="w-full text-left text-sm">
+    <table class="w-full text-left text-sm" aria-busy="true">
       <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
         <tr>
           <th

@@ -1,10 +1,15 @@
 <template>
   <BackLink to="/library" :label="$t('views.CompositeEditorView.back_to_library')" />
   <div class="flex h-[calc(100vh-3.5rem)]">
-    <output v-if="loading" class="flex flex-1 flex-col gap-4 p-6" :aria-label="$t('views.CompositeEditorView.loading_canvas')">
-      <SkeletonBlock height-class="h-8 w-64" />
-      <SkeletonBlock height-class="flex-1 w-full" />
-    </output>
+    <div v-if="loading" class="flex flex-1 flex-col gap-4 p-6">
+      <!-- The live region carries only the loading status; the skeleton
+           blocks are layout, not phrasing content, so they are siblings. -->
+      <output class="sr-only" aria-live="polite">{{ $t('views.CompositeEditorView.loading_canvas') }}</output>
+      <div class="flex flex-1 flex-col gap-4" aria-busy="true">
+        <SkeletonBlock height-class="h-8 w-64" />
+        <SkeletonBlock height-class="flex-1 w-full" />
+      </div>
+    </div>
 
     <div v-else-if="pageError" class="flex flex-1 items-center justify-center p-6">
       <ErrorAlert :message="pageError" :on-retry="retry" />
@@ -214,7 +219,8 @@ watch(
 )
 
 function openSaveAsDialog(): void {
-  saveAsDialogRef.value?.showModal()
+  const dialog = saveAsDialogRef.value
+  if (dialog && !dialog.open) dialog.showModal()
 }
 
 function closeSaveAsDialog(): void {

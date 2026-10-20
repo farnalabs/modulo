@@ -192,9 +192,14 @@
 
       <div class="card p-4">
         <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminErrorDetailView.raw_events', { count: eventsTotal }) }}</h2>
-        <output v-if="eventsLoading" class="block space-y-2 py-2" :aria-label="$t('common.loading')" data-testid="admin-error-detail-events-loading">
-          <SkeletonBlock v-for="n in 3" :key="'event-skeleton-' + n" height-class="h-12 w-full" />
-        </output>
+        <div v-if="eventsLoading" class="py-2" data-testid="admin-error-detail-events-loading">
+          <!-- Live region carries only the status text; the skeleton blocks are
+               layout, not phrasing content, so they are siblings. -->
+          <output class="sr-only" aria-live="polite">{{ $t('common.loading') }}</output>
+          <div class="space-y-2" aria-busy="true">
+            <SkeletonBlock v-for="n in 3" :key="'event-skeleton-' + n" height-class="h-12 w-full" />
+          </div>
+        </div>
         <EmptyState
           v-else-if="events.length === 0"
           :title="$t('views.AdminErrorDetailView.no_raw_events_loaded')"
