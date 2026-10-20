@@ -313,7 +313,20 @@ describe('AdminAuditView — verify chain', () => {
   it('shows the valid chain result with the verified event count', async () => {
     ;(api.GET as Mock).mockImplementation(async (url: string) => {
       if (url === '/api/v1/admin/audit/verify') {
-        return { data: { valid: true, event_count: 2 }, error: undefined }
+        return {
+          data: {
+            valid: true,
+            total_events: 2,
+            checked_events: 2,
+            truncated: false,
+            first_gap_index: null,
+            first_tampered_id: null,
+            chain_head_match: true,
+            chain_count_mismatch: false,
+            detail: null,
+          },
+          error: undefined,
+        }
       }
       return pagePayload([auditEvent('evt-1')])
     })
@@ -329,13 +342,50 @@ describe('AdminAuditView — verify chain', () => {
     expect(result.text()).toContain('2 events verified')
   })
 
+  it('omits the verified count for an empty chain', async () => {
+    ;(api.GET as Mock).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/admin/audit/verify') {
+        return {
+          data: {
+            valid: true,
+            total_events: 0,
+            checked_events: 0,
+            truncated: false,
+            first_gap_index: null,
+            first_tampered_id: null,
+            chain_head_match: null,
+            chain_count_mismatch: null,
+            detail: null,
+          },
+          error: undefined,
+        }
+      }
+      return pagePayload([auditEvent('evt-1')])
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="admin-audit-verify-chain"]').trigger('click')
+    await nextTick()
+
+    const result = wrapper.find('[data-testid="admin-audit-chain-result"]')
+    expect(result.exists()).toBe(true)
+    expect(result.text()).toContain('Chain Integrity: ✅ Valid')
+    expect(result.text()).not.toContain('events verified')
+  })
+
   it('shows the broken chain result with the detail message', async () => {
     ;(api.GET as Mock).mockImplementation(async (url: string) => {
       if (url === '/api/v1/admin/audit/verify') {
         return {
           data: {
             valid: false,
-            event_count: 1,
+            total_events: 2,
+            checked_events: 1,
+            truncated: false,
+            first_gap_index: 1,
+            first_tampered_id: 'evt-2',
+            chain_head_match: null,
+            chain_count_mismatch: null,
             detail: 'Audit chain break at event 1 (id evt-2): stored previous_hash (bad-hash) does not match',
           },
           error: undefined,
