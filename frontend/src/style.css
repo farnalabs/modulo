@@ -359,34 +359,44 @@
     color: hsl(var(--primary-text));
   }
 
+  /* Each badge's text colour lives in a local custom property so the light
+     mode override below changes only the value. The tint behind the text is
+     translucent, so the rendered contrast is measured against the composited
+     surface, not the raw tint - see the .light overrides for the dark values. */
   .badge-context-purple {
+    --badge-context-text: 270 60% 70%;
     background-color: hsla(270 60% 50% / 0.12);
-    color: hsl(270 60% 70%);
+    color: hsl(var(--badge-context-text));
   }
 
   .badge-context-indigo {
+    --badge-context-text: 240 60% 70%;
     background-color: hsla(240 60% 50% / 0.12);
-    color: hsl(240 60% 70%);
+    color: hsl(var(--badge-context-text));
   }
 
   .badge-context-cyan {
+    --badge-context-text: 190 80% 58%;
     background-color: hsla(190 80% 40% / 0.12);
-    color: hsl(190 80% 58%);
+    color: hsl(var(--badge-context-text));
   }
 
   .badge-context-orange {
+    --badge-context-text: 25 90% 70%;
     background-color: hsla(25 90% 50% / 0.12);
-    color: hsl(25 90% 70%);
+    color: hsl(var(--badge-context-text));
   }
 
   .badge-context-pink {
+    --badge-context-text: 340 80% 70%;
     background-color: hsla(340 80% 50% / 0.12);
-    color: hsl(340 80% 70%);
+    color: hsl(var(--badge-context-text));
   }
 
   .badge-context-rose {
+    --badge-context-text: 350 80% 70%;
     background-color: hsla(350 80% 50% / 0.12);
-    color: hsl(350 80% 70%);
+    color: hsl(var(--badge-context-text));
   }
 
   .badge-context-slate {
@@ -405,7 +415,8 @@
   }
 
   .badge-context-green {
-    color: hsl(142 71% 68%);
+    --badge-context-text: 142 71% 68%;
+    color: hsl(var(--badge-context-text));
     background-color: hsla(142 71% 45% / 0.1);
   }
 
@@ -435,11 +446,16 @@
   html {
     scroll-behavior: auto;
   }
+  /* !important is required here: component-scoped <style> blocks declare their
+     own animations/transitions at higher specificity, so without it the reset
+     would lose and reduce-motion users would still get the motion. */
+  /* stylelint-disable sonar/declaration-no-important -- reduced-motion reset must override scoped component animations */
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+  /* stylelint-enable sonar/declaration-no-important */
 }
 @media (prefers-reduced-motion: no-preference) {
   html {
@@ -600,12 +616,12 @@
 .light .bg-destructive\/10 {
   background-color: hsl(0 84.2% 48% / 0.2);
 }
-.light .badge-context-purple { color: hsl(270 60% 35%); background-color: hsla(270 60% 35% / 0.1); }
-.light .badge-context-indigo { color: hsl(240 60% 35%); background-color: hsla(240 60% 35% / 0.1); }
-.light .badge-context-cyan { color: hsl(190 80% 30%); background-color: hsla(190 80% 30% / 0.1); }
-.light .badge-context-orange { color: hsl(25 90% 38%); background-color: hsla(25 90% 38% / 0.1); }
-.light .badge-context-pink { color: hsl(340 80% 35%); background-color: hsla(340 80% 35% / 0.1); }
-.light .badge-context-rose { color: hsl(350 80% 35%); background-color: hsla(350 80% 35% / 0.1); }
+.light .badge-context-purple { --badge-context-text: 270 60% 35%; color: hsl(var(--badge-context-text)); background-color: hsla(270 60% 35% / 0.1); }
+.light .badge-context-indigo { --badge-context-text: 240 60% 35%; color: hsl(var(--badge-context-text)); background-color: hsla(240 60% 35% / 0.1); }
+.light .badge-context-cyan { --badge-context-text: 190 80% 30%; color: hsl(var(--badge-context-text)); background-color: hsla(190 80% 30% / 0.1); }
+.light .badge-context-orange { --badge-context-text: 25 90% 38%; color: hsl(var(--badge-context-text)); background-color: hsla(25 90% 38% / 0.1); }
+.light .badge-context-pink { --badge-context-text: 340 80% 35%; color: hsl(var(--badge-context-text)); background-color: hsla(340 80% 35% / 0.1); }
+.light .badge-context-rose { --badge-context-text: 350 80% 35%; color: hsl(var(--badge-context-text)); background-color: hsla(350 80% 35% / 0.1); }
 .light .badge-context-amber { color: hsl(var(--warning-text)); background-color: hsla(38 92% 35% / 0.1); }
 .light .badge-context-green { color: hsl(var(--success-text)); background-color: hsla(142 71% 28% / 0.1); }
 
