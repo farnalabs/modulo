@@ -121,11 +121,27 @@ function formatErrorObject(obj: Record<string, unknown>): string {
   return stringifyErrorObject(obj)
 }
 
+function stringifyPrimitiveError(err: unknown): string {
+  // The caller has excluded strings, null/undefined/falsy values, Errors and
+  // objects, so only truthy primitives and functions reach here. Each defines
+  // its own toString(), so no implicit "[object Object]" coercion can occur.
+  if (
+    typeof err === 'number' ||
+    typeof err === 'bigint' ||
+    typeof err === 'symbol' ||
+    typeof err === 'function'
+  ) {
+    return err.toString()
+  }
+  // Only a truthy boolean remains.
+  return 'true'
+}
+
 export function formatApiError(err: unknown): string {
   if (isProblemDetail(err)) return err.detail
   if (typeof err === 'string') return err
   if (!err) return 'Unknown error'
   if (err instanceof Error) return err.message
   if (typeof err === 'object') return formatErrorObject(err as Record<string, unknown>)
-  return String(err)
+  return stringifyPrimitiveError(err)
 }

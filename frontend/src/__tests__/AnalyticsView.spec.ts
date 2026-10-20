@@ -534,6 +534,17 @@ describe('aggregateByKey', () => {
     expect(agg[0].count).toBe(10)
     expect(agg[0].success_rate).toBeCloseTo(0.6667, 3)
   })
+
+  it('groups buckets with no dimension key under a single null-key entry', () => {
+    const series: AnalyticsBucket[] = [
+      { date: '2026-08-01', count: 1 },
+      { date: '2026-08-02', key: null, count: 2 },
+    ]
+    const agg = aggregateByKey(series)
+    expect(agg).toHaveLength(1)
+    expect(agg[0].key).toBeNull()
+    expect(agg[0].count).toBe(3)
+  })
 })
 
 describe('computeTrendDelta', () => {

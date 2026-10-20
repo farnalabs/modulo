@@ -1185,4 +1185,24 @@ describe('AdminConnectorsView — FAR-617 add/delete/error-state coverage', () =
     // operational-config sibling above).
     expect(wrapper.find('#adminconnectors-edit-form-error').attributes('role')).toBe('alert')
   })
+
+  it('prefills REST defaults when the stored config_json is null', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        items: [
+          { id: 'rest-null', name: 'REST Null', connector_type_id: 'rest', tier: 'native', status: 'active', config_json: null },
+        ],
+      },
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await openEdit(wrapper, 'rest-null')
+
+    expect((wrapper.find('[data-testid="rest-connector-base-url"]').element as HTMLInputElement).value).toBe('')
+    expect((wrapper.find('[data-testid="rest-connector-method"]').element as HTMLSelectElement).value).toBe('GET')
+    expect((wrapper.find('[data-testid="rest-connector-timeout"]').element as HTMLInputElement).value).toBe('30')
+  })
 })

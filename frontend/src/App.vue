@@ -51,9 +51,9 @@ const isBareRoute = computed(() => route.meta.bare === true)
 // otherwise always see LoginView — on a multi-org instance that re-renders the
 // slug step forever, so the credential form is unreachable. The bare /login
 // route keeps rendering LoginView directly.
-const ROUTE_VIEW_PUBLIC_ROUTES = ['org-login', 'accept-invite', 'oauth-authorize', 'auth-callback']
+const ROUTE_VIEW_PUBLIC_ROUTES = new Set(['org-login', 'accept-invite', 'oauth-authorize', 'auth-callback'])
 const showsPublicRouteView = computed(
-  () => !isAuthenticated.value && ROUTE_VIEW_PUBLIC_ROUTES.includes(route.name as string),
+  () => !isAuthenticated.value && ROUTE_VIEW_PUBLIC_ROUTES.has(route.name as string),
 )
 
 useWebVitals()

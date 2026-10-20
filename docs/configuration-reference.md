@@ -367,6 +367,8 @@ Client sync for the hosted community library of pipeline primitives.
 | `SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES` | No | unset (derived: `max(SAQ_RUN_TIMEOUT // 60, 120) + 15`, i.e. 135 at the shipped 7200s) | Age bound (minutes) past `runs.started_at` at which a `dispatcher='saq'` run with ZERO node progress is terminalised `executor_stalled` - shared by `dispatcher_reconcile`'s age-bound nodeless router / mid-graph gate and the independent `stale_run_recovery` zero-progress branch (FAR-1715). Unset keeps the historical derivation (default behaviour unchanged). An explicit pin is validated at Settings load against the worst-case legitimate window of every consumer (the `SAQ_SETUP_GRACE_SECONDS` + max-node-timeout pre-node window, and the mid-graph gate's max-legitimate-run-duration floor) and is refused at load if too low |
 | `SAQ_RUN_CLAIM_CAP` | No | `20` | Per-claim cap on SAQ claim attempts for `dispatcher='saq'` runs |
 | `SAQ_SETUP_GRACE_SECONDS` | No | `600` | Zombie-run protection: a run must dispatch at least one node within this window or the watchdog fails it |
+| `NODELESS_IN_FLIGHT_FLOOR_SECONDS` | No | unset (derived: `SAQ_SETUP_GRACE_SECONDS + 3300`, i.e. 3900s at the shipped defaults) | How long a LIVE `sandbox_dispatch_state` marker shields a run from the nodeless backstop, measured from the per-attempt anchor `max(runs.started_at, runs.dispatched_at)`. Unset keeps the derivation, so raising `SAQ_SETUP_GRACE_SECONDS` widens the floor with it. An explicit value (min 60) must still cover grace + the max node timeout or Settings refuses to load - a shorter floor would let the backstop claim a live attempt |
+| `NODE_STARTED_STALE_SECONDS` | No | `7200` | Marker-age bound for reclaiming a node-STARTED (`dispatch_phase='first_node_dispatched'`) `running` run: once its dispatch marker is older than this AND its `heartbeat_at` has gone stale, the run is terminalised `failed` / `worker_lost` and never re-dispatched, freeing the leaked runner slot. Both conditions are required, so a live long-running node is never reclaimed. Min 1, max 604800, and a pin below `SAQ_SETUP_GRACE_SECONDS` + 3300 is refused at load because it would kill a live node mid-execution |
 | `SAQ_CLAIMED_NODELESS_MINUTES` | No | `35` | Secondary zombie net: a run still `running` with a fresh heartbeat but zero checkpoints after this many minutes is failed. Reduced from `45` by FAR-199 (bounds wedged-fleet accumulation). This value is the **floor** only: each pipeline's effective window is derived from its longest node `timeout_seconds` as `ceil(max_node_timeout / 60) + 5` minutes, clamped to `[SAQ_CLAIMED_NODELESS_MINUTES, 1440]` (FAR-1740), so a pipeline whose max node timeout is 3300s gets a 60-minute window and a slow-but-healthy first node is never false-failed |
 | `SAQ_NODELESS_EARLY_DETECT_MINUTES` | No | `15` | Early re-dispatch window (minutes) for a claimed-but-nodeless run whose heartbeat is still fresh: catches a wedged executor before the full nodeless window elapses (min 5, max 120). Effective only when it is **below** the effective nodeless window (see `SAQ_CLAIMED_NODELESS_MINUTES`); at or above that value the early-detect branch is disabled with a load-time warning and the run waits the full window. FAR-1740: the branch is also disabled for any pipeline whose derived window was widened above the `SAQ_CLAIMED_NODELESS_MINUTES` floor, since a node may still be legitimately running inside the early window. Zero nodes have executed, so nothing double-executes |
 | `SAQ_JOB_HEARTBEAT` | No | `300` | SAQ job heartbeat knob (per-job `heartbeat`) |
@@ -487,6 +489,7 @@ Rate limiting uses Redis sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to
 | `RUN_API_KEY_DEFAULT_TTL_SECONDS` | No | `900` | Per-run agent runtime API key TTL floor (min 300, max 86400) |
 | `SANDBOX_PROVISIONING_TIMEOUT_SECONDS` | No | `90` | Timeout for sandbox workspace provisioning (min 15, max 600) |
 | `SANDBOX_BINDING_RESOLVE_TIMEOUT_SECONDS` | No | `30` | Timeout for resolving runner bindings (decrypting referenced model-backend credentials) during dispatch (min 5, max 120) |
+| `MODEL_CLASS_REGISTRY_PATH` | No | unset | Path to the `model-management.json` registry that the `sandbox_agent` node's `model_class` seam resolves through at snapshot mint and in the graph validator. Unset means no registry: a node without `model_class` resolves nothing (existing pipelines unchanged), while a node that DECLARES `model_class` fails closed before dispatch with `ModelClassResolutionError`. When set, the file must stay readable - a configured-but-broken registry rejects sandbox runs loudly instead of silently dispatching them on the wrong model |
 
 ---
 
@@ -533,6 +536,24 @@ LOAD.
 | `MODULO_ARTIFACTS_ENABLED` | No | `true` | Enable pipeline artifact storage |
 | `MODULO_ARTIFACTS_DIR` | No | `""` | Base directory for artifact files. Empty defaults to `<backend>/.data/artifacts` resolved by the store factory. |
 | `MODULO_WORKSPACE_INPUTS_ENABLED` | No | `false` | Managed workspace inputs (MWI) kill-switch. When OFF (default), a `sandbox_agent` node that declares `workspace_inputs` short-circuits with `sandbox.workspace_inputs_disabled` and provisions nothing; existing sandbox behaviour is unchanged. Operators enable it explicitly once MWI is ready for production use |
+| `MODULO_MULTI_ORG_ENABLED` | No | `false` | Multi-organisation mode. OFF (the single-org default for self-hosted, ADR 005) blocks org creation, rejects org-slug login and makes the login-context endpoint always report single-org. ON enables multi-org behaviour and the org-slug login path. A multi-org deployment also refuses a globally scoped secrets backend (e.g. Vault) for credential references rather than risk a cross-org read |
+| `MODULO_SCHEMA_VALIDATOR_MODE` | No | `lenient` | Schema-validator strictness, one of `lenient` or `strict`; any other value resolves to `lenient`. Read directly from the environment as a **first-boot seed only**: once the effective setting exists in the DB (per-org `settings_json`, then the instance-wide `system_config` row) that value wins. See [`docs/configuration-precedence.md`](./configuration-precedence.md) |
+
+---
+
+## Trigger Streak Detection
+
+Ongoing and cron triggers track consecutive no-delivery terminal runs. These
+variables are read directly from the environment by
+`core/trigger_streak.py` (not part of the Settings class) and sit **below**
+per-trigger `config_json` values (`max_no_delivery_streak`,
+`no_delivery_min_window_hours`), which always win.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_STREAK_DEACTIVATE_KILL_SWITCH` | No | `true` | Gates only the deactivate + notify side-effect of the streak sweep; classification always persists. Any of `0`, `false`, `off`, `no` disables the side-effect, any other value leaves it enabled |
+| `MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS` | No | `24` | Deployment default minimum wall-clock window (hours) before an `ongoing` trigger's no-delivery streak may fire; `0` removes the window so a fast-moving repo's quiet stretch still deactivates the pool. Invalid values fall back to the default |
+| `MODULO_CRON_STREAK_MIN_WINDOW_HOURS` | No | `48` | Same window for `cron` triggers, kept separate from the ongoing default: two full daily periods, so a single missed day never trips while a broken intraday cron still surfaces within two days. `0` removes the window. Invalid values fall back to the default |
 
 ---
 
@@ -655,6 +676,8 @@ An in-process asyncio task running in the web-process FastAPI lifespan that read
 | `VAULT_TOKEN` | For Vault | – | Vault authentication token |
 | `VAULT_ROLE_ID` | For Vault | – | Vault AppRole role ID |
 | `VAULT_SECRET_ID` | For Vault | – | Vault AppRole secret ID |
+| `VAULT_MOUNT_POINT` | No | `secret` | KV v2 mount path the Vault backend reads and writes under. Read directly by `VaultSecretsBackend`, not part of the Settings class |
+| `VAULT_PATH_PREFIX` | No | `modulo/secrets` | Path prefix inside the KV mount; a stored key resolves as `<prefix>/<key>`. Read directly by `VaultSecretsBackend`, not part of the Settings class |
 | `AWS_ACCESS_KEY_ID` | For AWS Secrets Manager | – | AWS access key for the Secrets Manager backend |
 | `AWS_SECRET_ACCESS_KEY` | For AWS Secrets Manager | – | AWS secret access key |
 | `AWS_REGION` | No | `us-east-1` | AWS region for Secrets Manager |

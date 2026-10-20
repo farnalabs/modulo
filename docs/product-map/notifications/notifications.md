@@ -43,8 +43,10 @@ status: covered
 # Notifications
 
 Notifications surface pipeline events to operators across `/notifications`,
-`/settings/email`, `/admin/notification-delivery` and the in-app panel. The
-`core/notifier` dispatches outgoing webhooks with HMAC-SHA256 signing, bounded retry, and
+`/settings/email`, `/settings/notifications`, `/admin/notification-delivery` and
+the in-app panel; `/settings/notifications` is where each user sets their own
+in-app preferences (a per-category toggle set plus the dashboard minimum level).
+The `core/notifier` dispatches outgoing webhooks with HMAC-SHA256 signing, bounded retry, and
 dead-letter tracking of final failures; `api/routes/admin_notifications.py` exposes the
 notification-delivery log with retry/DLQ admin actions; `event_mapper.py` maps run/HITL
 events into typed notification payloads; and in-app notifications stream over SSE.

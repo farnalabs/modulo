@@ -121,6 +121,7 @@ const AdminErrorsView = () => import('../views/AdminErrorsView.vue')
 const AdminErrorDetailView = () => import('../views/AdminErrorDetailView.vue')
 const UserAssistantSkillsView = () => import('../views/UserAssistantSkillsView.vue')
 const SettingsEmailView = () => import('../views/SettingsEmailView.vue')
+const SettingsNotificationsView = () => import('../views/SettingsNotificationsView.vue')
 const SettingsErrorForwardersView = () => import('../views/SettingsErrorForwardersView.vue')
 const SettingsMonitorConfigView = () => import('../views/SettingsMonitorConfigView.vue')
 const PipelineListView = () => import('../views/PipelineListView.vue')
@@ -243,6 +244,11 @@ const router = createRouter({
       component: CollectionDetailView,
       props: true,
       meta: { breadcrumb: 'Collection', parent: 'library' },
+    },
+    {
+      path: '/settings/notifications',
+      name: 'settings-notifications',
+      component: SettingsNotificationsView,
     },
     {
       path: '/settings/email',
