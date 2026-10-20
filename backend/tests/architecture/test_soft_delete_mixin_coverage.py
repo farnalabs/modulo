@@ -71,13 +71,13 @@ def test_gate_enumerates_known_orgscoped_models() -> None:
     """Load-bearing: prove the gate actually inspects concrete OrgScoped models.
 
     ``OrgScoped`` declares ``__abstract__ = True`` and all its concrete
-    subclasses (EvalDefinition, ErrorNotificationRule, …) inherit it.  If
+    subclasses (Eval, ErrorNotificationRule, …) inherit it.  If
     someone re-introduces a broad ``getattr(cls, "__abstract__")`` skip,
     these models disappear from the enumeration and the gate becomes
     vacuous again.  This self-check catches that regression.
     """
     from modulo.db.models.error_notification_rule import ErrorNotificationRule
-    from modulo.db.models.eval_definition import EvalDefinition
+    from modulo.db.models.eval import Eval
 
     enumerated_classes: set[type] = set()
     for mapper in Base.registry.mappers:
@@ -87,8 +87,8 @@ def test_gate_enumerates_known_orgscoped_models() -> None:
         enumerated_classes.add(cls)
 
     # Both are concrete OrgScoped subclasses with deleted_at — must appear
-    assert EvalDefinition in enumerated_classes, (
-        "EvalDefinition is a concrete OrgScoped model with deleted_at but was "
+    assert Eval in enumerated_classes, (
+        "Eval is a concrete OrgScoped model with deleted_at but was "
         "not enumerated — the gate may have re-introduced a vacuous getattr skip"
     )
     assert ErrorNotificationRule in enumerated_classes, (

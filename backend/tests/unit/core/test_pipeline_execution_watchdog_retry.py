@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -1097,6 +1098,56 @@ async def test_context_load_sets_rls_org_and_execution_context():
     # The claim count is read from the same row (the pre-node hang budget
     # bound consumes it) and surfaces in the loaded context.
     assert context[3] == 2
+
+
+async def test_retry_context_loader_reraises_cancellation() -> None:
+    """``CancelledError`` must propagate, never be swallowed into a fail-open
+    ``None`` — the watchdog's own cancellation would otherwise be converted
+    into a silent "do not retry" decision."""
+    with (
+        patch.object(
+            wr,
+            "_load_watchdog_retry_context",
+            AsyncMock(side_effect=asyncio.CancelledError()),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await wr._load_retry_context_or_none(MagicMock(), run_id=uuid.uuid4(), org_id=uuid.uuid4())
+
+
+async def test_retry_context_loader_fails_open_to_none_on_error(caplog: pytest.LogCaptureFixture) -> None:
+    """Every NON-cancellation load failure logs and degrades to ``None`` so the
+    watchdog still terminal-fails the run."""
+    with (
+        patch.object(
+            wr,
+            "_load_watchdog_retry_context",
+            AsyncMock(side_effect=RuntimeError("db down")),
+        ),
+        caplog.at_level(logging.WARNING),
+    ):
+        result = await wr._load_retry_context_or_none(MagicMock(), run_id=uuid.uuid4(), org_id=uuid.uuid4())
+    assert result is None
+    assert any(r.msg == "pipeline.watchdog_retry_context_load_failed run=%s" for r in caplog.records)
+
+
+def test_resolve_schedule_state_failopen_logs_warning_and_reports(caplog: pytest.LogCaptureFixture) -> None:
+    """A structurally-invalid schedule (present, but rejected) resolves to the
+    hardcoded default AND emits the fail-open warning carrying the reason."""
+    policy = {"backoff_schedule": {"delay_seconds": 0}}
+    with caplog.at_level(logging.WARNING):
+        state, effective_sleep = wr._resolve_schedule_state(policy, 1, uuid.uuid4())
+    assert state == "failopen"
+    assert effective_sleep > 0
+    assert any(r.msg == "pipeline.watchdog_retry_schedule_fail_open" for r in caplog.records)
+
+
+def test_resolve_schedule_state_valid_uses_the_run_schedule() -> None:
+    """A valid run-level schedule resolves to ``valid`` (no warning)."""
+    policy = {"backoff_schedule": {"delay_seconds": 30, "multiplier": 1.0}}
+    state, effective_sleep = wr._resolve_schedule_state(policy, 1, uuid.uuid4())
+    assert state == "valid"
+    assert effective_sleep > 0
 
 
 # ---------------------------------------------------------------------------

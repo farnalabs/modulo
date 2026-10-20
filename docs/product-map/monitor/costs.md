@@ -67,6 +67,22 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
 - [x] Per-agent token budget: a run crossing its agent token budget transitions to the
       `budget_exceeded` terminal state with "This run exceeded its token budget."
       (`cost_controller/finalize.py`, `cost_controls.feature`)
+- [x] Declared (self-reported) agent cost is DISPLAYED but never billed (FAR-1780):
+      a `self_reported` component carrying a report is rendered in the breakdown with
+      `provenance: reported` + `billable: false`, and `build_cost_breakdown`'s total
+      sums BILLABLE components only - so a run whose only cost content is the agent's
+      declared report totals `0.000000`, the spend gate (`check_and_record_spend`)
+      consumes the caller-computed billable total and a declared-only run approves even
+      at a saturated limit, the far circuit breaker reads the same billable-only total,
+      and the verification probe (`_evaluate_run`) compares `total_cost_usd` to the
+      billable sum only (skipping `billable: false` entries, so a declared-only run is
+      never a false mismatch). Per-datum provenance stamps (sandbox envelopes: which
+      envelope datum carries the producer's own report) propagate onto the union's
+      folded keys (`provenance` map on the run-output node entry; token datums via the
+      shared reported-token chain, refusals never stamped) and persist through the
+      sparse-entry write-back (`build_cost_breakdown`, `finalize.py`,
+      `node_runner.py`, `probe.py`; `test_sandbox_envelope_provenance.py`,
+      `test_cost_finalize.py`, `test_cost_probe.py`, `test_cost_controller.py`)
 - [x] Pipeline cost circuit breaker (§8.10): a pipeline crossing its monthly spend
       threshold trips the breaker and permanently pauses triggers until an admin
       re-enables it via `POST /circuit-breaker/{pipeline_id}/reset`. Since FAR-1530 the

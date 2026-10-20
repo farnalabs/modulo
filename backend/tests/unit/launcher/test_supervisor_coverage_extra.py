@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -1700,3 +1701,182 @@ def test_degrade_locked_with_pause_hook_and_runtime(tmp_path: Path) -> None:
     supervisor._degrade_locked("test reason")
     assert pause_calls == [GATE_SUPERVISOR_PRE_TEARDOWN]
     assert runtime_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Defensive / platform branches moved by the S3776 refactor
+# ---------------------------------------------------------------------------
+
+
+def test_stop_with_no_holder_refuses_when_lock_is_held(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(supervisor_module, "_lock_is_free", lambda _path: False)
+    data_dir = tmp_path / "data"
+    lock_path = tmp_path / "data.lock"
+
+    with pytest.raises(supervisor_module.LauncherError, match="locked but no holder is recorded"):
+        supervisor_module._stop_with_no_holder(data_dir, lock_path)
+
+
+def test_request_stop_refuses_on_windows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(supervisor_module.sys, "platform", "win32")
+
+    with pytest.raises(supervisor_module.LauncherError, match=r"not supported on Windows"):
+        supervisor_module.request_stop(tmp_path / "data")
+
+
+def test_kill_child_and_abandon_swallows_kill_error() -> None:
+    class _Child:
+        def kill(self) -> None:
+            raise OSError("already gone")
+
+        def wait(self, timeout: float) -> int:
+            return 0
+
+    assert supervisor_module._kill_child_and_abandon(_Child()) == 2
+
+
+def test_drain_shim_child_kills_after_grace_timeout() -> None:
+    class _Child:
+        def __init__(self) -> None:
+            self.waits: list[float] = []
+            self.killed = False
+
+        def wait(self, timeout: float) -> int:
+            self.waits.append(timeout)
+            if len(self.waits) == 1:
+                raise subprocess.TimeoutExpired(cmd="service", timeout=timeout)
+            return 0
+
+        def kill(self) -> None:
+            self.killed = True
+
+    child = _Child()
+
+    assert supervisor_module._drain_shim_child(child) == 0
+    assert child.killed
+    assert child.waits == [30, 5]
+
+
+def test_shim_watch_loop_drains_child_once_shutting_down(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    drained: list[object] = []
+
+    def _fake_drain(child: object) -> int:
+        drained.append(child)
+        return 7
+
+    class _Child:
+        def poll(self) -> int | None:
+            return None
+
+    child = _Child()
+    shutting_down = threading.Event()
+    shutting_down.set()
+    monkeypatch.setattr(supervisor_module, "_shim_should_abandon", lambda **_kwargs: False)
+    monkeypatch.setattr(supervisor_module, "_drain_shim_child", _fake_drain)
+
+    code = supervisor_module._shim_watch_loop(
+        child,
+        parent_pid=1,
+        recorded_starttime=1,
+        shutting_down=shutting_down,
+    )
+
+    assert code == 7
+    assert drained == [child]
+
+
+def test_load_status_state_missing_state_file_is_honest_unknown(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A state.json that disappears between the secrets read and the load is
+    an honest unknown (no error string), not an unreadable-state failure."""
+    secrets = LauncherSecrets(
+        postgres_password="pg-pw",
+        redis_password="redis-pw",
+        state_hmac_key=bytes(range(32)),
+    )
+    (tmp_path / "secrets.json").write_text(
+        json.dumps(
+            {
+                "postgres_password": secrets.postgres_password,
+                "redis_password": secrets.redis_password,
+                "state_hmac_key": secrets.state_hmac_key_hex,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _raise_file_not_found(_path: Path, _hmac_key: bytes) -> object:
+        raise FileNotFoundError("state.json raced away")
+
+    from modulo.launcher import state as state_module
+
+    monkeypatch.setattr(state_module, "load_state", _raise_file_not_found)
+
+    state, error = supervisor_module._load_status_state(tmp_path)
+
+    assert state is None
+    assert error is None
+
+
+def test_request_stop_returns_signal_outcome(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    holder = supervisor_module.LockHolder(pid=4242, mode="foreground", acquired_at=0.0)
+    monkeypatch.setattr(supervisor_module, "_read_lock_holder", lambda _path: holder)
+    monkeypatch.setattr(supervisor_module, "_signal_holder", lambda _holder, _path, _timeout: 0)
+
+    assert supervisor_module.request_stop(data_dir) == 0
+
+
+def test_request_stop_awaits_lock_release_after_signal(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    holder = supervisor_module.LockHolder(pid=4242, mode="foreground", acquired_at=0.0)
+    monkeypatch.setattr(supervisor_module, "_read_lock_holder", lambda _path: holder)
+    monkeypatch.setattr(supervisor_module, "_signal_holder", lambda _holder, _path, _timeout: None)
+    monkeypatch.setattr(supervisor_module, "_await_lock_release", lambda _path, _pid, _timeout: 0)
+
+    assert supervisor_module.request_stop(data_dir) == 0
+
+
+def test_terminate_unhealthy_child_kills_after_grace() -> None:
+    supervisor = supervisor_module.Supervisor(supervisor_module.SupervisorKnobs(shutdown_grace_seconds=1.0))
+    spec = supervisor_module.ChildSpec(name="pg", argv_builder=lambda: ["pg"])
+
+    class _Process:
+        def __init__(self) -> None:
+            self.killed = False
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            self.killed = True
+
+    process = _Process()
+    child = supervisor_module._Child(spec=spec, process=process, terminating_since=0.0, healthy=False)
+    supervisor._terminate_unhealthy_child_locked(child, process, 5.0)
+
+    assert process.killed
+
+
+def test_terminate_unhealthy_child_waits_within_grace() -> None:
+    supervisor = supervisor_module.Supervisor(supervisor_module.SupervisorKnobs(shutdown_grace_seconds=10.0))
+    spec = supervisor_module.ChildSpec(name="pg", argv_builder=lambda: ["pg"])
+
+    class _Process:
+        def __init__(self) -> None:
+            self.killed = False
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            self.killed = True
+
+    process = _Process()
+    child = supervisor_module._Child(spec=spec, process=process, terminating_since=0.0, healthy=False)
+    supervisor._terminate_unhealthy_child_locked(child, process, 0.5)
+
+    assert not process.killed

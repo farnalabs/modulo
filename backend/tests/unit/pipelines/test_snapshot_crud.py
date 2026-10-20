@@ -215,7 +215,7 @@ class TestRollbackToSnapshot:
 
         with patch(
             "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
-            new_callable=AsyncMock,
+            new_callable=MagicMock,
         ) as mock_diff:
             mock_diff.return_value = DiffResult(
                 weakened_edges=[],
@@ -257,7 +257,7 @@ class TestRollbackToSnapshot:
             ) as mock_resolve,
             patch(
                 "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
-                new_callable=AsyncMock,
+                new_callable=MagicMock,
             ) as mock_diff,
         ):
             mock_diff.return_value = DiffResult(
@@ -323,7 +323,7 @@ class TestRollbackToSnapshot:
             ) as mock_resolve,
             patch(
                 "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
-                new_callable=AsyncMock,
+                new_callable=MagicMock,
                 return_value=allowed_diff,
             ) as mock_diff,
             patch(
@@ -339,8 +339,8 @@ class TestRollbackToSnapshot:
         mock_resolve.assert_awaited_once()
         assert mock_resolve.await_args.kwargs["is_privileged"] is True
         assert mock_resolve.await_args.kwargs["caller_type"] == "mcp"
-        assert mock_diff.await_args.kwargs["is_privileged"] is False
-        assert mock_diff.await_args.kwargs["caller_type"] == "mcp"
+        assert mock_diff.call_args.kwargs["is_privileged"] is False
+        assert mock_diff.call_args.kwargs["caller_type"] == "mcp"
 
     async def test_rollback_to_snapshot_raises_when_gate_weakening_denied(self):
         """A denied gate-weakening diff must raise and leave the graph untouched."""
@@ -372,7 +372,7 @@ class TestRollbackToSnapshot:
         with (
             patch(
                 "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
-                new_callable=AsyncMock,
+                new_callable=MagicMock,
                 return_value=denied_diff,
             ),
             patch(
@@ -414,7 +414,7 @@ class TestRollbackToSnapshot:
         with (
             patch(
                 "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
-                new_callable=AsyncMock,
+                new_callable=MagicMock,
                 return_value=_denied_diff("legacy-snapshot-ambiguous"),
             ),
             patch(
@@ -463,7 +463,7 @@ class TestRollbackToSnapshot:
         with (
             patch(
                 "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
-                new_callable=AsyncMock,
+                new_callable=MagicMock,
                 return_value=weakened_diff,
             ),
             patch(
@@ -535,7 +535,7 @@ class TestRollbackToSnapshot:
         with (
             patch(
                 "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
-                new_callable=AsyncMock,
+                new_callable=MagicMock,
                 return_value=weakening_diff,
             ),
             patch(
@@ -633,7 +633,7 @@ class TestRollbackToSnapshot:
         with (
             patch(
                 "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
-                new_callable=AsyncMock,
+                new_callable=MagicMock,
             ) as mock_diff,
             patch(
                 "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",

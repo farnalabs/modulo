@@ -33,6 +33,8 @@ unit-tests:
   - backend/tests/unit/api/test_triggers_endpoint.py
   - backend/tests/unit/api/test_admin_triggers.py
   - backend/tests/unit/api/test_webhooks_endpoint.py
+  - backend/tests/unit/test_run_admission.py
+  - backend/tests/unit/core/test_cron_helpers_residual.py
   - backend/tests/unit/api/test_webhook_replay.py
   - backend/tests/unit/api/test_trigger_config_secrets.py
   - backend/tests/unit/api/test_team_scope_dependencies.py
@@ -70,6 +72,35 @@ rate-limited by the `TriggerEngine`.
 
 ## Behaviours
 
+- [x] A **wedged** pipeline (queued runs, no progress) stops accepting NEW
+      work, refused per funnel (FAR-1342, the FAR-604 D3 backpressure guard):
+      **webhook** → HTTP 429 and no run (the sender retries); **cron** → the
+      fire is CONSUMED and RECORDED — a `backpressure_skipped` TriggerEvent
+      plus `last_fired_at` stamped, with `next_fire_at` already advanced at
+      enqueue time — so the fire is a documented loss, never a silent one;
+      **polling** → skipped and recorded, and the next poll interval re-fires
+      naturally; **manual / MCP** → exempt (no backpressure check; capacity
+      gates may still DEFER its dispatch but never refuse it). The invariant:
+      *a pending run may wait indefinitely while its pipeline makes progress; a
+      pipeline making NO progress stops accepting new work.* Every refusal is
+      operator-visible: the `backpressure_skipped` event appears in
+      `/api/v1/admin/trigger-events` and the per-trigger event log, is counted
+      in the capacity-outcome summary, and the FAR-1344 wedge alert evaluates
+      the SAME predicate on every dispatcher-reconcile tick, so a skip is
+      paired with a notification. Detection is the interim shape-based guard —
+      pending depth over `max(3 x max_concurrent_runs, 5)`, or the oldest
+      genuinely-wedged pending run older than
+      `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` (default 60 min;
+      `org_capacity_limited` rows are excluded from the age leg, while
+      `pipeline_capacity` rows still count) — so a slow-but-progressing
+      pipeline can still be refused until FAR-1355's progress-based detection
+      replaces it. The check fails OPEN (admits, with a warning) on a read
+      error, and webhook replays bypass it (an intentional re-fire is never
+      refused) (`core/run_admission.py` `evaluate_backpressure`,
+      `core/trigger_engine/__init__.py` webhook admission,
+      `core/cron_helpers.py` `_backpressure_skip` / `_polling_pre_fire_gate`;
+      `unit-tests: test_run_admission.py,
+      core/test_cron_helpers_residual.py, api/test_webhooks_endpoint.py`)
 - [x] Trigger CRUD via `/api/v1/triggers` (list, create, PUT update, delete,
       restore) with per-type config (webhook / cron / polling / ongoing);
       secret fields are encrypted at rest and never returned

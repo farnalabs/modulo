@@ -33,6 +33,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import uuid
+from collections.abc import Iterable
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -223,6 +224,29 @@ def filter_run_context_scope(run_context: dict[str, Any], context_scope: list[st
     return {k: v for k, v in run_context.items() if k in allowed or k in _CONTEXT_ALWAYS_KEPT}
 
 
+def _node_connector_contribution(
+    node: Any,
+    agent_connector_grants: dict[str, set[str]] | None,
+) -> set[str]:
+    """Return the connector id/type strings ONE graph node contributes.
+
+    A node-level ``capability_scope.allowed_connectors`` is authoritative and is
+    never widened with agent grants (FAR-418). A connector-unrestricted agent
+    node contributes its Agent's ``connector_type_refs`` grants; any other
+    unrestricted node contributes nothing (FAR-435 least-privilege tightening).
+    """
+    if not isinstance(node, dict):
+        return set()
+    cap_scope = node.get("capability_scope") or {}
+    allowed = cap_scope.get("allowed_connectors") if isinstance(cap_scope, dict) else None
+    if allowed:
+        return {str(entry) for entry in allowed if entry}
+    agent_id = node.get("agent_id")
+    if agent_id is None or not agent_connector_grants:
+        return set()
+    return set(agent_connector_grants.get(str(agent_id)) or set())
+
+
 def compute_run_fetch_scope(
     graph_json: dict[str, Any] | None,
     agent_connector_grants: dict[str, set[str]] | None = None,
@@ -235,7 +259,7 @@ def compute_run_fetch_scope(
     defeated by an over-tight run scope.
 
     Per-node contribution (FAR-418: credentials outside a node's scope are never
-    decrypted):
+    decrypted) lives in :func:`_node_connector_contribution`:
 
     * A node that declares a non-empty ``capability_scope.allowed_connectors``
       contributes EXACTLY those connectors. Its Agent's broader ``connector_type_refs``
@@ -265,22 +289,7 @@ def compute_run_fetch_scope(
         return None
     scope: set[str] = set()
     for node in nodes:
-        if not isinstance(node, dict):
-            continue
-        cap_scope = node.get("capability_scope") or {}
-        allowed = cap_scope.get("allowed_connectors") if isinstance(cap_scope, dict) else None
-        if allowed:
-            # Node-level narrow scope — never widen beyond it with agent grants.
-            scope.update(str(entry) for entry in allowed if entry)
-            continue
-        # Connector-unrestricted: an agent node needs its full grants; a
-        # non-agent unrestricted node contributes nothing and is subject to the
-        # union (FAR-435 least-privilege tightening).
-        agent_id = node.get("agent_id")
-        if agent_id is not None and agent_connector_grants:
-            grants = agent_connector_grants.get(str(agent_id))
-            if grants:
-                scope.update(grants)
+        scope.update(_node_connector_contribution(node, agent_connector_grants))
     return sorted(scope) if scope else None
 
 
@@ -293,6 +302,28 @@ def _is_connector_object(value: Any) -> bool:
     Plain dicts / ConnectorResult records are never matched.
     """
     return hasattr(value, "connector_type") and callable(getattr(value, "query", None))
+
+
+def _iter_nested_values(value: Any) -> Iterable[Any] | None:
+    """Yield the values a payload guard must descend into, or ``None`` for a leaf.
+
+    Dispatch order matters and mirrors the historical guard: mapping values,
+    then list/tuple elements, then dataclass fields, then a non-primitive
+    object's ``__dict__`` values. Returning ``None`` marks a leaf (primitive,
+    or an object with no attribute bag) that needs no recursion.
+    """
+    if isinstance(value, dict):
+        return value.values()
+    if isinstance(value, (list, tuple)):
+        return value
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return (getattr(value, field.name) for field in dataclasses.fields(value))
+    if hasattr(value, "__dict__") and not isinstance(value, (str, bytes, bytearray, int, float, bool)):
+        # Backstop for non-dataclass objects (agents may wrap payloads in plain
+        # classes). Skip primitives and types; descend into attributes.
+        attributes: dict[str, Any] = vars(value)
+        return attributes.values()
+    return None
 
 
 def assert_no_secret_objects(value: Any, *, node_id: str, _seen: set[int] | None = None) -> None:
@@ -322,17 +353,8 @@ def assert_no_secret_objects(value: Any, *, node_id: str, _seen: set[int] | None
             target=type(value).__name__,
             kind="secret",
         )
-    if isinstance(value, dict):
-        for nested in value.values():
-            assert_no_secret_objects(nested, node_id=node_id, _seen=_seen)
-    elif isinstance(value, (list, tuple)):
-        for nested in value:
-            assert_no_secret_objects(nested, node_id=node_id, _seen=_seen)
-    elif dataclasses.is_dataclass(value) and not isinstance(value, type):
-        for field in dataclasses.fields(value):
-            assert_no_secret_objects(getattr(value, field.name), node_id=node_id, _seen=_seen)
-    elif hasattr(value, "__dict__") and not isinstance(value, (str, bytes, bytearray, int, float, bool)):
-        # Backstop for non-dataclass objects (agents may wrap payloads in plain
-        # classes). Skip primitives and types; descend into attributes.
-        for nested in vars(value).values():
-            assert_no_secret_objects(nested, node_id=node_id, _seen=_seen)
+    nested_values = _iter_nested_values(value)
+    if nested_values is None:
+        return
+    for nested in nested_values:
+        assert_no_secret_objects(nested, node_id=node_id, _seen=_seen)

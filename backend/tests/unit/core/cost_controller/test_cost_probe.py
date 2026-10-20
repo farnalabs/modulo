@@ -145,6 +145,41 @@ def test_evaluate_run_skips_non_dict_entries() -> None:
     assert _evaluate_run(run) == "ok"
 
 
+def test_evaluate_run_excludes_non_billable_components() -> None:
+    """FAR-1780: a component carrying ``billable: False`` (the
+    agent-declared ``self_reported`` class) is EXCLUDED from the probe's
+    summed amount — build_cost_breakdown excludes it from the total by
+    design, so including it here would flag every declared-only agent spend
+    as a mismatch."""
+    run = _make_sampled_run(
+        total="2.000000",
+        breakdown=[
+            {"component": "x", "amount_usd": "2.000000"},
+            {
+                "component": "self_reported",
+                "amount_usd": "5.000000",
+                "billable": False,
+                "source": "agent",
+                "provenance": "reported",
+            },
+        ],
+    )
+    assert _evaluate_run(run) == "ok"
+
+
+def test_evaluate_run_billable_flag_absent_or_true_still_sums() -> None:
+    """A component without the flag (legacy entries) or with ``billable:
+    True`` is summed exactly as before."""
+    run = _make_sampled_run(
+        total="3.000000",
+        breakdown=[
+            {"component": "x", "amount_usd": "1.000000"},
+            {"component": "y", "amount_usd": "2.000000", "billable": True},
+        ],
+    )
+    assert _evaluate_run(run) == "ok"
+
+
 def test_evaluate_run_any_clamped_marker_short_circuits_to_clamped() -> None:
     """A single total_clamped entry marks the whole run as clamped."""
     run = _make_sampled_run(

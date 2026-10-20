@@ -1,9 +1,11 @@
-"""Tests for EvalDefinition/EvalSuite versioning + EvalResult version snapshots (FAR-382).
+"""Tests for eval-definition/EvalSuite versioning + EvalResult version snapshots (FAR-382).
 
 Covers, without Docker (in-memory SQLite + pure functions):
 
 * the new columns exist on the ORM models (``version`` / ``pre_version_raw`` on
-  EvalDefinition and EvalSuite, ``eval_definition_version`` on EvalResult);
+  the eval-definition model — ``Eval`` since FAR-1961 deleted the legacy
+  ``EvalDefinition`` entity — and on EvalSuite, ``eval_definition_version`` on
+  EvalResult);
 * the migration is reversible, non-null from cutover, and its chain head is
   correct;
 * the NULL-version lookup: an unpinned version resolves to the definition's
@@ -26,7 +28,7 @@ from modulo.core.eval_engine.suite_run import (
     SuiteRunError,
     resolve_eval_definition_version,
 )
-from modulo.db.models import Base, EvalDefinition, EvalResult, EvalSuite
+from modulo.db.models import Base, Eval, EvalResult, EvalSuite
 from modulo.db.models.eval_suite_run import SuiteRun
 
 _MIGRATION_PATH = (
@@ -45,20 +47,19 @@ def _make_session() -> Session:
     engine = create_engine("sqlite://")
     Base.metadata.create_all(
         engine,
-        tables=[EvalDefinition.__table__, EvalResult.__table__, EvalSuite.__table__, SuiteRun.__table__],
+        tables=[Eval.__table__, EvalResult.__table__, EvalSuite.__table__, SuiteRun.__table__],
     )
     return Session(engine)
 
 
-def _make_definition(org_id: uuid.UUID, *, version: int = 1, config: dict | None = None) -> EvalDefinition:
-    return EvalDefinition(
+def _make_eval(org_id: uuid.UUID, *, version: int = 1, config: dict | None = None) -> Eval:
+    return Eval(
         organisation_id=org_id,
         pipeline_id=uuid.uuid4(),
         account_id=uuid.uuid4(),
         name="eval",
         eval_type="regex",
         config_json=config or {"pattern": "a"},
-        failure_behaviour="warn",
         version=version,
     )
 
@@ -66,14 +67,14 @@ def _make_definition(org_id: uuid.UUID, *, version: int = 1, config: dict | None
 # --------------------------------------------------------------------------- #
 # Model surface                                                               #
 # --------------------------------------------------------------------------- #
-def test_eval_definition_version_columns_present() -> None:
-    cols = EvalDefinition.__table__.columns
+def test_eval_version_columns_present() -> None:
+    cols = Eval.__table__.columns
     assert "version" in cols
     assert "pre_version_raw" in cols
 
 
-def test_eval_definition_version_defaults_to_one() -> None:
-    col = EvalDefinition.__table__.c.version
+def test_eval_version_defaults_to_one() -> None:
+    col = Eval.__table__.c.version
     assert col.nullable is False
     assert col.default is not None
     assert col.default.arg == 1
@@ -138,7 +139,7 @@ def test_resolve_returns_pinned_version_unchanged() -> None:
 
 def test_resolve_unpinned_looks_up_latest_definition_version() -> None:
     org_id = uuid.uuid4()
-    row = _make_definition(org_id, version=3)
+    row = _make_eval(org_id, version=3)
     session = _async_session(row=row)
     version = asyncio.run(resolve_eval_definition_version(session, org_id, row.id))
     assert version == 3
@@ -212,7 +213,7 @@ def test_eval_def_to_dict_surfaces_version() -> None:
 
     session = _make_session()
     org_id = uuid.uuid4()
-    row = _make_definition(org_id, version=5, config={"pattern": "x"})
+    row = _make_eval(org_id, version=5, config={"pattern": "x"})
     session.add(row)
     session.flush()
 

@@ -205,18 +205,18 @@ class TestRequirePermissionAnyCredential:
 class TestRequireFeature:
     """Feature-availability gate -> 402 ``ProblemException``."""
 
-    async def test_enabled_feature_returns_none(self) -> None:
+    def test_enabled_feature_returns_none(self) -> None:
         dep = require_feature("team_rbac")
         ctx = MagicMock()
         ctx.feature_enabled.return_value = True
-        assert await dep.dependency(ctx=ctx) is None
+        assert dep.dependency(ctx=ctx) is None
 
-    async def test_disabled_feature_raises_402_with_instance(self) -> None:
+    def test_disabled_feature_raises_402_with_instance(self) -> None:
         dep = require_feature("team_rbac")
         ctx = MagicMock()
         ctx.feature_enabled.return_value = False
         with pytest.raises(ProblemException) as excinfo:
-            await dep.dependency(ctx=ctx)
+            dep.dependency(ctx=ctx)
         exc = excinfo.value
         assert exc.status_code == 402
         assert exc.problem.status == 402
@@ -224,19 +224,19 @@ class TestRequireFeature:
         assert exc.problem.instance == "team_rbac"
         assert "team_rbac" in exc.problem.detail
 
-    async def test_disabled_feature_uses_feature_name_as_instance(self) -> None:
+    def test_disabled_feature_uses_feature_name_as_instance(self) -> None:
         dep = require_feature("sso")
         ctx = MagicMock()
         ctx.feature_enabled.return_value = False
         with pytest.raises(ProblemException) as excinfo:
-            await dep.dependency(ctx=ctx)
+            dep.dependency(ctx=ctx)
         assert excinfo.value.problem.instance == "sso"
 
-    async def test_feature_enabled_checked_by_name(self) -> None:
+    def test_feature_enabled_checked_by_name(self) -> None:
         dep = require_feature("audit_viewer")
         ctx = MagicMock()
         ctx.feature_enabled.return_value = True
-        await dep.dependency(ctx=ctx)
+        dep.dependency(ctx=ctx)
         ctx.feature_enabled.assert_called_once_with("audit_viewer")
 
 

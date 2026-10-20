@@ -76,7 +76,7 @@ def union_allow_header(request: Request) -> str | None:
     return ", ".join(sorted(methods))
 
 
-async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     headers = dict(exc.headers or {})
     if exc.status_code == status.HTTP_405_METHOD_NOT_ALLOWED:
         allow = union_allow_header(request)
@@ -90,12 +90,12 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
     return problem.to_response(headers=headers)
 
 
-async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     problem = problem_from_validation_error(request, exc.errors())
     return problem.to_response()
 
 
-async def storage_exhausted_exception_handler(request: Request, exc: StorageExhaustedError) -> JSONResponse:
+def storage_exhausted_exception_handler(request: Request, exc: StorageExhaustedError) -> JSONResponse:
     """Map the DB-capacity ``StorageExhaustedError`` to HTTP 503 (FAR-426).
 
     A ``fixed``-mode DB at/over the 98% hard-stop refuses NEW run creation.
@@ -111,7 +111,7 @@ async def storage_exhausted_exception_handler(request: Request, exc: StorageExha
     ).to_response()
 
 
-async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch-all for any exception not handled by specific handlers.
 
     Logs the full exception with stack trace and returns a structured

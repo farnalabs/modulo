@@ -1607,11 +1607,15 @@ class TestSamlRoutesExtended:
 
 class TestOidcCallbackEndpointExtended:
     def test_success_redirects_with_tokens(self, client: TestClient) -> None:
+        from modulo.api.routes.sso import _OIDC_LOGIN_STATE_COOKIE
         from modulo.auth.sso import sign_state
 
         settings = _override()
         raw_state = "state-xyz"
         signed = sign_state(f"google:{raw_state}", settings.secret_key)
+        # FAR-1979: the callback requires the login-time browser-binding cookie
+        # to match the state, so seed it as the login redirect would.
+        client.cookies.set(_OIDC_LOGIN_STATE_COOKIE, sign_state(raw_state, settings.secret_key))
 
         id_token = (
             base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()

@@ -2443,7 +2443,7 @@ class PipelineExecutor:
             # Unpinned (NULL) or a non-string stand-in — pre-pinning
             # behaviour: fall back to the pipeline's live gates.
             return None
-        blocked, block_message = await _verify_policy_gate_pin_fingerprint(
+        blocked, block_message = _verify_policy_gate_pin_fingerprint(
             org_id=org_id,
             run_id=run_id,
             snapshot_id=snapshot.id,

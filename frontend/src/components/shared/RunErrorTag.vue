@@ -21,6 +21,11 @@ const CLASS_STYLES: Record<string, string> = {
   connector: 'bg-warning/10 text-warning-text',
   capacity: 'bg-primary/10 text-primary',
   provider: 'bg-warning/10 text-warning-text',
+  // Styling is keyed on the code's CLASS (first dotted segment), so this covers
+  // every ``model.*`` code. It carries the billing fault
+  // ``model.insufficient_funds`` — a hard blocker only an operator can clear —
+  // so it uses the destructive styling of the other critical classes (agent/eval).
+  model: 'bg-destructive/10 text-destructive-text',
   eval: 'bg-destructive/10 text-destructive-text',
   config: 'bg-warning/10 text-warning-text',
   contract: 'bg-warning/10 text-warning-text',

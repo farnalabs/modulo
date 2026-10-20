@@ -614,6 +614,67 @@ def _holder_identity_matches(holder: LockHolder) -> bool | None:
     return current == holder.starttime
 
 
+def _stop_with_no_holder(data_dir: Path, lock_path: Path) -> int:
+    """No recorded holder: 0 when the flock is free, else a mid-boot refusal."""
+    if _lock_is_free(lock_path):
+        _log.info("stop.no_holder data_dir=%s", data_dir)
+        return 0
+    raise LauncherError(
+        f"Refusing to stop: the data dir {data_dir} is locked but no holder is recorded "
+        "(a launcher may be mid-boot) — retry in a moment."
+    )
+
+
+def _stop_with_stale_identity(holder: LockHolder, lock_path: Path) -> int:
+    """PID-reuse holder: 0 when the flock is free, else a hard refusal."""
+    _log.warning("stop.stale_holder_identity pid=%s", holder.pid)
+    if _lock_is_free(lock_path):
+        return 0
+    raise LauncherError(
+        f"Refusing to stop: the recorded launcher PID {holder.pid} was reused by another "
+        "process and the lock is still held by an unidentified process — inspect the "
+        "data dir manually before signalling anything."
+    )
+
+
+def _signal_holder(holder: LockHolder, lock_path: Path, timeout: float) -> int | None:
+    """SIGTERM the verified holder.
+
+    Returns an exit code when the holder is already gone but the lock proves
+    still held; None when the signal was delivered (the caller then awaits
+    the lock release).
+    """
+    try:
+        os.kill(holder.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return 0 if _lock_is_free(lock_path) else _raise_still_locked(holder.pid, timeout)
+    except OSError as exc:
+        raise LauncherError(f"could not signal launcher PID {holder.pid}: {exc}") from exc
+    return None
+
+
+def _await_lock_release(lock_path: Path, pid: int, timeout: float) -> int:
+    """Wait for the flock to clear after signalling *pid* (0) or report 1."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _lock_is_free(lock_path):
+            return 0
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            if _lock_is_free(lock_path):
+                return 0
+            return 1
+        time.sleep(0.2)
+    # The holder was signalled but the kernel lock is still held at the
+    # deadline: we could not *confirm* a clean stop (the holder may be
+    # unverifiable, e.g. a legacy record with no STARTTIME). Per the contract
+    # this is a "could not confirm stopped" outcome, reported as 1 — never an
+    # exception, which is reserved for outright refusals (mid-boot / PID reuse).
+    _log.warning("stop.unconfirmed pid=%s timeout=%s", pid, timeout)
+    return 1
+
+
 def request_stop(data_dir: Path, *, timeout: float = 10.0) -> int:
     """Ask the launcher holding *data_dir* to stop (the ``modulo stop`` path).
 
@@ -629,47 +690,13 @@ def request_stop(data_dir: Path, *, timeout: float = 10.0) -> int:
     lock_path = data_dir.parent / (data_dir.name + LOCK_SUFFIX)
     holder = _read_lock_holder(lock_path)
     if holder is None:
-        if _lock_is_free(lock_path):
-            _log.info("stop.no_holder data_dir=%s", data_dir)
-            return 0
-        raise LauncherError(
-            f"Refusing to stop: the data dir {data_dir} is locked but no holder is recorded "
-            "(a launcher may be mid-boot) — retry in a moment."
-        )
-    identity = _holder_identity_matches(holder)
-    if identity is False:
-        _log.warning("stop.stale_holder_identity pid=%s", holder.pid)
-        if _lock_is_free(lock_path):
-            return 0
-        raise LauncherError(
-            f"Refusing to stop: the recorded launcher PID {holder.pid} was reused by another "
-            "process and the lock is still held by an unidentified process — inspect the "
-            "data dir manually before signalling anything."
-        )
-    try:
-        os.kill(holder.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return 0 if _lock_is_free(lock_path) else _raise_still_locked(holder.pid, timeout)
-    except OSError as exc:
-        raise LauncherError(f"could not signal launcher PID {holder.pid}: {exc}") from exc
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if _lock_is_free(lock_path):
-            return 0
-        try:
-            os.kill(holder.pid, 0)
-        except OSError:
-            if _lock_is_free(lock_path):
-                return 0
-            return 1
-        time.sleep(0.2)
-    # The holder was signalled but the kernel lock is still held at the
-    # deadline: we could not *confirm* a clean stop (the holder may be
-    # unverifiable, e.g. a legacy record with no STARTTIME). Per the contract
-    # this is a "could not confirm stopped" outcome, reported as 1 — never an
-    # exception, which is reserved for outright refusals (mid-boot / PID reuse).
-    _log.warning("stop.unconfirmed pid=%s timeout=%s", holder.pid, timeout)
-    return 1
+        return _stop_with_no_holder(data_dir, lock_path)
+    if _holder_identity_matches(holder) is False:
+        return _stop_with_stale_identity(holder, lock_path)
+    signalled = _signal_holder(holder, lock_path, timeout)
+    if signalled is not None:
+        return signalled
+    return _await_lock_release(lock_path, holder.pid, timeout)
 
 
 def _raise_still_locked(pid: int, timeout: float) -> int:
@@ -786,6 +813,86 @@ def _shim_should_abandon(
     return current_starttime != recorded_starttime
 
 
+def _parse_shim_argv(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
+    """Parse the shim's own options and split off the child argv.
+
+    argparse's REMAINDER positional mis-parses when optionals follow a
+    positional, so split the child argv off on the first "--" ourselves and
+    parse only the shim's own options.
+    """
+    parser = argparse.ArgumentParser(prog="modulo-child-shim", add_help=False)
+    parser.add_argument("child_shim")
+    parser.add_argument("--parent-pid", type=int, required=True)
+    parser.add_argument("--parent-starttime", type=int, required=True)
+    dash = argv.index("--") if "--" in argv else len(argv)
+    return parser.parse_args(argv[:dash]), argv[dash + 1 :]
+
+
+def _make_forward_signal(
+    shutting_down: threading.Event,
+    child_holder: list[subprocess.Popen[bytes]],
+) -> Callable[[int, object], None]:
+    """Build the ONE SIGTERM+SIGINT handler, installed before the spawn.
+
+    A signal arriving in the spawn window must not kill the shim by default
+    action. The group signal already reached the service; a signal aimed at
+    THIS pid only (not the group) is forwarded on SIGTERM.
+    """
+
+    def _forward_signal(signum: int, _frame: object) -> None:
+        shutting_down.set()
+        if signum == signal.SIGTERM and child_holder:
+            with contextlib.suppress(OSError):
+                os.kill(child_holder[0].pid, signal.SIGTERM)
+
+    return _forward_signal
+
+
+def _kill_child_and_abandon(child_proc: subprocess.Popen[bytes]) -> int:
+    """Kill + reap the service, then return the shim's abandon exit code."""
+    try:
+        child_proc.kill()
+        child_proc.wait(timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return 2
+
+
+def _drain_shim_child(child_proc: subprocess.Popen[bytes]) -> int:
+    """Wait for a shutting-down service; SIGKILL it if the grace expires."""
+    try:
+        return child_proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        child_proc.kill()
+        return child_proc.wait(timeout=5)
+
+
+def _shim_watch_loop(
+    child_proc: subprocess.Popen[bytes],
+    *,
+    parent_pid: int,
+    recorded_starttime: int,
+    shutting_down: threading.Event,
+) -> int:
+    """Poll the launcher STARTTIME / child exit until the shim should return."""
+    next_watchdog = 0.0
+    while True:
+        code = child_proc.poll()
+        if code is not None:
+            return code
+        now = time.monotonic()
+        if now >= next_watchdog:
+            next_watchdog = now + SHIM_POLL_SECONDS
+            if _shim_should_abandon(
+                recorded_starttime=recorded_starttime,
+                current_starttime=read_proc_starttime(parent_pid),
+            ):
+                return _kill_child_and_abandon(child_proc)
+        if shutting_down.is_set():
+            return _drain_shim_child(child_proc)
+        time.sleep(0.05)
+
+
 def child_shim_main(argv: list[str]) -> int:
     """Run the child shim: supervise the launcher, carry the service process.
 
@@ -801,69 +908,26 @@ def child_shim_main(argv: list[str]) -> int:
     * exits with the service's exit code so the supervisor's crash bookkeeping
       sees the real failure.
     """
-    parser = argparse.ArgumentParser(prog="modulo-child-shim", add_help=False)
-    parser.add_argument("child_shim")
-    parser.add_argument("--parent-pid", type=int, required=True)
-    parser.add_argument("--parent-starttime", type=int, required=True)
-    # argparse's REMAINDER positional mis-parses when optionals follow a
-    # positional, so split the child argv off on the first "--" ourselves and
-    # parse only the shim's own options.
-    dash = argv.index("--") if "--" in argv else len(argv)
-    child_argv = argv[dash + 1 :]
-    ns = parser.parse_args(argv[:dash])
+    ns, child_argv = _parse_shim_argv(argv)
     if not child_argv:
         _log.error("shim.no_child_argv")
         return 2
-    parent_pid = ns.parent_pid
-    recorded = ns.parent_starttime
     shutting_down = threading.Event()
     child_holder: list[subprocess.Popen[bytes]] = []
-
-    def _forward_signal(signum: int, _frame: object) -> None:
-        # ONE handler for SIGTERM+SIGINT, installed BEFORE the child is
-        # spawned: a signal arriving in the spawn window must not kill the
-        # shim by default action. The group signal already reached the
-        # service; a signal aimed at THIS pid only (not the group) is
-        # forwarded on SIGTERM.
-        shutting_down.set()
-        if signum == signal.SIGTERM and child_holder:
-            with contextlib.suppress(OSError):
-                os.kill(child_holder[0].pid, signal.SIGTERM)
-
-    signal.signal(signal.SIGTERM, _forward_signal)
-    signal.signal(signal.SIGINT, _forward_signal)
+    signal.signal(signal.SIGTERM, _make_forward_signal(shutting_down, child_holder))
+    signal.signal(signal.SIGINT, _make_forward_signal(shutting_down, child_holder))
     preexec = _set_pdeathsig if sys.platform == "linux" else None
     child_proc = subprocess.Popen(  # noqa: S603 — argv built by the supervisor, never shell  # NOSONAR — supervisor-built argv, not user input
         child_argv,
         preexec_fn=preexec,
     )
     child_holder.append(child_proc)
-
-    next_watchdog = 0.0
-    while True:
-        code: int | None = child_proc.poll()
-        if code is not None:
-            return code
-        now = time.monotonic()
-        if now >= next_watchdog:
-            next_watchdog = now + SHIM_POLL_SECONDS
-            if _shim_should_abandon(
-                recorded_starttime=recorded,
-                current_starttime=read_proc_starttime(parent_pid),
-            ):
-                try:
-                    child_proc.kill()
-                    child_proc.wait(timeout=5)
-                except (OSError, subprocess.TimeoutExpired):
-                    pass
-                return 2
-        if shutting_down.is_set():
-            try:
-                return child_proc.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                child_proc.kill()
-                return child_proc.wait(timeout=5)
-        time.sleep(0.05)
+    return _shim_watch_loop(
+        child_proc,
+        parent_pid=ns.parent_pid,
+        recorded_starttime=ns.parent_starttime,
+        shutting_down=shutting_down,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1052,23 +1116,35 @@ class Supervisor:
 
     def _tick_child_locked(self, child: _Child) -> None:
         now = self._clock()
-        if child.process is None:
-            if child.next_spawn_at is not None and now < child.next_spawn_at:
-                return
-            if self._ready_to_spawn(child):
-                self._spawn_locked(child)
+        process = child.process
+        if process is None:
+            self._tick_unstarted_locked(child, now)
             return
-        code = child.process.poll()
+        code = process.poll()
         if code is not None:
             self._on_exit_locked(child, code)
             return
         if child.spec.probe is None:
-            # No probe: the startup deadline is the liveness contract — a
-            # child that survives the window without dying is presumed live
-            # (its death remains the crash signal).
-            if not child.healthy and child.spawned_at is not None:
-                self._enforce_startup_deadline_locked(child, now)
+            self._tick_probe_less_locked(child, now)
             return
+        self._tick_probed_locked(child, process, now)
+
+    def _tick_unstarted_locked(self, child: _Child, now: float) -> None:
+        """Spawn a never-started child once its backoff window has elapsed."""
+        if child.next_spawn_at is not None and now < child.next_spawn_at:
+            return
+        if self._ready_to_spawn(child):
+            self._spawn_locked(child)
+
+    def _tick_probe_less_locked(self, child: _Child, now: float) -> None:
+        # No probe: the startup deadline is the liveness contract — a
+        # child that survives the window without dying is presumed live
+        # (its death remains the crash signal).
+        if not child.healthy and child.spawned_at is not None:
+            self._enforce_startup_deadline_locked(child, now)
+
+    def _tick_probed_locked(self, child: _Child, process: ChildProcess, now: float) -> None:
+        """Run a child's probe and act on the tri-state outcome."""
         outcome = self._run_probe(child)
         if outcome is ProbeOutcome.UNAVAILABLE:
             # The probe TOOL is broken, not the child: leave the healthy
@@ -1088,14 +1164,18 @@ class Supervisor:
             # A once-healthy child that now fails its probe is
             # restarted through the same crash/backoff path: stop it
             # here and let the exit poll record the real crash.
-            if child.terminating_since is None:
-                self._terminate_locked(child)
-                child.terminating_since = now
-            elif now - child.terminating_since > self.knobs.shutdown_grace_seconds:
-                with contextlib.suppress(OSError):
-                    child.process.kill()
+            self._terminate_unhealthy_child_locked(child, process, now)
             return
         self._enforce_startup_deadline_locked(child, now)
+
+    def _terminate_unhealthy_child_locked(self, child: _Child, process: ChildProcess, now: float) -> None:
+        """Stop (then kill after the grace window) a once-healthy failing child."""
+        if child.terminating_since is None:
+            self._terminate_locked(child)
+            child.terminating_since = now
+        elif now - child.terminating_since > self.knobs.shutdown_grace_seconds:
+            with contextlib.suppress(OSError):
+                process.kill()
 
     def _enforce_startup_deadline_locked(self, child: _Child, now: float) -> None:
         """A never-healthy child must not wedge the supervisor forever.
@@ -1744,69 +1824,59 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def collect_status(data_dir: Path) -> dict[str, Any]:
-    """Assemble the ``modulo status`` payload (state + pids + lock holder).
+def _load_status_state(data_dir: Path) -> tuple[Any, str | None]:
+    """(state, error) — read-only state.json verification for status.
 
-    Strictly READ-ONLY — a status query must never mutate the data dir: the
-    secrets file is parsed WITHOUT the create-if-missing behaviour (a
-    missing file simply means ``initialized: false``), nothing is created,
-    chmodded, or rewritten. state.json is verified with the secrets-file
-    HMAC key when readable, and the result carries only ports/PIDs/modes.
+    The secrets file is parsed WITHOUT the create-if-missing behaviour (a
+    missing file is an error string; a missing state.json alongside readable
+    secrets is an honest unknown with no error).
     """
     from modulo.launcher import secrets_file as secrets_file_module
     from modulo.launcher.secrets_file import SecretsFileError
-    from modulo.launcher.state import LauncherState, StateIntegrityError, StateVersionError, load_state
+    from modulo.launcher.state import StateIntegrityError, StateVersionError, load_state
 
-    status: dict[str, Any] = {"data_dir": str(data_dir), "initialized": False, "components": {}}
-    state: LauncherState | None = None
     secrets_path = data_dir / "secrets.json"
     try:
         if not secrets_path.exists():
-            status["error"] = "data dir is not initialized (no secrets file)"
-        else:
-            secrets_loaded = secrets_file_module._parse(secrets_path.read_bytes())
-            state = load_state(data_dir / STATE_FILENAME, secrets_loaded.state_hmac_key)
+            return None, "data dir is not initialized (no secrets file)"
+        secrets_loaded = secrets_file_module._parse(secrets_path.read_bytes())
+        return load_state(data_dir / STATE_FILENAME, secrets_loaded.state_hmac_key), None
     except SecretsFileError as exc:
-        status["error"] = f"secrets unavailable: {exc}"
+        return None, f"secrets unavailable: {exc}"
     except (StateIntegrityError, StateVersionError) as exc:
-        status["error"] = f"state unreadable: {exc}"
+        return None, f"state unreadable: {exc}"
     except FileNotFoundError:
-        pass
-    # Terminal-degraded state (FAR-674): read-only surface for status/doctor,
-    # surfaced even when state.json is unreadable (it is the launcher's
-    # last-word record about WHY it stopped).
+        return None, None
+
+
+def _apply_degraded_record(data_dir: Path, status: dict[str, Any]) -> None:
+    """Surface the persisted degraded record (readable without state.json)."""
     degraded = read_degraded_record(data_dir / DEGRADED_FILENAME)
-    if degraded is not None:
-        crashes = degraded.get("crashes")
-        status["degraded"] = {
-            "reason": degraded.get("reason"),
-            "degraded_at": degraded.get("degraded_at"),
-            "crashes": crashes if isinstance(crashes, list) else [],
-        }
-    if state is None:
-        return status
-    status["initialized"] = True
-    status["postgres_port"] = state.postgres_port
-    status["redis_port"] = state.redis_port
-    status["api_port"] = state.api_port
-    runtime_path = data_dir / RUNTIME_FILENAME
-    holder = _read_lock_holder(data_dir.parent / (data_dir.name + LOCK_SUFFIX))
-    pids = read_runtime_manifest(runtime_path)
-    degraded_reason = read_degraded_reason(runtime_path)
-    if holder is not None:
-        status["launcher"] = {
-            "pid": holder.pid,
-            "mode": holder.mode,
-            "alive": _pid_alive(holder.pid),
-        }
-    if degraded_reason is not None:
-        status["degraded"] = {
-            "reason": degraded_reason,
-            "remediation": (
-                "the supervisor trip is terminal — restart `modulo start` once the underlying "
-                "fault is cleared, and inspect the app log (`modulo logs`) for crash backtraces"
-            ),
-        }
+    if degraded is None:
+        return
+    crashes = degraded.get("crashes")
+    status["degraded"] = {
+        "reason": degraded.get("reason"),
+        "degraded_at": degraded.get("degraded_at"),
+        "crashes": crashes if isinstance(crashes, list) else [],
+    }
+
+
+def _apply_degraded_reason(status: dict[str, Any], degraded_reason: str | None) -> None:
+    """Overlay the runtime-manifest degraded reason (its remediation text)."""
+    if degraded_reason is None:
+        return
+    status["degraded"] = {
+        "reason": degraded_reason,
+        "remediation": (
+            "the supervisor trip is terminal — restart `modulo start` once the underlying "
+            "fault is cleared, and inspect the app log (`modulo logs`) for crash backtraces"
+        ),
+    }
+
+
+def _apply_component_status(status: dict[str, Any], state: Any, pids: dict[str, int]) -> None:
+    """Add the postgres/redis/SAQ rows of the component table."""
     for name, port in (
         ("postgres", state.postgres_port),
         ("redis", state.redis_port),
@@ -1821,6 +1891,10 @@ def collect_status(data_dir: Path) -> dict[str, Any]:
             "state": _component_state(pid, port),
             "remediation": _component_remediation(name, pid, port),
         }
+
+
+def _apply_api_component_status(status: dict[str, Any], state: Any, holder: LockHolder | None) -> None:
+    """Add the api row — its PID is the launcher lock holder's."""
     api_pid = holder.pid if holder is not None else None
     status["components"]["api"] = {
         "pid": api_pid,
@@ -1829,6 +1903,48 @@ def collect_status(data_dir: Path) -> dict[str, Any]:
         "state": _component_state(api_pid, state.api_port),
         "remediation": _component_remediation("api", api_pid, state.api_port),
     }
+
+
+def _apply_runtime_status(data_dir: Path, status: dict[str, Any], state: Any) -> None:
+    """Add the launcher/pid/component table once state.json is verified."""
+    runtime_path = data_dir / RUNTIME_FILENAME
+    holder = _read_lock_holder(data_dir.parent / (data_dir.name + LOCK_SUFFIX))
+    pids = read_runtime_manifest(runtime_path)
+    _apply_degraded_reason(status, read_degraded_reason(runtime_path))
+    if holder is not None:
+        status["launcher"] = {
+            "pid": holder.pid,
+            "mode": holder.mode,
+            "alive": _pid_alive(holder.pid),
+        }
+    _apply_component_status(status, state, pids)
+    _apply_api_component_status(status, state, holder)
+
+
+def collect_status(data_dir: Path) -> dict[str, Any]:
+    """Assemble the ``modulo status`` payload (state + pids + lock holder).
+
+    Strictly READ-ONLY — a status query must never mutate the data dir: the
+    secrets file is parsed WITHOUT the create-if-missing behaviour (a
+    missing file simply means ``initialized: false``), nothing is created,
+    chmodded, or rewritten. state.json is verified with the secrets-file
+    HMAC key when readable, and the result carries only ports/PIDs/modes.
+    """
+    status: dict[str, Any] = {"data_dir": str(data_dir), "initialized": False, "components": {}}
+    state, error = _load_status_state(data_dir)
+    if error is not None:
+        status["error"] = error
+    # Terminal-degraded state (FAR-674): read-only surface for status/doctor,
+    # surfaced even when state.json is unreadable (it is the launcher's
+    # last-word record about WHY it stopped).
+    _apply_degraded_record(data_dir, status)
+    if state is None:
+        return status
+    status["initialized"] = True
+    status["postgres_port"] = state.postgres_port
+    status["redis_port"] = state.redis_port
+    status["api_port"] = state.api_port
+    _apply_runtime_status(data_dir, status, state)
     return status
 
 

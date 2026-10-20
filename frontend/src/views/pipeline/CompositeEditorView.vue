@@ -1,10 +1,10 @@
 <template>
   <BackLink to="/library" :label="$t('views.CompositeEditorView.back_to_library')" />
   <div class="flex h-[calc(100vh-3.5rem)]">
-    <div v-if="loading" class="flex flex-1 flex-col gap-4 p-6" :aria-label="$t('views.CompositeEditorView.loading_canvas')" role="status">
+    <output v-if="loading" class="flex flex-1 flex-col gap-4 p-6" :aria-label="$t('views.CompositeEditorView.loading_canvas')">
       <SkeletonBlock height-class="h-8 w-64" />
       <SkeletonBlock height-class="flex-1 w-full" />
-    </div>
+    </output>
 
     <div v-else-if="pageError" class="flex flex-1 items-center justify-center p-6">
       <ErrorAlert :message="pageError" :on-retry="retry" />

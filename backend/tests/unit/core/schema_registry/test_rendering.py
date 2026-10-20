@@ -314,6 +314,37 @@ class TestRefInlining:
         inner = result.schema["properties"]["data"]["properties"]["inner"]
         assert inner["type"] == "string"
 
+    def test_non_string_ref_value_rejected(self) -> None:
+        """A ``$ref`` whose value is not a string is a hard flatten error —
+        the render falls back rather than passing a bogus ref downstream."""
+        schema = {
+            "type": "object",
+            "properties": {"data": {"$ref": 123}},
+        }
+        result = render_for_profile(schema, "provider-strict", "openai")
+        assert result.skipped is True
+        reason = result.skip_reason or ""
+        assert "ref_flatten_error" in reason
+        assert "$ref must be a string" in reason
+
+
+class TestFlattenRefList:
+    """The array flattener descends dict items and passes scalars through."""
+
+    def test_flattens_dict_items_and_keeps_scalar_items(self) -> None:
+        from modulo.core.schema_registry.rendering import _flatten_refs
+
+        schema: dict[str, Any] = {
+            "type": "array",
+            "items": [{"$ref": "#/$defs/Item"}, "raw", 7],
+            "$defs": {"Item": {"type": "string"}},
+        }
+        flattened, _node_count = _flatten_refs(schema)
+        items = flattened["items"]
+        assert items[0]["type"] == "string"
+        assert items[1] == "raw"
+        assert items[2] == 7
+
 
 # ---------------------------------------------------------------------------
 # 4. Fallback: failing render never raises, never blocks
@@ -719,6 +750,28 @@ class TestWalkSchema:
         _walk_schema(schema, "#", _collector)
         assert "items" in visited
         assert "type" in visited
+
+    def test_list_root_visits_dict_items(self) -> None:
+        """A top-level list goes through the array branch of ``_walk_schema``
+        (the dict branch is what a normal schema exercises)."""
+        visited: list[tuple[str, str]] = []
+
+        def _collector(key: str, value: Any, path: str) -> None:
+            visited.append((key, path))
+
+        _walk_schema([{"type": "string"}, {"type": "integer"}], "#", _collector)
+        assert ("type", "#[0]") in visited
+        assert ("type", "#[1]") in visited
+
+    def test_scalar_root_is_a_no_op(self) -> None:
+        """A non-dict, non-list root visits nothing and does not raise."""
+        visited: list[str] = []
+
+        def _collector(key: str, value: Any, path: str) -> None:
+            visited.append(key)
+
+        _walk_schema("just-a-string", "#", _collector)
+        assert not visited
 
 
 # ---------------------------------------------------------------------------

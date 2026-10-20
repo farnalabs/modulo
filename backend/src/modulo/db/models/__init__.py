@@ -27,7 +27,6 @@ from modulo.db.models.eval_dataset import (
     purge_soft_deleted_eval_cases,
     validate_dataset_has_cases,
 )
-from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.eval_suite import EvalSuite
 from modulo.db.models.eval_suite_run import (
@@ -132,7 +131,6 @@ __all__ = [
     "Eval",
     "EvalCase",
     "EvalDataset",
-    "EvalDefinition",
     "EvalResult",
     "EvalSuite",
     "Evidence",

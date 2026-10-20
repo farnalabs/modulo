@@ -206,5 +206,5 @@ scraped series actually carries; `modulo_errors_total` on its own returns nothin
   `configs/otel-collector.yml` in `docs/deployment.md` §Observability Stack).
   If panels show no data, verify the collector exports these exact names
   before editing the dashboard queries.
-- The Claim Token Expiry panel uses a stacked time-series bar chart (not a native calendar heatmap) – install the [Discrete](https://grafana.com/grafana/plugins/natel-discrete-panel/) or [Status History](https://grafana.com/grafana/plugins/marcusolsson-status-history-panel/) panel plugin for a true calendar heatmap view
+- The Claim Token Expiry panel uses a stacked time-series bar chart (not a native calendar heatmap) – to render it differently, either install the [Discrete](https://grafana.com/grafana/plugins/natel-discrete-panel/) panel plugin, or use the built-in [Status History](https://grafana.com/docs/grafana/latest/visualizations/panels-visualizations/visualizations/status-history/) visualization, which draws a status-over-time grid (similar to a state timeline) rather than a calendar heatmap
 - Cost dashboards use `increase(...[$__interval])` which works with Prometheus counter metrics – ensure your metrics are counters, not gauges
