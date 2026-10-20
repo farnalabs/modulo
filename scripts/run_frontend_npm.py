@@ -100,6 +100,59 @@ def frontend_relative_paths(filenames: list[str]) -> list[str]:
     return result
 
 
+def _load_package_scripts() -> dict:
+    """Return the ``scripts`` object from frontend/package.json."""
+    with Path(PACKAGE_JSON).open(encoding="utf-8-sig") as fh:
+        return json.load(fh).get("scripts", {})
+
+
+def _eslint_command() -> list[str]:
+    """Return the command prefix used to run eslint."""
+    eslint_bin = FRONTEND_DIR / "node_modules" / ".bin" / "eslint"
+    if not eslint_bin.is_file():
+        # Fallback: use npx (slower but always available).  On Windows the
+        # npx shim is a .cmd that CreateProcess cannot launch directly, so
+        # it must run through the command interpreter too.
+        if sys.platform == "win32":
+            return [_CMD_EXE, "/c", "npx", "eslint"]
+        return ["npx", "eslint"]
+    if sys.platform == "win32":
+        return [_CMD_EXE, "/c", str(eslint_bin)]
+    return [str(eslint_bin)]
+
+
+def _run_eslint_on_staged(extra_args: list[str]) -> int:
+    """Run eslint on the staged files under frontend/ (pre-commit path)."""
+    # When extra_args are present (filenames from pre-commit with
+    # pass_filenames: true), we cannot use "pnpm run lint" because its
+    # script hardcodes `eslint src` — extra filenames would be additive,
+    # not a replacement.  Instead, run eslint directly with just the staged
+    # files, translated to paths that resolve from frontend/ (pre-commit
+    # passes repo-root-relative paths while eslint runs with cwd=frontend/).
+    staged = frontend_relative_paths(extra_args)
+    if not staged:
+        print(
+            f"{Path(__file__).name}: no staged files under frontend/ - skipping",
+            file=sys.stderr,
+        )
+        return 0
+    cmd = [*_eslint_command(), "--cache", "--cache-location", ".cache/eslint", *staged]
+    result = subprocess.run(cmd, cwd=FRONTEND_DIR, check=False)
+    return result.returncode
+
+
+def _run_package_script(pm: str, script: str) -> int:
+    """Run a package.json script through the resolved package manager."""
+    if sys.platform == "win32":
+        # CreateProcess cannot execute .cmd/.bat shims directly (WinError 193);
+        # they must be launched through the Windows command interpreter.
+        cmd = [_CMD_EXE, "/c", pm, "run", script]
+    else:
+        cmd = [pm, "run", script]
+    result = subprocess.run(cmd, cwd=FRONTEND_DIR, check=False)
+    return result.returncode
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(f"usage: {Path(__file__).name} <script> [extra-args...]", file=sys.stderr)
@@ -116,8 +169,7 @@ def main() -> int:
         print(f"{Path(__file__).name}: {PACKAGE_JSON} not found - skipping", file=sys.stderr)
         return 0
 
-    with Path(PACKAGE_JSON).open(encoding="utf-8-sig") as fh:
-        scripts = json.load(fh).get("scripts", {})
+    scripts = _load_package_scripts()
     if script not in scripts:
         print(
             f"{Path(__file__).name}: no '{script}' script in frontend/package.json - skipping",
@@ -130,45 +182,10 @@ def main() -> int:
         print(f"{Path(__file__).name}: neither pnpm nor npm found on PATH", file=sys.stderr)
         return 1
 
-    # When extra_args are present (filenames from pre-commit with
-    # pass_filenames: true), we cannot use "pnpm run lint" because its
-    # script hardcodes `eslint src` — extra filenames would be additive,
-    # not a replacement.  Instead, run eslint directly with just the staged
-    # files, translated to paths that resolve from frontend/ (pre-commit
-    # passes repo-root-relative paths while eslint runs with cwd=frontend/).
     if extra_args:
-        staged = frontend_relative_paths(extra_args)
-        if not staged:
-            print(
-                f"{Path(__file__).name}: no staged files under frontend/ - skipping",
-                file=sys.stderr,
-            )
-            return 0
-        eslint_bin = FRONTEND_DIR / "node_modules" / ".bin" / "eslint"
-        if not eslint_bin.is_file():
-            # Fallback: use npx (slower but always available).  On Windows the
-            # npx shim is a .cmd that CreateProcess cannot launch directly, so
-            # it must run through the command interpreter too.
-            if sys.platform == "win32":
-                eslint_cmd = [_CMD_EXE, "/c", "npx", "eslint"]
-            else:
-                eslint_cmd = ["npx", "eslint"]
-        elif sys.platform == "win32":
-            eslint_cmd = [_CMD_EXE, "/c", str(eslint_bin)]
-        else:
-            eslint_cmd = [str(eslint_bin)]
-        cmd = [*eslint_cmd, "--cache", "--cache-location", ".cache/eslint", *staged]
-        result = subprocess.run(cmd, cwd=FRONTEND_DIR, check=False)
-        return result.returncode
+        return _run_eslint_on_staged(extra_args)
 
-    if sys.platform == "win32":
-        # CreateProcess cannot execute .cmd/.bat shims directly (WinError 193);
-        # they must be launched through the Windows command interpreter.
-        cmd = [_CMD_EXE, "/c", pm, "run", script]
-    else:
-        cmd = [pm, "run", script]
-    result = subprocess.run(cmd, cwd=FRONTEND_DIR, check=False)
-    return result.returncode
+    return _run_package_script(pm, script)
 
 
 if __name__ == "__main__":
