@@ -75,6 +75,13 @@ async def update_set(
     values: dict[str, Any] | None = None,
     version: int,
 ) -> ParameterSet | None:
+    # FAR-1825: this is the request transaction's first row lock (the REST PUT
+    # and the MCP update_parameter_set tool both reach it unbounded otherwise).
+    # A contended parameter-set row must raise 55P03 (a visible 409), never
+    # park a pooled connection indefinitely.
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
     result = await session.execute(
         select(ParameterSet)
         .where(

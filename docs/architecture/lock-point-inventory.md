@@ -16,14 +16,24 @@
 
 ## 1. Method (reproducible enumeration)
 
+> **FAR-1825 re-derivation (this branch).** §1's commands were re-run against the
+> branch tip, not trusted from the previous snapshot: **58** `.with_for_update(`
+> + **3** `with_for_update=` = **61** SQLAlchemy call sites (+2 raw SQL = **63**
+> row-lock sites). The +2 since the FAR-1833 cutover are **new sites landed by
+> other work**, neither category C: `api/mcp_server.py::_replace_pipeline_graph_txn`
+> (A19; self-bounds with `set_mutation_row_lock_timeout` before its first lock) and
+> `core/cron_helpers.py::_fail_node_deadline_run` (D15; `session.get(Run,
+> with_for_update=True)`, bounded by the reconcile org transaction's bound at
+> `cron_helpers.py:8763`). Category C itself is unchanged at **20** sites.
+
 Counts below are **measured**, not estimated. The two enumeration commands are:
 
 ```bash
 # (1) SQLAlchemy call sites – the lint-safe way to skip doc/comment prose,
 #     because prose never writes a leading dot or an `=`:
-grep -rn '\.with_for_update(' backend/src/modulo --include='*.py' | wc -l   # 57
-grep -rn 'with_for_update='  backend/src/modulo --include='*.py' | wc -l   #  2  (session.get kwargs)
-# total SQLAlchemy row-lock call sites: 59
+grep -rn '\.with_for_update(' backend/src/modulo --include='*.py' | wc -l   # 58
+grep -rn 'with_for_update='  backend/src/modulo --include='*.py' | wc -l   #  3  (session.get kwargs)
+# total SQLAlchemy row-lock call sites: 61
 
 # (2) raw SQL `FOR UPDATE` occurrences. NOTE: the filter is LOOSE – it also
 #     matches docstring/prose mentions of `FOR UPDATE`, so do not read the raw
@@ -41,15 +51,15 @@ returns **66** hits; the 7-hit difference is prose (docstrings/comments), which 
 by a one-off script that additionally resolves the enclosing `def`/`async def` for each
 hit; the raw `file:line` set is exactly reproducible from command (1).
 
-**Headline counts** (re-measured after the FAR-1833 cutover; see §10)
+**Headline counts** (re-measured on the FAR-1825 branch; see §10)
 
 | Form | Measured |
 |---|---|
-| SQLAlchemy `.with_for_update(...)` | 57 |
-| SQLAlchemy `session.get(..., with_for_update=True)` | 2 |
-| **SQLAlchemy row-lock call sites (total)** | **59** |
+| SQLAlchemy `.with_for_update(...)` | 58 |
+| SQLAlchemy `session.get(..., with_for_update=True)` | 3 |
+| **SQLAlchemy row-lock call sites (total)** | **61** |
 | Raw SQL `FOR UPDATE` in locking DML | 2 |
-| **Total row-lock sites** | **61** |
+| **Total row-lock sites** | **63** |
 | Non-locking `FOR UPDATE` occurrence (RLS policy DDL) | 1 |
 
 > **Count corrections (FAR-1822 + FAR-1832).** The original audit recorded **63**
@@ -92,7 +102,7 @@ lock is taken in. "Over-serialises" is a judgement: **no** means the critical se
 minimum needed for the stated invariant; **watch** flags a lock that also blocks an
 unrelated writer or is held across non-lock work.
 
-### A – pipeline/trigger serialisation (18)
+### A – pipeline/trigger serialisation (19)
 
 | # | file:line | function | lock | txn | hold / blocking scope | over-serialises |
 |---|---|---|---|---|---|---|
@@ -113,7 +123,8 @@ unrelated writer or is held across non-lock work.
 | A15 | `core/pipeline_engine/node_runner.py:2414` | `_write_raw_output_marker` | FOR UPDATE | caller txn | Run-row lock for the raw-output marker write; the counterpart of A16. | no. |
 | A16 | `core/pipeline_engine/recovery.py:431` | `_fetch_locked_run` | FOR UPDATE | caller txn, `include_soft_deleted` | Locks the *pipeline* row to single-flight run recovery; re-reads the run after the lock. | no. |
 | A17 | `core/pipeline_engine/recovery.py:712` | `guardrail_override` | FOR UPDATE | caller txn, `include_soft_deleted` | Pipeline lock so a guardrail override cannot race a graph edit. | no. |
-| A18 | `core/pipeline_engine/classify.py:1283` | `_reconcile_classify_run` | FOR UPDATE + `populate_existing` | **own** `session.begin()` | Per-run re-read to terminalise/classify exactly once; each DB call bounded by `asyncio.wait_for(_CLASSIFICATION_WRITE_TIMEOUT_SECONDS)`. | no. |
+| A18 | `core/pipeline_engine/classify.py:1383` | `_reconcile_classify_run` | FOR UPDATE + `populate_existing` | **own** `session.begin()` | Per-run re-read to terminalise/classify exactly once; each DB call bounded by `asyncio.wait_for(_CLASSIFICATION_WRITE_TIMEOUT_SECONDS)`. | no. |
+| A19 | `api/mcp_server.py:4119` | `_replace_pipeline_graph_txn` | FOR UPDATE | own `_session` txn, **bounded** by `set_mutation_row_lock_timeout` (FAR-1361) | MCP graph-replace transaction takes the pipeline row lock first (FAR-1845 order); the bound is issued before the first lock. | no. |
 
 > Note: A18 and the raw-SQL site R2 (§4) both lock the `runs` row; A15 and R2 are the two
 > halves of the same connector idempotency-gate fence (write vs read).
@@ -139,31 +150,39 @@ unrelated writer or is held across non-lock work.
 > writer, HITL-window writer): each is now a single-statement atomic settings patch
 > (`update_org_settings_patch`) with no `SELECT … FOR UPDATE` pre-lock – see §10
 > finding 3. Row IDs are kept gap-stable for cross-references.
+>
+> **FAR-1825 swept this category.** Every C site whose lock a request path can
+> reach now issues the transaction-scoped `set_mutation_row_lock_timeout` before
+> its first lock (column `txn`). Three site-groups are deliberately left as-is,
+> with the reason recorded on the row: C5/C6 are already bounded one frame up by
+> the shared org-patch helper, and C10/C11/C21 have no production caller at all.
+> The structural guard is
+> `backend/tests/unit/api/test_far1825_lock_timeout_sweep.py`.
 
 | # | file:line | function | lock | txn | hold / blocking scope | over-serialises |
 |---|---|---|---|---|---|---|
-| C4 | `api/routes/model_backends.py:658` | `create_model_backend_endpoint` | FOR UPDATE | mutation txn | Locks existing same-name `ModelBackend` row for creation uniqueness (409 on clash). | no. |
-| C5 | `db/crud/organisation.py:89` | `get_organisation` | FOR UPDATE (opt-in) | caller txn | Generic org row lock used by org-updating callers. Marks itself FAR-1624: intentionally plain `FOR UPDATE`, not `FOR NO KEY UPDATE`. Since FAR-1830/1832 its only caller is the atomic settings patch's **generic-dialect (SQLite/MariaDB) fallback** (`_apply_json_column_patch_generic`) – on Postgres the patch is a single `UPDATE` and never takes this. | **watch** – Organisation row (Postgres never reaches it). |
-| C6 | `db/crud/observability.py:28` (`update_otel_config` → shared `db/crud/organisation.py` machinery) | `update_otel_config` | FOR UPDATE (generic-dialect fallback only) | caller txn | **FAR-1832 (QA F3):** routes through the shared atomic JSON-column patch (`update_org_json_column_patch`) – the Postgres path is a single-statement atomic `otel_config_json = COALESCE(…) || :patch` write with no pre-lock; the `FOR UPDATE` survives only on the SQLite/MariaDB fallback branch (`_apply_json_column_patch_generic`, which never runs on Postgres). Deliberately `require_live_row=False` (still `include_soft_deleted` on the generic read) – FAR-1025 keeps OTel config writable during the pending-deletion window (unlike `settings_json`, whose writers now refuse soft-deleted orgs). QA F3 also gave this path the same fail-closed tenant guard as the settings writer (it previously trusted `org_id` verbatim – and `organisations` is not RLS-scoped, so that guard is the only tenant control). | no – never reached on Postgres. |
-| C7 | `db/crud/parameter_set.py:84` | `update_set` | FOR UPDATE | caller txn | Parameter-set version bump RMW. | no. |
-| C8 | `db/crud/account.py:121` | `_get_account_locked` | FOR UPDATE (`session.get`) | caller txn | The account-preferences serialisation point (documented): all preference writers serialise here. | **watch** – Account row shared with key quota B9. |
-| C9 | `db/crud/node_observation.py:36` | `observe_node` | FOR UPDATE | caller txn | Idempotent node-observation upsert (insert if absent). | no. |
-| C10 | `db/crud/node_composite.py:27` | `set_parent_node` | FOR UPDATE | caller txn | Locks the node being re-parented. | no. |
-| C11 | `db/crud/node_composite.py:33` | `set_parent_node` | FOR UPDATE | caller txn | Locks the (new) parent node in the same txn – cycle/self-parent guard. | no. |
-| C12 | `db/crud/sso_provider.py:201` | `create_provider` | FOR UPDATE | caller txn | SSO-provider name uniqueness per org. | no. |
-| C13 | `db/crud/sso_provider.py:310` | `update_provider` | FOR UPDATE | caller txn | SSO-provider update RMW (credential-bearing entity). | no. |
-| C14 | `db/crud/parameter_schema.py:109` | `update_schema` | FOR UPDATE | caller txn | Parameter-schema version bump RMW. | no. |
-| C15 | `db/crud/agent.py:161` | `add_prompt_version` | FOR UPDATE | caller txn | Agent prompt-version append RMW. | no. |
-| C16 | `db/crud/agent.py:228` | `rollback_prompt_version` | FOR UPDATE | caller txn | Agent prompt-version rollback. | no. |
-| C17 | `db/crud/invitations.py:94` | `get_live_for_email` | FOR UPDATE | caller txn | Invitation consume/lookup RMW (documented: caller MUST hold and consume the row). | no. |
-| C18 | `db/crud/invitations.py:126` | `get_valid_by_token_hash` | FOR UPDATE | caller txn | Invitation consume by token hash (single-use). | no. |
-| C19 | `db/crud/agent_runner_binding.py:112` | `replace_agent_bindings` | FOR UPDATE | caller txn | Serialises concurrent binding saves on the Agent row before delete-all + insert. | no. |
-| C20 | `core/lifecycle_map/service.py:87` | `get_lifecycle_map_for_update` | FOR UPDATE + `populate_existing` | caller txn | Lifecycle-map version bump; prevents two savers both writing version N+1. | no. |
-| C21 | `core/workflow_import_export/__init__.py:158` | `_get_existing_names` | FOR UPDATE (opt-in) | caller txn | Locks existing entity names during import for deterministic name reconciliation. | watch – scanning a name set under lock; hold grows with import size. |
-| C22 | `core/assistant/context_source_service.py:130` | `_upsert_context_source` | FOR UPDATE | caller txn | Org-scoped assistant-context-source upsert. | no. |
-| C23 | `core/assistant/context_source_service.py:140` | `_upsert_context_source` | FOR UPDATE | caller txn | User-scoped assistant-context-source upsert (per-user variant of C22). | no. |
+| C4 | `api/routes/model_backends.py:663` | `create_model_backend_endpoint` | FOR UPDATE | mutation txn, **bounded** (FAR-1825: `set_mutation_row_lock_timeout` at the top of the route transaction) | Locks existing same-name `ModelBackend` row for creation uniqueness (409 on clash). | no. |
+| C5 | `db/crud/organisation.py:107` | `get_organisation` | FOR UPDATE (opt-in) | caller txn, **bounded** by `_take_settings_patch_lock_wait` in `update_org_json_column_patch` | Generic org row lock used by org-updating callers. Marks itself FAR-1624: intentionally plain `FOR UPDATE`, not `FOR NO KEY UPDATE`. Since FAR-1830/1832 its only caller is the atomic settings patch's **generic-dialect (SQLite/MariaDB) fallback** (`_apply_json_column_patch_generic`) – on Postgres the patch is a single `UPDATE` and never takes this. | **watch** – Organisation row (Postgres never reaches it). |
+| C6 | `db/crud/organisation.py:718` (`_apply_json_column_patch_generic`; entered via `db/crud/observability.py::update_otel_config` → shared machinery) | `_apply_json_column_patch_generic` | FOR UPDATE (generic-dialect fallback only) | caller txn, **bounded** by `_take_settings_patch_lock_wait` (the shared patch bounds before it dispatches here) | **FAR-1832 (QA F3):** routes through the shared atomic JSON-column patch (`update_org_json_column_patch`) – the Postgres path is a single-statement atomic `otel_config_json = COALESCE(…) || :patch` write with no pre-lock; the `FOR UPDATE` survives only on the SQLite/MariaDB fallback branch (`_apply_json_column_patch_generic`, which never runs on Postgres). Deliberately `require_live_row=False` (still `include_soft_deleted` on the generic read) – FAR-1025 keeps OTel config writable during the pending-deletion window (unlike `settings_json`, whose writers now refuse soft-deleted orgs). QA F3 also gave this path the same fail-closed tenant guard as the settings writer (it previously trusted `org_id` verbatim – and `organisations` is not RLS-scoped, so that guard is the only tenant control). | no – never reached on Postgres. |
+| C7 | `db/crud/parameter_set.py:91` | `update_set` | FOR UPDATE | caller txn, **bounded** (FAR-1825, in the helper before the lock) | Parameter-set version bump RMW. | no. |
+| C8 | `db/crud/account.py:130` | `_get_account_locked` | FOR UPDATE (`session.get`) | caller txn, **bounded** (FAR-1825, in the helper before the lock) | The account-preferences serialisation point (documented): all preference writers serialise here. | **watch** – Account row shared with key quota B9. |
+| C9 | `db/crud/node_observation.py:42` | `observe_node` | FOR UPDATE | caller txn, **bounded** (FAR-1825, in the helper before the lock) | Idempotent node-observation upsert (insert if absent). | no. |
+| C10 | `db/crud/node_composite.py:27` | `set_parent_node` | FOR UPDATE | caller txn, **deliberately unbounded** | Locks the node being re-parented. No production call site (only unit tests import it, verified by the FAR-1825 guard), so no request path can reach it. | no. |
+| C11 | `db/crud/node_composite.py:33` | `set_parent_node` | FOR UPDATE | caller txn, **deliberately unbounded** (same reason as C10) | Locks the (new) parent node in the same txn – cycle/self-parent guard. | no. |
+| C12 | `db/crud/sso_provider.py:207` | `create_provider` | FOR UPDATE | caller txn, **bounded** (FAR-1825, in the helper before the lock) | SSO-provider name uniqueness per org. | no. |
+| C13 | `db/crud/sso_provider.py:323` | `update_provider` | FOR UPDATE | caller txn, **bounded** (FAR-1825, at helper entry, before the conditional name lock) | SSO-provider update RMW (credential-bearing entity). | no. |
+| C14 | `db/crud/parameter_schema.py:115` | `update_schema` | FOR UPDATE | caller txn, **bounded** (FAR-1825, in the helper before the lock) | Parameter-schema version bump RMW. | no. |
+| C15 | `db/crud/agent.py:168` | `add_prompt_version` | FOR UPDATE | caller txn, **bounded** (FAR-1825, in the helper before the lock) | Agent prompt-version append RMW. | no. |
+| C16 | `db/crud/agent.py:240` | `rollback_prompt_version` | FOR UPDATE | caller txn, **bounded** (FAR-1825, in the helper before the lock) | Agent prompt-version rollback. | no. |
+| C17 | `db/crud/invitations.py:100` | `get_live_for_email` | FOR UPDATE | caller txn, **bounded** (FAR-1825, in the helper before the lock) | Invitation consume/lookup RMW (documented: caller MUST hold and consume the row). Reached by the pre-auth SSO JIT login; the bound turns a contended row into 55P03 (login failure) rather than an unbounded pre-auth wait. | no. |
+| C18 | `db/crud/invitations.py:139` | `get_valid_by_token_hash` | FOR UPDATE | caller txn, **bounded** (FAR-1825, in the helper before the lock) | Invitation consume by token hash (single-use); first lock of the accept-invite transaction. | no. |
+| C19 | `db/crud/agent_runner_binding.py:119` | `replace_agent_bindings` | FOR UPDATE | caller txn, **bounded** (FAR-1825, in the helper before the lock) | Serialises concurrent binding saves on the Agent row before delete-all + insert. Both the save route and the workflow-import path are covered. | no. |
+| C20 | `core/lifecycle_map/service.py:94` | `get_lifecycle_map_for_update` | FOR UPDATE + `populate_existing` | caller txn, **bounded** (FAR-1825, in the helper before the lock) | Lifecycle-map version bump; prevents two savers both writing version N+1. Covers the update, save-version and update-version routes. | no. |
+| C21 | `core/workflow_import_export/__init__.py:160` | `_get_existing_names` | FOR UPDATE (opt-in) | caller txn, **deliberately unbounded** | Locks existing entity names during import for deterministic name reconciliation. The lock is behind `for_update=True`, and **no production caller passes it** (both public wrappers default to `False`; verified by the FAR-1825 guard), so no lock is taken today. Enabling it means sweeping it. | watch – scanning a name set under lock; hold grows with import size. |
+| C22 | `core/assistant/context_source_service.py:138` | `_upsert_context_source` | FOR UPDATE | caller txn, **bounded** (FAR-1825, in the helper before the branch) | Org-scoped assistant-context-source upsert. | no. |
+| C23 | `core/assistant/context_source_service.py:148` | `_upsert_context_source` | FOR UPDATE | caller txn, **bounded** (same FAR-1825 bound as C22 – one statement precedes both branches) | User-scoped assistant-context-source upsert (per-user variant of C22). | no. |
 
-### D – operational / other (11)
+### D – operational / other (12)
 
 > **D7, D9 and D14 have been removed.** **FAR-1822** removed D7 (the `cron_helpers`
 > scheduled-report lock – PR #1842 merged 2026-10-15; the stamp-and-commit path now
@@ -186,6 +205,7 @@ unrelated writer or is held across non-lock work.
 | D11 | `core/cost_controller/__init__.py:270` | `get_or_create_daily_count` | FOR UPDATE | caller txn | Daily-count row RMW with `begin_nested()` IntegrityError re-read. | no. |
 | D12 | `core/audit_logger/__init__.py:337` | `_get_chain_head_locked` | FOR UPDATE | caller txn | Per-org audit-chain head; prevents forked appends. | watch – held for the append; A13 appends an audit event inside its pipeline lock, stacking two locks (see §7). |
 | D13 | `core/hitl_manager/__init__.py:588` | `_assert_team_member_for_claim` | FOR UPDATE | caller txn | Locks the HITL gate row so the team check is serialised with the claim UPDATE. | no. |
+| D15 | `core/cron_helpers.py:5845` | `_fail_node_deadline_run` | FOR UPDATE (`session.get`) | caller txn, **bounded** by the reconcile org transaction (`cron_helpers.py:8763`, FAR-1601) | FAR-1999 node-deadline reaper: locks the run row, re-checks every premise on the locked row, then terminal-fails it. Background reconciliation only (no request path). | no – single-run fence. |
 
 > **D9 is retired (FAR-1833).** The org spend-ceiling gate
 > (`core/cost_controller/finalize.py::_apply_spend_ceiling_gate`) no longer takes
@@ -216,16 +236,18 @@ unrelated writer or is held across non-lock work.
 
 | Category | SQLAlchemy sites | Raw SQL sites | **Total** |
 |---|---|---|---|
-| A – pipeline/trigger serialisation | 18 | 1 (R2) | **19** |
+| A – pipeline/trigger serialisation | 19 | 1 (R2) | **20** |
 | B – credential rotation | 10 | 0 | **10** |
 | C – entity CRUD | 20 | 0 | **20** |
-| D – operational/other | 11 | 1 (R1) | **12** |
-| **Total** | **59** | **2** | **61** |
+| D – operational/other | 12 | 1 (R1) | **13** |
+| **Total** | **61** | **2** | **63** |
 
 These are the §3 counts as they stand on this branch: the FAR-1801 authoring snapshot
-with D7 retired by FAR-1822, C1/C2/C3/D14 removed by FAR-1832, and D9 retired by
-FAR-1833. A live re-run of §1's commands reads the same **59** SQLAlchemy sites, so
-the inventory and the measurement agree after the FAR-1833 cutover; see §9.
+with D7 retired by FAR-1822, C1/C2/C3/D14 removed by FAR-1832, D9 retired by
+FAR-1833, and the two post-cutover sites added by other work (A19
+`_replace_pipeline_graph_txn`, D15 `_fail_node_deadline_run`). FAR-1825 re-ran
+§1's commands against this branch and reads the same **61** SQLAlchemy sites, so
+the inventory and the measurement agree; see §9 and §10.
 
 Distinct **locked tables** (by frequency): `runs` (heaviest – A5, A6, A7, A14, A15, A18, R2, D10, R1), `organisations` (C5, C6-generic-fallback, D1–D4), `pipelines` (A1–A4, A10–A13, A16, A17), `accounts` (B9, C8), `token_families` (B4–B6), `ScheduledReport` (D8), plus
 single-use rows for credentials/entities.
@@ -244,7 +266,11 @@ single-use rows for credentials/entities.
   fixtures). It must be called *before* the first lock in a transaction (FAR-1313). Route
   mutation transactions, the two team-gate helpers (A2, A3) and the two
   `request_cancellation` callers (A7) all call it; FAR-1610 closed A7, the hold-out this
-  inventory originally flagged.
+  inventory originally flagged. **FAR-1825 closed the category-C sweep:** every C site a
+  request path can reach now issues the bound itself (C4 at the route's transaction top,
+  C7–C9/C12–C20/C22–C23 at the CRUD helper's first lock), while C5/C6 inherit the shared
+  org-patch helper's bound. C10/C11/C21 are deliberately unbounded because no production
+  request path reaches them (see §3 C and §10).
 - **Weak-strength locks are already used where conflict width matters:** FOR NO KEY UPDATE
   for snapshot allocation (A4), FOR SHARE for the clone
   source read (A12), `SKIP LOCKED` for run coalescing (A5), and scoped `OF <table>` locks
@@ -369,6 +395,13 @@ original finding.
    sites (C-series) whose callers may hold the transaction across slow work, and add
    `set_mutation_row_lock_timeout` at the transaction top where the first lock is unbounded.
    *(Categories C + B.)*
+   **DELIVERED for category C – FAR-1825.** Re-derived the C set from §1 against the
+   branch tip, bounded every reachable site (C4 route-level; C7–C9, C12–C20, C22–C23 at the
+   CRUD helper; C5/C6 already bounded by the shared org-patch helper), and recorded C10/C11/
+   C21 as deliberately unbounded (no production caller). Pinned by
+   `backend/tests/unit/api/test_far1825_lock_timeout_sweep.py`. Category B is unchanged by
+   this sweep; B9 (`_enforce_user_key_quota`, the Account-row key-mint quota) shares the
+   Account row with C8 and is the remaining B-series candidate.
 
 ---
 
@@ -476,3 +509,62 @@ advisory is acquired BEFORE any `organisations`-row mutation, on both the finali
 (`lock_org_cost_state` precedes `_cost_controls_patch`, which sets `org.daily_spend_limit`).
 Both take the pair in the SAME order (advisory → org row), so they cannot form the ABBA cycle
 that was D9. The residual coupling is therefore a bounded one-way wait, never a deadlock.
+
+### FAR-1825 – category-C lock-bound sweep (re-derived, not trusted from this doc)
+
+This document's own §9 caveat applies: an inventory is a hypothesis. FAR-1825 therefore
+re-ran §1's two commands against the branch tip before changing anything:
+
+| Form | Before sweep (this branch) |
+|---|---|
+| `.with_for_update(` | **58** |
+| `session.get(..., with_for_update=True)` | **3** |
+| SQLAlchemy call sites | **61** |
+| raw locking `FOR UPDATE` | **2** |
+| **total** | **63** |
+
+The +2 since the FAR-1833 snapshot are sites added by unrelated work, both outside
+category C: **A19** `api/mcp_server.py::_replace_pipeline_graph_txn` (already self-bounds
+with `set_mutation_row_lock_timeout`, FAR-1361) and **D15**
+`core/cron_helpers.py::_fail_node_deadline_run` (bounded by the reconcile org transaction
+at `cron_helpers.py:8763`). Category C remains exactly **20** sites.
+
+**Disposition of every category-C site** (the `txn` column in §3 carries the per-row note):
+
+- **Bounded by this sweep, at the request transaction's first lock:**
+  C4 (route top), C7, C8, C9, C12, C13, C14, C15, C16, C17, C18, C19, C20, C22, C23.
+  Each now issues `set_mutation_row_lock_timeout(session)` before its first
+  `SELECT … FOR UPDATE`. The helper is transaction-scoped (`SET LOCAL lock_timeout`,
+  Postgres-only), so a contended row raises SQLSTATE 55P03 and the existing DB-error
+  mapping turns it into a visible 409 (REST) or a branchable tool error (MCP) — never an
+  unbounded wait.
+- **Already bounded one frame up:** C5 and C6. Both are reached only through the shared
+  org JSON-column patch (`update_org_json_column_patch`), which calls
+  `_take_settings_patch_lock_wait` before dispatching to `_apply_json_column_patch_generic`;
+  the Postgres path never takes a row lock at all. No second bound was added.
+- **Deliberately left unbounded, with reason:** C10/C11 (`set_parent_node`) have **no
+  production call site** — only `tests/unit/db/test_node_composite.py` — so no request
+  path can reach the lock. C21 (`_get_existing_names`) takes its lock only behind
+  `for_update=True`, and neither public wrapper (`get_existing_pipeline_names`,
+  `get_existing_agent_names`) passes it, so the lock is never taken today. Enabling either
+  path must sweep it in the same change; the FAR-1825 guard fails if that happens
+  silently.
+
+**Structural guard.** `backend/tests/unit/api/test_far1825_lock_timeout_sweep.py` is a
+token scanner: it re-derives the C site counts per file, asserts every swept function sets
+the bound *before* its first row-lock token, pins the caller-bounded C5/C6 shape, and
+asserts the no-caller sites stay unreachable. Known residual (accepted): a NEW transitive
+helper in a file not listed in the guard is not discovered by token scanning — adding a
+category-C lock means adding it to the guard and this inventory in the same change.
+
+**Out-of-scope findings recorded, not fixed here** (both are category A/B, not C):
+
+1. **A1 `api/mcp_server.py::bind_connector_to_node` is unbounded.** It takes the pipeline
+   row `FOR UPDATE` inside the shared `_session` context manager, which sets RLS but no
+   `lock_timeout`; the MCP tool path therefore has a user-facing unbounded wait for a
+   contended pipeline row. The row's `txn` note says "caller txn" but not "bounded".
+   Follow-up: add the bound inside `bind_connector_to_node` (same shape as A19) or accept
+   it explicitly.
+2. **B9 `api/routes/api_keys.py::_enforce_user_key_quota`** locks the Account row (shared
+   with C8) without a bound in its own route transaction. It sits in category B, which
+   FAR-1825 did not sweep; it is the remaining B-series candidate.

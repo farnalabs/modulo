@@ -53,6 +53,7 @@ from modulo.db.crud.model_backend import (
     list_pipeline_references_for_backend,
     update_model_backend,
 )
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import TERMINAL_STATUSES, Run
@@ -636,6 +637,10 @@ async def create_model_backend_endpoint(
     _validate_provider(req.provider)
     try:
         async with session.begin():
+            # FAR-1825: bound the creation-name uniqueness lock below (the
+            # transaction's first row lock). A contended same-name row must
+            # surface 55P03 -> 409, never an unbounded request wait.
+            await set_mutation_row_lock_timeout(session)
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 

@@ -117,7 +117,16 @@ async def _get_account_locked(session: AsyncSession, account_id: uuid.UUID) -> A
     Raises ``AccountNotFoundError`` when the row is missing (404-loud). The
     lock is held until the CALLER's transaction commits or rolls back: this
     helper is begin-AGNOSTIC (it never opens or closes a transaction).
+
+    FAR-1825: bounded here because this is the request transaction's first row
+    lock on every preferences path (REST ``/me/settings``,
+    ``/me/hitl-email-preferences``, the in-app dashboard preferences PUT and
+    the MCP ``set_hitl_email_alerts`` tool). A contended Account row must raise
+    55P03 (a visible 409), never park the pooled connection indefinitely.
     """
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
     account = await session.get(Account, account_id, with_for_update=True)
     if account is None:
         _logger.warning(
