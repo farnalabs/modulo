@@ -1272,4 +1272,144 @@ describe('SchemaEditorView', () => {
     )
     expect((versionCall?.[1] as { body?: { version_number?: number } } | undefined)?.body?.version_number).toBe(1)
   })
+
+  it('reports a version failure after creating a schema', async () => {
+    ;(vi.mocked(api.POST) as any).mockImplementation((url: string) => {
+      if (String(url).includes('/schemas/validate')) {
+        return Promise.resolve({ data: { valid: true, errors: [] }, error: undefined })
+      }
+      if (String(url).includes('/versions')) {
+        return Promise.resolve({ data: null, error: { detail: 'version_conflict' } })
+      }
+      return Promise.resolve({ data: { id: 'schema-new', name: 'New' }, error: undefined })
+    })
+
+    const wrapper = mount(SchemaEditorView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          FeatureGate: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+    await flushPromises()
+
+    const vm = wrapper.vm as any
+    vm.isNew = true
+    vm.schemaName = 'Version Fail'
+    vm.schemaVersion = '1.0.0'
+    vm.fields = [{ name: 'email', type: 'string' }]
+    await nextTick()
+
+    await vm.saveSchema()
+
+    expect(vm.saveError).toBeTruthy()
+    expect(vm.saveError).toContain('version')
+    expect(vm.saveSuccess).toBeNull()
+  })
+
+  it('reports an update error returned by the PATCH endpoint', async () => {
+    ;(vi.mocked(api.POST) as any).mockImplementation((url: string) => {
+      if (String(url).includes('/schemas/validate')) {
+        return Promise.resolve({ data: { valid: true, errors: [] }, error: undefined })
+      }
+      return Promise.resolve({ data: { id: 'schema-1', version: '1.0.0' }, error: undefined })
+    })
+    ;(vi.mocked(api.PATCH) as any).mockResolvedValue({ data: null, error: { detail: 'update_denied' } })
+
+    const wrapper = mount(SchemaEditorView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          FeatureGate: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+    await flushPromises()
+
+    const vm = wrapper.vm as any
+    vm.selectedSchemaId = 'schema-1'
+    vm.isNew = false
+    vm.schemaName = 'User Profile'
+    vm.schemaVersion = '1.0.0'
+    vm.fields = [{ name: 'email', type: 'string' }]
+    await nextTick()
+
+    await vm.saveSchema()
+
+    expect(vm.saveError).toBeTruthy()
+    expect(vm.saveError).toContain('update_denied')
+  })
+
+  it('reports a version failure after updating a schema', async () => {
+    ;(vi.mocked(api.POST) as any).mockImplementation((url: string) => {
+      if (String(url).includes('/schemas/validate')) {
+        return Promise.resolve({ data: { valid: true, errors: [] }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: { detail: 'version_conflict' } })
+    })
+    ;(vi.mocked(api.PATCH) as any).mockResolvedValue({ data: { id: 'schema-1', name: 'User Profile' }, error: undefined })
+
+    const wrapper = mount(SchemaEditorView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          FeatureGate: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+    await flushPromises()
+
+    const vm = wrapper.vm as any
+    vm.selectedSchemaId = 'schema-1'
+    vm.isNew = false
+    vm.schemaName = 'User Profile'
+    vm.schemaVersion = '1.0.0'
+    vm.fields = [{ name: 'email', type: 'string' }]
+    await nextTick()
+
+    await vm.saveSchema()
+
+    expect(vm.saveError).toBeTruthy()
+    expect(vm.saveError).toContain('version')
+  })
+
+  it('increments the next version number from the loaded versions', async () => {
+    ;(vi.mocked(api.POST) as any).mockImplementation((url: string) => {
+      if (String(url).includes('/schemas/validate')) {
+        return Promise.resolve({ data: { valid: true, errors: [] }, error: undefined })
+      }
+      return Promise.resolve({ data: { id: 'schema-1', version: '1.1.0' }, error: undefined })
+    })
+    ;(vi.mocked(api.PATCH) as any).mockResolvedValue({ data: { id: 'schema-1', name: 'User Profile' }, error: undefined })
+
+    const wrapper = mount(SchemaEditorView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          FeatureGate: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+    await flushPromises()
+
+    const vm = wrapper.vm as any
+    vm.selectedSchemaId = 'schema-1'
+    vm.isNew = false
+    vm.schemaName = 'User Profile'
+    vm.schemaVersion = '1.1.0'
+    vm.fields = [{ name: 'email', type: 'string' }]
+    vm.versions = [
+      { version: '1.0.0', version_number: 1, definition_json: {} },
+      { version: '1.0.1', version_number: 2, definition_json: {} },
+    ]
+    await nextTick()
+
+    await vm.saveSchema()
+
+    const versionCall = (vi.mocked(api.POST) as any).mock.calls.find(([url]: [string]) =>
+      String(url).includes('/versions'),
+    )
+    expect((versionCall?.[1] as { body?: { version_number?: number } } | undefined)?.body?.version_number).toBe(3)
+  })
 })
