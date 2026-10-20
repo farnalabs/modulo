@@ -336,6 +336,9 @@ async def _run_reconcile(
         record_facts = stack.enter_context(
             patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock)
         )
+        attribute_age_gate = stack.enter_context(
+            patch.object(ch, "_attribute_age_gate_derived_cost", new_callable=AsyncMock)
+        )
         if capacity_free is False:
             stack.enter_context(
                 patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=5)
@@ -347,6 +350,7 @@ async def _run_reconcile(
         summary = await ch.dispatcher_reconcile()
 
     session.record_facts = record_facts
+    session.attribute_age_gate = attribute_age_gate
     if terminalizer is not None:
         session.terminalizer = terminalizer
     if terminalizer_missing is not None:
@@ -2223,6 +2227,25 @@ class TestTerminalizerSyntheticErrorDetail:
         assert params["code"] == ch._NO_PROGRESS_ERROR_CODE
         assert params["detail"] == ch._STRANDED_PENDING_ERROR_DETAIL
         assert params["stranded_age_minutes"] == 135
+
+
+class TestAgeGateDerivedCostWiring:
+    """FAR-1993: only the mid-graph age gate's runs reach the derived-cost
+    attribution — the reconcile tick collects their ids post-commit."""
+
+    @pytest.mark.asyncio
+    async def test_mid_graph_terminalized_run_is_attributed_post_commit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run_id = uuid.uuid4()
+        _summary, *_rest, session = await _run_reconcile(monkeypatch, [], terminalizer_ids={"no_progress": [run_id]})
+        session.attribute_age_gate.assert_awaited_once_with(run_id, ORG)
+
+    @pytest.mark.asyncio
+    async def test_other_terminalizers_are_not_attributed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run_id = uuid.uuid4()
+        _summary, *_rest, session = await _run_reconcile(
+            monkeypatch, [], terminalizer_ids={"claim_cap_exhausted": [run_id]}
+        )
+        session.attribute_age_gate.assert_not_awaited()
 
 
 class TestAwaitingHumanHasCommittedDecision:

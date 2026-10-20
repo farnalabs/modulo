@@ -201,7 +201,7 @@ async def _run_org_pass(
         enqueue_failed_redispatched=0,
         summary=summary if summary is not None else ch._dispatcher_summary(),
         terminalized_run_ids=terminalized_run_ids if terminalized_run_ids is not None else [],
-        row_budget=row_budget,
+        limits=ch._ReconcileOrgLimits(row_budget=row_budget),
     )
 
 

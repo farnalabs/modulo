@@ -111,7 +111,7 @@ async def _job_exists(redis_url: str, run_id: uuid.UUID) -> bool:
         await r.aclose()
 
 
-async def _run_row_state(db_engine: Any, run_id: uuid.UUID) -> tuple[str, str | None]:
+async def _run_row_state(db_engine: Any, run_id: uuid.UUID) -> tuple[str, str | None, str | None]:
     from sqlalchemy import NullPool
     from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -119,27 +119,32 @@ async def _run_row_state(db_engine: Any, run_id: uuid.UUID) -> tuple[str, str | 
     try:
         async with eng.connect() as conn:
             row = (
-                await conn.execute(text("SELECT status, claim_token FROM runs WHERE id=:rid"), {"rid": str(run_id)})
+                await conn.execute(
+                    text("SELECT status, claim_token, error_code FROM runs WHERE id=:rid"), {"rid": str(run_id)}
+                )
             ).first()
     finally:
         await eng.dispose()
     assert row is not None
-    return row[0], row[1]
+    return row[0], row[1], row[2]
 
 
 async def test_node_started_stale_run_is_not_redispatched(
     saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
 ) -> None:
     """A first-node-STARTED run with a stale heartbeat and no SAQ job is NOT
-    re-dispatched: no job appears, the row stays running, the claim token is
-    untouched (nothing claimed or re-enqueued it)."""
+    re-dispatched: no job appears and the claim token is untouched (nothing
+    claimed or re-enqueued it). FAR-1999 then reaps it at its durable node
+    deadline — a started node may have executed side effects, so the run is
+    terminal-failed rather than held ``running`` forever or re-executed."""
     run_id, _ = await _seed_node_phase_run(db_engine, test_org, test_user, dispatch_phase=PHASE_FIRST_NODE_DISPATCHED)
 
     await ch.dispatcher_reconcile()
 
     assert not await _job_exists(saq_settings_env, run_id)
-    status, claim_token = await _run_row_state(db_engine, run_id)
-    assert status == "running"
+    status, claim_token, error_code = await _run_row_state(db_engine, run_id)
+    assert status == "failed"
+    assert error_code == "node_deadline_exceeded"
     assert claim_token == "token-a"
 
 
@@ -154,7 +159,7 @@ async def test_control_null_phase_stale_run_is_redispatched(
     await ch.dispatcher_reconcile()
 
     assert await _job_exists(saq_settings_env, run_id)
-    status, _claim_token = await _run_row_state(db_engine, run_id)
+    status, _claim_token, _error_code = await _run_row_state(db_engine, run_id)
     assert status == "running"
 
 
@@ -184,7 +189,7 @@ async def test_pending_node_started_reset_run_is_redispatched(
     await ch.dispatcher_reconcile()
 
     assert await _job_exists(saq_settings_env, run_id)
-    status, claim_token = await _run_row_state(db_engine, run_id)
+    status, claim_token, _error_code = await _run_row_state(db_engine, run_id)
     # Re-enqueued only — the reconcile tick never claims the row itself.
     assert status == "pending"
     assert claim_token == "token-a"
