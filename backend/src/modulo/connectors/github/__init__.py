@@ -651,24 +651,33 @@ class GitHubConnector(ConnectorBase):
             self._check_circuit()
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES + 1):
-            try:
-                response = await self._attempt_request(method, path, attempt, kwargs)
-                if response is not None:
-                    return response
-            except httpx.HTTPStatusError as exc:
-                last_exc = exc
-                if self._should_retry_status(exc.response.status_code, attempt):
-                    await asyncio.sleep(self._sleep_delay(exc.response, attempt))
-                    continue
-                self._raise_status_error(exc)
-            except (httpx.TimeoutException, httpx.ConnectError) as exc:
-                last_exc = exc
-                if await self._sleep_network_retry(attempt):
-                    continue
-                message, error_code = self._network_error_kind(exc)
-                self._raise_network_error(exc, message, error_code)
+            response, error = await self._request_attempt(method, path, attempt, kwargs)
+            if response is not None:
+                return response
+            last_exc = error
         self._record_failure()
         raise GitHubNetworkError("GitHub API request failed after retries") from last_exc
+
+    async def _request_attempt(
+        self,
+        method: str,
+        path: str,
+        attempt: int,
+        kwargs: dict[str, Any],
+    ) -> tuple[httpx.Response | None, Exception | None]:
+        """One attempt: a retry returns ``(None, exc)``; a terminal error raises."""
+        try:
+            return await self._attempt_request(method, path, attempt, kwargs), None
+        except httpx.HTTPStatusError as exc:
+            if self._should_retry_status(exc.response.status_code, attempt):
+                await asyncio.sleep(self._sleep_delay(exc.response, attempt))
+                return None, exc
+            self._raise_status_error(exc)
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            if await self._sleep_network_retry(attempt):
+                return None, exc
+            message, error_code = self._network_error_kind(exc)
+            self._raise_network_error(exc, message, error_code)
 
     async def _attempt_request(
         self,
