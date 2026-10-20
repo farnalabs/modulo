@@ -415,7 +415,12 @@ class FeedbackManager:
 
     @staticmethod
     def _normalise_eval_def(eval_def: Any) -> Any:
-        """Normalise an ORM ``EvalDefinition`` row to the engine's DTO shape."""
+        """Normalise an ORM ``Eval`` row to the engine's DTO shape.
+
+        The legacy ``EvalDefinition`` entity is gone; the live ``Eval`` model has
+        no ``failure_behaviour`` column (the policy gate owns the action), so the
+        DTO default is used.
+        """
         if isinstance(eval_def, dict) or hasattr(eval_def, "config"):
             return eval_def
         if hasattr(eval_def, "config_json"):
@@ -429,7 +434,7 @@ class FeedbackManager:
                 name=eval_def.name,
                 eval_type=eval_def.eval_type,
                 config=eval_def.config_json,
-                failure_behaviour=eval_def.failure_behaviour,
+                failure_behaviour=getattr(eval_def, "failure_behaviour", "warn"),
                 pass_threshold=float(eval_def.pass_threshold) if eval_def.pass_threshold is not None else None,
                 suite_id=eval_def.suite_id,
             )

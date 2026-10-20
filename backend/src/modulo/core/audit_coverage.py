@@ -189,7 +189,11 @@ __all__ = [
 AuditOutcome = Literal["success", "error"]
 
 #: A FastAPI dependency that resolves the acting principal for a request.
-PrincipalResolver = Callable[..., Awaitable[TenantPrincipal]]
+#: Either a sync or an async resolver -- ``Depends`` accepts both, and FastAPI
+#: runs a sync one in the threadpool. Keep this a union rather than pinning
+#: ``Awaitable`` so a resolver whose body never awaits need not be declared
+#: ``async`` (S7503).
+PrincipalResolver = Callable[..., TenantPrincipal | Awaitable[TenantPrincipal]]
 
 _LOG_KEY_PREFIX = "audit_coverage"
 

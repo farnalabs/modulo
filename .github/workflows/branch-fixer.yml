@@ -15,9 +15,17 @@ on:
         description: 'Review feedback or failure description'
         required: true
         type: string
+      force:
+        description: 'Set true to bypass Branch Fixer coalescing (an intentional re-fire). Automated callers must NOT set this.'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  # pull-requests: read is required by the "Resolve PR head SHA" step below:
+  # it reads the PR through the REST API to find the current head SHA.
+  pull-requests: read
 
 jobs:
   trigger-modulo-fixer:
@@ -31,6 +39,56 @@ jobs:
     # Manual `workflow_dispatch` invocations MUST check the PR's labels
     # themselves before calling this workflow.
     steps:
+      - name: Resolve PR head SHA
+        id: head-sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          FORCE: ${{ inputs.force }}
+        shell: bash
+        run: |
+          # Escape hatch: the coalesce gate keys on (prNumber, headSha) and
+          # cannot tell a human's intentional re-fire from an automated
+          # re-dispatch of the same commit. `force: true` therefore skips the
+          # lookup entirely and writes an empty output, so the payload omits
+          # headSha - and a payload with no headSha derives no coalesce key, so
+          # the delivery always creates a run. Automated callers (the PR
+          # Housekeeper) must NOT set it: they take the default `false` and get
+          # normal coalescing.
+          if [ "${FORCE}" = "true" ]; then
+            echo "::notice::force=true - skipping head SHA resolution so this dispatch is never coalesced."
+            echo "head_sha=" >> "${GITHUB_OUTPUT:-/dev/null}"
+            exit 0
+          fi
+
+          # headSha: coalescing parity with ci.yml. The Branch Fixer's webhook
+          # trigger folds repeated deliveries for the same (prNumber, headSha)
+          # within its coalesce window into ONE run. ci.yml's notify-pr-failure
+          # already sends headSha, but this dispatch path did not - so every
+          # PR Housekeeper re-dispatch for an unchanged PR minted another full
+          # fixer run. Resolving the PR's current head SHA lets a repeat on the
+          # SAME commit coalesce, while a new commit changes the SHA and still
+          # dispatches a fresh run.
+          #
+          # FAIL OPEN, by design: a dispatch must never be blocked here. If the
+          # lookup fails the output stays empty, the webhook step omits the
+          # headSha key entirely, and the payload behaves exactly as it did
+          # before this step existed (an absent headSha derives no coalesce key,
+          # so the delivery creates a run as before).
+          #
+          # The explicit /repos/farnalabs/modulo/... REST path is required: this
+          # job has no actions/checkout step, so there is no git remote for `gh`
+          # to infer the repository from.
+          HEAD_SHA=""
+          GH_RC=0
+          HEAD_SHA=$(gh api "repos/farnalabs/modulo/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/tmp/head_sha_stderr.txt) || GH_RC=$?
+          if [ "$GH_RC" -ne 0 ] || [ -z "$HEAD_SHA" ]; then
+            ERR=$(head -c 300 /tmp/head_sha_stderr.txt 2>/dev/null | tr '\n' ' ' || true)
+            echo "::warning::Could not resolve the head SHA for PR #${PR_NUMBER} (rc=${GH_RC}) - dispatching without headSha, so this delivery will not coalesce.${ERR:+ gh api stderr: $ERR}"
+            HEAD_SHA=""
+          fi
+          echo "head_sha=${HEAD_SHA}" >> "${GITHUB_OUTPUT:-/dev/null}"
+
       - name: Send webhook to Modulo Branch Fixer
         id: webhook
         env:
@@ -39,14 +97,21 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           BRANCH: ${{ inputs.branch }}
           FEEDBACK: ${{ inputs.feedback }}
+          HEAD_SHA: ${{ steps.head-sha.outputs.head_sha }}
         run: |
           TIMESTAMP=$(date +%s)
+          # headSha is added only when the lookup above resolved it. An empty
+          # headSha key would derive no coalesce key anyway, but omitting it
+          # keeps the "no headSha = no coalescing" contract explicit, and an
+          # unchanged payload is what the fallback path has always sent.
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
             --argjson prNumber "${PR_NUMBER}" \
+            --arg headSha "${HEAD_SHA}" \
             --arg failureDescription "${FEEDBACK}" \
             --arg repo "farnalabs/modulo" \
-            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
+            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}
+             + (if $headSha == "" then {} else {headSha: $headSha} end)')
           HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
 
           # Retry with exponential backoff on 429/5xx (max 5 attempts)

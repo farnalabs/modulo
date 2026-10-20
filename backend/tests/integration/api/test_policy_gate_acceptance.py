@@ -43,6 +43,7 @@ from collections.abc import AsyncGenerator
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -551,11 +552,12 @@ def _principal(env: _Env) -> object:
 
 
 async def test_pg_spec_c11_concurrent_creates_serialize_via_advisory_lock(db_engine: AsyncEngine, env: _Env) -> None:
-    """Three concurrent gate creators land exactly ONE live gate.
+    """Three concurrent creates: exactly ONE succeeds; the rest get the typed 409.
 
-    Direct call to the route's shared helper from three concurrent sessions;
-    the transaction-scoped advisory lock must serialize them so the
-    partial-unique index never fires.
+    POST is create-only (FAR-1750). Direct calls to the route's shared helper
+    from three concurrent sessions; the transaction-scoped advisory lock
+    serialises them so each later writer observes the committed live gate and
+    is refused with HTTP 409 rather than racing the partial-unique index.
     """
     from modulo.api.routes import evals as evals_module  # local import; avoid app import at module scope
 
@@ -567,23 +569,31 @@ async def test_pg_spec_c11_concurrent_creates_serialize_via_advisory_lock(db_eng
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
-    async def _writer(action: str) -> str:
-        async with factory() as session, session.begin():
-            gate = await evals_module._create_or_replace_gate(
-                eval_id,
-                {"action": action, "node_id": node_id},
-                session,
-                principal,
-            )
-            return str(gate.id)
+    async def _writer(action: str) -> str | HTTPException:
+        try:
+            async with factory() as session, session.begin():
+                gate = await evals_module._create_gate(
+                    eval_id,
+                    {"action": action, "node_id": node_id},
+                    session,
+                    principal,
+                )
+                return str(gate.id)
+        except HTTPException as exc:
+            return exc
 
-    results = await asyncio.gather(_writer("warn"), _writer("warn"), _writer("warn"))
-    assert len(set(results)) == 3, f"each writer must persist its own row, got {results}"
+    outcomes = await asyncio.gather(_writer("warn"), _writer("warn"), _writer("warn"))
+    successes = [outcome for outcome in outcomes if isinstance(outcome, str)]
+    conflicts = [outcome for outcome in outcomes if isinstance(outcome, HTTPException)]
+    assert len(successes) == 1, f"exactly one create must win, got {outcomes}"
+    assert len(conflicts) == 2, f"the other two must be refused, got {outcomes}"
+    assert all(exc.status_code == 409 for exc in conflicts)
 
     rows = await _load_gates(db_engine, env.org_id, eval_id, live_only=False)
     live = [r for r in rows if not r[3]]
-    assert len(rows) == 3, f"all three writers committed, got {len(rows)}"
+    assert len(rows) == 1, f"only the winning create persisted a row, got {len(rows)}"
     assert len(live) == 1, f"exactly one live gate expected, got {rows}"
+    assert str(live[0][0]) == successes[0]
 
 
 async def test_pg_spec_c11_negative_without_lock_second_writer_dies_with_unique_violation(
@@ -609,14 +619,14 @@ async def test_pg_spec_c11_negative_without_lock_second_writer_dies_with_unique_
 
     session_a = factory()
     await session_a.begin()
-    await evals_module._create_or_replace_gate(
+    await evals_module._create_gate(
         eval_id, {"action": "warn", "node_id": node_id}, session_a, principal
     )  # uncommitted
 
     session_b = factory()
     await session_b.begin()
     task_b = asyncio.create_task(
-        evals_module._create_or_replace_gate(eval_id, {"action": "warn", "node_id": node_id}, session_b, principal)
+        evals_module._create_gate(eval_id, {"action": "warn", "node_id": node_id}, session_b, principal)
     )
     try:
         await asyncio.sleep(0.5)  # writer B is now blocked on A's uncommitted index entry

@@ -24,6 +24,22 @@ from modulo.core.housekeeping import (
 _FakeBase = declarative_base()
 
 
+def _fake_scan_session() -> AsyncMock:
+    """AsyncMock session whose ``begin_nested()`` behaves like a savepoint.
+
+    ``scan_all`` runs every scanner inside ``async with session.begin_nested()``
+    (FAR-1977). A bare ``AsyncMock`` returns a coroutine from ``begin_nested()``,
+    which is not an async context manager, so the helper installs the shape the
+    real ``AsyncSession`` provides.
+    """
+    session = AsyncMock()
+    nested = AsyncMock()
+    nested.__aenter__ = AsyncMock(return_value=None)
+    nested.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested)
+    return session
+
+
 class _FakeTenantModel(_FakeBase):
     __tablename__ = "pipelines"
     id = Column(Uuid(), primary_key=True)
@@ -76,10 +92,46 @@ class TestCategoryResult:
         assert data["label"] == "mystery_category"
         assert data["count"] == 0
 
+    def test_default_status_is_ok_and_error_is_none(self) -> None:
+        """An unset status must read as "ran", never as failed (FAR-1977).
+
+        An empty ``candidates`` list alone must not imply failure: a plain
+        ``CategoryResult(category=..., candidates=[])`` is a clean empty scan.
+        """
+        r = CategoryResult(category="orphan_secrets", candidates=[])
+        data = r.to_dict()
+        assert data["status"] == "ok"
+        assert data["error"] is None
+
+    def test_failed_status_and_structured_error_serialise(self) -> None:
+        """A failed category carries a non-ok status + a class-only error.
+
+        The error must name the exception CLASS (``reason`` + ``exception``)
+        and never carry a message, traceback, or other raw exception text.
+        """
+        r = CategoryResult(
+            category="stale_pipelines",
+            candidates=[],
+            status="failed",
+            error={"reason": "scanner_failed", "exception": "RuntimeError"},
+        )
+        data = r.to_dict()
+        assert data["status"] == "failed"
+        assert data["error"] == {"reason": "scanner_failed", "exception": "RuntimeError"}
+        assert "message" not in data["error"]
+        assert "traceback" not in data["error"]
+
 
 class TestScanAll:
     async def _fake_session(self) -> AsyncMock:
-        return AsyncMock()
+        """An AsyncMock session whose ``begin_nested()`` is a usable savepoint.
+
+        ``scan_all`` wraps each scanner in ``async with session.begin_nested()``
+        (FAR-1977). On a real ``AsyncSession`` that call returns an async context
+        manager; on a bare ``AsyncMock`` it returns a coroutine, which is not
+        one — so the helper installs the async-CM shape every scanner needs.
+        """
+        return _fake_scan_session()
 
     @pytest.mark.asyncio
     async def test_scan_all_enriches_candidates_with_entity_type(self) -> None:
@@ -137,6 +189,13 @@ class TestScanAll:
         assert results[1].category == "stale_pipelines"
         assert not results[1].candidates
 
+        # FAR-1977 partial failure: only the scanner that RAISED is marked
+        # failed; the successful scanner keeps the default ``ok`` status.
+        assert results[0].status == "ok"
+        assert results[0].error is None
+        assert results[1].status == "failed"
+        assert results[1].error == {"reason": "scanner_failed", "exception": "RuntimeError"}
+
     @pytest.mark.asyncio
     async def test_scan_all_returns_category_for_every_scanner(self) -> None:
         session = await self._fake_session()
@@ -156,6 +215,8 @@ class TestScanAll:
         assert len(results) == 1
         assert results[0].category == "empty_teams"
         assert not results[0].candidates
+        assert results[0].status == "ok"
+        assert results[0].error is None
 
     @pytest.mark.asyncio
     async def test_scan_all_logs_scanner_failure_with_category(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -200,6 +261,10 @@ class TestScanAll:
         assert "scanner FAILURE" in message
         assert records[0].exc_info is not None
 
+        # The failure is ALSO in the response (FAR-1977), not only the log.
+        assert results[0].status == "failed"
+        assert results[0].error == {"reason": "scanner_failed", "exception": "NotImplementedError"}
+
     @pytest.mark.asyncio
     async def test_scan_all_does_not_log_failure_for_clean_empty_scan(self, caplog: pytest.LogCaptureFixture) -> None:
         """The failure signal distinguishes a failed scanner from a genuinely empty one (FAR-1906)."""
@@ -222,6 +287,8 @@ class TestScanAll:
 
         assert len(results) == 1
         assert not results[0].candidates
+        assert results[0].status == "ok"
+        assert results[0].error is None
         records = [record for record in caplog.records if record.name == "modulo.core.housekeeping"]
         assert not records
 
@@ -414,5 +481,5 @@ class TestScannerRegistry:
             entity_type=None,
         )
         with patch("modulo.core.housekeeping._SCANNERS", [detection_only]):
-            results = await scan_all(AsyncMock(), uuid.uuid4())
+            results = await scan_all(_fake_scan_session(), uuid.uuid4())
         assert results[0].candidates[0].entity_type == "invalid_org_fk"

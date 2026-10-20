@@ -12,8 +12,10 @@ The allowed eval_type vocabulary lives in exactly five places:
       subset; guardrail is NOT composite-eligible (like custom_function).
   (d) ``composite_binding.EvalDefinitionConfig.type`` Literal — same
       composite-eligible subset; guardrail deliberately absent.
-  (e) DB CHECK ``ck_eval_definitions_type`` (ORM model + migration 0110) —
-      must include ``guardrail``.
+  (e) DB CHECK ``ck_evals_type`` on the live ``evals`` table (ORM model) —
+      must include ``guardrail``. The legacy ``ck_eval_definitions_type``
+      remains in immutable migration 0110 and is asserted to carry the same
+      value.
 
 Sites (a), (b create/update), (e) must agree on the FULL universe. Sites (c),
 (d) must agree on the composite-eligible subset and MUST NOT contain
@@ -25,7 +27,7 @@ import re
 from modulo.core.composite_engine.composite_binding import EvalDefinitionConfig
 from modulo.core.eval_engine import EvalType
 from modulo.core.graph_validator import GraphValidator
-from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionModel
+from modulo.db.models.eval import Eval as EvalModel
 
 FULL_UNIVERSE = {"llm_judge", "regex", "json_schema", "custom_function", "guardrail", "human_set"}
 COMPOSITE_ELIGIBLE = {"regex", "json_schema", "llm_judge"}
@@ -104,9 +106,7 @@ def test_site_d_composite_binding_literal_excludes_guardrail():
 
 
 def test_site_e_orm_and_migration_check_include_guardrail():
-    orm_check = next(
-        c for c in EvalDefinitionModel.__table_args__ if getattr(c, "name", None) == "ck_eval_definitions_type"
-    )
+    orm_check = next(c for c in EvalModel.__table_args__ if getattr(c, "name", None) == "ck_evals_type")
     assert "guardrail" in orm_check.sqltext.text
 
     import pathlib

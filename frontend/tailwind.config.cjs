@@ -27,6 +27,14 @@ module.exports = {
         primary: 'hsl(var(--primary))',
         'accent-bright': 'hsl(var(--accent-bright))',
         'primary-foreground': 'hsl(var(--primary-foreground))',
+        // FAR-1938: text-safe counterpart of `primary`, following the
+        // `warning-text` / `destructive-text` precedent. `--primary` is a
+        // FILL/accent hue, so primary COLOURED TEXT on a `bg-primary/*` tint is
+        // only 4.16-4.33:1 in light mode (WCAG AA needs 4.5:1).
+        // `--primary-text` keeps the hue and darkens only in light mode; use
+        // `text-primary-text` - never `text-primary` - for primary-coloured
+        // text (see style.css for the measured ratios).
+        'primary-text': 'hsl(var(--primary-text))',
         secondary: 'hsl(var(--secondary))',
         'secondary-foreground': 'hsl(var(--secondary-foreground))',
         muted: 'hsl(var(--muted))',
@@ -35,7 +43,21 @@ module.exports = {
         'accent-foreground': 'hsl(var(--accent-foreground))',
         destructive: 'hsl(var(--destructive))',
         'destructive-foreground': 'hsl(var(--destructive-foreground))',
+        // Fill-safe counterpart of `destructive` for text-bearing SOLID fills
+        // (badges, destructive buttons). `--destructive` is an accent hue, so
+        // `--destructive-foreground` on it is only 3.22:1 (dark) / 3.30:1
+        // (agent) - below the WCAG AA 4.5:1 floor. Use `bg-destructive-fill`
+        // with `text-destructive-foreground` on every solid destructive
+        // surface that carries text.
+        'destructive-fill': 'hsl(var(--destructive-fill))',
         success: 'hsl(var(--success))',
+        // FAR-1938: text-safe counterpart of `success`. `--success` is a
+        // fill/accent green - as TEXT it is only 2.30:1 on white in light mode.
+        // `--success-text` keeps the hue and darkens light mode; it is an exact
+        // copy of `--success` in the dark and agent themes. Use
+        // `text-success-text` - never `text-success` - for success COLOURED
+        // TEXT (see style.css for the measured ratios).
+        'success-text': 'hsl(var(--success-text))',
         warning: 'hsl(var(--warning))',
         // FAR-1530/FAR-1587: text-safe counterpart of `warning`. `--warning` is
         // tuned as a FILL/accent hue (50% lightness), so amber text on white or

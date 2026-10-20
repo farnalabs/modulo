@@ -41,7 +41,7 @@
                     <div>
                       <button
                         type="button"
-                        class="font-medium text-left hover:text-primary transition-colors"
+                        class="font-medium text-left hover:text-primary-text transition-colors"
                         @click="toggleExpand(plugin.PLUGIN_ID)"
                       >
                         {{ plugin.display_name }}
@@ -56,7 +56,7 @@
                   </td>
                   <td class="table-cell">
                     <span
-                      class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary"
+                      class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary-text"
                     >
                       {{ pluginTypeLabel(plugin.capabilities) }}
                     </span>
@@ -64,7 +64,7 @@
                   <td class="table-cell">
                     <span
                       class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
-                      :class="plugin.health_ok ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
+                      :class="plugin.health_ok ? 'bg-success/10 text-success-text' : 'bg-muted text-muted-foreground'"
                     >
                       <span
                         class="h-1.5 w-1.5 rounded-full"
@@ -123,7 +123,7 @@
                           <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminPluginsView.health_detail') }}</span>
                           <p
                             class="text-sm"
-                            :class="plugin.health_ok ? 'text-success' : 'text-destructive'"
+                            :class="plugin.health_ok ? 'text-success-text' : 'text-destructive'"
                           >
                             {{ plugin.health_detail || '—' }}
                           </p>

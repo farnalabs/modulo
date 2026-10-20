@@ -21,9 +21,12 @@ than source-level string assertions. They prove:
 * **Data safety** — the downgrade drops ONLY its own columns, never the owning
   tables or their rows: ordinary eval definitions and soft-deleted guardrails
   survive a 0116 downgrade, and the run row survives a 0113 downgrade.
-* **Model/migration consistency** — the ORM models (``EvalDefinition``,
-  ``PipelineSnapshot``, ``Run``) match the post-upgrade schema, and a drift
-  guard fails if a trust column exists on one side but not the other. The
+* **Model/migration consistency** — the ORM models (``PipelineSnapshot``,
+  ``Run``) match the post-upgrade schema, and a drift guard fails if a trust
+  column exists on one side but not the other. ``eval_definitions`` has no ORM
+  model any more (the legacy entity was deleted in FAR-1961 while the table
+  remains until a later slice), so it is a migration-owned table for the drift
+  guard: its migration-side columns are still asserted, its model side is not. The
   add/drop column sets must be symmetric — the downgrade must drop exactly
   what the upgrade added — so the models would also match the post-downgrade
   schema were they reverted to their pre-0116/0113 state.
@@ -56,6 +59,11 @@ _TRUST_COLUMNS = {
     ("eval_definitions", "deleted_by"): _REVISION_0116,
     ("pipeline_snapshots", "guardrail_pins_fingerprint"): _REVISION_0116,
 }
+
+# Tables with no ORM model: their migration side is still asserted, but there is
+# no model side to compare against. ``eval_definitions`` lost its ORM entity in
+# FAR-1961; the table itself survives until a later slice.
+_NO_ORM_MODEL_TABLES: frozenset[str] = frozenset({"eval_definitions"})
 
 _ADD_COLUMN_RE = re.compile(r'op\.add_column\(\s*"(\w+)"\s*,\s*sa\.Column\(\s*"(\w+)"')
 _DROP_COLUMN_RE = re.compile(r'op\.drop_column\(\s*"(\w+)"\s*,\s*"(\w+)"')
@@ -108,9 +116,12 @@ def _assert_drift_free(
         (table, column) for revision_columns in migration_columns.values() for table, column in revision_columns
     }
     for (table, column), revision in trust_columns.items():
-        assert column in model_columns[table], f"model {table} is missing trust column {column}"
+        if table not in _NO_ORM_MODEL_TABLES:
+            assert column in model_columns[table], f"model {table} is missing trust column {column}"
         assert (table, column) in migration_columns[revision], f"migration {revision} must create {table}.{column}"
     for table, column in all_migration_columns:
+        if table in _NO_ORM_MODEL_TABLES:
+            continue
         assert column in model_columns[table], f"{table}.{column} created by a migration but absent from the ORM model"
 
 
@@ -254,17 +265,11 @@ class TestDowngradeDataSafety:
 
 
 class TestModelMigrationConsistency:
-    """The ORM models must match the schema at each revision."""
+    """The ORM models must match the schema at each revision.
 
-    def test_eval_definition_model_matches_0116_schema(self) -> None:
-        from modulo.db.models.eval_definition import EvalDefinition
-
-        columns = EvalDefinition.__table__.c
-        assert "deleted_at" in columns
-        assert "deleted_by" in columns
-        assert isinstance(columns["deleted_at"].type, sa.DateTime)
-        assert columns["deleted_at"].type.timezone is True
-        assert isinstance(columns["deleted_by"].type, sa.Uuid)
+    ``eval_definitions`` has no ORM model (FAR-1961); its 0116 round-trip is
+    still covered by ``TestRoundTrip0116``/``TestDowngradeDataSafety`` above.
+    """
 
     def test_pipeline_snapshot_model_matches_0116_schema(self) -> None:
         from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -284,12 +289,11 @@ class TestModelMigrationConsistency:
     def test_drift_guard_trust_surface_consistent_both_directions(self) -> None:
         # A future mismatch is caught here: a trust column that exists on one
         # side (model OR migration) but not the other fails this test.
-        from modulo.db.models.eval_definition import EvalDefinition
         from modulo.db.models.pipeline_snapshot import PipelineSnapshot
         from modulo.db.models.run import Run
 
         model_columns = {
-            "eval_definitions": set(EvalDefinition.__table__.c.keys()),
+            "eval_definitions": set(),
             "pipeline_snapshots": set(PipelineSnapshot.__table__.c.keys()),
             "runs": set(Run.__table__.c.keys()),
         }
@@ -304,12 +308,11 @@ class TestModelMigrationConsistency:
         # drifts. Feed synthetic mismatches — a trust column removed from its
         # owning migration, and a migration column absent from its model —
         # and assert the guard raises instead of silently passing.
-        from modulo.db.models.eval_definition import EvalDefinition
         from modulo.db.models.pipeline_snapshot import PipelineSnapshot
         from modulo.db.models.run import Run
 
         model_columns = {
-            "eval_definitions": set(EvalDefinition.__table__.c.keys()),
+            "eval_definitions": set(),
             "pipeline_snapshots": set(PipelineSnapshot.__table__.c.keys()),
             "runs": set(Run.__table__.c.keys()),
         }

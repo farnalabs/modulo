@@ -8,7 +8,7 @@ the same contract against real Postgres, but integration coverage is not part
 of the gate's report).
 
 Exercised here: the admin gate, the org-scoped eval/gate 404s, the binding
-400, the advisory-locked create/replace helper, the typed 409s, the
+400, the advisory-locked create helper, the typed 409s, the
 lock-timeout (SQLSTATE 57014) 503, the generic DB/exception mappings, and the
 best-effort audit failure paths.
 """
@@ -23,6 +23,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
@@ -191,6 +192,25 @@ def _gate_row(*, action: str = "warn", version: int | None = 1, node_id: uuid.UU
     return row
 
 
+def _capture_added_gates(session: AsyncMock) -> list:
+    """Capture every row passed to ``session.add`` and stamp it an ``id``.
+
+    ``session.flush`` is mocked at the unit tier, so the DB-side primary-key
+    default never runs; the response model needs a real ``id``. The captured
+    object is the ``PolicyGate`` the helper built, which is what the
+    create-only assertions inspect.
+    """
+    added: list = []
+
+    def _add(obj: object) -> None:
+        if getattr(obj, "id", None) is None:
+            obj.id = _GATE_ID  # type: ignore[attr-defined]
+        added.append(obj)
+
+    session.add = MagicMock(side_effect=_add)
+    return added
+
+
 def _install_overrides(session: AsyncMock, *, org_role: str = "admin") -> None:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield session
@@ -241,7 +261,7 @@ def client() -> Generator[tuple[TestClient, AsyncMock], None, None]:
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers — direct coverage for the advisory-lock create/replace path
+# Shared helpers — direct coverage for the advisory-lock create path
 # ---------------------------------------------------------------------------
 
 
@@ -259,7 +279,7 @@ async def test_with_gate_advisory_lock_runs_fn_under_lock() -> None:
     assert session.execute.await_count == 2
 
 
-async def test_create_or_replace_gate_no_live_gate_inserts() -> None:
+async def test_create_gate_no_live_gate_inserts() -> None:
     session = _make_session()
     _queue_execute(session, [_result(), _result(), _result(scalar_one_or_none=None)])
     principal = TenantPrincipal(
@@ -269,18 +289,22 @@ async def test_create_or_replace_gate_no_live_gate_inserts() -> None:
         org_role="admin",
     )
 
-    gate = await evals_routes._create_or_replace_gate(
-        _EVAL_ID, {"action": "warn", "node_id": _NODE_ID}, session, principal
-    )
+    gate = await evals_routes._create_gate(_EVAL_ID, {"action": "warn", "node_id": _NODE_ID}, session, principal)
 
     assert gate.action == "warn"
     session.add.assert_called_once()
     session.flush.assert_awaited()
 
 
-async def test_create_or_replace_gate_soft_deletes_live_gate() -> None:
+async def test_create_gate_live_gate_raises_409() -> None:
+    """FAR-1750: POST is create-only — a live gate is refused, never replaced.
+
+    The old create-OR-REPLACE helper soft-deleted this row; create-only must
+    leave it untouched and surface the typed conflict instead.
+    """
     session = _make_session()
     live_gate = _gate_row()
+    live_gate.evaluation_mode = "human"
     _queue_execute(session, [_result(), _result(), _result(scalar_one_or_none=live_gate)])
     principal = TenantPrincipal(
         username="admin@test",
@@ -289,13 +313,15 @@ async def test_create_or_replace_gate_soft_deletes_live_gate() -> None:
         org_role="admin",
     )
 
-    gate = await evals_routes._create_or_replace_gate(
-        _EVAL_ID, {"action": "block", "node_id": _NODE_ID}, session, principal
-    )
+    with pytest.raises(HTTPException) as excinfo:
+        await evals_routes._create_gate(_EVAL_ID, {"action": "block", "node_id": _NODE_ID}, session, principal)
 
-    assert gate.action == "block"
-    assert live_gate.deleted_at is not None
-    assert live_gate.deleted_by == _USER_ID
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail == evals_routes._MSG_POLICY_GATE_ALREADY_EXISTS
+    # The live row is untouched — no soft-delete, no mode change.
+    assert live_gate.deleted_at is None
+    assert live_gate.evaluation_mode == "human"
+    session.add.assert_not_called()
 
 
 async def test_load_eval_or_404_missing_raises_404() -> None:
@@ -307,8 +333,6 @@ async def test_load_eval_or_404_missing_raises_404() -> None:
         account_id=_USER_ID,
         org_role="admin",
     )
-
-    from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as excinfo:
         await evals_routes._load_eval_or_404(session, _EVAL_ID, principal)
@@ -334,7 +358,7 @@ def test_create_gate_non_admin_returns_403() -> None:
 def test_create_gate_success(client: tuple[TestClient, AsyncMock]) -> None:
     http, session = client
     _queue_execute(session, [_result(scalar_one_or_none=_eval_row())])
-    with patch.object(evals_routes, "_create_or_replace_gate", new=AsyncMock(return_value=_gate_row())):
+    with patch.object(evals_routes, "_create_gate", new=AsyncMock(return_value=_gate_row())):
         resp = http.post(_GATE_URL, json={"action": "warn"})
 
     assert resp.status_code == 201, resp.text
@@ -376,7 +400,7 @@ def test_create_gate_suite_scoped_eval_rejected_before_any_insert(client: tuple[
     http, session = client
     _queue_execute(session, [_result(scalar_one_or_none=_eval_row(node_id=None))])
     insert = AsyncMock()
-    with patch.object(evals_routes, "_create_or_replace_gate", new=insert):
+    with patch.object(evals_routes, "_create_gate", new=insert):
         resp = http.post(_GATE_URL, json={"action": "warn"})
 
     assert resp.status_code == 400, resp.text
@@ -392,7 +416,7 @@ def test_create_gate_binds_the_evals_own_node_id(client: tuple[TestClient, Async
     http, session = client
     _queue_execute(session, [_result(scalar_one_or_none=_eval_row(node_id=_NODE_ID))])
     insert = AsyncMock(return_value=_gate_row())
-    with patch.object(evals_routes, "_create_or_replace_gate", new=insert):
+    with patch.object(evals_routes, "_create_gate", new=insert):
         resp = http.post(_GATE_URL, json={"action": "warn"})
 
     assert resp.status_code == 201, resp.text
@@ -400,10 +424,99 @@ def test_create_gate_binds_the_evals_own_node_id(client: tuple[TestClient, Async
     assert gate_fields["node_id"] == _NODE_ID
 
 
+def test_create_gate_live_human_gate_conflicts_and_keeps_mode_when_omitted(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """FAR-1750 regression (decision of record): POST is create-only.
+
+    A POST onto an eval that already has a live ``human`` gate is REFUSED
+    with 409 — with ``evaluation_mode`` omitted it must not silently be
+    treated as a replace (the old behaviour returned 201 and downgraded the
+    mode to ``automatic``). The live row must stay untouched — including its
+    operator-controlled enforcement state (FAR-967 CO-5): a refused POST must
+    never re-enable a disabled gate either.
+    """
+    http, session = client
+    added = _capture_added_gates(session)
+
+    # (a) fresh create with an explicit ``human`` mode.
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _result(),  # SET LOCAL statement_timeout
+            _result(),  # advisory lock
+            _result(scalar_one_or_none=None),
+        ],
+    )
+    first = http.post(_GATE_URL, json={"action": "warn", "evaluation_mode": "human"})
+    assert first.status_code == 201, first.text
+    assert first.json()["evaluation_mode"] == "human"
+    live_gate = added[0]
+
+    # The operator then disables the gate (FAR-967 CO-5); a refused POST must
+    # leave that enforcement state alone.
+    disabled_at = datetime(2026, 1, 1, tzinfo=UTC)
+    live_gate.enabled = False
+    live_gate.enabled_at = None
+    live_gate.disabled_at = disabled_at
+
+    # (b) POST again with the mode omitted — create-only refuses.
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _result(),
+            _result(),
+            _result(scalar_one_or_none=live_gate),
+        ],
+    )
+    resp = http.post(_GATE_URL, json={"action": "block"})
+
+    # (c) typed 409, and the live row is neither soft-deleted, re-moded nor
+    # re-enabled.
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == evals_routes._MSG_POLICY_GATE_ALREADY_EXISTS
+    assert live_gate.deleted_at is None
+    assert live_gate.evaluation_mode == "human"
+    assert live_gate.enabled is False
+    assert live_gate.disabled_at == disabled_at
+    assert len(added) == 1
+
+
+def test_create_gate_live_human_gate_conflicts_for_explicit_automatic(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Sibling: an explicit ``automatic`` POST onto a live ``human`` gate is
+    ALSO refused, so the downgrade ``human → automatic`` is structurally
+    impossible — replacing is PUT's job (which preserves on omit)."""
+    http, session = client
+    added = _capture_added_gates(session)
+    live_gate = _gate_row(action="warn")
+    live_gate.evaluation_mode = "human"
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _result(),
+            _result(),
+            _result(scalar_one_or_none=live_gate),
+        ],
+    )
+
+    resp = http.post(_GATE_URL, json={"action": "block", "evaluation_mode": "automatic"})
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == evals_routes._MSG_POLICY_GATE_ALREADY_EXISTS
+    assert live_gate.deleted_at is None
+    assert live_gate.evaluation_mode == "human"
+    assert not added
+
+
 def test_create_gate_conflict_returns_409(client: tuple[TestClient, AsyncMock]) -> None:
     http, session = client
     _queue_execute(session, [_result(scalar_one_or_none=_eval_row())])
-    with patch.object(evals_routes, "_create_or_replace_gate", new=AsyncMock(side_effect=_INTEGRITY)):
+    with patch.object(evals_routes, "_create_gate", new=AsyncMock(side_effect=_INTEGRITY)):
         resp = http.post(_GATE_URL, json={"action": "warn"})
 
     assert resp.status_code == 409, resp.text
@@ -413,7 +526,7 @@ def test_create_gate_audit_failure_still_succeeds(client: tuple[TestClient, Asyn
     http, session = client
     _queue_execute(session, [_result(scalar_one_or_none=_eval_row())])
     with (
-        patch.object(evals_routes, "_create_or_replace_gate", new=AsyncMock(return_value=_gate_row())),
+        patch.object(evals_routes, "_create_gate", new=AsyncMock(return_value=_gate_row())),
         patch.object(evals_routes, "append_audit_event", new=AsyncMock(side_effect=RuntimeError("audit down"))),
     ):
         resp = http.post(_GATE_URL, json={"action": "warn"})
@@ -470,6 +583,8 @@ def test_update_gate_success_bumps_version(client: tuple[TestClient, AsyncMock])
     _queue_execute(
         session,
         [
+            _result(),  # SET LOCAL statement_timeout
+            _result(),  # advisory lock
             _result(scalar_one_or_none=_eval_row()),
             _result(scalar_one_or_none=_gate_row(action="warn", version=1)),
         ],
@@ -502,6 +617,8 @@ def test_update_gate_omitting_evaluation_mode_preserves_human(client: tuple[Test
     _queue_execute(
         session,
         [
+            _result(),  # SET LOCAL statement_timeout
+            _result(),  # advisory lock
             _result(scalar_one_or_none=_eval_row()),
             _result(scalar_one_or_none=gate),
         ],
@@ -519,6 +636,47 @@ def test_update_gate_omitting_evaluation_mode_preserves_human(client: tuple[Test
     assert body["pre_version_raw"] == {"action": "warn", "evaluation_mode": "human"}
 
 
+def test_update_gate_preserves_disabled_enforcement_state(client: tuple[TestClient, AsyncMock]) -> None:
+    """FAR-967 F6 invariant still live on the single replace path (PUT, FAR-1750).
+
+    Create-only POST removed the replace-time inheritance branches, but the
+    invariant they protected is still exercised by PUT: a replace/update must
+    never silently re-enable an operator-disabled gate. A PUT that changes
+    ``action`` and omits ``evaluation_mode`` must leave ``enabled`` False and
+    the ``disabled_at`` stamp unchanged.
+    """
+    http, session = client
+    gate = _gate_row(action="warn", version=1)
+    gate.evaluation_mode = "human"
+    disabled_at = datetime(2026, 1, 1, tzinfo=UTC)
+    gate.enabled = False
+    gate.enabled_at = None
+    gate.disabled_at = disabled_at
+    _queue_execute(
+        session,
+        [
+            _result(),  # SET LOCAL statement_timeout
+            _result(),  # advisory lock
+            _result(scalar_one_or_none=_eval_row()),
+            _result(scalar_one_or_none=gate),
+        ],
+    )
+
+    resp = http.put(_GATE_URL, json={"action": "block"})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # The mutable config changed as requested...
+    assert body["action"] == "block"
+    assert body["evaluation_mode"] == "human"
+    # ...but the operator safety control was not touched: no silent re-enable.
+    assert body["enabled"] is False
+    assert body["disabled_at"] is not None
+    assert gate.enabled is False
+    assert gate.enabled_at is None
+    assert gate.disabled_at == disabled_at
+
+
 def test_update_gate_explicit_automatic_resets_human_gate(client: tuple[TestClient, AsyncMock]) -> None:
     """An explicit ``evaluation_mode="automatic"`` still WRITES.
 
@@ -532,6 +690,8 @@ def test_update_gate_explicit_automatic_resets_human_gate(client: tuple[TestClie
     _queue_execute(
         session,
         [
+            _result(),  # SET LOCAL statement_timeout
+            _result(),  # advisory lock
             _result(scalar_one_or_none=_eval_row()),
             _result(scalar_one_or_none=gate),
         ],
@@ -552,6 +712,8 @@ def test_update_gate_version_none_defaults_to_one(client: tuple[TestClient, Asyn
     _queue_execute(
         session,
         [
+            _result(),  # SET LOCAL statement_timeout
+            _result(),  # advisory lock
             _result(scalar_one_or_none=_eval_row()),
             _result(scalar_one_or_none=_gate_row(version=None)),
         ],
@@ -565,7 +727,14 @@ def test_update_gate_version_none_defaults_to_one(client: tuple[TestClient, Asyn
 
 def test_update_gate_eval_not_found_returns_404(client: tuple[TestClient, AsyncMock]) -> None:
     http, session = client
-    _queue_execute(session, [_result(scalar_one_or_none=None)])
+    _queue_execute(
+        session,
+        [
+            _result(),  # SET LOCAL statement_timeout
+            _result(),  # advisory lock
+            _result(scalar_one_or_none=None),
+        ],
+    )
 
     resp = http.put(_GATE_URL, json={"action": "block"})
 
@@ -578,6 +747,8 @@ def test_update_gate_not_found_returns_404(client: tuple[TestClient, AsyncMock])
     _queue_execute(
         session,
         [
+            _result(),  # SET LOCAL statement_timeout
+            _result(),  # advisory lock
             _result(scalar_one_or_none=_eval_row()),
             _result(scalar_one_or_none=None),
         ],
@@ -596,6 +767,8 @@ def test_update_gate_binding_violation_returns_400(client: tuple[TestClient, Asy
     _queue_execute(
         session,
         [
+            _result(),  # SET LOCAL statement_timeout
+            _result(),  # advisory lock
             _result(scalar_one_or_none=_eval_row(node_id=None)),
             _result(scalar_one_or_none=_gate_row()),
         ],
@@ -612,6 +785,8 @@ def test_update_gate_audit_failure_still_succeeds(client: tuple[TestClient, Asyn
     _queue_execute(
         session,
         [
+            _result(),  # SET LOCAL statement_timeout
+            _result(),  # advisory lock
             _result(scalar_one_or_none=_eval_row()),
             _result(scalar_one_or_none=_gate_row()),
         ],
@@ -646,6 +821,36 @@ def test_update_gate_unexpected_error_returns_500(client: tuple[TestClient, Asyn
     assert resp.status_code == 500, resp.text
 
 
+def test_update_gate_acquires_advisory_lock_before_loading_gate(client: tuple[TestClient, AsyncMock]) -> None:
+    """FAR-1750: the PUT load-and-mutate runs under the SAME per-eval advisory
+    lock as create/toggle — SET LOCAL statement_timeout and
+    ``pg_advisory_xact_lock`` must execute BEFORE the live-gate read.
+
+    Remove the lock acquisition and the statements (and their ordering)
+    vanish, so a concurrent POST/PATCH can interleave with this
+    read-modify-write.
+    """
+    http, session = client
+    _queue_execute(
+        session,
+        [
+            _result(),  # SET LOCAL statement_timeout
+            _result(),  # advisory lock
+            _result(scalar_one_or_none=_eval_row()),
+            _result(scalar_one_or_none=_gate_row()),
+        ],
+    )
+
+    resp = http.put(_GATE_URL, json={"action": "block"})
+    assert resp.status_code == 200, resp.text
+
+    stmts = [str(call.args[0]) for call in session.execute.await_args_list if call.args]
+    timeout_idx = next(i for i, s in enumerate(stmts) if "statement_timeout" in s)
+    lock_idx = next(i for i, s in enumerate(stmts) if "pg_advisory_xact_lock" in s)
+    gate_read_idx = next(i for i, s in enumerate(stmts) if "policy_gates" in s and "deleted_at" in s)
+    assert timeout_idx < lock_idx < gate_read_idx
+
+
 # ---------------------------------------------------------------------------
 # F4: update path returns author warnings (FAR-957)
 # ---------------------------------------------------------------------------
@@ -661,6 +866,8 @@ def test_update_gate_returns_author_warnings(client: tuple[TestClient, AsyncMock
     _queue_execute(
         session,
         [
+            _result(),  # SET LOCAL statement_timeout
+            _result(),  # advisory lock
             _result(scalar_one_or_none=_eval_row(config_json={"evidence_key": "racy.key"})),
             _result(scalar_one_or_none=_gate_row()),
         ],
@@ -947,93 +1154,11 @@ def test_get_gate_unexpected_error_returns_500(client: tuple[TestClient, AsyncMo
 
 
 # ---------------------------------------------------------------------------
-# FAR-967 F6 — create-or-replace INHERITS the operator's enabled state
+# FAR-1750 — create-only: the FRESH-CREATE state (no inheritance branches)
 # ---------------------------------------------------------------------------
 
 
-async def test_create_or_replace_gate_carries_disabled_state() -> None:
-    """F6 load-bearing: replacing a live gate that the operator DISABLED must
-    carry ``enabled=False`` (+ its timestamp pair) onto the new row — a
-    create-or-replace must never silently re-enable a disabled gate."""
-    session = _make_session()
-    live_gate = _gate_row(action="block")
-    disabled_at = datetime(2026, 1, 1, tzinfo=UTC)
-    live_gate.enabled = False
-    live_gate.enabled_at = None
-    live_gate.disabled_at = disabled_at
-    # SET LOCAL + advisory lock + the in-lock live-gate re-check.
-    _queue_execute(session, [_result(), _result(), _result(scalar_one_or_none=live_gate)])
-    principal = TenantPrincipal(
-        username="admin@test",
-        organisation_id=_ORG_ID,
-        account_id=_USER_ID,
-        org_role="admin",
-    )
-
-    gate = await evals_routes._create_or_replace_gate(
-        _EVAL_ID, {"action": "block", "node_id": _NODE_ID}, session, principal
-    )
-
-    assert gate.enabled is False
-    assert gate.enabled_at is None
-    assert gate.disabled_at == disabled_at
-    assert live_gate.deleted_at is not None  # the old row is still replaced
-
-
-async def test_create_or_replace_gate_normalises_missing_enabled_at() -> None:
-    """Defensive normalisation: a carried live gate that is ``enabled`` but has
-    a NULL ``enabled_at`` is stamped with ``now`` so the symmetric CHECK
-    (``ck_policy_gates_enabled_timestamps``) is satisfied on the replacement
-    insert even for a row that somehow arrived with a missing stamp."""
-    session = _make_session()
-    live_gate = _gate_row(action="block")
-    live_gate.enabled = True
-    live_gate.enabled_at = None
-    live_gate.disabled_at = None
-    _queue_execute(session, [_result(), _result(), _result(scalar_one_or_none=live_gate)])
-    principal = TenantPrincipal(
-        username="admin@test",
-        organisation_id=_ORG_ID,
-        account_id=_USER_ID,
-        org_role="admin",
-    )
-
-    gate = await evals_routes._create_or_replace_gate(
-        _EVAL_ID, {"action": "block", "node_id": _NODE_ID}, session, principal
-    )
-
-    assert gate.enabled is True
-    assert gate.enabled_at is not None
-    assert gate.disabled_at is None
-
-
-async def test_create_or_replace_gate_normalises_missing_disabled_at() -> None:
-    """Symmetric defensive branch: a carried live gate that is NOT ``enabled``
-    but has a NULL ``disabled_at`` is stamped with ``now`` so the symmetric
-    CHECK is satisfied on the replacement insert."""
-    session = _make_session()
-    live_gate = _gate_row(action="block")
-    live_gate.enabled = False
-    live_gate.enabled_at = None
-    live_gate.disabled_at = None
-    _queue_execute(session, [_result(), _result(), _result(scalar_one_or_none=live_gate)])
-    principal = TenantPrincipal(
-        username="admin@test",
-        organisation_id=_ORG_ID,
-        account_id=_USER_ID,
-        org_role="admin",
-    )
-
-    gate = await evals_routes._create_or_replace_gate(
-        _EVAL_ID, {"action": "block", "node_id": _NODE_ID}, session, principal
-    )
-
-    assert gate.enabled is False
-    assert gate.disabled_at is not None
-    assert gate.enabled_at is None
-
-
-async def test_create_or_replace_gate_fresh_create_stamps_enabled() -> None:
+async def test_create_gate_fresh_create_stamps_enabled() -> None:
     """Sibling: with NO live gate the fresh create keeps the creation default
     (enabled + enabled_at stamped, disabled_at NULL — the CHECK-acceptable
     creation state)."""
@@ -1046,13 +1171,27 @@ async def test_create_or_replace_gate_fresh_create_stamps_enabled() -> None:
         org_role="admin",
     )
 
-    gate = await evals_routes._create_or_replace_gate(
-        _EVAL_ID, {"action": "warn", "node_id": _NODE_ID}, session, principal
-    )
+    gate = await evals_routes._create_gate(_EVAL_ID, {"action": "warn", "node_id": _NODE_ID}, session, principal)
 
     assert gate.enabled is True
     assert gate.enabled_at is not None
     assert gate.disabled_at is None
+
+
+async def test_create_gate_fresh_create_defaults_mode_automatic() -> None:
+    """With no live gate, an omitted mode still defaults to ``automatic``."""
+    session = _make_session()
+    _queue_execute(session, [_result(), _result(), _result(scalar_one_or_none=None)])
+    principal = TenantPrincipal(
+        username="admin@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+    gate = await evals_routes._create_gate(_EVAL_ID, {"action": "warn", "node_id": _NODE_ID}, session, principal)
+
+    assert gate.evaluation_mode == "automatic"
 
 
 def test_create_gate_audit_payload_carries_enabled(client: tuple[TestClient, AsyncMock]) -> None:
@@ -1063,7 +1202,7 @@ def test_create_gate_audit_payload_carries_enabled(client: tuple[TestClient, Asy
     gate = _gate_row()
     gate.enabled = True
     with (
-        patch.object(evals_routes, "_create_or_replace_gate", new=AsyncMock(return_value=gate)),
+        patch.object(evals_routes, "_create_gate", new=AsyncMock(return_value=gate)),
         patch("modulo.api.routes.evals.append_audit_event", new_callable=AsyncMock) as audit,
     ):
         resp = http.post(_GATE_URL, json={"action": "warn"})
@@ -1082,6 +1221,8 @@ def test_update_gate_audit_payload_carries_enabled(client: tuple[TestClient, Asy
     _queue_execute(
         session,
         [
+            _result(),  # SET LOCAL statement_timeout
+            _result(),  # advisory lock
             _result(scalar_one_or_none=_eval_row()),
             _result(scalar_one_or_none=gate),
         ],
@@ -1169,7 +1310,7 @@ def test_toggle_gate_enable_success(client: tuple[TestClient, AsyncMock]) -> Non
 
 def test_toggle_gate_holds_advisory_lock_around_the_mutation(client: tuple[TestClient, AsyncMock]) -> None:
     """F6 load-bearing: the toggle's load-and-mutate runs under the SAME
-    transaction-scoped advisory lock as create-or-replace — SET LOCAL
+    transaction-scoped advisory lock as create/toggle — SET LOCAL
     statement_timeout and pg_advisory_xact_lock must execute BEFORE the gate
     read. Remove the lock wrapper and these statements (and their ordering)
     vanish."""

@@ -95,6 +95,19 @@ class TestExtractColumnInfo:
         assert table == "pipeline_runs"
         assert column == "status"
 
+    def test_generic_programming_error_is_case_insensitive(self) -> None:
+        """Both quoting alternatives stay matched under ``re.IGNORECASE``.
+
+        Pins the S6395 fix (the redundant per-alternative non-capturing groups
+        were removed from ``_PROGRAMMING_COLUMN_RE``): the quoted and unquoted
+        shapes must both resolve, in either case.
+        """
+        quoted = _make_db_error('COLUMN "Pipeline_Runs.Status" does not exist')
+        assert _extract_column_info(quoted) == ("Pipeline_Runs", "Status")
+
+        unquoted = _make_db_error("Column Pipeline_Runs.Status does not exist")
+        assert _extract_column_info(unquoted) == ("Pipeline_Runs", "Status")
+
     def test_dotted_token_without_column_keyword_returns_none(self) -> None:
         """A bare ``<word>.<word>`` token must NOT be attributed as a column.
 

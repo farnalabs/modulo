@@ -114,7 +114,7 @@ loudly (it never silently passes) – see `run_human_eval_set`.
 
 ## Where evals run
 
-* **Post-node evals** – attached to a node via the `eval_definitions` table;
+* **Post-node evals** – attached to a node via the `evals` table;
   executed by `EvalEngine.evaluate` in the pipeline executor.
 * **HITL gate evals** – evaluated before an interrupt; see
   `pipeline_engine/node_runner.py`.

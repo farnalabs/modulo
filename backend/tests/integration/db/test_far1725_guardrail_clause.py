@@ -23,7 +23,7 @@ so the leak skews ``pass_rate``.
 These tests pin the storage model AND the consumer contract:
 
 * the probe tests prove, against real Postgres, where ``eval_id`` points and
-  that the current write path leaves no ``eval_definitions`` row behind;
+  that the current write path persists the definition to ``evals``;
 * the regression tests fail on the legacy clause and pass on the fixed one.
 """
 
@@ -200,12 +200,10 @@ class TestStorageModelProbe:
         assert row[0] == _COMPOSITE_FK, row[1]
         assert "REFERENCES evals(id, organisation_id)" in row[1], row[1]
 
-    async def test_current_write_path_leaves_no_eval_definitions_row(self, db_engine: AsyncEngine) -> None:
+    async def test_current_write_path_lands_in_evals(self, db_engine: AsyncEngine) -> None:
         """Behavioural probe: a guardrail written via the production helper
-        lands in ``evals`` and nowhere else.
-
-        This is the fact that makes the legacy clause a no-op — it is asserted
-        so a future dual-write reinstatement fails here loudly.
+        lands in ``evals`` — the store every loader and the exclusion clause
+        read. Fails if the write path stops persisting the definition.
         """
         org_id, account_id, pipeline_id = await _seed_org_account_pipeline(db_engine)
         maker = _session_maker(db_engine)
@@ -224,17 +222,8 @@ class TestStorageModelProbe:
             evals_rows = (
                 await conn.execute(text("SELECT eval_type FROM evals WHERE id = :id"), {"id": str(guardrail_id)})
             ).fetchall()
-            legacy_rows = (
-                await conn.execute(
-                    text("SELECT eval_type FROM eval_definitions WHERE id = :id"), {"id": str(guardrail_id)}
-                )
-            ).fetchall()
 
         assert [r[0] for r in evals_rows] == ["guardrail"], f"evals row missing: {evals_rows}"
-        assert legacy_rows == [], (
-            "eval_definitions unexpectedly holds the guardrail id — the storage model "
-            "hypothesis (eval_definitions is frozen) is wrong and this fixture is stale"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -367,28 +356,20 @@ class TestGuardrailExclusion:
             f"soft-deleted guardrail leaked: expected only {normal_id}, got {[r.eval_id for r in rows]}"
         )
 
-    async def test_backfilled_guardrail_rows_still_excluded(self, db_engine: AsyncEngine) -> None:
-        """No-regression: a pre-cutover guardrail (present in BOTH tables under
-        one UUID — the 0254 backfill shape) must stay excluded too."""
+    async def test_directly_seeded_guardrail_rows_still_excluded(self, db_engine: AsyncEngine) -> None:
+        """No-regression: a guardrail row written directly to ``evals`` (raw
+        SQL, not the production helper) must stay excluded too."""
         org_id, account_id, pipeline_id = await _seed_org_account_pipeline(db_engine)
         run_id = await _seed_run(db_engine, org_id, pipeline_id)
-        legacy_id = uuid.uuid4()
+        guardrail_id = uuid.uuid4()
         async with db_engine.begin() as conn:
-            await conn.execute(
-                text(
-                    "INSERT INTO eval_definitions (id, organisation_id, account_id, pipeline_id, "
-                    "node_id, name, eval_type, config_json, failure_behaviour, version) "
-                    "VALUES (:id, :oid, :aid, :pid, NULL, 'legacy-gr', 'guardrail', '{}'::json, 'warn', 1)"
-                ),
-                {"id": str(legacy_id), "oid": str(org_id), "aid": str(account_id), "pid": str(pipeline_id)},
-            )
             await conn.execute(
                 text(
                     "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, "
                     "config_json, account_id, version) "
-                    "VALUES (:id, :oid, :pid, NULL, 'legacy-gr', 'guardrail', '{}'::json, :aid, 1)"
+                    "VALUES (:id, :oid, :pid, NULL, 'seeded-gr', 'guardrail', '{}'::json, :aid, 1)"
                 ),
-                {"id": str(legacy_id), "oid": str(org_id), "pid": str(pipeline_id), "aid": str(account_id)},
+                {"id": str(guardrail_id), "oid": str(org_id), "pid": str(pipeline_id), "aid": str(account_id)},
             )
 
         maker = _session_maker(db_engine)
@@ -399,11 +380,11 @@ class TestGuardrailExclusion:
                 account_id=account_id,
                 pipeline_id=pipeline_id,
                 eval_type="regex",
-                name="normal-legacy",
+                name="normal-seeded",
             )
             await session.commit()
 
-        await _insert_result(db_engine, org_id=org_id, run_id=run_id, eval_id=legacy_id, passed=True)
+        await _insert_result(db_engine, org_id=org_id, run_id=run_id, eval_id=guardrail_id, passed=True)
         await _insert_result(db_engine, org_id=org_id, run_id=run_id, eval_id=normal_id, passed=True)
 
         async with maker() as session:

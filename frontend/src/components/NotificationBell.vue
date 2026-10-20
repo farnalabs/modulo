@@ -19,7 +19,7 @@
         v-if="store.unreadCount > 0"
         data-testid="notification-unread-badge"
         aria-hidden="true"
-        class="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold text-destructive-foreground"
+        class="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-destructive-fill px-1 text-[10px] font-bold text-destructive-foreground"
       >
         {{ unreadBadgeText }}
       </span>

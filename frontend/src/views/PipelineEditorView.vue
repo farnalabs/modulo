@@ -613,7 +613,7 @@
              created. -->
         <output
           v-if="restoreNotice"
-          class="block border-b bg-success/10 px-3 py-2 text-xs text-success"
+          class="block border-b bg-success/10 px-3 py-2 text-xs text-success-text"
           data-testid="pipeline-editor-restore-notice"
         >
           {{ restoreNotice }}
@@ -880,7 +880,7 @@
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
                   </div></template>
           <template #node-agent="nodeProps"><div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-primary">{{ $t('views.PipelineEditorView.node_agent_badge') }}</div>
+                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-primary-text">{{ $t('views.PipelineEditorView.node_agent_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
                     <div v-if="nodeProps.data.hasCapabilityScope" class="mt-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300" data-testid="pipeline-node-scope-badge">{{ $t('views.PipelineEditorView.capability_scope_scoped_badge') }}</div>
                   </div></template>
@@ -896,7 +896,7 @@
                they never fall back to the `agent` node rendering. Display
                only — no config panel or palette entry in this slice. -->
           <template #node-dispatch="nodeProps"><div class="rounded-lg border-2 border-cyan-500/60 bg-cyan-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-600 dark:text-cyan-300">{{ $t('views.PipelineEditorView.node_dispatch_badge') }}</div>
+                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-700 dark:text-cyan-300">{{ $t('views.PipelineEditorView.node_dispatch_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_dispatch_label') }}</div>
                   </div></template>
           <template #edge-default="edgeProps">
@@ -1496,7 +1496,7 @@
               v-model="edgeForm.hitl_enabled"
               type="checkbox"
               :disabled="isViewing"
-              class="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+              class="h-4 w-4 rounded border-gray-300 text-primary-text focus:ring-primary"
             />
             <span class="ml-2 text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.enabled') }}</span>
           </label>
@@ -1541,7 +1541,7 @@
               v-model="edgeForm.human_only"
               type="checkbox"
               :disabled="isViewing"
-              class="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+              class="h-4 w-4 rounded border-gray-300 text-primary-text focus:ring-primary"
             />
             <span class="text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.human_only_block_llm_auto_approval') }}</span>
           </div>
@@ -2037,7 +2037,7 @@ function nodeTypeBadgeClass(nodeType: string): string {
   if (nodeType === 'manual') return 'badge badge-status-warning'
   if (nodeType === 'router') return 'badge bg-indigo-500/10 text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300'
   if (nodeType === 'hitl') return 'badge bg-rose-500/10 text-rose-600 dark:bg-rose-900 dark:text-rose-300'
-  if (nodeType === 'dispatch') return 'badge bg-cyan-500/10 text-cyan-600 dark:bg-cyan-900 dark:text-cyan-300'
+  if (nodeType === 'dispatch') return 'badge bg-cyan-500/10 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-300'
   return 'badge badge-status-primary'
 }
 

@@ -56,7 +56,10 @@ _STARTED_OUT = datetime(2020, 1, 1, tzinfo=UTC)
 # drop dispositions (non-dict entry, empty component, non-string component,
 # malformed amount, boolean amount), the keep-as-0 disposition (null amount),
 # plus the SQL-predicate-only branches: out-of-window, non-array breakdown,
-# total_clamped FALSE (not a marker), and NULL started_at.
+# total_clamped FALSE (not a marker), NULL started_at, and the FAR-1780
+# per-entry billable filter (a declared ``billable: false`` self_reported
+# entry is EXCLUDED; an explicit ``billable: true``, an absent key, a STRING
+# ``"false"`` and a JSON-null ``billable`` are all still billed).
 _RUN_FIXTURE: list[dict[str, object]] = [
     {  # (b) 6dp string amounts, two components
         "team": "A",
@@ -156,6 +159,32 @@ _RUN_FIXTURE: list[dict[str, object]] = [
         "breakdown": "null",
         "started": _STARTED_IN,
     },
+    {  # FAR-1780 mixed run: the declared ``billable: false`` self_reported
+        # entry (the agent's report) is EXCLUDED from the summed amounts; the
+        # absent-key entry and the explicit ``billable: true`` entry are both
+        # still billed. total_cost_usd mirrors the real producer (sum of the
+        # BILLABLE entries), so the run total makes no room for the declared
+        # money either.
+        "team": "A",
+        "total": Decimal("1.600000"),
+        "breakdown": '[{"component": "model_declared", "source": "self_reported", '
+        '"billable": false, "amount_usd": "4.000000"}, '
+        '{"component": "model_plain", "source": "self_reported", "amount_usd": "1.000000"}, '
+        '{"component": "model_explicit", "source": "self_reported", '
+        '"billable": true, "amount_usd": "0.600000"}]',
+        "started": _STARTED_IN,
+    },
+    {  # FAR-1780 filter gating: a STRING ``"false"`` and a JSON-null
+        # ``billable`` are NOT the boolean-false marker — both still billed
+        # (typeof-gated at the DB level, mirroring the unit literal).
+        "team": "B",
+        "total": Decimal("5.000000"),
+        "breakdown": '[{"component": "model_stringfalse", "source": "self_reported", '
+        '"billable": "false", "amount_usd": "3.000000"}, '
+        '{"component": "model_nullbillable", "source": "self_reported", '
+        '"billable": null, "amount_usd": "2.000000"}]',
+        "started": _STARTED_IN,
+    },
 ]
 
 
@@ -231,17 +260,24 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
         await db_session.execute(text(_SQL_COST_COMPONENT_BUCKETS), {"org_id": org_id, "since": since})
     ).all()
 
-    # exactly 7 GROUP rows: T1 {model, storage}, T2 {tokens, egress, zero,
-    # credit}, org-unassigned {storage} — the dropped "junk" group must NOT
-    # materialise, and none of the excluded runs may contribute.
-    assert len(component_rows) == 7
+    # exactly 11 GROUP rows: T1 {model, model_plain, model_explicit, storage},
+    # T2 {model_stringfalse, model_nullbillable, tokens, egress, zero, credit},
+    # org-unassigned {storage} — the dropped "junk" group must NOT
+    # materialise, none of the excluded runs may contribute, and the
+    # FAR-1780 declared-only component (``model_declared``, billable false)
+    # must NOT materialise either (4.0 excluded).
+    assert len(component_rows) == 11
     raw_buckets = {
         (str(row.team_id) if row.team_id is not None else "__org__", row.component): row.amount_usd
         for row in component_rows
     }
     assert raw_buckets == {
         (str(team_a.id), "model"): Decimal("2.000000"),
+        (str(team_a.id), "model_plain"): Decimal("1.000000"),
+        (str(team_a.id), "model_explicit"): Decimal("0.600000"),
         (str(team_a.id), "storage"): Decimal("0.250000"),
+        (str(team_b.id), "model_stringfalse"): Decimal("3.000000"),
+        (str(team_b.id), "model_nullbillable"): Decimal("2.000000"),
         (str(team_b.id), "tokens"): Decimal("1.25"),
         (str(team_b.id), "egress"): Decimal("0.300000"),
         (str(team_b.id), "zero"): Decimal("0.000000"),
@@ -262,9 +298,13 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
     assert buckets["components_by_team"] == {
         str(team_a.id): [
             {"name": "model", "amount_usd": "2.000000"},
+            {"name": "model_plain", "amount_usd": "1.000000"},
+            {"name": "model_explicit", "amount_usd": "0.600000"},
             {"name": "storage", "amount_usd": "0.250000"},
         ],
         str(team_b.id): [
+            {"name": "model_stringfalse", "amount_usd": "3.000000"},
+            {"name": "model_nullbillable", "amount_usd": "2.000000"},
             {"name": "tokens", "amount_usd": "1.250000"},
             {"name": "egress", "amount_usd": "0.300000"},
             {"name": "zero", "amount_usd": "0.000000"},
@@ -274,8 +314,9 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
     }
     assert buckets["legacy_total"] == "5.000000"
     assert buckets["org_unassigned_components"] == "0.750000"
-    # team components 2.25 + 1.30, org-unassigned 0.75, legacy 5.0
-    assert buckets["org_total"] == "9.300000"
+    # team components 3.85 + 6.30, org-unassigned 0.75, legacy 5.0 — the
+    # declared 4.000000 (billable false) is excluded from the buckets.
+    assert buckets["org_total"] == "15.900000"
     assert buckets["has_more"] is False
     # no ledger rows were written for this fixture org
     assert not buckets["annotations_by_team"]
@@ -366,6 +407,20 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
             '[{"component": "claude", "display_name": "Claude", "source": "self_reported", "amount_usd": "4.000000"}]',
             _STARTED_IN,
         ),
+        # FAR-1780 mixed self_reported run (pipeline_one): the explicit
+        # billable:true gpt4 entry is INCLUDED; the declared billable:false
+        # m2 entry (4.0 excluded from the exported sum) proves the per-entry
+        # billable filter at the DB level. total_cost_usd mirrors the real
+        # producer (the billed 1.25, no room for the declared 7.00).
+        (
+            pipeline_one,
+            Decimal("1.250000"),
+            '[{"component": "gpt4", "display_name": "GPT-4", "source": "self_reported", '
+            '"billable": true, "amount_usd": "1.250000"}, '
+            '{"component": "m2_declared", "display_name": "M2", "source": "self_reported", '
+            '"billable": false, "amount_usd": "7.000000"}]',
+            _STARTED_IN,
+        ),
         # gpt4 with source='calculated' — EXCLUDED by the source filter
         (
             pipeline_two,
@@ -413,13 +468,14 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
     # `cost_breakdown`; the per-component/model split is the job of
     # `_SQL_EXPORT_MODEL`, so the self_reported/calculated runs below DO count
     # toward each pipeline's total.
-    # pipeline_one: 1.25 + 2.75 + NULL(0) + 1.00 + 0.50 (in-window) = 5.50, COUNT(*) 5
-    #   (the 10.00 out-of-window gpt4 run is excluded)
+    # pipeline_one: 1.25 + 2.75 + NULL(0) + 1.00 + 0.50 + 1.25 (mixed-billable
+    #   run) in-window = 6.75, COUNT(*) 6 (the 10.00 out-of-window gpt4 run is
+    #   excluded)
     # pipeline_two: 3.00 + 4.00(claude) + 99.00(gpt4 calculated) = 106.00, COUNT(*) 3
     #   (the 5.00 out-of-window run is excluded)
     # pipeline_three: only NULL-cost in-window runs → 0.0 total, COUNT 1
     assert pipeline_export == {
-        (str(pipeline_one), 5.5, 5),
+        (str(pipeline_one), 6.75, 6),
         (str(pipeline_two), 106.0, 3),
         (str(pipeline_three), 0.0, 1),
     }
@@ -432,10 +488,14 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
         )
     ).all()
     model_export = {row.component: (float(row.amount_usd), _safe_int(row.total_runs)) for row in model_rows}
-    # gpt4: 1.00 + 2.00 (run1) + 0.50 (run2, display_name changed) = 3.50 across
-    # 2 DISTINCT runs; claude: 4.00 across 1 run. The calculated-source gpt4 and
-    # the out-of-window gpt4 are both excluded.
+    # gpt4: 1.00 + 2.00 (run1) + 0.50 (run2, display_name changed) + 1.25
+    # (mixed-billable run) = 4.75 across 3 DISTINCT runs; claude: 4.00 across
+    # 1 run. The calculated-source gpt4 and the out-of-window gpt4 are both
+    # excluded; the declared m2 entry (billable false, 7.00) is excluded by
+    # the FAR-1780 per-entry billable filter, so NO ``m2_declared`` row may
+    # materialise at all.
     assert model_export == {
-        "gpt4": (pytest.approx(3.50), 2),
+        "gpt4": (pytest.approx(4.75), 3),
         "claude": (pytest.approx(4.00), 1),
     }
+    assert "m2_declared" not in model_export

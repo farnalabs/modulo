@@ -185,6 +185,7 @@ from modulo.core.logging_config import org_id_var
 from modulo.core.mcp.scope_validator import (
     MCPAuthorizationError,
     MCPSystemAdminRequiredError,
+    check_node_allowed_tools,
     check_tool_scope,
     set_request_allowed_tools,
 )
@@ -627,6 +628,50 @@ def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
         # pre-centralisation response.
         _log_system_admin_denial(tool_name)
         raise MCPAuthorizationError(str(exc)) from None
+
+
+def _check_node_allowed_tools(tool_name: str) -> None:
+    """Enforce ONLY the node-level allowed_tools narrowing (FAR-1976).
+
+    The handful of read-only MCP tools that bypass ``_check_agent_tool_scope``
+    (they declare no role/system-admin requirement, so they have no full-
+    chokepoint leg to route through) must still honour a node's
+    ``capability_scope.allowed_tools`` — the chokepoint's OTHER leg. Each such
+    handler calls this helper at its top, before any DB/work, so "read-only" is
+    not mistaken for "in scope".
+
+    Reads the SAME request-scoped source as the chokepoint
+    (``_ctx_node_allowed_tools_val()``, with the shared resolver's own
+    request-header fallback); ``None`` = UNRESTRICTED/legacy. Raises
+    ``MCPAuthorizationError`` with the byte-identical chokepoint leg-1 message,
+    so the handler's ``except MCPAuthorizationError`` arm produces the same
+    ``insufficient_scope`` envelope a full-chokepoint refusal does. The role
+    and system-admin legs are deliberately NOT re-derived here — these tools
+    declare neither, and re-deriving them would change their semantics.
+    """
+    check_node_allowed_tools(tool_name, allowed_tools=_ctx_node_allowed_tools_val())
+
+
+def _resource_node_scope_error(tool_name: str) -> str | None:
+    """Return the resource-body refusal when a node scope excludes *tool_name*.
+
+    FAR-1976: ``@mcp.resource`` handlers returned the same tenant data the
+    gated tools expose, so a run-scoped node whose ``allowed_tools`` excluded a
+    tool could still read it through ``resources/read``. Each tool-backed
+    resource gates under its duplicated tool's name via this adapter, which
+    applies the SAME node-scope leg as the tool handlers but renders the
+    refusal as resource text (MCP resources return plain strings, not the tool
+    handlers' structured error envelope).
+
+    Returns ``None`` when the read is allowed (including the ``None`` /
+    unrestricted legacy case), otherwise the ``error: insufficient_scope: ...``
+    body to return verbatim.
+    """
+    try:
+        _check_node_allowed_tools(tool_name)
+    except MCPAuthorizationError as exc:
+        return f"error: insufficient_scope: {exc}"
+    return None
 
 
 # FAR-1184: raising or clearing a pipeline's spend circuit-breaker threshold
@@ -2347,6 +2392,9 @@ async def list_pipelines_tool(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("list_pipelines")
         org_id = _ctx_org_id_val()
         from modulo.db.crud.pipeline import list_pipelines
 
@@ -2370,6 +2418,8 @@ async def list_pipelines_tool(
             "next_cursor": result.next_cursor,
             "has_more": result.has_more,
         }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("list_pipelines_tool failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -3696,6 +3746,9 @@ async def get_pipeline_graph_tool(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("get_pipeline_graph")
         from modulo.db.crud.pipeline import get_pipeline_graph
 
         org_id = _ctx_org_id_val()
@@ -3730,6 +3783,8 @@ async def get_pipeline_graph_tool(
             "node_count": len(masked_nodes),
             "edge_count": len(edge_dicts),
         }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("get_pipeline_graph_tool failed")
         return {
@@ -3965,6 +4020,7 @@ async def _replace_pipeline_graph_txn(
         replace_pipeline_graph,
     )
     from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+    from modulo.db.models.pipeline import Pipeline
 
     async with _session(org_id) as s:
         # FAR-1361: bound every row-lock wait in this transaction BEFORE its
@@ -3985,6 +4041,30 @@ async def _replace_pipeline_graph_txn(
             return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
         if _team_scoped_key_mismatch(pipeline.owner_team_id):
             return _team_scope_error("pipeline", pipeline_id)
+        # FAR-1845: standardised Pipeline -> Agent lock order. This transaction
+        # takes the pipeline row lock FIRST, before *any* write path can touch
+        # Agent rows. The FAR-488a sync below UPDATEs Agent rows, and under the
+        # session's default autoflush those locks are flushed before the next
+        # statement — so syncing first and only then letting
+        # ``replace_pipeline_graph`` take the pipeline ``FOR UPDATE`` would
+        # acquire Agent -> Pipeline. That inverts the order every REST graph
+        # write (and the snapshot-rollback hook) uses, and a concurrent write
+        # sharing an Agent row could deadlock (40P01) instead of hitting the
+        # bounded-lock 409/503. The later ``replace_pipeline_graph`` lock is
+        # re-entrant inside this same transaction.
+        locked_pipeline = (
+            await s.execute(
+                select(Pipeline)
+                .where(
+                    Pipeline.id == pid,
+                    Pipeline.organisation_id == org_id,
+                    Pipeline.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if locked_pipeline is None:
+            return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
         # FAR-1181: the graph READ masks env_vars/context_files/parameter
         # values; a full-replace write round-tripping that masked read must
         # not persist the mask literals over the stored secrets. Echoes are
@@ -4865,6 +4945,71 @@ def _run_status_base(run: Run) -> dict[str, Any]:
     return result
 
 
+# FAR-1575: bound the MCP run-detail ``input_payload`` projection. REST carries
+# the full masked payload; the MCP tool response must be size-bounded so a
+# pathological input (a huge pasted prompt, a 10k-item list, a deeply nested
+# blob) cannot produce an unbounded response. Three caps apply:
+#   * each STRING is sliced to at most 8_000 chars (marker within the cap, via
+#     the shared ``slice_with_marker`` helper — no second marker vocabulary);
+#   * the WHOLE payload shares one budget of 500 dict entries / list items, so
+#     nested collections cannot multiply the cap;
+#   * nesting deeper than 20 levels is replaced by the truncation marker
+#     (mirrors ``_mask_output_value``'s own depth guard).
+# The bound runs AFTER masking: truncating first could strand a partial secret,
+# and masking an already-truncated secret can miss it.
+_MCP_INPUT_PAYLOAD_MAX_STRING_CHARS = 8_000
+_MCP_INPUT_PAYLOAD_MAX_TOTAL_ITEMS = 500
+_MCP_INPUT_PAYLOAD_MAX_DEPTH = 20
+
+
+@dataclass
+class _McpPayloadBudget:
+    """Mutable item budget shared across one input-payload projection."""
+
+    items_remaining: int
+
+
+def _bound_mcp_input_payload(
+    value: Any,
+    budget: _McpPayloadBudget,
+    *,
+    _depth: int = 0,
+) -> Any:
+    """Recursively size-bound an already-masked MCP ``input_payload`` value.
+
+    Strings are sliced with the shared truncation marker, dict/list traversal
+    draws from a single shared item budget, and nesting beyond
+    :data:`_MCP_INPUT_PAYLOAD_MAX_DEPTH` collapses to the marker. A truncated
+    collection carries the marker as its final element / a marker key.
+    """
+    from modulo.core.pipeline_engine.hitl_context import TRUNCATION_MARKER, slice_with_marker
+
+    if _depth > _MCP_INPUT_PAYLOAD_MAX_DEPTH:
+        return TRUNCATION_MARKER
+    if isinstance(value, str):
+        return slice_with_marker(value, _MCP_INPUT_PAYLOAD_MAX_STRING_CHARS)
+    if isinstance(value, dict):
+        bounded: dict[Any, Any] = {}
+        for key, item in value.items():
+            if budget.items_remaining <= 0:
+                omitted = len(value) - len(bounded)
+                bounded[TRUNCATION_MARKER] = f"{omitted} item(s) omitted"
+                break
+            budget.items_remaining -= 1
+            bounded[key] = _bound_mcp_input_payload(item, budget, _depth=_depth + 1)
+        return bounded
+    if isinstance(value, list):
+        bounded_list: list[Any] = []
+        for item in value:
+            if budget.items_remaining <= 0:
+                bounded_list.append(TRUNCATION_MARKER)
+                break
+            budget.items_remaining -= 1
+            bounded_list.append(_bound_mcp_input_payload(item, budget, _depth=_depth + 1))
+        return bounded_list
+    return value
+
+
 def _run_status_detail(run: Run, blobs: RunBlobs) -> dict[str, Any]:
     # FAR-1737: reuse the REST serialisers verbatim — the masked input payload
     # and the deadline-triage projection must be byte-identical to
@@ -4898,10 +5043,18 @@ def _run_status_detail(run: Run, blobs: RunBlobs) -> dict[str, Any]:
     # from the markers already reassembled for this detail read. Both are
     # detail-only: the base response never touches either (matches REST, where
     # the mask/projection sit behind the detail builder).
+    # FAR-1575: mask FIRST, then size-bound — truncating before masking could
+    # leave a partial secret, and masking a truncated secret can miss it. The
+    # REST path keeps the full masked payload; only this MCP projection is
+    # bounded.
     _raw_input_payload = getattr(run, "input_payload", None)
-    result["input_payload"] = (
-        _mask_output_value(_raw_input_payload) if isinstance(_raw_input_payload, dict) and _raw_input_payload else None
-    )
+    if isinstance(_raw_input_payload, dict) and _raw_input_payload:
+        result["input_payload"] = _bound_mcp_input_payload(
+            _mask_output_value(_raw_input_payload),
+            _McpPayloadBudget(_MCP_INPUT_PAYLOAD_MAX_TOTAL_ITEMS),
+        )
+    else:
+        result["input_payload"] = None
     result["deadline_triage"] = _deadline_triage_from_markers(getattr(blobs, "markers", None))
     return result
 
@@ -4943,6 +5096,9 @@ def _run_status_node(
 async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    # FAR-1976: this tool bypasses the full chokepoint, so it must still
+    # enforce the node allowed_tools narrowing leg explicitly.
+    _check_node_allowed_tools("get_run_status")
     org_id = _ctx_org_id_val()
     rid, rid_err = _parse_uuid_param(run_id, "run_id")
     if rid_err:
@@ -4971,13 +5127,29 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
         "masked run input_payload (the original run input, sensitive fields "
         "redacted), and deadline_triage[] — the per-attempt sandbox envelopes "
         "(attempt_key, no_output_reason, sandbox_log_tail, raw_output_tail, "
-        "stdout_length) that explain why a node produced no output."
+        "stdout_length) that explain why a node produced no output. The "
+        "input_payload is size-bounded: strings over 8000 characters and "
+        "collections beyond 500 total entries/items are truncated with a "
+        "marker."
     )
 )
 @_RETRY_DB
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
+    """Get a run's status; ``detail=True`` adds nodes, the masked input and triage.
+
+    The detail read's ``input_payload`` is masked with the same value-level
+    masker the REST detail endpoint uses, then size-bounded so a pathological
+    input cannot produce an unbounded response: each string is capped at
+    ``_MCP_INPUT_PAYLOAD_MAX_STRING_CHARS`` (8,000) characters, and the whole
+    payload shares a budget of ``_MCP_INPUT_PAYLOAD_MAX_TOTAL_ITEMS`` (500)
+    dict entries / list items. Capped strings and collections carry the shared
+    truncation marker ``…(truncated)``. The base (``detail=False``) response is
+    unchanged.
+    """
     try:
         return await _get_run_status_impl(run_id, detail)
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("get_run_status failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -5299,7 +5471,7 @@ async def _create_eval_definition_impl(
     pass_threshold: float | None,
     suite_id: str | None,
 ) -> dict[str, Any]:
-    """Persist a new EvalDefinition; shared with the MCP tool wrapper.
+    """Persist a new eval definition (an ``Eval`` row); shared with the MCP tool wrapper.
 
     Redirected to write to Eval+PolicyGate via the shared helper (FAR-1101 chunk 3b).
     """
@@ -5375,7 +5547,7 @@ async def _create_eval_definition_impl(
 
 @mcp.tool(
     description="Create a new eval definition (operator or admin). Persists an "
-    "EvalDefinition row scoped to the caller's org and returns its details. "
+    "Eval row scoped to the caller's org and returns its details. "
     "Requires an operator or admin caller; lower roles receive an "
     "insufficient_scope error.",
 )
@@ -5462,7 +5634,7 @@ async def _update_eval_definition_impl(
     pass_threshold: float | None,
     suite_id: str | None,
 ) -> dict[str, Any]:
-    """Apply a partial update to an EvalDefinition; shared with the MCP tool wrapper.
+    """Apply a partial update to an eval definition (an ``Eval`` row); shared with the MCP tool wrapper.
 
     Redirected to write to Eval+PolicyGate via the shared helper (FAR-1101 chunk 3b).
     """
@@ -10589,12 +10761,17 @@ async def search_documentation(query: str, section: str | None = None) -> dict[s
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("search_documentation")
         index = _get_doc_index()
         results = index.search(query, section=section)
         if not results:
             return {"results": "No documentation found for query.", "count": 0}
         formatted = index.format_results(results)
         return {"results": formatted, "count": len(results)}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except Exception as exc:
         _log.exception("search_documentation failed")
         return _tool_exception_error("Failed to search documentation", exc, "mcp.search_documentation")
@@ -10612,6 +10789,9 @@ async def get_integration_status() -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("get_integration_status")
         from sqlalchemy import func, select
 
         from modulo.db.models.connector_instance import ConnectorInstance
@@ -10689,6 +10869,8 @@ async def get_integration_status() -> dict[str, Any]:
             "model_backends": backend_list,
             "trigger_count": trigger_count,
         }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("get_integration_status failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -10786,6 +10968,9 @@ async def get_available_features() -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("get_available_features")
         from modulo.core.feature_flags import resolve_plan_context
 
         org_id = _ctx_org_id_val()
@@ -10808,6 +10993,8 @@ async def get_available_features() -> dict[str, Any]:
             lines.append(f"| {flag.name} | {flag.tier} | {available} |")
 
         return {"results": "\n".join(lines), "tier": current_tier, "feature_count": len(all_flags)}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("get_available_features failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -10895,6 +11082,9 @@ async def list_schemas(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("list_schemas")
         org_id = _ctx_org_id_val()
         lim = max(1, min(limit, 100))
 
@@ -10916,6 +11106,8 @@ async def list_schemas(
             "next_cursor": result.next_cursor,
             "has_more": result.has_more,
         }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("list_schemas failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -11849,6 +12041,9 @@ async def validate_payload(
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        # FAR-1976: this tool bypasses the full chokepoint, so it must still
+        # enforce the node allowed_tools narrowing leg explicitly.
+        _check_node_allowed_tools("validate_payload")
         from jsonschema import Draft202012Validator, ValidationError
         from jsonschema.exceptions import SchemaError as JsSchemaError
 
@@ -11899,6 +12094,8 @@ async def validate_payload(
                 "valid": False,
                 "errors": [{"path": "(schema)", "message": f"Invalid schema definition: {exc.message}"}],
             }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("validate_payload failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -11944,6 +12141,12 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
                     "description": r.description,
                     "candidates": [c.to_dict() for c in r.candidates[:lim]],
                     "count": len(r.candidates),
+                    # FAR-1977: mirrors the REST ``HousekeepingCategory`` shape —
+                    # ``status`` is "ok" for a scanner that ran (empty = clean)
+                    # and "failed" for one that raised, whose ``error`` carries
+                    # the exception CLASS only (no message/traceback).
+                    "status": r.status,
+                    "error": r.error,
                 }
                 for r in results
             ],
@@ -12092,6 +12295,10 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
 async def resource_pipelines() -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the list_pipelines tool — same node-scope gate.
+    denied = _resource_node_scope_error("list_pipelines")
+    if denied is not None:
+        return denied
     from modulo.db.crud.pipeline import list_pipelines
 
     org_id = _ctx_org_id_val()
@@ -12131,6 +12338,10 @@ def _format_run_line(r: Any, child_rollups: dict[Any, tuple[Any, int]], cost_bre
 async def resource_pipeline_runs(pipeline_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the list_runs tool — same node-scope gate.
+    denied = _resource_node_scope_error("list_runs")
+    if denied is not None:
+        return denied
     from modulo.db.crud.run import list_runs
 
     org_id = _ctx_org_id_val()
@@ -12170,6 +12381,11 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
 async def resource_pipeline_detail(pipeline_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: exposes the pipeline metadata list_pipelines returns
+    # (name/id/visibility/owners) plus structural counts — gate under it.
+    denied = _resource_node_scope_error("list_pipelines")
+    if denied is not None:
+        return denied
     from sqlalchemy import func, select
 
     from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -12224,6 +12440,10 @@ async def resource_pipeline_detail(pipeline_id: str) -> str:
 async def resource_pipeline_snapshots(pipeline_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: deliberately NOT node-scope gated — no gated tool lists a
+    # pipeline's snapshots (``get_pipeline_diff`` only diffs two identified
+    # snapshots; ``get_pipeline_graph`` returns the live graph). This resource
+    # exposes snapshot ids/versions/tags only, never graph content.
     from modulo.db.crud.pipeline_snapshot_versioning import list_snapshots
 
     org_id = _ctx_org_id_val()
@@ -12284,6 +12504,18 @@ def _render_snapshot_node_details(nodes: list[dict[str, Any]]) -> str:
 async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: the payload is a HISTORICAL SNAPSHOT's graph (nodes/edges plus
+    # connector bindings), so this resource needs BOTH capabilities: the
+    # live-graph capability (get_pipeline_graph) and the snapshot/diff
+    # capability (get_pipeline_diff). Requiring both is fail-closed — a node
+    # allowed one but not the other must not read snapshot content through
+    # resources/read.
+    denied = _resource_node_scope_error("get_pipeline_graph")
+    if denied is not None:
+        return denied
+    denied = _resource_node_scope_error("get_pipeline_diff")
+    if denied is not None:
+        return denied
     from modulo.db.crud.pipeline_snapshot_versioning import get_snapshot_detail
 
     org_id = _ctx_org_id_val()
@@ -12324,6 +12556,10 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
 async def resource_run(run_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the get_run_status tool — same node-scope gate.
+    denied = _resource_node_scope_error("get_run_status")
+    if denied is not None:
+        return denied
     org_id = _ctx_org_id_val()
     try:
         rid = uuid.UUID(run_id)
@@ -12490,6 +12726,10 @@ async def resource_hitl_review(run_id: str, review_id: str) -> str:
     """HITL gate context. Annotated as agent_output — treat as untrusted."""
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the get_hitl_review tool — same node-scope gate.
+    denied = _resource_node_scope_error("get_hitl_review")
+    if denied is not None:
+        return denied
     org_id = _ctx_org_id_val()
     try:
         rid = uuid.UUID(run_id)
@@ -12525,6 +12765,10 @@ async def resource_hitl_review(run_id: str, review_id: str) -> str:
 async def resource_schemas() -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the list_schemas tool — same node-scope gate.
+    denied = _resource_node_scope_error("list_schemas")
+    if denied is not None:
+        return denied
     from sqlalchemy import select
 
     from modulo.db.models.schema import Schema
@@ -12541,6 +12785,11 @@ async def resource_schemas() -> str:
 async def resource_schema_detail(schema_id: str, version: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: the schema-version read surface duplicates get_schema_versions
+    # (list_schemas exposes no version rows) — gate under it.
+    denied = _resource_node_scope_error("get_schema_versions")
+    if denied is not None:
+        return denied
     from sqlalchemy import select
 
     from modulo.db.models.schema import Schema, SchemaVersion
@@ -12618,6 +12867,10 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
 async def resource_connectors() -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the list_connectors tool — same node-scope gate.
+    denied = _resource_node_scope_error("list_connectors")
+    if denied is not None:
+        return denied
     from sqlalchemy import select
 
     from modulo.db.models.connector_instance import ConnectorInstance
@@ -12638,6 +12891,10 @@ async def resource_connectors() -> str:
 async def resource_model_backends() -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the list_model_backends tool — same node-scope gate.
+    denied = _resource_node_scope_error("list_model_backends")
+    if denied is not None:
+        return denied
     from sqlalchemy import select
 
     from modulo.db.models.model_backend import ModelBackend
@@ -12660,6 +12917,10 @@ async def resource_library() -> str:
     """
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: duplicates the search_library tool — same node-scope gate.
+    denied = _resource_node_scope_error("search_library")
+    if denied is not None:
+        return denied
     try:
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
@@ -12693,6 +12954,11 @@ async def resource_library_detail(primitive_type: str, slug: str) -> str:
     """Get details of a single library primitive by type and slug."""
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
+    # FAR-1976: the library browse/read surface duplicates search_library —
+    # gate under it (there is no separate library-primitive-read tool).
+    denied = _resource_node_scope_error("search_library")
+    if denied is not None:
+        return denied
     try:
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:

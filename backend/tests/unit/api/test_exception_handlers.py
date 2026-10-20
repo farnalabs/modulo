@@ -12,10 +12,8 @@ carries ``request_id`` and ``instance``) so a regression is caught at the unit
 layer rather than by a production regression.
 """
 
-import asyncio
 import json
 import logging
-from collections.abc import Awaitable
 from types import SimpleNamespace
 from typing import Any
 
@@ -44,20 +42,16 @@ class _Request:
         self.url = type("_Url", (), {"path": path})()
 
 
-def _asyncio_run(coro: Awaitable[JSONResponse]) -> JSONResponse:
-    return asyncio.run(coro)  # type: ignore[arg-type]
-
-
 def _run_http(request: _Request, exc: StarletteHTTPException) -> JSONResponse:
-    return _asyncio_run(http_exception_handler(request, exc))  # type: ignore[arg-type]
+    return http_exception_handler(request, exc)  # type: ignore[arg-type]
 
 
 def _run_validation(request: _Request, exc: RequestValidationError) -> JSONResponse:
-    return _asyncio_run(validation_exception_handler(request, exc))  # type: ignore[arg-type]
+    return validation_exception_handler(request, exc)  # type: ignore[arg-type]
 
 
 def _run_unhandled(request: _Request, exc: Exception) -> JSONResponse:
-    return _asyncio_run(unhandled_exception_handler(request, exc))  # type: ignore[arg-type]
+    return unhandled_exception_handler(request, exc)  # type: ignore[arg-type]
 
 
 def _body(resp: JSONResponse) -> dict[str, Any]:
@@ -74,8 +68,8 @@ class TestHttpExceptionHandler:
         assert body["detail"] == "gone"
         assert body["request_id"] == "rid-1"
 
-    async def test_plain_http_exception_maps_to_problem_detail(self) -> None:
-        resp = await http_exception_handler(_Request("rid-1"), StarletteHTTPException(status_code=404, detail="gone"))  # type: ignore[arg-type]
+    def test_plain_http_exception_maps_to_problem_detail(self) -> None:
+        resp = http_exception_handler(_Request("rid-1"), StarletteHTTPException(status_code=404, detail="gone"))  # type: ignore[arg-type]
         assert resp.status_code == 404
         body = _body(resp)
         assert body["type"] == "urn:problem:modulo:not_found"
@@ -94,9 +88,9 @@ class TestHttpExceptionHandler:
         resp = _run_http(_Request("rid-5"), exc)
         assert resp.headers.get("retry-after") == "5"
 
-    async def test_plain_http_exception_carries_headers(self) -> None:
+    def test_plain_http_exception_carries_headers(self) -> None:
         exc = StarletteHTTPException(status_code=429, detail="slow down", headers={"Retry-After": "30"})
-        resp = await http_exception_handler(_Request(), exc)  # type: ignore[arg-type]
+        resp = http_exception_handler(_Request(), exc)  # type: ignore[arg-type]
         assert resp.status_code == 429
         assert resp.headers.get("retry-after") == "30"
 
@@ -109,9 +103,9 @@ class TestHttpExceptionHandler:
         assert body["instance"] == "/x"
         assert body["request_id"] == "rid-2"
 
-    async def test_problem_exception_takes_the_fast_path(self) -> None:
+    def test_problem_exception_takes_the_fast_path(self) -> None:
         exc = ProblemException(ProblemType.RATE_LIMITED, detail="slow down", headers={"Retry-After": "5"})
-        resp = await http_exception_handler(_Request("rid-9"), exc)  # type: ignore[arg-type]
+        resp = http_exception_handler(_Request("rid-9"), exc)  # type: ignore[arg-type]
         assert resp.status_code == 429
         body = _body(resp)
         assert body["type"] == "urn:problem:modulo:rate_limited"
@@ -120,9 +114,9 @@ class TestHttpExceptionHandler:
         assert body["request_id"] == "rid-9"
         assert resp.headers.get("retry-after") == "5"
 
-    async def test_problem_exception_request_id_fills_state_gap(self) -> None:
+    def test_problem_exception_request_id_fills_state_gap(self) -> None:
         exc = ProblemException(ProblemType.FORBIDDEN, detail="no")
-        resp = await http_exception_handler(_Request(None), exc)  # type: ignore[arg-type]
+        resp = http_exception_handler(_Request(None), exc)  # type: ignore[arg-type]
         body = _body(resp)
         assert "request_id" not in body
 
@@ -136,8 +130,8 @@ class TestHttpExceptionHandler:
         resp = _run_http(_Request("rid-4"), exc)
         assert resp.headers.get("x-request-id") == "rid-4"
 
-    async def test_unknown_status_falls_back_to_500(self) -> None:
-        resp = await http_exception_handler(_Request(), StarletteHTTPException(status_code=418, detail="teapot"))  # type: ignore[arg-type]
+    def test_unknown_status_falls_back_to_500(self) -> None:
+        resp = http_exception_handler(_Request(), StarletteHTTPException(status_code=418, detail="teapot"))  # type: ignore[arg-type]
         body = _body(resp)
         assert resp.status_code == 500
         assert body["type"] == "urn:problem:modulo:internal_error"
@@ -157,9 +151,9 @@ class TestValidationExceptionHandler:
         assert body["detail"] == "body.name: field required; query.limit: must be <= 100"
         assert body["request_id"] == "rid-6"
 
-    async def test_returns_422_problem_with_joined_errors(self) -> None:
+    def test_returns_422_problem_with_joined_errors(self) -> None:
         exc = RequestValidationError(errors=[{"loc": ("body", "name"), "msg": "field required"}])
-        resp = await validation_exception_handler(_Request("rid-v"), exc)  # type: ignore[arg-type]
+        resp = validation_exception_handler(_Request("rid-v"), exc)  # type: ignore[arg-type]
         assert resp.status_code == 422
         body = _body(resp)
         assert body["type"] == "urn:problem:modulo:validation_error"
@@ -167,14 +161,14 @@ class TestValidationExceptionHandler:
         assert body["detail"] == "body.name: field required"
         assert body["request_id"] == "rid-v"
 
-    async def test_joins_multiple_errors(self) -> None:
+    def test_joins_multiple_errors(self) -> None:
         exc = RequestValidationError(
             errors=[
                 {"loc": ("query", "limit"), "msg": "must be <= 100"},
                 {"loc": ("body", "items", 0, "id"), "msg": "invalid"},
             ]
         )
-        resp = await validation_exception_handler(_Request(), exc)  # type: ignore[arg-type]
+        resp = validation_exception_handler(_Request(), exc)  # type: ignore[arg-type]
         body = _body(resp)
         assert body["detail"] == "query.limit: must be <= 100; body.items.0.id: invalid"
 
@@ -194,8 +188,8 @@ class TestUnhandledExceptionHandler:
         assert body["instance"] == "/boom"
         assert body["request_id"] == "rid-8"
 
-    async def test_returns_500_problem_with_instance_and_request_id(self) -> None:
-        resp = await unhandled_exception_handler(_Request("rid-u", "/crash"), RuntimeError("boom"))  # type: ignore[arg-type]
+    def test_returns_500_problem_with_instance_and_request_id(self) -> None:
+        resp = unhandled_exception_handler(_Request("rid-u", "/crash"), RuntimeError("boom"))  # type: ignore[arg-type]
         assert resp.status_code == 500
         body = _body(resp)
         assert body["type"] == "urn:problem:modulo:internal_error"
@@ -210,8 +204,8 @@ class TestUnhandledExceptionHandler:
         body = _body(resp)
         assert "request_id" not in body
 
-    async def test_request_id_omitted_when_state_missing(self) -> None:
-        resp = await unhandled_exception_handler(_Request(None), ValueError("boom"))  # type: ignore[arg-type]
+    def test_request_id_omitted_when_state_missing(self) -> None:
+        resp = unhandled_exception_handler(_Request(None), ValueError("boom"))  # type: ignore[arg-type]
         body = _body(resp)
         assert "request_id" not in body
 
@@ -321,20 +315,20 @@ class TestUnionAllowHeader:
         """The handler rewrites ``Allow`` on 405; other statuses stay untouched."""
         request = _scope_request({"/api/v1/libraries": {"get": {}, "post": {}}})
         exc = StarletteHTTPException(status_code=405, detail="Method Not Allowed", headers={"Allow": "GET"})
-        resp = _asyncio_run(http_exception_handler(request, exc))  # type: ignore[arg-type]
+        resp = http_exception_handler(request, exc)  # type: ignore[arg-type]
         assert resp.status_code == 405
         assert resp.headers["allow"] == "GET, POST"
 
     def test_405_without_a_resolvable_document_keeps_the_original_header(self) -> None:
         request = _Request()  # type: ignore[arg-type]
         exc = StarletteHTTPException(status_code=405, detail="Method Not Allowed", headers={"Allow": "HEAD"})
-        resp = _asyncio_run(http_exception_handler(request, exc))  # type: ignore[arg-type]
+        resp = http_exception_handler(request, exc)  # type: ignore[arg-type]
         assert resp.headers["allow"] == "HEAD"
 
     def test_non_405_headers_are_untouched(self) -> None:
         request = _scope_request({"/test": {"get": {}}}, path="/test")
         exc = StarletteHTTPException(status_code=429, detail="slow", headers={"Retry-After": "5"})
-        resp = _asyncio_run(http_exception_handler(request, exc))  # type: ignore[arg-type]
+        resp = http_exception_handler(request, exc)  # type: ignore[arg-type]
         assert resp.headers.get("retry-after") == "5"
         assert "allow" not in resp.headers
 

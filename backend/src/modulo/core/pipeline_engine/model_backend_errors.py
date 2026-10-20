@@ -2,8 +2,9 @@
 
 Best-effort pattern matching on the terminal JSONL event stream captured in
 retained agent stdout.  Scans for ``"type":"error"`` lines carrying known
-provider-error signatures (UnknownError/timeout, APIError/Model-is-disabled,
-connection, rate-limit) and returns a first-class error code.
+provider-error signatures (insufficient funds / HTTP 402, UnknownError/timeout,
+APIError/Model-is-disabled, connection, rate-limit) and returns a first-class
+error code.
 
 Trust boundary: this is a BEST-EFFORT classifier — when no signature matches,
 callers fail open to the existing generic classification.  Redaction rules
@@ -26,6 +27,35 @@ import re
 # Each entry is (compiled_regex, error_code).  Patterns are applied in order;
 # the first match wins.  All patterns target the JSONL ``"type":"error"``
 # event stream that the agent runtime emits to stdout.
+#
+# ORDERING: ``_INSUFFICIENT_FUNDS_PATTERN`` is deliberately FIRST.  A billing
+# fault is a hard blocker — every retry re-hits the same wall — so when a
+# stdout stream carries BOTH a transient signature (timeout / connection) and a
+# funds refusal, the funds refusal is the outcome that must be surfaced.
+
+# The OpenCode Go gateway answers HTTP 402 "Insufficient account funds" when the
+# provider account balance is exhausted.  Captured verbatim from production
+# retained stdout::
+#
+#   {"type":"error",...,"error":{"name":"APIError","data":{
+#     "message":"Upstream request failed: Insufficient account funds",
+#     "statusCode":402,"isRetryable":false,
+#     "metadata":{"url":"https://opencode.ai/inference/go/openai/v1/chat/completions"}}}}
+#
+# Tolerates EITHER the numeric status code OR the message text (case-insensitive)
+# so a variant payload that reports only one of the two still classifies.
+#
+# SINGLE-LINE BOUND: the scan is over a JSONL stream, and one event is exactly
+# one line.  The gap uses ``[^\n]*?`` (not ``.*?``) so a ``"type":"error"``
+# event can never be joined to a DIFFERENT line's ``"statusCode":402`` — an
+# unrelated later event must not be read as this event's billing refusal.  The
+# ``(?!\d)`` after 402 stops a longer code (e.g. ``4021``) from matching.
+_INSUFFICIENT_FUNDS_PATTERN = re.compile(
+    r'"type"\s*:\s*"error"[^\n]*?(?:'
+    r'"statusCode"\s*:\s*402(?!\d)'
+    r'|"message"\s*:\s*"[^\n"]*?insufficient\s+account\s+funds)',
+    re.IGNORECASE,
+)
 
 _PROVIDER_TIMEOUT_PATTERN = re.compile(
     r'"type"\s*:\s*"error".*?"name"\s*:\s*"UnknownError".*?"message"\s*:\s*'
@@ -54,6 +84,7 @@ _RATE_LIMIT_PATTERN = re.compile(
 
 # Ordered list: first match wins.
 _SIGNATURE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (_INSUFFICIENT_FUNDS_PATTERN, "model.insufficient_funds"),
     (_PROVIDER_TIMEOUT_PATTERN, "model.provider_timeout"),
     (_MODEL_DISABLED_PATTERN, "model_disabled"),
     (_CONNECTION_ERROR_PATTERN, "model.connection"),

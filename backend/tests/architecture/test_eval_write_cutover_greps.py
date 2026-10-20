@@ -68,12 +68,12 @@ _LEGACY_WRITE_PATTERN = re.compile(
     r"|EvalDefinitionRow\("
 )
 
-# Files allowed to match: the ORM model definition itself (module import),
-# the redirect helper (constructs the new-table rows owning the redirect),
-# and the guardrail config path's read-side loader (row alias for the DTO
-# conversion; its writes now route through the shared helper instead).
+# Files allowed to match: the redirect helper (constructs the new-table rows
+# owning the redirect), and the guardrail config path's read-side loader (row
+# alias for the DTO conversion; its writes now route through the shared helper
+# instead). The legacy ORM model module was deleted, so it no longer needs an
+# allowance.
 _LEGACY_WRITE_ALLOWED_PREFIXES = (
-    "db/models/eval_definition.py",
     "core/eval_engine/eval_definition_write.py",
     "api/routes/guardrail_config.py",
 )

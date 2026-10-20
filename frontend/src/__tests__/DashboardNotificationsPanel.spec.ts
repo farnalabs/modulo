@@ -197,6 +197,11 @@ describe('DashboardNotificationsPanel', () => {
 
     const badge = wrapper.find('[role="status"]')
     expect(badge.exists()).toBe(true)
+    // WCAG AA: 11px bold text is not "large text"; the fill-safe destructive
+    // token is required for `--destructive-foreground` to clear 4.5:1.
+    expect(badge.classes()).toContain('bg-destructive-fill')
+    expect(badge.classes()).toContain('text-destructive-foreground')
+    expect(badge.classes()).not.toContain('bg-destructive')
   })
 
   it('uses the severity-filtered unread-count endpoint for the badge, not the raw total of active notifications', async () => {

@@ -113,10 +113,10 @@ class TestDispatch:
         with TestClient(app) as client:
             resp = client.post("/api/v1/runs")
         assert resp.status_code == 200
-        args, kwargs = registry.check.await_args
+        args, _kwargs = registry.check.await_args
         assert args[0] == "ip:testclient:/api/v1/runs"
-        assert kwargs["max_requests"] == 60
-        assert kwargs["window_s"] == 60
+        assert args[1] == 60
+        assert args[2] == 60
 
     def test_get_not_rate_limited(self):
         registry = _registry(allowed=False)
@@ -146,10 +146,12 @@ class TestDispatch:
             resp = client.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 429
         assert resp.headers["Retry-After"] == "60"
-        args, kwargs = registry.check.await_args
+        args, _kwargs = registry.check.await_args
         assert args[0] == "ip:testclient:/api/v1/auth/sso/providers"
-        assert kwargs["max_requests"] == 60
-        assert kwargs["window_s"] == 60
+        # Called positionally: the noop implementation must underscore-prefix its
+        # unused params (ruff ARG) and the union type then requires a positional call.
+        assert args[1] == 60  # max_requests
+        assert args[2] == 60  # window_s
 
     def test_bypass_token_skips_limit(self):
         registry = _registry(allowed=False)

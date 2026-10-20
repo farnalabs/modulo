@@ -176,6 +176,9 @@ _NO_ORM_MODEL_TABLES: frozenset[str] = frozenset(
         # Written by the migration only, never mapped by the ORM.
         # permanent (documented repo divergence)
         "eval_backfill_violations",
+        # FAR-1961: the legacy eval_definitions ORM entity was deleted while
+        # the table remains until a later slice drops it. Migration-owned only.
+        "eval_definitions",
     }
 )
 

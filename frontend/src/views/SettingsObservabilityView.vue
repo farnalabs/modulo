@@ -172,7 +172,7 @@
           :message="formError"
           :retryable="false"
         />
-        <div v-if="formSuccess" data-testid="settings-observability-form-success" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success">
+        <div v-if="formSuccess" data-testid="settings-observability-form-success" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success-text">
           {{ formSuccess }}
         </div>
 
@@ -180,7 +180,7 @@
           v-if="testResult"
           data-testid="settings-observability-test-result"
           class="rounded-lg border p-4 text-sm"
-          :class="testResult.success ? 'border-success/50 bg-success/10 text-success' : 'border-destructive/50 bg-destructive/10 text-destructive-text'"
+          :class="testResult.success ? 'border-success/50 bg-success/10 text-success-text' : 'border-destructive/50 bg-destructive/10 text-destructive-text'"
         >
           <p class="font-medium">{{ testResult.success ? $t('views.SettingsObservabilityView.connection_successful') : $t('views.SettingsObservabilityView.connection_failed') }}</p>
           <p class="mt-1">{{ testResult.message }}</p>

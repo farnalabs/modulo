@@ -55,7 +55,7 @@
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono placeholder:text-muted-foreground/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none transition-all"
             :placeholder="$t('views.SettingsLicenseView.paste_your_modulolicensekey_value_here')"
           />
-          <p v-if="verifyResult" class="text-sm" :class="verifyResult.valid ? 'text-success' : 'text-destructive'">
+          <p v-if="verifyResult" class="text-sm" :class="verifyResult.valid ? 'text-success-text' : 'text-destructive'">
             {{ verifyResult.message }}
           </p>
 
