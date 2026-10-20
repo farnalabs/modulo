@@ -85,7 +85,8 @@ _MIGRATION_OWNED_CHECKS: dict[str, frozenset[str]] = {
             "ck_error_notification_rule_window",
         }
     ),
-    "eval_definitions": frozenset({"ck_eval_definitions_pass_threshold"}),
+    # FAR-1962: the legacy eval_definitions table is DROPPED by migration 0321,
+    # so its migration-owned CHECK no longer exists to be listed.
     "eval_results": frozenset({"ck_eval_results_run_xor_suite"}),
     "eval_suites": frozenset({"ck_eval_suites_minimum_delta"}),
     "journeys": frozenset({"ck_journey_run_count"}),
@@ -176,9 +177,9 @@ _NO_ORM_MODEL_TABLES: frozenset[str] = frozenset(
         # Written by the migration only, never mapped by the ORM.
         # permanent (documented repo divergence)
         "eval_backfill_violations",
-        # FAR-1961: the legacy eval_definitions ORM entity was deleted while
-        # the table remains until a later slice drops it. Migration-owned only.
-        "eval_definitions",
+        # FAR-1962 (chunk 13 slice 3+4): the legacy eval_definitions table was
+        # DROPPED by migration 0321 — it is no longer a DB-vs-ORM divergence
+        # (neither side has it), so the entry was removed with the table.
     }
 )
 

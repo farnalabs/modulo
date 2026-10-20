@@ -157,6 +157,9 @@ _DROPPED_0147_PAIRS: dict[tuple[str, str], str] = {
     # 0179_drop_workspace_leases
     ("workspace_leases", "resource_usage_json"): "0179_drop_workspace_leases",
     ("workspace_leases", "output_artifact_refs_json"): "0179_drop_workspace_leases",
+    # FAR-1962 (chunk 13 slice 3+4): the legacy eval_definitions table is purged
+    # after the cutover proved every row redundant.
+    ("eval_definitions", "config_json"): "0321_purge_eval_definitions",
 }
 
 #: A TRANSITIONAL state between "mapped" and "dropped": the ORM entity is gone
@@ -165,11 +168,7 @@ _DROPPED_0147_PAIRS: dict[tuple[str, str], str] = {
 #: the change that removed the model; the parity test asserts the table really
 #: is absent from ``Base.metadata`` so the entry cannot go stale while a model
 #: still exists.
-_NO_ORM_MODEL_0147_PAIRS: dict[tuple[str, str], str] = {
-    # FAR-1961 (chunk 13 slice 1) deleted the legacy EvalDefinition entity; the
-    # table is dropped by a later chunk-13 slice, not here.
-    ("eval_definitions", "config_json"): "FAR-1961",
-}
+_NO_ORM_MODEL_0147_PAIRS: dict[tuple[str, str], str] = {}
 
 
 def _load_migration() -> ModuleType:
