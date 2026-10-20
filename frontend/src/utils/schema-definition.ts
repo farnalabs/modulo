@@ -23,8 +23,10 @@ function formatDefault(value: unknown): string {
   if (typeof value === 'object') return JSON.stringify(value)
   if (typeof value === 'string') return value
   if (typeof value === 'boolean') return value ? 'true' : 'false'
-  // Only number | bigint | symbol | function remain; each defines toString().
-  return value.toString()
+  if (typeof value === 'function') return Function.prototype.toString.call(value)
+  // Only number | bigint | symbol remain - all primitives, so toString() gives
+  // their textual form and never falls back to Object's "[object Object]".
+  return (value as number | bigint | symbol).toString()
 }
 
 export function coerceDefault(value: string, type: string): unknown {
