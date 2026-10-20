@@ -27,7 +27,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from starlette.responses import StreamingResponse
 
 from modulo.api.routes import audit as route
@@ -208,6 +208,20 @@ class TestScanRoute:
                 stream_factory=lambda **_: _raising(SQLAlchemyError("connection failed")),
             )
         assert exc_info.value.status_code == 503
+
+    async def test_integrity_error_maps_to_409_not_503(self) -> None:
+        """FAR-1924 regression: the shared classifier's 409 arm is reachable.
+
+        The old hand-rolled priming copy downgraded an ``IntegrityError`` (a
+        SQLAlchemyError subclass) to a generic 503; ``prime_stream`` routes it
+        through the one classifier, which maps it to 409.
+        """
+        with pytest.raises(HTTPException) as exc_info:
+            await _call_scan(
+                format="json",
+                stream_factory=lambda **_: _raising(IntegrityError("s", {}, Exception())),
+            )
+        assert exc_info.value.status_code == 409
 
     async def test_http_exception_passes_through_untouched(self) -> None:
         original = HTTPException(status_code=418, detail="teapot")
