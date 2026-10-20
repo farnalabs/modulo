@@ -58,7 +58,11 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 from tenacity import before_sleep_log, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from modulo.api.db_error_handling import raise_session_contract_error, session_contract_error_payload
+from modulo.api.db_error_handling import (
+    _MSG_LOCK_TIMEOUT,
+    raise_session_contract_error,
+    session_contract_error_payload,
+)
 from modulo.api.dependencies import (
     get_or_create_engine,
     get_or_create_session_factory,
@@ -260,14 +264,11 @@ _MSG_EVAL_DEF_UPDATE_FAILED = "update_eval_definition failed"
 _MSG_EVAL_DEF_DELETE_FAILED = "delete_eval_definition failed"
 _MSG_DB_OPERATION_FAILED = "Database operation failed. Please try again."
 # FAR-1825: SQLSTATE 55P03 from a bounded row-lock wait is a busy-row CONFLICT,
-# not an outage (mirrors ``db_error_handling._MSG_LOCK_TIMEOUT``): the engine is
-# healthy and re-issuing once the other change commits may succeed. The code is
-# ``lock_timeout`` so a consuming agent branches on it instead of retrying a
-# generic database outage.
-_MSG_LOCK_TIMEOUT = (
-    "Timed out waiting for a lock on this resource; another change is in progress. "
-    "Re-issue the request once the other change completes."
-)
+# not an outage: the engine is healthy and re-issuing once the other change
+# commits may succeed. The message is imported from ``db_error_handling`` (the
+# single declaration) rather than re-typed here, so the two error surfaces
+# cannot drift; the code is ``lock_timeout`` so a consuming agent branches on it
+# instead of retrying a generic database outage.
 _MSG_CREATE_API_KEY_FAILED = "create_api_key failed"
 _MSG_LIST_API_KEYS_FAILED = "list_api_keys failed"
 _MSG_REVOKE_API_KEY_FAILED = "revoke_api_key failed"
