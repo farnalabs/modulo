@@ -1529,6 +1529,9 @@
             />
             <span class="text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.human_only_block_llm_auto_approval') }}</span>
           </div>
+          <p class="mt-1 text-xs text-muted-foreground" data-testid="pipeline-editor-human-only-credential-note">
+            {{ $t('views.PipelineEditorView.human_only_machine_credential_note') }}
+          </p>
           <!-- FAR-1257 advisory (NON-BLOCKING): a human-only gate nobody can be
                notified about will simply age out at the review window and the
                run gets cancelled. Warn, never gate the save. aria-live (not
