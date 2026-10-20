@@ -499,7 +499,12 @@ routes:
         sidebar_order: 9
         type: form_page
         <<: *community
-        required_permissions: [notification.self]
+        # Role-gated, not permission-gated: the sidebar/router permission gate
+        # reads a `permissions` client claim that the signed-in session does
+        # not carry, so a required_permissions gate here would hide the page
+        # from every user. The underlying endpoint is granted to the lowest
+        # role, so listing all four org roles is the accurate gate.
+        required_roles: [viewer, runner, operator, admin]
         deprecated: false
     /settings/email:
         name: settings-email
@@ -6598,6 +6603,9 @@ features:
 
             # In-app notifications — /api/v1/notifications/in-app
             - "[x] GET /dashboard returns the dashboard feed, GET /unread-count the badge count, GET '' the paginated inbox, GET/PUT /preferences the per-user notification preferences, GET /{id} the detail, and POST /{id}/review-later + POST /{id}/dismiss action the record"
+
+            # FAR-248 — per-user notification preferences UI
+            - "[x] The /settings/notifications page (sidebar MONITOR group, visible to every org role) renders one toggle per category returned by GET /api/v1/notifications/in-app/preferences — the backend derives that set from _EVENT_CONFIG, so the page holds no hardcoded category list and every emitted category has a curated label — writes each toggle as a single-key delta so a concurrent change is never clobbered, and offers the dashboard minimum level as a separate select saved on its own; the in-flight save is announced through a persistently-mounted aria-live region plus aria-busy and a visible per-row label on the saving switch, and a failed save keeps the previous state with an inline assertive retry (tests/integration/test_notification_preferences_contract.py, frontend/src/__tests__/SettingsNotificationsView.spec.ts)"
 
             # FAR-1234 — read-time run metadata + clearing stopped-run notifications
             - "[x] Run-linked notifications carry point-in-time run metadata resolved at READ time on GET /dashboard, GET '' and GET /{id}: run_id parsed from the /runs/{run_id} deep link, run_status, run_terminal computed against db.models.run.TERMINAL_STATUSES, and run_cancel_reason (FAR-1233) — the notification row itself is never re-stamped, so a hitl.awaiting raised before the run was cancelled reports run_terminal true at read time; a non-run deep link or an unreadable run degrades to null/false instead of failing the read (tests/unit/api/test_in_app_notifications_run_metadata.py)"

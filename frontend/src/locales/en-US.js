@@ -723,10 +723,14 @@ export default {
       "categories_heading": "In-app notification categories",
       "categories_help": "Turn a category off to stop receiving those in-app notifications. Changes are saved as you make them.",
       "no_categories": "No notification categories are available.",
+      "unknown_category": "Other notification",
       "toggle_aria_label": "Notifications for {category}",
+      "dashboard_level_heading": "Dashboard notifications",
+      "dashboard_level_summary": "Control which notifications appear on your dashboard.",
       "dashboard_level_label": "Dashboard minimum level",
       "dashboard_level_help": "Notifications below this level are hidden from your dashboard panel and unread badge.",
       "saving": "Saving...",
+      "saving_row": "Saving...",
       "load_failed": "Could not load notification preferences: {message}",
       "save_failed": "Could not save your change: {message}",
       "levels": {
@@ -768,6 +772,9 @@ export default {
           "gate_removal_denied": "HITL gate removal denied",
           "gate_removed": "HITL gate removed",
           "overdue": "HITL overdue"
+        },
+        "provider": {
+          "failure": "Model provider authentication or billing failure"
         },
         "run": {
           "budget_exceeded": "Run budget exceeded",
