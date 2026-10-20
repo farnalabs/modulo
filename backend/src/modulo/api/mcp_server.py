@@ -4920,6 +4920,71 @@ def _run_status_base(run: Run) -> dict[str, Any]:
     return result
 
 
+# FAR-1575: bound the MCP run-detail ``input_payload`` projection. REST carries
+# the full masked payload; the MCP tool response must be size-bounded so a
+# pathological input (a huge pasted prompt, a 10k-item list, a deeply nested
+# blob) cannot produce an unbounded response. Three caps apply:
+#   * each STRING is sliced to at most 8_000 chars (marker within the cap, via
+#     the shared ``slice_with_marker`` helper — no second marker vocabulary);
+#   * the WHOLE payload shares one budget of 500 dict entries / list items, so
+#     nested collections cannot multiply the cap;
+#   * nesting deeper than 20 levels is replaced by the truncation marker
+#     (mirrors ``_mask_output_value``'s own depth guard).
+# The bound runs AFTER masking: truncating first could strand a partial secret,
+# and masking an already-truncated secret can miss it.
+_MCP_INPUT_PAYLOAD_MAX_STRING_CHARS = 8_000
+_MCP_INPUT_PAYLOAD_MAX_TOTAL_ITEMS = 500
+_MCP_INPUT_PAYLOAD_MAX_DEPTH = 20
+
+
+@dataclass
+class _McpPayloadBudget:
+    """Mutable item budget shared across one input-payload projection."""
+
+    items_remaining: int
+
+
+def _bound_mcp_input_payload(
+    value: Any,
+    budget: _McpPayloadBudget,
+    *,
+    _depth: int = 0,
+) -> Any:
+    """Recursively size-bound an already-masked MCP ``input_payload`` value.
+
+    Strings are sliced with the shared truncation marker, dict/list traversal
+    draws from a single shared item budget, and nesting beyond
+    :data:`_MCP_INPUT_PAYLOAD_MAX_DEPTH` collapses to the marker. A truncated
+    collection carries the marker as its final element / a marker key.
+    """
+    from modulo.core.pipeline_engine.hitl_context import TRUNCATION_MARKER, slice_with_marker
+
+    if _depth > _MCP_INPUT_PAYLOAD_MAX_DEPTH:
+        return TRUNCATION_MARKER
+    if isinstance(value, str):
+        return slice_with_marker(value, _MCP_INPUT_PAYLOAD_MAX_STRING_CHARS)
+    if isinstance(value, dict):
+        bounded: dict[Any, Any] = {}
+        for key, item in value.items():
+            if budget.items_remaining <= 0:
+                omitted = len(value) - len(bounded)
+                bounded[TRUNCATION_MARKER] = f"{omitted} item(s) omitted"
+                break
+            budget.items_remaining -= 1
+            bounded[key] = _bound_mcp_input_payload(item, budget, _depth=_depth + 1)
+        return bounded
+    if isinstance(value, list):
+        bounded_list: list[Any] = []
+        for item in value:
+            if budget.items_remaining <= 0:
+                bounded_list.append(TRUNCATION_MARKER)
+                break
+            budget.items_remaining -= 1
+            bounded_list.append(_bound_mcp_input_payload(item, budget, _depth=_depth + 1))
+        return bounded_list
+    return value
+
+
 def _run_status_detail(run: Run, blobs: RunBlobs) -> dict[str, Any]:
     # FAR-1737: reuse the REST serialisers verbatim — the masked input payload
     # and the deadline-triage projection must be byte-identical to
@@ -4953,10 +5018,18 @@ def _run_status_detail(run: Run, blobs: RunBlobs) -> dict[str, Any]:
     # from the markers already reassembled for this detail read. Both are
     # detail-only: the base response never touches either (matches REST, where
     # the mask/projection sit behind the detail builder).
+    # FAR-1575: mask FIRST, then size-bound — truncating before masking could
+    # leave a partial secret, and masking a truncated secret can miss it. The
+    # REST path keeps the full masked payload; only this MCP projection is
+    # bounded.
     _raw_input_payload = getattr(run, "input_payload", None)
-    result["input_payload"] = (
-        _mask_output_value(_raw_input_payload) if isinstance(_raw_input_payload, dict) and _raw_input_payload else None
-    )
+    if isinstance(_raw_input_payload, dict) and _raw_input_payload:
+        result["input_payload"] = _bound_mcp_input_payload(
+            _mask_output_value(_raw_input_payload),
+            _McpPayloadBudget(_MCP_INPUT_PAYLOAD_MAX_TOTAL_ITEMS),
+        )
+    else:
+        result["input_payload"] = None
     result["deadline_triage"] = _deadline_triage_from_markers(getattr(blobs, "markers", None))
     return result
 
@@ -5029,11 +5102,25 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
         "masked run input_payload (the original run input, sensitive fields "
         "redacted), and deadline_triage[] — the per-attempt sandbox envelopes "
         "(attempt_key, no_output_reason, sandbox_log_tail, raw_output_tail, "
-        "stdout_length) that explain why a node produced no output."
+        "stdout_length) that explain why a node produced no output. The "
+        "input_payload is size-bounded: strings over 8000 characters and "
+        "collections beyond 500 total entries/items are truncated with a "
+        "marker."
     )
 )
 @_RETRY_DB
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
+    """Get a run's status; ``detail=True`` adds nodes, the masked input and triage.
+
+    The detail read's ``input_payload`` is masked with the same value-level
+    masker the REST detail endpoint uses, then size-bounded so a pathological
+    input cannot produce an unbounded response: each string is capped at
+    ``_MCP_INPUT_PAYLOAD_MAX_STRING_CHARS`` (8,000) characters, and the whole
+    payload shares a budget of ``_MCP_INPUT_PAYLOAD_MAX_TOTAL_ITEMS`` (500)
+    dict entries / list items. Capped strings and collections carry the shared
+    truncation marker ``…(truncated)``. The base (``detail=False``) response is
+    unchanged.
+    """
     try:
         return await _get_run_status_impl(run_id, detail)
     except MCPAuthorizationError as exc:
@@ -5359,7 +5446,7 @@ async def _create_eval_definition_impl(
     pass_threshold: float | None,
     suite_id: str | None,
 ) -> dict[str, Any]:
-    """Persist a new EvalDefinition; shared with the MCP tool wrapper.
+    """Persist a new eval definition (an ``Eval`` row); shared with the MCP tool wrapper.
 
     Redirected to write to Eval+PolicyGate via the shared helper (FAR-1101 chunk 3b).
     """
@@ -5435,7 +5522,7 @@ async def _create_eval_definition_impl(
 
 @mcp.tool(
     description="Create a new eval definition (operator or admin). Persists an "
-    "EvalDefinition row scoped to the caller's org and returns its details. "
+    "Eval row scoped to the caller's org and returns its details. "
     "Requires an operator or admin caller; lower roles receive an "
     "insufficient_scope error.",
 )
@@ -5522,7 +5609,7 @@ async def _update_eval_definition_impl(
     pass_threshold: float | None,
     suite_id: str | None,
 ) -> dict[str, Any]:
-    """Apply a partial update to an EvalDefinition; shared with the MCP tool wrapper.
+    """Apply a partial update to an eval definition (an ``Eval`` row); shared with the MCP tool wrapper.
 
     Redirected to write to Eval+PolicyGate via the shared helper (FAR-1101 chunk 3b).
     """

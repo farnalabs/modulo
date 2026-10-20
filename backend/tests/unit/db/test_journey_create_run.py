@@ -36,7 +36,6 @@ from modulo.db.crud.variant_group import run_variant_weighted
 from modulo.db.lifecycle_refs import canonical_work_item_id
 from modulo.db.models.base import Base
 from modulo.db.models.eval import Eval
-from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.journey import Journey
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -62,7 +61,6 @@ _TABLES: list[Table] = cast(
         PipelineSnapshot.__table__,
         Journey.__table__,
         VariantGroup.__table__,
-        EvalDefinition.__table__,
         Eval.__table__,
     ],
 )

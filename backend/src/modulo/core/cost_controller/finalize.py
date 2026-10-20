@@ -101,6 +101,7 @@ from modulo.core.node_output_split import (
     node_telemetry,
     split_node_output,
 )
+from modulo.core.provenance import PROVENANCE_KEY, PROVENANCE_REPORTED
 from modulo.core.run_outputs_dualwrite import guard_dual_write
 from modulo.core.spend_ceiling import (
     ORG_CEILING_EXCEEDED,
@@ -790,6 +791,63 @@ _REPORTED_TOKEN_FIELD_MAP: tuple[tuple[str, str], ...] = tuple(
 )
 
 
+#: FAR-1780: envelope provenance datum -> the union keys each datum folds
+#: into. Token datums are DERIVED from the shared ``REPORTED_TOKEN_CHAIN``
+#: (same derivation as ``_REPORTED_TOKEN_FIELD_MAP``) so the chain cannot
+#: drift; the model-cost datums fold onto the pinned model-cost union keys
+#: whose folded VALUE mirrors the agent's declaration (``model_cost_usd`` is
+#: the re-clamped report, ``model_cost_raw_usd`` the verbatim raw when the
+#: report carried one). The engine's own clamp annotations
+#: (``model_cost_clamped`` / ``model_cost_out_of_band_high``) are NOT mapped —
+#: they are engine-authored booleans, not agent claims.
+_UNION_PROVENANCE_DATUM_KEYS: dict[str, tuple[str, ...]] = {
+    **{binding.node_field: (binding.union_key,) for binding in REPORTED_TOKEN_CHAIN},
+    "model_cost_usd": ("model_cost_usd", "model_cost_raw_usd"),
+    "model_cost_raw_usd": ("model_cost_usd", "model_cost_raw_usd"),
+}
+
+
+def _fold_datum_provenance(node_dict: dict[str, Any], output_obj: dict[str, Any] | None) -> None:
+    """Propagate the output envelope's per-datum ``reported`` map into the union.
+
+    FAR-1780: the sandbox envelope's ``provenance`` key (built by
+    node_runner's ``_sandbox_reported_datum_provenance``) names the datums
+    that carry the PRODUCER'S OWN report. Sparse per-node telemetry now
+    carries the same key through ``node_telemetry()`` (split rows) or the
+    legacy envelope's inner output, so the union (the run-output/API shape
+    and the persisted sparse entry) can render the same classes.
+
+    Engine-assigned, never self-asserted (ADR-034 / ADR-042): the stored
+    union entry NEVER names a provenance class that survived from a previous
+    enrich — the fold POPS the stored key first and rebuilds. A stamp is
+    applied only for (a) a datum the envelope names EXACTLY
+    ``PROVENANCE_REPORTED`` and (b) a mapped union key that actually
+    SURVIVED this enrich's folds (``_fold_model_cost`` / ``_fold_token_usage``
+    pop a refused or replaced value, so presence checks run post-fold —
+    a refused report's key is NOT stamped). No envelope map = no union
+    provenance key at all.
+
+    Mapping uses ``_UNION_PROVENANCE_DATUM_KEYS``; datums the map does not
+    name (``output_json``/``summary``/extraction payloads — engine-set only)
+    are deliberately not propagated.
+    """
+    node_dict.pop(PROVENANCE_KEY, None)
+    if not isinstance(output_obj, dict):
+        return
+    source_map = output_obj.get(PROVENANCE_KEY)
+    if not isinstance(source_map, dict):
+        return
+    stamped: dict[str, str] = {}
+    for datum, union_keys in _UNION_PROVENANCE_DATUM_KEYS.items():
+        if source_map.get(datum) is not PROVENANCE_REPORTED:
+            continue
+        for union_key in union_keys:
+            if union_key in node_dict and union_key not in stamped:
+                stamped[union_key] = PROVENANCE_REPORTED
+    if stamped:
+        node_dict[PROVENANCE_KEY] = stamped
+
+
 def _fold_token_usage(node_dict: dict[str, Any], output_obj: dict[str, Any] | None) -> None:
     """Fold agent-reported token usage into the union's DISTINCT ``reported_*`` keys.
 
@@ -929,10 +987,12 @@ def _enrich_node_fields(
 
     Sets ``wall_clock_time_ms`` (server-verified when present), the split
     sandbox flags (``sandbox_by_map`` / ``is_sandbox_for_wallclock``), the
-    pinned model-cost fold, and the agent-reported token-usage fold
-    (``reported_*`` — display-only, FAR-491). Returns the node's mapped type
-    (``None`` when the frozen map lacks the node — the schema-drift
-    provenance gate).
+    pinned model-cost fold, the agent-reported token-usage fold
+    (``reported_*`` — display-only, FAR-491), and the envelope's per-datum
+    provenance propagation (``_fold_datum_provenance`` — FAR-1780, runs
+    AFTER the two folds so a stamp rides only a surviving value). Returns
+    the node's mapped type (``None`` when the frozen map lacks the node —
+    the schema-drift provenance gate).
     """
     wall_ms = _wall_clock_ms(output_obj)
     if wall_ms is not None:
@@ -945,6 +1005,7 @@ def _enrich_node_fields(
 
     _fold_model_cost(node_dict, output_obj)
     _fold_token_usage(node_dict, output_obj)
+    _fold_datum_provenance(node_dict, output_obj)
     return map_type
 
 
