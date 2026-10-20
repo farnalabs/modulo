@@ -715,13 +715,13 @@ async def test_chain_end_returns_early_without_envelope():
 
 
 def test_session_lost_text_non_dict_returns_empty():
-    assert _node_output_sandbox_session_lost_text(None) == ""
-    assert _node_output_sandbox_session_lost_text("str") == ""
+    assert not _node_output_sandbox_session_lost_text(None)
+    assert not _node_output_sandbox_session_lost_text("str")
 
 
 def test_session_lost_text_skips_non_dict_views():
     output = {"output": "str", "artifacts": [None, {"output": "str"}]}
-    assert _node_output_sandbox_session_lost_text(output) == ""
+    assert not _node_output_sandbox_session_lost_text(output)
 
 
 def test_session_lost_text_collects_retained_surfaces():
