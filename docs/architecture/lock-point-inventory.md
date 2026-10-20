@@ -106,7 +106,7 @@ unrelated writer or is held across non-lock work.
 
 | # | file:line | function | lock | txn | hold / blocking scope | over-serialises |
 |---|---|---|---|---|---|---|
-| A1 | `api/mcp_server.py:4683` (`bind_connector_to_node`, defined at 4643) | `bind_connector_to_node` | FOR UPDATE | caller txn | Pipeline row locked while the MCP graph/connector-binding write commits. | no – pipeline single-writer. |
+| A1 | `api/mcp_server.py:4692` (`bind_connector_to_node`, defined at 4652) | `bind_connector_to_node` | FOR UPDATE | caller txn | Pipeline row locked while the MCP graph/connector-binding write commits. | no – pipeline single-writer. |
 | A2 | `api/routes/triggers.py:379` | `_require_team_gate_in_txn` | FOR UPDATE | mutation txn, bounded by `set_mutation_row_lock_timeout` | TOCTOU re-check of the pipeline team gate; blocks pipeline graph writers for the RMW. | no. |
 | A3 | `api/routes/pipelines.py:3400` | `_reapply_team_gate_inside_mutation_txn` | FOR UPDATE | mutation txn, bounded | Same team-gate TOCTOU re-check (the route-side twin of A2). | no. |
 | A4 | `db/crud/pipeline_snapshot.py:441` | `_acquire_snapshot_allocation_lock` | FOR NO KEY UPDATE (`key_share=True`) | caller txn, bounded by `set_mutation_row_lock_timeout` | Snapshot-allocation slot; deliberately the weakest key-preserving lock so it does not conflict with FK-only writers. Timeout → `SnapshotLockNotAvailableError` (retryable 503). | no. |
@@ -124,7 +124,7 @@ unrelated writer or is held across non-lock work.
 | A16 | `core/pipeline_engine/recovery.py:431` | `_fetch_locked_run` | FOR UPDATE | caller txn, `include_soft_deleted` | Locks the *pipeline* row to single-flight run recovery; re-reads the run after the lock. | no. |
 | A17 | `core/pipeline_engine/recovery.py:712` | `guardrail_override` | FOR UPDATE | caller txn, `include_soft_deleted` | Pipeline lock so a guardrail override cannot race a graph edit. | no. |
 | A18 | `core/pipeline_engine/classify.py:1383` | `_reconcile_classify_run` | FOR UPDATE + `populate_existing` | **own** `session.begin()` | Per-run re-read to terminalise/classify exactly once; each DB call bounded by `asyncio.wait_for(_CLASSIFICATION_WRITE_TIMEOUT_SECONDS)`. | no. |
-| A19 | `api/mcp_server.py:4161` | `_replace_pipeline_graph_txn` | FOR UPDATE | own `_session` txn, **bounded** by `set_mutation_row_lock_timeout` (FAR-1361) | MCP graph-replace transaction takes the pipeline row lock first (FAR-1845 order); the bound is issued before the first lock. | no. |
+| A19 | `api/mcp_server.py:4170` | `_replace_pipeline_graph_txn` | FOR UPDATE | own `_session` txn, **bounded** by `set_mutation_row_lock_timeout` (FAR-1361) | MCP graph-replace transaction takes the pipeline row lock first (FAR-1845 order); the bound is issued before the first lock. | no. |
 
 > Note: A18 and the raw-SQL site R2 (§4) both lock the `runs` row; A15 and R2 are the two
 > halves of the same connector idempotency-gate fence (write vs read).
