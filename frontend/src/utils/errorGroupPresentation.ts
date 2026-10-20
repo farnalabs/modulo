@@ -1,4 +1,5 @@
 import { shortId } from './format'
+import { toDate } from '../lib/formatDate'
 
 /** Badge class for an error group's peak severity level. */
 export function levelBadgeClass(level: string): string {
@@ -18,8 +19,8 @@ export function statusBadgeClass(status: string): string {
 
 /** Short timestamp shared by the error list and detail surfaces. */
 export function formatErrorDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return '—'
-  const d = new Date(dateStr)
+  const d = toDate(dateStr)
+  if (!d) return '—'
   return d.toLocaleString(undefined, {
     month: 'short',
     day: 'numeric',

@@ -30,6 +30,7 @@ describe('error group presentation helpers', () => {
     expect(formatErrorDate(null)).toBe('—')
     expect(formatErrorDate(undefined)).toBe('—')
     expect(formatErrorDate('')).toBe('—')
+    expect(formatErrorDate('not-a-date')).toBe('—')
   })
 
   it('stringifies a row id and tolerates a missing id', () => {
