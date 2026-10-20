@@ -1,9 +1,9 @@
-"""Unit tests for migration 0321_pipeline_snapshots_substantive_version_index.
+"""Unit tests for migration 0322_pipeline_snapshots_substantive_version_index.
 
 Structural: load the migration module and assert its contract without a
 database, mirroring test_migration_0171_runs_list_indexes.py.
 
-* the chain is pinned (revision -> 0320_evidence_redaction_rules) so the
+* the chain is pinned (revision -> 0321_organisation_cost_state) so the
   pre-commit check-migration-heads hook cannot be ambushed by a rebase;
 * the upgrade creates exactly one index, with the repo's idempotent
   ``CREATE INDEX IF NOT EXISTS`` convention (0187/0171/0182);
@@ -23,7 +23,7 @@ from pathlib import Path
 from types import ModuleType
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0321_pipeline_snapshots_substantive_version_index"
+_MIGRATION_NAME = "0322_pipeline_snapshots_substantive_version_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
 
@@ -47,7 +47,7 @@ def _source_code() -> str:
 def test_metadata_pins_chain() -> None:
     module = _load_migration()
     assert module.revision == _MIGRATION_NAME
-    assert module.down_revision == "0320_evidence_redaction_rules"
+    assert module.down_revision == "0321_organisation_cost_state"
     assert module.branch_labels is None
     assert module.depends_on is None
 
