@@ -121,11 +121,29 @@ function formatErrorObject(obj: Record<string, unknown>): string {
   return stringifyErrorObject(obj)
 }
 
+// Only primitives and functions reach this fallback (objects, Errors and
+// strings are handled above). Convert each explicitly by type so the result is
+// never the generic "[object Object]" coercion S6551 warns about.
+function stringifyPrimitiveError(err: unknown): string {
+  switch (typeof err) {
+    case 'number':
+    case 'bigint':
+      return err.toString()
+    case 'boolean':
+      return err ? 'true' : 'false'
+    case 'symbol':
+    case 'function':
+      return err.toString()
+    default:
+      return 'Unknown error'
+  }
+}
+
 export function formatApiError(err: unknown): string {
   if (isProblemDetail(err)) return err.detail
   if (typeof err === 'string') return err
   if (!err) return 'Unknown error'
   if (err instanceof Error) return err.message
   if (typeof err === 'object') return formatErrorObject(err as Record<string, unknown>)
-  return String(err)
+  return stringifyPrimitiveError(err)
 }
