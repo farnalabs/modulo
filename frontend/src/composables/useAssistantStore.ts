@@ -189,10 +189,13 @@ export const useAssistantStore = defineStore('assistant', () => {
     }
   }
 
-  async function sendMessage(text: string) {
-    if (!activeSessionId.value) return
+  // Callers await this (AssistantChat, AnalyzeRunButton), so it keeps its
+  // Promise contract even though enqueuing the message is synchronous.
+  function sendMessage(text: string): Promise<void> {
+    if (!activeSessionId.value) return Promise.resolve()
     messages.value.push(createMessage('user', text, { session_id: activeSessionId.value }))
     isStreaming.value = true
+    return Promise.resolve()
   }
 
   function setPanelState(state: 'closed' | 'floating' | 'docked' | 'maximised') {
