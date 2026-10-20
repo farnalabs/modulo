@@ -18,6 +18,7 @@ snapshot with no Agent-row sync, so a restored command read back from the graph
 but was overwritten by the stale Agent row at run-snapshot time.
 """
 
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -234,6 +235,69 @@ async def test_sync_noop_without_bound_nodes() -> None:
     session.execute.assert_not_awaited()
 
 
+async def test_sync_only_writes_agent_commands() -> None:
+    """FAR-2008: the sync is deliberately narrow — it writes ONLY
+    ``agent_commands``.
+
+    The other four Agent-authoritative fields (``token_budget``,
+    ``prompt_template``, ``model_backend_id``, ``parameter_schema_id``) and the
+    node-authoritative ``schema_profile`` are NOT node-editable on the typed
+    graph model, so a save/restore must never copy node values onto the shared
+    Agent row. Widening the sync would let a rollback silently revert an Agent
+    edit made after the snapshot was taken.
+    """
+    agent_id = uuid.uuid4()
+    model_backend_id = uuid.uuid4()
+    parameter_schema_id = uuid.uuid4()
+    agent = SimpleNamespace(
+        id=agent_id,
+        agent_commands=["old-command"],
+        token_budget=10,
+        prompt_template="agent-prompt",
+        model_backend_id=model_backend_id,
+        parameter_schema_id=parameter_schema_id,
+        schema_profile="tool-rich",
+    )
+    session = _session_returning([agent])
+    node = _node(uuid.uuid4(), agent_id=agent_id, agent_commands=["new-command"])
+    node["token_budget"] = 999
+    node["prompt_template"] = "node-prompt"
+    node["model_backend_id"] = str(uuid.uuid4())
+    node["parameter_schema_id"] = str(uuid.uuid4())
+    node["schema_profile"] = "node-profile"
+
+    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=[node], pipeline_id=_PIPELINE_ID)
+
+    assert changed == 1
+    assert agent.agent_commands == ["new-command"]
+    assert agent.token_budget == 10
+    assert agent.prompt_template == "agent-prompt"
+    assert agent.model_backend_id == model_backend_id
+    assert agent.parameter_schema_id == parameter_schema_id
+    assert agent.schema_profile == "tool-rich"
+
+
+async def test_sync_log_line_carries_pipeline_attribution(caplog: pytest.LogCaptureFixture) -> None:
+    """FAR-2008: the sync log line names the Agent, the organisation AND (when
+    the caller knows it) the pipeline whose graph was written — a shared Agent
+    row may be bound by many pipelines, so agent alone does not attribute the
+    mutation."""
+    caplog.set_level(logging.INFO, logger="modulo.core.agent_command_sync")
+    agent_id = uuid.uuid4()
+    agent = SimpleNamespace(id=agent_id, agent_commands=["old-command"])
+    session = _session_returning([agent])
+    nodes = [_node(uuid.uuid4(), agent_id=agent_id, agent_commands=["new-command"])]
+
+    await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes, pipeline_id=_PIPELINE_ID)
+
+    records = [r for r in caplog.records if r.message == "pipeline.graph.agent_commands_synced"]
+    assert len(records) == 1
+    record = records[0]
+    assert record.agent_id == str(agent_id)  # type: ignore[attr-defined]
+    assert record.organisation_id == str(_ORG_ID)  # type: ignore[attr-defined]
+    assert record.pipeline_id == str(_PIPELINE_ID)  # type: ignore[attr-defined]
+
+
 def test_snapshot_materializes_synced_agent_commands() -> None:
     """(b) After the sync, snapshot materialization applies the UPDATED Agent
     row value to the bound node — the command the operator PATCHed is what
@@ -258,6 +322,53 @@ def test_snapshot_shadow_overrides_node_command_with_agent_row() -> None:
     _apply_agent_fields(node, agent)
 
     assert node["agent_commands"] == ["stale-agent-row-command"]
+
+
+def test_apply_agent_fields_ownership_contract() -> None:
+    """FAR-2008: the snapshot overlay's field-ownership contract is pinned.
+
+    Five fields are Agent-authoritative and are overwritten from the row
+    (``token_budget``, ``prompt_template``, ``model_backend_id``,
+    ``agent_commands``, ``parameter_schema_id``); ``schema_profile`` is
+    node-authoritative, so an explicit node value is preserved and the Agent
+    value is only a default (``setdefault``). A future edit that widens or
+    narrows this without updating the writers' sync contract fails here.
+    """
+    agent = Agent(name="ownership", prompt_template="agent-prompt")
+    agent.token_budget = 4242
+    model_backend_id = uuid.uuid4()
+    parameter_schema_id = uuid.uuid4()
+    agent.model_backend_id = model_backend_id
+    agent.agent_commands = ["agent-command"]
+    agent.parameter_schema_id = parameter_schema_id
+    agent.schema_profile = "agent-profile"
+    node = _node(uuid.uuid4(), agent_id=uuid.uuid4(), agent_commands=["node-command"])
+    node["token_budget"] = 1
+    node["prompt_template"] = "node-prompt"
+    node["model_backend_id"] = str(uuid.uuid4())
+    node["parameter_schema_id"] = str(uuid.uuid4())
+    node["schema_profile"] = "node-profile"
+
+    _apply_agent_fields(node, agent)
+
+    assert node["token_budget"] == 4242
+    assert node["prompt_template"] == "agent-prompt"
+    assert node["model_backend_id"] == str(model_backend_id)
+    assert node["agent_commands"] == ["agent-command"]
+    assert node["parameter_schema_id"] == str(parameter_schema_id)
+    assert node["schema_profile"] == "node-profile"
+
+
+def test_apply_agent_fields_defaults_schema_profile_from_the_agent() -> None:
+    """The node-authoritative half of the contract: with no explicit node
+    ``schema_profile``, the Agent row's value is used as the default."""
+    agent = Agent(name="ownership", prompt_template="agent-prompt")
+    agent.schema_profile = "agent-profile"
+    node = _node(uuid.uuid4(), agent_id=uuid.uuid4())
+
+    _apply_agent_fields(node, agent)
+
+    assert node["schema_profile"] == "agent-profile"
 
 
 def _make_settings() -> Settings:
@@ -623,6 +734,7 @@ async def test_rollback_endpoint_syncs_agent_rows_from_the_restored_snapshot(cli
         patch("modulo.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
         patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
         patch("modulo.api.routes.pipelines._enforce_connector_team_bindings", new=_record_gate),
+        patch("modulo.api.routes.pipelines.append_audit_event", new=AsyncMock()),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAP_ID}/rollback")
 
@@ -630,6 +742,7 @@ async def test_rollback_endpoint_syncs_agent_rows_from_the_restored_snapshot(cli
     assert order == ["rollback_start", "sync", "connector_gate", "graph_write"], order
     assert len(sync_calls) == 1
     assert sync_calls[0]["org_id"] == _ORG_ID
+    assert sync_calls[0]["pipeline_id"] == _PIPELINE_ID
     assert sync_calls[0]["nodes"] == target.graph_json["nodes"]
 
 
@@ -658,13 +771,79 @@ async def test_rollback_endpoint_syncs_even_without_connector_bindings(client: T
         patch("modulo.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
         patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
         patch("modulo.api.routes.pipelines._enforce_connector_team_bindings", new=gate_mock),
+        patch("modulo.api.routes.pipelines.append_audit_event", new=AsyncMock()),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAP_ID}/rollback")
 
     assert resp.status_code == 200, resp.text
     assert len(sync_calls) == 1
+    assert sync_calls[0]["pipeline_id"] == _PIPELINE_ID
     assert sync_calls[0]["nodes"] == target.graph_json["nodes"]
     gate_mock.assert_not_awaited()
+
+
+async def test_rollback_endpoint_audits_agent_command_sync(client: TestClient) -> None:
+    """FAR-2008 attribution: when the rollback's sync actually rewrites Agent
+    rows, a durable ``pipeline.agent_commands_synced`` event is appended in the
+    SAME transaction (the route transaction), naming the pipeline, the actor
+    and the number of Agent rows changed.
+
+    The structured log line alone is not enough: a rollback can rewrite a
+    SHARED Agent row (one Agent bound by several pipelines), so the mutation
+    must be attributable in the audit chain.
+    """
+    agent_id = uuid.uuid4()
+    restored_node = _node(uuid.uuid4(), agent_id=agent_id, agent_commands=["opencode run -- restored"])
+    target = MagicMock()
+    target.graph_json = {"nodes": [restored_node], "edges": []}
+    pipeline = _locked_pipeline()
+
+    async def _fake_rollback(*_args: Any, **kwargs: Any) -> MagicMock:
+        await kwargs["post_lock_gate"](target, pipeline)
+        return _snapshot_for_response()
+
+    audit = AsyncMock()
+    with (
+        patch("modulo.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=3)),
+        patch("modulo.api.routes.pipelines.append_audit_event", new=audit),
+    ):
+        resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAP_ID}/rollback")
+
+    assert resp.status_code == 200, resp.text
+    audit.assert_awaited_once()
+    kwargs = audit.await_args.kwargs
+    assert kwargs["org_id"] == _ORG_ID
+    assert kwargs["event_type"] == "pipeline.agent_commands_synced"
+    assert kwargs["actor_user_id"] == _USER_ID
+    assert kwargs["resource_type"] == "pipeline"
+    assert kwargs["resource_id"] == _PIPELINE_ID
+    assert kwargs["payload_json"] == {"agent_count": 3}
+
+
+async def test_rollback_endpoint_does_not_audit_a_noop_sync(client: TestClient) -> None:
+    """A rollback whose restored commands already match every bound Agent row
+    changes nothing, so it must NOT append an agent-sync audit event (only a
+    real mutation is recorded)."""
+    restored_node = _node(uuid.uuid4(), agent_id=uuid.uuid4(), agent_commands=["opencode run -- same"])
+    target = MagicMock()
+    target.graph_json = {"nodes": [restored_node], "edges": []}
+    pipeline = _locked_pipeline()
+
+    async def _fake_rollback(*_args: Any, **kwargs: Any) -> MagicMock:
+        await kwargs["post_lock_gate"](target, pipeline)
+        return _snapshot_for_response()
+
+    audit = AsyncMock()
+    with (
+        patch("modulo.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=0)),
+        patch("modulo.api.routes.pipelines.append_audit_event", new=audit),
+    ):
+        resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAP_ID}/rollback")
+
+    assert resp.status_code == 200, resp.text
+    audit.assert_not_awaited()
 
 
 async def test_rollback_endpoint_maps_unpinned_ref_sync_to_422(client: TestClient) -> None:

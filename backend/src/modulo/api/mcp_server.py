@@ -4110,7 +4110,7 @@ async def _replace_pipeline_graph_txn(
         # graph write), so a failure rolls the whole save back.
         from modulo.api.routes.pipelines import _sync_agent_row_commands
 
-        await _sync_agent_row_commands(s, org_id=org_id, nodes=nodes)
+        await _sync_agent_row_commands(s, org_id=org_id, nodes=nodes, pipeline_id=pid)
         # FAR-309 PR A review: the guardrail-binding strip guard runs in the
         # service layer (replace_pipeline_graph, under the row lock) — the
         # MCP surface inherits it via caller_type="mcp".

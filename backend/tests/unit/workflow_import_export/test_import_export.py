@@ -43,6 +43,7 @@ import yaml
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 import modulo.core.workflow_import_export as mod
+from modulo.core.pipeline_engine.git_content import GitContentRefError
 from modulo.core.workflow_import_export import (
     _get_existing_names,
     _get_latest_published_version,
@@ -1601,6 +1602,89 @@ async def test_materialize_rejects_unknown_owner_team() -> None:
     result.scalar_one_or_none.return_value = None
     with pytest.raises(ValueError, match="not found in this organisation"):
         await materialize_import(_FakeSession(result), _ORG_ID, _ACCOUNT_ID, bundle, owner_team_id=uuid.uuid4())
+
+
+async def test_materialize_syncs_node_agent_commands_into_bound_agent_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-2008: bundle import is a graph writer and honours the FAR-488a sync.
+
+    The bundle carries an Agent whose ``agent_commands`` differ from the
+    commands on the graph node bound to it. Import must (a) materialise the
+    Agent row with the bundle's commands and (b) then sync the NODE's commands
+    over it in the same transaction, before the graph is persisted — because a
+    non-NULL Agent-row command wins at run-snapshot time
+    (``_apply_agent_fields``). Without the sync the created row keeps the
+    bundle's stale command and every imported run would execute it while the
+    graph claimed the node's command (the FAR-488 divergence).
+
+    Fails on the pre-FAR-2008 code: the sync call did not exist and
+    ``_base_agent_args`` dropped ``agent_commands`` entirely.
+    """
+    created = _patch_crud(monkeypatch)
+    export_agent_id = uuid.uuid4()
+    bundle_command = "opencode run -- bundle"
+    node_command = "opencode run -- node"
+    # The Agent row the importer just created, standing in for the real ORM row
+    # the sync re-reads by id: it carries the bundle's command, so the node's
+    # differing command is a real change the sync must write.
+    created_agent = SimpleNamespace(id=uuid.uuid4(), agent_commands=[bundle_command])
+    created["agent"].return_value = created_agent
+    agent_row_result = MagicMock()
+    agent_row_result.scalars.return_value = [created_agent]
+    bundle = _make_bundle(
+        pipeline={
+            "name": "Imported",
+            "description": "d",
+            "graph_nodes_json": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "agent_id": str(export_agent_id),
+                    "agent_commands": [node_command],
+                }
+            ],
+            "retry_policy": {},
+            "node_timeout_seconds": 900,
+            "run_context_defaults": {},
+        },
+        agents=[
+            {
+                "id": str(export_agent_id),
+                "name": "Agent A",
+                "prompt_template": "pt",
+                "agent_commands": [bundle_command],
+            }
+        ],
+    )
+
+    await materialize_import(_FakeSession(agent_row_result), _ORG_ID, _ACCOUNT_ID, bundle)
+
+    assert created["agent"].await_args.kwargs["agent_commands"] == [bundle_command]
+    assert created_agent.agent_commands == [node_command]
+
+
+async def test_materialize_rejects_unpinned_git_ref_in_bundled_agent_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-2008/FAR-220: importing ``agent_commands`` does not open a pin-gate
+    bypass — a bundle whose Agent commands carry an unpinned ``git+`` ref is
+    rejected before the Agent row is created, exactly like the Agent save
+    paths and the node-level sync."""
+    _patch_crud(monkeypatch)
+    unpinned = "git+https://github.com/example/repo.git@main#prompts/x.md"
+    bundle = _make_bundle(
+        agents=[
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Agent A",
+                "prompt_template": "pt",
+                "agent_commands": [unpinned],
+            }
+        ],
+    )
+
+    with pytest.raises(GitContentRefError, match="agent_commands git content ref was rejected"):
+        await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
 
 
 async def test_materialize_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:

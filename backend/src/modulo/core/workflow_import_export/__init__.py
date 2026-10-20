@@ -25,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.agent_command_sync import sync_agent_row_commands
 from modulo.core.graph_validator import GraphValidator, check_sandbox_only_field_placement
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.pipeline_engine.git_content import GitContentRefError, validate_agent_git_content_values
@@ -1532,6 +1533,20 @@ async def _materialize_pipeline_and_edges(
         sections.name,
     )
 
+    # FAR-2008: bundle import is a graph writer too. Keep the imported nodes'
+    # bound Agent rows in step with the node-level ``agent_commands`` they
+    # declare, in the SAME transaction and BEFORE the graph is persisted —
+    # ``_apply_agent_fields`` lets a non-NULL Agent-row command win at run
+    # snapshot time, so without this an imported graph could claim one command
+    # and every run execute another (FAR-488-class). The sync is the shared
+    # ``core.agent_command_sync`` helper every other graph writer uses, which
+    # is why it lives in core rather than api.
+    await sync_agent_row_commands(
+        ctx.session,
+        org_id=ctx.org_id,
+        nodes=graph_nodes,
+        pipeline_id=pipeline.id,
+    )
     pipeline.graph_nodes_json = list(graph_nodes)
     # FAR-889: detect imports that recreate schema-less manual nodes.  Unlike
     # the REST write path, import tolerates legacy bundles (FAR-874) and keeps
@@ -1950,6 +1965,16 @@ async def _materialize_agents(
         except GitContentRefError as exc:
             msg = f"Agent '{aname}' prompt_template git content ref was rejected: {exc}"
             raise GitContentRefError(msg) from exc
+        # FAR-2008/FAR-220: ``agent_commands`` is imported now, so the bundle's
+        # commands pass the same save-time pin gate every Agent write path runs —
+        # otherwise a bundle could store an unpinned ``git+`` ref that fails
+        # closed only when a bound node renders it (and is then materialised
+        # onto every node bound to the Agent at snapshot time).
+        try:
+            validate_agent_git_content_values(agent_commands=agent_args.get("agent_commands"))
+        except GitContentRefError as exc:
+            msg = f"Agent '{aname}' agent_commands git content ref was rejected: {exc}"
+            raise GitContentRefError(msg) from exc
         _apply_agent_references(
             agent_args,
             ad,
@@ -1991,7 +2016,16 @@ def _base_agent_args(
     aname: str,
     ad: dict[str, Any],
 ) -> dict[str, Any]:
-    """Build the base create_agent keyword arguments for an imported agent."""
+    """Build the base create_agent keyword arguments for an imported agent.
+
+    FAR-2008: ``agent_commands`` is carried over too. Export writes it into the
+    bundle and import used to drop it, so an imported Agent bound by a node
+    that relies on its row-level command started with a NULL ``agent_commands``
+    — which ``_apply_agent_fields`` then cannot materialise, losing the
+    bundle's command entirely. A non-list value (malformed bundle) is dropped
+    rather than persisted into a JSONB column.
+    """
+    agent_commands = ad.get("agent_commands")
     return {
         "session": ctx.session,
         "org_id": ctx.org_id,
@@ -2003,6 +2037,7 @@ def _base_agent_args(
         "evals": ad.get("evals"),
         "retry_policy": ad.get("retry_policy"),
         "token_budget": ad.get("token_budget"),
+        "agent_commands": agent_commands if isinstance(agent_commands, list) else None,
     }
 
 
