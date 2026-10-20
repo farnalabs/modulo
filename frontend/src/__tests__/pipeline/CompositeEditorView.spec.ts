@@ -366,6 +366,24 @@ describe('CompositeEditorView', () => {
     wrapper.unmount()
   })
 
+  it('save-as dialog is a native <dialog> and closes on Escape', async () => {
+    const wrapper = mountView()
+    await flush()
+
+    const saveAsBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Save as composite')!
+    await saveAsBtn.trigger('click')
+    await nextTick()
+
+    const dialog = wrapper.find('dialog')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.attributes('role')).toBeUndefined()
+
+    await dialog.trigger('keydown', { key: 'Escape' })
+    await nextTick()
+    expect(wrapper.find('#compositeeditorview-field-2').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('save-as dialog renders a POST failure inline (role=alert) and stays open', async () => {
     // The saveAsError row only mounts when the dialog is open AND a save has
     // failed; handleSaveAs keeps the dialog open on error so the user can fix

@@ -70,15 +70,15 @@
           v-for="m in pagedMaps"
           :key="m.id"
           class="card card-hover w-full p-5 text-left cursor-pointer"
-          role="button"
-          tabindex="0"
           @click="openMap(m)"
-          @keydown.enter="openMap(m)"
-          @keydown.space.prevent="openMap(m)"
           data-testid="lifecycle-map-list-card"
         >
           <div class="flex items-start justify-between gap-2 mb-2">
-            <h3 class="text-base font-medium text-foreground truncate">{{ m.name }}</h3>
+            <button
+              type="button"
+              class="min-w-0 truncate text-left text-base font-medium text-foreground"
+              @click.stop="openMap(m)"
+            >{{ m.name }}</button>
             <div class="flex shrink-0 items-center gap-1">
               <span class="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                 v{{ m.current_version }}
@@ -146,10 +146,13 @@
     </main>
 
     <!-- Create dialog -->
-    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+    <dialog
       v-if="showCreateDialog"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      open
+      :aria-label="$t('views.LifecycleMapList.create_lifecycle_map')"
+      class="fixed inset-0 z-50 m-0 flex max-h-none max-w-none items-center justify-center border-0 bg-black/50 p-0 text-foreground"
       @click.self="showCreateDialog = false"
+      @keydown.escape="showCreateDialog = false"
     >
       <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
         <h3 class="mb-4 text-base font-semibold">{{ $t('views.LifecycleMapList.create_lifecycle_map') }}</h3>
@@ -196,7 +199,7 @@
           </div>
         </div>
       </div>
-    </div>
+    </dialog>
   </div>
 </template>
 

@@ -220,4 +220,14 @@ describe('PublishCompositeFlow', () => {
     await wrapper.find('.fixed.inset-0').trigger('click')
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
+
+  it('closes on Escape (native <dialog> modal affordance)', async () => {
+    const wrapper = mountFlow()
+    // Web:S6819: the backdrop is a native <dialog>, not a div with role=button.
+    const dialog = wrapper.find('dialog')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.attributes('role')).toBeUndefined()
+    await dialog.trigger('keydown', { key: 'Escape' })
+    expect(wrapper.emitted('close')).toHaveLength(1)
+  })
 })

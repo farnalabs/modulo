@@ -938,7 +938,8 @@ describe('AdminAuditView — system ledger (system admin)', () => {
 
     const status = wrapper.find('[data-testid="admin-audit-system-status"]')
     expect(status.exists()).toBe(true)
-    expect(status.attributes('role')).toBe('status')
+    expect(status.element.tagName).toBe('OUTPUT')
+    expect(status.attributes('role')).toBeUndefined()
     expect(status.attributes('aria-live')).toBe('polite')
     expect(status.text()).toContain('3 records')
   })

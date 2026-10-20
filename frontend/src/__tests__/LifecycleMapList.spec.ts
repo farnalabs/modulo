@@ -718,6 +718,16 @@ describe('LifecycleMapList create dialog', () => {
 
     // Dialog should be closed (no longer shows "Create Lifecycle Map")
     expect(wrapper.text()).not.toContain('Create Lifecycle Map')
+
+    // Reopen and dismiss with Escape (native <dialog> modal affordance).
+    await wrapper.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    const dialog = wrapper.find('dialog')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.attributes('role')).toBeUndefined()
+    await dialog.trigger('keydown', { key: 'Escape' })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).not.toContain('Create Lifecycle Map')
   })
 
   it('shows error when create fails', async () => {
@@ -875,7 +885,7 @@ describe('LifecycleMapList card content', () => {
     expect(card.text()).toContain('Launch Flow')
   })
 
-  it('supports keyboard navigation on card (Enter key)', async () => {
+  it('supports keyboard navigation through the card native button', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [summaryMap] }))))
     const wrapper = mount(LifecycleMapList, {
       global: {
@@ -892,11 +902,15 @@ describe('LifecycleMapList card content', () => {
     await flushPromises()
 
     const card = wrapper.find('[data-testid="lifecycle-map-list-card"]')
-    await card.trigger('keydown.enter')
+    // Web:S6819: the card no longer carries role=button/tabindex; the native
+    // button is the keyboard-activatable target.
+    expect(card.attributes('role')).toBeUndefined()
+    expect(card.attributes('tabindex')).toBeUndefined()
+    await card.find('button').trigger('click')
     expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
   })
 
-  it('supports keyboard navigation on card (Space key)', async () => {
+  it('clicking the card body still opens the map for mouse users', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [summaryMap] }))))
     const wrapper = mount(LifecycleMapList, {
       global: {
@@ -913,7 +927,7 @@ describe('LifecycleMapList card content', () => {
     await flushPromises()
 
     const card = wrapper.find('[data-testid="lifecycle-map-list-card"]')
-    await card.trigger('keydown.space')
+    await card.trigger('click')
     expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
   })
 })

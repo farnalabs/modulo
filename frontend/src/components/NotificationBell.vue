@@ -53,20 +53,19 @@
          token would only re-run the refresh+retry that just failed, and the
          auth-change re-arm restarts the stream automatically the moment a
          fresh token lands. -->
-    <div
+    <output
       v-if="showReconnectBanner"
       data-testid="sse-reconnect-banner"
-      role="status"
       aria-live="polite"
-      class="absolute left-full top-0 z-50 ml-2 w-56 rounded-md border border-border bg-popover p-3 text-xs shadow-md"
+      class="absolute left-full top-0 z-50 ml-2 block w-56 rounded-md border border-border bg-popover p-3 text-xs shadow-md"
     >
-      <p v-if="reconnectFeedback === 'failed'" class="mb-2 text-foreground">
+      <span v-if="reconnectFeedback === 'failed'" class="mb-2 block text-foreground">
         {{ $t('components.NotificationBell.reconnect_failed') }}
-      </p>
-      <p v-else-if="reconnectFeedback === 'attempting'" class="mb-2 text-foreground">
+      </span>
+      <span v-else-if="reconnectFeedback === 'attempting'" class="mb-2 block text-foreground">
         {{ $t('components.NotificationBell.reconnect_attempting') }}
-      </p>
-      <p v-else class="mb-2 text-foreground">{{ $t('components.NotificationBell.reconnect_banner') }}</p>
+      </span>
+      <span v-else class="mb-2 block text-foreground">{{ $t('components.NotificationBell.reconnect_banner') }}</span>
       <button
         type="button"
         data-testid="sse-reconnect-button"
@@ -80,7 +79,7 @@
             : $t("components.NotificationBell.reconnect_action")
         }}
       </button>
-    </div>
+    </output>
   </div>
 </template>
 

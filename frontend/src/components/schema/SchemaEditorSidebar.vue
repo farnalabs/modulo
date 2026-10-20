@@ -12,15 +12,14 @@
     </div>
 
     <div class="flex-1 overflow-y-auto">
-      <div
+      <output
         v-if="loading"
-        class="space-y-2 p-4"
-        role="status"
+        class="block space-y-2 p-4"
         :aria-label="$t('common.loading')"
         data-testid="schema-editor-list-loading"
       >
         <SkeletonBlock v-for="n in 5" :key="'schema-skeleton-' + n" height-class="h-12 w-full" />
-      </div>
+      </output>
       <div v-else-if="schemas.length === 0" class="p-4">
         <EmptyState :title="$t('views.SchemaEditorView.no_schemas_yet')" />
       </div>

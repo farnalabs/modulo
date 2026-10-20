@@ -193,10 +193,9 @@
                 {{ eventLabel(evt) }}
               </label>
             </div>
-            <p
+            <output
               v-if="!eventsLoading && availableEvents.length === 0"
-              role="status"
-              class="mt-1 text-xs text-destructive"
+              class="mt-1 block text-xs text-destructive"
               data-testid="team-notif-events-unavailable"
             >
               {{ $t('components.TeamNotificationEndpoints.event_list_unavailable') }}
@@ -208,7 +207,7 @@
               >
                 {{ $t('components.TeamNotificationEndpoints.retry') }}
               </button>
-            </p>
+            </output>
           </div>
           <div>
             <label for="teamnotificationendpoints-field-4" class="mb-1 block text-xs font-medium">{{ $t('components.TeamNotificationEndpoints.description') }}</label>
@@ -280,10 +279,9 @@
               {{ eventLabel(evt) }}
             </label>
           </div>
-          <p
+          <output
             v-if="!eventsLoading && availableEvents.length === 0"
-            role="status"
-            class="mt-1 text-xs text-destructive"
+            class="mt-1 block text-xs text-destructive"
             data-testid="team-notif-events-unavailable"
           >
             {{ $t('components.TeamNotificationEndpoints.event_list_unavailable') }}
@@ -295,7 +293,7 @@
             >
               {{ $t('components.TeamNotificationEndpoints.retry') }}
             </button>
-          </p>
+          </output>
         </div>
         <div>
           <label for="teamnotificationendpoints-field-1" class="mb-1 block text-xs font-medium">{{ $t('components.TeamNotificationEndpoints.description') }}</label>

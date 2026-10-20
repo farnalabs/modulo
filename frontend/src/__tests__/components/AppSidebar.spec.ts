@@ -133,7 +133,7 @@ describe('AppSidebar', () => {
       const wrapper = mountSidebar()
       await flushPromises()
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(true)
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('dialog').exists()).toBe(false)
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
     })
 
@@ -357,8 +357,10 @@ describe('AppSidebar', () => {
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
       // Labelled live region with a non-interactive hamburger affordance: a tap
-      // gets visible pending feedback, not a response-less blank slot.
-      expect(pending.attributes('role')).toBe('status')
+      // gets visible pending feedback, not a response-less blank slot. The
+      // native <output> carries the implicit status role (Web:S6819).
+      expect(pending.element.tagName).toBe('OUTPUT')
+      expect(pending.attributes('role')).toBeUndefined()
       expect(pending.attributes('aria-busy')).toBe('true')
       expect(pending.attributes('aria-label')).toBe('Loading navigation')
       expect(pending.find('[data-testid="mobile-nav-pending-hamburger"]').exists()).toBe(true)
@@ -436,7 +438,7 @@ describe('AppSidebar', () => {
       await flushPromises()
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
       expect(wrapper.find('[aria-label="Collapse sidebar"]').exists()).toBe(false)
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('dialog').exists()).toBe(false)
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
     })
 
@@ -445,7 +447,7 @@ describe('AppSidebar', () => {
       await flushPromises()
       await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
       await flushPromises()
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+      expect(wrapper.find('dialog').exists()).toBe(true)
       expect(wrapper.find('div[aria-hidden="true"].fixed.inset-0').exists()).toBe(true)
     })
 
@@ -456,7 +458,7 @@ describe('AppSidebar', () => {
       await flushPromises()
       await wrapper.find('div[aria-hidden="true"].fixed.inset-0').trigger('click')
       await flushPromises()
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('dialog').exists()).toBe(false)
     })
 
     it('closes the mobile panel when Escape is fired on the backdrop (FAR-821 a11y)', async () => {
@@ -469,7 +471,7 @@ describe('AppSidebar', () => {
 
       await backdrop.trigger('keydown', { key: 'Escape' })
       await flushPromises()
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('dialog').exists()).toBe(false)
     })
 
     it('closes the mobile panel on Escape', async () => {
@@ -479,7 +481,7 @@ describe('AppSidebar', () => {
       await flushPromises()
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
       await flushPromises()
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('dialog').exists()).toBe(false)
     })
 
     it('closes the mobile panel when a nav item is activated', async () => {
@@ -487,10 +489,10 @@ describe('AppSidebar', () => {
       await flushPromises()
       await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
       await flushPromises()
-      const dialog = wrapper.find('[role="dialog"]')
+      const dialog = wrapper.find('dialog')
       await dialog.find('.sidebar-link').trigger('click')
       await flushPromises()
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('dialog').exists()).toBe(false)
     })
 
     it('renders the avatar as a router-link to /admin/my-profile in rail mode', async () => {
@@ -508,12 +510,12 @@ describe('AppSidebar', () => {
       const expandButton = wrapper.find('[aria-label="Expand sidebar"]')
       await expandButton.trigger('click')
       await flushPromises()
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+      expect(wrapper.find('dialog').exists()).toBe(true)
 
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
       await flushPromises()
 
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('dialog').exists()).toBe(false)
       expect(document.activeElement).toBe(expandButton.element)
 
       wrapper.unmount()
@@ -525,7 +527,7 @@ describe('AppSidebar', () => {
       await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
       await flushPromises()
 
-      const dialog = wrapper.find('[role="dialog"]')
+      const dialog = wrapper.find('dialog')
       const focusables = dialog.findAll(
         'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
       )
@@ -552,12 +554,12 @@ describe('AppSidebar', () => {
       await flushPromises()
       await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
       await flushPromises()
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+      expect(wrapper.find('dialog').exists()).toBe(true)
 
       route.path = '/notifications'
       await flushPromises()
 
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('dialog').exists()).toBe(false)
 
       route.path = '/'
     })
@@ -587,7 +589,7 @@ describe('AppSidebar', () => {
       const wrapper = mountSidebar()
       await flushPromises()
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('dialog').exists()).toBe(false)
     })
 
     it('renders the avatar as a router-link to /admin/my-profile in full mode', async () => {

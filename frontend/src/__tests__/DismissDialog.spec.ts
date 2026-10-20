@@ -49,7 +49,7 @@ describe('DismissDialog', () => {
     const wrapper = mount(DismissDialog, {
       props: { notification: makeNotification(), modelValue: false },
     })
-    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.body.querySelector('dialog')).toBeNull()
     expect(wrapper.html()).not.toContain('dismiss')
   })
 
@@ -60,7 +60,7 @@ describe('DismissDialog', () => {
     await wrapper.setProps({ modelValue: true })
     await flushPromises()
     await nextTick()
-    const dialog = document.body.querySelector('[role="dialog"]') as HTMLElement
+    const dialog = document.body.querySelector('dialog') as HTMLElement
     expect(dialog).not.toBeNull()
     const firstRadio = dialog.querySelector('input[type="radio"]') as HTMLInputElement
     expect(firstRadio).toBeTruthy()
@@ -86,7 +86,7 @@ describe('DismissDialog', () => {
     await wrapper.setProps({ modelValue: true })
     await flushPromises()
     await nextTick()
-    const confirmBtn = document.body.querySelector('[role="dialog"] button:last-child') as HTMLButtonElement
+    const confirmBtn = document.body.querySelector('dialog button:last-child') as HTMLButtonElement
     await confirmBtn.click()
     await nextTick()
     const confirms = wrapper.emitted('confirm')
@@ -140,7 +140,7 @@ describe('DismissDialog', () => {
       await wrapper.setProps({ modelValue: true })
       await flushPromises()
       await nextTick()
-      const dialog = document.body.querySelector('[role="dialog"]') as HTMLElement
+      const dialog = document.body.querySelector('dialog') as HTMLElement
       expect(dialog.style.left).toBe('50%')
       expect(dialog.style.top).toBe('50%')
       expect(dialog.style.transform).toBe('translate(-50%, -50%)')
@@ -154,7 +154,7 @@ describe('DismissDialog', () => {
       await wrapper.setProps({ modelValue: true })
       await flushPromises()
       await nextTick()
-      const dialog = document.body.querySelector('[role="dialog"]') as HTMLElement
+      const dialog = document.body.querySelector('dialog') as HTMLElement
       // top = bottom + gap (8) = 148; left = 200
       expect(dialog.style.top).toBe('148px')
       expect(dialog.style.left).toBe('200px')
@@ -168,7 +168,7 @@ describe('DismissDialog', () => {
       await wrapper.setProps({ modelValue: true })
       await flushPromises()
       await nextTick()
-      const dialog = document.body.querySelector('[role="dialog"]') as HTMLElement
+      const dialog = document.body.querySelector('dialog') as HTMLElement
       // top = trigger.top - panelHeight(260) - gap(8) = 432
       expect(dialog.style.top).toBe('432px')
     })
@@ -181,7 +181,7 @@ describe('DismissDialog', () => {
       await wrapper.setProps({ modelValue: true })
       await flushPromises()
       await nextTick()
-      const dialog = document.body.querySelector('[role="dialog"]') as HTMLElement
+      const dialog = document.body.querySelector('dialog') as HTMLElement
       // left = innerWidth(1024) - panelWidth(340) - 16 = 668
       expect(dialog.style.left).toBe('668px')
     })
@@ -194,7 +194,7 @@ describe('DismissDialog', () => {
       await wrapper.setProps({ modelValue: true })
       await flushPromises()
       await nextTick()
-      const dialog = document.body.querySelector('[role="dialog"]') as HTMLElement
+      const dialog = document.body.querySelector('dialog') as HTMLElement
       expect(dialog.style.left).toBe('16px')
     })
 
@@ -206,7 +206,7 @@ describe('DismissDialog', () => {
       await wrapper.setProps({ modelValue: true })
       await flushPromises()
       await nextTick()
-      const dialog = document.body.querySelector('[role="dialog"]') as HTMLElement
+      const dialog = document.body.querySelector('dialog') as HTMLElement
       // top would be 150 - 260 - 8 = negative -> clamp to (200 - 260)/2 = -30 -> max(16, -30) = 16
       expect(dialog.style.top).toBe('16px')
     })

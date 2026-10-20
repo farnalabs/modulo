@@ -93,10 +93,14 @@
     </template>
 
     <!-- Save as composite dialog -->
-    <div role="button" tabindex="0" :aria-label="$t('views.CompositeEditorView.close_dialog')" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+    <dialog
       v-if="showSaveAsComposite"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      open
+      aria-modal="true"
+      :aria-label="$t('views.CompositeEditorView.close_dialog')"
+      class="fixed inset-0 z-50 m-0 flex max-h-none max-w-none items-center justify-center border-0 bg-black/50 p-0 text-foreground"
       @click.self="showSaveAsComposite = false"
+      @keydown.escape="showSaveAsComposite = false"
     >
       <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
         <h3 class="mb-4 text-base font-semibold">{{ $t('views.CompositeEditorView.save_as_composite') }}</h3>
@@ -136,7 +140,7 @@
           </div>
         </div>
       </div>
-    </div>
+    </dialog>
 
     <!-- Publish Composite Flow -->
     <PublishCompositeFlow

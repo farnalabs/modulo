@@ -111,9 +111,11 @@ function goToLibrary() {
 </script>
 
 <template>
-  <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+  <dialog
+    open
+    class="fixed inset-0 z-50 m-0 flex max-h-none max-w-none items-center justify-center border-0 bg-black/50 p-0 text-foreground"
     @click.self="emit('close')"
+    @keydown.escape="emit('close')"
   >
     <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
       <!-- Step indicator -->
@@ -310,5 +312,5 @@ function goToLibrary() {
         </button>
       </div>
     </div>
-  </div>
+  </dialog>
 </template>

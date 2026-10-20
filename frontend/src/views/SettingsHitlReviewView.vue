@@ -56,13 +56,12 @@
     <!-- FAR-861: bulk action bar — visible when 1+ gates are selected. Shows
          selection count, bulk claim, bulk reject (with shared reason input),
          and per-gate outcome reporting. -->
-    <div
+    <output
       v-if="someSelected"
       data-testid="hitl-review-bulk-bar"
-      role="status"
-      class="mb-4 rounded-lg border border-primary/30 bg-primary/5 p-3"
+      class="mb-4 block rounded-lg border border-primary/30 bg-primary/5 p-3"
     >
-      <div class="flex flex-wrap items-center gap-3">
+      <span class="flex flex-wrap items-center gap-3">
         <span class="text-sm font-medium">
           {{ $t('views.SettingsHitlReviewView.bulk_selected', { count: selectedCount }) }}
         </span>
@@ -93,7 +92,7 @@
         >
           {{ $t('views.SettingsHitlReviewView.bulk_clear') }}
         </button>
-      </div>
+      </span>
       <!-- Bulk reject shared reason input -->
       <div v-if="showBulkRejectInput" class="mt-3 flex flex-wrap items-end gap-3">
         <label class="flex-1">
@@ -127,7 +126,7 @@
           </button>
         </div>
       </div>
-    </div>
+    </output>
     <!-- FAR-861: the per-gate outcome report is deliberately OUTSIDE the bulk
          bar above. A successful bulk operation refetches the list and prunes
          the selection, so the bar unmounts; nested inside it the report would
@@ -320,7 +319,7 @@
       </div>
       </div>
       <!-- FAR-692: server-side pagination over /hitl/reviews. Only rendered when
-           there is more than one page; the page indicator uses role="status" so
+           there is more than one page; the page indicator uses aria-live so
            a page change is announced. No shared pagination component exists in
            components/shared/, so this minimal inline pager is view-local. -->
       <nav

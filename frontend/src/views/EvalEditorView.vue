@@ -182,14 +182,14 @@
                   </div>
 
                   <!-- Toggle disable confirmation (mirrors delete-confirmation pattern) -->
-                  <div
+                  <dialog
                     v-if="gateToggleConfirming"
                     ref="gateToggleDialogRef"
-                    role="dialog"
+                    open
                     aria-modal="true"
                     :aria-label="$t('views.EvalEditorView.policyGate.toggleDisableConfirm')"
                     data-testid="policy-gate-toggle-confirm-dialog"
-                    class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs"
+                    class="static m-0 flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-foreground"
                     @keydown="onGateToggleDialogKeydown"
                   >
                     <span>
@@ -215,7 +215,7 @@
                     >
                       {{ $t('common.no') }}
                     </button>
-                  </div>
+                  </dialog>
 
                   <!-- Delete gate button -->
                   <div v-if="policyGate.exists" class="flex items-center gap-2">
@@ -232,13 +232,13 @@
                       </button>
                     </template>
                     <template v-else>
-                      <div
+                      <dialog
                         ref="gateDialogRef"
-                        role="dialog"
+                        open
                         aria-modal="true"
                         :aria-label="$t('views.EvalEditorView.policyGate.deleteConfirm')"
                         data-testid="policy-gate-confirm-dialog"
-                        class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs"
+                        class="static m-0 flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-foreground"
                         @keydown="onGateDialogKeydown"
                       >
                         <span>
@@ -264,7 +264,7 @@
                         >
                           {{ $t('common.no') }}
                         </button>
-                      </div>
+                      </dialog>
                     </template>
                   </div>
 
@@ -291,14 +291,14 @@
               </div>
 
               <!-- Dirty-gate confirm dialog -->
-              <div
+              <dialog
                 v-if="dirtyConfirmVisible"
                 ref="dirtyConfirmDialogRef"
-                role="dialog"
+                open
                 aria-modal="true"
                 :aria-label="$t('views.EvalEditorView.policyGate.dirtyConfirmAriaLabel')"
                 data-testid="dirty-confirm-dialog"
-                class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs"
+                class="static m-0 flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-foreground"
                 @keydown="onDirtyDialogKeydown"
               >
                 <span>{{ $t('views.EvalEditorView.policyGate.unsavedChangesConfirm') }}</span>
@@ -319,7 +319,7 @@
                 >
                   {{ $t('views.EvalEditorView.policyGate.dirtyConfirmStay') }}
                 </button>
-              </div>
+              </dialog>
 
               <div class="flex items-center gap-2 pt-2">
               <Button :disabled="!canSave || saving" data-testid="eval-editor-save" @click="saveEval">

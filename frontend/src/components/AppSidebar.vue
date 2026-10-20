@@ -68,13 +68,14 @@
       aria-hidden="true"
     />
 
-    <aside
+    <dialog
       v-if="mobileExpanded"
+      id="mobile-nav-panel"
       ref="mobilePanelRef"
-      role="dialog"
+      open
       aria-modal="true"
       :aria-label="$t('components.AppLayout.main_navigation')"
-      class="fixed top-0 left-0 z-40 h-full w-64 border-r bg-background p-4 flex flex-col overflow-y-auto md:hidden"
+      class="fixed top-0 left-0 z-40 m-0 h-full w-64 max-h-none max-w-none border-r bg-background p-4 flex flex-col overflow-y-auto text-foreground md:hidden"
     >
       <SidebarFull
         :is-system-admin="isSystemAdmin"
@@ -90,7 +91,7 @@
         @toggle-theme="$emit('toggle-theme')"
         @open-command-palette="$emit('open-command-palette')"
       />
-    </aside>
+    </dialog>
   </template>
 
   <!-- Mobile + flag UNRESOLVED (FAR-1237): a neutral placeholder occupies the
@@ -103,14 +104,13 @@
        Review finding: the placeholder must read as pending NAV, not a blank
        slot. It now mirrors the drawer header's hamburger geometry (same 22px
        Menu glyph in the same 44px rounded box, but non-interactive with a muted
-       tone) and is a labelled live region (`role="status"` + `aria-busy`) so
+       tone) and is a labelled live region (`<output>` + `aria-busy`) so
        attempted activation gets visible wait feedback instead of silence. The
        header is position:fixed, so neither it nor <main>'s offset shifts when
        the resolved chrome mounts. -->
   <template v-if="!isDesktop && mobileNavMode === 'pending'">
-    <header
+    <output
       :data-testid="MOBILE_NAV_PENDING_TESTID"
-      role="status"
       aria-busy="true"
       :aria-label="$t('components.AppLayout.loading_navigation')"
       class="md:hidden fixed top-0 left-0 right-0 z-50 flex items-center border-b bg-background px-4 h-14"
@@ -122,8 +122,8 @@
       >
         <Menu class="h-[22px] w-[22px]" />
       </span>
-      <div class="ml-2 h-5 w-28 rounded-md bg-muted animate-pulse" aria-hidden="true" />
-    </header>
+      <span class="ml-2 block h-5 w-28 rounded-md bg-muted animate-pulse" aria-hidden="true" />
+    </output>
   </template>
 
   <!-- Mobile + flag OFF: hamburger header + slide-in drawer + backdrop (restored from main) -->

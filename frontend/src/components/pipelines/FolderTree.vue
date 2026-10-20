@@ -68,20 +68,22 @@
             selectedFolderId === element.folder.id ? 'bg-accent text-accent-foreground font-medium' : 'text-foreground',
           ]"
           :style="{ paddingLeft: `${12 + element.depth * 16}px`, paddingRight: '8px' }"
-          role="button"
-          tabindex="0"
           @click="$emit('select-folder', element.folder.id)"
-          @keydown.enter="$emit('select-folder', element.folder.id)"
-          @keydown.space.prevent="$emit('select-folder', element.folder.id)"
           @dragover.prevent
           @drop="onFolderDrop(element.folder.id, $event)"
         >
-          <!-- Folder icon -->
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+          <button
+            type="button"
+            class="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            @click.stop="$emit('select-folder', element.folder.id)"
+          >
+            <!-- Folder icon -->
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
 
-          <!-- Folder name -->
-          <span class="truncate">{{ element.folder.name }}</span>
-          <span v-if="counts?.[element.folder.id] !== undefined" class="ml-1 text-xs text-muted-foreground shrink-0">{{ counts[element.folder.id] }}</span>
+            <!-- Folder name -->
+            <span class="truncate">{{ element.folder.name }}</span>
+            <span v-if="counts?.[element.folder.id] !== undefined" class="ml-1 text-xs text-muted-foreground shrink-0">{{ counts[element.folder.id] }}</span>
+          </button>
 
           <!-- Action buttons (rename, delete) -->
           <div class="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">

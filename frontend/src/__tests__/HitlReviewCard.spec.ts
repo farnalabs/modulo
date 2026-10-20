@@ -757,8 +757,38 @@ describe('HitlReviewCard', () => {
     expect((approve.element as HTMLButtonElement).disabled).toBe(true)
 
     await wrapper.find('[data-testid="hitl-gate-option-ship"]').trigger('click')
-    expect(wrapper.find('[data-testid="hitl-gate-option-ship"]').attributes('aria-checked')).toBe('true')
+    // Each option is a native radio input (Web:S6819); checked state is the
+    // input's own property, never a redundant ARIA attribute.
+    const ship = wrapper.find('[data-testid="hitl-gate-option-ship"]')
+    expect((ship.element as HTMLInputElement).type).toBe('radio')
+    expect(ship.attributes('role')).toBeUndefined()
+    expect((ship.element as HTMLInputElement).checked).toBe(true)
     expect((approve.element as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('renders an option description as visible text on the native radio option', async () => {
+    await mockClaimThenDecide()
+    wrapper = mount(HitlReviewCard, {
+      props: {
+        gate: gate({
+          context: {
+            response_contract: {
+              kind: 'choice',
+              options: [{ id: 'ship', label: 'Ship it', description: 'Deploy the change now.' }],
+            },
+          },
+        }),
+      },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+
+    const option = wrapper.find('[data-testid="hitl-gate-option-ship"]')
+    expect(option.exists()).toBe(true)
+    expect(option.attributes('type')).toBe('radio')
+    expect(wrapper.text()).toContain('Deploy the change now.')
   })
 
   it('submits the selected option as the approve answer (FAR-860)', async () => {
@@ -848,12 +878,12 @@ describe('HitlReviewCard', () => {
     expect(second.attributes('tabindex')).toBe('-1')
 
     await first.trigger('keydown', { key: 'ArrowDown' })
-    expect(second.attributes('aria-checked')).toBe('true')
+    expect((second.element as HTMLInputElement).checked).toBe(true)
     expect(second.attributes('tabindex')).toBe('0')
     expect(first.attributes('tabindex')).toBe('-1')
 
     await second.trigger('keydown', { key: 'ArrowUp' })
-    expect(first.attributes('aria-checked')).toBe('true')
+    expect((first.element as HTMLInputElement).checked).toBe(true)
   })
 
   it('renders a visible fallback when a choice gate ships no options (FAR-860)', async () => {
@@ -868,7 +898,8 @@ describe('HitlReviewCard', () => {
 
     const fallback = wrapper.find('[data-testid="hitl-gate-choice-fallback"]')
     expect(fallback.exists()).toBe(true)
-    expect(fallback.attributes('role')).toBe('status')
+    expect(fallback.element.tagName).toBe('OUTPUT')
+    expect(fallback.attributes('role')).toBeUndefined()
     expect(wrapper.find('[data-testid="hitl-gate-option-ship"]').exists()).toBe(false)
     // An unanswerable choice gate must stay locked.
     expect((wrapper.find('[data-testid="hitl-gate-approve"]').element as HTMLButtonElement).disabled).toBe(true)
@@ -899,7 +930,7 @@ describe('HitlReviewCard', () => {
     wrapper = null
     firstInstance.unmount()
     wrapper = mount(HitlReviewCard, mountOptions(gate({ context, claimed_by: 'reviewer@team' })))
-    expect(wrapper.find('[data-testid="hitl-gate-option-ship"]').attributes('aria-checked')).toBe('true')
+    expect((wrapper.find('[data-testid="hitl-gate-option-ship"]').element as HTMLInputElement).checked).toBe(true)
     expect((wrapper.find('[data-testid="hitl-gate-approve"]').element as HTMLButtonElement).disabled).toBe(false)
 
     // A pending gate has no live claim: the whole session (selection included)

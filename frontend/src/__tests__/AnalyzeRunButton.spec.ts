@@ -259,7 +259,8 @@ describe('AnalyzeRunButton press', () => {
 
     // aria-live status line reports the handoff.
     const status = wrapper.find('[data-testid="run-detail-analyze-status"]')
-    expect(status.attributes('role')).toBe('status')
+    expect(status.element.tagName).toBe('OUTPUT')
+    expect(status.attributes('role')).toBeUndefined()
     expect(status.text()).toContain('Root-cause analysis started')
   })
 

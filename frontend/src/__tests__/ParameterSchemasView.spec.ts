@@ -105,7 +105,8 @@ describe('ParameterSchemasView — list', () => {
     expect(wrapper.find('[data-testid="paramschema-new"]').exists()).toBe(true)
     // STATE-3: the list renders a pulse skeleton (TableSkeleton), not a spinner
     // and not a blank region.
-    const skeleton = wrapper.find('[role="status"][aria-busy="true"]')
+    // The native <output> carries the implicit status role (Web:S6819).
+    const skeleton = wrapper.find('output[aria-busy="true"]')
     expect(skeleton.exists()).toBe(true)
     expect(skeleton.findAll('.animate-pulse').length).toBeGreaterThan(0)
     expect(wrapper.find('[data-testid="paramschema-delete"]').exists()).toBe(false)

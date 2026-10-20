@@ -601,8 +601,8 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     expect(wrapper.find('[data-testid="policy-gate-confirm-dialog"]').exists()).toBe(false)
   })
 
-  // Finding 3: Dialog has role="dialog", aria-modal, Escape-dismiss, Tab-trap.
-  it('has role="dialog" and aria-modal="true" on the confirmation dialog (finding 3)', async () => {
+  // Finding 3: Dialog is a native <dialog open>, aria-modal, Escape-dismiss, Tab-trap.
+  it('uses a native <dialog> with aria-modal="true" on the confirmation dialog (finding 3)', async () => {
     evalsList = [evalItem({ id: 'eval-1' })]
     gateResponses['eval-1'] = ok({ id: 'g1', action: 'block', version: 1 })
     const wrapper = mountView()
@@ -616,7 +616,8 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
 
     const dialog = wrapper.find('[data-testid="policy-gate-confirm-dialog"]')
     expect(dialog.exists()).toBe(true)
-    expect(dialog.attributes('role')).toBe('dialog')
+    expect(dialog.element.tagName).toBe('DIALOG')
+    expect(dialog.attributes('role')).toBeUndefined()
     expect(dialog.attributes('aria-modal')).toBe('true')
     expect(dialog.attributes('aria-label')).toBeTruthy()
   })
@@ -665,8 +666,9 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       join(__dirname, '..', 'views', 'EvalEditorView.vue'),
       'utf-8',
     )
-    // The dialog div must have role="dialog" and aria-modal="true".
-    expect(dialog.attributes('role')).toBe('dialog')
+    // The native <dialog> must not reintroduce an explicit role.
+    expect(dialog.element.tagName).toBe('DIALOG')
+    expect(dialog.attributes('role')).toBeUndefined()
     expect(dialog.attributes('aria-modal')).toBe('true')
 
     // The source must contain the focus-trap handler that intercepts Tab.
@@ -703,7 +705,8 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
 
     const dialog = wrapper.find('[data-testid="dirty-confirm-dialog"]')
     expect(dialog.exists()).toBe(true)
-    expect(dialog.attributes('role')).toBe('dialog')
+    expect(dialog.element.tagName).toBe('DIALOG')
+    expect(dialog.attributes('role')).toBeUndefined()
     expect(dialog.attributes('aria-modal')).toBe('true')
     expect(dialog.text()).toContain('unsaved policy gate changes')
 
@@ -868,7 +871,8 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
 
     const dialog = wrapper.find('[data-testid="dirty-confirm-dialog"]')
     expect(dialog.exists()).toBe(true)
-    expect(dialog.attributes('role')).toBe('dialog')
+    expect(dialog.element.tagName).toBe('DIALOG')
+    expect(dialog.attributes('role')).toBeUndefined()
     expect(dialog.attributes('aria-modal')).toBe('true')
 
     // Structural verification: the dialog has the keydown handler wired.

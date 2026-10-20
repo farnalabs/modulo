@@ -1,7 +1,6 @@
 <template>
-  <div
-    class="overflow-x-auto rounded-lg border bg-card shadow-sm"
-    role="status"
+  <output
+    class="block overflow-x-auto rounded-lg border bg-card shadow-sm"
     aria-busy="true"
     :aria-label="ariaLabel"
   >
@@ -37,7 +36,7 @@
         </tr>
       </tbody>
     </table>
-  </div>
+  </output>
 </template>
 
 <script setup lang="ts">

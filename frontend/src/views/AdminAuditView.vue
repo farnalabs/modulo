@@ -393,8 +393,7 @@
           >
             {{ $t('views.AdminAuditView.reset') }}
           </button>
-          <span
-            role="status"
+          <output
             aria-live="polite"
             class="ml-auto text-sm text-muted-foreground"
             data-testid="admin-audit-system-status"
@@ -402,7 +401,7 @@
             <template v-if="systemLoading">{{ $t('views.AdminAuditView.system_loading') }}</template>
             <template v-else-if="systemError">{{ $t('views.AdminAuditView.system_failed_to_load') }} {{ systemError }}</template>
             <template v-else>{{ $t('views.AdminAuditView.system_records_count', { count: systemTotal }, systemTotal) }}</template>
-          </span>
+          </output>
         </div>
       </div>
 

@@ -263,7 +263,8 @@ describe('AdminOrgSettingsView', () => {
 
     const saved = wrapper.find('[data-testid="org-hitl-review-window-saved"]')
     expect(saved.exists()).toBe(true)
-    expect(saved.attributes('role')).toBe('status')
+    expect(saved.element.tagName).toBe('OUTPUT')
+    expect(saved.attributes('role')).toBeUndefined()
     wrapper.unmount()
   })
 

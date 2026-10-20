@@ -2,9 +2,9 @@
   <Teleport to="body">
     <div v-if="isOpen" class="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]">
       <div class="fixed inset-0 bg-black/50" @click="close" @keydown.escape="close" aria-hidden="true" />
-      <div
-        class="relative z-10 w-full max-w-lg rounded-lg border bg-background shadow-xl"
-        role="dialog"
+      <dialog
+        open
+        class="relative z-10 m-0 w-full max-w-lg rounded-lg border bg-background p-0 text-foreground shadow-xl"
         aria-label="Command palette"
         aria-modal="true"
       >
@@ -48,7 +48,7 @@
         <div class="border-t px-4 py-2 text-xs text-muted-foreground text-right">
           &uarr;&darr; navigate &middot; &crarr; open &middot; Esc close
         </div>
-      </div>
+      </dialog>
     </div>
   </Teleport>
 </template>

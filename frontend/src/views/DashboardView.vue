@@ -112,15 +112,17 @@
           </thead>
           <tbody>
             <tr v-for="team in summary.teams" :key="team.id"
-                role="button"
-                tabindex="0"
-                :aria-expanded="expandedTeam === team.id"
                 :data-testid="'dashboard-team-row-' + team.id"
-                class="border-b last:border-0 hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-                @click="toggleTeam(team.id)"
-                @keydown.enter="toggleTeam(team.id)"
-                @keydown.space.prevent="toggleTeam(team.id)">
-              <td class="py-2.5 font-medium">{{ team.name }}</td>
+                class="border-b last:border-0 hover:bg-muted/50"
+                @click="toggleTeam(team.id)">
+              <td class="py-2.5 font-medium">
+                <button
+                  type="button"
+                  :aria-expanded="expandedTeam === team.id"
+                  class="text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  @click.stop="toggleTeam(team.id)"
+                >{{ team.name }}</button>
+              </td>
               <td class="py-2.5 text-right">{{ team.total_runs }}</td>
               <td class="py-2.5 text-right text-success-text">{{ team.run_counts_by_status?.running ?? 0 }}</td>
               <td class="py-2.5 text-right text-destructive">{{ team.run_counts_by_status?.failed ?? 0 }}</td>
