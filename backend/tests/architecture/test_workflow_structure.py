@@ -950,3 +950,113 @@ def test_workflow_notifications_cannot_be_silently_unpostable() -> None:
     assert not violations, "A workflow notification can be silently undeliverable (FAR-2001):\n" + "\n".join(
         str(violation) for violation in violations
     )
+
+
+# --- Signing canary: identity is read from the EMBEDDED signature -----------
+#
+# The canary signs a throwaway COPY of whoami.exe. `Get-AuthenticodeSignature`
+# reported the Windows SECURITY CATALOG signature of that file (SignatureType
+# = Catalog, subject CN=Microsoft Windows..., thumbprint 3B77DB29...), because a
+# catalog hash covers a PE except its certificate table - so a signed copy still
+# matches the original's catalog entry, and the embedded Azure signature is
+# never inspected. The original check asserted only on that catalog subject, so
+# it could not pass for any correct signing run (observed run 39366248825).
+#
+# The fix reads the embedded signature from the PE certificate table, verifies
+# it cryptographically, and collects the certificate of every SignerInfo -
+# envelope plus nested (Azure Artifact Signing may dual-sign, carrying the
+# customer identity in the SPC_NESTED_SIGNATURE attribute,
+# OID 1.3.6.1.4.1.311.2.4.1). These tests pin the structural invariants.
+
+SIGNING_CANARY_YML = WORKFLOWS / "signing-canary.yml"
+SPC_NESTED_SIGNATURE_OID = "1.3.6.1.4.1.311.2.4.1"
+
+
+def _verify_step_run_text() -> str:
+    """Return the `run:` script of the 'Verify Authenticode signature' step."""
+    wf = _load_yaml(SIGNING_CANARY_YML)
+    steps = next(iter(wf["jobs"].values()))["steps"]
+    step = next(s for s in steps if str(s.get("name", "")).startswith("Verify Authenticode signature"))
+    return step["run"]
+
+
+def test_signing_canary_does_not_assert_on_envelope_subject_alone() -> None:
+    """The verification step must NOT contain the old predicate
+    `$subject -notlike '*FARNA LABS LTD*'`, where `$subject` is the certificate
+    `Get-AuthenticodeSignature` reported. That is the Windows catalog signature
+    of a copy of whoami.exe, so the predicate could never pass."""
+    run = _verify_step_run_text()
+    violations: list[str] = []
+    if "$subject -notlike" in run:
+        violations.append(
+            "  signing-canary.yml: still uses the envelope-only `$subject -notlike` check; "
+            "Get-AuthenticodeSignature reports the Windows catalog signer of a copied system file"
+        )
+    if "*FARNA LABS LTD*" in run:
+        violations.append("  signing-canary.yml: still uses the old literal '*FARNA LABS LTD*' pattern")
+    assert not violations, (
+        "signing-canary.yml still asserts on the certificate Get-AuthenticodeSignature reported:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_signing_canary_reads_and_verifies_the_embedded_signature() -> None:
+    """The step must parse the PE certificate table itself and verify each
+    embedded signature cryptographically, rather than trusting the certificate
+    `Get-AuthenticodeSignature` returned (which is the catalog's)."""
+    run = _verify_step_run_text()
+    violations: list[str] = []
+    if "Get-PeSignedDataBlobs" not in run:
+        violations.append("  signing-canary.yml: does not walk the PE certificate table (WIN_CERTIFICATE entries)")
+    if "CheckSignature" not in run:
+        violations.append("  signing-canary.yml: does not verify the embedded signature (CheckSignature)")
+    assert not violations, "signing-canary.yml does not read/verify the embedded signature:\n" + "\n".join(violations)
+
+
+def test_signing_canary_traverses_nested_signatures() -> None:
+    """The step must collect signer certificates from nested signatures by
+    walking the SPC_NESTED_SIGNATURE attribute (OID 1.3.6.1.4.1.311.2.4.1)."""
+    run = _verify_step_run_text()
+    violations: list[str] = []
+    if SPC_NESTED_SIGNATURE_OID not in run:
+        violations.append(f"  signing-canary.yml: missing nested signature OID {SPC_NESTED_SIGNATURE_OID}")
+    if "UnauthenticatedAttributes" not in run:
+        violations.append("  signing-canary.yml: does not inspect SignerInfo.UnauthenticatedAttributes")
+    if "SignedCms" not in run or ".Decode(" not in run:
+        violations.append("  signing-canary.yml: does not decode nested SignedCms")
+    assert not violations, (
+        "signing-canary.yml does not traverse nested signatures to find the company identity:\n" + "\n".join(violations)
+    )
+
+
+def _company_pattern_from_workflow() -> str:
+    """The company-identity regex the workflow matches signer subjects with."""
+    run = _verify_step_run_text()
+    match = re.search(r"\$companyPattern\s*=\s*'([^']+)'", run)
+    assert match, "signing-canary.yml: `$companyPattern = '...'` assignment not found — update this test deliberately"
+    return match.group(1)
+
+
+def test_signing_canary_company_pattern_matches_identity() -> None:
+    """The company pattern must match the identity-validation forms and must NOT
+    match the Windows certificate the failing runs reported (run 39366248825)."""
+    pattern = _company_pattern_from_workflow()
+    for subject in (
+        "CN=FARNA LABS LTD, O=FARNA LABS LTD, L=London, C=GB",
+        "CN=Farnalabs Ltd, O=Farnalabs Ltd, L=London, C=GB",
+        "CN=FARNALABS LTD",
+    ):
+        assert re.search(pattern, subject), f"company pattern {pattern!r} does not match {subject!r}"
+    windows_subject = "CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
+    assert not re.search(pattern, windows_subject), (
+        f"company pattern {pattern!r} would accept the Windows certificate {windows_subject!r}"
+    )
+
+
+def test_signing_canary_status_gate_remains() -> None:
+    """The Authenticode status must still be validated as Valid."""
+    run = _verify_step_run_text()
+    violations: list[str] = []
+    if "Valid" not in run or "Status" not in run:
+        violations.append("  signing-canary.yml: missing Authenticode status check")
+    assert not violations, "signing-canary.yml dropped the Authenticode status validation:\n" + "\n".join(violations)
