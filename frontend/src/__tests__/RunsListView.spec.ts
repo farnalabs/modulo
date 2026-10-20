@@ -217,16 +217,18 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
-  it('renders the superseded label (not plain rejected) for a queue-expired run (FAR-1883)', async () => {
+  it('renders its own short label (not the generic superseded copy) for a queue-expired run (FAR-1883)', async () => {
     mockResponses['/api/v1/runs'] = listWith([
       { ...baseRun, status: 'rejected', error_code: 'queue.expired' },
     ])
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
-    // A capacity-queue timeout is a supersession, so the status cell carries
-    // the superseded label — never the raw `rejected` status.
-    expect(wrapper.text()).toContain('Superseded by a newer version')
+    // A capacity-queue timeout is a supersession, but it reads as "expired
+    // while queued" — never the generic "newer version" copy and never the raw
+    // `rejected` status.
+    expect(wrapper.text()).toContain('Expired while queued')
+    expect(wrapper.text()).not.toContain('Superseded by a newer version')
     expect(wrapper.text()).not.toContain('rejected')
     // The error-code label key resolves in the real render path.
     expect(wrapper.text()).toContain('Queue wait expired')

@@ -535,8 +535,11 @@ async def oidc_callback(
 ) -> RedirectResponse:
     """Handle the OIDC provider's callback (authorization code exchange).
 
-    On success, redirects the browser to the frontend callback URL with
-    access and refresh tokens as query parameters.
+    On success, responds with a 307 redirect to the frontend callback URL. The
+    access token is carried in the URL fragment (``#access_token=...``); the
+    refresh token is never placed in the URL and is delivered only as the
+    httpOnly ``modulo_refresh`` cookie set on the same redirect, alongside the
+    ``XSRF-TOKEN`` double-submit CSRF cookie.
     """
     code = request.query_params.get("code")
     state = request.query_params.get("state")
@@ -963,8 +966,11 @@ async def saml_acs(
 ) -> RedirectResponse:
     """Handle the SAML Assertion Consumer Service POST from the IdP.
 
-    On success, redirects the browser to the frontend callback URL with
-    access and refresh tokens as query parameters.
+    On success, responds with a 307 redirect to the frontend callback URL. The
+    access token is carried in the URL fragment (``#access_token=...``); the
+    refresh token is never placed in the URL and is delivered only as the
+    httpOnly ``modulo_refresh`` cookie set on the same redirect, alongside the
+    ``XSRF-TOKEN`` double-submit CSRF cookie.
     """
     bind_audit_org(request, SYSTEM_ORG_ID)
     # This legacy route has no provider slug in its path (saml_process_response
