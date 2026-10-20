@@ -323,6 +323,142 @@ async def test_fallback_echo_takes_priority_over_elevation(elevation_enabled):
     assert result[1] == "sandbox.no_output_json"
 
 
+# ---------------------------------------------------------------------------
+# FAR-1800 — a session death caused by a non-retryable provider error (HTTP 402)
+# ---------------------------------------------------------------------------
+
+
+def _session_lost_402_envelope_event() -> dict[str, Any]:
+    """The PRODUCTION shape of the FAR-1800 failure.
+
+    The E2B wrapper's dead-session echo writes ``output.json`` as
+    ``{"status": "failed", "summary": <placeholder>, "no_output_reason": <tail of
+    the opencode output>}`` — so the killing provider error lives in
+    ``no_output_reason`` (a JSON string), NOT in the placeholder summary. The
+    top-level telemetry view omits ``output_json``, so only the artifact view
+    carries it (mirrors ``_build_sandbox_node_envelope``)."""
+    no_output_reason = (
+        '{"type":"error","sessionID":"ses_ec1f9b8c0ffeUzdix1G59mOuhV",'
+        '"error":{"name":"APIError","data":'
+        '{"message":"Upstream request failed: Insufficient account funds",'
+        '"statusCode":402,"isRetryable":false,'
+        '"metadata":{"url":"https://opencode.ai/inference/go/v1/chat/completions"}}}}'
+    )
+    return {
+        "event": "on_chain_end",
+        "name": "node-a",
+        "data": {
+            "output": {
+                "artifacts": [
+                    {
+                        "node_id": "node-a",
+                        "status": "failed",
+                        "output": {
+                            "status": "failed",
+                            "summary": "No output from agent - session interrupted",
+                            "sandbox_session_lost": True,
+                            "agent_stdout": "",
+                            "output_json": {
+                                "status": "failed",
+                                "summary": "No output from agent - session interrupted",
+                                "no_output_reason": no_output_reason,
+                            },
+                        },
+                    }
+                ],
+                "output": {
+                    "status": "failed",
+                    "summary": "No output from agent - session interrupted",
+                    "sandbox_session_lost": True,
+                },
+            }
+        },
+    }
+
+
+async def test_session_lost_provider_402_terminalizes_insufficient_funds(elevation_enabled):
+    """FAR-1800 prove-the-fix: a dead session whose RETAINED text carries the
+    opencode HTTP 402 refusal terminalizes ``model.insufficient_funds``
+    (NON-retryable) — NOT the generic retryable ``sandbox.no_output_json``,
+    whose every retry re-hits the same billing wall and burns a sandbox
+    dispatch. The placeholder marker reason is preserved as the failure detail."""
+    result, broker = await _run_stream_graph([_session_lost_402_envelope_event()])
+
+    final_status, error_code, error_detail, _node_token_usage = result
+    assert final_status == "failed"
+    assert error_code == "model.insufficient_funds"
+    assert error_code != "sandbox.no_output_json"
+    assert error_detail == "No output from agent - session interrupted"
+    assert is_retryable("model.insufficient_funds") is False
+    assert (
+        "run_failed",
+        {"error": "model.insufficient_funds", "detail": "No output from agent - session interrupted"},
+    ) in (_run_failed_publishes(broker))
+
+
+def _session_lost_402_in_agent_stdout_envelope_event() -> dict[str, Any]:
+    """The 402 signature lives ONLY in the artifact's ``agent_stdout``.
+
+    The retained-text helper scans the stdout/stderr surfaces as well as
+    ``output.json``'s ``no_output_reason``; this pins that second surface. The
+    envelope deliberately carries NO ``no_output_reason`` and no 402 text
+    anywhere else, so classification can only succeed via ``agent_stdout``."""
+    agent_stdout = (
+        '{"type":"error","sessionID":"ses_stdout_only",'
+        '"error":{"name":"APIError","data":'
+        '{"message":"Upstream request failed: Insufficient account funds",'
+        '"statusCode":402,"isRetryable":false}}}}'
+    )
+    return {
+        "event": "on_chain_end",
+        "name": "node-a",
+        "data": {
+            "output": {
+                "artifacts": [
+                    {
+                        "node_id": "node-a",
+                        "status": "failed",
+                        "output": {
+                            "status": "failed",
+                            "summary": "No output from agent - session interrupted",
+                            "sandbox_session_lost": True,
+                            "agent_stdout": agent_stdout,
+                            "output_json": {
+                                "status": "failed",
+                                "summary": "No output from agent - session interrupted",
+                            },
+                        },
+                    }
+                ],
+                "output": {
+                    "status": "failed",
+                    "summary": "No output from agent - session interrupted",
+                    "sandbox_session_lost": True,
+                },
+            }
+        },
+    }
+
+
+async def test_session_lost_provider_402_in_agent_stdout_classifies(elevation_enabled):
+    """FAR-1800: the retained-text helper scans ``agent_stdout``/``agent_stderr``
+    as well as ``output_json.no_output_reason`` — a 402 present ONLY in
+    ``agent_stdout`` must still terminalise ``model.insufficient_funds`` rather
+    than the retryable generic code."""
+    result, broker = await _run_stream_graph([_session_lost_402_in_agent_stdout_envelope_event()])
+
+    final_status, error_code, error_detail, _node_token_usage = result
+    assert final_status == "failed"
+    assert error_code == "model.insufficient_funds"
+    assert error_code != "sandbox.no_output_json"
+    assert error_detail == "No output from agent - session interrupted"
+    assert is_retryable("model.insufficient_funds") is False
+    assert (
+        "run_failed",
+        {"error": "model.insufficient_funds", "detail": "No output from agent - session interrupted"},
+    ) in (_run_failed_publishes(broker))
+
+
 async def test_genuine_verdict_stays_agent_failed(elevation_enabled):
     """FAR-227 prove-the-fix 2 (control): a genuine agent verdict — the agent
     WROTE output.json saying it failed — STILL terminalizes ``agent.failed``
@@ -389,6 +525,22 @@ def test_retry_after_policy_stall_matches_dotted_agent_stall():
 def test_retry_after_policy_failure_excludes_agent_stall():
     """A stall mapped to agent.stall is never retried as a generic failure."""
     assert _retry_after_policy({"on": ["failure"], "max_retries": 2}, "failed", "agent.stall") is None
+
+
+def test_retry_after_policy_failure_excludes_provider_billing_codes():
+    """FAR-1800: a provider billing/provisioning refusal cannot recover on
+    retry, so a ``failure`` policy must NOT re-dispatch it — whatever the
+    retry budget. Covers both canonical and legacy spellings."""
+    for code in ("model.insufficient_funds", "model_insufficient_funds", "model_disabled"):
+        assert _retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", code) is None, code
+
+
+def test_retry_after_policy_failure_still_retries_ordinary_failure():
+    """Control for the billing exclusion: the SAME ``failure`` policy still
+    retries an ordinary failed run — the exclusion is surgical, not a blanket
+    ``non-retryable => never retry`` rule (``agent.failed`` stays retryable)."""
+    assert _retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", "sandbox.no_output_json") == 3
+    assert _retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", "agent.failed") == 3
 
 
 def test_retry_after_policy_legacy_behaviour_unchanged():
