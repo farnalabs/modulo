@@ -113,9 +113,13 @@ class Organisation(SoftDeleteMixin, Base):
     # deadlock) between the finalize gate+accrual and the ceiling set/clear
     # endpoints. The retired ``max_run_cost_cents`` / ``spend_ceiling_cents`` /
     # ``org_cumulative_spend_cents`` columns and the
-    # ``ck_organisations_cum_spend`` CHECK were dropped by migration
-    # ``0324_drop_organisations_cost_columns`` (FAR-1902), together with their
-    # mappings here, so the ORM metadata matches the live schema.
+    # ``ck_organisations_cum_spend`` CHECK are NO LONGER MAPPED here (FAR-1902).
+    # This release removes the ORM reference only: the physical columns (and the
+    # CHECK) stay in place until migration
+    # ``0324_drop_organisations_cost_columns`` ships in a LATER release, so a
+    # rolling deploy never serves a release whose ORM still names a dropped
+    # column. ``test_migrated_schema_matches_orm_metadata`` carries an expiring
+    # parity entry until that migration lands.
     deletion_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     deletion_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     export_bundle_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True, default=None)
