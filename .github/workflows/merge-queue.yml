@@ -329,7 +329,7 @@ jobs:
         shell: bash
         run: |
           echo "Fetching open PRs sorted by age..."
-          gh pr list --state open --json number,title,headRefName,createdAt --limit 50 2>&1 | \
+          gh pr list --state open --json number,title,headRefName,baseRefName,createdAt --limit 50 2>&1 | \
             jq 'sort_by(.createdAt)' > /tmp/all_prs.json
           ALL_COUNT=$(jq 'length' /tmp/all_prs.json)
           echo "Found $ALL_COUNT open PR(s)"
@@ -362,6 +362,22 @@ jobs:
             AUTHOR_VERDICT="${AUTHOR_OUT%%|*}"
             if [ "$AUTHOR_VERDICT" != "ok" ]; then
               echo "skipping - same-repo author gate: ${AUTHOR_OUT#*|}"
+              continue
+            fi
+
+            # Base-branch gate: the queue merges into main, so only PRs that
+            # target main are eligible. A stacked PR (base = another feature
+            # branch) cannot be squash-merged into main correctly: its head
+            # carries the whole unmerged base branch, which conflicts with the
+            # changes main has taken since that base was cut (2026-10-20: PR
+            # #2029, stacked on unmerged #2017, was collected as approved and
+            # GREEN, then conflicted on classify.py / trigger-engine.md /
+            # manifest.yaml, failing every queue pass and starving the whole
+            # queue of merges). The stacked PR becomes eligible the moment its
+            # base lands and it is retargeted (retarget-stacked-prs.py).
+            BASE_REF=$(echo "$pr" | jq -r '.baseRefName')
+            if [ "$BASE_REF" != "main" ]; then
+              echo "skipping - base branch '$BASE_REF' is not main (stacked PR: its base must land and it must be retargeted first)"
               continue
             fi
 
