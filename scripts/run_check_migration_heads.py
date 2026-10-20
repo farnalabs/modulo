@@ -95,6 +95,38 @@ def _read(path: str) -> str:
         return ""
 
 
+def _down_revision_line_index(lines: list[str]) -> int | None:
+    """Return the index of the ``down_revision`` assignment line, if present."""
+    for i, line in enumerate(lines):
+        if re.match(r"^down_revision\s*[:=]", line):
+            return i
+    return None
+
+
+def _slice_parent_block(lines: list[str], start: int) -> str:
+    """Join lines from *start* through the first line containing ``)``."""
+    block = ""
+    for i in range(start, len(lines)):
+        block += lines[i] + "\n"
+        if ")" in lines[i]:
+            break
+    return block
+
+
+def _merge_parent_revisions(content: str) -> set[str]:
+    """Collect quoted revision ids from a tuple-form ``down_revision`` block."""
+    # Tuple-form down_revision (merge migration): the parent list opens with
+    # '(' on the down_revision line. Slice from that line through the closing
+    # ')' and collect every quoted revision id inside.
+    if not re.search(r"(?m)^down_revision\s*[:=].*\(", content):
+        return set()
+    lines = content.splitlines()
+    start = _down_revision_line_index(lines)
+    if start is None:
+        return set()
+    return set(re.findall(r"\"([^\"]+)\"", _slice_parent_block(lines, start)))
+
+
 def _collect_merge_parent_revisions(files: list[str]) -> tuple[set[str], dict[str, str]]:
     """Return (merge_parent_revisions, file_revisions)."""
     merge_parent_revisions: set[str] = set()
@@ -104,23 +136,7 @@ def _collect_merge_parent_revisions(files: list[str]) -> tuple[set[str], dict[st
         m = _RE_REVISION.search(content)
         if m:
             file_revisions[name] = m.group(1)
-        # Tuple-form down_revision (merge migration): the parent list opens with
-        # '(' on the down_revision line. Slice from that line through the closing
-        # ')' and collect every quoted revision id inside.
-        if re.search(r"(?m)^down_revision\s*[:=].*\(", content):
-            lines = content.splitlines()
-            start = None
-            for i, line in enumerate(lines):
-                if re.match(r"^down_revision\s*[:=]", line):
-                    start = i
-                    break
-            if start is not None:
-                block = ""
-                for i in range(start, len(lines)):
-                    block += lines[i] + "\n"
-                    if ")" in lines[i]:
-                        break
-                merge_parent_revisions.update(re.findall(r"\"([^\"]+)\"", block))
+        merge_parent_revisions.update(_merge_parent_revisions(content))
     return merge_parent_revisions, file_revisions
 
 

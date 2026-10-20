@@ -132,6 +132,42 @@ def _clean_map(content_json: Any) -> tuple[dict[str, Any] | None, list[str], boo
     return cleaned, changes, True, None
 
 
+def _stage_pipeline_id(stage: dict[str, Any], dialect_name: str) -> Any:
+    """Return the stage's pipeline id, stringified for SQLite."""
+    pipeline_raw = stage.get("pipeline_id")
+    pipeline_id: Any = None
+    if isinstance(pipeline_raw, str) and pipeline_raw.strip():
+        try:
+            pipeline_id = uuid.UUID(pipeline_raw)
+        except ValueError:
+            pipeline_id = None
+    if pipeline_id is not None and dialect_name == "sqlite":
+        return str(pipeline_id)
+    return pipeline_id
+
+
+def _junction_row(
+    row: Any,
+    stage: dict[str, Any],
+    position: int,
+    pipeline_id: Any,
+    dialect_name: str,
+) -> dict[str, Any]:
+    """Build the junction-row parameter dict for one stage."""
+    return {
+        "id": uuid.uuid4() if dialect_name != "sqlite" else str(uuid.uuid4()),
+        "map_id": row.id,
+        "version": row.version,
+        "stage_id": stage.get("id", ""),
+        "stage_name": stage.get("name", ""),
+        "position": position,
+        "stage_type": stage.get("type", "placeholder"),
+        "pipeline_id": pipeline_id,
+        "organisation_id": row.organisation_id,
+        "account_id": row.account_id,
+    }
+
+
 def _reproject_junction(conn: Any, row: Any, content: dict[str, Any], *, dialect_name: str) -> None:
     """Replace the map's junction projection rows with rows derived from content.
 
@@ -147,31 +183,8 @@ def _reproject_junction(conn: Any, row: Any, content: dict[str, Any], *, dialect
     for position, stage in enumerate(stages):
         if not isinstance(stage, dict):
             continue
-        pipeline_id: Any = None
-        pipeline_raw = stage.get("pipeline_id")
-        if isinstance(pipeline_raw, str) and pipeline_raw.strip():
-            try:
-                pipeline_id = uuid.UUID(pipeline_raw)
-            except ValueError:
-                pipeline_id = None
-        if pipeline_id is not None and dialect_name == "sqlite":
-            pipeline_id = str(pipeline_id)
-        new_id: Any = uuid.uuid4() if dialect_name != "sqlite" else str(uuid.uuid4())
-        conn.execute(
-            _INSERT_JUNCTION_SQL,
-            {
-                "id": new_id,
-                "map_id": row.id,
-                "version": row.version,
-                "stage_id": stage.get("id", ""),
-                "stage_name": stage.get("name", ""),
-                "position": position,
-                "stage_type": stage.get("type", "placeholder"),
-                "pipeline_id": pipeline_id,
-                "organisation_id": row.organisation_id,
-                "account_id": row.account_id,
-            },
-        )
+        pipeline_id = _stage_pipeline_id(stage, dialect_name)
+        conn.execute(_INSERT_JUNCTION_SQL, _junction_row(row, stage, position, pipeline_id, dialect_name))
 
 
 def _scan_maps(conn: Any, *, after_id: Any, batch_size: int) -> list[Any]:

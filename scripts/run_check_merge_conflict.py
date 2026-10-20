@@ -59,17 +59,24 @@ def _parse_conflicted_paths(stdout: str) -> list[str]:
     return [ln for ln in lines[1:] if ln.strip()]
 
 
-def main() -> int:
-    # Which remote to compare against.
+def _origin_available() -> bool:
+    """Return True when a git remote named ``origin`` is configured."""
     rc, out, _ = _run_git("remote")
-    origin_available = rc == 0 and "origin" in out.splitlines()
+    return rc == 0 and "origin" in out.splitlines()
 
+
+def _resolve_branch() -> tuple[str, int | None]:
+    """Return ``(branch, exit_code)`` where *exit_code* is set when unresolvable."""
     rc, out, _ = _run_git("rev-parse", "--abbrev-ref", "HEAD")
     branch = out.strip() if rc == 0 else ""
     if rc != 0 or not branch or branch == "HEAD":
         _warn("detached HEAD / unresolved branch - skipping (pass)")
-        return 0
+        return branch, 0
+    return branch, None
 
+
+def _check_first_push(branch: str) -> int | None:
+    """Return an exit code when the branch has already been pushed, else ``None``."""
     # Has this branch been pushed before (upstream configured)?
     # `@{u}` fails with exit code 128 when no upstream is set.
     # Treat upstream == origin/main as unpushed (worktree-creation flows set
@@ -78,23 +85,52 @@ def main() -> int:
     rc_u, out_u, _ = _run_git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
     upstream = out_u.strip()
     first_push = rc_u != 0 or not upstream or upstream == _BASELINE_REF
-    if not first_push:
-        _warn(f"'{branch}' already has upstream '{upstream}' - pass (first-push rule only).")
-        return 0
+    if first_push:
+        return None
+    _warn(f"'{branch}' already has upstream '{upstream}' - pass (first-push rule only).")
+    return 0
 
-    if not origin_available:
-        _warn("no 'origin' remote available - skipping merge-conflict check (pass).")
-        return 0
 
+def _fetch_origin() -> int | None:
+    """Fetch origin; return an exit code (pass with warning) when it fails."""
     rc_f, out_f, err_f = _run_git("fetch", "origin")
-    if rc_f != 0:
-        _warn(
-            f"'git fetch origin' failed "
-            f"({(err_f or out_f).strip() or 'no output'}); "
-            "skipping merge-conflict check (pass)."
-        )
+    if rc_f == 0:
+        return None
+    _warn(
+        f"'git fetch origin' failed ({(err_f or out_f).strip() or 'no output'}); skipping merge-conflict check (pass)."
+    )
+    return 0
+
+
+def _merge_tree_verdict(branch: str) -> int:
+    """Test whether *branch* merges cleanly with the baseline ref."""
+    rc_m, out_m, _err_m = _run_git("merge-tree", "--write-tree", "--name-only", _BASELINE_REF, "HEAD")
+    if rc_m == 0:
+        _warn(f"'{branch}' merges cleanly with origin/main - pass.")
         return 0
 
+    if rc_m != 1:
+        # Unexpected exit code (old git, unrelated histories, etc.) — fail open.
+        _warn(f"git merge-tree exited with unexpected code {rc_m} - skipping merge-conflict check (pass).")
+        return 0
+
+    paths = _parse_conflicted_paths(out_m)
+    if paths:
+        path_block = "\n".join(f"  {p}" for p in paths)
+    else:
+        path_block = "  (conflict detail is in git's output — see stderr above)"
+    print(
+        f"{_PREFIX} FAILED - '{branch}' conflicts with origin/main.\n"
+        f"Conflicted path(s):\n{path_block}\n"
+        "Resolve the conflict before pushing, e.g.:\n"
+        "  git fetch origin main && git merge origin/main    # or: git rebase origin/main",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def _check_merge_against_baseline(branch: str) -> int:
+    """Check ancestry and merge cleanliness against ``origin/main``."""
     rc_v, _, _ = _run_git("rev-parse", "--verify", "--quiet", _BASELINE_REF)
     if rc_v != 0:
         _warn("origin/main does not resolve locally - skipping merge-conflict check (pass).")
@@ -107,29 +143,30 @@ def main() -> int:
         return 0
 
     # Test whether the branch merges cleanly with origin/main.
-    rc_m, out_m, _err_m = _run_git("merge-tree", "--write-tree", "--name-only", _BASELINE_REF, "HEAD")
-    if rc_m == 0:
-        _warn(f"'{branch}' merges cleanly with origin/main - pass.")
+    return _merge_tree_verdict(branch)
+
+
+def main() -> int:
+    # Which remote to compare against.
+    origin_available = _origin_available()
+
+    branch, exit_code = _resolve_branch()
+    if exit_code is not None:
+        return exit_code
+
+    first_push_exit = _check_first_push(branch)
+    if first_push_exit is not None:
+        return first_push_exit
+
+    if not origin_available:
+        _warn("no 'origin' remote available - skipping merge-conflict check (pass).")
         return 0
 
-    if rc_m == 1:
-        paths = _parse_conflicted_paths(out_m)
-        if paths:
-            path_block = "\n".join(f"  {p}" for p in paths)
-        else:
-            path_block = "  (conflict detail is in git's output — see stderr above)"
-        print(
-            f"{_PREFIX} FAILED - '{branch}' conflicts with origin/main.\n"
-            f"Conflicted path(s):\n{path_block}\n"
-            "Resolve the conflict before pushing, e.g.:\n"
-            "  git fetch origin main && git merge origin/main    # or: git rebase origin/main",
-            file=sys.stderr,
-        )
-        return 1
+    fetch_exit = _fetch_origin()
+    if fetch_exit is not None:
+        return fetch_exit
 
-    # Unexpected exit code (old git, unrelated histories, etc.) — fail open.
-    _warn(f"git merge-tree exited with unexpected code {rc_m} - skipping merge-conflict check (pass).")
-    return 0
+    return _check_merge_against_baseline(branch)
 
 
 if __name__ == "__main__":
