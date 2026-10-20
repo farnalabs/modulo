@@ -19,6 +19,7 @@ export default {
       "claiming": "Claiming...",
       "re_claim": "Re-claim",
       "review_notes": "Review notes (optional)",
+      "decision_recorded_as_yours_note": "This decision is recorded as yours.",
       "approve": "Approve",
       "approving": "Approving...",
       "reject": "Reject",
@@ -91,6 +92,7 @@ export default {
       "context_load_error": "Could not load this authorization request. It may have expired — return to the application and try again.",
       "no_scopes_selected": "Select at least one permission to approve, or decline the request.",
       "decline": "Decline",
+      "approve_grants_your_authority_note": "Approving grants this client authority as your own account — and a decision it makes is recorded as yours. Only approve for a client you control on your own machine, never for a cloud agent or a shared job.",
       "declined_title": "Request declined",
       "declined_description": "You declined this authorization request. You can close this window and return to the application."
     },
@@ -928,6 +930,7 @@ export default {
     "SettingsHitlReviewView": {
       "title": "HITL Review",
       "subtitle": "Review and respond to pending human-in-the-loop gates",
+      "human_only_decider_note": "A human-only gate is decided by a person — here, or through MCP with a credential linked to a human account. A machine credential (MCP API key or service account) cannot decide one.",
       "search_placeholder": "Search pipeline or node name...",
       "status_label": "Status",
       "status_pending": "Pending",
@@ -1192,6 +1195,11 @@ export default {
       "hitl_review_window_help": "Seconds an unanswered human review gate waits before the run is cancelled and its concurrency slot released. Allowed range 60 to 604800 seconds. Leave empty to clear the override and inherit the organisation default.",
       "hitl_review_window_out_of_range": "The HITL review window must be a whole number of seconds between {min} and {max}.",
       "hitl_review_window_update_failed": "Failed to update the HITL review window: {error}",
+      "queue_timeout_label": "Queue timeout (s)",
+      "queue_timeout_never": "never",
+      "queue_timeout_help": "How long a run may wait in the capacity queue before it is dropped. Anchored on the time the run was queued. Leave empty (never) by default: the run waits indefinitely and the queue-state alert is the escalation path. Allowed range 1 to 604800 seconds. On expiry the run ends as a supersession (queue.expired), not a failure. Cron pipelines should set this to their period (a 1h cron to 3600) so a stale fire self-drops; webhook, manual and MCP pipelines should leave it empty.",
+      "queue_timeout_out_of_range": "The queue timeout must be a whole number of seconds between {min} and {max}.",
+      "queue_timeout_update_failed": "Failed to update the queue timeout: {error}",
       "ownerless_gate_advisory": "This gate is human-only and has no required team, and this pipeline has no owner. Nobody is assigned to review it, so it will time out at the review window and the run will be cancelled. Set a required team or a pipeline owner to avoid this.",
       "autonomy_manual_approval": "Manual approval",
       "autonomy_notify_on_complete": "Notify on complete",
@@ -1288,6 +1296,7 @@ export default {
       "enabled": "Enabled",
       "claim_expiry_minutes": "Claim Expiry (minutes)",
       "human_only_block_llm_auto_approval": "Human only (block LLM auto-approval)",
+      "human_only_machine_credential_note": "Deciding this gate needs a credential linked to a human account; an MCP API key or service-account credential cannot decide it.",
       "condition_type": "Condition Type",
       "none_always_gate": "None (always gate)",
       "jmespath_expression": "JMESPath Expression",
@@ -2114,6 +2123,8 @@ export default {
       "purge_selected": "Purge selected",
       "cancel": "Cancel",
       "export_downloaded": "Export downloaded.",
+      "export_may_be_incomplete": "The download completed, but the export may be incomplete: the completion marker was missing. Re-run the export before treating this file as a complete record.",
+      "export_incomplete_transfer": "The export did not complete: the transfer was interrupted and the file is incomplete. Re-run the export before using the file.",
       "failed_to_load_candidates": "Failed to load candidates",
       "purge_failed": "Purge failed",
       "export_failed": "Export failed",
@@ -2470,6 +2481,7 @@ export default {
       "capacity_backpressure": "Capacity Backpressure",
       "capacity_saturation": "Capacity Saturation",
       "capacity_recovered": "Capacity Recovered",
+      "capacity_redis_pressure": "Queue Store Memory Pressure",
       "response_body": "Response Body",
       "admin_view_of_all_webhook_notification_deliveries": "Admin view of all webhook notification deliveries",
       "failed_to_load_delivery_logs": "Failed to load delivery logs:",
@@ -2545,6 +2557,7 @@ export default {
       "server_url": "Server URL",
       "create_and_manage_api_keys_for_mcp_client_authentication": "Create and manage API keys for MCP client authentication",
       "api_keys_act_org_wide_note": "API keys act org-wide. Per-user keys (scope: user) are mintable via the API; full key-management UX is coming in Phase 2.",
+      "api_keys_machine_credential_note": "API keys are machine credentials — they operate pipelines but cannot decide a human-only HITL gate. Deciding one needs a credential linked to a human account.",
       "name": "Name",
       "key_prefix": "Key Prefix",
       "role": "Role",
@@ -2581,6 +2594,7 @@ export default {
       "redirect_uris_invalid": "Not a valid redirect URI: {list}. Each entry must be an absolute http:// or https:// URL.",
       "scopes": "Scopes",
       "scopes_required": "Select at least one scope.",
+      "oauth_hitl_review_scope_note": "The hitl:review scope lets this client decide gates as the human who approves it. Use it for a local client on your own machine only — never paste a human-linked token into a cloud agent or a shared CI job.",
       "scope_search_label": "Search scopes",
       "scope_search_placeholder": "Filter by scope name, e.g. run.trigger",
       "scope_search_empty": "No scopes match your search.",
@@ -2678,7 +2692,18 @@ export default {
       "hitl_review_window_out_of_range": "The review window must be between {min} and {max} seconds (1 minute to 7 days).",
       "hitl_review_window_saved": "HITL review window saved.",
       "hitl_review_window_status_default": "No organisation default. Pipelines without their own override inherit the instance default.",
-      "hitl_review_window_status_set": "Organisation default: {seconds} seconds."
+      "hitl_review_window_status_set": "Organisation default: {seconds} seconds.",
+      "mcp_authority_title": "Human-linked MCP authority",
+      "mcp_authority_description": "Who may decide a human-only HITL gate over MCP. A human-only gate is always decided by a person; this controls whether a human-linked credential may act as their authority.",
+      "mcp_authority_toggle": "Allow human-linked credentials to decide human-only gates over MCP",
+      "mcp_authority_hint": "On (default): a consent-derived OAuth token for a member of this organisation may claim and decide a human-only gate over MCP, and the decision is recorded as that person's. Off: every MCP credential is refused on a human-only gate, restoring the stricter behaviour where a person decides it in the browser. Manually delivering a gate's output stays browser-only either way.",
+      "mcp_authority_loading": "Loading setting...",
+      "mcp_authority_retry": "Retry",
+      "mcp_authority_load_failed": "Failed to load the setting: {error}",
+      "mcp_authority_save_failed": "Failed to save the setting: {error}",
+      "mcp_authority_saved": "Setting saved.",
+      "mcp_authority_status_enabled": "A human-linked credential may decide a human-only gate over MCP.",
+      "mcp_authority_status_disabled": "No MCP credential may decide a human-only gate; a person decides it in the browser."
     },
     "OnboardingWizard": {
       "wire_pipeline": "Wire Pipeline",
@@ -4587,7 +4612,8 @@ export default {
       "queue_pressure_critical": "Queue Pressure (Critical)",
       "capacity_backpressure": "Capacity Backpressure",
       "capacity_saturation": "Capacity Saturation",
-      "capacity_recovered": "Capacity Recovered"
+      "capacity_recovered": "Capacity Recovered",
+      "capacity_redis_pressure": "Queue Store Memory Pressure"
     },
     "NotificationBell": {
       "notifications": "Notifications",
@@ -4929,6 +4955,7 @@ export default {
       "cancelled": "Node cancelled"
     },
     "run": { "superseded": "Run superseded", "no_progress": "Run made no progress" },
+    "queue": { "expired": "Queue wait expired" },
     "connector": {
       "invalid_key": "Invalid connector key",
       "permission": "Connector permission denied",
@@ -5010,6 +5037,7 @@ export default {
       "cancelled": "The node was cancelled before completion."
     },
     "run": { "superseded": "This run was superseded by a newer run." },
+    "queue": { "expired": "The run waited in the capacity queue past this pipeline's queue timeout and was dropped before it started. It was superseded, not failed." },
     "connector": {
       "invalid_key": "The connector key is invalid or missing.",
       "permission": "The connector does not have permission to access the resource.",
@@ -5055,6 +5083,7 @@ export default {
     "compensation_failed": "A watched node and its compensation path both failed.",
     "rejected": "A reviewer rejected the run at a human review gate with no reject route, so the run ended.",
     "superseded": "A newer version of the work item replaced this run's waiting review, so the run ended. No reviewer rejected it.",
+    "queue_expired": "The run waited in the capacity queue past this pipeline's queue timeout and was dropped before it started. It was superseded, not rejected by a reviewer.",
     "pending": "The run is queued and waiting to start.",
     "running": "The run is currently executing.",
     "awaiting_human": "The run is waiting for a human decision at a HITL gate.",

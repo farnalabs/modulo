@@ -17,7 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.core.pipeline_engine.executor import PipelineExecutor
-from modulo.core.pipeline_execution import CAPACITY_TIMEOUT_TTL_MINUTES, stale_run_recovery_sweep
+from modulo.core.pipeline_execution import stale_run_recovery_sweep
 from modulo.db.rls import set_rls_org
 
 pytestmark = [
@@ -101,6 +101,7 @@ async def _seed_pipeline(
     name: str,
     account_id: uuid.UUID,
     max_concurrent: int = _PIPELINE_CAP,
+    queue_timeout_seconds: int | None = None,
 ) -> uuid.UUID:
     pipeline_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
@@ -108,8 +109,9 @@ async def _seed_pipeline(
             text(
                 "INSERT INTO pipelines (id, organisation_id, name, account_id, "
                 "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                "queue_timeout_seconds, "
                 "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
-                "VALUES (:id, :oid, :name, :uid, :mcr, 30, 300, "
+                "VALUES (:id, :oid, :name, :uid, :mcr, 30, 300, :qts, "
                 "'{}'::json, '[]'::json, 'manual_approval', 'org')"
             ),
             {
@@ -118,6 +120,7 @@ async def _seed_pipeline(
                 "name": name,
                 "uid": str(account_id),
                 "mcr": max_concurrent,
+                "qts": queue_timeout_seconds,
             },
         )
     return pipeline_id
@@ -263,6 +266,23 @@ async def _run_heartbeat(
         await set_rls_org(session, org_id)
         result = await session.execute(
             text("SELECT heartbeat_at FROM runs WHERE id = :rid"),
+            {"rid": str(run_id)},
+        )
+        row = result.first()
+        return row[0] if row else None
+
+
+async def _run_fact_status(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> str | None:
+    """The compensating analytics fact's status for a run (FAR-162 / P6')."""
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        result = await session.execute(
+            text("SELECT status FROM run_daily_facts WHERE run_id = :rid"),
             {"rid": str(run_id)},
         )
         row = result.first()
@@ -584,15 +604,20 @@ async def test_running_non_sandbox_run_leaves_sandbox_cap_to_sandbox_runs(
 
 
 # ---------------------------------------------------------------------------
-# Stale-run sweep: durable capacity-timeout backstop
+# Stale-run sweep: capacity-queued runs wait indefinitely by default
+# (per-pipeline queue_timeout opt-in; expiry is a queue.expired supersession)
 # ---------------------------------------------------------------------------
 
 
-async def test_sweep_fails_old_marked_pending_but_not_young(
+async def test_sweep_leaves_capacity_marked_runs_pending_without_a_queue_timeout(
     db_engine: AsyncEngine,
     migrated_db_url: str,
     monkeypatch: pytest.MonkeyPatch,
+    patched_redispatch: AsyncMock,
 ):
+    """FAR-1883: with NULL ``queue_timeout_seconds`` (the default) there is NO
+    queued TTL - even a week-old capacity-marked pending run is left alive and
+    re-dispatched, never terminal-failed."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
 
     org_id, user_id = await _seed_org_account(db_engine, "SweepOrg", cap=1)
@@ -607,7 +632,7 @@ async def test_sweep_fails_old_marked_pending_but_not_young(
         snap,
         status="pending",
         error_code="org_capacity_limited",
-        created_at=now - timedelta(minutes=CAPACITY_TIMEOUT_TTL_MINUTES + 30),
+        created_at=now - timedelta(days=7),
     )
     young_marked = await _seed_run(
         db_engine,
@@ -621,10 +646,16 @@ async def test_sweep_fails_old_marked_pending_but_not_young(
 
     result = await stale_run_recovery_sweep(db_engine)
     assert result.get("error") is None, f"sweep failed: {result}"
+    assert result["queue_expired_swept"] == 0, result
 
     status, code = await _run_state(db_engine, org_id, old_marked)
-    assert status == "failed"
-    assert code == "capacity_timeout"
+    assert status == "pending", "a capacity-queued run must wait indefinitely by default"
+    assert code == "org_capacity_limited"
+    # The week-old stranded run is re-dispatched, not killed.
+    assert result["stranded_capacity_redispatched"] >= 1, result
+    assert any(call.args[0] == str(old_marked) for call in patched_redispatch.await_args_list), (
+        "the old capacity-queued run must be re-dispatched, never terminal-failed"
+    )
 
     status, code = await _run_state(db_engine, org_id, young_marked)
     assert status == "pending", "young reason-marked pending run must survive the sweep"
@@ -758,18 +789,22 @@ async def test_sweep_skips_fresh_heartbeat_capacity_blocked_run(
     assert code == "pipeline_capacity"
 
 
-async def test_sweep_still_fails_capacity_timeout_eligible_run(
+async def test_sweep_expires_capacity_queued_run_past_pipeline_queue_timeout(
     db_engine: AsyncEngine,
     migrated_db_url: str,
     monkeypatch: pytest.MonkeyPatch,
     patched_redispatch: AsyncMock,
 ):
-    """A run past the 120-min capacity_timeout TTL must FAIL, never be
-    resurrected by the re-dispatch branch (existing behaviour preserved)."""
+    """FAR-1883: a capacity-queued run older than its PIPELINE's
+    ``queue_timeout_seconds`` is ENDED as a supersession - status ``rejected``
+    with the distinct ``queue.expired`` code - and is never re-dispatched.
+
+    ``rejected`` is deliberately NOT a failure status, so this run cannot enter
+    the analytics failure count (which keys only on failed/stalled)."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
 
     org_id, user_id = await _seed_org_account(db_engine, "TimeoutOrg", cap=1)
-    pipe = await _seed_pipeline(db_engine, org_id, "PipeTimeout", user_id)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeTimeout", user_id, queue_timeout_seconds=3600)
     snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
 
     now = datetime.now(UTC)
@@ -780,42 +815,41 @@ async def test_sweep_still_fails_capacity_timeout_eligible_run(
         snap,
         status="pending",
         error_code="org_capacity_limited",
-        created_at=now - timedelta(minutes=CAPACITY_TIMEOUT_TTL_MINUTES + 30),
-        heartbeat_at=now - timedelta(minutes=CAPACITY_TIMEOUT_TTL_MINUTES + 30),
-        dispatched_at=now - timedelta(minutes=CAPACITY_TIMEOUT_TTL_MINUTES + 30),
+        created_at=now - timedelta(minutes=90),
+        heartbeat_at=now - timedelta(minutes=90),
+        dispatched_at=now - timedelta(minutes=90),
     )
 
     result = await stale_run_recovery_sweep(db_engine)
     assert result.get("error") is None, f"sweep failed: {result}"
     assert result["stranded_capacity_redispatched"] == 0, result
-    assert result["capacity_timeout_swept"] == 1, result
+    assert result["queue_expired_swept"] == 1, result
     patched_redispatch.assert_not_awaited()
 
     status, code = await _run_state(db_engine, org_id, old)
-    assert status == "failed"
-    assert code == "capacity_timeout"
+    assert status == "rejected", "queue expiry is a supersession, never a failure"
+    assert code == "queue.expired"
+
+    # The compensating daily fact must carry the run's real (rejected) status,
+    # so the analytics failure_count (failed/stalled only) excludes it.
+    fact_status = await _run_fact_status(db_engine, org_id, old)
+    assert fact_status == "rejected"
 
 
-async def test_sweep_capacity_timeout_fires_on_refreshed_never_claimed_row(
+async def test_sweep_queue_expiry_is_anchored_on_created_at(
     db_engine: AsyncEngine,
     migrated_db_url: str,
     monkeypatch: pytest.MonkeyPatch,
     patched_redispatch: AsyncMock,
 ):
-    """A never-claimed capacity-marked row past the TTL terminal-fails via
-    capacity_timeout EVEN THOUGH the stranded-refresh loop restamped its
-    heartbeat inside the TTL window (claim_count 0 — the model default).
-
-    The refresh UPDATE keeps a never-claimed row's heartbeat_at fresh while
-    created_at is inside the TTL, so past the crossing a heartbeat-age test
-    alone would wait a further full TTL (~2x the documented TTL). The
-    ``claim_count = 0`` disjunct fires at the crossing regardless of that
-    refreshed heartbeat — this pins the never-claimed-at-TTL semantics
-    against the refresh loop."""
+    """FAR-1883: the queue_timeout clock is ``created_at`` ("time queued"),
+    NOT the heartbeat - a never-claimed row whose heartbeat was restamped by
+    the stranded-refresh loop still expires once its queued age passes the
+    window."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
 
     org_id, user_id = await _seed_org_account(db_engine, "RefreshNeverOrg", cap=1)
-    pipe = await _seed_pipeline(db_engine, org_id, "PipeRefreshNever", user_id)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeRefreshNever", user_id, queue_timeout_seconds=3600)
     snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
 
     now = datetime.now(UTC)
@@ -826,19 +860,19 @@ async def test_sweep_capacity_timeout_fires_on_refreshed_never_claimed_row(
         snap,
         status="pending",
         error_code="org_capacity_limited",
-        created_at=now - timedelta(minutes=CAPACITY_TIMEOUT_TTL_MINUTES + 30),
+        created_at=now - timedelta(minutes=90),
         heartbeat_at=now - timedelta(minutes=10),
     )
 
     result = await stale_run_recovery_sweep(db_engine)
     assert result.get("error") is None, f"sweep failed: {result}"
     assert result["stranded_capacity_redispatched"] == 0, result
-    assert result["capacity_timeout_swept"] == 1, result
+    assert result["queue_expired_swept"] == 1, result
     patched_redispatch.assert_not_awaited()
 
     status, code = await _run_state(db_engine, org_id, refreshed)
-    assert status == "failed"
-    assert code == "capacity_timeout"
+    assert status == "rejected"
+    assert code == "queue.expired"
 
 
 # ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from starlette.responses import StreamingResponse
 
 from modulo.api.routes import analytics as route
@@ -222,6 +223,33 @@ class TestScanRoute:
         await _body(response)
         assert captured["team_ids"] == team_ids
 
+    async def test_resolver_http_exception_passes_through_untouched(self) -> None:
+        """The team-boundary resolver's own HTTP verdict is never re-mapped.
+
+        ``_resolve_scoped_team_ids`` already owns its DB-error mapping: it
+        raises a 503 (fail-closed) rather than a raw ``Exception``. Wrapping
+        that in ``_map_service_error`` would turn a deliberately-typed 503 into
+        the untyped 500 fallback, so the route re-raises it unchanged and never
+        reaches the stream factory.
+        """
+        original = HTTPException(status_code=503, detail="team boundary unavailable")
+        factory = MagicMock()
+        with (
+            patch.object(route, "_resolve_scoped_team_ids", new=AsyncMock(side_effect=original)),
+            patch.object(route, "_analytics_session_factory", return_value=MagicMock()),
+            patch.object(route, "stream_export_facts", new=factory),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await route.analytics_scan(
+                format="json",
+                params=AnalyticsParams(),
+                settings=MagicMock(),
+                principal=_principal(),
+                _=None,
+            )
+        assert exc_info.value is original
+        assert factory.call_count == 0
+
     async def test_service_error_maps_to_an_http_status(self) -> None:
         with pytest.raises(HTTPException) as exc_info:
             await _call_scan(
@@ -229,6 +257,21 @@ class TestScanRoute:
                 stream_factory=lambda **_: _raising(AnalyticsRateLimitedError("over budget")),
             )
         assert exc_info.value.status_code == 429
+
+    async def test_untyped_db_error_maps_through_the_shared_classifier(self) -> None:
+        """A non-typed start-up failure gets the shared classifier's verdict.
+
+        The typed ``AnalyticsError`` keep their own mapping (see the 429 test);
+        an ``IntegrityError`` is not an ``AnalyticsError``, so it falls through
+        to the shared classifier — which maps it to 409 rather than the generic
+        500 the module-local ``_map_service_error`` fallback would have given.
+        """
+        with pytest.raises(HTTPException) as exc_info:
+            await _call_scan(
+                format="json",
+                stream_factory=lambda **_: _raising(IntegrityError("s", {}, Exception())),
+            )
+        assert exc_info.value.status_code == 409
 
     async def test_http_exception_passes_through_untouched(self) -> None:
         original = HTTPException(status_code=418, detail="teapot")

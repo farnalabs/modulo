@@ -313,58 +313,99 @@ def build_drift_detail(
         for kind in (KIND_SCHEMA, KIND_BACKEND, KIND_PIPELINE, KIND_TRIGGER)
     }
     detail: dict[str, dict[str, Any]] = {}
+    _add_pipeline_drift(detail, updated[KIND_PIPELINE], desired, current_entities)
+    _add_managed_field_drift(detail, updated, desired, current_entities)
+    return detail
 
-    # Pipeline graph breakdown (legacy shape — keyed by pipeline name).
+
+def _add_pipeline_drift(
+    detail: dict[str, dict[str, Any]],
+    updated_pipelines: set[str],
+    desired: dict[str, list[tuple[str, dict[str, Any]]]],
+    current_entities: dict[str, Any],
+) -> None:
+    """Add the graph breakdown for every drifted pipeline (legacy shape)."""
     desired_pipelines = dict(desired.get(KIND_PIPELINE) or [])
-    for name in updated[KIND_PIPELINE]:
+    for name in updated_pipelines:
         view = desired_pipelines.get(name)
         if not view or "graph" not in view:
             continue
-        current = (current_entities.get(KIND_PIPELINE) or {}).get(name) or {}
-        raw_current_graph: dict[str, Any] = current.get("graph") or {"nodes": [], "edges": []}
-        # FAR-1232: the desired view arrives already redacted (managed_view),
-        # so the current side is redacted through the identical CLI mask —
-        # the node/modified breakdown then compares like-for-like (a masked
-        # secret shows as the sentinel on BOTH sides instead of a phantom
-        # "modified" entry that is pure masking).
-        current_graph = strip_secret_shaped_graph(raw_current_graph)
-        breakdown = _diff_graph(view["graph"], current_graph)
-        graph_changed = any(side for field in breakdown.values() for side in field.values())
-        # FAR-220: name the git-sourced content fields that drifted (commit
-        # moves). Content-ref fields sit OUTSIDE the secret-bearing node
-        # fields, so the git comparison runs on the RAW current graph (with
-        # its refs intact) while the modified decision uses redacted views.
-        git_content = _diff_git_content(view["graph"], raw_current_graph)
-        if git_content:
-            breakdown["git_content"] = git_content
-        # FAR-1109: name node-attached policy-gate changes explicitly — the
-        # generic node breakdown flags the node as "modified", but an operator
-        # must be able to tell a gate change from any other node change.
-        gate_changes = policy_gate_changes(view["graph"], current_graph)
-        if gate_changes:
-            breakdown["policy_gates"] = gate_changes
-        if graph_changed or git_content or gate_changes:
+        breakdown = _pipeline_drift_breakdown(name, view["graph"], current_entities)
+        if breakdown is not None:
             detail[name] = breakdown
 
-    # Non-pipeline field breakdown (keyed "<kind>:<name>").
+
+def _pipeline_drift_breakdown(
+    name: str,
+    desired_graph: dict[str, Any],
+    current_entities: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Build one pipeline's drift breakdown; None when nothing actually drifted."""
+    current = (current_entities.get(KIND_PIPELINE) or {}).get(name) or {}
+    raw_current_graph: dict[str, Any] = current.get("graph") or {"nodes": [], "edges": []}
+    # FAR-1232: the desired view arrives already redacted (managed_view),
+    # so the current side is redacted through the identical CLI mask —
+    # the node/modified breakdown then compares like-for-like (a masked
+    # secret shows as the sentinel on BOTH sides instead of a phantom
+    # "modified" entry that is pure masking).
+    current_graph = strip_secret_shaped_graph(raw_current_graph)
+    breakdown = _diff_graph(desired_graph, current_graph)
+    graph_changed = any(side for field in breakdown.values() for side in field.values())
+    # FAR-220: name the git-sourced content fields that drifted (commit
+    # moves). Content-ref fields sit OUTSIDE the secret-bearing node
+    # fields, so the git comparison runs on the RAW current graph (with
+    # its refs intact) while the modified decision uses redacted views.
+    git_content = _diff_git_content(desired_graph, raw_current_graph)
+    if git_content:
+        breakdown["git_content"] = git_content
+    # FAR-1109: name node-attached policy-gate changes explicitly — the
+    # generic node breakdown flags the node as "modified", but an operator
+    # must be able to tell a gate change from any other node change.
+    gate_changes = policy_gate_changes(desired_graph, current_graph)
+    if gate_changes:
+        breakdown["policy_gates"] = gate_changes
+    if not (graph_changed or git_content or gate_changes):
+        return None
+    return breakdown
+
+
+def _add_managed_field_drift(
+    detail: dict[str, dict[str, Any]],
+    updated: dict[str, set[str]],
+    desired: dict[str, list[tuple[str, dict[str, Any]]]],
+    current_entities: dict[str, Any],
+) -> None:
+    """Add the managed-field breakdown for drifted non-pipeline entities."""
     for kind in (KIND_SCHEMA, KIND_BACKEND, KIND_TRIGGER):
         desired_views = dict(desired.get(kind) or [])
         for name in updated[kind]:
-            view = desired_views.get(name)
-            if not view:
-                continue
-            current_view = _managed_current_view(kind, name, view, current_entities)
-            if current_view is None:
-                continue
-            # Exclude plan-only refresh markers on both sides: the marker drives
-            # the hash decision (report says updated) but is not a managed field,
-            # so it must not surface in the field breakdown.
-            diffable_view = {key: value for key, value in view.items() if key not in _REFRESH_MARKER_KEYS}
-            diffable_current = {key: value for key, value in current_view.items() if key not in _REFRESH_MARKER_KEYS}
-            fields = _diff_fields(diffable_view, diffable_current)
-            if any(fields.values()):
-                detail[f"{kind}:{name}"] = {"fields": fields}
-    return detail
+            entry = _managed_field_breakdown(kind, name, desired_views, current_entities)
+            if entry is not None:
+                detail[f"{kind}:{name}"] = entry
+
+
+def _managed_field_breakdown(
+    kind: str,
+    name: str,
+    desired_views: dict[str, dict[str, Any]],
+    current_entities: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Diff one entity's managed fields; None when not comparable or clean."""
+    view = desired_views.get(name)
+    if not view:
+        return None
+    current_view = _managed_current_view(kind, name, view, current_entities)
+    if current_view is None:
+        return None
+    # Exclude plan-only refresh markers on both sides: the marker drives
+    # the hash decision (report says updated) but is not a managed field,
+    # so it must not surface in the field breakdown.
+    diffable_view = {key: value for key, value in view.items() if key not in _REFRESH_MARKER_KEYS}
+    diffable_current = {key: value for key, value in current_view.items() if key not in _REFRESH_MARKER_KEYS}
+    fields = _diff_fields(diffable_view, diffable_current)
+    if not any(fields.values()):
+        return None
+    return {"fields": fields}
 
 
 def has_drift(report: dict[str, Any]) -> bool:

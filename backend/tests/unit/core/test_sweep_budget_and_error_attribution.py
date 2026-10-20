@@ -590,7 +590,7 @@ class TestStaleRunRecoveryWrapperErrorSurfacing:
         sweep_result = {
             "never_dispatched_swept": 0,
             "worker_lost_swept": 0,
-            "capacity_timeout_swept": 0,
+            "queue_expired_swept": 0,
             "stranded_capacity_redispatched": 0,
             "redispatch_outcomes": {},
             "error": "sweep_failed (RuntimeError: DB down)",

@@ -27,6 +27,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
@@ -37,6 +38,7 @@ from modulo.core.run_admission import (
     derive_webhook_coalesce_key,
     evaluate_backpressure,
     reconcile_pipeline_slots,
+    trigger_slot_count_predicate,
 )
 from modulo.core.trigger_engine import PipelineBackpressureError, TriggerEngine
 from modulo.db.models.base import Base
@@ -2050,3 +2052,100 @@ class TestSweepRowLockBoundFAR1592:
         monkeypatch.setattr(ra, "get_settings", lambda: _sweep_settings(sweep_name))
         with pytest.raises(asyncio.CancelledError):
             await _run_sweep(sweep_name, engine)
+
+
+class TestFar1999TriggerSlotCount:
+    """FAR-1999 — a pending run holds a trigger slot only for the grace window.
+
+    Real-SQLite coverage of ``trigger_slot_count_predicate``: a ``pending`` run
+    that was accepted but never dispatched (queued or capacity-deferred) stops
+    counting after the create→dispatch grace window, while every genuinely
+    in-flight status keeps counting at any age. This is what stops one
+    capacity-blocked run holding one of a trigger's eight slots for ~50
+    minutes with no live dispatch.
+    """
+
+    @pytest.fixture
+    async def session(self) -> AsyncGenerator[AsyncSession, None]:
+        engine: AsyncEngine = create_async_engine("sqlite+aiosqlite://", echo=False)
+        async with engine.begin() as conn:
+            tables = [t for t in Base.metadata.sorted_tables if t.name in {"runs", "organisations"}]
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+            await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        async with maker() as db_session:
+            yield db_session
+        await engine.dispose()
+
+    @staticmethod
+    def _run(*, trigger_id: uuid.UUID, status: str, created_at: datetime) -> Run:
+        return Run(
+            organisation_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            snapshot_id=uuid.uuid4(),
+            trigger_id=trigger_id,
+            trigger_type="webhook",
+            run_number=1,
+            input_hash="a" * 64,
+            langgraph_thread_id="t-" + uuid.uuid4().hex,
+            status=status,
+            cancellation_requested=False,
+            created_at=created_at,
+        )
+
+    async def _count(self, session: AsyncSession, trigger_id: uuid.UUID, now: datetime) -> int:
+        result = await session.execute(
+            select(func.count()).where(trigger_slot_count_predicate(trigger_id, pending_grace_seconds=300, now=now))
+        )
+        return int(result.scalar_one())
+
+    async def test_running_run_counts_at_any_age(self, session: AsyncSession) -> None:
+        trigger_id = uuid.uuid4()
+        now = datetime(2026, 1, 1, 12, 0, 0)
+        session.add(self._run(trigger_id=trigger_id, status="running", created_at=now - timedelta(hours=5)))
+        await session.commit()
+        assert await self._count(session, trigger_id, now) == 1
+
+    async def test_young_pending_run_counts(self, session: AsyncSession) -> None:
+        trigger_id = uuid.uuid4()
+        now = datetime(2026, 1, 1, 12, 0, 0)
+        session.add(self._run(trigger_id=trigger_id, status="pending", created_at=now - timedelta(seconds=60)))
+        await session.commit()
+        assert await self._count(session, trigger_id, now) == 1
+
+    async def test_stale_pending_run_does_not_count(self, session: AsyncSession) -> None:
+        trigger_id = uuid.uuid4()
+        now = datetime(2026, 1, 1, 12, 0, 0)
+        session.add(self._run(trigger_id=trigger_id, status="pending", created_at=now - timedelta(minutes=50)))
+        await session.commit()
+        assert await self._count(session, trigger_id, now) == 0
+
+    async def test_mixed_population_counts_only_slot_holders(self, session: AsyncSession) -> None:
+        trigger_id = uuid.uuid4()
+        now = datetime(2026, 1, 1, 12, 0, 0)
+        session.add_all(
+            [
+                self._run(trigger_id=trigger_id, status="running", created_at=now - timedelta(hours=2)),
+                self._run(trigger_id=trigger_id, status="claimed", created_at=now - timedelta(hours=1)),
+                self._run(trigger_id=trigger_id, status="pending", created_at=now - timedelta(minutes=1)),
+                self._run(trigger_id=trigger_id, status="pending", created_at=now - timedelta(minutes=50)),
+            ]
+        )
+        await session.commit()
+        assert await self._count(session, trigger_id, now) == 3
+
+    async def test_cancellation_requested_run_does_not_count(self, session: AsyncSession) -> None:
+        trigger_id = uuid.uuid4()
+        now = datetime(2026, 1, 1, 12, 0, 0)
+        row = self._run(trigger_id=trigger_id, status="running", created_at=now - timedelta(hours=2))
+        row.cancellation_requested = True
+        session.add(row)
+        await session.commit()
+        assert await self._count(session, trigger_id, now) == 0
+
+    async def test_other_triggers_are_not_counted(self, session: AsyncSession) -> None:
+        trigger_id = uuid.uuid4()
+        now = datetime(2026, 1, 1, 12, 0, 0)
+        session.add(self._run(trigger_id=uuid.uuid4(), status="running", created_at=now - timedelta(hours=2)))
+        await session.commit()
+        assert await self._count(session, trigger_id, now) == 0

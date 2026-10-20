@@ -205,8 +205,14 @@ async def advance_terminalised_run(
     org_id: uuid.UUID,
     *,
     source: str,
+    status: str = "failed",
 ) -> None:
     """Advance a terminalised sweep run's journeys, fact and audit record.
+
+    ``status`` is the terminal status the journey advance sees (FAR-1883: a
+    queue-expired run is a SUPERSESSION - ``rejected`` - so it must never
+    increment a journey's failed ``run_count``). The daily fact is derived from
+    the re-selected run row, so it always carries the row's real status.
 
     The single orchestration shared by ``pipeline_execution``'s legacy
     stale-run sweep and ``run_admission``'s FAR-604 slot-reconciliation sweep
@@ -225,7 +231,7 @@ async def advance_terminalised_run(
     landed, so a sweep transaction that rolled back after the id was
     collected cannot produce a phantom event.
     """
-    await advance_journeys_from_stored_refs(async_engine, str(run_id), str(org_id), "failed")
+    await advance_journeys_from_stored_refs(async_engine, str(run_id), str(org_id), status)
     try:
         await record_terminal_failed_fact(async_engine, str(run_id), str(org_id))
     except asyncio.CancelledError:

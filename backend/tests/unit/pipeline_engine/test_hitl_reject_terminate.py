@@ -32,6 +32,7 @@ from modulo.core.pipeline_engine import executor as executor_mod
 from modulo.core.pipeline_engine.classify import (
     REASON_HITL_REJECTED,
     REASON_HITL_SUPERSEDED,
+    REASON_QUEUE_EXPIRED,
     RunClassificationValue,
     classify_run,
 )
@@ -454,12 +455,26 @@ def test_rejected_is_a_terminal_whitelisted_status() -> None:
 
 @pytest.mark.parametrize(
     ("error_code", "reason"),
-    [("hitl.rejected", REASON_HITL_REJECTED), ("hitl.superseded", REASON_HITL_SUPERSEDED)],
+    [
+        ("hitl.rejected", REASON_HITL_REJECTED),
+        ("hitl.superseded", REASON_HITL_SUPERSEDED),
+        # FAR-1883: a queue expiry is a supersession, not a HITL rejection.
+        ("queue.expired", REASON_QUEUE_EXPIRED),
+    ],
 )
 def test_rejected_runs_classify_excluded_with_their_own_reason(error_code: str, reason: str) -> None:
     result = classify_run("rejected", error_code)
     assert result.value == RunClassificationValue.excluded
     assert result.reason == reason
+
+
+def test_queue_expired_is_not_reported_as_a_hitl_rejection() -> None:
+    """FAR-1883: the ticket's whole point - a queue timeout must never read as a
+    reviewer's "no" (``REASON_HITL_REJECTED``)."""
+    result = classify_run("rejected", "queue.expired")
+    assert result.reason == REASON_QUEUE_EXPIRED
+    assert result.reason != REASON_HITL_REJECTED
+    assert result.reason != REASON_HITL_SUPERSEDED
 
 
 def test_hitl_reject_error_codes_are_registered_silent_and_non_retryable() -> None:

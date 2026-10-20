@@ -103,41 +103,19 @@ class AzurePipelinesConnector(ConnectorBase):
         payload with neither yields ``""``, which trigger_run refuses to
         return.
         """
-        raw_id = raw.get("id")
-        raw_state = raw.get("state", "unknown")
-        raw_result = raw.get("result", "")
-        if raw_state == "completed" and raw_result:
-            status = _STATUS_MAP.get(raw_result, CIRunStatus.UNKNOWN)
-        else:
-            status = _STATUS_MAP.get(raw_state, CIRunStatus.UNKNOWN)
-        resources = raw.get("resources")
-        repositories = resources.get("repositories") if isinstance(resources, dict) else None
-        self_repo = repositories.get("self") if isinstance(repositories, dict) else None
-        ref_name = self_repo.get("refName", "") if isinstance(self_repo, dict) else ""
-        branch = ref_name.replace("refs/heads/", "") if ref_name else ""
-        template_parameters = raw.get("templateParameters")
-        pipeline = raw.get("pipeline")
-        pipeline_id_field = str(pipeline.get("id") or "") if isinstance(pipeline, dict) else ""
+        pipeline_id_field = _pipeline_id_field(raw.get("pipeline"))
         qualifier = pipeline_id_field or pipeline_ref
-        if raw_id is None:
-            run_id = ""
-        elif qualifier:
-            run_id = f"{qualifier}/{raw_id}"
-        else:
-            run_id = str(raw_id)
-        links = raw.get("_links")
-        web = links.get("web") if isinstance(links, dict) else None
         return CIRun(
-            id=run_id,
+            id=_qualified_run_id(raw.get("id"), qualifier),
             pipeline_id=pipeline_id_field,
-            status=status,
-            url=web.get("href", "") if isinstance(web, dict) else "",
-            branch=branch,
-            commit_sha=self_repo.get("version", "") if isinstance(self_repo, dict) else "",
+            status=_run_status(raw.get("state", "unknown"), raw.get("result", "")),
+            url=_run_web_url(raw),
+            branch=_run_branch(raw),
+            commit_sha=_run_commit_sha(raw),
             created_at=raw.get("createdDate", ""),
             updated_at=raw.get("finishedDate", ""),
             duration_seconds=None,
-            triggered_by=template_parameters.get("triggeredBy", "") if isinstance(template_parameters, dict) else "",
+            triggered_by=_run_triggered_by(raw),
         )
 
     async def health_check(self) -> HealthResult:
@@ -391,6 +369,69 @@ class AzurePipelinesConnector(ConnectorBase):
                     return cast("dict[str, Any]", r.json())
                 case _:
                     raise ValueError(f"Unsupported write resource: {payload.resource!r}")
+
+
+def _pipeline_id_field(pipeline: Any) -> str:
+    """The payload's own ``pipeline.id`` as a string (``""`` when absent)."""
+    if isinstance(pipeline, dict):
+        return str(pipeline.get("id") or "")
+    return ""
+
+
+def _qualified_run_id(raw_id: Any, qualifier: str) -> str:
+    """Qualify a run id as ``pipeline_id/run_id`` when a pipeline id is known."""
+    if raw_id is None:
+        return ""
+    if qualifier:
+        return f"{qualifier}/{raw_id}"
+    return str(raw_id)
+
+
+def _run_status(state: Any, result: Any) -> CIRunStatus:
+    """Map (state, result) onto ``_STATUS_MAP`` (a completed result wins)."""
+    if state == "completed" and result:
+        return _STATUS_MAP.get(result, CIRunStatus.UNKNOWN)
+    return _STATUS_MAP.get(state, CIRunStatus.UNKNOWN)
+
+
+def _run_self_repo(raw: dict[str, Any]) -> dict[str, Any] | None:
+    """The payload's ``resources.repositories.self`` object, when present."""
+    resources = raw.get("resources")
+    if not isinstance(resources, dict):
+        return None
+    repositories = resources.get("repositories")
+    if not isinstance(repositories, dict):
+        return None
+    self_repo = repositories.get("self")
+    return self_repo if isinstance(self_repo, dict) else None
+
+
+def _run_branch(raw: dict[str, Any]) -> str:
+    """The short branch name from ``resources.repositories.self.refName``."""
+    self_repo = _run_self_repo(raw)
+    ref_name = self_repo.get("refName", "") if self_repo is not None else ""
+    return ref_name.replace("refs/heads/", "") if ref_name else ""
+
+
+def _run_commit_sha(raw: dict[str, Any]) -> str:
+    """The commit version from ``resources.repositories.self``."""
+    self_repo = _run_self_repo(raw)
+    return self_repo.get("version", "") if self_repo is not None else ""
+
+
+def _run_web_url(raw: dict[str, Any]) -> str:
+    """The run's web URL from ``_links.web.href``."""
+    links = raw.get("_links")
+    if not isinstance(links, dict):
+        return ""
+    web = links.get("web")
+    return web.get("href", "") if isinstance(web, dict) else ""
+
+
+def _run_triggered_by(raw: dict[str, Any]) -> str:
+    """The ``templateParameters.triggeredBy`` value, when present."""
+    template_parameters = raw.get("templateParameters")
+    return template_parameters.get("triggeredBy", "") if isinstance(template_parameters, dict) else ""
 
 
 class _AzurePipelinesTestDouble(CITestDoubleMixin, AzurePipelinesConnector):

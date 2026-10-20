@@ -381,6 +381,31 @@
               />
               <span id="pipeline-hitl-review-window-help" class="sr-only">{{ $t('views.PipelineEditorView.hitl_review_window_help') }}</span>
             </div>
+            <!-- FAR-1883: per-pipeline capacity-queue timeout. Empty = null =
+                 never (the default - a capacity-queued run waits
+                 indefinitely). The value is seconds; on expiry the run ends
+                 as a queue.expired supersession, never a failure. -->
+            <div class="flex items-center gap-1" v-tooltip.bottom="$t('views.PipelineEditorView.queue_timeout_help')">
+              <label
+                for="pipeline-queue-timeout"
+                class="whitespace-nowrap text-[10px] text-muted-foreground"
+                :title="$t('views.PipelineEditorView.queue_timeout_help')"
+              >{{ $t('views.PipelineEditorView.queue_timeout_label') }}:</label>
+              <input id="pipeline-queue-timeout"
+                v-model="queueTimeoutInput"
+                type="number"
+                min="1"
+                max="604800"
+                step="1"
+                inputmode="numeric"
+                :placeholder="$t('views.PipelineEditorView.queue_timeout_never')"
+                :aria-describedby="'pipeline-queue-timeout-help'"
+                class="w-24 rounded-md border border-input bg-background px-1.5 py-1 text-xs"
+                @change="updateQueueTimeout"
+                data-testid="pipeline-editor-queue-timeout"
+              />
+              <span id="pipeline-queue-timeout-help" class="sr-only">{{ $t('views.PipelineEditorView.queue_timeout_help') }}</span>
+            </div>
             <div class="relative">
               <button
                 type="button"
@@ -1545,6 +1570,9 @@
             />
             <span class="text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.human_only_block_llm_auto_approval') }}</span>
           </div>
+          <p class="mt-1 text-xs text-muted-foreground" data-testid="pipeline-editor-human-only-credential-note">
+            {{ $t('views.PipelineEditorView.human_only_machine_credential_note') }}
+          </p>
           <!-- FAR-1257 advisory (NON-BLOCKING): a human-only gate nobody can be
                notified about will simply age out at the review window and the
                run gets cancelled. Warn, never gate the save. aria-live (not
@@ -2248,6 +2276,52 @@ async function updateHitlReviewWindow() {
   } catch (e: unknown) {
     saveGraphError.value = t('views.PipelineEditorView.hitl_review_window_update_failed', { error: formatApiError(e) })
     syncHitlReviewWindowFromPipeline()
+  }
+}
+
+// FAR-1883: per-pipeline capacity-queue timeout (seconds; 1..604800).
+// '' = never (the default - a capacity-queued run waits indefinitely). Empty
+// on save sends an explicit null so the backend's exclude_unset path CLEARS
+// the column rather than leaving it untouched.
+const QUEUE_TIMEOUT_MIN_SECONDS = 1
+const QUEUE_TIMEOUT_MAX_SECONDS = 604800
+const queueTimeoutInput = ref<string | number>('')
+
+function syncQueueTimeoutFromPipeline() {
+  const stored = (pipeline.value as { queue_timeout_seconds?: number | null } | null)?.queue_timeout_seconds
+  queueTimeoutInput.value = stored ?? ''
+}
+
+async function updateQueueTimeout() {
+  const raw = String(queueTimeoutInput.value ?? '').trim()
+  let seconds: number | null
+  if (raw === '') {
+    seconds = null
+  } else {
+    const parsed = Number(raw)
+    if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < QUEUE_TIMEOUT_MIN_SECONDS || parsed > QUEUE_TIMEOUT_MAX_SECONDS) {
+      saveGraphError.value = t('views.PipelineEditorView.queue_timeout_out_of_range', {
+        min: QUEUE_TIMEOUT_MIN_SECONDS,
+        max: QUEUE_TIMEOUT_MAX_SECONDS,
+      })
+      // Never display a value the server would reject - restore the stored one.
+      syncQueueTimeoutFromPipeline()
+      return
+    }
+    seconds = parsed
+  }
+  try {
+    await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: { queue_timeout_seconds: seconds },
+      signal,
+    }))
+    if (pipeline.value) pipeline.value.queue_timeout_seconds = seconds
+    queueTimeoutInput.value = seconds ?? ''
+    saveGraphError.value = null
+  } catch (e: unknown) {
+    saveGraphError.value = t('views.PipelineEditorView.queue_timeout_update_failed', { error: formatApiError(e) })
+    syncQueueTimeoutFromPipeline()
   }
 }
 
@@ -3895,6 +3969,7 @@ async function loadPipeline() {
     circuitBreakerInput.value = data?.circuit_breaker_threshold ?? ''
     maxAutonomyInput.value = (data as any)?.max_autonomy_level ?? null
     syncHitlReviewWindowFromPipeline()
+    syncQueueTimeoutFromPipeline()
     syncEnvironmentProfileFromPipeline()
     syncRetryPolicyFromPipeline()
   } catch (e) {
