@@ -2,10 +2,10 @@
 
 import uuid
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, String, Text, Uuid, text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, String, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
 
 
 class SavedView(SoftDeleteMixin, OrgScoped):
@@ -32,8 +32,8 @@ class SavedView(SoftDeleteMixin, OrgScoped):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     view_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    filters: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
-    columns: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    filters: Mapped[dict[str, object]] = mapped_column(JSONB_COL, nullable=False, default=dict)
+    columns: Mapped[list[str] | None] = mapped_column(JSONB_COL, nullable=True)
     sort_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     sort_order: Mapped[str] = mapped_column(String(10), nullable=False, default="desc")
     account_id: Mapped[uuid.UUID] = mapped_column(

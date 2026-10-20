@@ -16,7 +16,7 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.db.crud.agent import create_agent
-from modulo.db.crud.pipeline import create_pipeline, replace_pipeline_graph
+from modulo.db.crud.pipeline import GraphWriteActor, create_pipeline, replace_pipeline_graph
 from modulo.db.crud.schema import create_schema, create_schema_version
 from modulo.db.models.agent import Agent
 from modulo.db.models.model_backend import ModelBackend
@@ -467,9 +467,11 @@ async def seed_examples(
             org_id=principal.organisation_id,
             nodes=nodes,
             edges=[],
-            is_privileged=True,
-            caller_type="rest",
-            account_id=principal.account_id,
+            actor=GraphWriteActor(
+                is_privileged=True,
+                caller_type="rest",
+                account_id=principal.account_id,
+            ),
         )
 
         progress = await _get_or_create_progress(session, principal.organisation_id)
@@ -566,9 +568,11 @@ async def create_starter_pipeline(
             org_id=principal.organisation_id,
             nodes=nodes,
             edges=edges,
-            is_privileged=True,
-            caller_type="rest",
-            account_id=principal.account_id,
+            actor=GraphWriteActor(
+                is_privileged=True,
+                caller_type="rest",
+                account_id=principal.account_id,
+            ),
         )
 
     return StarterPipelineResponse(

@@ -1,12 +1,35 @@
 """Strict route-introspection test for the ADR 047 permission sweep.
 
-Walks the FastAPI router and asserts that every mutating user-principal route
-carries a permission dependency (tagged via ``_tagged_dep``) OR is on the
-explicit documented exempt allowlist. This is the completeness guarantee for
-task-authz-b-sweep: a route added without a permission tag fails loudly.
+Walks the FastAPI router and asserts the route authorisation guarantees. The
+guard is split across the two route surfaces the router exposes, because the
+ADR 047 model gates them differently:
+
+* **Mutating routes** (POST/PUT/PATCH/DELETE) — every mutating user-principal
+  route carries a permission dependency (tagged via ``_tagged_dep``) OR is on
+  the explicit documented ``EXEMPT`` allowlist. This is the completeness
+  guarantee for task-authz-b-sweep: a mutating route added without a permission
+  tag fails loudly.
+* **Read routes** (GET) — every read route is permission-tagged, OR is
+  authenticated by a principal-bearing dependency (``PRINCIPAL_DEPENDENCIES`` —
+  the ADR 047 model for reads, which rely on the tenant/user principal rather
+  than an org-role tag), OR is on the explicit documented ``READ_EXEMPT``
+  public/pre-auth allowlist. Before FAR-1969 every read route was outside the
+  guard entirely, so an added read route with no authorisation at all could not
+  be caught — precisely the FAR-1955 surface class.
+* **Dependency-site coverage** — a permission tag is honoured wherever it is
+  declared: endpoint signature, route decorator, router-level
+  ``dependencies=[...]``, or nested inside another dependency
+  (``test_route_level_permission_gates_are_visible``).
+
+Explicitly **not** asserted here: the *effective role* of a resolved permission
+key (a valid-but-wrong key such as ``runner.status`` resolving to the viewer
+``run.status``). A ``{route: role}`` map is the wrong instrument for that — it
+can itself encode the typo and would read as complete; behavioural boundary
+tests are the mechanism (FAR-1964 design verdict). This guard asserts presence
+and resolvability of a gate, not its role.
 
 The ADR's intent (v9, "Phase-1 sweep" + "Strict introspection test"):
-- bidirectional map: every mutating route is tagged or exempt; nothing is both
+- bidirectional map: every guarded route is tagged or exempt; nothing is both
 - variant-kind assertions: strict system routes use require_system_permission,
   org-deletion uses require_system_or_org_admin, admin_email/orgs use the
   scoped-hybrid, run trigger/status use tenant_or_api_key
@@ -22,8 +45,10 @@ import pytest
 from modulo.api.main import app
 from tests.unit.api.route_introspection import (
     get_all_apiroutes,
+    get_applied_dependency_names,
     get_mutating_routes,
     get_permission_tag,
+    get_read_routes,
     get_resolved_min_role,
 )
 
@@ -162,6 +187,76 @@ EXEMPT: dict[tuple[str, str], str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Dependencies that establish a caller principal (authentication). A read route
+# carrying any of these is authenticated even without a permission tag — the
+# ADR 047 model for reads, which rely on the tenant/user principal rather than
+# an org-role tag. Optional (`*_optional`) variants are deliberately ABSENT: an
+# optional principal does not gate the route. Add a name here only when the
+# dependency genuinely requires a valid principal.
+# ---------------------------------------------------------------------------
+PRINCIPAL_DEPENDENCIES: frozenset[str] = frozenset(
+    {
+        "get_current_user",
+        "get_current_tenant_user",
+        "get_current_tenant_user_or_api_key",
+        "get_scim_principal",
+    }
+)
+
+# ---------------------------------------------------------------------------
+# Read-route public/pre-auth allowlist: GET routes that intentionally carry NO
+# permission tag and NO principal dependency, each with a documented reason.
+# Key = (method, path) ; value = reason. Everything here is reachable without a
+# session BY DESIGN; a read route that is neither tagged, nor authenticated,
+# nor listed here fails the guard.
+# ---------------------------------------------------------------------------
+READ_EXEMPT: dict[tuple[str, str], str] = {
+    # Liveness/readiness probes: hit by the platform's health checks with no
+    # credentials; return no tenant data.
+    ("GET", "/healthz"): "health probe (no principal)",
+    ("GET", "/healthz/ready"): "readiness probe (no principal)",
+    # OAuth discovery metadata (RFC 8414 / RFC 9728): public by specification.
+    ("GET", "/.well-known/oauth-authorization-server"): "OAuth discovery metadata (public by spec)",
+    ("GET", "/.well-known/oauth-protected-resource"): "OAuth protected-resource metadata (public by spec)",
+    ("GET", "/.well-known/oauth-protected-resource/mcp"): "OAuth protected-resource metadata (public by spec)",
+    # Pre-auth login/SSO entry points: no principal exists yet (the route
+    # mints or resolves one). Adding an authenticated dependency here would
+    # 401 the logged-out browser — see the pre-auth route lesson.
+    ("GET", "/api/v1/auth/login-context"): "pre-auth login page context (no principal yet)",
+    ("GET", "/api/v1/auth/org-login/{slug}"): "pre-auth org login (no principal yet)",
+    ("GET", "/api/v1/auth/oidc/{provider}/login"): "pre-auth OIDC login (no principal yet)",
+    ("GET", "/api/v1/auth/oidc/{provider}/callback"): "pre-auth OIDC callback (no principal yet)",
+    ("GET", "/api/v1/auth/saml/login"): "pre-auth SAML login (no principal yet)",
+    ("GET", "/api/v1/auth/saml/metadata"): "pre-auth SAML metadata (no principal yet)",
+    ("GET", "/api/v1/auth/saml/{provider_id}/login"): "pre-auth SAML login (no principal yet)",
+    ("GET", "/api/v1/auth/saml/{provider_id}/metadata"): "pre-auth SAML metadata (no principal yet)",
+    ("GET", "/api/v1/auth/sso/providers"): "pre-auth SSO discovery (login page)",
+    # MCP OAuth consent: anonymous display context for a pending consent grant
+    # (the caller has not authenticated yet); enforced against the pending
+    # consent row's resolved org, never a session.
+    ("GET", "/api/v1/mcp/oauth/consent/context"): "anonymous OAuth consent context (pre-auth)",
+    # Deployment build metadata: unauthenticated BY DESIGN so the CI/CD deploy
+    # pipelines can verify which build is live; only already-public git
+    # metadata is exposed (docstring in routes/deployment.py).
+    ("GET", "/api/v1/deployment"): "deploy-pipeline build verification (public by design)",
+    # Public, tenant-free catalogues and static content: the connector-type
+    # catalogue, the product-map manifest, and the community registry. None
+    # reads tenant data.
+    ("GET", "/api/v1/connectors/types"): "static connector-type catalogue (no tenant data)",
+    ("GET", "/api/v1/manifest"): "public product-map manifest (no tenant data)",
+    ("GET", "/api/v1/registry/primitives"): "public community registry (no tenant data)",
+    ("GET", "/api/v1/registry/primitives/{slug:path}"): "public community registry (no tenant data)",
+    ("GET", "/api/v1/registry/publishers"): "public community registry (no tenant data)",
+    ("GET", "/api/v1/registry/pull/{slug:path}"): "public community registry (no tenant data)",
+    # Public liveness ping and instance licence view: both unauthenticated and
+    # org-less BY DESIGN (FAR-1720 for the licence view — it reports the
+    # deployment-level licence ladder with no org context).
+    ("GET", "/api/v1/libraries/ping"): "public liveness ping (no tenant data)",
+    ("GET", "/api/v1/license"): "deployment-level licence view (unauthenticated + org-less by design, FAR-1720)",
+}
+
+
 def _route_key(route) -> tuple[str, str]:
     methods = sorted((route.methods or set()) - {"HEAD", "OPTIONS"})
     return (methods[0] if methods else "?", route.path)
@@ -189,6 +284,99 @@ def test_exempt_allowlist_entries_exist() -> None:
     mutating_keys = {_route_key(r) for r in get_mutating_routes(app)}
     missing = [k for k in EXEMPT if k not in mutating_keys]
     assert not missing, "Exempt entries that are not mutating routes:\n" + "\n".join(str(m) for m in missing)
+
+
+def test_every_read_route_is_authorised_or_exempt() -> None:
+    """Every read route is tagged, authenticated, or on the public allowlist.
+
+    Getting this to pass was FAR-1969's coverage decision: reads are NOT all
+    permission-tagged in the ADR 047 model, so the honest invariant is
+    "tagged OR authenticated by a principal dependency OR publicly exempt".
+    A read route carrying NONE of the three fails — which is how the added
+    read-regression class (the FAR-1955 surface) is caught.
+    """
+    reads = get_read_routes(app)
+    unauthorised = []
+    for route in reads:
+        key = _route_key(route)
+        tag = get_permission_tag(route)
+        if tag is not None:
+            if key in READ_EXEMPT:
+                # Tagged AND exempt = contradiction — must be one or the other.
+                pytest.fail(f"Read route {key} is both tagged and in the read exempt allowlist: {tag}")
+            continue
+        if get_applied_dependency_names(route) & PRINCIPAL_DEPENDENCIES:
+            continue
+        if key in READ_EXEMPT:
+            continue
+        unauthorised.append(f"{key[0]} {key[1]}")
+
+    assert not unauthorised, (
+        "Read routes with no permission tag, no principal dependency, and no "
+        "read-exempt entry:\n" + "\n".join(unauthorised)
+    )
+
+
+def test_read_exempt_allowlist_entries_exist() -> None:
+    """Every read-exempt entry must be a GET route (no stale entries)."""
+    read_keys = {_route_key(r) for r in get_read_routes(app)}
+    missing = [k for k in READ_EXEMPT if k not in read_keys]
+    assert not missing, "Read-exempt entries that are not GET routes:\n" + "\n".join(str(m) for m in missing)
+
+
+def test_route_level_permission_gates_are_visible() -> None:
+    """A permission gate declared outside the endpoint signature is still seen.
+
+    The pre-FAR-1969 ``get_permission_tag`` read only the endpoint signature, so
+    a gate on the route decorator / router ``dependencies=[...]`` was invisible.
+    This asserts the guard now sees every route-level permission tag — and that
+    at least one such route exists, so the check cannot pass vacuously.
+    """
+    checked = 0
+    invisible = []
+    for route in get_all_apiroutes(app):
+        declared = sorted(
+            d.permission
+            for d in (getattr(route, "dependencies", None) or [])
+            if getattr(d, "permission", None) is not None
+        )
+        if not declared:
+            continue
+        checked += 1
+        tag = get_permission_tag(route)
+        seen = {t["permission"] for t in (tag or {}).get("tags", [])}
+        missing = [p for p in declared if p not in seen]
+        if missing:
+            invisible.append(f"{route.path}: {missing}")
+
+    assert checked > 0, "no route-level permission gates found — the guard is vacuous"
+    assert not invisible, "Route-level permission gates invisible to get_permission_tag:\n" + "\n".join(invisible)
+
+
+def test_verification_key_route_level_gate_is_visible() -> None:
+    """FAR-1969 regression pin for the route-level-gate blind spot.
+
+    ``GET /api/v1/admin/audit/verification-key`` is gated ONLY by a route-level
+    ``require_permission("audit.manage")`` — it has no permission dependency in
+    its endpoint signature. Before the fix, ``get_permission_tag`` returned
+    ``None`` for it (the guard read a gated route as untagged). If the
+    route-dependency read regresses, this fails.
+    """
+    route = next(
+        (
+            r
+            for r in get_all_apiroutes(app)
+            if r.path == "/api/v1/admin/audit/verification-key" and "GET" in (r.methods or set())
+        ),
+        None,
+    )
+    assert route is not None, "verification-key route not found — the fixture moved"
+    tag = get_permission_tag(route)
+    assert tag is not None, "verification-key route-level permission gate is invisible to get_permission_tag"
+    tags = tag.get("tags", [tag])
+    assert any(t["permission"] == "audit.manage" and t["permission_kind"] == "tenant" for t in tags), (
+        f"verification-key should carry the route-level audit.manage (tenant) tag; got {tags}"
+    )
 
 
 def test_permission_keys_resolve_in_registry() -> None:

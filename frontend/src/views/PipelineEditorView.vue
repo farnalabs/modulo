@@ -97,18 +97,24 @@
             </button>
             <div v-if="!isViewing" class="relative" @click.stop @keydown.enter.stop @keydown.space.prevent.stop>
               <button
+                ref="saveAsDropdownTriggerRef"
                 type="button"
                 :class="btnToolbarSecondary"
                 :aria-expanded="showSaveAsDropdown"
                 aria-haspopup="menu"
                 data-testid="pipeline-editor-save-as-template"
-                @click="showSaveAsDropdown = !showSaveAsDropdown"
+                @click="toggleSaveAsDropdown()"
               >
                 {{ $t('views.PipelineEditorView.save_as_template') }}
               </button>
               <div
                 v-if="showSaveAsDropdown"
-                class="absolute left-0 top-full z-30 mt-1 w-48 rounded-lg border bg-card py-1 shadow-lg"
+                :class="[
+                  'fixed z-30 max-h-[calc(100vh-1rem)] overflow-y-auto overscroll-contain rounded-lg border bg-card py-1 shadow-lg',
+                  SAVE_AS_DROPDOWN_METRICS.className,
+                ]"
+                :style="saveAsDropdownStyle"
+                data-testid="pipeline-editor-save-as-dropdown"
               >
                 <button
                   type="button"
@@ -258,7 +264,11 @@
                 open
                 :id="autonomyPanelDialogId"
                 ref="autonomyPanelDialogRef"
-                class="absolute right-0 left-auto top-full z-50 mt-1 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-card p-3 shadow-lg"
+                :class="[
+                  'fixed z-50 max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-card p-3 shadow-lg',
+                  AUTONOMY_PANEL_METRICS.className,
+                ]"
+                :style="autonomyPanelStyle"
                 tabindex="-1"
                 :aria-label="$t('views.PipelineEditorView.autonomy_panel_title')"
                 data-testid="pipeline-editor-autonomy-panel-dialog"
@@ -374,7 +384,11 @@
                 open
                 :id="retryPolicyPanelId"
                 ref="retryPolicyPanelRef"
-                class="absolute right-0 left-auto top-full z-50 mt-1 w-72 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-card p-3 shadow-lg"
+                :class="[
+                  'fixed z-50 max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-card p-3 shadow-lg',
+                  RETRY_POLICY_PANEL_METRICS.className,
+                ]"
+                :style="retryPolicyPanelStyle"
                 tabindex="-1"
                 :aria-label="$t('views.PipelineEditorView.retry_policy')"
                 data-testid="pipeline-editor-retry-policy-panel"
@@ -533,7 +547,7 @@
                 option-label="label"
                 option-value="value"
                 class="toolbar-select w-40 text-xs"
-                append-to="self"
+                append-to="body"
                 :aria-label="$t('views.PipelineEditorView.new_node_type')"
                 :title="$t('views.PipelineEditorView.new_node_type_hint')"
                 data-testid="pipeline-editor-node-type-select"
@@ -561,6 +575,20 @@
             </button>
           </div>
         </div>
+        <!-- Folder-list load failure. In-flow directly beneath the toolbar —
+             never absolutely positioned and never inside the fixed-height
+             canvas, because a degraded breadcrumb must not replace the page
+             with pageError yet must still be visible. NOT breakpoint-gated: this
+             view renders no FolderTree, so a gate would hide the failure at
+             >=md — exactly where it occurs. The shared contract lives in
+             FolderListError.vue. -->
+        <FolderListError
+          v-if="folderError"
+          :message="folderError"
+          :on-retry="loadFolders"
+          class="mx-3 my-2"
+          :data-testid="'pipeline-editor-folder-error'"
+        />
         <!-- FAR-1816: transient success notice after a restore. A plain toast
              would be unmounted the moment the view navigates back to latest,
              so it lives here as a persistent-until-explicit status region
@@ -569,7 +597,7 @@
              created. -->
         <output
           v-if="restoreNotice"
-          class="block border-b bg-success/10 px-3 py-2 text-xs text-success"
+          class="block border-b bg-success/10 px-3 py-2 text-xs text-success-text"
           data-testid="pipeline-editor-restore-notice"
         >
           {{ restoreNotice }}
@@ -607,6 +635,18 @@
               @click="viewLatest"
             >
               {{ $t('views.PipelineEditorView.historic_view_latest') }}
+            </button>
+            <!-- FAR-1818: one-click entry into semantic-led compare mode
+                 (viewed version vs the latest). Hidden while the viewed
+                 version IS the latest — that would be a self-compare. -->
+            <button
+              v-if="resolvedSnapshotId !== latestSnapshotId"
+              type="button"
+              :class="btnToolbarSecondary"
+              data-testid="pipeline-editor-historic-compare"
+              @click="openCompare"
+            >
+              {{ $t('views.PipelineEditorView.historic_compare') }}
             </button>
             <button
               type="button"
@@ -682,14 +722,22 @@
             </button>
           </div>
         </div>
-        <!-- Canvas region. `min-h-[8rem]` (replacing the old `min-h-0`) keeps a
+        <!-- FAR-1818: the canvas is hidden (not unmounted — viewport state is
+             preserved) while the compare view occupies the same flex slot.
+             Canvas region. `min-h-[8rem]` (replacing the old `min-h-0`) keeps a
              real, focusable canvas even when the pinned height is smaller than
              the wrapped toolbar: the toolbar + this minimum make the content
              column scroll internally (never the page), so both stay reachable.
              `tabindex="-1"` makes it the focus-restore fallback for a properties
              sheet whose trigger (a VueFlow node/edge wrapper) is not focusable
              (FAR-1861). -->
-        <div ref="canvasRef" class="relative min-h-[8rem] flex-1" tabindex="-1" data-testid="pipeline-editor-canvas">
+        <div
+          v-show="!compareMode"
+          ref="canvasRef"
+          class="relative min-h-[8rem] flex-1"
+          tabindex="-1"
+          data-testid="pipeline-editor-canvas"
+        >
         <!-- Empty-state overlay on top of the canvas (latest mode only — its
              rename/archive/delete/add-node row is all write affordances, so a
              historical view of an empty graph shows the canvas alone). -->
@@ -703,15 +751,16 @@
             <Button size="small" type="button" class="text-xs" @click="openRenameDialog">{{ $t('views.PipelineEditorView.rename') }}</Button>
             <button v-if="!pipeline?.archived_at" type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" data-testid="pipeline-editor-empty-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
             <button v-else type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" data-testid="pipeline-editor-empty-unarchive" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
-            <button v-if="planStore.featureEnabled('pipeline_delete')" type="button" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" data-testid="pipeline-editor-empty-delete" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
+            <button v-if="planStore.featureEnabled('pipeline_delete')" type="button" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive-text hover:bg-destructive/20" data-testid="pipeline-editor-empty-delete" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
             <Select
               v-model="newNodeType"
               :options="nodeTypeOptions"
               option-label="label"
               option-value="value"
               class="toolbar-select w-40 text-xs"
-              append-to="self"
+              append-to="body"
               :aria-label="$t('views.PipelineEditorView.new_node_type')"
+              data-testid="pipeline-editor-empty-node-type-select"
             />
             <Button severity="secondary" outlined size="small" type="button" class="text-xs" @click="addNode()">{{ $t('views.PipelineEditorView.add_node') }}</Button>
           </div>
@@ -815,7 +864,7 @@
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
                   </div></template>
           <template #node-agent="nodeProps"><div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-primary">{{ $t('views.PipelineEditorView.node_agent_badge') }}</div>
+                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-primary-text">{{ $t('views.PipelineEditorView.node_agent_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
                     <div v-if="nodeProps.data.hasCapabilityScope" class="mt-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300" data-testid="pipeline-node-scope-badge">{{ $t('views.PipelineEditorView.capability_scope_scoped_badge') }}</div>
                   </div></template>
@@ -831,7 +880,7 @@
                they never fall back to the `agent` node rendering. Display
                only — no config panel or palette entry in this slice. -->
           <template #node-dispatch="nodeProps"><div class="rounded-lg border-2 border-cyan-500/60 bg-cyan-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-600 dark:text-cyan-300">{{ $t('views.PipelineEditorView.node_dispatch_badge') }}</div>
+                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-700 dark:text-cyan-300">{{ $t('views.PipelineEditorView.node_dispatch_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_dispatch_label') }}</div>
                   </div></template>
           <template #edge-default="edgeProps">
@@ -850,6 +899,21 @@
             </div>
           </template>
         </VueFlow>
+        </div>
+        <!-- FAR-1818: semantic-led old-vs-latest compare mode. Rendered in the
+             canvas slot (the canvas above is hidden) so the presentation has
+             room; the pair pickers keep the route query authoritative, which is
+             what makes the view deep-linkable for sharing. -->
+        <div v-if="compareMode" class="min-h-0 flex-1 overflow-y-auto">
+          <PipelineSnapshotCompare
+            :pipeline-id="pipelineId"
+            :base-snapshot-id="resolvedSnapshotId ?? ''"
+            :compare-snapshot-id="compareParam"
+            :snapshots="snapshots"
+            :latest-snapshot-id="latestSnapshotId"
+            @change="updateCompare"
+            @close="exitCompare"
+          />
         </div>
       </div>
       <!-- Node Properties Panel. Mobile (FAR-1841): an in-editor overlay sheet
@@ -1353,7 +1417,7 @@
   :aria-label="$t('views.PipelineEditorView.edge_type')"
   v-model="edgeForm.edge_type"
   :disabled="isViewing"
-  append-to="self"
+  append-to="body"
   :placeholder="$t('views.PipelineEditorView.normal')"
   class="w-full"
   :options="[{ value: 'normal', label: $t('views.PipelineEditorView.normal') }, { value: 'reject', label: $t('views.PipelineEditorView.reject') }, { value: 'conditional', label: $t('views.PipelineEditorView.conditional') }, { value: 'loop', label: $t('views.PipelineEditorView.loop') }, { value: 'llm', label: $t('views.PipelineEditorView.llm_routing') }]"
@@ -1416,7 +1480,7 @@
               v-model="edgeForm.hitl_enabled"
               type="checkbox"
               :disabled="isViewing"
-              class="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+              class="h-4 w-4 rounded border-gray-300 text-primary-text focus:ring-primary"
             />
             <span class="ml-2 text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.enabled') }}</span>
           </label>
@@ -1461,7 +1525,7 @@
               v-model="edgeForm.human_only"
               type="checkbox"
               :disabled="isViewing"
-              class="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+              class="h-4 w-4 rounded border-gray-300 text-primary-text focus:ring-primary"
             />
             <span class="text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.human_only_block_llm_auto_approval') }}</span>
           </div>
@@ -1485,7 +1549,7 @@
   :aria-label="$t('views.PipelineEditorView.condition_type')"
   v-model="edgeForm.condition_type"
   :disabled="isViewing"
-  append-to="self"
+  append-to="body"
   :placeholder="$t('views.PipelineEditorView.none_always_gate')"
   class="w-full"
   :options="[{ value: 'none', label: $t('views.PipelineEditorView.none_always_gate') }, { value: 'jmespath', label: $t('views.PipelineEditorView.jmespath_expression') }, { value: 'eval', label: $t('views.PipelineEditorView.eval_reference') }]"
@@ -1538,7 +1602,7 @@
   :aria-label="$t('views.PipelineEditorView.operator')"
   v-model="edgeForm.eval_operator"
   :disabled="isViewing"
-  append-to="self"
+  append-to="body"
   :placeholder="$t('views.PipelineEditorView.eval_operator_placeholder')"
   class="w-full"
   :options="[{ value: 'lt', label: $t('views.PipelineEditorView.eval_operator_lt') }, { value: 'gt', label: $t('views.PipelineEditorView.eval_operator_gt') }, { value: 'lte', label: $t('views.PipelineEditorView.eval_operator_lte') }, { value: 'gte', label: $t('views.PipelineEditorView.eval_operator_gte') }, { value: 'eq', label: $t('views.PipelineEditorView.eval_operator_eq') }, { value: 'neq', label: $t('views.PipelineEditorView.eval_operator_neq') }]"
@@ -1844,9 +1908,9 @@
             <li
               v-for="(b, i) in restoreDiffSummary.breaking"
               :key="i"
-              :class="b.severity === 'block' ? 'text-destructive' : 'text-warning-text'"
+              :class="isBlockingSeverity(b.severity) ? 'text-destructive' : 'text-warning-text'"
             >
-              {{ $t('views.PipelineEditorView.historic_restore_diff_breaking', { severity: b.severity, reason: b.reason }) }}
+              {{ $t('views.PipelineEditorView.historic_restore_diff_breaking', { severity: restoreSeverityLabel(b.severity), reason: b.reason }) }}
             </li>
           </ul>
         </template>
@@ -1907,18 +1971,31 @@ import { usePlanStore } from '../stores/planStore'
 
 import FormDialog from '../components/shared/FormDialog.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import FolderListError from '../components/pipelines/FolderListError.vue'
 import FlowControls from '../components/shared/FlowControls.vue'
 import PipelineSnapshotTimeline from '../components/pipeline/PipelineSnapshotTimeline.vue'
+import PipelineSnapshotCompare from '../components/pipeline/PipelineSnapshotCompare.vue'
 import PipelineVersionChip from '../components/pipeline/PipelineVersionChip.vue'
 import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.vue'
 import SnapshotLockCard from '../components/pipeline/SnapshotLockCard.vue'
 import ProgressiveAutonomyPanel from '../components/pipeline/ProgressiveAutonomyPanel.vue'
 import AgentRunnerBindings from '../components/agent/AgentRunnerBindings.vue'
 import { shortId } from '../utils/format'
+import {
+  isBlockingSeverity,
+  readBreakingChanges,
+  readChangeClassCounts,
+  readImpactedNodes,
+  severityLabel as resolveSeverityLabel,
+  type SnapshotBreakingChange,
+  type SnapshotDiffPayload,
+} from '../lib/pipelineSnapshotDiff'
 import { formatDateShort } from '../lib/formatDate'
+import { withTimeout } from '../lib/requestTimeout'
 import { CANVAS_EDGE_STROKE } from '../constants/canvas'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
+import { invalidFolderListMessage, isFolderList, type FolderItem } from '../lib/api/folders'
 import type { LocationQueryRaw } from 'vue-router'
 import { useApi } from '../composables/useApi'
 import { useCurrentUser } from '../composables/useCurrentUser'
@@ -1930,12 +2007,6 @@ import { currentSubstantiveVersion, SNAPSHOT_PAGE_SIZE } from '../lib/pipelineVe
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import { Pencil as PencilIcon, LoaderCircle as LoaderCircleIcon, Download as DownloadIcon, Play as PlayIcon, Plus as PlusIcon, Maximize2 as Maximize2Icon, X as XIcon, ExternalLink as ExternalLinkIcon } from '@lucide/vue'
-
-function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = 15000): Promise<T> {
-  const ctrl = new AbortController()
-  const timeout = setTimeout(() => ctrl.abort(), ms)
-  return factory(ctrl.signal).finally(() => clearTimeout(timeout))
-}
 
 // The legacy useApi `post` helper aborted every request after 30s; the typed
 // client has no deadline of its own, so the archive/pause toggles keep the
@@ -1949,7 +2020,7 @@ function nodeTypeBadgeClass(nodeType: string): string {
   if (nodeType === 'manual') return 'badge badge-status-warning'
   if (nodeType === 'router') return 'badge bg-indigo-500/10 text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300'
   if (nodeType === 'hitl') return 'badge bg-rose-500/10 text-rose-600 dark:bg-rose-900 dark:text-rose-300'
-  if (nodeType === 'dispatch') return 'badge bg-cyan-500/10 text-cyan-600 dark:bg-cyan-900 dark:text-cyan-300'
+  if (nodeType === 'dispatch') return 'badge bg-cyan-500/10 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-300'
   return 'badge badge-status-primary'
 }
 
@@ -1987,6 +2058,8 @@ const singlePrPerRun = computed<boolean>({
 })
 const selectedEdgeData = ref<any | null>(null)
 const showSaveAsDropdown = ref(false)
+const saveAsDropdownTriggerRef = ref<HTMLButtonElement | null>(null)
+const saveAsDropdownStyle = ref<Record<string, string>>({})
 const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl', dispatch: 'dispatch' }
 const { fitView, onPaneReady } = useVueFlow()
 
@@ -1995,7 +2068,7 @@ const { fitView, onPaneReady } = useVueFlow()
 const btnToolbarBase = 'inline-flex h-7 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50'
 const btnToolbarSecondary = `${btnToolbarBase} border border-input bg-background hover:bg-accent`
 const btnToolbarPrimary = `${btnToolbarBase} bg-indigo-600 text-white hover:bg-indigo-500`
-const btnToolbarDestructive = `${btnToolbarBase} border border-destructive/50 bg-destructive/10 text-destructive hover:bg-destructive/20`
+const btnToolbarDestructive = `${btnToolbarBase} border border-destructive/50 bg-destructive/10 text-destructive-text hover:bg-destructive/20`
 const btnToolbarIcon = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground'
 const groupDividerClass = 'mx-0.5 hidden h-5 w-px shrink-0 bg-border md:block'
 
@@ -2166,6 +2239,110 @@ const ownerlessGateAdvisory = computed(() => {
   return !selectedEdgeData.value.hitl_review_config?.required_team_id
 })
 
+// Viewport margin kept clear on every clamped edge, in px — the class cap
+// `max-w-[calc(100vw-1rem)]` reserves the same 1rem (16px) across both edges.
+const OVERLAY_VIEWPORT_MARGIN_PX = 8
+// Offset between the trigger's near edge and the panel, in px.
+const OVERLAY_TRIGGER_GAP_PX = 4
+// The panel's minimum comfortable height, in px: below this much room under
+// the trigger — and only when the space above is genuinely roomier — the panel
+// flips to sit above it.
+const OVERLAY_MIN_COMFORTABLE_HEIGHT_PX = 160
+// Hard floor for the clamped panel height, in px — a panel is never collapsed
+// below this even when there is no real room.
+const OVERLAY_MIN_HEIGHT_PX = 120
+
+/**
+ * A panel's Tailwind width class paired with the same width in px — the single
+ * source of truth for both. The class sets the panel's real width; the px value
+ * feeds the horizontal clamp in `anchoredPopoverStyle`. They MUST agree: if
+ * they drift, only the left-edge fallback clamp degrades (the default
+ * right-anchored case is unaffected). Reference `.className` on the panel and
+ * `.widthPx` at its positioner — never repeat either literal.
+ */
+interface OverlayPanelMetrics {
+  readonly className: string
+  readonly widthPx: number
+}
+
+const SAVE_AS_DROPDOWN_METRICS: OverlayPanelMetrics = { widthPx: 192, className: 'w-48' }
+const RETRY_POLICY_PANEL_METRICS: OverlayPanelMetrics = { widthPx: 288, className: 'w-72' }
+const AUTONOMY_PANEL_METRICS: OverlayPanelMetrics = { widthPx: 320, className: 'w-80' }
+
+/**
+ * Viewport-anchored positioning for the toolbar popovers (FAR-1899).
+ *
+ * FAR-1861 made the editor content column the internal scroll container
+ * (`overflow-y-auto`) and clipped the editor root (`overflow-hidden`). A
+ * popover that stays in-tree is therefore clipped to the column's box, which
+ * in the sub-fit band (a viewport shorter than the wrapped toolbar's
+ * min-content height) is only a few pixels tall — the panel is reachable by
+ * scrolling the column but can never be seen whole. A `position: fixed`
+ * popover escapes that clipping (no ancestor establishes a containing block
+ * for it — the editor root only sets height), so it is anchored to the
+ * trigger's viewport rect and its height clamped to the room actually
+ * available: the panel scrolls its own content rather than being cut off.
+ * Returns {} when the trigger ref is not bound yet (jsdom mounts), leaving the
+ * CSS class fallback in charge.
+ *
+ * `preferredWidth` is the panel's CSS width in px, taken from that panel's
+ * `OverlayPanelMetrics.widthPx` so it can never drift from its class, clamped
+ * here by the same `max-w-[calc(100vw-1rem)]` the class applies. With the
+ * default `align: 'right'` the panel is RIGHT-aligned to the
+ * trigger's right edge; when that would push its LEFT edge off-screen (a
+ * trigger near the left edge — the w-80/w-72 panels are wider than the room
+ * left of a left-edge trigger), it falls back to LEFT-anchoring with the left
+ * edge clamped inside the margin, so both edges stay on screen. `align: 'left'`
+ * (the save-as-template menu, which hangs off the left edge of its trigger)
+ * always left-anchors, clamping the left edge inside the margin so a trigger
+ * near the right edge does not push the panel off-screen.
+ */
+function anchoredPopoverStyle(
+  trigger: HTMLElement | null,
+  preferredWidth: number,
+  align: 'left' | 'right' = 'right',
+): Record<string, string> {
+  if (!trigger) return {}
+  const rect = trigger.getBoundingClientRect()
+  const margin = OVERLAY_VIEWPORT_MARGIN_PX
+  const gap = OVERLAY_TRIGGER_GAP_PX
+  const spaceBelow = window.innerHeight - rect.bottom - gap - margin
+  const spaceAbove = rect.top - gap - margin
+  // Stay below unless that leaves less than a usable panel AND there is
+  // genuinely more room above (so a tall viewport keeps the familiar
+  // below-the-trigger placement).
+  const openUp = spaceBelow < OVERLAY_MIN_COMFORTABLE_HEIGHT_PX && spaceAbove > spaceBelow
+  const available = openUp ? spaceAbove : spaceBelow
+  const maxHeight = Math.max(
+    OVERLAY_MIN_HEIGHT_PX,
+    Math.min(available, window.innerHeight - margin * 2),
+  )
+  // Effective panel width: the class width, capped by the viewport cap.
+  const width = Math.min(preferredWidth, window.innerWidth - margin * 2)
+  let left: string
+  let right: string
+  if (align === 'left') {
+    // Left-anchored to the trigger's left edge, clamped inside the margin.
+    left = `${Math.max(margin, Math.min(rect.left, window.innerWidth - margin - width))}px`
+    right = 'auto'
+  } else {
+    // Right-aligned by default; left-anchor when the panel would overflow the
+    // left edge (a trigger within one panel-width of the viewport's left edge).
+    const overflowsLeft = rect.right - width < margin
+    left = overflowsLeft
+      ? `${Math.max(margin, Math.min(rect.left, window.innerWidth - margin - width))}px`
+      : 'auto'
+    right = overflowsLeft ? 'auto' : `${Math.max(margin, window.innerWidth - rect.right)}px`
+  }
+  return {
+    left,
+    right,
+    top: openUp ? 'auto' : `${rect.bottom + gap}px`,
+    bottom: openUp ? `${Math.max(margin, window.innerHeight - rect.top + gap)}px` : 'auto',
+    maxHeight: `${maxHeight}px`,
+  }
+}
+
 const retryPolicyOpen = ref(false)
 const retryPolicySaving = ref(false)
 // FAR-649: coverage mode. 'all' = All errors (the default; saves the policy
@@ -2181,8 +2358,31 @@ const retryPolicyLegacyBackoff = ref<number | undefined>(undefined)
 const retryPolicyError = ref<string | null>(null)
 const retryPolicyToggleRef = ref<HTMLButtonElement | null>(null)
 const retryPolicyPanelRef = ref<HTMLElement | null>(null)
+const retryPolicyPanelStyle = ref<Record<string, string>>({})
 const retryPolicyToggleId = 'pipeline-editor-retry-policy-toggle'
 const retryPolicyPanelId = 'pipeline-editor-retry-policy-panel'
+
+function positionRetryPolicyPanel() {
+  retryPolicyPanelStyle.value = anchoredPopoverStyle(
+    retryPolicyToggleRef.value,
+    RETRY_POLICY_PANEL_METRICS.widthPx,
+  )
+}
+
+// Capture phase: scroll does not bubble, so this also catches the content
+// column's own scroll while the panel is open (keeping it pinned to its
+// trigger) — not just the window's. Passive: the handler only reads geometry
+// and never calls preventDefault, so it must not block the scroll it observes.
+function bindRetryPolicyPositioning() {
+  document.addEventListener('scroll', positionRetryPolicyPanel, { capture: true, passive: true })
+  window.addEventListener('resize', positionRetryPolicyPanel, { passive: true })
+}
+
+function unbindRetryPolicyPositioning() {
+  // Only `capture` participates in listener matching; `passive` is add-only.
+  document.removeEventListener('scroll', positionRetryPolicyPanel, true)
+  window.removeEventListener('resize', positionRetryPolicyPanel)
+}
 const retryPolicyOptions = [
   { value: 'stall', labelKey: 'views.PipelineEditorView.retry_policy_stall' },
   { value: 'timeout', labelKey: 'views.PipelineEditorView.retry_policy_timeout' },
@@ -2322,15 +2522,19 @@ function syncRetryPolicyFromPipeline() {
 }
 
 function toggleRetryPolicy() {
-  retryPolicyOpen.value = !retryPolicyOpen.value
   if (retryPolicyOpen.value) {
-    syncRetryPolicyFromPipeline()
-    nextTick(() => {
-      retryPolicyPanelRef.value?.focus()
-    })
-  } else {
+    retryPolicyOpen.value = false
     retryPolicyToggleRef.value?.focus()
+    return
   }
+  syncRetryPolicyFromPipeline()
+  // Anchor BEFORE the panel paints so it never flashes at its static
+  // in-column position for a frame.
+  positionRetryPolicyPanel()
+  retryPolicyOpen.value = true
+  nextTick(() => {
+    retryPolicyPanelRef.value?.focus()
+  })
 }
 
 function closeRetryPolicy() {
@@ -2348,13 +2552,16 @@ function onRetryPolicyKeydown(event: KeyboardEvent) {
 watch(retryPolicyOpen, (open) => {
   if (open) {
     document.addEventListener('keydown', onRetryPolicyKeydown)
+    bindRetryPolicyPositioning()
   } else {
     document.removeEventListener('keydown', onRetryPolicyKeydown)
+    unbindRetryPolicyPositioning()
   }
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onRetryPolicyKeydown)
+  unbindRetryPolicyPositioning()
 })
 
 // FAR-1696 (ADR 043 S5): progressive-autonomy panel popover. Same
@@ -2365,16 +2572,40 @@ const autonomyPanelDialogId = 'pipeline-editor-autonomy-panel-dialog'
 const autonomyPanelOpen = ref(false)
 const autonomyPanelToggleRef = ref<HTMLButtonElement | null>(null)
 const autonomyPanelDialogRef = ref<HTMLDialogElement | null>(null)
+const autonomyPanelStyle = ref<Record<string, string>>({})
+
+function positionAutonomyPanel() {
+  autonomyPanelStyle.value = anchoredPopoverStyle(
+    autonomyPanelToggleRef.value,
+    AUTONOMY_PANEL_METRICS.widthPx,
+  )
+}
+
+// Passive for the same reason as the retry-policy panel: the handler only
+// reads geometry and never calls preventDefault.
+function bindAutonomyPanelPositioning() {
+  document.addEventListener('scroll', positionAutonomyPanel, { capture: true, passive: true })
+  window.addEventListener('resize', positionAutonomyPanel, { passive: true })
+}
+
+function unbindAutonomyPanelPositioning() {
+  // Only `capture` participates in listener matching; `passive` is add-only.
+  document.removeEventListener('scroll', positionAutonomyPanel, true)
+  window.removeEventListener('resize', positionAutonomyPanel)
+}
 
 function toggleAutonomyPanel() {
-  autonomyPanelOpen.value = !autonomyPanelOpen.value
   if (autonomyPanelOpen.value) {
-    nextTick(() => {
-      autonomyPanelDialogRef.value?.focus()
-    })
-  } else {
+    autonomyPanelOpen.value = false
     autonomyPanelToggleRef.value?.focus()
+    return
   }
+  // Same FAR-1899 anchor-before-paint as the retry-policy panel above.
+  positionAutonomyPanel()
+  autonomyPanelOpen.value = true
+  nextTick(() => {
+    autonomyPanelDialogRef.value?.focus()
+  })
 }
 
 function closeAutonomyPanel() {
@@ -2392,13 +2623,85 @@ function onAutonomyPanelKeydown(event: KeyboardEvent) {
 watch(autonomyPanelOpen, (open) => {
   if (open) {
     document.addEventListener('keydown', onAutonomyPanelKeydown)
+    bindAutonomyPanelPositioning()
   } else {
     document.removeEventListener('keydown', onAutonomyPanelKeydown)
+    unbindAutonomyPanelPositioning()
   }
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onAutonomyPanelKeydown)
+  unbindAutonomyPanelPositioning()
+})
+
+// FAR-1899 follow-up: the save-as-template menu is a plain in-tree popover in
+// the SAME clipped content column as the retry-policy and autonomy panels, so
+// it carries the same sub-fit clipping (FAR-1861). It gets the same
+// `position: fixed` viewport anchoring, but LEFT-anchored (the menu hangs off
+// the left edge of its trigger) rather than right-aligned like the panels —
+// hence the explicit `align`.
+function positionSaveAsDropdown() {
+  saveAsDropdownStyle.value = anchoredPopoverStyle(
+    saveAsDropdownTriggerRef.value,
+    SAVE_AS_DROPDOWN_METRICS.widthPx,
+    'left',
+  )
+}
+
+// Passive for the same reason as the panels: the handler only reads geometry
+// and never calls preventDefault.
+function bindSaveAsDropdownPositioning() {
+  document.addEventListener('scroll', positionSaveAsDropdown, { capture: true, passive: true })
+  window.addEventListener('resize', positionSaveAsDropdown, { passive: true })
+}
+
+function unbindSaveAsDropdownPositioning() {
+  // Only `capture` participates in listener matching; `passive` is add-only.
+  document.removeEventListener('scroll', positionSaveAsDropdown, true)
+  window.removeEventListener('resize', positionSaveAsDropdown)
+}
+
+function toggleSaveAsDropdown() {
+  if (showSaveAsDropdown.value) {
+    closeSaveAsDropdown()
+    return
+  }
+  // Anchor before paint so the menu never flashes at its static in-column
+  // position for a frame (same FAR-1899 anchor-before-paint as the panels).
+  positionSaveAsDropdown()
+  showSaveAsDropdown.value = true
+}
+
+// FAR-1899 review note: the save-as menu was the only toolbar popover without
+// an Escape handler, so a keyboard user had to reach the toggle (or pick an
+// item) to dismiss it. Same open/Escape/focus-return shape as the retry-policy
+// and autonomy panels: Escape closes it and returns focus to the toggle.
+function closeSaveAsDropdown() {
+  showSaveAsDropdown.value = false
+  saveAsDropdownTriggerRef.value?.focus()
+}
+
+function onSaveAsDropdownKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && showSaveAsDropdown.value) {
+    event.preventDefault()
+    closeSaveAsDropdown()
+  }
+}
+
+watch(showSaveAsDropdown, (open) => {
+  if (open) {
+    document.addEventListener('keydown', onSaveAsDropdownKeydown)
+    bindSaveAsDropdownPositioning()
+  } else {
+    document.removeEventListener('keydown', onSaveAsDropdownKeydown)
+    unbindSaveAsDropdownPositioning()
+  }
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onSaveAsDropdownKeydown)
+  unbindSaveAsDropdownPositioning()
 })
 
 // A manual demote/promote writes earned_autonomy_level server-side; refetch
@@ -2462,7 +2765,11 @@ async function saveRetryPolicy() {
   }
 }
 
-const folders = ref<any[]>([])
+const folders = ref<FolderItem[]>([])
+// A failed folder-list load must be visible AND retryable: the folder
+// breadcrumb is derived from this list, so a silent failure leaves it wrong or
+// absent with no way to recover short of a reload. Mirrors PipelineListView.
+const folderError = ref<string | null>(null)
 const linkedLifecycleMaps = ref<any[]>([])
 
 const folderPath = computed(() => {
@@ -3963,14 +4270,29 @@ async function triggerRun() {
 }
 
 async function loadFolders() {
+  folderError.value = null
   try {
-    const response = await get<any[] | { items?: any[] }>('/api/v1/pipeline-folders')
-    // Accept both the raw-array and { items: [...] } response shapes — the
-    // folderPath computed iterates folders.value unconditionally, so a
-    // non-array payload would throw on every render (see loadLifecycleMaps
-    // for the same tolerance pattern).
-    folders.value = Array.isArray(response) ? response : (response.items ?? [])
+    const response = await get<FolderItem[]>('/api/v1/pipeline-folders')
+    // Guard before assigning: `get<FolderItem[]>` is an unchecked cast and
+    // useApi returns `undefined as T` on a 204, while the folderPath computed
+    // iterates folders.value (and dereferences f.id / f.parent_id) on every
+    // render — a non-array or a bad element would throw on every render.
+    // /api/v1/pipeline-folders returns a BARE array (backend `list[FolderResponse]`,
+    // generated contract `FolderResponse[]`), so the `{ items: [...] }` envelope
+    // this view used to tolerate was copy-paste from loadLifecycleMaps (which
+    // genuinely returns an envelope) and is rejected here like every other
+    // folder consumer. Do NOT coerce to []: that hides a real contract
+    // violation. A bad shape is logged loudly AND surfaced as a retryable
+    // alert below the toolbar (pageError replaces the whole page, which a
+    // degraded breadcrumb must not do), and the previous list is left intact.
+    if (!isFolderList(response)) {
+      console.error(invalidFolderListMessage('/api/v1/pipeline-folders', response))
+      folderError.value = t('views.PipelineEditorView.invalid_folder_list_response')
+      return
+    }
+    folders.value = response
   } catch (e) {
+    folderError.value = formatApiError(e)
     console.warn('Failed to load folders', e)
   }
 }
@@ -4025,6 +4347,19 @@ function readQueryValue(value: unknown): string | null {
 const snapshotParam = computed(() => readQueryValue(route.query.snapshot))
 const versionParam = computed(() => readQueryValue(route.query.version))
 const historicRequested = computed(() => snapshotParam.value !== null || versionParam.value !== null)
+
+// FAR-1818: version compare mode. `?compare=<uuid>` — the KEY's presence is
+// what selects the mode, and an empty/absent id means "compare against the
+// latest version". The base side is the resolved `?snapshot=` version (or its
+// `?version=` alias), so the canonical deep link is
+// `?snapshot=<base>&compare=<other>`. Kept separate from the historic-view
+// refs: entering compare never hydrates the editable graph.
+const compareRequested = computed(() => route.query.compare !== undefined)
+const compareParam = computed(() => readQueryValue(route.query.compare))
+
+// The latest saved version (the snapshot list is version-DESCENDING and
+// loadCatalog filters version 0) — the default "compare against" target.
+const latestSnapshotId = computed<string | null>(() => snapshots.value[0]?.id ?? null)
 
 /** `?version=<n>`: the positive integer, -1 when malformed, null when absent. */
 const requestedVersion = computed(() => {
@@ -4228,6 +4563,13 @@ const isViewing = computed(
     viewSnapshot.value !== null,
 )
 
+// FAR-1818: compare mode is the `?compare=` key ON TOP of the historic view —
+// it needs a resolved base version, and it stays read-only (isViewing holds,
+// so every write affordance remains unmounted).
+const compareMode = computed(
+  () => compareRequested.value && isViewing.value && resolvedSnapshotId.value !== null,
+)
+
 // Graceful miss: unknown/deleted snapshot, a `?version=` the bounded search
 // PROVED absent, or a malformed version param — never a raw error, never a
 // dead page. A search that could not complete ('failed') is deliberately not
@@ -4360,10 +4702,14 @@ watch([isViewing, resolvedSnapshotId], async () => {
   void runInitialFitView()
 })
 
+const VERSION_SELECTION_KEYS = new Set(['snapshot', 'version', 'compare'])
+
 function versionParamsExceptSnapshot(): LocationQueryRaw {
   const out: LocationQueryRaw = {}
   for (const [key, value] of Object.entries(route.query)) {
-    if (key !== 'snapshot' && key !== 'version') out[key] = value
+    // `compare` is a view-selection param too (FAR-1818): leaving the version
+    // view must not strand a stale compare id in the URL.
+    if (!VERSION_SELECTION_KEYS.has(key)) out[key] = value
   }
   return out
 }
@@ -4371,6 +4717,35 @@ function versionParamsExceptSnapshot(): LocationQueryRaw {
 /** Strip the version params and navigate back to the live editor. */
 function viewLatest(): void {
   void router.push({ path: route.path, query: versionParamsExceptSnapshot() })
+}
+
+// --- FAR-1818: version compare mode ----------------------------------------
+/** Banner action: open the viewed version against the latest (one click). */
+function openCompare(): void {
+  const base = resolvedSnapshotId.value
+  if (!base) return
+  onPaneClick() // the compare view replaces the canvas; drop any selection
+  const query = versionParamsExceptSnapshot()
+  query.snapshot = base
+  query.compare = latestSnapshotId.value ?? ''
+  void router.push({ path: route.path, query })
+}
+
+/** Pair-picker change from the compare view — deep-linkable via the route. */
+function updateCompare(payload: { base: string; compare: string }): void {
+  if (!payload.base) return
+  const query = versionParamsExceptSnapshot()
+  query.snapshot = payload.base
+  query.compare = payload.compare
+  void router.push({ path: route.path, query })
+}
+
+/** Leave compare, staying on the same historic base version. */
+function exitCompare(): void {
+  const query = versionParamsExceptSnapshot()
+  const base = resolvedSnapshotId.value
+  if (base) query.snapshot = base
+  void router.push({ path: route.path, query })
 }
 
 // --- Unsaved-changes guard (FAR-1812 B) -----------------------------------
@@ -4437,7 +4812,7 @@ let restoreNoticeTimer: ReturnType<typeof setTimeout> | null = null
 // `snapshot_b` the target, so the diff's `nodes_added`/`edges_added` are what
 // restoring brings back and `*_removed` what it drops; `*_modified` are
 // in-place config changes (agent, prompt, commands, timeout, label, ports).
-const restoreDiff = ref<Record<string, any> | null>(null)
+const restoreDiff = ref<SnapshotDiffPayload>(null)
 const restoreDiffLoading = ref(false)
 const restoreDiffError = ref<string | null>(null)
 // C2: the early-return outcomes. Both must render an explicit message — never
@@ -4447,11 +4822,6 @@ const restoreDiffNoBaseline = ref(false)
 // M6: sequence guard so an earlier dialog's diff cannot land after a later one.
 let restoreDiffRequestSeq = 0
 
-interface RestoreBreakingChange {
-  severity: string
-  reason: string
-}
-
 interface RestoreDiffSummary {
   nodesRestored: number
   nodesRemoved: number
@@ -4460,35 +4830,44 @@ interface RestoreDiffSummary {
   edgesRemoved: number
   edgesModified: number
   impacted: number
-  breaking: RestoreBreakingChange[]
-  /** True only when EVERY change class the endpoint reports is empty. */
+  breaking: SnapshotBreakingChange[]
+  /** True when restoring would change ANYTHING (see the predicate below). */
   hasChanges: boolean
 }
 
 const restoreDiffSummary = computed<RestoreDiffSummary | null>(() => {
   const d = restoreDiff.value
   if (!d) return null
-  const count = (value: unknown): number => (Array.isArray(value) ? value.length : 0)
-  const nodesRestored = count(d.nodes_added)
-  const nodesRemoved = count(d.nodes_removed)
-  const nodesModified = count(d.nodes_modified)
-  const edgesRestored = count(d.edges_added)
-  const edgesRemoved = count(d.edges_removed)
-  const edgesModified = count(d.edges_modified)
-  const impacted = count(d.semantic?.impacted_nodes)
-  const breaking = (Array.isArray(d.semantic?.breaking_changes) ? d.semantic.breaking_changes : []) as RestoreBreakingChange[]
-  // C1: "no differences" may only be concluded when EVERY class is empty —
-  // otherwise a config-only edit (nodes/edges modified, nothing added) would
-  // falsely read as "no configuration differences".
-  const hasChanges =
-    nodesRestored + nodesRemoved + nodesModified + edgesRestored + edgesRemoved + edgesModified + impacted > 0 ||
-    breaking.length > 0
+  // FAR-1893: the change-class enumeration, the semantic readers and the
+  // severity label all come from the shared module. Only this dialog's LAYOUT
+  // (the list of counts) stays local.
+  const counts = readChangeClassCounts(d)
+  const breaking = readBreakingChanges(d)
+  const impacted = readImpactedNodes(d).length
+  // Deliberately broader than the compare view's `hasStructuralChanges`
+  // (structural only): this dialog answers "does restoring this version
+  // change anything at all?", so a semantic-only difference (an impacted node
+  // or a breaking port change) still means "not identical". Both predicates
+  // are expressed from the same shared counts, so neither can drift on the
+  // structural half.
+  const hasChanges = counts.hasChanges || impacted > 0 || breaking.length > 0
   return {
-    nodesRestored, nodesRemoved, nodesModified,
-    edgesRestored, edgesRemoved, edgesModified,
-    impacted, breaking, hasChanges,
+    nodesRestored: counts.nodesAdded,
+    nodesRemoved: counts.nodesRemoved,
+    nodesModified: counts.nodesModified,
+    edgesRestored: counts.edgesAdded,
+    edgesRemoved: counts.edgesRemoved,
+    edgesModified: counts.edgesModified,
+    impacted,
+    breaking,
+    hasChanges,
   }
 })
+
+/** Shared severity rule (neutral namespace), injected with this view's `t`. */
+function restoreSeverityLabel(severity?: string): string {
+  return resolveSeverityLabel(severity, t)
+}
 
 const timelineRef = ref<InstanceType<typeof PipelineSnapshotTimeline> | null>(null)
 
@@ -4554,7 +4933,7 @@ async function loadRestoreDiff(): Promise<void> {
       restoreDiffError.value = formatApiError(error)
       return
     }
-    restoreDiff.value = (data as Record<string, any>) ?? null
+    restoreDiff.value = data ?? null
   } catch (e: unknown) {
     if (seq !== restoreDiffRequestSeq) return
     console.warn('[PipelineEditorView] failed to load restore diff', formatApiError(e))
@@ -4645,6 +5024,14 @@ function historicShareLink(): string {
   const params = new URLSearchParams()
   const id = resolvedSnapshotId.value
   if (id) params.set('snapshot', id)
+  // FAR-1818: while comparing, the canonical share link carries the compare id
+  // too (an empty compare id means "against latest", which the link preserves).
+  if (compareMode.value) {
+    let compareId = compareParam.value
+    if (compareId === null) compareId = latestSnapshotId.value
+    if (compareId === null) compareId = ''
+    params.set('compare', compareId)
+  }
   const query = params.toString()
   return query ? `${window.location.origin}${route.path}?${query}` : `${window.location.origin}${route.path}`
 }

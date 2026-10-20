@@ -1301,19 +1301,19 @@ class TestIsExecutableJsLine:
 # ---------------------------------------------------------------------------
 # FAR-962 regression: deleted and non-executable lines excluded from denominator
 # ---------------------------------------------------------------------------
-def test_deletion_only_diff_fails():
-    """A production diff whose only change is deleting lines → FAIL, not SKIP.
+def test_deletion_only_diff_is_exempt_from_the_coverage_gate():
+    """A production diff whose only change is deleting lines → PASS, stated explicitly.
 
     FAR-962 regression (retained): deleted lines must not enter the
     changed-lines denominator — ``changed_lines`` stays 0 here even though
     three executable lines were removed (observed on PR #704: 31.2% effective
     coverage from deleted lines counted as unmeasured).
 
-    FAR-1317: that 0 must no longer skip into a pass.  A deletion-only
-    change gets a dedicated FAIL reason instead — the gate cannot tell a
-    justified deletion from a load-bearing one (PR #1022: the ``expires_at
-    IS NULL`` branch deleted "to bring the changed-lines coverage gate to
-    100%"), so it fails closed.
+    A deletion-only diff adds nothing to measure, so it must not FAIL the
+    changed-lines gate: failing it made every genuinely subtractive change
+    structurally impassable, and the only way to clear it was to write tests
+    for lines that were never written.  The exemption is rendered in the
+    summary rather than being a silent pass.
     """
     with (
         patch.object(mod, "_get_changed_production_files", return_value={}),
@@ -1326,17 +1326,23 @@ def test_deletion_only_diff_fails():
             fail_under=90,
         )
     assert result.changed_lines == 0  # deletions never enter the denominator
-    assert result.skipped is False
-    assert result.passed is False
-    assert "deletion-only" in result.skip_reason.lower()
+    assert result.skipped is True
+    assert result.passed is True
+    assert result.no_added_lines_exempt is True
+    assert result.deletion_only_approved is False
     assert result.deleted_lines == 3
+    summary = result.summary()
+    assert "[Python] PASS" in summary
+    assert "exempt" in summary.lower()
+    assert "no executable production lines added" in summary.lower()
 
 
-def test_main_fails_on_deletion_only_change(tmp_path, capsys):
-    """End-to-end (main → exit code): a deletion-only change exits 1, not 0.
+def test_main_passes_on_deletion_only_change(tmp_path, capsys):
+    """End-to-end (main → exit code): a deletion-only change exits 0 and says why.
 
-    The gate's CI contract is its exit code; this proves the FAR-1317 FAIL
-    reaches it instead of the old SKIP-into-pass (exit 0).
+    The gate's CI contract is its exit code; this proves the exemption reaches
+    it, and that the summary states the exemption verbatim instead of passing
+    silently.
     """
     xml = tmp_path / "coverage.xml"
     lines = "\n".join(
@@ -1366,8 +1372,161 @@ def test_main_fails_on_deletion_only_change(tmp_path, capsys):
         ),
     ):
         rc = mod.main()
-    assert rc == 1
-    assert "deletion-only" in capsys.readouterr().out.lower()
+    assert rc == 0
+    out = capsys.readouterr().out.lower()
+    assert "exempt" in out
+    assert "no executable production lines added" in out
+
+
+def test_no_executable_change_is_exempt_with_wording(tmp_path):
+    """No executable change at all → PASS with the exemption wording.
+
+    A comment/docstring/docs-only diff adds nothing to measure.  The pass is
+    explicit: the reason names the exemption instead of failing.
+    """
+    with (
+        patch.object(mod, "_get_changed_production_files", return_value={}),
+        patch.object(mod, "_get_production_deletions", return_value={}),
+    ):
+        result = mod.evaluate(
+            language="Python",
+            report_path=tmp_path / "coverage.xml",
+            compare_branch="origin/main",
+            fail_under=90,
+        )
+
+    assert result.skipped is True
+    assert result.passed is True
+    assert result.no_added_lines_exempt is True
+    assert "nothing for the changed-lines coverage gate to measure" in result.skip_reason
+    assert "exempt" in result.summary().lower()
+
+
+def test_added_uncovered_lines_still_fails_and_is_not_exempt(tmp_path):
+    """A diff that adds uncovered executable lines → FAIL; exemption must not leak.
+
+    The discriminator for the exemption: only a diff that adds NO executable
+    line is exempt.  Deleting lines alongside newly added uncovered lines
+    must still be scored on the added lines alone.
+    """
+    fake_report = tmp_path / "coverage.xml"
+    fake_report.write_text("<coverage/>")
+
+    with (
+        patch.object(mod, "_get_changed_production_files", return_value={"src/new_module.py": 50}),
+        patch.object(mod, "_get_production_deletions", return_value={"src/old_module.py": 10}),
+        patch.object(mod, "_run_diff_cover", return_value=(1, REAL_DIFF_COVER_FAIL_COMBINED)),
+        patch.object(mod, "_get_diff_cover_json", return_value=JSON_REPORT_EMPTY),
+    ):
+        result = mod.evaluate(
+            language="Python",
+            report_path=fake_report,
+            compare_branch="origin/main",
+            fail_under=90,
+        )
+
+    assert result.skipped is False
+    assert result.passed is False
+    assert result.no_added_lines_exempt is False
+    assert result.changed_lines == 50
+    assert result.unmeasured_lines == 50
+    assert "exempt" not in result.summary().lower()
+
+
+def test_fully_covered_added_lines_pass_without_exemption(tmp_path):
+    """A diff that adds fully-covered lines → PASS with no exemption wording.
+
+    Proves the exemption is specific to diffs that add nothing: when added
+    lines exist and clear the threshold, the summary is the ordinary PASS.
+    """
+    fake_report = tmp_path / "coverage.xml"
+    fake_report.write_text("<coverage/>")
+    json_pass = {
+        "src_stats": {
+            "src/calc.py": {
+                "percent_covered": 100.0,
+                "covered_lines": list(range(50)),
+                "violation_lines": [],
+            }
+        },
+        "total_num_lines": 50,
+        "total_num_violations": 0,
+        "total_percent_covered": 100.0,
+        "num_changed_lines": 50,
+    }
+
+    with (
+        patch.object(mod, "_get_changed_production_files", return_value={"src/calc.py": 50}),
+        patch.object(mod, "_get_production_deletions", return_value={}),
+        patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_STDOUT)),
+        patch.object(mod, "_get_diff_cover_json", return_value=json_pass),
+    ):
+        result = mod.evaluate(
+            language="Python",
+            report_path=fake_report,
+            compare_branch="origin/main",
+            fail_under=90,
+        )
+
+    assert result.skipped is False
+    assert result.passed is True
+    assert result.no_added_lines_exempt is False
+    assert result.tiny_diff is False
+    assert result.actual_pct == 100.0
+    summary = result.summary()
+    assert "[Python] PASS" in summary
+    assert "exempt" not in summary.lower()
+
+
+def test_undeterminable_added_lines_fails_closed(tmp_path):
+    """If the added-line set cannot be determined, the language FAILS.
+
+    ``_get_changed_production_files`` returns ``None`` (not ``{}``) when
+    ``git diff`` fails.  An unknown diff shape must never be treated as a
+    diff that adds nothing and exempted — it fails closed.
+    """
+    with patch.object(mod, "_get_changed_production_files", return_value=None):
+        result = mod.evaluate(
+            language="Python",
+            report_path=tmp_path / "coverage.xml",
+            compare_branch="origin/main",
+            fail_under=90,
+        )
+
+    assert result.skipped is False
+    assert result.passed is False
+    assert result.no_added_lines_exempt is False
+    assert "could not determine" in result.skip_reason
+
+
+def test_count_added_lines_returns_none_when_git_diff_fails():
+    """A failing ``git diff`` is undeterminable, never zero added lines."""
+    with patch.object(mod.subprocess, "run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=128, stdout="", stderr="fatal")
+        count = mod._count_added_lines("origin/main...HEAD", "src/module.py")
+
+    assert count is None
+
+
+def test_changed_production_files_returns_none_when_git_diff_fails():
+    """The changed-file enumeration is undeterminable when ``git diff`` fails."""
+    with patch.object(mod.subprocess, "run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=128, stdout="", stderr="fatal")
+        files = mod._get_changed_production_files("origin/main", "Python")
+
+    assert files is None
+
+
+def test_changed_production_files_returns_none_when_a_file_count_is_undeterminable():
+    """One undeterminable per-file count makes the whole added-line set unknown."""
+    name_only = subprocess.CompletedProcess(args=[], returncode=0, stdout="src/module.py\n", stderr="")
+    with (
+        patch.object(mod.subprocess, "run", return_value=name_only),
+        patch.object(mod, "_count_added_lines", return_value=None),
+    ):
+        files = mod._get_changed_production_files("origin/main", "Python")
+
+    assert files is None
 
 
 def test_mixed_change_with_covered_additions_passes_despite_deletions(tmp_path):
@@ -1816,15 +1975,14 @@ def test_evaluate_data_only_collection_diff_skips_via_real_git_diff(tmp_path):
     assert result.passed is True
 
 
-def test_evaluate_deletion_only_diff_fails_via_real_git_diff(tmp_path):
-    """A real deletion-only production diff must FAIL, not skip into a pass.
+def test_evaluate_deletion_only_diff_is_exempt_via_real_git_diff(tmp_path):
+    """A real deletion-only production diff passes with an explicit exemption.
 
     FAR-962 aspect retained: the deleted lines never enter the changed-lines
-    denominator (``_get_changed_production_files`` still returns ``{}`` — the
-    state that used to feed the "no changed production lines → SKIP" rule).
-    FAR-1317: that SKIP was a pass, so a PR whose only production change is
-    deleting code went green for free.  It now fails with the deletion-only
-    reason.
+    denominator (``_get_changed_production_files`` still returns ``{}``).
+    The diff adds no executable line, so there is nothing for the coverage
+    gate to measure; the result must be a PASS whose summary states the
+    exemption rather than a silent skip.
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1847,21 +2005,26 @@ def test_evaluate_deletion_only_diff_fails_via_real_git_diff(tmp_path):
 
     assert changed == {}
     assert deletions == {"src/module.py": 1}
-    assert result.skipped is False
-    assert result.passed is False
-    assert "deletion-only" in result.skip_reason.lower()
+    assert result.skipped is True
+    assert result.passed is True
+    assert result.no_added_lines_exempt is True
     assert result.deleted_lines == 1
+    assert "exempt" in result.summary().lower()
 
 
-def test_far1022_shape_deleting_uncovered_branch_fails_via_real_git_diff(tmp_path):
+def test_far1022_shape_deleting_uncovered_branch_is_exempt_not_credited_via_real_git_diff(tmp_path):
     """FAR-1022 reproduction, driven through real ``git diff``.
 
     The incident: a Branch Fixer commit DELETED the load-bearing ``expires_at
     IS NULL`` branch — the whole arm, its own lines — "to bring the
-    changed-lines coverage gate to 100%".  A PR whose only production change
-    is that deletion used to hit "no changed production lines → SKIP" (exit
-    0): deleting real code was the cheapest path to green.  The gate must now
-    FAIL it with the deletion-only reason.
+    changed-lines coverage gate to 100%".  Deleting code was the cheapest
+    path to green.
+
+    The gate no longer fails a purely subtractive diff (that rule made every
+    genuine deletion structurally impassable), but the deletion must still
+    earn NO coverage credit: it never enters the changed-lines denominator,
+    and the result states the exemption explicitly.  Reviewing the deletion
+    itself is a code-review responsibility, not a coverage-gate one.
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1889,13 +2052,14 @@ def test_far1022_shape_deleting_uncovered_branch_fails_via_real_git_diff(tmp_pat
             fail_under=90,
         )
 
-    # The pre-fix signature: no ADDED lines, so the old gate skipped → passed.
     assert changed == {}
     assert deletions == {"src/module.py": 2}  # `if ...:` + `return True`
-    assert result.skipped is False
-    assert result.passed is False
-    assert "deletion-only" in result.skip_reason.lower()
-    assert "FAR-1317" in result.skip_reason
+    assert result.passed is True
+    assert result.no_added_lines_exempt is True
+    # No credit: the two deleted lines are not in the changed-lines count.
+    assert result.changed_lines == 0
+    assert result.deleted_lines == 2
+    assert "deletions earn no coverage credit" in result.skip_reason.lower()
 
 
 def test_comment_deletion_only_still_skips_via_real_git_diff(tmp_path):
@@ -1960,8 +2124,12 @@ def test_docstring_deletion_only_still_skips_via_real_git_diff(tmp_path):
     assert result.passed is True
 
 
-def test_deleted_production_file_fails_via_real_git_diff(tmp_path):
-    """Deleting an entire production file is a deletion-only change → FAIL."""
+def test_deleted_production_file_is_exempt_via_real_git_diff(tmp_path):
+    """Deleting an entire production file adds no executable line → exempt PASS.
+
+    The file contributes nothing to the changed-lines denominator; the gate
+    reports the exemption rather than failing a purely subtractive change.
+    """
     repo = tmp_path / "repo"
     repo.mkdir()
     env = _init_repo(repo, "def f():\n    return 1\n")
@@ -1981,9 +2149,10 @@ def test_deleted_production_file_fails_via_real_git_diff(tmp_path):
         )
 
     assert changed == {}
-    assert result.skipped is False
-    assert result.passed is False
-    assert "deletion-only" in result.skip_reason.lower()
+    assert result.skipped is True
+    assert result.passed is True
+    assert result.no_added_lines_exempt is True
+    assert "exempt" in result.summary().lower()
 
 
 def test_deletion_only_diff_approved_skips_as_pass():

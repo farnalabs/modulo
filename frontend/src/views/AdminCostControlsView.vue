@@ -219,7 +219,7 @@
                 </Button>
               </div>
               <p v-if="budgetSaveError" class="mt-2 text-xs text-destructive">{{ budgetSaveError }}</p>
-              <p v-if="budgetSaveSuccess" class="mt-2 text-xs text-success">{{ $t('views.AdminCostControlsView.budget_updated') }}</p>
+              <p v-if="budgetSaveSuccess" class="mt-2 text-xs text-success-text">{{ $t('views.AdminCostControlsView.budget_updated') }}</p>
             </div>
           </template>
         </Card>
@@ -379,7 +379,7 @@ const remainingClass = computed(() => {
   const pct = percentUsed.value
   if (pct >= 100) return 'text-destructive'
   if (pct >= 90) return 'text-warning-text'
-  return 'text-success'
+  return 'text-success-text'
 })
 
 const progressBarClass = computed(() => {

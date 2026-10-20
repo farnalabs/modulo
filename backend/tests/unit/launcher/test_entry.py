@@ -17,6 +17,7 @@ import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
@@ -307,6 +308,57 @@ def test_boot_order_smoke_with_mocked_children(monkeypatch: pytest.MonkeyPatch, 
     ]
     assert order == expected_prefix
     assert serve_calls == [("127.0.0.1", 18000)]
+
+
+def test_serve_phase_exception_becomes_booterror(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A serve-phase failure must reach the operator as an actionable BootError.
+
+    The S3776 decomposition moved the serve phase into a helper; its call site
+    must stay inside the boot try/except so a bind/startup error is still
+    converted (main's behaviour) instead of escaping as a raw traceback.
+    """
+    order: list[str] = []
+    _install_boot_mocks(monkeypatch, order)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
+    def serve(host: str, port: int, stop_event: threading.Event) -> None:
+        raise OSError("address already in use")
+
+    with pytest.raises(BootError, match="address already in use"):
+        run_start(tmp_path / "data", serve=serve)
+
+
+def test_serve_phase_base_exception_tears_down_supervisor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A serve-phase SystemExit must tear the bundled children down first.
+
+    uvicorn exits with ``sys.exit(STARTUP_FAILURE)`` on a bind/startup failure;
+    SystemExit is a BaseException, so it bypasses the BootError conversion and
+    the supervisor must still be shut down before it propagates - otherwise the
+    bundled Postgres/Redis/SAQ children are orphaned.
+    """
+    import modulo.launcher.supervisor as supervisor_mod
+
+    order: list[str] = []
+    _install_boot_mocks(monkeypatch, order)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    shutdowns: list[str] = []
+
+    class SpySupervisor(supervisor_mod.Supervisor):
+        def shutdown(self) -> None:
+            shutdowns.append("shutdown")
+            super().shutdown()
+
+    monkeypatch.setattr(supervisor_mod, "Supervisor", SpySupervisor)
+
+    def serve(host: str, port: int, stop_event: threading.Event) -> None:
+        raise SystemExit(3)
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_start(tmp_path / "data", serve=serve)
+    assert exc_info.value.code == 3
+    assert shutdowns == ["shutdown"]
 
 
 def test_lock_refusal_propagates_naming_holder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -786,6 +838,34 @@ def test_detach_failure_is_signalled_through_the_handshake(
     code = run_start(tmp_path / "data", detach=True)
     assert code == 1
     assert "bundled binaries not found" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX fork mechanics")
+def test_detach_system_exit_propagates_but_still_logs_the_cause(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A pre-ready SystemExit keeps its semantics AND the operator diagnostic."""
+    monkeypatch.setattr(os, "fork", lambda: 0)
+    monkeypatch.setattr(os, "setsid", lambda: None)
+    monkeypatch.setattr(entry_module, "_redirect_stdio", lambda log: None)
+
+    def exiting_run_foreground(
+        data_dir: Path,
+        *,
+        bin_dir: Path | None = None,
+        clear_degraded: bool = False,
+        serve=None,
+        ready_fd: int | None = None,
+    ) -> int:
+        raise SystemExit(3)
+
+    monkeypatch.setattr(entry_module, "_run_foreground", exiting_run_foreground)
+    with pytest.raises(SystemExit) as exc_info:
+        run_start(tmp_path / "data", detach=True)
+    assert exc_info.value.code == 3
+    err = capsys.readouterr().err
+    assert "detached boot failed" in err
+    assert "3" in err
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX pipe mechanics")
@@ -1762,3 +1842,102 @@ class TestEnsureAppDatabaseSafety:
         args, kwargs = captured[0]
         assert kwargs["ssl"] is False
         assert "sslmode" not in str(args[0])
+
+
+# ---------------------------------------------------------------------------
+# Serve-phase helpers moved by the S3776 refactor
+# ---------------------------------------------------------------------------
+
+
+class _ServePhaseSupervisor:
+    """Minimal supervisor double for the serve-phase teardown helpers."""
+
+    def __init__(self, *, shutdown_error: Exception | None = None) -> None:
+        self.shutdown_calls = 0
+        self.degraded_reason: str | None = None
+        self._shutdown_error = shutdown_error
+
+    def shutdown(self) -> None:
+        self.shutdown_calls += 1
+        if self._shutdown_error is not None:
+            raise self._shutdown_error
+
+    def monitor_thread_alive(self) -> bool:
+        return True
+
+
+def test_shutdown_supervisor_after_boot_error_swallows_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
+    messages: list[str] = []
+    monkeypatch.setattr(entry_module._log, "exception", lambda message, *args, **kwargs: messages.append(message))
+    supervisor = _ServePhaseSupervisor(shutdown_error=OSError("pipe closed"))
+
+    entry_module._shutdown_supervisor_after_boot_error(supervisor)
+
+    assert supervisor.shutdown_calls == 1
+    assert messages == ["supervisor.shutdown_failed during boot error handling"]
+
+
+def test_serve_until_shutdown_short_circuits_when_shutdown_requested(tmp_path: Path) -> None:
+    supervisor = _ServePhaseSupervisor()
+    run_state = entry_module._RunState()
+    run_state.shutdown_requested.set()
+
+    code = entry_module._serve_until_shutdown(
+        supervisor,
+        run_state,
+        SimpleNamespace(api_port=18000),
+        serve=lambda *args: pytest.fail("serve must not run after a shutdown request"),
+        ready_fd=None,
+        degraded_path=tmp_path / "degraded.json",
+        data_dir=tmp_path,
+    )
+
+    assert code == 0
+    assert supervisor.shutdown_calls == 1
+
+
+def test_serve_until_shutdown_writes_readiness_handshake(tmp_path: Path) -> None:
+    read_fd, write_fd = os.pipe()
+    served: list[tuple[str, int]] = []
+    try:
+        code = entry_module._serve_until_shutdown(
+            _ServePhaseSupervisor(),
+            entry_module._RunState(),
+            SimpleNamespace(api_port=18000),
+            serve=lambda host, port, stop: served.append((host, port)),
+            ready_fd=write_fd,
+            degraded_path=tmp_path / "degraded.json",
+            data_dir=tmp_path,
+        )
+        handshake = os.read(read_fd, 64)
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert handshake == b"ready\n"
+    assert code == 0
+    assert served == [(entry_module.POSTGRES_HOST, 18000)]
+
+
+def test_serve_until_shutdown_uses_serve_api_when_no_serve_callable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, int]] = []
+
+    def _fake_serve_api(host: str, port: int, stop_event: threading.Event, force_exit: threading.Event) -> None:
+        calls.append((host, port))
+
+    monkeypatch.setattr(entry_module, "_serve_api", _fake_serve_api)
+
+    code = entry_module._serve_until_shutdown(
+        _ServePhaseSupervisor(),
+        entry_module._RunState(),
+        SimpleNamespace(api_port=18001),
+        serve=None,
+        ready_fd=None,
+        degraded_path=tmp_path / "degraded.json",
+        data_dir=tmp_path,
+    )
+
+    assert code == 0
+    assert calls == [(entry_module.POSTGRES_HOST, 18001)]

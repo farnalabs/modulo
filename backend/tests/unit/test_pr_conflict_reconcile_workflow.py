@@ -146,3 +146,165 @@ def test_recency_window_constant_present() -> None:
     so the guard's limits are honest."""
     raw = _raw()
     assert "30" in raw, "30-minute recency window constant/comment missing"
+
+
+# --- FAR-1935: deterministic conflict fingerprint so duplicate dispatches
+# --- dedupe in the Branch Fixer instead of launching a second run.
+
+
+def test_dispatch_payload_includes_fingerprint() -> None:
+    """FAR-1935: the dispatch payload MUST carry a ``fingerprint``, mirroring
+    ci.yml's notify-pr-failure payload. Without it the Branch Fixer cannot
+    dedupe repeat dispatches for the same conflict (observed on #1937, which
+    was dispatched twice ~2h apart while the first run was still live)."""
+    raw = _raw()
+    assert "--arg fingerprint" in raw, "Dispatch payload omits --arg fingerprint (FAR-1935)"
+    assert "fingerprint: $fingerprint" in raw, "Dispatch jq object omits the fingerprint key (FAR-1935)"
+
+
+def test_fingerprint_is_keyed_on_pr_and_main_sha() -> None:
+    """FAR-1935: the fingerprint must key on the conflicting state — the PR
+    number and the tip of main. Same PR + same main = the SAME merge to
+    reconcile = dedupe; main moved = a genuinely different merge = different
+    fingerprint = allowed through."""
+    raw = _raw()
+    expected = 'FINGERPRINT="conflict|pr:${PR_NUM}|main:${MAIN_SHA}"'
+    assert expected in raw, "Fingerprint shape is not conflict|pr:<n>|main:<sha> (FAR-1935)"
+
+
+def test_resolves_main_sha_for_the_fingerprint() -> None:
+    """FAR-1935: the main SHA the fingerprint keys on must be resolved by the
+    workflow. This job has no actions/checkout step and therefore no git remote,
+    so it is fetched through the GitHub API."""
+    raw = _raw()
+    assert "repos/farnalabs/modulo/commits/main" in raw, "Workflow does not resolve the tip of main (FAR-1935)"
+    assert "MAIN_SHA=" in raw, "Workflow never assigns MAIN_SHA (FAR-1935)"
+
+
+# --- FAR-1956: conflict dispatches carry a structural taskKind marker so the
+# --- Branch Fixer can select the conflict task profile (a single long attempt)
+# --- rather than the CI-failure retry ladder. The distinction must be
+# --- structural — never a prose match on failureDescription.
+
+
+def test_dispatch_payload_includes_task_kind() -> None:
+    """FAR-1956: the dispatch payload MUST carry ``taskKind: conflict``. The
+    Branch Fixer reads it to branch its retry loop — a conflict task gets ONE
+    long attempt (the observed conflicts need ~2800s, which the CI-failure
+    ladder cannot give attempt 1), while a missing marker keeps the existing
+    budget-aware ladder so older dispatches still work."""
+    raw = _raw()
+    assert '--arg taskKind "conflict"' in raw, "Dispatch payload omits --arg taskKind (FAR-1956)"
+    assert "taskKind: $taskKind" in raw, "Dispatch jq object omits the taskKind key (FAR-1956)"
+
+
+# --- FAR-1949: an undelivered Branch Fixer dispatch must leave a durable,
+# --- PR-attributable signal on the PR. The "never SILENT" requirement is
+# --- FAR-1939, but its merge-queue.yml fallback only emits ::error:: + exit 1;
+# --- the durable-comment + marker pattern mirrors this workflow's own
+# --- manual-delivery note ("Surface manual-delivery conflicts").
+
+
+def _dispatch_step_block() -> str:
+    """Raw text of the 'Dispatch the Branch Fixer' step, up to the next step.
+
+    Scoping the containment checks below to this one step matters: the
+    manual-delivery step already calls ``gh pr comment``, so a file-wide
+    ``"gh pr comment" in raw`` check would pass even while the dispatch-failure
+    arm posts nothing — exactly the FAR-1949 defect."""
+    raw = _raw()
+    marker = "- name: Dispatch the Branch Fixer"
+    start = raw.index(marker)
+    rest = raw[start + len(marker) :]
+    end = rest.find("- name: ")
+    return rest if end == -1 else rest[:end]
+
+
+def test_dispatch_failure_posts_a_pr_comment() -> None:
+    """FAR-1949: after the retries are exhausted the step must leave a durable
+    comment on the affected PR. On 2026-10-17 the dispatch was refused (HTTP
+    429, concurrent-run limit) and the conflicted PR carried nothing saying
+    reconciliation had been attempted and refused."""
+    block = _dispatch_step_block()
+    assert 'gh pr comment "$PR_NUM"' in block, (
+        "Dispatch-failure arm must post a `gh pr comment` on the affected PR (FAR-1949)"
+    )
+
+
+def test_dispatch_failure_comment_says_why_and_links_the_run() -> None:
+    """FAR-1949: the comment must record why the fixer was never asked (the
+    HTTP status / error detail) and link the run, so a conflicted PR is
+    visibly stuck rather than silently stuck."""
+    block = _dispatch_step_block()
+    why = (
+        "could NOT dispatch the Branch Fixer for this PR: all 5 webhook attempts "
+        "failed (last HTTP ${LAST_HTTP}: ${DETAIL})"
+    )
+    assert why in block, "Undelivered-notification body must state why (HTTP status) (FAR-1949)"
+    assert "actions/runs/${{ github.run_id }}" in block, (
+        "Undelivered-notification body must carry the run URL (FAR-1949)"
+    )
+
+
+def test_dispatch_failure_error_names_the_pr() -> None:
+    """FAR-1949: the ::error:: must name the affected PR so the line is
+    attributable rather than an anonymous count."""
+    block = _dispatch_step_block()
+    assert (
+        "::error::Branch Fixer dispatch failed for PR #$PR_NUM (HTTP ${LAST_HTTP}: "
+        "${DETAIL}) after retries — this PR was never handed to the fixer."
+    ) in block, "Dispatch-failure ::error:: must name the affected PR (FAR-1949)"
+
+
+def test_dispatch_failure_escalates_when_the_comment_fails() -> None:
+    """FAR-1949: if the durable comment itself cannot be posted, that gap must
+    not be silent — an escalated ::error:: names the PR."""
+    block = _dispatch_step_block()
+    assert "::error::PR #$PR_NUM: could not post the undelivered-notification comment either" in block, (
+        "Missing escalated ::error:: for a failed undelivered-notification comment (FAR-1949)"
+    )
+
+
+def test_dispatch_failure_keeps_the_loud_failure_and_can_comment() -> None:
+    """FAR-1949: the durable comment is the fix, but the loud failure and the
+    credentials that make the comment possible must both survive. The retry
+    count/backoff are unchanged; the step must still exit 1, the step env must
+    still carry GH_TOKEN, and the token must still be granted
+    ``pull-requests: write``. The first assertion is new (it fails before the
+    change); the rest are retained invariants pinned alongside it."""
+    block = _dispatch_step_block()
+    assert "this PR was never handed to the fixer." in block
+    assert "exit 1" in block, "Dispatch-failure arm must still exit 1 (FAR-1949)"
+    assert "GH_TOKEN" in block, "Dispatch step env must keep GH_TOKEN for the comment (FAR-1949)"
+    assert "pull-requests: write" in _raw(), "pull-requests: write permission missing (FAR-1949)"
+
+
+def test_dispatch_failure_comment_is_idempotent_via_marker() -> None:
+    """FAR-1949 review: this reconciler fires every 15 minutes, so a
+    persistently failing webhook (e.g. a sustained 429) must not post a fresh
+    undelivered-dispatch comment on every cycle. The note must carry an HTML
+    marker and be skipped when that marker already exists — the same
+    idempotency the manual-delivery note in this workflow uses."""
+    block = _dispatch_step_block()
+    assert "<!-- pr-conflict-reconciler:undelivered-dispatch -->" in block, (
+        "Undelivered-dispatch comment must carry a dedup marker (FAR-1949 review)"
+    )
+    assert 'gh pr view "$PR_NUM" --repo farnalabs/modulo --json comments' in block, (
+        "Undelivered-dispatch arm must check for an existing marker comment (FAR-1949 review)"
+    )
+    assert "UNDELIVERED_MARKER" in block, "Marker must be used in the jq existence check (FAR-1949 review)"
+    assert "already carries an undelivered-dispatch note" in block, (
+        "Undelivered-dispatch arm must skip reposting when the marker exists (FAR-1949 review)"
+    )
+
+
+def test_dispatch_failure_escalation_names_the_comment_failure_separately() -> None:
+    """FAR-1949 review: the escalated ::error:: must distinguish the COMMENT
+    failure from the webhook failure. Appending the webhook's HTTP status next
+    to the comment failure made a reader misattribute it as the reason the
+    comment could not be posted."""
+    block = _dispatch_step_block()
+    assert "comment post failed" in block, "Escalated ::error:: must name the comment failure (FAR-1949 review)"
+    assert "the dispatch failure was webhook HTTP" in block, (
+        "Escalated ::error:: must label the webhook status as the dispatch failure (FAR-1949 review)"
+    )

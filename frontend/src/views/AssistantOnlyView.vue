@@ -396,7 +396,7 @@ onMounted(async () => {
   background-color: hsl(var(--accent));
 }
 .assistant-only-tab.active {
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text));
   background-color: hsla(var(--primary) / 0.08);
 }
 .assistant-only-tab-close {
@@ -441,7 +441,7 @@ onMounted(async () => {
   color: hsl(var(--foreground));
 }
 .assistant-only-subtab.active {
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text));
   border-bottom-color: hsl(var(--primary));
 }
 </style>

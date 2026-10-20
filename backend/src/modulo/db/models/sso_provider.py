@@ -1,9 +1,9 @@
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, LargeBinary, String, Text
+from sqlalchemy import Boolean, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import JSONB_COL, OrgScoped
 
 
 class SsoProvider(OrgScoped):
@@ -29,9 +29,11 @@ class SsoProvider(OrgScoped):
     # FAR-855: case-insensitive EXACT-match allowlist of verified email
     # domains, consulted only when auto_provision is True. Empty list = mode 3
     # ("anyone who authenticates") which additionally requires the
-    # sso_unrestricted_provisioning feature flag (default OFF).
-    allowed_domains: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    # sso_unrestricted_provisioning feature flag (default OFF). Physical jsonb
+    # (0246); JSONB_COL keeps the ORM declaration honest while preserving
+    # SQLite/MariaDB parity.
+    allowed_domains: Mapped[list[str]] = mapped_column(JSONB_COL, nullable=False, default=list, server_default="[]")
     default_role: Mapped[str] = mapped_column(String(32), default="runner", server_default="runner")
-    group_mappings: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, server_default="[]")
+    group_mappings: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False, server_default="[]")
     preset: Mapped[str] = mapped_column(String(32), nullable=False, server_default="custom")
     tenant_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)

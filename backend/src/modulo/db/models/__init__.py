@@ -27,7 +27,6 @@ from modulo.db.models.eval_dataset import (
     purge_soft_deleted_eval_cases,
     validate_dataset_has_cases,
 )
-from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.eval_suite import EvalSuite
 from modulo.db.models.eval_suite_run import (
@@ -43,6 +42,7 @@ from modulo.db.models.eval_suite_run import (
     transition_state,
 )
 from modulo.db.models.evidence import Evidence
+from modulo.db.models.evidence_redaction_rule import EvidenceRedactionRule
 from modulo.db.models.external_agent import ExternalAgent
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
@@ -67,6 +67,7 @@ from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthTokenFamil
 from modulo.db.models.onboarding_progress import OnboardingProgress
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
+from modulo.db.models.organisation_cost_state import OrganisationCostState
 from modulo.db.models.parameter_schema import ParameterSchema
 from modulo.db.models.parameter_set import ParameterSet
 from modulo.db.models.pipeline import Pipeline
@@ -131,10 +132,10 @@ __all__ = [
     "Eval",
     "EvalCase",
     "EvalDataset",
-    "EvalDefinition",
     "EvalResult",
     "EvalSuite",
     "Evidence",
+    "EvidenceRedactionRule",
     "ExternalAgent",
     "FeatureFlagCatalog",
     "FeedbackRecord",
@@ -168,6 +169,7 @@ __all__ = [
     "OrgMembership",
     "OrgScoped",
     "Organisation",
+    "OrganisationCostState",
     "ParameterSchema",
     "ParameterSet",
     "Pipeline",

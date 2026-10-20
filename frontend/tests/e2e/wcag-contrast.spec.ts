@@ -1,6 +1,67 @@
+// FAR-1913 — this spec's name promises a contrast gate; until now the shared
+// `filterViolations()` allowlist dropped `color-contrast` from every scan, so it
+// could not see one. That rule id is no longer tolerated: the failed-status
+// badge it found (destructive text on a destructive tint) is fixed via the
+// `--destructive-text` token, and every destructive-text-on-tint pairing in the
+// app was swept to it — including the tinted delete-confirm blocks and the
+// run-detail diagnostics cards, which render only after interaction and so are
+// not reached by the route scans below. The only entry still filtered is
+// `aria-hidden-focus` (documented, PrimeVue-internal) — see tests/e2e/setup/wcag.ts.
 import { test, expect, systemAdminJwt } from './setup/fixtures'
 import AxeBuilder from '@axe-core/playwright'
 import { WCAG_TAGS, filterViolations } from './setup/wcag'
+
+// Flipping the theme triggers PrimeVue's 0.2s colour transition on every
+// control. A cross-fade between the two themes passes through a low-contrast
+// midpoint, so an axe scan that lands mid-transition reports a `color-contrast`
+// violation the settled theme does not have. Suppress transitions before any
+// theme flip and audit the settled colours.
+const SUPPRESS_TRANSITIONS_CSS = '*, *::before, *::after { transition: none !important; }'
+
+/**
+ * Force the light theme and audit the settled colours (see SUPPRESS_TRANSITIONS_CSS).
+ *
+ * `:root` is the dark theme; AppLayout's toggle flips `documentElement` between
+ * `.light` and `.dark`. Adding `.light` alone is enough because light mode's
+ * variables are a complete override of `:root`'s. Views that opt into
+ * `data-theme="agent"` are flipped too: `.light [data-theme="agent"]` re-declares
+ * the light palette so the user's theme choice wins inside an agent-themed page
+ * (only the agent typography survives), so a light scan audits those views in
+ * their real light-mode colours.
+ */
+async function forceLightMode(page: import('@playwright/test').Page) {
+  await page.addStyleTag({ content: SUPPRESS_TRANSITIONS_CSS })
+  await page.evaluate(() => {
+    document.documentElement.classList.add('light')
+    document.documentElement.classList.remove('dark')
+  })
+  await page.evaluate(() => new Promise(r => requestAnimationFrame(r)))
+}
+
+/** Minimal shape of an axe violation, enough to log the failing nodes and their ratios. */
+interface LoggableViolation {
+  id: string
+  impact?: string | null
+  help: string
+  nodes: { target: unknown[]; any: { message: string }[] }[]
+}
+
+/**
+ * Log every violation with per-node detail. A rule-level count alone cannot be
+ * diagnosed (which element, which colour pair, which ratio); the node's `any`
+ * messages carry the measured foreground/background and the actual ratio, so a
+ * CI failure is actionable without reproducing it locally.
+ */
+function logViolations(label: string, violations: LoggableViolation[]) {
+  if (violations.length === 0) return
+  console.log(`\n=== ${label} ===`)
+  for (const v of violations) {
+    console.log(`[${v.impact}] ${v.id} (${v.nodes.length} nodes): ${v.help}`)
+    for (const node of v.nodes) {
+      console.log(`  - ${node.target.map(String).join(' ')} :: ${node.any.map(a => a.message).join(' | ')}`)
+    }
+  }
+}
 
 test.describe('PrimeVue Select overlay WCAG + keyboard nav', { tag: "@regression" }, () => {
   test('open filter-bar-status overlay has no unexpected WCAG AA violations', { tag: "@regression" }, async ({ page, env }) => {
@@ -87,6 +148,15 @@ test.describe('WCAG AA audit (CI — Vite dev server)', { tag: "@regression" }, 
       // Wait for the Vue app to mount before running axe
       await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
 
+      // Flipping the theme triggers PrimeVue's 0.2s colour transition on every
+      // control. A cross-fade between the two themes passes through a
+      // low-contrast midpoint (dark ink on a bright fill fading to light ink
+      // on a dark fill), so an axe scan that lands mid-transition reports a
+      // `color-contrast` violation the settled theme does not have (observed:
+      // the login submit button measures 4.33:1 mid-transition, 4.60:1 once
+      // settled). The settled colours are what the theme actually ships, so
+      // suppress transitions before the flip and audit those.
+      await page.addStyleTag({ content: SUPPRESS_TRANSITIONS_CSS })
       await page.evaluate(() => {
         document.documentElement.classList.add('light')
         document.documentElement.classList.remove('dark')
@@ -121,6 +191,10 @@ test.describe('WCAG AA audit (CI — Vite dev server)', { tag: "@regression" }, 
       // Wait for the Vue app to mount before running axe
       await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
 
+      // Same transition-suppression guard as the light-mode test: a stored
+      // theme that differs from the default means this class-flip cross-fades,
+      // and an axe scan landing mid-transition reports a false positive.
+      await page.addStyleTag({ content: SUPPRESS_TRANSITIONS_CSS })
       await page.evaluate(() => {
         document.documentElement.classList.remove('light')
         document.documentElement.classList.remove('dark')
@@ -225,6 +299,46 @@ test.describe('authenticated shell — sidebar profile links (FAR-1907)', { tag:
           console.log(`[${v.impact}] ${v.id} (${v.nodes.length} nodes): ${v.help}`)
         }
       }
+      expect(violations).toEqual([])
+    })
+  }
+})
+
+// FAR-1938 — every scan above runs the default (dark) theme, so the light
+// palette was never asserted. The light theme is a full token override on
+// `:root`, and several of its text tokens measured below the WCAG AA 4.5:1
+// floor (`success` at 2.30:1 on white, muted on the light surface at 3.42:1,
+// `--warning-text` at 4.01:1, primary on its tint at 4.16-4.33:1). Each route
+// is scanned in BOTH themes: a fix that darkens a light token must not lighten
+// its dark counterpart below AA, and vice versa.
+//
+// Deliberately @regression, unlike the mock-backed tests above: the deployed
+// `--grep @regression` gate is the only CI job that audits the shipped bundle,
+// so the light-theme AA gate must run there (it also runs in the per-PR
+// `Frontend and WCAG` job, which selects this file by name). The mock API only
+// supplies data; the colours under audit come from the deployed stylesheet.
+test.describe('authenticated light-theme contrast (FAR-1938)', { tag: "@regression" }, () => {
+  for (const path of AUTHENTICATED_ROUTES) {
+    test(`authenticated ${path} has no unexpected WCAG AA violations (light theme)`, { tag: "@regression" }, async ({ page, env }) => {
+      const { setupLocalMockApi, loginAsAdmin } = await import('./setup/fixtures')
+      await setupLocalMockApi(page)
+      await page.addInitScript(() => { try { localStorage.setItem('assistant-panel-state', 'closed') } catch (err) { console.warn(err) } })
+      await loginAsAdmin(page, env)
+
+      await page.goto(path)
+      await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
+      await forceLightMode(page)
+
+      // Guard the harness itself: if the theme did not actually flip, the scan
+      // below would silently re-audit dark and this test would prove nothing.
+      expect(
+        await page.evaluate(() => document.documentElement.classList.contains('light')),
+        'the light theme must be active before scanning',
+      ).toBe(true)
+
+      const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze()
+      const violations = filterViolations(results.violations)
+      logViolations(`${path} (authenticated, light)`, violations)
       expect(violations).toEqual([])
     })
   }

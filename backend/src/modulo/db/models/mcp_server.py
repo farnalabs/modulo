@@ -30,11 +30,10 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, LargeBinary, String, Uuid
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, LargeBinary, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import ONDELETE_SET_NULL, OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, ONDELETE_SET_NULL, OrgScoped, SoftDeleteMixin
 
 _FK_ACCOUNTS_ID = "accounts.id"
 
@@ -75,9 +74,7 @@ class McpServer(SoftDeleteMixin, OrgScoped):
     transport: Mapped[str] = mapped_column(String(30), nullable=False)
     endpoint: Mapped[str | None] = mapped_column(String(2000))
     command: Mapped[str | None] = mapped_column(String(2000))
-    declared_scopes: Mapped[list[str]] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list
-    )
+    declared_scopes: Mapped[list[str]] = mapped_column(JSONB_COL, nullable=False, default=list)
     owner_account_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), index=True
     )
@@ -87,9 +84,7 @@ class McpServer(SoftDeleteMixin, OrgScoped):
     credentials_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
 
     # --- Tool-definition pinning (FAR-1692 S2) ---
-    tools_json: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list
-    )
+    tools_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False, default=list)
     tools_hash: Mapped[str | None] = mapped_column(String(64))
     approval_status: Mapped[str] = mapped_column(String(30), nullable=False, server_default=APPROVAL_STATUS_UNAPPROVED)
     approved_by: Mapped[uuid.UUID | None] = mapped_column(

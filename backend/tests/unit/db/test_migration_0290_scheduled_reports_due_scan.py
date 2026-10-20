@@ -5,7 +5,7 @@ template — the migration uses only ``op.create_index``, which both Postgres
 and SQLite accept; the Postgres-only ``SET DEFAULT`` leg is dialect-guarded
 and skipped here, the 0246 precedent). Proves:
 
-* **Revision chain** — revision/down_revision pin to the 0289 head.
+* **Revision chain** — revision/down_revision pin to its 0289 parent.
 * **Round-trip** — the upgrade creates ``ix_scheduled_reports_due_scan``,
   the downgrade drops it, and a second upgrade re-creates it.
 * **Index shape** — composite on ``(organisation_id, next_send_at)``.

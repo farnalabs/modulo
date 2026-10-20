@@ -26,9 +26,54 @@
       @update:filter="handleFilterUpdate"
     >
       <template #after>
+        <!-- FAR-1926: Dismiss all clears every live notification FOR THIS
+             USER ONLY (the shared store action posts the per-user
+             mark-all-read). Sits beside the filters, applies to the whole
+             live list — not just the current page. -->
+        <button
+          type="button"
+          data-testid="notifications-dismiss-all"
+          class="rounded-md border px-4 py-2 text-sm font-medium text-primary-text hover:bg-muted transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="dismissingAll || loading || total === 0 || filterStatus !== 'active'"
+          @click="onDismissAll"
+        >
+          {{ dismissingAll ? $t('views.NotificationsPage.dismissing_all') : $t('views.NotificationsPage.dismiss_all') }}
+        </button>
         <button type="button" data-testid="notifications-reset-filters" class="rounded-md border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors" @click="resetFilters">{{ $t('common.reset') }}</button>
       </template>
     </FilterBar>
+
+    <!-- Failure, success and no-op are three MUTUALLY EXCLUSIVE outcomes of
+         this page's OWN dismiss-all attempt — the error ref is local (never
+         shared store state, QA FAR-1926) and only ever set here. -->
+    <p
+      v-if="dismissAllError"
+      data-testid="notifications-dismiss-all-error"
+      role="alert"
+      class="text-sm text-destructive"
+    >
+      {{ dismissAllError }}
+    </p>
+    <output
+      v-else-if="dismissedAll"
+      data-testid="notifications-dismiss-all-success"
+      :aria-label="$t('views.NotificationsPage.dismissed_all_status')"
+      aria-live="polite"
+      class="block text-sm text-muted-foreground"
+    >
+      {{ $t('views.NotificationsPage.dismissed_all_status') }}
+    </output>
+    <!-- The server marked nothing (no-op re-run): say so neutrally rather
+         than claiming a clear that did not happen. -->
+    <output
+      v-else-if="nothingToDismiss"
+      data-testid="notifications-dismiss-all-nothing"
+      :aria-label="$t('views.NotificationsPage.nothing_to_dismiss')"
+      aria-live="polite"
+      class="block text-sm text-muted-foreground"
+    >
+      {{ $t('views.NotificationsPage.nothing_to_dismiss') }}
+    </output>
 
     <!-- States -->
     <output
@@ -52,7 +97,7 @@
     </output>
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadNotifications" />
     <EmptyState v-else-if="notifications.length === 0" :title="$t('views.NotificationsPage.no_notifications')" :description="$t('views.NotificationsPage.no_notifications_matching_filters')">
-      <button type="button" data-testid="notifications-clear-filters" class="text-sm text-primary hover:underline" @click="resetFilters">{{ $t('views.NotificationsPage.clear_filters') }}</button>
+      <button type="button" data-testid="notifications-clear-filters" class="text-sm text-primary-text hover:underline" @click="resetFilters">{{ $t('views.NotificationsPage.clear_filters') }}</button>
     </EmptyState>
     <template v-else>
       <div class="space-y-2">
@@ -101,6 +146,7 @@ import { useI18n } from "vue-i18n";
 import type { NotificationResponse } from "../lib/api/notifications";
 import { useDataFetch } from "../composables/useDataFetch";
 import { fetchNotifications, reviewLater } from "../lib/api/notifications";
+import { useNotificationsStore } from "../stores/notifications";
 import NotificationCard from "../components/NotificationCard.vue";
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
@@ -110,9 +156,24 @@ import EmptyState from "../components/shared/EmptyState.vue";
 
 const { t } = useI18n();
 
+const store = useNotificationsStore();
 const total = ref(0);
 const page = ref(1);
 const pageSize = ref(20);
+const dismissingAll = ref(false);
+const dismissedAll = ref(false);
+/**
+ * Neutral outcome for a no-op re-run (the server marked 0 rows): mutually
+ * exclusive with `dismissedAll` so a zero never claims a clear.
+ */
+const nothingToDismiss = ref(false);
+/**
+ * THIS surface's dismiss-all error (QA FAR-1926). Local by design — the
+ * shared store holds no error state, so a failure here can never render as a
+ * stale alert on the bell dropdown or the dashboard panel. Cleared at the
+ * start of each attempt and whenever a list load succeeds below.
+ */
+const dismissAllError = ref<string | null>(null);
 
 const filterLevel = ref("");
 const filterScope = ref("");
@@ -148,6 +209,10 @@ watch(data, (d) => {
     notifications.value = d.items
     total.value = d.total
     page.value = d.page
+    // A successful list load retires any earlier dismiss-all error — the
+    // fresh server state is the new truth (failures leave `data` untouched,
+    // so a failed load never clears it).
+    dismissAllError.value = null
   }
 }, { immediate: true })
 
@@ -180,6 +245,37 @@ function nextPage() {
 function onDismissed(id: string) {
   notifications.value = notifications.value.filter((n) => n.id !== id);
   total.value = Math.max(0, total.value - 1);
+}
+
+async function onDismissAll(): Promise<void> {
+  // Gated to the live view (QA FAR-1926): the bulk action only clears LIVE
+  // notifications, so a dismissed-status list is never a valid target. The
+  // button's :disabled carries the same condition; this guard covers any
+  // programmatic invocation so the API is never posted from a dismissed view.
+  if (filterStatus.value !== "active") return;
+  dismissingAll.value = true;
+  dismissedAll.value = false;
+  nothingToDismiss.value = false;
+  dismissAllError.value = null;
+  try {
+    // One shared action path (FAR-1926): same store action as the bell
+    // dropdown and the dashboard panel — per-user scope only.
+    const marked = await store.dismissAll();
+    // Truthful copy: the SERVER's marked count picks the outcome — a no-op
+    // reports "Nothing to dismiss", never the dismissed-success message.
+    nothingToDismiss.value = marked === 0;
+    dismissedAll.value = marked > 0;
+    // Re-read THIS page's filtered list from the server's post-state so the
+    // active view empties for real, never because of a local mutation.
+    await loadNotifications();
+  } catch (e: unknown) {
+    // The store throws an Error carrying the formatted API message; keep it
+    // in THIS surface's local ref so no other surface can render it.
+    // The list is deliberately left untouched: nothing was cleared.
+    dismissAllError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    dismissingAll.value = false;
+  }
 }
 
 async function onReviewLater(id: string) {

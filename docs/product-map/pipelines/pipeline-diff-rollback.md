@@ -6,8 +6,13 @@ code:
   - backend/src/modulo/db/models/pipeline_snapshot.py
   - backend/src/modulo/db/crud/pipeline_snapshot.py
   - backend/src/modulo/db/crud/pipeline_snapshot_versioning.py
+  - backend/src/modulo/db/crud/pipeline.py
   - backend/src/modulo/api/routes/pipelines.py
   - backend/src/modulo/api/routes/runs.py
+  - backend/src/modulo/db/migrations/versions/0317_drop_retired_pipeline_diff_rollback_flag.py
+  - frontend/src/views/PipelineEditorView.vue
+  - frontend/src/components/pipeline/PipelineSnapshotTimeline.vue
+  - frontend/src/components/pipeline/PipelineSnapshotCompare.vue
 unit-tests:
   - backend/tests/unit/db/test_pipeline_snapshot.py
   - backend/tests/unit/pipelines/test_snapshot_versioning.py
@@ -18,6 +23,11 @@ unit-tests:
   - backend/tests/unit/db/crud/test_pipeline_graph_updated_audit.py
   - backend/tests/unit/api/test_pipeline_snapshot_gating.py
   - backend/tests/unit/api/test_snapshot_path_scoping_and_residual_gates.py
+  - backend/tests/integration/db/test_migration_0317_drop_retired_pipeline_diff_rollback_flag.py
+  - frontend/src/__tests__/PipelineEditorHistoricVersion.spec.ts
+  - frontend/src/__tests__/PipelineEditorCompare.spec.ts
+  - frontend/src/__tests__/components/PipelineSnapshotTimeline.spec.ts
+  - frontend/src/__tests__/components/PipelineSnapshotCompare.spec.ts
 bdd:
   - backend/tests/bdd/features/pipelines/snapshot_versioning.feature
   - backend/tests/bdd/features/pipelines/crud.feature
@@ -30,18 +40,53 @@ status: covered
 # Pipeline Snapshot Diff & Rollback
 
 Automatic pipeline snapshotting plus structured diff and rollback, exposed through the
-`snapshots` endpoints under `/api/v1/pipelines`. A snapshot is captured automatically when a run is triggered,
-so any pipeline version can be recovered or compared. Referenced by ADR 047/018 as a
-product-map entry touched during centralized authorization cleanup.
+`snapshots` endpoints under `/api/v1/pipelines`. A snapshot is captured automatically
+when a run is triggered and on every explicit graph save, so any pipeline version can be
+recovered or compared. Referenced by ADR 047/018 as a product-map entry touched during
+centralized authorization cleanup.
 
 ## Behaviours
 
-- [x] Snapshot created automatically when a run is triggered
+- [x] Snapshot created automatically when a run is triggered and on every
+      explicit graph save (the save→edit contract is detailed under
+      `feat-pipelines-pipeline-versioning`)
 - [x] List snapshots for a pipeline, ordered by version descending, with total count
 - [x] Get snapshot detail by id (full snapshot graph and metadata)
 - [x] Tag and annotate a snapshot via PATCH (custom tag + notes)
-- [x] Rollback to a previous snapshot creates a new snapshot tagged `rollback-v{version}`
-      that restores the graph
+- [x] Rollback to a previous snapshot creates a NEW live-edit snapshot tagged
+      `rollback-v{version}` that restores the graph: `rollback_to_snapshot`
+      writes `version_kind='edit'` / `created_kind='rollback'` with the next
+      allocated `snapshot_version`, so a restore is a new version rather than a
+      rewrite and history is never deleted — the same target can be restored
+      again (`backend/src/modulo/db/crud/pipeline_snapshot_versioning.py::rollback_to_snapshot`)
+- [x] The editor's restore flow is ONE shared FormDialog opened from the
+      read-only historic view (the persistent banner's Restore this version and
+      the version timeline's per-version action): it embeds the old-vs-latest
+      change summary from `POST /snapshots/diff` (nodes restored/removed/
+      modified, connections added/removed/modified, downstream impact, breaking
+      port changes), names the real consequences (new runs use the restored
+      version, edits made since stop being used, history is NOT deleted, runs
+      already in progress keep the version they started on), and uses a plain
+      confirm — no typed phrase, because the action is reversible. A refusal
+      that would remove a HITL gate, strip a node-bound guardrail, or use
+      another team's connector is rendered as plain-language copy, never the raw
+      server error; success navigates back to the latest version and announces
+      the outcome (`Restored v{n}. Created v{m}.`) in an `<output>` status
+      notice (`frontend/src/views/PipelineEditorView.vue`,
+      `frontend/src/__tests__/PipelineEditorHistoricVersion.spec.ts`)
+- [x] The historic version view and the restore flow are reachable from the
+      route deep links `?snapshot=<uuid>` / `?version=<n>`; the full read-only
+      contract (frozen graph, live editor state preserved, write affordances
+      unmounted, `?compare=<uuid>`) is tracked under
+      `feat-pipelines-pipeline-versioning`
+- [x] Snapshot diff and rollback are Community-tier: the
+      `pipeline_diff_rollback` plan gate is RETIRED (FAR-1819) — no
+      `require_feature` guard remains on the routes, and migration
+      `0317_drop_retired_pipeline_diff_rollback_flag` deletes the stale
+      `feature_flag_catalog` row so the admin Feature Flags surface cannot
+      advertise a flag that gates nothing
+      (`frontend/tests/e2e/journeys/snapshot-versioning-journey.spec.ts` asserts
+      no 402; `backend/tests/unit/api/test_pipeline_snapshot_gating.py`)
 - [x] Rollback is guarded under the pipeline row lock before any graph mutation:
       a HITL-gate weakening is denied (`HitlReviewWeakeningDenied`, legacy
       snapshots fail closed as `legacy-snapshot-ambiguous`), a non-admin may not
@@ -105,6 +150,16 @@ product-map entry touched during centralized authorization cleanup.
 
 ## QA History
 
+- 2026-10-19: **FAR-1814 docs drift pass** – documented the shipped restore and
+  gating surfaces that had no tracker line: rollback now names its
+  `version_kind='edit'` / `created_kind='rollback'` provenance and the fact it
+  never deletes history; the editor's shared restore dialog (diff summary,
+  consequences, plain confirm, plain-language guard refusals, success notice);
+  the `?snapshot` / `?version` historic entry point (cross-referenced to
+  `feat-pipelines-pipeline-versioning`); and the FAR-1819 retirement of the
+  `pipeline_diff_rollback` tier gate plus migration 0317's catalog sweep. Every
+  claim was re-verified against the code before writing; `status` stays
+  `covered`.
 - 2026-10-12: **Improve Architecture product-map walk (index 400)** – closed
   five untracked sub-surfaces shipped since the 2026-08-29 pass: (1) FAR-1666
   policy-gate reconciliation on rollback (same-txn `reconcile_graph_policy_gates`,

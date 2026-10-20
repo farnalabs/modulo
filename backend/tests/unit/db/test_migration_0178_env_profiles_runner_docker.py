@@ -3,8 +3,7 @@
 Structural: load the migration module and assert its contract without a
 database, and pin model/migration parity for the provider_type vocabulary:
 
-* the chain is pinned (revision -> 0177_invitations, the main-chain head
-  this revision extends);
+* the chain is pinned (revision -> 0177_invitations, its parent);
 * the upgrade widens ``ck_env_profiles_provider_type`` with 'runner_docker'
   (guarded ``DROP CONSTRAINT IF EXISTS`` + re-add) and drops the legacy
   ``'local_docker'`` server default (guarded: only when the default is the

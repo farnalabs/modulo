@@ -23,6 +23,11 @@ the webhook-subscribable subset is ``AVAILABLE_EVENTS`` in
                           cron streak trip that deactivated NOTHING)
   - org_triggers_auto_paused → level: warning, scope: admin (FAR-1183)
   - guardrail_enforcement_gap / guardrail_kill_switch / guardrail_unexpected_skip → scope: admin (FAR-223)
+  - queue_pressure_notice / queue_pressure_warning / queue_pressure_critical
+    → level: info/warning/error, scope: org (FAR-1344)
+  - capacity_backpressure → level: warning, scope: org (FAR-1344)
+  - capacity_saturation → level: warning, scope: admin (FAR-1344)
+  - capacity_recovered → level: info, scope: org (FAR-1344)
 """
 
 from __future__ import annotations
@@ -36,6 +41,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.notifier import (
     EVENT_BUDGET_EXCEEDED,
+    EVENT_CAPACITY_BACKPRESSURE,
+    EVENT_CAPACITY_RECOVERED,
+    EVENT_CAPACITY_SATURATION,
     EVENT_CIRCUIT_BREAKER_TRIPPED,
     EVENT_CLAIM_EXPIRED,
     EVENT_EVAL_BLOCKED,
@@ -49,6 +57,9 @@ from modulo.core.notifier import (
     EVENT_HITL_DEADLINE_WARNING,
     EVENT_HITL_OVERDUE,
     EVENT_ORG_TRIGGERS_AUTO_PAUSED,
+    EVENT_QUEUE_PRESSURE_CRITICAL,
+    EVENT_QUEUE_PRESSURE_NOTICE,
+    EVENT_QUEUE_PRESSURE_WARNING,
     EVENT_RUN_FAILED,
     EVENT_RUN_STALLED,
     EVENT_SYSTEM_ANNOUNCEMENT,
@@ -62,6 +73,11 @@ _log = logging.getLogger(__name__)
 
 # Deep-link template shared by every run-scoped notification action URL.
 _RUN_DETAIL_URL = "/runs/{run_id}"
+
+# FAR-1344 — the capacity/queue-pressure panel lives on /analytics (the
+# FAR-1343 read surface); capacity alerts deep-link there so an operator can
+# act without reading logs.
+_CAPACITY_PANEL_URL = "/analytics"
 
 # HITL-gate guard events (hitl-gate-removal-guard-plan.md v19 §5). These are
 # emitted by the service-layer backstop as AuditEvents; the config registration
@@ -255,6 +271,65 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 168,
     },
+    # FAR-1344 — the capacity queue-pressure ladder. One event type per rung
+    # (see the notifier __init__ rationale): the level escalates
+    # notice=info → warning=warning → critical=error while the category stays
+    # org-scoped and the action deep-links to the capacity panel. TTL is long
+    # enough (48h) that an unresolved queue alert outlives a weekend; the
+    # sweep's auto-clear (capacity_recovered) is what retires it early.
+    EVENT_QUEUE_PRESSURE_NOTICE: {
+        "level": "info",
+        "scope": "org",
+        "category": "capacity.queue_notice",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 48,
+    },
+    EVENT_QUEUE_PRESSURE_WARNING: {
+        "level": "warning",
+        "scope": "org",
+        "category": "capacity.queue_warning",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 72,
+    },
+    EVENT_QUEUE_PRESSURE_CRITICAL: {
+        "level": "error",
+        "scope": "org",
+        "category": "capacity.queue_critical",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    # Backpressure is an org-scoped, pipeline-level admission refusal: the
+    # operator (not only an admin) owns the queue, so it is org scoped.
+    EVENT_CAPACITY_BACKPRESSURE: {
+        "level": "warning",
+        "scope": "org",
+        "category": "capacity.backpressure",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 72,
+    },
+    # Saturation is an ORG-wide infrastructure condition (a shared limit is
+    # fully held) — admin scope, paired with the other org-capacity operator
+    # alerts (org_triggers_auto_paused / circuit_breaker_tripped).
+    EVENT_CAPACITY_SATURATION: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "capacity.saturation",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_CAPACITY_RECOVERED: {
+        "level": "info",
+        "scope": "org",
+        "category": "capacity.recovered",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 24,
+    },
 }
 
 _TITLE_TEMPLATES: dict[str, str] = {
@@ -279,6 +354,12 @@ _TITLE_TEMPLATES: dict[str, str] = {
     EVENT_GUARDRAIL_ENFORCEMENT_GAP: "Guardrail enforcement gap — {guardrail}",
     EVENT_GUARDRAIL_KILL_SWITCH: "Guardrails downgraded to observe (kill-switch enabled)",
     EVENT_GUARDRAIL_UNEXPECTED_SKIP: "Guardrail skipped unexpectedly — {guardrail}",
+    EVENT_QUEUE_PRESSURE_NOTICE: "Queue building up — {pipeline_name}",
+    EVENT_QUEUE_PRESSURE_WARNING: "Queue not draining — {pipeline_name}",
+    EVENT_QUEUE_PRESSURE_CRITICAL: "Queue stalled — {pipeline_name}",
+    EVENT_CAPACITY_BACKPRESSURE: "New runs refused (backpressure) — {pipeline_name}",
+    EVENT_CAPACITY_SATURATION: "Capacity saturation — {limit_label} fully held",
+    EVENT_CAPACITY_RECOVERED: "Capacity recovered — {subject_label}",
 }
 
 _BODY_TEMPLATES: dict[str, str] = {
@@ -332,6 +413,36 @@ _BODY_TEMPLATES: dict[str, str] = {
         'Guardrail "{guardrail}" was skipped for an unexpected reason ({reason}) — not explained by '
         "a soft-deleted pinned guardrail. See the run for details."
     ),
+    # FAR-1344 — capacity alert bodies. Every placeholder here is always present
+    # in the payload the sweep builds (it fills safe defaults), so a capacity
+    # alert never renders "[unknown]".
+    EVENT_QUEUE_PRESSURE_NOTICE: (
+        'Pipeline "{pipeline_name}" has {pending_depth} queued run(s), oldest waiting '
+        "{oldest_pending_age_minutes} min — the queue is growing. Binding limit: {limit_label} "
+        "({current_value}/{limit_value}). {suggested_action}"
+    ),
+    EVENT_QUEUE_PRESSURE_WARNING: (
+        'Pipeline "{pipeline_name}" queue is not draining: {pending_depth} queued, oldest waiting '
+        "{oldest_pending_age_minutes} min. Binding limit: {limit_label} ({current_value}/{limit_value}). "
+        "{suggested_action}"
+    ),
+    EVENT_QUEUE_PRESSURE_CRITICAL: (
+        'Pipeline "{pipeline_name}" queue is stalled: {pending_depth} queued and still climbing with no '
+        "drain, oldest waiting {oldest_pending_age_minutes} min. Binding limit: {limit_label} "
+        "({current_value}/{limit_value}). {suggested_action}"
+    ),
+    EVENT_CAPACITY_BACKPRESSURE: (
+        'New runs for "{pipeline_name}" are being refused by backpressure ({reason_label}) — '
+        "{pending_depth} queued locally. {suggested_action}"
+    ),
+    EVENT_CAPACITY_SATURATION: (
+        "{limit_label} has been fully held at {limit_value} for over {sustained_minutes} min with "
+        "{pending_depth} run(s) queued org-wide. {suggested_action}"
+    ),
+    EVENT_CAPACITY_RECOVERED: (
+        "Capacity has recovered for {subject_label}: the queue is draining again and the "
+        "{previous_level} capacity alert is cleared."
+    ),
 }
 
 _ACTION_URL_TEMPLATES: dict[str, str | None] = {
@@ -358,6 +469,14 @@ _ACTION_URL_TEMPLATES: dict[str, str | None] = {
     EVENT_GUARDRAIL_ENFORCEMENT_GAP: _RUN_DETAIL_URL,
     EVENT_GUARDRAIL_KILL_SWITCH: None,
     EVENT_GUARDRAIL_UNEXPECTED_SKIP: _RUN_DETAIL_URL,
+    # FAR-1344 — the capacity panel on /analytics is the operator's action
+    # surface (FAR-1343 read); every capacity alert deep-links there.
+    EVENT_QUEUE_PRESSURE_NOTICE: _CAPACITY_PANEL_URL,
+    EVENT_QUEUE_PRESSURE_WARNING: _CAPACITY_PANEL_URL,
+    EVENT_QUEUE_PRESSURE_CRITICAL: _CAPACITY_PANEL_URL,
+    EVENT_CAPACITY_BACKPRESSURE: _CAPACITY_PANEL_URL,
+    EVENT_CAPACITY_SATURATION: _CAPACITY_PANEL_URL,
+    EVENT_CAPACITY_RECOVERED: _CAPACITY_PANEL_URL,
 }
 
 # FAR-1410 — payload-driven wording overrides, selected from the payload's

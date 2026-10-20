@@ -2,13 +2,42 @@ import uuid
 from datetime import datetime
 from typing import Final
 
-from sqlalchemy import DateTime, ForeignKey, Uuid, func, text
+from sqlalchemy import JSON, DateTime, ForeignKey, Uuid, func, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # SQL referential action shared by every nullable FK across the model layer:
 # when the referenced row is deleted, the column is nulled rather than cascading.
 # Single home so model modules import it instead of re-declaring the literal.
 ONDELETE_SET_NULL: Final[str] = "SET NULL"
+
+# Column type for a JSON column whose physical Postgres type is ``jsonb``: use
+# it for the columns migration ``0147_json_to_jsonb_standardize`` promoted and
+# for every column a migration created ``jsonb`` directly. Generic ``JSON``
+# keeps SQLite and MariaDB working; the ``postgresql`` variant makes the ORM
+# declare what the database actually holds.
+#
+# This matters beyond cosmetics: a column declared bare ``JSON`` over a physical
+# ``jsonb`` column binds equality/containment predicates as ``$1::JSON`` and
+# Postgres raises ``operator does not exist: jsonb = json``. FAR-1856 was
+# exactly that failure on ``lifecycle_maps.content_json`` — a scanner swallowed
+# the per-scanner exception and silently returned nothing in production.
+#
+# ONE definition (FAR-1878): import this alias rather than writing the
+# ``JSON().with_variant(JSONB(), "postgresql")`` expression inline. The
+# architecture gate ``tests/architecture/test_model_jsonb_column_parity.py``
+# enforces this single-definition rule across the whole source tree (migrations
+# excluded) and dialect parity for **every** column a migration declares
+# ``jsonb`` (the pair set is derived from the migrations themselves, not a
+# hand-maintained inventory).
+JSONB_COL: Final[JSON] = JSON().with_variant(JSONB(), "postgresql")
+
+# ``none_as_null=True`` sibling for a physical-jsonb column whose ORM
+# declaration binds Python ``None`` as SQL NULL rather than the JSON ``null``
+# value (``runs.work_item_refs`` / ``runs.variant_config_snapshot``). The
+# variant carries the same flag so the postgres bind path preserves that
+# semantic; a plain ``JSONB_COL`` would silently change None handling.
+JSONB_COL_NONE_AS_NULL: Final[JSON] = JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
 
 
 class Base(DeclarativeBase):

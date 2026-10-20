@@ -4,11 +4,13 @@ name: "Merge: Queue Watchdog"
 #
 # Incident (2026-09-17 ~20:03-21:21 UTC): a merge-queue run (35268537695,
 # workflow_dispatch) entered in_progress but never got a runner — its job has
-# started_at: null. Because merge-queue.yml declares concurrency:
-# { group: merge-queue, cancel-in-progress: false }, that run held the group
-# lock indefinitely. Every later run queued behind it. GitHub keeps only the
-# newest pending run per group, so each new event cancelled the previous
-# pending run — a stream of cancelled runs plus one permanent pending.
+# started_at: null. Because merge-queue.yml's `queue` job declares
+# concurrency: { group: merge-queue, cancel-in-progress: false } (it was at
+# WORKFLOW level until 2026-10, so this incident held a workflow-wide lock),
+# that run held the group lock indefinitely. Every later run queued behind it.
+# GitHub keeps only the newest pending run per group, so each new event
+# cancelled the previous pending run — a stream of cancelled runs plus one
+# permanent pending.
 #
 # The in-job "Cancel stale stuck runs" sweep (merge-queue.yml ~207-241)
 # lives INSIDE the queue job — but that job cannot start while the lock is

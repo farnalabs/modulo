@@ -254,7 +254,7 @@
             v-if="importSuccess"
             data-testid="settings-guardrails-import-success"
             role="status"
-            class="text-sm font-medium text-success"
+            class="text-sm font-medium text-success-text"
           >
             {{ importSuccess }}
           </div>

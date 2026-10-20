@@ -7,12 +7,13 @@ import pytest
 
 from modulo.core.library_service import (
     _MODULO_PRIMITIVES,
-    _filter_modulo,
     copy_to_adapt,
     get_primitive,
     list_primitives,
 )
 from modulo.db.crud.base import PageResult
+
+from .helpers import mock_session as _mock_session
 
 _EXPECTED_COMPOSITE_SLUGS = {
     "approver",
@@ -57,16 +58,6 @@ def _fake_primitive(
         "output_schema_id": None,
     }
     return p
-
-
-def _mock_session() -> MagicMock:
-    session = MagicMock()
-    ctx = AsyncMock()
-    ctx.__aenter__ = AsyncMock(return_value=ctx)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=ctx)
-    session.in_transaction = MagicMock(return_value=True)
-    return session
 
 
 # ---------------------------------------------------------------------------
@@ -192,15 +183,10 @@ async def test_copy_to_adapt_composite_preserves_content_json():
 
 
 # ---------------------------------------------------------------------------
-# Community primitive filter does not include composite (not added yet)
+# Composite primitives in the built-in catalog
 # ---------------------------------------------------------------------------
 
 
 def test_modulo_primitives_include_composites():
     composites = [p for p in _MODULO_PRIMITIVES if p.primitive_type == "composite"]
     assert {p.slug for p in composites} == _EXPECTED_COMPOSITE_SLUGS
-
-
-def test_filter_modulo_composite_returns_composites():
-    results = _filter_modulo(primitive_type="composite", search=None)
-    assert {p.slug for p in results} == _EXPECTED_COMPOSITE_SLUGS

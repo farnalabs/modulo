@@ -147,6 +147,19 @@ jobs:
           SKIPPED=0
           FAILED=0
 
+          # Tip of main, the volatile half of the dispatch fingerprint below.
+          # This job has no actions/checkout step, so there is no git remote to
+          # `git ls-remote` against; the explicit REST path through the existing
+          # GH_TOKEN is the cheap equivalent (mirrors the /repos/... paths
+          # already used in this step). Fail-open: if the lookup fails we fall
+          # back to a per-run nonce, so the fingerprint can never freeze on a
+          # stale value and silently suppress every future dispatch.
+          MAIN_SHA=$(gh api repos/farnalabs/modulo/commits/main --jq '.sha' 2>/dev/null || echo "")
+          if [ -z "$MAIN_SHA" ]; then
+            echo "::warning::Could not resolve the tip of main; falling back to a per-run nonce so the conflict fingerprint still allows dispatch."
+            MAIN_SHA="unknown-$(date +%s)"
+          fi
+
           for i in $(seq 0 $((DISPATCH_COUNT - 1))); do
             PR_NUM=$(jq -r ".[$i].number" /tmp/dispatch_prs.json)
             BRANCH=$(jq -r ".[$i].headRefName" /tmp/dispatch_prs.json)
@@ -173,13 +186,67 @@ jobs:
               fi
             fi
 
-            # Dispatch via webhook (mirrors ci.yml notify-pr-failure pattern)
+            # headSha: enables the engine's CI-failure coalescing, which the
+            # Branch Fixer's webhook trigger keys on (prNumber, headSha) -
+            # exactly what ci.yml's notify-pr-failure already sends. This
+            # dispatch path sent no headSha, so it could never coalesce and
+            # every 15-minute cycle minted a brand-new full fixer run for an
+            # unchanged PR (PR #1773 accumulated 148 runs in a week). With the
+            # PR's own head SHA a repeat dispatch for the same commit folds
+            # into the run already created for it instead of minting another.
+            #
+            # The suppressed set is BROADER than byte-identical payloads: the
+            # coalesce key carries the PR head SHA but NOT the tip of main, so
+            # a re-dispatch after main has advanced (a genuinely different
+            # merge to reconcile) is suppressed too - for up to the coalesce
+            # window (default 1 hour) - because the PR's head SHA is unchanged.
+            # The fingerprint below still varies with main, but the coalesce
+            # gate does not read it. Consequence, accepted deliberately (it is
+            # the point of this change): the effective retry cadence for a
+            # no-commit fixer failure on this path is ~1 hour, not the
+            # 30-minute fixer-recency guard above. A new commit changes the
+            # head SHA and still dispatches fresh.
+            #
+            # FAIL OPEN: an unresolvable SHA leaves HEAD_SHA empty and the
+            # payload omits the key, so the delivery behaves exactly as it did
+            # before (an absent headSha derives no coalesce key) and the
+            # dispatch is never blocked or skipped. Explicit REST path because
+            # this job has no actions/checkout step, so `gh` has no remote to
+            # infer the repository from.
+            HEAD_SHA=""
+            SHA_RC=0
+            HEAD_SHA=$(gh api "/repos/farnalabs/modulo/pulls/${PR_NUM}" --jq '.head.sha' 2>/tmp/pr_head_sha_stderr.txt) || SHA_RC=$?
+            if [ "$SHA_RC" -ne 0 ] || [ -z "$HEAD_SHA" ]; then
+              ERR=$(head -c 300 /tmp/pr_head_sha_stderr.txt 2>/dev/null | tr '\n' ' ' || true)
+              echo "::warning::Could not resolve the head SHA for PR #$PR_NUM (rc=$SHA_RC) — dispatching without headSha, so this delivery will not coalesce.${ERR:+ gh api stderr: $ERR}"
+              HEAD_SHA=""
+            fi
+
+            # Deterministic dedupe key for this conflict (mirrors ci.yml's
+            # notify-pr-failure payload shape). An unchanged tip of main means
+            # the SAME merge to reconcile, so an identical repeat collapses to
+            # one Branch Fixer run (the fixer dedupes on
+            # `{{ input.fingerprint }}`). Once main advances the merge is
+            # genuinely different and the fingerprint changes, so the fixer's
+            # own dedupe would allow a new run - but the (prNumber, headSha)
+            # coalesce gate above can still suppress the dispatch itself for up
+            # to its window (see that block). The 30-minute fixer-recency guard
+            # above remains the pre-dispatch retry gate.
+            FINGERPRINT="conflict|pr:${PR_NUM}|main:${MAIN_SHA}"
+            # taskKind marks this as a CONFLICT task so the Branch Fixer selects the
+            # conflict task profile (ONE long attempt) rather than the CI-failure
+            # retry ladder. Extra payload keys flow through harmlessly; an absent
+            # marker keeps the ladder, so older dispatches keep working.
             BODY=$(jq -n \
               --arg branchName "$BRANCH" \
               --argjson prNumber "$PR_NUM" \
-              --arg failureDescription "PR conflicts with origin/main (mergeable=CONFLICTING). merge origin/main into the branch (a MERGE commit — do NOT rebase or force-push a shared/reviewed branch). Resolve conflicts by reading all three versions (base/ours/theirs) and satisfying both intents. Re-run the stages/tests for touched modules. Push — which re-arms the pull_request pipeline (CI + sonarcloud-scan)." \
+              --arg headSha "$HEAD_SHA" \
+              --arg failureDescription "PR conflicts with origin/main (mergeable=CONFLICTING). merge origin/main into the branch (a MERGE commit — do NOT rebase or force-push a shared/reviewed branch). Resolve conflicts by reading all three versions (base/ours/theirs) and satisfying both intents. Do NOT re-run the test suites in the sandbox — resolve, commit, and push. The node budget is too small for a full conflict resolution plus a suite run, and the push re-arms the pull_request pipeline, which is the authoritative gate. Push — which re-arms the pull_request pipeline (CI + sonarcloud-scan)." \
               --arg repo "farnalabs/modulo" \
-              '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
+              --arg fingerprint "${FINGERPRINT}" \
+              --arg taskKind "conflict" \
+              '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo, fingerprint: $fingerprint, taskKind: $taskKind}
+               + (if $headSha == "" then {} else {headSha: $headSha} end)')
 
             # Retry with exponential backoff on network failures (curl HTTP 000) and 429/5xx (max 5 attempts).
             # TIMESTAMP and HMAC are recomputed per attempt: the server
@@ -224,7 +291,39 @@ jobs:
 
             if [ "$DISPATCH_OK" = "false" ]; then
               DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-              echo "::error::Branch Fixer dispatch failed for PR #$PR_NUM (HTTP ${LAST_HTTP}: ${DETAIL}) after retries."
+              # FAR-1949: an undelivered dispatch must never be SILENT, and it must
+              # be attributable to the PR it concerns. On 2026-10-17 the dispatch was
+              # refused with HTTP 429 ("Concurrent run limit of 5 reached") and the
+              # conflicted PR was left with nothing durable saying the Branch Fixer
+              # had never been asked to reconcile it. So: name the PR in the
+              # annotation AND leave a durable comment on that PR. FAR-1939 set the
+              # "never SILENT on an undelivered dispatch" requirement, but its
+              # merge-queue.yml fallback emits only ::error:: + exit 1 (it posts no
+              # PR comment); the durable-comment + HTML-marker pattern is mirrored
+              # from this workflow's own manual-delivery note in the "Surface
+              # manual-delivery conflicts" step below. The retry count and backoff
+              # above are deliberately unchanged.
+              echo "::error::Branch Fixer dispatch failed for PR #$PR_NUM (HTTP ${LAST_HTTP}: ${DETAIL}) after retries — this PR was never handed to the fixer."
+              # Idempotent: this reconciler runs every 15 minutes, so a persistently
+              # failing webhook (e.g. a sustained 429) would otherwise post a fresh
+              # comment on every cycle. Mirror the manual-delivery note below: key
+              # the note on an HTML marker and skip when it already exists.
+              UNDELIVERED_MARKER="<!-- pr-conflict-reconciler:undelivered-dispatch -->"
+              EXISTING=$(gh pr view "$PR_NUM" --repo farnalabs/modulo --json comments --jq "[.comments[] | select(.body | contains(\"$UNDELIVERED_MARKER\"))] | length" 2>/dev/null || echo "0")
+              if [ "$EXISTING" != "0" ]; then
+                echo "::notice::PR #$PR_NUM already carries an undelivered-dispatch note — not reposting."
+              else
+                UNDELIVERED_BODY="The PR Conflict Reconciler could NOT dispatch the Branch Fixer for this PR: all 5 webhook attempts failed (last HTTP ${LAST_HTTP}: ${DETAIL}). Until the conflict is reconciled this PR stays conflicted against \`origin/main\` (mergeable=CONFLICTING), so no pull_request workflow will run to hand it to the fixer. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} ${UNDELIVERED_MARKER}"
+                if gh pr comment "$PR_NUM" --repo farnalabs/modulo --body "$UNDELIVERED_BODY" > /dev/null 2>/tmp/undelivered_comment_stderr.txt; then
+                  echo "::notice::PR #$PR_NUM: posted a comment recording that the Branch Fixer was never dispatched."
+                else
+                  # Name the COMMENT failure separately from the webhook failure: the
+                  # reader must not misattribute the comment's stderr/HTTP status as
+                  # the reason the dispatch failed.
+                  COMMENT_ERR=$(head -c 300 /tmp/undelivered_comment_stderr.txt 2>/dev/null | tr '\n' ' ' || true)
+                  echo "::error::PR #$PR_NUM: could not post the undelivered-notification comment either (comment post failed${COMMENT_ERR:+: $COMMENT_ERR}; the dispatch failure was webhook HTTP ${LAST_HTTP}: ${DETAIL}) — this PR has NO durable signal that the Branch Fixer was never asked to reconcile it."
+                fi
+              fi
               FAILED=$((FAILED + 1))
             fi
           done

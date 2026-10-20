@@ -178,8 +178,11 @@ PERMISSIONS: dict[str, str] = {
     "eval.definition.update": "operator",
     "eval.definition.delete": "operator",
     # housekeeping
-    "housekeeping.list": "runner",
-    "housekeeping.perform": "operator",
+    # RETIRED (FAR-1879): ``housekeeping.list`` and ``housekeeping.perform``
+    # are no longer keys. Both MCP tools now resolve to ``housekeeping.manage``
+    # (admin) and enforce the system-admin gate in their own bodies, matching
+    # their REST twins. A leftover grant naming either retired key fails closed
+    # (``is_delegable`` is False for an unknown key).
     # determination — SDLC scan + pipeline draft generation read all of the
     # org's connected tool data (repos, PRs, issues), so it is operator-scoped
     # like schema.infer rather than viewer/runner.
@@ -213,6 +216,10 @@ PERMISSIONS: dict[str, str] = {
     "housekeeping.manage": "admin",
     "run_retention.manage": "admin",
     "evidence_retention.manage": "admin",
+    # Evidence read surface + server-side redaction boundary (FAR-944).
+    # Reads are viewer-floor; managing the redaction rules is admin-only.
+    "evidence.read": "viewer",
+    "evidence.redaction.manage": "admin",
     "admin.trigger_events": "admin",
     "admin.queue_metrics": "admin",
     "admin.notification.manage": "admin",
@@ -248,6 +255,19 @@ PERMISSIONS: dict[str, str] = {
     "lifecycle_map.update": "operator",
     "lifecycle_map.delete": "operator",
     "lifecycle_map.list": "viewer",
+    # runners — the ``GET /api/v1/runners/status`` read model (per-machine
+    # probe strip, per-profile health/drift, and the org's sandbox-concurrency
+    # contract). FAR-1955: this is an ADMIN surface (the manifest declares
+    # ``/admin/runners/*`` with ``required_roles: [admin]``), but it previously
+    # rode ``environment_profile.list`` — a viewer-granted key — so any member
+    # could read the capacity/concurrency contract. Split by surface rather
+    # than tightening the shared key: ``environment_profile.list`` stays viewer
+    # because the pipeline editor (``/pipelines/:id/editor``, member-readable)
+    # reads ``GET /api/v1/environment-profiles`` on mount. The key is plural
+    # ``runners.`` (mirroring the REST namespace) and deliberately NOT
+    # ``runner.status``: ``run.status`` is an existing VIEWER-level key, so a
+    # one-character typo in a gate would silently downgrade to viewer.
+    "runners.status": "admin",
     # environment profiles
     "environment_profile.create": "operator",
     "environment_profile.update": "operator",

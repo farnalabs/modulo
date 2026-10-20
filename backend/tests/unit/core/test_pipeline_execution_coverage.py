@@ -1280,3 +1280,56 @@ class TestAwaitWatchdogBounded:
             )
         # A None task short-circuits before the bounded wait is ever entered.
         wait_mock.assert_not_awaited()
+
+
+# -----------------------------------------------------------------------
+# _run_abort_watcher — executor + watchdog cancellation
+# -----------------------------------------------------------------------
+
+
+class TestRunAbortWatcher:
+    @pytest.mark.asyncio
+    async def test_cancels_all_pending_tasks_on_abort_signal(self) -> None:
+        """When an abort signal fires, every still-running task is cancelled."""
+        superseded = asyncio.Event()
+        health_failed = asyncio.Event()
+        superseded.set()
+
+        exec_task = asyncio.create_task(asyncio.sleep(999))
+        watchdog_task = asyncio.create_task(asyncio.sleep(999))
+        node_deadline_task = asyncio.create_task(asyncio.sleep(999))
+
+        await pe._run_abort_watcher(
+            superseded,
+            health_failed,
+            exec_task=exec_task,
+            watchdog_task=watchdog_task,
+            node_deadline_task=node_deadline_task,
+        )
+        await asyncio.gather(exec_task, watchdog_task, node_deadline_task, return_exceptions=True)
+        assert exec_task.cancelled()
+        assert watchdog_task.cancelled()
+        assert node_deadline_task.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_leaves_already_done_tasks_untouched(self) -> None:
+        """A task that finished before the abort signal is not re-cancelled."""
+        superseded = asyncio.Event()
+        health_failed = asyncio.Event()
+        health_failed.set()
+
+        exec_task = asyncio.create_task(asyncio.sleep(0))
+        watchdog_task = asyncio.create_task(asyncio.sleep(0))
+        node_deadline_task = asyncio.create_task(asyncio.sleep(0))
+        await asyncio.gather(exec_task, watchdog_task, node_deadline_task)
+
+        await pe._run_abort_watcher(
+            superseded,
+            health_failed,
+            exec_task=exec_task,
+            watchdog_task=watchdog_task,
+            node_deadline_task=node_deadline_task,
+        )
+        for task in (exec_task, watchdog_task, node_deadline_task):
+            assert task.done()
+            assert not task.cancelled()

@@ -91,7 +91,15 @@ function notificationEvent(overrides: Record<string, unknown> = {}): Record<stri
 }
 
 async function mountBell(props: Record<string, unknown> = {}) {
-  const wrapper = mount(NotificationBell, { props, global: { plugins: [createPinia()] } })
+  const wrapper = mount(NotificationBell, {
+    props,
+    global: {
+      plugins: [createPinia()],
+      // FAR-1926: the dropdown teleports to <body>; stub the teleport so it
+      // renders in place and wrapper.find keeps working.
+      stubs: { teleport: true },
+    },
+  })
   await flushPromises()
   await nextTick()
   return wrapper
@@ -154,6 +162,12 @@ describe('NotificationBell (FAR-250)', () => {
     const badge = wrapper.find('[data-testid="notification-unread-badge"]')
     expect(badge.exists()).toBe(true)
     expect(badge.text()).toBe('7')
+    // WCAG AA: 10px bold text is not "large text", so the 4.5:1 floor applies.
+    // `--destructive-foreground` on `--destructive` is only 3.22:1 (dark) /
+    // 3.30:1 (agent); the fill-safe token clears AA in every theme.
+    expect(badge.classes()).toContain('bg-destructive-fill')
+    expect(badge.classes()).toContain('text-destructive-foreground')
+    expect(badge.classes()).not.toContain('bg-destructive')
   })
 
   it('caps the badge at "99+" when the unread count exceeds 99', async () => {
@@ -456,6 +470,49 @@ describe('NotificationBell (FAR-250)', () => {
     // A click whose target the root contains is NOT an outside click; the
     // handler must leave the dropdown open.
     handler({ target: wrapper.element } as unknown as MouseEvent)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(true)
+    addSpy.mockRestore()
+  })
+
+  it('keeps the dropdown open when the click lands inside the (body-teleported) dropdown', async () => {
+    // FAR-1926: the panel teleports to <body>, so it is NOT inside the bell
+    // root — the outside-click handler must still treat its own subtree as
+    // "inside" (matched via #notification-dropdown), or the panel would close
+    // on every internal click in the real app.
+    const addSpy = vi.spyOn(document, 'addEventListener')
+    const wrapper = await mountBell()
+    await wrapper.find('[data-testid="notification-bell-button"]').trigger('click')
+    expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(true)
+
+    const clickCall = addSpy.mock.calls.find(([type]) => type === 'click')
+    expect(clickCall).toBeDefined()
+    const handler = clickCall![1] as unknown as (e: MouseEvent) => void
+
+    // A detached element that is the teleported dialog itself (or inside it):
+    // closest('#notification-dropdown') matches, so the dropdown stays open.
+    const teleportedDialog = document.createElement('div')
+    teleportedDialog.id = 'notification-dropdown'
+    handler({ target: teleportedDialog } as unknown as MouseEvent)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(true)
+    addSpy.mockRestore()
+  })
+
+  it('ignores an outside-click event that carries no target (defensive)', async () => {
+    const addSpy = vi.spyOn(document, 'addEventListener')
+    const wrapper = await mountBell()
+    await wrapper.find('[data-testid="notification-bell-button"]').trigger('click')
+    expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(true)
+
+    const clickCall = addSpy.mock.calls.find(([type]) => type === 'click')
+    const handler = clickCall![1] as unknown as (e: MouseEvent) => void
+
+    // A synthetic event with no target must bail out (never throw, never be
+    // treated as an outside click that closes the panel).
+    expect(() => handler({ target: null } as unknown as MouseEvent)).not.toThrow()
     await flushPromises()
 
     expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(true)

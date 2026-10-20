@@ -58,5 +58,5 @@ class TestCreateRegistry:
 class TestNoopRateLimiter:
     async def test_noop_allows_every_request(self):
         limiter = _NoopRateLimiter()
-        assert await limiter.check("key", max_requests=1) is True
-        assert await limiter.check("key", max_requests=0) is True
+        assert await limiter.check("key", 1) is True
+        assert await limiter.check("key", 0) is True

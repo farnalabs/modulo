@@ -1549,7 +1549,7 @@ export interface paths {
         };
         /**
          * Sso Providers
-         * @description List configured SSO providers (OIDC) and whether SAML is enabled.
+         * @description List the SSO providers this instance advertises on the login page.
          *
          *     Pre-auth discovery endpoint: the login page fetches it BEFORE any user is
          *     authenticated, so it must never require a user and must never surface an
@@ -1560,14 +1560,20 @@ export interface paths {
          *     anonymous path resolves system-level licenses only — org-level licenses
          *     are unreachable pre-auth.
          *
-         *     OIDC providers are merged from the sso_providers DB table (preferred) and
-         *     the env-var fallback, deduplicated by provider_id. The DB read goes through
-         *     the system session (``modulo_system`` role, instance-global) so the login
-         *     page reflects every org's enabled providers; when the system read returns
-         *     nothing (unprovisioned role), fall back to the app session scoped to the
-         *     first org (single-org self-hosted behaviour). SAML is enabled if any enabled
-         *     SAML provider exists in the DB, or if env-var SAML is fully configured
-         *     (enabled + license + metadata).
+         *     FAR-1978 — the response is SCOPED. ``display_name`` is admin-chosen free
+         *     text and can name a tenant, so an anonymous caller must never read a
+         *     provider row from an org they did not resolve by slug:
+         *
+         *     - Single-org instance (exactly one login-active org): that org's enabled
+         *       OIDC providers (filtered by ``organisation_id``) plus env-var providers.
+         *       This is the only path the single-org login page (`LoginView.vue`) uses.
+         *     - Zero or more than one login-active org: environment-level configuration
+         *       only — env-var OIDC providers and env-var SAML. No DB provider name is
+         *       listed.
+         *
+         *     SAML is enabled on the single-org path if any enabled SAML provider exists
+         *     in the DB, or if env-var SAML is fully configured (enabled + license +
+         *     metadata); on the multi-org path only the env-var configuration counts.
          */
         get: operations["sso_providers_api_v1_auth_sso_providers_get"];
         put?: never;
@@ -1912,6 +1918,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/capacity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Analytics Capacity
+         * @description Capacity / queue-pressure observability (FAR-1343).
+         *
+         *     Answers "is my queue draining, and if not, which limit is holding it?" plus
+         *     "is the org's active-run resource healthy?" from one read surface:
+         *
+         *     * per-pipeline and org-wide pending depth, oldest-pending age and the
+         *       created/started/completed counts over the window (the drain rate);
+         *     * a cause breakdown for the pending queue (pipeline capacity vs org run
+         *       capacity vs org sandbox capacity, from the canonical capacity markers);
+         *     * the configured limits, the limit currently binding, and how many pending
+         *       runs would become admissible if that limit were raised;
+         *     * org ACTIVE-RUN health — cap utilisation vs completion rate and the
+         *       "cap fully held AND completions ≈ 0 for K consecutive intervals"
+         *       leak/stall signature with per-pipeline attribution.
+         *
+         *     **Observability only — signal, never a refusal.** A repeated ``pipeline_id``
+         *     narrows the queue, drain and series sections; the ACTIVE-RUN health totals
+         *     are always org-wide (their denominator is the org cap), and its
+         *     per-pipeline attribution lists only the pipelines visible to the caller's
+         *     team scope. ``window_minutes`` bounds the scan; an oversized scan is a 422
+         *     asking the caller to narrow it, never a silently truncated series.
+         */
+        get: operations["analytics_capacity_api_v1_analytics_capacity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/guardrails": {
         parameters: {
             query?: never;
@@ -2074,10 +2120,10 @@ export interface paths {
          *     Served unauthenticated on purpose: the CI/CD deploy pipelines
          *     (deploy.yml, rc-validate.yml, deploy-watchdog.yml,
          *     deploy-staleness-check.yml) call it without a principal to verify which
-         *     build is live. The repo is public, so the git metadata is already
-         *     world-readable. Only genuinely non-public locals (hostname, ci_job_url)
-         *     are omitted. If values are absent they fall back to empty strings so the
-         *     endpoint is always safe to call.
+         *     build is live. Only public-safe build identifiers are returned; source-repo
+         *     free text (git_branch, git_commit_message) and other non-public locals
+         *     (hostname, ci_job_url) are omitted. If values are absent they fall back to
+         *     empty strings so the endpoint is always safe to call.
          */
         get: operations["deployment_info_api_v1_deployment_get"];
         put?: never;
@@ -7536,11 +7582,22 @@ export interface paths {
          *     ``validate_binding`` is called to verify the gate-to-eval binding is
          *     still valid after the update.  Violations are logged at WARNING with
          *     structured context but the caller receives a generic 400 (criteria 5-9).
+         *
+         *     The load-and-mutate runs under the same transaction-scoped advisory lock
+         *     as create/toggle (FAR-1750), so a concurrent POST/PATCH cannot interleave
+         *     with this read-modify-write. A lock-acquisition timeout (SQLSTATE 57014)
+         *     surfaces through the standard 503 DB-error mapping.
          */
         put: operations["update_policy_gate_api_v1_evals__eval_id__policy_gate_put"];
         /**
          * Create Policy Gate
          * @description Create a PolicyGate for an eval (admin only).
+         *
+         *     POST is CREATE-ONLY (FAR-1750, decision of record): an eval that already
+         *     has a live gate is refused with a typed 409 — updating (including
+         *     changing ``evaluation_mode``) is ``PUT``, which is the single replace
+         *     path. With ``evaluation_mode`` omitted, a fresh create defaults to
+         *     ``automatic``.
          *
          *     The gate inherits the eval's edit permission — no separate permission
          *     check is performed (criterion 14).
@@ -7552,8 +7609,9 @@ export interface paths {
          *     (criteria 5-9).
          *
          *     Concurrent creates are serialised via a transaction-scoped advisory lock
-         *     (section 4.4/5).  A ``UniqueViolation`` while holding the lock → 409.
-         *     A lock-acquisition timeout (SQLSTATE 57014) → 503.
+         *     (section 4.4/5).  A POST that finds a live gate while holding the lock →
+         *     409; a ``UniqueViolation`` (true race) → 409. A lock-acquisition timeout
+         *     (SQLSTATE 57014) → 503.
          */
         post: operations["create_policy_gate_api_v1_evals__eval_id__policy_gate_post"];
         /**
@@ -7604,8 +7662,8 @@ export interface paths {
          *     (CO-3).
          *
          *     The load-and-mutate runs under the same transaction-scoped advisory lock
-         *     as create-or-replace (FAR-967 F6) so a concurrent replace cannot
-         *     interleave with this read-modify-write.  A lock-acquisition timeout
+         *     as create/update (FAR-967 F6) so a concurrent write cannot interleave
+         *     with this read-modify-write.  A lock-acquisition timeout
          *     (SQLSTATE 57014) → 503.
          *
          *     An audit-log entry is emitted (best-effort, same path as create/update).
@@ -10303,6 +10361,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/evidence/redaction-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Redaction Rules Endpoint
+         * @description List the caller org's redaction rules (admin only).
+         *
+         *     DB failures are translated by ``@handle_db_errors``; a read cannot produce a
+         *     rule conflict, so no local ``IntegrityError`` arm re-labels one as such.
+         */
+        get: operations["list_redaction_rules_endpoint_api_v1_evidence_redaction_rules_get"];
+        /**
+         * Upsert Redaction Rule Endpoint
+         * @description Create or update one redaction rule for the caller org (admin only).
+         *
+         *     DB failures (including the unique-constraint ``IntegrityError`` that a
+         *     concurrent upsert of the same ``(key_pattern, role)`` can raise) are
+         *     translated to their status codes by ``@handle_db_errors`` — one shared
+         *     mapping instead of a duplicated per-route chain.
+         */
+        put: operations["upsert_redaction_rule_endpoint_api_v1_evidence_redaction_rules_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/evidence/{evidence_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Evidence Endpoint
+         * @description Return one evidence row for the caller org, redacted for their role.
+         *
+         *     The 404 for a missing row is raised inside the body and passed through
+         *     untouched by ``@handle_db_errors``; DB failures use the shared mapping.
+         */
+        get: operations["get_evidence_endpoint_api_v1_evidence__evidence_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Evidence Endpoint
+         * @description List a run's evidence rows for the caller org, redacted for their role.
+         *
+         *     At most :data:`_EVIDENCE_LIST_LIMIT` rows are returned.
+         *
+         *     The org's redaction rules are loaded ONCE per request and each row resolved
+         *     in memory from that list — never one rule query per row. DB failures use the
+         *     shared ``@handle_db_errors`` mapping; a read cannot produce a rule conflict.
+         */
+        get: operations["list_evidence_endpoint_api_v1_evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/assistant/sessions": {
         parameters: {
             query?: never;
@@ -11845,6 +11984,312 @@ export interface components {
              * @description Allowlist of run_context keys the node may read. Absent = UNRESTRICTED (full run_context).
              */
             context_scope?: string[] | null;
+        };
+        /**
+         * CapacityActiveHealth
+         * @description Org ACTIVE-RUN health: cap utilisation vs completion rate (FAR-1343).
+         *
+         *     ``executing_total`` is the part of the gate total that genuinely holds a
+         *     slot (running/claimed/unknown); ``parked_total`` is human-waiting runs the
+         *     org gate counts but which are not executing. ``stall_suspected`` is the
+         *     leak/stall signature: the org cap fully held while nothing completed for
+         *     ``stall_intervals`` consecutive complete intervals.
+         */
+        CapacityActiveHealth: {
+            /** Org Run Limit */
+            org_run_limit?: number | null;
+            /**
+             * Gate Total
+             * @default 0
+             */
+            gate_total: number;
+            /**
+             * Executing Total
+             * @default 0
+             */
+            executing_total: number;
+            /**
+             * Running Total
+             * @default 0
+             */
+            running_total: number;
+            /**
+             * Parked Total
+             * @default 0
+             */
+            parked_total: number;
+            /**
+             * Cancelling Total
+             * @default 0
+             */
+            cancelling_total: number;
+            /** Utilisation */
+            utilisation?: number | null;
+            /**
+             * Cap Held
+             * @default false
+             */
+            cap_held: boolean;
+            /**
+             * Completions In Window
+             * @default 0
+             */
+            completions_in_window: number;
+            /**
+             * Zero Completion Intervals
+             * @default 0
+             */
+            zero_completion_intervals: number;
+            /**
+             * Stall Intervals
+             * @default 3
+             */
+            stall_intervals: number;
+            /**
+             * Stall Suspected
+             * @default false
+             */
+            stall_suspected: boolean;
+            /**
+             * Stale Heartbeat Threshold Seconds
+             * @default 1800
+             */
+            stale_heartbeat_threshold_seconds: number;
+            /**
+             * Stale Heartbeat Count
+             * @default 0
+             */
+            stale_heartbeat_count: number;
+            /** Attribution */
+            attribution: components["schemas"]["CapacityAttribution"][];
+        };
+        /** CapacityAttribution */
+        CapacityAttribution: {
+            /** Pipeline Id */
+            pipeline_id: string;
+            /** Pipeline Name */
+            pipeline_name?: string | null;
+            /**
+             * Executing
+             * @default 0
+             */
+            executing: number;
+            /**
+             * Running
+             * @default 0
+             */
+            running: number;
+            /**
+             * Parked
+             * @default 0
+             */
+            parked: number;
+            /** Oldest Executing Age Seconds */
+            oldest_executing_age_seconds?: number | null;
+            /**
+             * Stale Heartbeat Count
+             * @default 0
+             */
+            stale_heartbeat_count: number;
+        };
+        /**
+         * CapacityBinding
+         * @description Which limit currently binds, and what lifting it would admit.
+         */
+        CapacityBinding: {
+            /** Scope */
+            scope: string;
+            /** Limit */
+            limit?: number | null;
+            /** In Use */
+            in_use?: number | null;
+            /** Headroom */
+            headroom?: number | null;
+            /**
+             * Pending Blocked
+             * @default 0
+             */
+            pending_blocked: number;
+            /**
+             * Admissible If Raised
+             * @default 0
+             */
+            admissible_if_raised: number;
+        };
+        /** CapacityDrain */
+        CapacityDrain: {
+            /**
+             * Created
+             * @default 0
+             */
+            created: number;
+            /**
+             * Started
+             * @default 0
+             */
+            started: number;
+            /**
+             * Completed
+             * @default 0
+             */
+            completed: number;
+            /** Ratio */
+            ratio?: number | null;
+            /**
+             * Baseline Depth
+             * @default 0
+             */
+            baseline_depth: number;
+            /** Baseline Oldest Pending Age Seconds */
+            baseline_oldest_pending_age_seconds?: number | null;
+            /**
+             * Final Depth
+             * @default 0
+             */
+            final_depth: number;
+            /**
+             * Depth Change
+             * @default 0
+             */
+            depth_change: number;
+            /** Verdict */
+            verdict: string;
+        };
+        /**
+         * CapacityLimits
+         * @description The configured limits alongside the queue so a reader sees headroom.
+         */
+        CapacityLimits: {
+            /** Org Run Concurrency Limit */
+            org_run_concurrency_limit?: number | null;
+            /** Sandbox Concurrency Limit */
+            sandbox_concurrency_limit?: number | null;
+            /**
+             * Sandbox Limit Is Default
+             * @default false
+             */
+            sandbox_limit_is_default: boolean;
+        };
+        /** CapacityPending */
+        CapacityPending: {
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+            /** Oldest Pending Age Seconds */
+            oldest_pending_age_seconds?: number | null;
+            /** By Cause */
+            by_cause?: {
+                [key: string]: number;
+            };
+            /** By Pipeline */
+            by_pipeline: components["schemas"]["CapacityPendingByPipeline"][];
+        };
+        /** CapacityPendingByPipeline */
+        CapacityPendingByPipeline: {
+            /** Pipeline Id */
+            pipeline_id: string;
+            /** Pipeline Name */
+            pipeline_name?: string | null;
+            /**
+             * Pending Count
+             * @default 0
+             */
+            pending_count: number;
+            /** Oldest Pending Age Seconds */
+            oldest_pending_age_seconds?: number | null;
+            /** Max Concurrent Runs */
+            max_concurrent_runs?: number | null;
+        };
+        /** CapacityQueueIfRaised */
+        CapacityQueueIfRaised: {
+            /**
+             * Pending Now
+             * @default 0
+             */
+            pending_now: number;
+            /**
+             * Admissible If Binding Raised
+             * @default 0
+             */
+            admissible_if_binding_raised: number;
+            /**
+             * Pending After Raise
+             * @default 0
+             */
+            pending_after_raise: number;
+        };
+        /** CapacityResponse */
+        CapacityResponse: {
+            /** Generated At */
+            generated_at: string;
+            /** Window Start */
+            window_start: string;
+            /** Window Seconds */
+            window_seconds: number;
+            /** Interval Seconds */
+            interval_seconds: number;
+            limits: components["schemas"]["CapacityLimits"];
+            pending: components["schemas"]["CapacityPending"];
+            drain: components["schemas"]["CapacityDrain"];
+            binding: components["schemas"]["CapacityBinding"];
+            queue_if_raised: components["schemas"]["CapacityQueueIfRaised"];
+            active_health: components["schemas"]["CapacityActiveHealth"];
+            /** Series */
+            series: components["schemas"]["CapacitySeriesBucket"][];
+        };
+        /** CapacitySeriesBucket */
+        CapacitySeriesBucket: {
+            /** Interval Start */
+            interval_start: string;
+            /** Interval End */
+            interval_end: string;
+            /**
+             * Created
+             * @default 0
+             */
+            created: number;
+            /**
+             * Started
+             * @default 0
+             */
+            started: number;
+            /**
+             * Completed
+             * @default 0
+             */
+            completed: number;
+            /**
+             * Pending Depth
+             * @default 0
+             */
+            pending_depth: number;
+            /** Oldest Pending Age Seconds */
+            oldest_pending_age_seconds?: number | null;
+            /** Drain Ratio */
+            drain_ratio?: number | null;
+            /**
+             * Complete
+             * @default false
+             */
+            complete: boolean;
+            /** By Pipeline */
+            by_pipeline: components["schemas"]["CapacitySeriesPipeline"][];
+        };
+        /** CapacitySeriesPipeline */
+        CapacitySeriesPipeline: {
+            /** Pipeline Id */
+            pipeline_id: string;
+            /** Pipeline Name */
+            pipeline_name?: string | null;
+            /**
+             * Pending Depth
+             * @default 0
+             */
+            pending_depth: number;
+            /** Oldest Pending Age Seconds */
+            oldest_pending_age_seconds?: number | null;
         };
         /** ChangeMemberRoleRequest */
         ChangeMemberRoleRequest: {
@@ -13953,6 +14398,49 @@ export interface components {
              */
             current_row_count: number;
         };
+        /**
+         * EvidenceRowResponse
+         * @description One evidence row with its ``value`` already redacted for the caller's role.
+         */
+        EvidenceRowResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /** Key */
+            key: string;
+            /** Subject Type */
+            subject_type: string;
+            /** Subject Id */
+            subject_id: string;
+            /** Value */
+            value: unknown;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Producer Type */
+            producer_type: string;
+            /** Producer Id */
+            producer_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** ExportPreviewResponse */
         ExportPreviewResponse: {
             /** Sample Span */
@@ -14756,6 +15244,12 @@ export interface components {
             candidates: components["schemas"]["CandidateItem"][];
             /** Count */
             count: number;
+            /** Status */
+            status: string;
+            /** Error */
+            error?: {
+                [key: string]: string;
+            } | null;
         };
         /** HousekeepingScanResponse */
         HousekeepingScanResponse: {
@@ -18596,6 +19090,45 @@ export interface components {
             /** Evaluated At */
             evaluated_at: string;
         };
+        /**
+         * RedactionRuleResponse
+         * @description A stored redaction rule.
+         */
+        RedactionRuleResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Key Pattern */
+            key_pattern: string;
+            /** Role */
+            role: string;
+            /** Redacted Fields */
+            redacted_fields: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * RedactionRuleUpsert
+         * @description Upsert payload for one ``(key_pattern, role)`` redaction rule (§2.4).
+         */
+        RedactionRuleUpsert: {
+            /** Key Pattern */
+            key_pattern: string;
+            /** Role */
+            role: string;
+            /** Redacted Fields */
+            redacted_fields?: string[];
+        };
         /** RegisterPublisherRequest */
         RegisterPublisherRequest: {
             /** Fingerprint Hex */
@@ -20834,6 +21367,32 @@ export interface components {
             prev_cursor?: string | null;
             /** Total */
             total: number;
+            result_counts?: components["schemas"]["TriggerEventResultCounts"] | null;
+        };
+        /**
+         * TriggerEventResultCounts
+         * @description Capacity-outcome counts for the last two 24h windows (FAR-1344).
+         *
+         *     ``recent``/``previous`` are keyed by ``validation_result`` for the capacity
+         *     vocabulary only — an org-wide summary, not a filtered page count.
+         */
+        TriggerEventResultCounts: {
+            /** Window Hours */
+            window_hours: number;
+            /** Recent */
+            recent: {
+                [key: string]: number;
+            };
+            /** Previous */
+            previous: {
+                [key: string]: number;
+            };
+            /** Total Recent */
+            total_recent: number;
+            /** Total Previous */
+            total_previous: number;
+            /** Direction */
+            direction: string;
         };
         /** TriggerRunRequest */
         TriggerRunRequest: {
@@ -25897,6 +26456,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConcurrencyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    analytics_capacity_api_v1_analytics_capacity_get: {
+        parameters: {
+            query?: {
+                pipeline_id?: string[] | null;
+                window_minutes?: number;
+                interval_seconds?: number;
+                stall_intervals?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapacityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37962,7 +38556,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Conflict — concurrent gate creation */
+            /** @description Conflict — a live gate already exists (use PUT), or concurrent creation */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -44760,6 +45354,142 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    list_redaction_rules_endpoint_api_v1_evidence_redaction_rules_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedactionRuleResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    upsert_redaction_rule_endpoint_api_v1_evidence_redaction_rules_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedactionRuleUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedactionRuleResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_evidence_endpoint_api_v1_evidence__evidence_id__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidenceRowResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    list_evidence_endpoint_api_v1_evidence_get: {
+        parameters: {
+            query: {
+                /** @description Run id whose evidence rows to list */
+                run_id: string;
+                /** @description Optional node id to include node-level evidence */
+                node_id?: string | null;
+                /** @description Optional exact evidence key filter */
+                key?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidenceRowResponse"][];
                 };
             };
             /** @description Validation Error */

@@ -1838,7 +1838,7 @@ async def _ensure_declared_gate(
     a live row with a different action is updated IN PLACE (version bump +
     ``pre_version_raw`` snapshot, mirroring the authoring route); no live row is
     created ENABLED with ``enabled_at`` stamped at creation — the same
-    fresh-create semantics as the authoring ``_create_or_replace_gate``, so the
+    fresh-create semantics as the authoring ``_create_gate``, so the
     ``ck_policy_gates_enabled_timestamps`` symmetric CHECK holds by
     construction.
     """
@@ -2173,6 +2173,28 @@ class GraphWriteRecording:
     patched_fields: list[str] | None = None
 
 
+@dataclass(frozen=True, kw_only=True)
+class GraphWriteActor:
+    """The request-resolved actor/auth context for a graph write.
+
+    Groups the six actor/auth inputs every graph-write surface resolves from
+    its request — ``is_privileged``, ``caller_type``, ``account_id``,
+    ``is_guardrail_admin``, ``grants_deny_privilege`` and
+    ``grants_deny_guardrail_admin`` — so :func:`replace_pipeline_graph` stays
+    within the ``python:S107`` parameter budget. ``is_privileged`` and
+    ``caller_type`` are required (the old keyword-only, no-default parameters);
+    the rest default to the same values the old defaults used. Resolution stays
+    at the CALL SITE — this object only carries the already-resolved values.
+    """
+
+    is_privileged: bool
+    caller_type: Literal["rest", "mcp"]
+    account_id: uuid.UUID | None = None
+    is_guardrail_admin: bool = False
+    grants_deny_privilege: bool = False
+    grants_deny_guardrail_admin: bool = False
+
+
 async def replace_pipeline_graph(
     session: AsyncSession,
     *,
@@ -2180,12 +2202,7 @@ async def replace_pipeline_graph(
     org_id: uuid.UUID,
     nodes: list[dict[str, Any]],
     edges: list[dict[str, Any]],
-    is_privileged: bool,
-    caller_type: Literal["rest", "mcp"],
-    account_id: uuid.UUID | None = None,
-    is_guardrail_admin: bool = False,
-    grants_deny_privilege: bool = False,
-    grants_deny_guardrail_admin: bool = False,
+    actor: GraphWriteActor,
     recording: GraphWriteRecording | None = None,
     _on_lock_acquired: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[PipelineEdge]] | None:
@@ -2193,19 +2210,22 @@ async def replace_pipeline_graph(
 
     ADR 047 service-layer backstop + hitl-gate-removal-guard-plan.md v19: the
     HITL gate guard runs here, under the row lock and BEFORE any delete/insert.
-    ``caller_type`` is required (no default); ``"mcp"`` forces ``is_privileged``
-    to False with no live-role query. For ``"rest"`` with ``account_id`` the
-    caller's live org role is re-read under the lock (fail-closed on DB error,
-    no retry). A gate-weakening write by a non-privileged caller raises
-    ``HitlReviewWeakeningDenied`` before the delete/insert executes.
+    The request-resolved actor/auth context arrives on ONE required
+    :class:`GraphWriteActor` (``actor`` — no default); it is resolved at the
+    call site, never here. ``actor.caller_type`` is required; ``"mcp"`` forces
+    ``actor.is_privileged`` to False with no live-role query. For ``"rest"``
+    with ``actor.account_id`` the caller's live org role is re-read under the
+    lock (fail-closed on DB error, no retry). A gate-weakening write by a
+    non-privileged caller raises ``HitlReviewWeakeningDenied`` before the
+    delete/insert executes.
 
     FAR-309 PR A review: the guardrail-binding strip guard
     (``enforce_guardrail_binding_strip``) runs here too, under the same row
     lock — a non-admin cannot strip a guardrail binding by removing a
-    guardrail-bound node. ``is_guardrail_admin`` is the caller-supplied admin
-    flag (admin-level, the ``guardrail.manage`` privilege — distinct from the
-    operator+ ``is_privileged``); for ``"rest"`` with ``account_id`` the live
-    role is re-read under the lock.
+    guardrail-bound node. ``actor.is_guardrail_admin`` is the caller-supplied
+    admin flag (admin-level, the ``guardrail.manage`` privilege — distinct from
+    the operator+ ``actor.is_privileged``); for ``"rest"`` with
+    ``actor.account_id`` the live role is re-read under the lock.
 
     FAR-1471: a successful write ALSO appends a ``pipeline.graph_updated``
     audit event (actor, pipeline id, before/after node+edge summary) so every
@@ -2231,9 +2251,10 @@ async def replace_pipeline_graph(
 
     The two recording knobs ride on ONE optional value object
     (:class:`GraphWriteRecording`) rather than two separate parameters: they
-    were added independently by FAR-1810 and FAR-1829, and two defaulted
-    flags on top of the privilege/grant flags push this signature past the
-    13-parameter budget.
+    were added independently by FAR-1810 and FAR-1829. The six actor/auth
+    inputs ride on ONE required value object (:class:`GraphWriteActor`,
+    FAR-1859) rather than six separate parameters, so the signature sits
+    comfortably below the ``python:S107`` budget even with future additions.
     """
     # Normalise the "no recording requested" default once, so both consumers
     # below read plain attributes. ``GraphWriteRecording()`` reproduces exactly
@@ -2255,10 +2276,10 @@ async def replace_pipeline_graph(
     effective_privileged = await resolve_effective_privilege(
         session,
         org_id=org_id,
-        account_id=account_id,
-        is_privileged=is_privileged,
-        caller_type=caller_type,
-        grants_deny_privilege=grants_deny_privilege,
+        account_id=actor.account_id,
+        is_privileged=actor.is_privileged,
+        caller_type=actor.caller_type,
+        grants_deny_privilege=actor.grants_deny_privilege,
     )
 
     # Snapshot current edges into plain data BEFORE any write (defense in depth).
@@ -2291,18 +2312,18 @@ async def replace_pipeline_graph(
         pipeline_id=pipeline_id,
         org_id=org_id,
         incoming_node_ids={str(node.get("id")) for node in nodes if node.get("id")},
-        is_guardrail_admin=is_guardrail_admin,
-        caller_type=caller_type,
-        account_id=account_id,
-        grants_deny_guardrail_admin=grants_deny_guardrail_admin,
+        is_guardrail_admin=actor.is_guardrail_admin,
+        caller_type=actor.caller_type,
+        account_id=actor.account_id,
+        grants_deny_guardrail_admin=actor.grants_deny_guardrail_admin,
     )
 
-    diff = await apply_gated_edge_diff(
+    diff = apply_gated_edge_diff(
         session,
         old_edges,
         edges,
         is_privileged=effective_privileged,
-        caller_type=caller_type,
+        caller_type=actor.caller_type,
         # FAR-609 review: node-level gate weakening (FAR-402 hitl_config) is
         # detected in the same guard pass — the node lists are deep-copied
         # before any write (same defense in depth as old_edges).
@@ -2316,17 +2337,17 @@ async def replace_pipeline_graph(
             correlation_keys=[w.correlation_key for w in all_weakened],
             weakening_types=sorted({t for w in all_weakened for t in w.weakening_types}),
             detail=denial_detail(diff),
-            payload_json=build_gate_diff_payload(diff, caller_type),
+            payload_json=build_gate_diff_payload(diff, actor.caller_type),
         )
     if diff.has_weakening:
         await append_audit_event(
             session,
             org_id=org_id,
             event_type="hitl_review_removed",
-            actor_user_id=account_id,
+            actor_user_id=actor.account_id,
             resource_type="pipeline",
             resource_id=pipeline_id,
-            payload_json=build_gate_diff_payload(diff, caller_type),
+            payload_json=build_gate_diff_payload(diff, actor.caller_type),
         )
 
     # FAR-889: reject manual nodes without output schemas at write time.
@@ -2377,7 +2398,7 @@ async def replace_pipeline_graph(
     await reconcile_graph_policy_gates(
         session,
         org_id=org_id,
-        account_id=account_id,
+        account_id=actor.account_id,
         pipeline_id=pipeline_id,
         previous_nodes=previous_nodes,
         new_nodes=nodes,
@@ -2432,13 +2453,13 @@ async def replace_pipeline_graph(
         session,
         org_id=org_id,
         event_type=GRAPH_UPDATED_EVENT,
-        actor_user_id=account_id,
+        actor_user_id=actor.account_id,
         resource_type="pipeline",
         resource_id=pipeline_id,
         payload_json=graph_update_audit_payload(
             pipeline_id=pipeline_id,
-            caller_type=caller_type,
-            account_id=account_id,
+            caller_type=actor.caller_type,
+            account_id=actor.account_id,
             previous_nodes=previous_nodes,
             new_nodes=nodes,
             previous_edge_count=len(old_edges),
@@ -2463,7 +2484,7 @@ async def replace_pipeline_graph(
         await _record_edit_snapshot_if_needed(
             session,
             pipeline_id=pipeline_id,
-            account_id=account_id,
+            account_id=actor.account_id,
             previous_nodes=previous_nodes,
             old_edges=old_edges,
             nodes=nodes,

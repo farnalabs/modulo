@@ -5,6 +5,11 @@ enumerated from the SQLAlchemy metadata at authoring time and committed as
 explicit literals — and must exactly cover every uuid primary key (FK-parent
 columns excluded). A runtime-enumerated list would silently change on future
 model edits, so the migration source must not inspect metadata at all.
+
+Every uuid PK whose ORM model was later deleted (but whose physical table the
+frozen migration still targets) is named explicitly in
+``_NO_ORM_MODEL_UUID_PKS``, so the coverage contract stays complete without the
+migration having to be re-enumerated.
 """
 
 import importlib.util
@@ -22,6 +27,16 @@ _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
 _EXPECTED_COUNT = 84
 
+# FAR-1961 (chunk 13 slice 1) deleted the legacy ``EvalDefinition`` ORM entity.
+# The physical ``eval_definitions`` table still exists — the 0254 cutover froze
+# it, and a later chunk-13 slice drops it — so 0194's FROZEN ``SET DEFAULT`` on
+# its uuid PK is still correct and must stay covered. The pair can no longer be
+# enumerated from ``Base.metadata``, so it is named here explicitly: the
+# metadata count is one lower than the frozen migration's statement count, and a
+# further model deletion/addition still trips the drift guard.
+_NO_ORM_MODEL_UUID_PKS = frozenset({("eval_definitions", "id")})
+_EXPECTED_METADATA_COUNT = _EXPECTED_COUNT - len(_NO_ORM_MODEL_UUID_PKS)
+
 # Tables introduced by migrations AFTER 0194_uuid_pk_server_defaults own their own
 # uuid-PK server defaults (e.g. 0207_collection_install_tracking sets install_id's
 # default inline, and CollectionInstallEntity.entity_id is a supplied key with no
@@ -35,6 +50,8 @@ _EXPECTED_COUNT = 84
 # gen_random_uuid() inline on its id column, same as the tables above.
 # external_agents / mcp_servers (0314_external_agents_mcp_servers, FAR-1692)
 # set gen_random_uuid() inline on their id columns too.
+# evidence_redaction_rules (0320_evidence_redaction_rules, FAR-944) sets
+# gen_random_uuid() inline on its id column, same as the tables above.
 _POST_0194_TABLES = frozenset(
     {
         "collection_install",
@@ -45,6 +62,7 @@ _POST_0194_TABLES = frozenset(
         "policy_gate_decisions",
         "evidence",
         "system_audit_events",
+        "evidence_redaction_rules",
         "external_agents",
         "mcp_servers",
     }
@@ -123,12 +141,21 @@ def test_migration_source_is_frozen_not_runtime_enumerated() -> None:
 
 def test_upgrade_covers_exactly_every_metadata_uuid_pk() -> None:
     _load_migration()  # the migration module must import cleanly
-    upgrade_pairs = {
+    upgrade_pairs_all = {
         (_RENAMED_BY_0257.get(table, table), column) for table, column in _alter_pairs(_source_code(), "SET")
     }
     metadata_pairs = _metadata_uuid_pk_pairs()
-    assert len(metadata_pairs) == _EXPECTED_COUNT, f"metadata uuid-PK count drifted: {len(metadata_pairs)}"
-    assert len(upgrade_pairs) == _EXPECTED_COUNT, f"migration SET statements: {sorted(upgrade_pairs)}"
+
+    # A retired-model pair must still be covered by the frozen migration...
+    missing_retired = _NO_ORM_MODEL_UUID_PKS - upgrade_pairs_all
+    assert not missing_retired, f"frozen migration no longer covers retired-model uuid PKs: {sorted(missing_retired)}"
+    # ...and the entry may not go stale while a model for it still exists.
+    stale_retired = _NO_ORM_MODEL_UUID_PKS & metadata_pairs
+    assert not stale_retired, f"uuid PKs listed as model-less are still in metadata: {sorted(stale_retired)}"
+
+    upgrade_pairs = upgrade_pairs_all - _NO_ORM_MODEL_UUID_PKS
+    assert len(metadata_pairs) == _EXPECTED_METADATA_COUNT, f"metadata uuid-PK count drifted: {len(metadata_pairs)}"
+    assert len(upgrade_pairs_all) == _EXPECTED_COUNT, f"migration SET statements: {sorted(upgrade_pairs_all)}"
     assert upgrade_pairs == metadata_pairs
     missing = metadata_pairs - upgrade_pairs
     assert not missing, f"metadata uuid PKs missing from upgrade: {sorted(missing)}"

@@ -59,6 +59,11 @@ from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 # langgraph).
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
+
+# FAR-1854: the gate-level record of an EXPIRED-UNANSWERED HITL review. The
+# module is deliberately import-safe (no cron_helpers import), so this edge
+# adds no cycle.
+from modulo.core.hitl_manager.review_expiry import record_review_expiry_outcomes
 from modulo.core.logging_config import org_id_var
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
@@ -581,9 +586,21 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     # FAR-1649: node-started rows held back from re-dispatch by the
     # row-level belt in _reconcile_one_row (defence-in-depth — the SQL legs
     # exclude the class, so production should see 0; a non-zero value is a
-    # race/regression alarm). Read through .get() like every other additive
-    # counter here.
+    # race/regression alarm). This counter is BELT HITS ONLY — the FAR-1914
+    # fresh-premise deferrals use their own counter below, precisely so this
+    # one keeps its regression-alarm meaning. Read through .get() like every
+    # other additive counter here.
     "node_started_deferred": 0,
+    # FAR-1914: rows the nodeless repair / early-detect re-verified as having
+    # STARTED a node (or left ``running``, or become unreadable -> fail
+    # closed) on a FRESH read after the scan selected them. This is a ROUTINE
+    # production signal, NOT a regression alarm: the scan row is a snapshot
+    # and the run's own executor legitimately dispatches its first node in the
+    # SELECT→loop window (run e6131612 proves the race is real), so a non-zero
+    # value here is expected and healthy — it is exactly what keeps the
+    # belt's ``node_started_deferred`` at 0 and thus still a usable alarm.
+    # Additive .get() contract like the rest.
+    "nodeless_fresh_premise_deferred": 0,
     # FAR-1803: node-started rows whose EXECUTOR heartbeat is stale (the
     # observed zero-node class — live dispatch marker, dead executor, zero
     # node outputs). Counted EVERY tick the population exists (its own scan
@@ -656,6 +673,9 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["capacity_deferred"] = stats.get("capacity_deferred", 0)
     # FAR-1649: held-back node-started rows (additive .get() contract).
     _dispatcher_reconcile_stats["node_started_deferred"] = stats.get("node_started_deferred", 0)
+    # FAR-1914: fresh-premise deferrals — a ROUTINE signal, kept separate from
+    # the belt-hit alarm above (additive .get() contract).
+    _dispatcher_reconcile_stats["nodeless_fresh_premise_deferred"] = stats.get("nodeless_fresh_premise_deferred", 0)
     # FAR-1803: the node-started / executor-lost gauge (additive .get()).
     _dispatcher_reconcile_stats["node_started_executor_lost"] = stats.get("node_started_executor_lost", 0)
     # Terminalizer counters (and their healthz aliases) derive from the
@@ -4808,10 +4828,21 @@ def _is_zero_progress_shape_row(row: Any) -> bool:
     """Row-level mirror of :data:`_ZERO_PROGRESS_SHAPE_SQL` (FAR-1740).
 
     True when the reconcile flags say ZERO node progress: no token usage, no
-    finalised store row (``outputs_absent``) and no LangGraph checkpoint
-    (``checkpoints_absent``). Fails CLOSED (``False``) when a flag is absent,
-    so a row source that forgets a column is never treated as zero-progress.
+    finalised store row (``outputs_absent``), no LangGraph checkpoint
+    (``checkpoints_absent``) AND no durably-recorded first-node start. Fails
+    CLOSED (``False``) when a flag is absent, so a row source that forgets a
+    column is never treated as zero-progress.
+
+    FAR-1914: the durable ``first_node_dispatched`` phase (FAR-1649) proves a
+    node STARTED even though no super-step completed, so such a row is NOT
+    zero-progress. The legacy implementation omitted this leg and therefore did
+    not mirror :data:`_ZERO_PROGRESS_SHAPE_SQL` (whose phase leg the node-started
+    guard relies on) — a started node was reported as zero-progress to the
+    FAR-1740 tail guard. The leg is additive: a row source without the column
+    keeps the existing zero-progress verdict.
     """
+    if getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:
+        return False
     return (
         getattr(row, "node_token_usage", None) is None
         and bool(getattr(row, "outputs_absent", False))
@@ -5057,6 +5088,53 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
     # Checkpoint leg LAST so the specific legs above stay the rejecting reason
     # for rows that carry them (keeps the per-leg tests discriminating).
     return bool(getattr(row, "checkpoints_absent", False))
+
+
+async def _fresh_row_is_node_started_or_gone(session: AsyncSession, run_id: uuid.UUID) -> bool:
+    """FAR-1914: re-verify the zero-node premise on the FRESH row before acting.
+
+    The reconcile SELECT returns a row SNAPSHOT; the per-row loop can act on it
+    tens of seconds later (a ballot of rows drains under budget), and the run's
+    own executor may have DISPATCHED its first node in that window, stamping
+    ``dispatch_phase='first_node_dispatched'``. Acting on the stale snapshot then
+    re-dispatches or terminal-fails a run whose node had just started.
+
+    Production evidence: run ``e6131612`` (2026-10-15) was terminal-failed
+    through the nodeless chokepoint with
+    ``dispatch_phase=first_node_dispatched dispatch_phase_elapsed=0.3s`` — its own
+    error_detail carried the self-contradicting label "FAR-1649 row should have
+    been excluded by the node-started selection legs". A node STARTED 0.3s
+    before the terminal write, so the scan-time phase was pre-node.
+
+    Returns True when the fresh row must NOT be treated as a claimed-but-nodeless
+    zombie: it has left ``running``, has durably STARTED a node, or carries node
+    token usage. Fails CLOSED (True) when the fresh state cannot be read — never
+    act on unverifiable state (a started node may have executed side effects, so
+    re-dispatch is unsafe — FAR-1649).
+    """
+    from modulo.db.models.run import Run
+
+    try:
+        fresh = await session.get(Run, run_id)
+    except Exception:
+        _log.warning(
+            "dispatcher_reconcile.fresh_nodeless_premise_unreadable run=%s — held back (fail closed)",
+            run_id,
+            exc_info=True,
+        )
+        return True
+    if fresh is None:
+        # The row vanished (deleted / not visible under this org's RLS): there
+        # is nothing safe to repair.
+        return True
+    if getattr(fresh, "status", None) != "running":
+        # Left running between the scan and now — the terminalizer/re-dispatch
+        # decision no longer applies.
+        return True
+    if getattr(fresh, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:
+        # FAR-1649: a durably-recorded first-node start is not zero-node.
+        return True
+    return getattr(fresh, "node_token_usage", None) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -8003,10 +8081,12 @@ async def _terminalize_run_facts(
 
     FAR-162 (P6') + FAR-746: record a capped daily fact for every run
     terminalised this tick; FAR-1549: record every such run on its org's
-    uncapped audit chain. All per-org terminalizer transactions have
-    committed by the time this runs — each facts write opens its own
-    RLS-scoped session. Extracted for S3776; ordering (facts, then audits)
-    is unchanged.
+    uncapped audit chain; FAR-1854: record the gate-level outcome for HITL
+    reviews the expiry sweep cancelled without a decision. All per-org
+    terminalizer transactions have committed by the time this runs — each
+    facts write opens its own RLS-scoped session. Extracted for S3776;
+    ordering (facts, then run audits, then gate-level expiry outcomes) is
+    unchanged.
     """
     # FAR-162 (P6') — record a daily fact for every run terminalised this
     # tick (executor_stalled / no_progress / claim_cap_exhausted /
@@ -8034,6 +8114,21 @@ async def _terminalize_run_facts(
     # ONE session per ORG (not one per run) so a terminalizer backlog cannot
     # blow the tick budget the way per-run sessions would.
     await _record_terminalisation_audits(terminalized_run_ids)
+    # FAR-1854 — the run-level sweep event above names the run but never the
+    # gate, and a cancelled run's undecided gate vanishes from every pending
+    # surface. Record the gate-level outcome from the SAME collected ids: the
+    # recorder re-verifies each run's cancel_reason/error_code against the
+    # expiry marker, so ids from the other terminalizers are ignored. Never a
+    # fabricated verdict — an expired review is recorded as undecided.
+    # Fail open WITH a log, exactly like the audit write above: the
+    # cancellations have already committed, so a recorder failure must never
+    # turn a completed sweep into a tick failure.
+    try:
+        await record_review_expiry_outcomes(_open_factory(), terminalized_run_ids)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("cron_helpers.review_expiry_outcomes_failed", exc_info=True)
 
 
 def _dispatcher_summary() -> dict[str, Any]:
@@ -8065,8 +8160,18 @@ def _dispatcher_summary() -> dict[str, Any]:
         # the class, so the scan never returns such a row; a non-zero value
         # means the belt caught a SELECT→loop phase race or a future leg that
         # forgot the exclusion (defence-in-depth alarm, not a routine
-        # per-tick signal).
+        # per-tick signal). FAR-1914 keeps this meaning intact by routing the
+        # fresh-premise deferrals to their OWN counter below, so a non-zero
+        # value here is still the regression alarm it is documented to be.
         "node_started_deferred": 0,
+        # FAR-1914: rows the nodeless repair / early-detect deferred after a
+        # FRESH re-verify proved a node had started (or the row left running /
+        # became unreadable). A ROUTINE per-tick signal — the scan snapshot
+        # legitimately races the executor's first-node dispatch (run
+        # e6131612), so this is expected to be non-zero in production and must
+        # NOT be read as the belt's regression alarm. Additive .get()
+        # contract.
+        "nodeless_fresh_premise_deferred": 0,
         # FAR-1803: node-started rows whose executor heartbeat is stale — the
         # zero-node class that used to be invisible to EVERY counter (its own
         # scan leg admits it; the row loop counts it and never re-dispatches
@@ -8643,6 +8748,35 @@ async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any
         raise
     except Exception:
         _log.warning("dispatcher_reconcile.streak_sweep_failed", exc_info=True)
+    # FAR-1344 — capacity alerting: the queue-pressure ladder, per-pipeline
+    # backpressure and org capacity saturation. Signal + alert only (never a
+    # refusal); the numbers come from FAR-1343's capacity reader, and this sweep
+    # is what turns "the queue is climbing" into a notification BEFORE work
+    # starts failing. Isolated: a failure here is a WARNING, never an abort of
+    # the reconcile tick.
+    try:
+        from modulo.core.capacity_alerts import evaluate_capacity_alerts
+
+        capacity_alerts = await evaluate_capacity_alerts(
+            factory=_open_system_factory(),
+            redis_client=redis_client,
+        )
+        summary["capacity_alerts_orgs"] = capacity_alerts.get("orgs_evaluated", 0)
+        summary["capacity_alerts_dispatched"] = capacity_alerts.get("dispatched", 0)
+        summary["capacity_alerts_failed"] = capacity_alerts.get("notify_failed", 0)
+        if capacity_alerts.get("dispatched") or capacity_alerts.get("org_errors"):
+            _log.info(
+                "dispatcher_reconcile.capacity_alerts",
+                extra={
+                    "orgs_evaluated": capacity_alerts.get("orgs_evaluated", 0),
+                    "dispatched": capacity_alerts.get("dispatched", 0),
+                    "org_errors": capacity_alerts.get("org_errors", 0),
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("dispatcher_reconcile.capacity_alerts_failed", exc_info=True)
     try:
         from modulo.auth.api_key import revoke_run_api_key_sweep
 
@@ -9078,6 +9212,12 @@ async def _reconcile_nodeless_repair(
     A nodeless zombie executed ZERO nodes (no checkpoint, no
     ``node_token_usage``, no finalised store row), so re-dispatch is SAFE (no
     double-execution; these pipelines only create PRs after a node runs).
+    ``None`` is returned ONLY when the row is not this branch's class (the
+    snapshot was pre-node and still is): the caller then continues with the
+    normal repairs. Every other terminal (including the FAR-1914 fresh-premise
+    deferral below, which DISPROVES the zero-node premise) returns the handled
+    counter so the caller can never fall through to a ``execute_run``
+    re-dispatch of a row a node already started (FAR-1649).
     Four-way outcome (FAR-509):
 
       * TERMINAL-FAIL — the retry budget is exhausted
@@ -9112,6 +9252,34 @@ async def _reconcile_nodeless_repair(
     """
     if not _is_nodeless_zombie_row(row, nodeless_window):
         return None
+    # FAR-1914: the scan row is a SNAPSHOT — the run's own executor may have
+    # dispatched its first node since the SELECT (observed run e6131612:
+    # terminal-failed with dispatch_phase_elapsed=0.3s). Re-verify the zero-node
+    # premise on the FRESH row before acting: a node-started row is deferred (no
+    # re-dispatch — FAR-1649 — and no "dispatched no node" terminal-fail) and
+    # left to the caller's node-started belt / the age gate.
+    if await _fresh_row_is_node_started_or_gone(session, row.id):
+        # FAR-1914: its OWN counter — a routine fresh-premise race, NOT the
+        # row-level belt's regression alarm (``node_started_deferred``).
+        summary["nodeless_fresh_premise_deferred"] += 1
+        _log.warning(
+            "dispatcher_reconcile.nodeless_fresh_premise_blocked run=%s org=%s "
+            "phase_snapshot=%s — a node started after the scan (or the row left running); "
+            "held back from re-dispatch/terminalise (FAR-1914)",
+            row.id,
+            org_id,
+            getattr(row, "dispatch_phase", None),
+        )
+        # FAR-1914 (review): the fresh row DISPROVES the zero-node premise, so
+        # the branch must STATE it handled the row — the same contract the
+        # FAR-873 early-detect guard above follows. Returning ``None`` told the
+        # caller "proceed with the normal repairs", and the snapshot row (still
+        # pre-node ``claimed``) then sailed past the node-started belt (which
+        # keys on the STALE phase) into the final re-dispatch as ``execute_run``
+        # — re-executing a run whose node had started (the FAR-1649 hazard the
+        # guard exists to prevent). Returning handled defers the row (it stays
+        # running, held back this tick) to the watchdogs / age gate.
+        return enqueue_failed_redispatched
     if not _should_redispatch_nodeless(row):
         # Budget exhausted (retry budget exhausted / policy excludes 'stall'):
         # terminal-fail exactly as before — even when throttled, since waiting
@@ -9407,11 +9575,24 @@ async def _reconcile_one_row(
     # min sooner.  The throttle uses the FULL nodeless_window (not the
     # early-detect window) so at most one early re-dispatch happens per full
     # cycle — preventing hot-loop re-dispatching while closing the gap.
-    if (
-        early_detect_minutes is not None
-        and _is_nodeless_zombie_row(row, early_detect_minutes)
-        and not _is_nodeless_redispatch_throttled(row, nodeless_window)
-    ):
+    early_detect_candidate = early_detect_minutes is not None and _is_nodeless_zombie_row(row, early_detect_minutes)
+    # FAR-1914: the scan row is a snapshot; re-verify the zero-node premise on
+    # the FRESH row before the early-detect branch acts (see
+    # ``_fresh_row_is_node_started_or_gone`` — run e6131612 started a node 0.3s
+    # before a stale-snapshot action). A node-started row is deferred here too,
+    # so the early path can never re-dispatch / terminal-fail a started node.
+    if early_detect_candidate and await _fresh_row_is_node_started_or_gone(session, row.id):
+        # FAR-1914: its OWN counter (routine race, not the belt's alarm).
+        summary["nodeless_fresh_premise_deferred"] += 1
+        _log.warning(
+            "dispatcher_reconcile.nodeless_early_detect_fresh_premise_blocked run=%s org=%s "
+            "phase_snapshot=%s — a node started after the scan; held back (FAR-1914)",
+            row.id,
+            org_id,
+            getattr(row, "dispatch_phase", None),
+        )
+        return enqueue_failed_redispatched
+    if early_detect_candidate and not _is_nodeless_redispatch_throttled(row, nodeless_window):
         # Budget first, exactly as the full-window repair: budget exhaustion
         # terminal-fails REGARDLESS of the cap (terminal-fail reduces load; it
         # never enqueues), so waiting out the cap could never help.

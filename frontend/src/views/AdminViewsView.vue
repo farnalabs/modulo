@@ -113,7 +113,7 @@
         <a
           href="https://modulo.run/docs/features/saved-views"
           target="_blank"
-          class="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+          class="inline-flex items-center gap-1 text-sm text-primary-text hover:underline"
         >
           {{ $t('views.AdminViewsView.learn_about_saved_views') }}
           <ExternalLink class="h-3.5 w-3.5" />
@@ -139,7 +139,7 @@
             >
               <td class="px-4 py-3 font-medium">{{ v.name }}</td>
               <td class="px-4 py-3">
-                <span class="inline-flex rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary capitalize">{{ v.view_type }}</span>
+                <span class="inline-flex rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary-text capitalize">{{ v.view_type }}</span>
               </td>
               <td class="px-4 py-3 text-muted-foreground max-w-[200px] truncate font-mono text-xs" v-tooltip.top="filtersSummary(v.filters)">{{ filtersSummary(v.filters) }}</td>
               <td class="px-4 py-3 text-muted-foreground">{{ v.created_by || '—' }}</td>
@@ -152,8 +152,8 @@
         </table>
       </div>
       <div v-if="deleteConfirmId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-        <p class="text-sm font-medium text-destructive">{{ $t('views.AdminViewsView.confirm_delete', { name: deleteConfirmName }) }}</p>
-        <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminViewsView.this_action_cannot_be_undone') }}</p>
+        <p class="text-sm font-medium text-destructive-text">{{ $t('views.AdminViewsView.confirm_delete', { name: deleteConfirmName }) }}</p>
+        <p class="mt-1 text-sm text-destructive-text">{{ $t('views.AdminViewsView.this_action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
           <Button :disabled="deleting" severity="danger" data-testid="admin-views-delete-confirm" @click="deleteView">
             {{ deleting ? $t('common.deleting') : $t('common.delete') }}
@@ -166,7 +166,7 @@
             {{ $t('common.cancel') }}
           </button>
         </div>
-        <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
+        <div v-if="deleteError" class="mt-2 text-sm text-destructive-text">{{ deleteError }}</div>
       </div>
     </template>
     </FeatureGate>

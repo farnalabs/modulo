@@ -165,7 +165,7 @@ function formatTime(iso: string): string {
   opacity: 1;
 }
 .assistant-session-delete:hover {
-  color: hsl(var(--destructive));
+  color: hsl(var(--destructive-text));
   background-color: hsla(var(--destructive) / 0.1);
 }
 </style>

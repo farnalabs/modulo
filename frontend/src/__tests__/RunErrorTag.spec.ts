@@ -20,9 +20,9 @@ describe('RunErrorTag', () => {
 
   it('applies the class for the code class group (agent destructive vs capacity primary)', () => {
     const agent = mount(RunErrorTag, { props: { code: 'agent.failed' } })
-    expect(agent.classes()).toContain('text-destructive')
+    expect(agent.classes()).toContain('text-destructive-text')
     const capacity = mount(RunErrorTag, { props: { code: 'capacity.org' } })
-    expect(capacity.classes()).toContain('text-primary')
+    expect(capacity.classes()).toContain('text-primary-text')
   })
 
   it('sets the detail title tooltip', () => {
@@ -53,5 +53,15 @@ describe('RunErrorTag', () => {
     expect(sideEffect.text()).toBe('Script side effects unknown')
     const sessionLost = mount(RunErrorTag, { props: { code: 'script.session_lost' } })
     expect(sessionLost.text()).toBe('Session lost')
+  })
+
+  it('renders model.insufficient_funds with its own label, not Unknown error', () => {
+    const wrapper = mount(RunErrorTag, { props: { code: 'model.insufficient_funds' } })
+    expect(wrapper.text()).toBe('Model provider out of funds')
+    expect(wrapper.text()).not.toBe('Unknown error')
+    // Carries a human-readable description for the aria-label/tooltip.
+    expect(wrapper.attributes('title')).toContain('Top up the provider account')
+    // Billing fault uses the destructive styling of the other critical classes.
+    expect(wrapper.classes()).toContain('text-destructive-text')
   })
 })

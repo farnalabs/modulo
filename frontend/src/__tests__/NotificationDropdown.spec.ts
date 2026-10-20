@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import type { NotificationResponse } from '../lib/api/notifications'
 
@@ -48,6 +49,9 @@ async function mountDropdown() {
           props: { to: { type: [String, Object], default: '' } },
           template: '<a :href="typeof to === \'string\' ? to : undefined"><slot /></a>',
         },
+        // FAR-1926: the panel teleports to <body> in the app; stub the
+        // teleport so it renders in place and wrapper.find keeps working.
+        teleport: true,
       },
     },
   })
@@ -167,13 +171,13 @@ describe('NotificationDropdown (FAR-249)', () => {
     expect(dialog.attributes('id')).toBe('notification-dropdown')
   })
 
-  it('marks all read via the store, clears the list, and announces success', async () => {
+  it('dismisses all via the shared store action, clears the list, and announces success', async () => {
     h.mockFetchDashboard.mockResolvedValue({
       notifications: [notification()],
       total_unread: 1,
     })
     const wrapper = await mountDropdown()
-    // After mark-all-read the follow-up fetches return an empty feed.
+    // After dismiss-all the follow-up fetches return an empty feed.
     h.mockFetchDashboard.mockResolvedValue({ notifications: [], total_unread: 0 })
     h.mockMarkAllRead.mockResolvedValue({ status: 'marked_read', marked: 1 })
 
@@ -188,13 +192,23 @@ describe('NotificationDropdown (FAR-249)', () => {
     expect(store.unreadCount).toBe(0)
   })
 
-  it('disables the mark-all-read button when the unread count is zero', async () => {
+  it('labels the bulk action "Dismiss all" (FAR-1926), not "Mark all as read"', async () => {
+    h.mockFetchDashboard.mockResolvedValue({
+      notifications: [notification()],
+      total_unread: 1,
+    })
+    const wrapper = await mountDropdown()
+    const button = wrapper.find('[data-testid="notification-mark-all-read"]')
+    expect(button.text()).toBe('Dismiss all')
+  })
+
+  it('disables the dismiss-all button when the unread count is zero', async () => {
     const wrapper = await mountDropdown()
     const button = wrapper.find('[data-testid="notification-mark-all-read"]')
     expect(button.attributes('disabled')).toBeDefined()
   })
 
-  it('surfaces a failure alert and keeps the list when mark-all-read fails', async () => {
+  it('surfaces a failure alert and keeps the list when dismiss-all fails', async () => {
     h.mockFetchDashboard.mockResolvedValue({
       notifications: [notification()],
       total_unread: 1,
@@ -208,8 +222,54 @@ describe('NotificationDropdown (FAR-249)', () => {
     const alert = wrapper.find('[data-testid="notification-mark-all-read-error"]')
     expect(alert.exists()).toBe(true)
     expect(alert.attributes('role')).toBe('alert')
-    // The list is untouched — the clear did not happen.
+    // The store throws an Error carrying the FORMATTED API message and the
+    // panel renders its own LOCAL ref — never a shared store error (QA FAR-1926).
+    expect(alert.text()).toBe('boom')
+    // No success region, and the list is untouched — the clear did not happen.
+    expect(wrapper.find('[data-testid="notification-mark-all-read-success"]').exists()).toBe(false)
     expect(wrapper.findAll('[data-testid="notification-dropdown"] li')).toHaveLength(1)
+  })
+
+  it('renders a non-Error rejection through String() when dismiss-all fails unexpectedly', async () => {
+    // Defensive arm of `e instanceof Error ? e.message : String(e)`: the store
+    // normally throws an Error, but a non-Error throw must still surface a
+    // readable message rather than an empty alert.
+    h.mockFetchDashboard.mockResolvedValue({
+      notifications: [notification()],
+      total_unread: 1,
+    })
+    const wrapper = await mountDropdown()
+    const store = useNotificationsStore()
+    vi.spyOn(store, 'dismissAll').mockRejectedValue('plain failure')
+
+    await wrapper.find('[data-testid="notification-mark-all-read"]').trigger('click')
+    await flushPromises()
+
+    const alert = wrapper.find('[data-testid="notification-mark-all-read-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toBe('plain failure')
+    expect(wrapper.find('[data-testid="notification-mark-all-read-success"]').exists()).toBe(false)
+  })
+
+  // QA FAR-1926 — truthful copy: the SERVER's marked count picks the outcome.
+  it('shows "Nothing to dismiss" instead of a success claim when the server marks zero rows', async () => {
+    h.mockFetchDashboard.mockResolvedValue({
+      notifications: [notification()],
+      total_unread: 1,
+    })
+    const wrapper = await mountDropdown()
+    h.mockMarkAllRead.mockResolvedValue({ status: 'marked_read', marked: 0 })
+
+    await wrapper.find('[data-testid="notification-mark-all-read"]').trigger('click')
+    await flushPromises()
+
+    expect(h.mockMarkAllRead).toHaveBeenCalledTimes(1)
+    const nothing = wrapper.find('[data-testid="notification-mark-all-read-nothing"]')
+    expect(nothing.exists()).toBe(true)
+    expect(nothing.text()).toBe('Nothing to dismiss')
+    expect(nothing.attributes('aria-live')).toBe('polite')
+    expect(wrapper.find('[data-testid="notification-mark-all-read-success"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="notification-mark-all-read-error"]').exists()).toBe(false)
   })
 
   it('emits close when a notification link is clicked', async () => {
@@ -268,5 +328,107 @@ describe('NotificationDropdown (FAR-249)', () => {
     expect(dots).toHaveLength(2)
     // Distinct classes → both the `info` arm and the `default` arm executed.
     expect(dots[0].classes()).not.toEqual(dots[1].classes())
+  })
+
+  // FAR-1926 — the panel is viewport-clamped so it can never render off the
+  // left edge of the window when the bell sits at the far LEFT of the screen
+  // (mobile icon rail, collapsed desktop rail) or spill past either edge.
+  describe('viewport-anchored placement (FAR-1926)', () => {
+    const DEFAULT_WIDTH = 1024
+    const DEFAULT_HEIGHT = 768
+
+    function setViewport(width: number, height: number): void {
+      Object.defineProperty(window, 'innerWidth', { value: width, configurable: true, writable: true })
+      Object.defineProperty(window, 'innerHeight', { value: height, configurable: true, writable: true })
+    }
+
+    /** The dropdown's positioning anchor is the bell root (its parentElement). */
+    function stubAnchorRect(
+      wrapper: Awaited<ReturnType<typeof mountDropdown>>,
+      rect: { left: number; right: number; bottom: number },
+    ): void {
+      const panel = wrapper.find('[data-testid="notification-dropdown"]').element as HTMLElement
+      const anchor = panel.parentElement as HTMLElement
+      vi.spyOn(anchor, 'getBoundingClientRect').mockReturnValue({
+        x: rect.left,
+        left: rect.left,
+        width: rect.right - rect.left,
+        right: rect.right,
+        y: 0,
+        top: 0,
+        height: rect.bottom,
+        bottom: rect.bottom,
+        toJSON: () => ({}),
+      } as DOMRect)
+    }
+
+    function panelStyle(wrapper: Awaited<ReturnType<typeof mountDropdown>>): CSSStyleDeclaration {
+      return (wrapper.find('[data-testid="notification-dropdown"]').element as HTMLElement).style
+    }
+
+    afterEach(() => {
+      setViewport(DEFAULT_WIDTH, DEFAULT_HEIGHT)
+    })
+
+    it('clamps the panel into the viewport when the bell sits at the far left (mobile/collapsed rail)', async () => {
+      setViewport(360, 740)
+      const wrapper = await mountDropdown()
+      // The rail anchor: bell root at x≈10..54 (64px rail, 44px touch target).
+      stubAnchorRect(wrapper, { left: 10, right: 54, bottom: 160 })
+      window.dispatchEvent(new Event('resize'))
+      await nextTick()
+
+      const style = panelStyle(wrapper)
+      expect(style.position).toBe('fixed')
+      // min(320, 360-16) = 320 wide, pulled to the 8px gutter — the legacy
+      // right-0 placement would have started at 54 - 320 = -266px.
+      expect(style.left).toBe('8px')
+      expect(style.width).toBe('320px')
+      // Panel sits below the bell (top-full mt-1 behaviour preserved).
+      expect(style.top).toBe('164px')
+    })
+
+    it('keeps right-aligning the panel to the bell when that fits the viewport', async () => {
+      setViewport(360, 740)
+      const wrapper = await mountDropdown()
+      // A bell near the RIGHT edge (the mobile drawer header): right-alignment
+      // (right edge 344) fits inside 360 - 8, so it is preserved verbatim.
+      stubAnchorRect(wrapper, { left: 300, right: 344, bottom: 56 })
+      window.dispatchEvent(new Event('resize'))
+      await nextTick()
+
+      const style = panelStyle(wrapper)
+      expect(style.position).toBe('fixed')
+      expect(style.left).toBe('24px') // 344 - 320
+      expect(style.width).toBe('320px')
+    })
+
+    it('shrinks the panel on a viewport narrower than the panel itself', async () => {
+      setViewport(300, 640)
+      const wrapper = await mountDropdown()
+      stubAnchorRect(wrapper, { left: 10, right: 54, bottom: 160 })
+      window.dispatchEvent(new Event('resize'))
+      await nextTick()
+
+      const style = panelStyle(wrapper)
+      expect(style.width).toBe('284px') // 300 - 2*8
+      expect(style.left).toBe('8px')
+      // 8 + 284 = 292 <= 300 — fully inside the viewport.
+    })
+
+    it('bails out of repositioning when the panel has no anchor to measure (defensive)', async () => {
+      const wrapper = await mountDropdown()
+      const panel = wrapper.find('[data-testid="notification-dropdown"]').element as HTMLElement
+      // Detach the panel so it has no parentElement to anchor to. `dropdownRef`
+      // still points at the element, so this exercises the guard that skips
+      // positioning when no anchor exists — a resize must not throw.
+      panel.remove()
+      panel.style.position = 'absolute'
+      window.dispatchEvent(new Event('resize'))
+      await nextTick()
+
+      // The guard returned before writing positionStyle, so the sentinel stands.
+      expect(panel.style.position).toBe('absolute')
+    })
   })
 })

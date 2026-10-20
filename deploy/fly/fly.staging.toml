@@ -30,6 +30,20 @@ app = 'staging-modulo'
 # Do NOT add process groups or machines without updating this block.
 primary_region = 'lhr'
 
+# ===== Shutdown window (FAR-2004) =====
+# Top-level keys (Fly documents kill_signal/kill_timeout at the top level only;
+# a value nested inside [http_service] does not reach the worker process
+# group). Fly's default window is 5 seconds, which SIGKILLed the SAQ worker
+# before its 30s drain grace + up to 60s cancellation deadline + the FAR-1627
+# shutdown handoff could run — orphaning every in-flight run. See the full
+# explanation in fly.toml. 180s leaves teardown headroom inside Fly's 300s
+# cap; the entrypoint's bounded drain (WORKER_DRAIN_DEADLINE_S) makes a stop
+# with nothing in flight fast.
+# The coupling is enforced by
+# backend/tests/architecture/test_deploy_worker_shutdown.py.
+kill_signal = "SIGTERM"
+kill_timeout = 180
+
 [deploy]
   strategy = 'rolling'
 
@@ -61,8 +75,9 @@ primary_region = 'lhr'
   auto_start_machines = true
   min_machines_running = 1  # budget: staging runs 1 app machine (scaled down 2026-08-15 to stay within the org machine limit)
   processes = ['app']
-  # Graceful worker drain window (plan F8).
-  kill_timeout = 120
+  # Graceful shutdown window: see the TOP-LEVEL kill_signal/kill_timeout block
+  # above (FAR-2004). A kill_timeout nested here does not reach the worker
+  # process group.
 
   [http_service.concurrency]
     type = "connections"
@@ -128,6 +143,9 @@ primary_region = 'lhr'
   # concurrent blocking dequeue holds one pool connection, plus a 5-connection
   # reserve for the upkeep ops schedule/sweep/abort/worker_info).
   SAQ_REDIS_POOL_SIZE = "10"
+  # FAR-2004: the worker entrypoint's bounded drain window (see fly.toml).
+  # Must fit inside the top-level kill_timeout (180s) with teardown headroom.
+  WORKER_DRAIN_DEADLINE_S = "140"
   # REQUIRED: Upstash Redis instance. Create with:
   #   fly redis create --name modulo-staging-redis -r lhr,ams --enable-eviction
   # Then store its connection string with `fly secrets set REDIS_URL=...`.

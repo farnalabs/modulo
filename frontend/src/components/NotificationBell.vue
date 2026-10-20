@@ -19,7 +19,7 @@
         v-if="store.unreadCount > 0"
         data-testid="notification-unread-badge"
         aria-hidden="true"
-        class="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold text-destructive-foreground"
+        class="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-destructive-fill px-1 text-[10px] font-bold text-destructive-foreground"
       >
         {{ unreadBadgeText }}
       </span>
@@ -38,7 +38,12 @@
     >
       {{ $t('components.NotificationBell.unread_count_status', { count: store.unreadCount }) }}
     </output>
-    <NotificationDropdown v-if="dropdownOpen" @close="closeDropdown" />
+    <!-- FAR-1926: teleports to <body> (so the fixed panel escapes the rail's
+         overflow clip AND the sidebar's stacking context) — the bell button
+         is passed as the placement anchor since it is no longer a DOM
+         ancestor, and click-outside treats the panel's own subtree as
+         "inside" (see onClickOutside). -->
+    <NotificationDropdown v-if="dropdownOpen" :anchor-el="bellButtonRef" @close="closeDropdown" />
     <!-- FAR-250: classified-reconnect banner — shown when the SSE stream
          stopped on a terminal 401/403. Stays visible while a manual restart
          is in flight ('attempting') so the click is acknowledged, and shows
@@ -175,7 +180,13 @@ function closeDropdown(): void {
 }
 
 function onClickOutside(event: MouseEvent): void {
-  if (rootRef.value && !rootRef.value.contains(event.target as Node)) {
+  const target = event.target as Node | null;
+  if (!target) return;
+  // The dropdown teleports to <body> (FAR-1926), so it is NOT inside
+  // rootRef — a click within the panel must not count as an outside click.
+  const inDropdown =
+    target instanceof Element && target.closest("#notification-dropdown") !== null;
+  if (!inDropdown && rootRef.value && !rootRef.value.contains(target)) {
     closeDropdown();
   }
 }

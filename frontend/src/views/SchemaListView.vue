@@ -22,12 +22,16 @@
       />
 
       <div class="flex-1 min-w-0">
-        <ErrorAlert
+        <!-- Folder-list load failure. The <md owner of the folder-error live
+             region (FolderTree's sidebar owns >=md), hence `gated`. The shared
+             contract — single live region, non-dismissible, retry re-fetches —
+             lives in FolderListError.vue. -->
+        <FolderListError
           v-if="folderError"
           :message="`${$t('views.SchemaListView.failed_to_load_folders')} ${folderError}`"
           :on-retry="loadFolders"
-          :dismiss-label="$t('common.close')"
-          :on-dismiss="() => { folderError = null }"
+          gated
+          :data-testid="'schema-list-folder-error'"
         />
 
         <!-- Retry is deliberately omitted (retryable=false): a failed move can only
@@ -134,14 +138,14 @@
                     <td class="px-4 py-3">
                       <span
                         v-if="schema.deprecated"
-                        class="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive"
+                        class="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive-text"
                       >
                         <span class="h-1.5 w-1.5 rounded-full bg-destructive" aria-hidden="true" />
                         {{ $t('views.SchemaListView.deprecated') }}
                       </span>
                       <span
                         v-else
-                        class="inline-flex items-center gap-1 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success"
+                        class="inline-flex items-center gap-1 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success-text"
                       >
                         <span class="h-1.5 w-1.5 rounded-full bg-success" aria-hidden="true" />
                         {{ $t('views.SchemaListView.active') }}
@@ -253,11 +257,13 @@ import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useApi } from '../composables/useApi'
 import { formatApiError } from '../lib/api/formatError'
+import { invalidFolderListMessage, isFolderList, type FolderItem } from '../lib/api/folders'
 import type { components } from '../lib/api/client'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FolderTree from '../components/pipelines/FolderTree.vue'
+import FolderListError from '../components/pipelines/FolderListError.vue'
 import { ChevronRight, Folder, FolderOpen, MoreVertical } from '@lucide/vue'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
@@ -274,14 +280,6 @@ interface SchemaListResponse {
   total: number
   page: number
   page_size: number
-}
-
-interface FolderItem {
-  id: string
-  organisation_id: string
-  name: string
-  parent_id: string | null
-  sort_order: number
 }
 
 const router = useRouter()
@@ -341,7 +339,18 @@ const mobileFolderSelectValue = computed<string>({
 async function loadFolders() {
   folderError.value = null
   try {
-    foldersList.value = await get<FolderItem[]>('/api/v1/schema-folders')
+    const response = await get<FolderItem[]>('/api/v1/schema-folders')
+    // Guard before assigning: `get<FolderItem[]>` is an unchecked cast and
+    // useApi returns `undefined as T` on a 204, while foldersList is
+    // dereferenced (foldersList.length / spread iteration / f.id / f.name) on
+    // every render — a non-array would crash the view. Do NOT coerce to []:
+    // that would hide a real contract violation behind an empty list.
+    if (!isFolderList(response)) {
+      console.error(invalidFolderListMessage('/api/v1/schema-folders', response))
+      folderError.value = t('views.SchemaListView.invalid_folder_list_response')
+      return
+    }
+    foldersList.value = response
   } catch (e: unknown) {
     folderError.value = formatApiError(e)
   }

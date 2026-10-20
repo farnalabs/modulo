@@ -14,10 +14,14 @@ from __future__ import annotations
 
 import os
 import shutil
+import socket
 import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from modulo.launcher import doctor as doctor_module
 from modulo.launcher.doctor import (
@@ -619,3 +623,85 @@ def test_apply_fixes(tmp_path: Path):
     (tmp_path / "pgdata").mkdir()
     actions = apply_fixes(tmp_path)
     assert any("orphan" in a or "port re-assignment" in a for a in actions)
+
+
+# ---------------------------------------------------------------------------
+# Defensive / platform branches moved by the S3776 refactor
+# ---------------------------------------------------------------------------
+
+
+def test_probe_redis_ping_false_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeClient:
+        def ping(self) -> bool:
+            return False
+
+    fake_redis = SimpleNamespace(Redis=lambda **_kwargs: _FakeClient())
+
+    monkeypatch.setitem(sys.modules, "redis", fake_redis)
+    with pytest.raises(RuntimeError, match="redis PING failed"):
+        doctor_module._probe_redis_ping(16379, "redis://:pw@127.0.0.1:16379/0")
+
+
+def test_probe_username_of_uid_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert doctor_module._probe_username_of_uid(0) is None
+
+
+def test_probe_username_of_uid_without_pwd_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setitem(sys.modules, "pwd", None)
+    assert doctor_module._probe_username_of_uid(0) is None
+
+
+def test_probe_listening_on_non_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert not doctor_module._probe_listening_on(5432)
+
+
+def test_probe_secrets_mode_on_windows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert doctor_module._probe_secrets_mode(tmp_path) is None
+
+
+def test_probe_secrets_mode_missing_file(tmp_path: Path) -> None:
+    assert doctor_module._probe_secrets_mode(tmp_path) is None
+
+
+def test_probe_last_backup_at_without_state() -> None:
+    assert doctor_module._probe_last_backup_at(None) is None
+
+
+def test_probe_last_backup_at_without_timestamp() -> None:
+    assert doctor_module._probe_last_backup_at(SimpleNamespace(last_backup_at=None)) is None
+
+
+def test_probe_last_backup_at_with_unparseable_timestamp() -> None:
+    state = SimpleNamespace(last_backup_at="not-a-timestamp")
+    assert doctor_module._probe_last_backup_at(state) is None
+
+
+def test_listen_hosts_in_table_missing_file(tmp_path: Path) -> None:
+    assert not doctor_module._listen_hosts_in_table(tmp_path / "absent.tcp", socket.AF_INET, 5432)
+
+
+def test_listen_hosts_in_table_undecodable_file(tmp_path: Path) -> None:
+    table = tmp_path / "tcp"
+    table.write_bytes(b"  sl  local_address rem_address   st\n\xff\xfe\n")
+    assert not doctor_module._listen_hosts_in_table(table, socket.AF_INET, 5432)
+
+
+def test_listen_hosts_in_table_skips_undecodable_address(tmp_path: Path) -> None:
+    # Port 1F90 (8080) matches, so the malformed host hex reaches the decoder
+    # and the per-line except continues instead of aborting the whole table.
+    table = tmp_path / "tcp"
+    table.write_text(
+        "  sl  local_address rem_address   st\n"
+        "   0: ZZZZZZZZ:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000\n",
+        encoding="ascii",
+    )
+    assert not doctor_module._listen_hosts_in_table(table, socket.AF_INET, 8080)
+
+
+def test_port_owner_descriptions_non_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert not doctor_module._port_owner_descriptions(5432)

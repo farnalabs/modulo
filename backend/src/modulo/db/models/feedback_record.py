@@ -1,11 +1,10 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, ForeignKey, Index, String, Text, Uuid
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import JSONB_COL, OrgScoped
 
 
 class FeedbackRecord(OrgScoped):
@@ -53,9 +52,7 @@ class FeedbackRecord(OrgScoped):
     rejection_reason: Mapped[str] = mapped_column(Text, nullable=False)
     # JSONB on Postgres (migration 0147 promoted this column from json);
     # generic JSON keeps SQLite/MariaDB parity (the evidence.py pattern).
-    rejected_output: Mapped[dict[str, Any]] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
-    )
+    rejected_output: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     producing_node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
     producing_agent_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True
@@ -70,6 +67,4 @@ class FeedbackRecord(OrgScoped):
     annotation: Mapped[str | None] = mapped_column(Text, nullable=True)
     # JSONB on Postgres (migration 0112 created this column as JSONB);
     # generic JSON keeps SQLite/MariaDB parity (the evidence.py pattern).
-    correction_state: Mapped[dict[str, Any] | None] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"), nullable=True
-    )
+    correction_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True)

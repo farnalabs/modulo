@@ -13,7 +13,7 @@ from modulo.api.main import app
 from modulo.api.routes.admin_housekeeping import CleanupResponse
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.housekeeping import Candidate, CategoryResult
+from modulo.core.housekeeping import Candidate, CategoryResult, Scanner
 from modulo.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -56,6 +56,13 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # ``scan_all`` wraps each scanner in ``async with session.begin_nested()``
+    # (FAR-1977); without the async-CM shape a bare AsyncMock returns a
+    # coroutine that cannot be entered.
+    nested_cm = AsyncMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested_cm)
     session.execute = AsyncMock(return_value=_authz_result())
     return session
 
@@ -102,6 +109,37 @@ def viewer_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[get_current_tenant_user] = lambda: _make_principal("viewer")
     app.dependency_overrides[get_current_user] = lambda: _make_principal("viewer")
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def operator_client() -> Generator[TestClient, None, None]:
+    """Operator role (below the admin floor) — rejected by ``require_permission``.
+
+    ``is_system_admin=True`` is set deliberately, so the test proves the org-role
+    floor denies an operator even when the system-admin flag is present.
+    """
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key="a" * 32,
+            fernet_key="a" * 32,
+            modulo_admin_password="testpass",
+        )
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_current_tenant_user] = lambda: _make_principal("operator", is_system_admin=True)
+    app.dependency_overrides[get_current_user] = lambda: _make_principal("operator", is_system_admin=True)
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -177,6 +215,8 @@ class TestListHousekeeping:
         cat = body["categories"][0]
         assert cat["category"] == "orphan_secrets"
         assert cat["count"] == 1
+        assert cat["status"] == "ok"
+        assert cat["error"] is None
         candidate = cat["candidates"][0]
         assert candidate["entity_type"] == "secret"
         assert set(candidate.keys()) == {"id", "name", "detail", "created_at", "entity_type"}
@@ -232,6 +272,53 @@ class TestListHousekeeping:
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 500
+
+    def test_failed_scanner_is_distinguishable_from_clean_empty(self, client: TestClient) -> None:
+        """FAR-1977: a scanner that RAISES must not read as a clean empty category.
+
+        Drives the REAL ``scan_all`` (only the scanner registry is patched) so
+        the route's serialisation of the failure signal is exercised end-to-end,
+        and asserts BOTH a clean empty category (``ok``) and a failed one
+        (``failed`` + class-only error) so neither can be misread.
+        """
+
+        async def broken_scanner(_s: object, _o: object) -> list[Candidate]:
+            raise RuntimeError("boom")
+
+        scanners = [
+            Scanner(
+                category="orphan_secrets",
+                scan_func=AsyncMock(return_value=[]),
+                label="Orphan Secrets",
+                description="d",
+                entity_type="secret",
+            ),
+            Scanner(
+                category="stale_pipelines",
+                scan_func=broken_scanner,
+                label="Stale Pipelines",
+                description="d",
+                entity_type="pipeline",
+            ),
+        ]
+        with (
+            patch("modulo.core.housekeeping._SCANNERS", scanners),
+            patch("modulo.api.routes.admin_housekeeping.set_rls_org"),
+        ):
+            resp = client.get(self.URL)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_count"] == 0
+        by_category = {c["category"]: c for c in body["categories"]}
+
+        clean = by_category["orphan_secrets"]
+        assert clean["status"] == "ok"
+        assert clean["error"] is None
+
+        failed = by_category["stale_pipelines"]
+        assert failed["status"] == "failed"
+        assert failed["error"] == {"reason": "scanner_failed", "exception": "RuntimeError"}
 
 
 class TestPerformCleanup:
@@ -492,6 +579,17 @@ class TestSystemAdminRequired:
         resp = non_sys_admin_client.get("/api/v1/admin/housekeeping")
         assert resp.status_code == 403
 
+    def test_list_housekeeping_403_for_operator(self, operator_client: TestClient) -> None:
+        """The REST list route's admin org-role floor (FAR-1879 parity).
+
+        ``operator_client`` sets ``is_system_admin=True`` deliberately, so this
+        proves ``require_permission`` — not the system-admin gate — denies an
+        operator. It mirrors the MCP ``TestListHousekeepingAuthz`` case of the
+        same name.
+        """
+        resp = operator_client.get("/api/v1/admin/housekeeping")
+        assert resp.status_code == 403
+
     def test_cleanup_403_for_org_admin(self, non_sys_admin_client: TestClient) -> None:
         resp = non_sys_admin_client.post("/api/v1/admin/housekeeping/cleanup", json={"items": []})
         assert resp.status_code == 403
@@ -499,3 +597,30 @@ class TestSystemAdminRequired:
     def test_checkpoints_purge_403_for_org_admin(self, non_sys_admin_client: TestClient) -> None:
         resp = non_sys_admin_client.post("/api/v1/admin/housekeeping/checkpoints/purge", json={"confirm": True})
         assert resp.status_code == 403
+
+
+class TestCleanupAuthzParity:
+    """FAR-1879: REST housekeeping authz, paired with the MCP tools' suites.
+
+    The REST housekeeping surfaces require an admin org role
+    (``require_permission``) AND ``is_system_admin``
+    (``require_system_permission``).
+
+    NOTE: these assertions exercise REST code this change did NOT touch — the
+    REST floor/gate already existed. They are pinned here as a PARITY GUARD, so
+    a future change that tightens the MCP side but weakens (or vice versa) the
+    REST side fails a test. They do not, and are not claimed to, prove the MCP
+    change; that proof lives in ``TestPerformHousekeepingAuthz`` and
+    ``TestListHousekeepingAuthz`` in ``tests/unit/mcp/test_mcp_config_tools.py``.
+    """
+
+    URL = "/api/v1/admin/housekeeping/cleanup"
+
+    def test_operator_rejected(self, operator_client: TestClient) -> None:
+        resp = operator_client.post(self.URL, json={"items": []})
+        assert resp.status_code == 403
+
+    def test_system_admin_accepted(self, client: TestClient) -> None:
+        resp = client.post(self.URL, json={"items": []})
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted_count": 0, "errors": []}

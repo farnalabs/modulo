@@ -33,6 +33,7 @@ from modulo.core.feedback_manager import FeedbackManager
 from modulo.core.guardrails.correction import CorrectionDefinition, CorrectionDetectorFamily, CorrectionVerdict
 from modulo.db.rls import set_rls_org
 from modulo.model_backends.stub.backend import StubModelBackend, normalize_input
+from tests.integration.conftest import EvalFixture, insert_eval
 
 pytestmark = pytest.mark.integration
 
@@ -134,9 +135,9 @@ async def correction_rig(
             ),
             {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(test_org), "graph": json.dumps(graph)},
         )
-        # Materialise the graph node so the eval_definitions.node_id FK (which
-        # the graph JSON alone does not satisfy) resolves. ON CONFLICT keeps
-        # this safe if a trigger has already created the row.
+        # Materialise the graph node referenced by the guardrail's ``node_id``
+        # (a JSON-graph id with no enforced FK). ON CONFLICT keeps this safe if
+        # a trigger has already created the row.
         await conn.execute(
             text(
                 "INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) "
@@ -146,20 +147,21 @@ async def correction_rig(
             {"nid": node_id, "oid": str(test_org), "pid": str(pipeline_id), "aid": str(test_user)},
         )
         guardrail_id = uuid.uuid4()
-        await conn.execute(
-            text(
-                "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, node_id, name, "
-                "eval_type, config_json, failure_behaviour, account_id) "
-                "VALUES (:id, :oid, :pid, :nid, 'gr_no_secrets', 'guardrail', (:cfg)::json, 'warn', :aid)"
+        # Seed the guardrail in ``evals`` — the live store both the loader and
+        # the read-back below use — through the shared fixture helper so the
+        # eval-insert shape stays single-touch.
+        await insert_eval(
+            conn,
+            EvalFixture(
+                id=guardrail_id,
+                organisation_id=test_org,
+                pipeline_id=pipeline_id,
+                node_id=uuid.UUID(node_id),
+                name="gr_no_secrets",
+                eval_type="guardrail",
+                account_id=test_user,
+                config=_guardrail_config(),
             ),
-            {
-                "id": str(guardrail_id),
-                "oid": str(test_org),
-                "pid": str(pipeline_id),
-                "nid": node_id,
-                "cfg": json.dumps(_guardrail_config()),
-                "aid": str(test_user),
-            },
         )
     return {
         "org_id": test_org,
@@ -176,15 +178,27 @@ async def _create_feedback_record(
     account_id: uuid.UUID,
     *,
     run_id: uuid.UUID | None = None,
-    run_number: int | None = None,
 ) -> uuid.UUID:
-    """Insert a real FeedbackRecord row bound to the rig's run/pipeline."""
+    """Insert a real FeedbackRecord row bound to the rig's run/pipeline.
+
+    ``run_number`` is allocated through the production atomic per-org counter
+    (``_allocate_run_number``) rather than a hardcoded literal. ``test_org`` is
+    session-scoped and shared by every integration module in one invocation, so
+    any fixed low number (e.g. 1/2/3) may already belong to a run created by an
+    earlier module — the direct insert then violates
+    ``uq_runs_org_run_number`` order-dependently (FAR-1968). Allocating from the
+    same counter production uses makes the fixture order-independent, and stays
+    collision-free against pre-existing runs.
+    """
+    from modulo.db.crud.run import _allocate_run_number
+
     record_id = uuid.uuid4()
     run_id = run_id or uuid.uuid4()
-    # A deterministic, collision-free run_number for the shared session org.
-    run_number = run_number or (int(run_id.int) % 1_000_000) + 1
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, rig["org_id"])
+        run_number = await _allocate_run_number(session, uuid.UUID(str(rig["org_id"])))
+        await session.execute(
             text(
                 "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
                 "trigger_type, status, input_payload, input_hash, langgraph_thread_id, "
@@ -202,7 +216,7 @@ async def _create_feedback_record(
                 "rnum": run_number,
             },
         )
-        await conn.execute(
+        await session.execute(
             text(
                 "INSERT INTO feedback_records (id, organisation_id, run_id, review_id, account_id, "
                 "rejection_reason, rejected_output, producing_node_id, feedback_status, "
@@ -250,12 +264,10 @@ class TestSingleNodeCorrectionPersistsResolved:
             await set_rls_org(session, test_org)
             from sqlalchemy import select
 
-            from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionRow
+            from modulo.db.models.eval import Eval
 
             guardrail_row = (
-                await session.execute(
-                    select(EvalDefinitionRow).where(EvalDefinitionRow.id == correction_rig["guardrail_id"])
-                )
+                await session.execute(select(Eval).where(Eval.id == correction_rig["guardrail_id"]))
             ).scalar_one()
 
         from modulo.core.eval_engine import EvalDefinition as EvalDefDTO
@@ -269,7 +281,7 @@ class TestSingleNodeCorrectionPersistsResolved:
             name=guardrail_row.name,
             eval_type="guardrail",
             config=guardrail_row.config_json,
-            failure_behaviour=guardrail_row.failure_behaviour,
+            failure_behaviour="warn",  # Eval rows carry no failure_behaviour; guardrails default to warn
         )
         correction = CorrDef.from_eval_config(guardrail_row.config_json)
         correction.validate_guardrail_binding(guardrail_dto)
@@ -313,12 +325,10 @@ class TestSingleNodeCorrectionPersistsResolved:
             await set_rls_org(session, test_org)
             from sqlalchemy import select
 
-            from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionRow
+            from modulo.db.models.eval import Eval
 
             guardrail_row = (
-                await session.execute(
-                    select(EvalDefinitionRow).where(EvalDefinitionRow.id == correction_rig["guardrail_id"])
-                )
+                await session.execute(select(Eval).where(Eval.id == correction_rig["guardrail_id"]))
             ).scalar_one()
 
         from modulo.core.eval_engine import EvalDefinition as EvalDefDTO
@@ -332,7 +342,7 @@ class TestSingleNodeCorrectionPersistsResolved:
             name=guardrail_row.name,
             eval_type="guardrail",
             config=guardrail_row.config_json,
-            failure_behaviour=guardrail_row.failure_behaviour,
+            failure_behaviour="warn",  # Eval rows carry no failure_behaviour; guardrails default to warn
         )
         correction = CorrDef.from_eval_config(guardrail_row.config_json)
         correction.validate_guardrail_binding(guardrail_dto)
@@ -396,9 +406,9 @@ class TestOrgWideConcurrentCap:
         # reached) plus the record being corrected — which is excluded from the
         # self-count (MAJOR-3). The admission of record 0 is denied.
         record_ids = [
-            await _create_feedback_record(db_engine, correction_rig, test_user, run_number=1),
-            await _create_feedback_record(db_engine, correction_rig, test_user, run_number=2),
-            await _create_feedback_record(db_engine, correction_rig, test_user, run_number=3),
+            await _create_feedback_record(db_engine, correction_rig, test_user),
+            await _create_feedback_record(db_engine, correction_rig, test_user),
+            await _create_feedback_record(db_engine, correction_rig, test_user),
         ]
         correction = CorrDef(
             id="corr_no_secrets",
@@ -468,7 +478,7 @@ class TestOrgWideConcurrentCap:
                 )
             ).scalar_one()
 
-        record_id = await _create_feedback_record(db_engine, correction_rig, test_user, run_number=1001)
+        record_id = await _create_feedback_record(db_engine, correction_rig, test_user)
         correction = CorrDef(
             id="corr_no_secrets",
             guardrail_id="gr_no_secrets",

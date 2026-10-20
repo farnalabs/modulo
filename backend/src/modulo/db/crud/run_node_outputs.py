@@ -86,11 +86,11 @@ from sqlalchemy import (
     select,
     update,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.models.base import JSONB_COL
 from modulo.db.models.run_node_outputs import (
     FINAL_ATTEMPT_KEY,
     META_NODE_ID,
@@ -384,9 +384,9 @@ QUARANTINE_TABLE = Table(
     _QUARANTINE_METADATA,
     Column("run_id", Uuid(), primary_key=True),
     Column("organisation_id", Uuid(), nullable=False),
-    Column("legacy_outputs_json", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
-    Column("legacy_node_telemetry_json", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
-    Column("legacy_raw_output_markers", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
+    Column("legacy_outputs_json", JSONB_COL, nullable=True),
+    Column("legacy_node_telemetry_json", JSONB_COL, nullable=True),
+    Column("legacy_raw_output_markers", JSONB_COL, nullable=True),
     Column("quarantined_at", DateTime(timezone=True), nullable=False),
 )
 

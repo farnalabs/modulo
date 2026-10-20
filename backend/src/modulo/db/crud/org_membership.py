@@ -134,3 +134,45 @@ async def resolve_role_from_membership(session: AsyncSession, account_id: str, o
         )
     )
     return result.scalar_one_or_none()
+
+
+async def resolve_live_role_and_kind(
+    session: AsyncSession, account_id: str, organisation_id: str
+) -> tuple[str, str] | None:
+    """Return ``(live_role, account.kind)`` for an active account with a live membership.
+
+    The human-linkage resolver (ADR 063 step 1) needs BOTH the live role
+    (proof of a non-deactivated membership) and the account's ``kind`` (human
+    vs service) in one round-trip; ``resolve_role_from_membership`` projects
+    only the role, so it cannot be reused as-is.
+
+    DELIBERATELY mirrors ``resolve_role_from_membership``'s predicates verbatim
+    (``accounts.active IS TRUE`` + ``deactivated_at IS NULL`` + the break-glass
+    deny) rather than sharing a query builder: that function is heavily
+    mock-coupled in the suite (its result is stubbed via
+    ``scalar_one_or_none``), so changing its select shape would silently alter
+    many unrelated tests. The predicate equivalence is pinned by
+    ``tests/unit/db/test_org_membership_live_role_kind.py``. Returns ``None``
+    when the account is globally inactive, the membership is deactivated or
+    absent, or the account is a deny-eligible break-glass account.
+    """
+    result = await session.execute(
+        select(OrgMembership.role, Account.kind)
+        .join(
+            Account,
+            and_(
+                Account.id == OrgMembership.account_id,
+                Account.active.is_(True),
+                ~denied_predicate(),
+            ),
+        )
+        .where(
+            OrgMembership.account_id == account_id,
+            OrgMembership.organisation_id == organisation_id,
+            OrgMembership.deactivated_at.is_(None),
+        )
+    )
+    row = result.one_or_none()
+    if row is None:
+        return None
+    return (row[0], row[1])

@@ -297,6 +297,68 @@ def _normalize_hitl_node(node: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _weakening_reason(legacy_snapshot: bool, otherwise: str) -> str:
+    """Plan §5 reason code: an ambiguous legacy snapshot always wins."""
+    return REASON_LEGACY_SNAPSHOT_AMBIGUOUS if legacy_snapshot else otherwise
+
+
+def _index_hitl_nodes(nodes: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    """Map ``node_id -> normalized hitl node`` over the participating nodes.
+
+    Non-hitl nodes and nodes with no id are dropped by
+    :func:`_normalize_hitl_node`; the result is the matching corpus for the
+    node-level diff.
+    """
+    indexed: dict[str, dict[str, Any]] = {}
+    for node in nodes or []:
+        normalized = _normalize_hitl_node(node)
+        if normalized is not None:
+            indexed[normalized["node_id"]] = normalized
+    return indexed
+
+
+def _node_weakening_types(old_cfg: dict[str, Any] | None, new_cfg: dict[str, Any] | None) -> list[str]:
+    """Weakening categories a matched node gained (empty list = silent).
+
+    The per-node arm of :func:`_weakening_types`: effective human-only -> not
+    (FAR-609), a switch to ``on_reject: proceed``, and an added truthy
+    ``correction_target`` (both FAR-1532).
+    """
+    types: list[str] = []
+    if human_only_effective(old_cfg) and not human_only_effective(new_cfg):
+        types.append("human_only")
+    if _on_reject_weakened(old_cfg, new_cfg):
+        types.append("on_reject")
+    if _correction_target_weakened(old_cfg, new_cfg):
+        types.append("correction_target")
+    return types
+
+
+def _removed_hitl_node_detections(
+    old_by_id: dict[str, dict[str, Any]],
+    matched_ids: set[str],
+    legacy_snapshot: bool,
+) -> list[EdgeWeakening]:
+    """Old hitl nodes absent from the new list -> structural-removal detections.
+
+    A node that was dropped (or down-typed off ``node_type == "hitl"``) has no
+    compiler-injected gate any more — the one structural weakening the
+    edge-level diff cannot see.
+    """
+    detections: list[EdgeWeakening] = []
+    for node_id in old_by_id:
+        if node_id in matched_ids:
+            continue
+        detections.append(
+            EdgeWeakening(
+                correlation_key=(node_id, node_id, "hitl_node"),
+                weakening_types=["structural:hitl_node_removed"],
+                reason_code=_weakening_reason(legacy_snapshot, REASON_CORRELATION_KEY_MISMATCH),
+            )
+        )
+    return detections
+
+
 def _hitl_node_weakenings(
     old_nodes: list[dict[str, Any]] | None,
     new_nodes: list[dict[str, Any]] | None,
@@ -336,56 +398,142 @@ def _hitl_node_weakenings(
 
     The comparison is pure — it never mutates its inputs.
     """
-    old_by_id: dict[str, dict[str, Any]] = {}
-    for node in old_nodes or []:
-        normalized = _normalize_hitl_node(node)
-        if normalized is not None:
-            old_by_id[normalized["node_id"]] = normalized
+    old_by_id = _index_hitl_nodes(old_nodes)
     detections: list[EdgeWeakening] = []
     matched_ids: set[str] = set()
     for node in new_nodes or []:
         normalized = _normalize_hitl_node(node)
         if normalized is None:
             continue
-        matching_old = old_by_id.get(normalized["node_id"])
+        node_id = normalized["node_id"]
+        matching_old = old_by_id.get(node_id)
         if matching_old is None:
             continue
-        matched_ids.add(normalized["node_id"])
-        old_effective = human_only_effective(matching_old["hitl_config"])
-        new_effective = human_only_effective(normalized["hitl_config"])
-        node_types: list[str] = []
-        if old_effective and not new_effective:
-            node_types.append("human_only")
-        # FAR-1532: switching the node's gate to ``on_reject: proceed``.
-        if _on_reject_weakened(matching_old["hitl_config"], normalized["hitl_config"]):
-            node_types.append("on_reject")
-        # FAR-1532: adding a ``correction_target`` is the automated parallel vector.
-        if _correction_target_weakened(matching_old["hitl_config"], normalized["hitl_config"]):
-            node_types.append("correction_target")
+        matched_ids.add(node_id)
+        node_types = _node_weakening_types(matching_old["hitl_config"], normalized["hitl_config"])
         if node_types:
             detections.append(
                 EdgeWeakening(
-                    correlation_key=(normalized["node_id"], normalized["node_id"], "hitl_node"),
+                    correlation_key=(node_id, node_id, "hitl_node"),
                     weakening_types=node_types,
-                    reason_code=(REASON_LEGACY_SNAPSHOT_AMBIGUOUS if legacy_snapshot else REASON_INSUFFICIENT_ROLE),
+                    reason_code=_weakening_reason(legacy_snapshot, REASON_INSUFFICIENT_ROLE),
                 )
             )
     # Old hitl nodes deleted (or down-typed to a non-gate node type): the
     # compiler no longer injects any gate for them — structural weakening.
-    for node_id in old_by_id:
-        if node_id in matched_ids:
-            continue
-        detections.append(
-            EdgeWeakening(
-                correlation_key=(node_id, node_id, "hitl_node"),
-                weakening_types=["structural:hitl_node_removed"],
-                reason_code=REASON_LEGACY_SNAPSHOT_AMBIGUOUS if legacy_snapshot else REASON_CORRELATION_KEY_MISMATCH,
-            )
-        )
+    detections.extend(_removed_hitl_node_detections(old_by_id, matched_ids, legacy_snapshot))
     return detections
 
 
-async def apply_gated_edge_diff(
+def _normalize_edge_list(edges: list[PipelineEdge] | list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Defensive deep-copy + normalise of an edge list for the gate diff."""
+    return [copy.deepcopy(_normalize_edge(e)) for e in (copy.deepcopy(edges) if edges else [])]
+
+
+def _edge_weakening_for_key(
+    key: tuple[str, str, str],
+    old_edge: dict[str, Any],
+    new_edge: dict[str, Any] | None,
+    legacy_snapshot: bool,
+) -> EdgeWeakening | None:
+    """Weakening detected for ONE stored key, or None when the edge is unchanged.
+
+    ``new_edge is None`` is an edge deletion; an omitted ``hitl_review_config``
+    key preserves the stored value (never a removal); an explicit ``None`` is a
+    gate removal; otherwise the two non-null configs go through
+    :func:`_weakening_types`.
+    """
+    if new_edge is None:
+        return EdgeWeakening(
+            correlation_key=key,
+            weakening_types=["structural:edge_deleted"],
+            reason_code=_weakening_reason(legacy_snapshot, REASON_CORRELATION_KEY_MISMATCH),
+        )
+    if not new_edge["hitl_review_config_present"]:
+        # Key omitted by the client -> preserve the existing stored value.
+        # The delete+reinsert write paths MUST mirror this contract and
+        # merge the stored value back (see pipeline._preserve_omitted_gate_config).
+        # An omitted key is never a gate removal.
+        return None
+    new_cfg = new_edge["hitl_review_config"]
+    if new_cfg is None:
+        return EdgeWeakening(
+            correlation_key=key,
+            weakening_types=["structural:gate_removed"],
+            reason_code=_weakening_reason(legacy_snapshot, REASON_CORRELATION_KEY_MISMATCH),
+        )
+    field_types = _weakening_types(old_edge["hitl_review_config"], new_cfg)
+    if not field_types:
+        return None
+    return EdgeWeakening(
+        correlation_key=key,
+        weakening_types=field_types,
+        reason_code=_weakening_reason(legacy_snapshot, REASON_INSUFFICIENT_ROLE),
+    )
+
+
+def _gated_edge_weakenings(
+    old_norm: list[dict[str, Any]],
+    new_norm: list[dict[str, Any]],
+    legacy_snapshot: bool,
+) -> list[EdgeWeakening]:
+    """Edge-level weakenings between the normalised old and new edge sets.
+
+    Only edges that HAD a gate (non-null ``hitl_review_config``) are
+    candidates; the new edge is matched on the
+    ``(source, target, edge_type)`` topology key.
+    """
+    old_by_key = {
+        _topo_key(e["source_node_id"], e["target_node_id"], e["edge_type"]): e
+        for e in old_norm
+        if e["hitl_review_config"] is not None
+    }
+    new_by_key = {_topo_key(e["source_node_id"], e["target_node_id"], e["edge_type"]): e for e in new_norm}
+    weakened: list[EdgeWeakening] = []
+    for key, old_edge in old_by_key.items():
+        detection = _edge_weakening_for_key(key, old_edge, new_by_key.get(key), legacy_snapshot)
+        if detection is not None:
+            weakened.append(detection)
+    return weakened
+
+
+def _has_structural_weakening(
+    weakened: list[EdgeWeakening],
+    node_weakenings: list[EdgeWeakening],
+) -> bool:
+    """True when any detection carries a ``structural`` weakening type."""
+    for detection in (*weakened, *node_weakenings):
+        for weakening_type in detection.weakening_types:
+            if "structural" in weakening_type:
+                return True
+    return False
+
+
+def _denial_reason(
+    *,
+    denied: bool,
+    caller_type: CallerType,
+    legacy_snapshot: bool,
+    weakened: list[EdgeWeakening],
+    node_weakenings: list[EdgeWeakening],
+) -> str | None:
+    """Plan §5 reason code for a denied diff (None when not denied).
+
+    Precedence: MCP caller -> legacy-snapshot ambiguity -> a structural
+    detection -> insufficient role.
+    """
+    if not denied:
+        return None
+    if caller_type == "mcp":
+        return REASON_MCP_NOT_PERMITTED
+    if legacy_snapshot:
+        return REASON_LEGACY_SNAPSHOT_AMBIGUOUS
+    if _has_structural_weakening(weakened, node_weakenings):
+        return REASON_CORRELATION_KEY_MISMATCH
+    return REASON_INSUFFICIENT_ROLE
+
+
+def apply_gated_edge_diff(
     _session: AsyncSession,
     old_edges: list[PipelineEdge] | list[dict[str, Any]],
     new_edges: list[dict[str, Any]],
@@ -401,7 +549,8 @@ async def apply_gated_edge_diff(
     ``session`` is currently unused by the comparison; it is part of the plan's
     contract so future DB-backed resolution can be added without changing the
     signature. ``old_edges`` MUST have been snapshotted (deepcopy) before any
-    write on the session; the primitive re-copies defensively.
+    write on the session; the primitive re-copies defensively. The comparison
+    is pure, so it is synchronous — callers do not await it (S7503).
 
     FAR-609 review — node-level coverage: when ``old_nodes``/``new_nodes``
     are provided (the graph-save and rollback callers pass the graph's node
@@ -417,73 +566,22 @@ async def apply_gated_edge_diff(
     if caller_type == "mcp":
         is_privileged = False
 
-    old_norm = [copy.deepcopy(_normalize_edge(e)) for e in (copy.deepcopy(old_edges) if old_edges else [])]
-    new_norm = [copy.deepcopy(_normalize_edge(e)) for e in (copy.deepcopy(new_edges) if new_edges else [])]
-
-    old_by_key = {
-        _topo_key(e["source_node_id"], e["target_node_id"], e["edge_type"]): e
-        for e in old_norm
-        if e["hitl_review_config"] is not None
-    }
-    new_by_key = {_topo_key(e["source_node_id"], e["target_node_id"], e["edge_type"]): e for e in new_norm}
-
-    weakened: list[EdgeWeakening] = []
-    for key, old_edge in old_by_key.items():
-        new_edge = new_by_key.get(key)
-        if new_edge is None:
-            weakened.append(
-                EdgeWeakening(
-                    correlation_key=key,
-                    weakening_types=["structural:edge_deleted"],
-                    reason_code=(
-                        REASON_LEGACY_SNAPSHOT_AMBIGUOUS if legacy_snapshot else REASON_CORRELATION_KEY_MISMATCH
-                    ),
-                )
-            )
-            continue
-        if not new_edge["hitl_review_config_present"]:
-            # Key omitted by the client -> preserve the existing stored value.
-            # The delete+reinsert write paths MUST mirror this contract and
-            # merge the stored value back (see pipeline._preserve_omitted_gate_config).
-            # An omitted key is never a gate removal.
-            continue
-        new_cfg = new_edge["hitl_review_config"]
-        if new_cfg is None:
-            weakened.append(
-                EdgeWeakening(
-                    correlation_key=key,
-                    weakening_types=["structural:gate_removed"],
-                    reason_code=(
-                        REASON_LEGACY_SNAPSHOT_AMBIGUOUS if legacy_snapshot else REASON_CORRELATION_KEY_MISMATCH
-                    ),
-                )
-            )
-            continue
-        field_types = _weakening_types(old_edge["hitl_review_config"], new_cfg)
-        if field_types:
-            weakened.append(
-                EdgeWeakening(
-                    correlation_key=key,
-                    weakening_types=field_types,
-                    reason_code=REASON_LEGACY_SNAPSHOT_AMBIGUOUS if legacy_snapshot else REASON_INSUFFICIENT_ROLE,
-                )
-            )
+    old_norm = _normalize_edge_list(old_edges)
+    new_norm = _normalize_edge_list(new_edges)
+    weakened = _gated_edge_weakenings(old_norm, new_norm, legacy_snapshot)
 
     has_weakening = bool(weakened)
     node_weakenings = _hitl_node_weakenings(old_nodes, new_nodes, legacy_snapshot=legacy_snapshot)
     if node_weakenings:
         has_weakening = True
     denied = has_weakening and not is_privileged
-    if not denied:
-        reason_code: str | None = None
-    elif caller_type == "mcp":
-        reason_code = REASON_MCP_NOT_PERMITTED
-    elif legacy_snapshot:
-        reason_code = REASON_LEGACY_SNAPSHOT_AMBIGUOUS
-    elif any("structural" in wt for w in (*weakened, *node_weakenings) for wt in w.weakening_types):
-        reason_code = REASON_CORRELATION_KEY_MISMATCH
-    else:
-        reason_code = REASON_INSUFFICIENT_ROLE
+    reason_code = _denial_reason(
+        denied=denied,
+        caller_type=caller_type,
+        legacy_snapshot=legacy_snapshot,
+        weakened=weakened,
+        node_weakenings=node_weakenings,
+    )
 
     return DiffResult(
         weakened_edges=weakened,

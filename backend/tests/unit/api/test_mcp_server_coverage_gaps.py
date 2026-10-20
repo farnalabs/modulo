@@ -1364,6 +1364,8 @@ class TestSimpleToolErrorHandlers(_AuthContext):
     async def test_list_housekeeping_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            # FAR-1879: pass the in-body system-admin gate to reach the body.
+            patch.object(ms, "_ctx_is_system_admin_val", return_value=True),
             patch("modulo.core.housekeeping.scan_all", side_effect=RuntimeError("boom")),
         ):
             result = await list_housekeeping()
@@ -1380,6 +1382,9 @@ class TestSimpleToolErrorHandlers(_AuthContext):
         ]
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            # FAR-1879: the tool's in-body system-admin gate is separate from
+            # the (stubbed-here) scope chokepoint; bypass it to reach the body.
+            patch.object(ms, "_ctx_is_system_admin_val", return_value=True),
             patch("modulo.core.housekeeping.ENTITY_MODEL_MAP", {"secret": Secret}),
             patch("modulo.core.housekeeping.NON_DELETABLE_ENTITY_TYPES", set()),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
@@ -1396,6 +1401,8 @@ class TestSimpleToolErrorHandlers(_AuthContext):
     async def test_perform_housekeeping_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            # FAR-1879: pass the in-body system-admin gate to reach the body.
+            patch.object(ms, "_ctx_is_system_admin_val", return_value=True),
             patch.object(ms, "_session", side_effect=RuntimeError("boom")),
         ):
             result = await perform_housekeeping(items=[{"entity_type": "secret", "id": "a"}])
@@ -1752,6 +1759,42 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
             result = await update_pipeline_graph(pipeline_id=str(uuid.uuid4()), nodes=nodes, edges=edges)
         assert result["error"] == "pipeline_not_found"
 
+    async def test_pipeline_gone_before_the_row_lock_returns_not_found(self) -> None:
+        """FAR-1845: the transaction re-reads the pipeline under ``FOR UPDATE``.
+
+        The first read can succeed and the row still be gone by the time the
+        lock is taken (a concurrent delete committed in between). That branch
+        must fail closed with the SAME envelope as the first read — and it must
+        not run the Agent-row sync or the graph write.
+        """
+        nodes, edges = self._valid_graph()
+        pipeline = MagicMock()
+        pipeline.owner_team_id = None
+        pipeline.graph_nodes_json = []
+        pipeline_id = str(uuid.uuid4())
+
+        async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+            if getattr(stmt, "_for_update_arg", None) is not None:
+                return _make_execute_result(scalar_one_or_none=None)
+            return _make_execute_result(scalar_one_or_none=pipeline)
+
+        session = _mock_session()
+        session.execute = AsyncMock(side_effect=_execute)
+        sync = AsyncMock()
+        replace = AsyncMock()
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=sync),
+            patch("modulo.db.crud.pipeline.replace_pipeline_graph", new=replace),
+        ):
+            result = await update_pipeline_graph(pipeline_id=pipeline_id, nodes=nodes, edges=edges)
+
+        assert result == {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+        sync.assert_not_awaited()
+        replace.assert_not_awaited()
+
     async def test_dispatch_binding_persists_non_idempotent(self) -> None:
         """FAR-1141 (CRITICAL 1): the MCP path validated the graph and then
         DISCARDED the model result, persisting the raw node dicts — so the
@@ -1786,8 +1829,11 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         # an empty scalars list (the referenced instance is absent, so the
         # capability check is skipped) rather than an unconfigured AsyncMock
         # child whose ``.scalars()`` yields a coroutine.
+        # FAR-1845: the transaction now also takes the pipeline row lock with a
+        # direct ``session.execute`` SELECT, so the same Result-like object must
+        # return the pipeline from ``scalar_one_or_none``.
         session = _mock_session()
-        session.execute.return_value = _make_execute_result()
+        session.execute.return_value = _make_execute_result(scalar_one_or_none=pipeline)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),

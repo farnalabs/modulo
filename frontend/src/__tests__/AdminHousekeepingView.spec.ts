@@ -37,6 +37,19 @@ const category = (category: string, items: unknown[], over: Record<string, unkno
   description: `${category} description`,
   candidates: items,
   count: items.length,
+  status: 'ok',
+  error: null,
+  ...over,
+})
+
+const failedCategory = (category: string, over: Record<string, unknown> = {}) => ({
+  category,
+  label: `${category} label`,
+  description: `${category} description`,
+  candidates: [],
+  count: 0,
+  status: 'failed',
+  error: { reason: 'scanner_failed', exception: 'ProgrammingError' },
   ...over,
 })
 
@@ -74,6 +87,15 @@ describe('AdminHousekeepingView — scan', () => {
     expect(wrapper.text()).toContain('Scanning')
     expect(wrapper.find('[data-testid="hk-error"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="hk-category"]').exists()).toBe(false)
+
+    // The skeleton is a labelled live region: a native <output> carries the
+    // implicit `status` role, so assistive tech is told the scan is running
+    // without an explicit role attribute (which SonarCloud Web:S6819 rejects).
+    // Matches the NotificationsPage / AdminErrorDetailView skeleton pattern.
+    const skeleton = wrapper.find('[data-testid="hk-loading"]')
+    expect(skeleton.exists()).toBe(true)
+    expect(skeleton.element.tagName).toBe('OUTPUT')
+    expect(skeleton.attributes('aria-busy')).toBe('true')
   })
 
   it('renders categories and candidates after a successful scan', async () => {
@@ -134,6 +156,83 @@ describe('AdminHousekeepingView — scan', () => {
     const wrapper = mountView()
     await nextTick()
     expect(wrapper.text()).toContain('not-a-date')
+  })
+
+  it('shows an em-dash placeholder when the candidate has no created_at', async () => {
+    mockGet.mockResolvedValue(scanPayload([
+      category('stale_pipelines', [candidate('p-1', 'Undated', { created_at: null })]),
+    ]))
+    const wrapper = mountView()
+    await nextTick()
+    expect(wrapper.find('[data-testid="hk-candidate-checkbox"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('—')
+  })
+})
+
+describe('AdminHousekeepingView — failed scanners (FAR-1977)', () => {
+  it('renders a failed category as a failure state, never as the clean empty state', async () => {
+    mockGet.mockResolvedValue(scanPayload([failedCategory('stale_pipelines')]))
+    const wrapper = mountView()
+    await nextTick()
+
+    const card = wrapper.find('[data-testid="hk-category"]')
+    const failed = card.find('[role="alert"]')
+    expect(failed.exists()).toBe(true)
+    expect(failed.attributes('role')).toBe('alert')
+    expect(failed.text()).toContain('could not be scanned')
+    expect(failed.text()).toContain('scanner_failed')
+    expect(failed.text()).toContain('ProgrammingError')
+    expect(card.text()).toContain('Scan failed')
+    // The clean empty state must NOT be shown for a failed scanner.
+    expect(card.text()).not.toContain('No candidates found.')
+  })
+
+  it('falls back to an unknown reason when a failed category carries no error detail', async () => {
+    mockGet.mockResolvedValue(scanPayload([failedCategory('stale_pipelines', { error: null })]))
+    const wrapper = mountView()
+    await nextTick()
+
+    const card = wrapper.find('[data-testid="hk-category"]')
+    expect(card.text()).toContain('This category could not be scanned')
+    expect(card.text()).toContain('Reason: unknown')
+    expect(card.text()).not.toContain('Error:')
+  })
+
+  it('keeps the clean empty state for a category that genuinely found nothing', async () => {
+    mockGet.mockResolvedValue(scanPayload([category('stale_pipelines', [])]))
+    const wrapper = mountView()
+    await nextTick()
+
+    const card = wrapper.find('[data-testid="hk-category"]')
+    expect(card.find('[role="alert"]').exists()).toBe(false)
+    expect(card.text()).toContain('No candidates found.')
+    expect(wrapper.findAll('[role="alert"]')).toHaveLength(0)
+  })
+
+  it('marks the whole scan incomplete when any category failed', async () => {
+    mockGet.mockResolvedValue(scanPayload([
+      category('stale_pipelines', [candidate('p-1', 'Pipe A')]),
+      failedCategory('orphan_connectors'),
+    ]))
+    const wrapper = mountView()
+    await nextTick()
+
+    const banners = wrapper.findAll('[role="alert"]').filter(a => a.text().includes('Scan incomplete'))
+    expect(banners).toHaveLength(1)
+    expect(banners[0].attributes('role')).toBe('alert')
+  })
+
+  it('reports a failed checkpoint_retention category instead of 0 reclaimable', async () => {
+    mockGet.mockResolvedValue(scanPayload([
+      category('stale_pipelines', [candidate('p-1', 'Pipe A')]),
+      failedCategory('checkpoint_retention', { error: { reason: 'scanner_failed' } }),
+    ]))
+    const wrapper = mountView()
+    await nextTick()
+
+    const section = wrapper.find('[data-testid="hk-checkpoint-retention"]')
+    expect(section.text()).toContain('Scan failed')
+    expect(section.text()).not.toContain('reclaimable')
   })
 })
 

@@ -97,25 +97,24 @@
                   <!-- FAR-1405: rendered for every trigger type the streak
                        engine covers (ongoing AND cron — the mirrored
                        STREAK_COVERED_TRIGGER_TYPES constant), not just ongoing.
-                       role="status" + aria-live mark it as a status region
-                       (ux-conformance A11Y / WCAG 4.1.3), mirroring the
-                       deactivated badge below. -->
-                  <span
+                       `<output>` carries the implicit status role and
+                       aria-live semantics (ux-conformance A11Y / WCAG 4.1.3),
+                       mirroring the deactivated badge below. -->
+                  <output
                     v-if="isStreakCovered(t) && t.streak_status?.enabled"
                     data-testid="settings-triggers-streak"
-                    role="status"
                     aria-live="polite"
                     :class="streakBadgeClass(t)"
                     class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium"
                   >
                     {{ $t('views.SettingsTriggersView.streak_display', { streak: t.streak_status.streak ?? 0, threshold: t.streak_status.threshold ?? 0 }) }}
-                  </span>
+                  </output>
                   <div
                     v-if="isStreakDeactivated(t)"
                     data-testid="settings-triggers-deactivated-badge"
                     aria-live="polite"
                     :aria-label="$t('views.SettingsTriggersView.deactivated_badge', { reason: deactivatedReasonLabel(t) })"
-                    class="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive"
+                    class="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive-text"
                   >
                     {{ $t('views.SettingsTriggersView.deactivated_badge', { reason: deactivatedReasonLabel(t) }) }}
                   </div>
@@ -123,7 +122,7 @@
                     <button
                       type="button"
                       class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors disabled:opacity-50"
-                      :class="t.active ? 'bg-success/10 text-success hover:bg-success/20' : 'bg-muted text-muted-foreground hover:bg-muted/80'"
+                      :class="t.active ? 'bg-success/10 text-success-text hover:bg-success/20' : 'bg-muted text-muted-foreground hover:bg-muted/80'"
                       :disabled="triggerToggling[t.id]"
                       data-testid="settings-triggers-toggle"
                       @click="toggleActive(t)"
@@ -789,10 +788,10 @@ function pipelineName(id: string): string {
 // The badge conditions read this constant, never a literal in the template, so
 // widening the backend set is a one-line change here (grep STREAK_TRIGGER_TYPES
 // across both trees to find the pair).
-const STREAK_COVERED_TRIGGER_TYPES: readonly string[] = ['ongoing', 'cron']
+const STREAK_COVERED_TRIGGER_TYPES: ReadonlySet<string> = new Set(['ongoing', 'cron'])
 
 function isStreakCovered(trigger: TriggerItem): boolean {
-  return STREAK_COVERED_TRIGGER_TYPES.includes(trigger.trigger_type)
+  return STREAK_COVERED_TRIGGER_TYPES.has(trigger.trigger_type)
 }
 
 // FAR-1405 — the deactivated badge and the re-enable action are driven by the
@@ -823,7 +822,7 @@ function streakBadgeClass(trigger: TriggerItem): string {
   // the tier reads as "tripped / needs attention". Colour only — no copy here
   // claims deactivation; that wording lives on the state-driven badge above.
   if (s.enabled && threshold > 0 && streak > 0 && streak >= threshold - 1) {
-    if (streak >= threshold) return 'bg-destructive/10 text-destructive'
+    if (streak >= threshold) return 'bg-destructive/10 text-destructive-text'
     return 'bg-amber-500/10 text-amber-600'
   }
   return 'bg-muted text-muted-foreground'
@@ -867,7 +866,7 @@ const agentReportedConfidenceDetail = computed(() =>
 )
 
 function outcomeBadgeClass(classification: string | null | undefined): string {
-  if (classification === OUTCOME_DELIVERED) return 'bg-success/10 text-success'
+  if (classification === OUTCOME_DELIVERED) return 'bg-success/10 text-success-text'
   if (classification === 'no_delivery') return 'bg-amber-500/10 text-amber-600'
   return 'bg-muted text-muted-foreground'
 }

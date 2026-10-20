@@ -3,8 +3,8 @@
 These run WITHOUT a database. They pin the migration's contract: the partial
 index shape (``runs (organisation_id) WHERE sandbox_dispatch_state IS NOT
 NULL`` â€” the exact predicate the marker sweep's candidate scan filters on),
-the idempotent IF NOT EXISTS form, the revision chain position (down_revision
-= 0194, the current head at authoring time), and the deploy-safety markers
+the idempotent IF NOT EXISTS form, the revision chain position (its parent is
+pinned, never a named head value), and the deploy-safety markers
 (plain CREATE INDEX, Postgres-guarded upgrade/downgrade â€” the 0193 precedent).
 The live-Postgres behaviour (index creation + the sweep's batched cursor scan
 using it) is covered by the testcontainers integration suite.
@@ -41,7 +41,7 @@ def _source_code() -> str:
 
 
 def test_revision_chain_position() -> None:
-    """The migration extends the CURRENT head (0194) â€” no branch, no collision."""
+    """The migration's parent is pinned; no branch, no collision."""
     module = _load_migration()
     assert module.revision == "0200_runs_runner_marker_sweep_index"
     assert module.down_revision == "0199_runs_json_to_jsonb"

@@ -207,16 +207,16 @@ and per-destination rate limiting.
       instance is rejected (`CONNECTOR_NOT_FOUND`), and a binding to an inactive
       instance is rejected (`CONNECTOR_INACTIVE`). For a binding the engine
       routes to a connector, the required ACL operation is DERIVED from the
-      node's routed connector verb — `query` requires `read`, `write` requires
+      node's routed connector verb – `query` requires `read`, `write` requires
       `write`, and `dispatch` requires `write` (there is no `dispatch` ACL
       capability: `trigger_run` mutates the remote system; an omitted
       `dispatch_action` defaults to `trigger_run`, matching the runtime), plus
       `read` when the NODE sets `await_completion` (a node-level field, a
-      sibling of `connector_binding` — the wait loop polls status/logs); the
+      sibling of `connector_binding` – the wait loop polls status/logs); the
       other dispatch actions (`get_run_status` / `get_run_logs` / `list_runs`)
       require `read`, per `dispatch_action`. The derived operation is checked
       against the bound instance's `allowed_operations` through the real
-      `ConnectorACL` — the same enforcement the hub applies — so an instance
+      `ConnectorACL` – the same enforcement the hub applies – so an instance
       that does not allow it is rejected (`CONNECTOR_MISSING_OPERATIONS`); an
       unset/empty allowlist is UNRESTRICTED (FAR-1564) and a malformed allowlist
       fails CLOSED. A `dispatch` binding is additionally checked for CI-runner

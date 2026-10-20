@@ -40,7 +40,6 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
-    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -53,16 +52,13 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import ONDELETE_SET_NULL, Base, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, ONDELETE_SET_NULL, Base, SoftDeleteMixin
 
-# Repeated column type (S1192): JSON with PostgreSQL JSONB variant. The three
-# provenance payload columns are jsonb in the DB (migration 0207); the PG
-# variant keeps the ORM honest against the migrated schema while the generic
-# JSON keeps SQLite parity (the repo-wide multi-backend convention).
-_JSONB_COL = JSON().with_variant(JSONB(), "postgresql")
+# The provenance payload columns are jsonb in the DB (migration 0207); the
+# shared JSONB_COL keeps the ORM honest against the migrated schema while
+# generic JSON keeps SQLite parity (the repo-wide multi-backend convention).
 
 
 class CollectionInstall(SoftDeleteMixin, Base):
@@ -103,8 +99,8 @@ class CollectionInstall(SoftDeleteMixin, Base):
         nullable=False,
         server_default=text("false"),
     )
-    resolved_manifest: Mapped[dict[str, Any] | None] = mapped_column(_JSONB_COL, nullable=True)
-    connector_checklist: Mapped[list[dict[str, Any]] | None] = mapped_column(_JSONB_COL, nullable=True)
+    resolved_manifest: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True)
+    connector_checklist: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB_COL, nullable=True)
     created_by: Mapped[UUID | None] = mapped_column(
         Uuid(),
         # Named to match migration 0309's explicit DDL so create_all and the

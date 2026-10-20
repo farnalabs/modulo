@@ -188,6 +188,25 @@
         language: system
         files: ^(backend/src/modulo/core/pipeline_engine/node_runner\.py|backend/src/modulo/api/mcp_server\.py|scripts/validate_pipeline_configs\.py)$
         pass_filenames: false
+      # FAR-263: the docs-validity checker is reachable by no other gate (ruff
+      # is scoped to ^backend/), so it could rot silently. --no-urls keeps the
+      # commit hook off the network; the URL pass is run by hand.
+      - id: check-doc-validity
+        name: docs validity sweep (no network)
+        entry: uv run --project backend --no-sync python scripts/check_doc_validity.py --no-urls
+        language: system
+        files: ^(README\.md|docs/.*\.md)$
+        pass_filenames: false
+        stages: [pre-commit]
+      # Guard the checker's own detection rules (ghcr placeholder handling, path
+      # extraction, capped-run exit code) whenever the script itself changes.
+      - id: check-doc-validity-self-test
+        name: docs validity checker self-test
+        entry: uv run --project backend --no-sync python scripts/check_doc_validity.py --self-test
+        language: system
+        files: ^scripts/check_doc_validity\.py$
+        pass_filenames: false
+        stages: [pre-commit]
 
   # CI-parity pre-push gate: mirrors key CI checks so a red-PR push is caught
   # locally before the CI round-trip. Tests are NOT included — CI's

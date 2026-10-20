@@ -131,6 +131,7 @@ from modulo.db.crud.pipeline import (
     CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT,
     CIRCUIT_BREAKER_THRESHOLD_MAX,
     CircuitBreakerThresholdChangeDenied,
+    GraphWriteActor,
     GraphWriteRecording,
     PipelineHasActiveRunsError,
     archive_pipeline,
@@ -1723,7 +1724,17 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         ``model_class``: the class is resolved at mint only for sandbox_agent
         nodes and consumed through the sandbox ``{{ model }}`` template
         variable, so on any other node type it would be a declared-but-unread
-        reference to a mechanism that never runs.
+        reference to a mechanism that never runs. FAR-1846 adds
+        ``egress_policy`` / ``egress_allowlist`` for the same reason: the egress
+        enforcement surface (the workspace egress policy plus the host:port
+        allowlist) is only derived for sandbox_agent nodes —
+        ``_check_sandbox_egress`` runs only in the sandbox branch of the graph
+        validator, and the node → ``WorkspaceSpec`` mapping is performed only by
+        the sandbox dispatch sites (``node_runner``, ``sandbox_mode`` and
+        ``bundled_runner/runner_dispatch``) against the resolver in
+        ``pipeline_engine/egress.py`` (itself a pure resolver, not a caller) —
+        so on any other node type the pair would be declared-but-unread
+        configuration that looks enforced and enforces nothing.
         """
         if self.node_type == "sandbox_agent":
             return
@@ -1739,6 +1750,10 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             raise ValueError("Only sandbox_agent nodes can set commands_concatenation_string")
         if self.model_class is not None:
             raise ValueError("Only sandbox_agent nodes can set model_class")
+        if self.egress_policy is not None:
+            raise ValueError("Only sandbox_agent nodes can set egress_policy")
+        if self.egress_allowlist is not None:
+            raise ValueError("Only sandbox_agent nodes can set egress_allowlist")
 
     def _validate_agent_only_fields(self) -> None:
         if self.node_type != "agent" and self.parameter_set_id is not None:
@@ -3617,12 +3632,14 @@ async def replace_pipeline_graph_endpoint(
                 org_id=principal.organisation_id,
                 nodes=node_data,
                 edges=[_edge_data_to_dict(edge) for edge in edge_data],
-                is_privileged=_is_privileged(principal.org_role, principal.key_grants),
-                caller_type="rest",
-                account_id=principal.account_id,
-                is_guardrail_admin=_is_guardrail_admin(principal),
-                grants_deny_privilege=_grants_deny_privilege(principal),
-                grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+                actor=GraphWriteActor(
+                    is_privileged=_is_privileged(principal.org_role, principal.key_grants),
+                    caller_type="rest",
+                    account_id=principal.account_id,
+                    is_guardrail_admin=_is_guardrail_admin(principal),
+                    grants_deny_privilege=_grants_deny_privilege(principal),
+                    grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+                ),
                 recording=GraphWriteRecording(record_snapshot=True),
             )
             if graph is not None:
@@ -4097,12 +4114,14 @@ async def _apply_graph_update(
         org_id=org_id,
         nodes=node_data,
         edges=[_edge_data_to_dict(edge) for edge in edge_data],
-        is_privileged=_is_privileged(principal.org_role, principal.key_grants),
-        caller_type="rest",
-        account_id=principal.account_id,
-        is_guardrail_admin=_is_guardrail_admin(principal),
-        grants_deny_privilege=_grants_deny_privilege(principal),
-        grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+        actor=GraphWriteActor(
+            is_privileged=_is_privileged(principal.org_role, principal.key_grants),
+            caller_type="rest",
+            account_id=principal.account_id,
+            is_guardrail_admin=_is_guardrail_admin(principal),
+            grants_deny_privilege=_grants_deny_privilege(principal),
+            grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+        ),
         recording=recording,
     )
     if graph is None:
@@ -5807,9 +5826,34 @@ async def rollback_snapshot_endpoint(
             # mirrored here: it remains a save-time-only rule (ModelBackendHub
             # has no invocation-time visibility gate), so rollbacks are judged
             # on connector bindings only.
-
-            async def _connector_team_gate_after_lock(target: PipelineSnapshot, pipeline: Pipeline) -> None:
+            #
+            # FAR-1845: the contract for the pipeline graph-write surfaces
+            # covered by this ticket — the REST full-graph/PATCH writes, the
+            # MCP full-graph write, and this snapshot rollback — is "sync the
+            # bound Agent rows inside the SAME transaction, BEFORE the graph
+            # write" (FAR-488a: what you save/restore is what runs). (Bundle
+            # import/export in ``modulo.core.workflow_import_export`` is a
+            # separate path and out of scope here.) ``rollback_to_snapshot``
+            # rewrites ``pipeline.graph_nodes_json``
+            # from the target snapshot verbatim, so without this sync the live
+            # graph would claim the restored command while
+            # ``_materialize_agent_fields`` let the stale Agent row win at
+            # run-snapshot time — the rollback would appear to change the
+            # command and the run would execute the old one. The caller owns
+            # the sync because ``rollback_to_snapshot`` (db layer) cannot import
+            # ``modulo.api`` (import-linter db-does-not-import-api), exactly as
+            # the REST graph-write endpoints own theirs.
+            async def _rollback_post_lock_gate(target: PipelineSnapshot, pipeline: Pipeline) -> None:
                 snapshot_nodes = target.graph_json.get("nodes", []) if isinstance(target.graph_json, dict) else []
+                # Sync the bound Agent rows FIRST — never behind an early
+                # return. The connector-team gate below short-circuits a graph
+                # with no connector bindings, but the Agent-row sync must run
+                # for every restored snapshot regardless of connector content.
+                await _sync_agent_row_commands(
+                    session,
+                    org_id=pipeline.organisation_id,
+                    nodes=snapshot_nodes,
+                )
                 stored_bindings = extract_connector_bindings(snapshot_nodes)
                 if not stored_bindings:
                     return
@@ -5830,7 +5874,7 @@ async def rollback_snapshot_endpoint(
                 is_guardrail_admin=_is_guardrail_admin(principal),
                 grants_deny_privilege=_grants_deny_privilege(principal),
                 grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
-                post_lock_gate=_connector_team_gate_after_lock,
+                post_lock_gate=_rollback_post_lock_gate,
             )
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
         await _handle_graph_write_denials(
@@ -5839,6 +5883,13 @@ async def rollback_snapshot_endpoint(
             pipeline_id=pipeline_id,
             exc=exc,
         )
+    except GitContentRefError as exc:
+        # FAR-1845/FAR-220: the rollback's Agent-row command sync validated an
+        # unpinned git content ref in the restored snapshot and failed closed
+        # INSIDE the transaction — the rollback is rolled back with it. Surface
+        # 422 instead of the decorator's 500, the same mapping every graph-write
+        # endpoint uses; a poisoned ref must never be restored silently.
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -6528,11 +6579,13 @@ async def _save_graph(
         org_id=org_id,
         nodes=nodes,
         edges=edge_dicts,
-        is_privileged=is_privileged,
-        caller_type=caller_type,
-        account_id=account_id,
-        is_guardrail_admin=is_guardrail_admin,
-        grants_deny_privilege=grants_deny_privilege,
-        grants_deny_guardrail_admin=grants_deny_guardrail_admin,
+        actor=GraphWriteActor(
+            is_privileged=is_privileged,
+            caller_type=caller_type,
+            account_id=account_id,
+            is_guardrail_admin=is_guardrail_admin,
+            grants_deny_privilege=grants_deny_privilege,
+            grants_deny_guardrail_admin=grants_deny_guardrail_admin,
+        ),
         recording=recording,
     )

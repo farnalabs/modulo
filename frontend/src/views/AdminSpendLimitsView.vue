@@ -30,7 +30,7 @@
               </Button>
             </div>
             <p v-if="orgSaveError" class="mt-2 text-xs text-destructive">{{ orgSaveError }}</p>
-            <p v-if="orgSaveSuccess" class="mt-2 text-xs text-success">{{ $t('views.AdminSpendLimitsView.org_limit_updated') }}</p>
+            <p v-if="orgSaveSuccess" class="mt-2 text-xs text-success-text">{{ $t('views.AdminSpendLimitsView.org_limit_updated') }}</p>
           </template>
         </Card>
 
@@ -81,7 +81,7 @@
 
                   <div class="flex items-center justify-between rounded-lg border bg-muted p-4">
                     <span class="text-sm font-medium">{{ $t('views.AdminSpendLimitsView.remaining_budget') }}</span>
-                    <span class="text-lg font-semibold" :class="ceilingRemaining === null ? '' : (ceilingRemaining === 0 ? 'text-destructive' : 'text-success')">
+                    <span class="text-lg font-semibold" :class="ceilingRemaining === null ? '' : (ceilingRemaining === 0 ? 'text-destructive' : 'text-success-text')">
                       {{ ceilingRemaining === null ? '—' : formatMoney(ceilingRemaining, currencyCode) }}
                     </span>
                   </div>
@@ -91,7 +91,7 @@
                       {{ savingCeiling ? $t('views.AdminSpendLimitsView.saving') : $t('views.AdminSpendLimitsView.save') }}
                     </Button>
                     <p v-if="ceilingSaveError" class="text-xs text-destructive">{{ ceilingSaveError }}</p>
-                    <p v-if="ceilingSaveSuccess" class="text-xs text-success">{{ $t('views.AdminSpendLimitsView.ceiling_updated') }}</p>
+                    <p v-if="ceilingSaveSuccess" class="text-xs text-success-text">{{ $t('views.AdminSpendLimitsView.ceiling_updated') }}</p>
                   </div>
                 </div>
               </template>
@@ -340,7 +340,7 @@ async function saveCeiling() {
 
 function overageClass(cost: number, limit: number | null): string {
   if (limit === null || limit <= 0) return ''
-  return cost > limit ? 'text-destructive' : 'text-success'
+  return cost > limit ? 'text-destructive' : 'text-success-text'
 }
 
 async function saveOrgLimit() {

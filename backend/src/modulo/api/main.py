@@ -86,6 +86,7 @@ from modulo.api.routes.error_notification_rules import router as error_notificat
 from modulo.api.routes.errors import router as errors_router
 from modulo.api.routes.evals import router as evals_router
 from modulo.api.routes.events import router as events_router
+from modulo.api.routes.evidence import router as evidence_router
 from modulo.api.routes.external_agents import router as external_agents_router
 from modulo.api.routes.feedback import router as feedback_router
 from modulo.api.routes.guardrail_config import router as guardrail_config_router
@@ -840,6 +841,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     _configure_license_and_otel(settings)
     _discover_plugins(settings)
+    _configure_capacity_platform_probe(settings)
 
     logger.info("startup.starting")
     await _run_boot_guards_and_seeds(settings)
@@ -883,6 +885,33 @@ def _configure_license_and_otel(settings: Settings) -> None:
         service_name=settings.modulo_otel_service_name,
         telemetry_enabled=is_telemetry_enabled(),
     )
+
+
+def _configure_capacity_platform_probe(settings: Settings) -> None:
+    """Install the provider/platform DB-capacity probe (FAR-1992).
+
+    The probe lets a deployment whose DB volume is not mountable into the app
+    (Fly: separate app/DB machines) auto-detect capacity instead of pinning
+    ``DB_CAPACITY_BYTES``. Built by the infra/provider layer
+    (``modulo.core.capacity_providers``) and injected into the DB layer through
+    its port, so ``modulo.db`` never imports ``modulo.core``.
+
+    Fail-open end to end: a build/install failure (or an unconfigured provider)
+    leaves the port UNSET, which keeps the FAR-1882 behaviour - filesystem probe,
+    then ``none`` (inert) - and can never block startup.
+    """
+    try:
+        from modulo.core.capacity_providers import build_platform_capacity_probe
+        from modulo.db.capacity import set_platform_capacity_probe
+
+        probe = build_platform_capacity_probe(settings)
+        set_platform_capacity_probe(probe)
+        if probe is not None:
+            logger.info("startup.capacity_platform_probe_installed", extra={"provider": probe.name})
+        else:
+            logger.info("startup.no_capacity_platform_probe")
+    except Exception:
+        logger.warning("startup.capacity_platform_probe_failed", exc_info=True)
 
 
 def _discover_plugins(settings: Settings) -> None:
@@ -1046,7 +1075,7 @@ async def _start_background_tasks(settings: Settings) -> dict[str, Any]:
 
     # Start the HITL claim expiry background job.
     claim_expiry_job = ClaimExpiryJob(db_engine)
-    await claim_expiry_job.start()
+    claim_expiry_job.start()
 
     # NOTE: no in-process trigger-event cleanup loop here (FAR-523). The SAQ
     # system crons ``webhook_dedup_cleanup`` / ``trigger_events_cleanup`` own
@@ -1347,6 +1376,7 @@ app.include_router(error_forwarder_config_router)
 app.include_router(error_notification_rules_router)
 app.include_router(errors_router)
 app.include_router(events_router)
+app.include_router(evidence_router)
 app.include_router(assistant_router)
 app.include_router(manifest_router)
 app.include_router(metrics_router)

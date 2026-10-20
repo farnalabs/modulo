@@ -24,7 +24,7 @@
           :class="[
             'rounded-lg border px-3 py-2 text-left text-xs transition-colors',
             form.stage_type === opt.value
-              ? 'border-primary bg-primary/10 text-primary'
+              ? 'border-primary bg-primary/10 text-primary-text'
               : 'border-input bg-background text-muted-foreground hover:border-muted-foreground/50',
           ]"
           @click="form.stage_type = opt.value"

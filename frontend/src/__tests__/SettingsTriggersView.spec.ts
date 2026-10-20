@@ -454,7 +454,11 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
     expect(badge.exists()).toBe(true)
     expect(badge.text()).toContain('No-delivery streak 3/5')
     // The badge conveys dynamic status, so it is a status region (WCAG 4.1.3).
-    expect(badge.attributes('role')).toBe('status')
+    // `<output>` carries the implicit status role (Sonar Web:S6819 prefers the
+    // native element), so assert the native carrier and that no explicit role
+    // is layered on top of it.
+    expect(badge.element.tagName).toBe('OUTPUT')
+    expect(badge.attributes('role')).toBeUndefined()
     expect(badge.attributes('aria-live')).toBe('polite')
     // "Deactivated" is state-driven: a notify-only cron trip never says it.
     expect(wrapper.find('[data-testid="settings-triggers-deactivated-badge"]').exists()).toBe(false)
@@ -471,7 +475,7 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
     const badge = wrapper.find('[data-testid="settings-triggers-streak"]')
     expect(badge.exists()).toBe(true)
     expect(badge.text()).toContain('No-delivery streak 5/5')
-    expect(badge.classes()).toContain('text-destructive')
+    expect(badge.classes()).toContain('text-destructive-text')
     expect(wrapper.find('[data-testid="settings-triggers-deactivated-badge"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="settings-triggers-reenable"]').exists()).toBe(false)
   })
@@ -838,10 +842,10 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
 
     const badges = wrapper.findAll('[data-testid="settings-triggers-streak"]')
     expect(badges).toHaveLength(2)
-    expect(badges[0].classes()).toContain('text-destructive')
+    expect(badges[0].classes()).toContain('text-destructive-text')
     expect(badges[0].classes()).not.toContain('text-amber-600')
     expect(badges[1].classes()).not.toContain('text-amber-600')
-    expect(badges[1].classes()).not.toContain('text-destructive')
+    expect(badges[1].classes()).not.toContain('text-destructive-text')
   })
 })
 

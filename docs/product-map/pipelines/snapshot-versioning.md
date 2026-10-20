@@ -6,9 +6,17 @@ code:
   - backend/src/modulo/db/models/pipeline_snapshot.py
   - backend/src/modulo/db/crud/pipeline_snapshot.py
   - backend/src/modulo/db/crud/pipeline_snapshot_versioning.py
+  - backend/src/modulo/db/crud/pipeline.py
   - backend/src/modulo/api/routes/pipelines.py
   - backend/src/modulo/api/routes/runs.py
+  - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/core/release_channels.py
+  - backend/src/modulo/db/migrations/versions/0317_drop_retired_pipeline_diff_rollback_flag.py
+  - frontend/src/views/PipelineEditorView.vue
+  - frontend/src/components/pipeline/PipelineSnapshotTimeline.vue
+  - frontend/src/components/pipeline/PipelineVersionChip.vue
+  - frontend/src/components/pipeline/PipelineSnapshotCompare.vue
+  - frontend/src/components/runs/RunPipelineVersionLink.vue
 unit-tests:
   - backend/tests/unit/pipelines/test_snapshot_versioning.py
   - backend/tests/unit/pipelines/test_snapshot_crud.py
@@ -16,6 +24,12 @@ unit-tests:
   - backend/tests/unit/db/test_pipeline_snapshot.py
   - backend/tests/unit/db/crud/test_snapshot_versioning_far402.py
   - backend/tests/unit/api/test_pipeline_snapshot_gating.py
+  - backend/tests/integration/db/test_migration_0317_drop_retired_pipeline_diff_rollback_flag.py
+  - frontend/src/__tests__/PipelineEditorHistoricVersion.spec.ts
+  - frontend/src/__tests__/PipelineEditorCompare.spec.ts
+  - frontend/src/__tests__/components/PipelineSnapshotTimeline.spec.ts
+  - frontend/src/__tests__/components/PipelineSnapshotCompare.spec.ts
+  - frontend/src/__tests__/RunPipelineVersionLink.spec.ts
 bdd:
   - backend/tests/bdd/features/pipelines/snapshot_versioning.feature
   - backend/tests/bdd/features/pipelines/crud.feature
@@ -28,8 +42,9 @@ status: covered
 # Pipeline Snapshot Versioning
 
 Versioned pipeline snapshots: a snapshot is captured automatically at run
-trigger, each carries an incrementing `snapshot_version`, and the versioning
-CRUD (tag, annotate, delete, rollback, diff) is the data layer under
+trigger and on every explicit graph save, each carries an incrementing
+`snapshot_version`, and the versioning CRUD (list, get by id or version, tag,
+annotate, delete, rollback, diff) is the data layer under
 `feat-pipelines-pipeline-diff-rollback`.
 
 ## Behaviours
@@ -45,6 +60,47 @@ CRUD (tag, annotate, delete, rollback, diff) is the data layer under
 - [x] Backward compatibility for pre-versioning snapshot records
 - [x] Versioning CRUD is the back-end of the `snapshots` endpoints under
       `/api/v1/pipelines`
+- [x] An explicit pipeline graph save records the save as an immutable live-edit
+      version (FAR-1810): every explicit-save path (`PUT /{pipeline_id}/graph`,
+      `PATCH /{pipeline_id}` carrying `graph_json`, the node-targeted
+      `PATCH /{pipeline_id}/graph/nodes/{node_id}`, the two node-conversion
+      saves and the MCP `update_pipeline_graph` tool) writes a
+      `version_kind='edit'` / `created_kind='edit'` snapshot in the SAME
+      transaction as the graph write, after the graph rows and the policy-gate
+      reconciliation. A save whose incoming graph is semantically identical to
+      the live one records no snapshot, and an allocation failure rolls the
+      whole save back rather than committing unversioned
+      (`backend/src/modulo/db/crud/pipeline.py::replace_pipeline_graph` +
+      `_record_edit_snapshot_if_needed`,
+      `backend/src/modulo/db/crud/pipeline_snapshot.py::create_snapshot_edit`)
+- [x] The editor opens a saved version READ-ONLY from `?snapshot=<uuid>` (the
+      canonical deep link) or `?version=<n>` (an alias resolved against the
+      version-descending snapshot list; `snapshot` wins when both are present),
+      and `?compare=<uuid>` opens the semantic compare mode for the viewed
+      version. While viewing, the frozen snapshot graph renders on the canvas
+      and the editable state keeps the LIVE graph, so no Save can rewrite live
+      with a stale graph; every write affordance is unmounted rather than
+      disabled (`frontend/src/views/PipelineEditorView.vue`,
+      `frontend/src/components/pipeline/PipelineSnapshotCompare.vue`,
+      `frontend/src/__tests__/PipelineEditorHistoricVersion.spec.ts`,
+      `frontend/src/__tests__/PipelineEditorCompare.spec.ts`)
+- [x] Run surfaces link to the version the run executed (FAR-1813): the runs
+      list row and the run detail render the pipeline name as
+      `/pipelines/{pipeline_id}/editor?snapshot={snapshot_id}`, built ONLY from
+      that run's own `snapshot_id`, plus a `v{n}` chip fed by the run's
+      `snapshot_version`. A legacy run with no snapshot links to the live editor
+      and renders no chip, and a deleted pipeline renders plain text
+      (`frontend/src/components/runs/RunPipelineVersionLink.vue`,
+      `backend/src/modulo/api/routes/runs.py`,
+      `frontend/src/__tests__/RunPipelineVersionLink.spec.ts`)
+- [x] Snapshot save, list, get, diff and rollback are Community-tier: the
+      `pipeline_diff_rollback` plan gate is RETIRED (FAR-1819) — the
+      `require_feature` guard is gone from the routes and the key is removed
+      from the feature registry, and migration
+      `0317_drop_retired_pipeline_diff_rollback_flag` sweeps the stale
+      `feature_flag_catalog` row so no admin surface advertises a flag that
+      gates nothing (`backend/tests/unit/api/test_pipeline_snapshot_gating.py`,
+      `backend/src/modulo/db/migrations/versions/0317_drop_retired_pipeline_diff_rollback_flag.py`)
 - [x] Snapshots carry FAR-402 P6 live-edit history + release-channel tagging:
       `version_kind` (`edit` vs `run`), `created_kind` (`initial`/`edit`/
       `rollback`/`run`), `draft` auto-saves, and `channel` (`none`/`stable`/
@@ -72,6 +128,16 @@ error-path semantics stay unit-tested (
 
 ## QA History
 
+- 2026-10-19: **FAR-1814 docs drift pass** – documented four shipped surfaces
+  that had no tracker line: (1) the FAR-1810 save→edit-snapshot contract
+  (`replace_pipeline_graph` calls `_record_edit_snapshot_if_needed` →
+  `create_snapshot_edit`, same transaction, no-op suppressed, fail-closed);
+  (2) the FAR-1812/1818 read-only historic view and its
+  `?snapshot` / `?version` / `?compare` route query;
+  (3) FAR-1813 run→version linking on the runs list and run detail; and
+  (4) the FAR-1819 retirement of the `pipeline_diff_rollback` tier gate, with
+  migration 0317 sweeping the stale feature-flag catalog row. Every claim was
+  re-verified against the code before writing; `status` stays `covered`.
 - 2026-10-12: **Improve Architecture product-map walk (index 400)** – closed
   the release-channel tracker gap: `channel`/`version_kind`/`draft`/
   `created_kind` tagging, the save-edit 422 contract, and the trigger-side

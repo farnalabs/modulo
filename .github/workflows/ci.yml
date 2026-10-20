@@ -41,13 +41,15 @@ jobs:
 
   changes:
     # FAR-1427: one cheap, checkout-free path detector feeding the path gates
-    # on the heavy jobs below (Frontend and WCAG, Tier 1b testcontainers,
-    # SonarCloud scan). It reads the PR file list from the GitHub API (no
-    # checkout, no toolchain: a few seconds) and publishes three outputs:
+    # on the heavy jobs below (Frontend and WCAG, Frontend unit suite
+    # (merge-queue parity), Tier 1b testcontainers, SonarCloud scan). It reads
+    # the PR file list from the GitHub API (no checkout, no toolchain: a few
+    # seconds) and publishes three outputs:
     #
-    #   frontend      - the Frontend and WCAG job has something to validate:
-    #                   anything under frontend/, the e2e route-coverage script,
-    #                   or this workflow itself.
+    #   frontend      - the Frontend and WCAG job (and the FAR-1947 merge-queue
+    #                   parity job) has something to validate: anything under
+    #                   frontend/, the e2e route-coverage script, or this
+    #                   workflow itself.
     #   sonar         - the change is NOT docs-only (markdown + docs/ outside
     #                   docs/api/examples/). SonarCloud analyses source,
     #                   workflows, Dockerfiles and config, so anything else keeps
@@ -167,6 +169,37 @@ jobs:
         working-directory: .
         run: uv run --no-build --project backend --no-sync python scripts/run_vulture.py
       - name: Semgrep (block new findings)
+        # --timeout 120 matches the budget scripts/run_semgrep.py already uses
+        # locally; semgrep's default is 5s, which the ~13k-line graph-write
+        # files can exceed under CI CPU contention (measured on the pinned
+        # semgrep: 28/32 runs skipped at the 5s default vs 0/48 at 120s).
+        # --timeout-threshold 1 drops a file on its FIRST per-rule timeout so
+        # the worst case stays bounded at 1 x 120s.
+        # When a rule times out on a file, semgrep SKIPS that file and still
+        # exits 0, printing only "Warning: N timeout error(s) ...". So this
+        # step captures the scan output and fails CLOSED when a skipped-file
+        # timeout is reported — otherwise the gate can report green while
+        # having silently not run a rule against the very file it protects
+        # (mcp_server.py holds the only MCP replace_pipeline_graph call site).
+        # Detection is PRIMARY from the structured --json-output errors stream
+        # (an entry of type "Timeout"); the text signatures are a SECONDARY net
+        # and are ANCHORED to semgrep's own line prefixes, so a finding that
+        # merely quotes the phrase (pipelines.py contains the literal
+        # "dispatch.wait_timeout error") cannot false-trigger. We deliberately
+        # do NOT fail on "Partially analyzed". On THIS step's invocation
+        # (uv run --project backend --no-sync semgrep) the one reproducible
+        # per-file instance is backend/src/modulo/api/mcp_server.py:2111 (the
+        # PEP 695 generic `async def _run_db_shell[**TOOL_SHELL_P]`, a genuine
+        # 1-line skip), so matching it would make CI permanently red. Semgrep's
+        # aggregate partial-analysis summary is not stable across invocations /
+        # entry points — an earlier scan through a different semgrep binary
+        # named node_runner.py and several frontend .spec.ts files, which
+        # per-file scans with this invocation did not reproduce. The per-file
+        # scan is the authoritative signal. The HITL graph-write guard's region
+        # at mcp_server.py:4014 is nonetheless analyzed despite the line-2111
+        # skip (mutation-verified, FAR-1933).
+        # `--error` semantics are unchanged: the step still propagates semgrep's
+        # own exit code for real findings.
         working-directory: .
         shell: bash
         run: |
@@ -177,27 +210,99 @@ jobs:
           else
             baseline=""
           fi
+          SEMGREP_LOG=/tmp/semgrep-scan.log
+          SEMGREP_JSON=/tmp/semgrep-scan.json
+          set +e
           if [ -n "$baseline" ]; then
-            uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit "$baseline" --error .
+            uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit "$baseline" --error --timeout 120 --timeout-threshold 1 --json-output="$SEMGREP_JSON" . 2>&1 | tee "$SEMGREP_LOG"
           else
-            uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error .
+            uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error --timeout 120 --timeout-threshold 1 --json-output="$SEMGREP_JSON" . 2>&1 | tee "$SEMGREP_LOG"
           fi
+          rc=${PIPESTATUS[0]}
+          incomplete=0
+          # PRIMARY: the structured JSON error stream — a skipped file is an
+          # errors[] entry of type "Timeout". A missing/malformed payload exits
+          # non-zero here and falls through to the text net below.
+          if uv run --no-build --project backend --no-sync python - "$SEMGREP_JSON" <<'PY'
+          import json, sys
+          try:
+              payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          except (OSError, ValueError):
+              sys.exit(1)
+          errors = payload.get("errors") if isinstance(payload, dict) else None
+          sys.exit(0 if isinstance(errors, list) and any(isinstance(e, dict) and e.get("type") == "Timeout" for e in errors) else 1)
+          PY
+          then
+            incomplete=1
+          fi
+          # SECONDARY net: anchored to semgrep's own line prefixes.
+          if grep -Eq '^Warning: [0-9]+ timeout error|^Semgrep stopped running rules' "$SEMGREP_LOG"; then
+            incomplete=1
+          fi
+          set -e
+          if [ "$incomplete" -ne 0 ]; then
+            echo "::error::semgrep skipped one or more files after a per-rule timeout; the scan is incomplete and must not be treated as passing (FAR-1859)."
+            exit 1
+          fi
+          exit "$rc"
       - name: Semgrep rule tests (--test)
         # Exercise the rule fixture tree so a rule's `# ruleid` / `# ok` guards
         # actually enforce the intended match. The directory form (`--test
         # .semgrep/`) is dead on this semgrep version for a dot-prefixed config
         # dir (get_config_filenames drops configs whose parent starts with `.`),
-        # so pair each rule with its matching-stem fixture explicitly. `set -e`
-        # aborts this step (red CI) if any fixture fails to match.
+        # so pair each rule with its fixture EXPLICITLY. The fixture filename
+        # cannot be derived from the rule-file stem in general: two rules here
+        # are named after the rule id (`graph-write-missing-is-privileged.py`)
+        # or the rule-file stem plus a suffix
+        # (`hitl-review-mcp-caller-type-literal.py`, whose rule id is
+        # `hitl-gate-mcp-caller-type-literal`) — a stem-derived loop silently
+        # skipped them. A listed rule with no fixture is a HARD failure: a
+        # missing fixture must fail the gate, never skip silently. `set -e`
+        # aborts the step (red CI) if any fixture fails to match.
         working-directory: .
         shell: bash
         run: |
           set -euo pipefail
-          for rule in .semgrep/no-raw-httpx-client.yml .semgrep/connector-egress-verify-required.yml .semgrep/callable-dunder-name.yml; do
-            base="$(basename "$rule" .yml)"
-            if [ -f ".semgrep/tests/${base}.py" ]; then
-              uv run --no-build --project backend --no-sync semgrep --config="$rule" --test ".semgrep/tests/${base}.py"
+          # Every fixture in the repo carrying a semgrep test annotation
+          # (`# ruleid:` / `# ok:`) is exercised here (FAR-1933), paired to the
+          # rule FILE that contains its rule id. Pairing is by RULE ID, not by
+          # rule-file stem (see the step comment above): a stem-derived loop is
+          # how a dead rule can ship green for months. Most fixtures live under
+          # .semgrep/tests/, but two sit BESIDE their rule files
+          # (credential_in_state.py, missing_session_begin.py) — a sweep scoped
+          # to .semgrep/tests/*.py is exactly what missed them, so enumerate by
+          # annotation, not by directory:
+          #   grep -rl '# ruleid:' --include='*.py' --include='*.ts' \
+          #     --include='*.vue' --include='*.js' .
+          pairs="
+          .semgrep/all-empty-iterable.yml:.semgrep/tests/all-empty-iterable.py
+          .semgrep/asyncio_waitfor_wait_unshielded.yml:.semgrep/tests/asyncio-waitfor-wait-unshielded.py
+          .semgrep/callable-dunder-name.yml:.semgrep/tests/callable-dunder-name.py
+          .semgrep/connector-egress-verify-required.yml:.semgrep/tests/connector-egress-verify-required.py
+          .semgrep/credential_in_state.yml:.semgrep/credential_in_state.py
+          .semgrep/exception-mro-ordering.yml:.semgrep/tests/test_exception_mro_ordering.py
+          .semgrep/hitl-review-edge-mutation-outside-guard.yml:.semgrep/tests/hitl-review-edge-mutation-outside-guard.py
+          .semgrep/hitl-review-mcp-caller-type.yml:.semgrep/tests/hitl-review-mcp-caller-type-literal.py
+          .semgrep/mcp-human-only-constant-non-browser.yml:.semgrep/tests/mcp-human-only-constant-non-browser.py
+          .semgrep/missing-is-privileged.yml:.semgrep/tests/graph-write-missing-is-privileged.py
+          .semgrep/missing_session_begin.yml:.semgrep/missing_session_begin.py
+          .semgrep/no-op-except-reraise.yml:.semgrep/tests/no-op-except-reraise.py
+          .semgrep/no-raw-httpx-client.yml:.semgrep/tests/no-raw-httpx-client.py
+          .semgrep/non_serializable_in_langgraph_state.yml:.semgrep/tests/non-serializable-in-langgraph-state.py
+          .semgrep/retry-loop-last-exc.yml:.semgrep/tests/retry-loop-last-exc.py
+          "
+          for pair in $pairs; do
+            rule="${pair%%:*}"
+            fixture="${pair#*:}"
+            if [ ! -f "$rule" ]; then
+              echo "::error::semgrep rule test: rule file not found: $rule"
+              exit 1
             fi
+            if [ ! -f "$fixture" ]; then
+              echo "::error::semgrep rule test: missing fixture for $rule (expected $fixture) — a rule with no fixture is a failure, not a skip"
+              exit 1
+            fi
+            uv run --no-build --project backend --no-sync semgrep --config="$rule" --test "$fixture"
           done
       - name: pip-audit (bounded retry on transient PyPI service errors)
         # pip-audit's PyPI vulnerability service raises ServiceError on any
@@ -606,7 +711,7 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         if: needs.changes.outputs.frontend == 'true'
         with:
-          version: 11.28.5
+          version: 11.28.6
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         if: needs.changes.outputs.frontend == 'true'
         with:
@@ -745,6 +850,68 @@ jobs:
         run: |
           echo "::error::E2E route coverage gate failed (rc=2: malformed router or missing e2e directory). See the 'E2E route coverage gate' step output." >&2
           exit 1
+
+  frontend-unit-parity:
+    # FAR-1947: the "Frontend and WCAG" job runs the unit suite with
+    # `--maxWorkers=2` (a deliberate 2-vCPU cap — see the vitest step there),
+    # but the merge queue runs `pnpm run test:unit`, which is `vitest run src
+    # --pool=threads --maxWorkers=4`, against the MERGED state. Worker count
+    # changes file -> worker assignment, so an order-dependent spec can pass at
+    # 2 workers and fail at 4. On 2026-10-17 exactly that happened
+    # (main-bootstrap.spec.ts, since made order-independent by FAR-1943): the
+    # queue's frontend step failed, main CI stayed green, PR CI reported
+    # "Frontend and WCAG" green, and NOTHING merged for ~2.5 h — the only
+    # external symptom was an opaque queue stall.
+    #
+    # This job runs the merge queue's EXACT command (`pnpm run test:unit` — same
+    # script, no flags added or dropped) so a queue-only failure surfaces as a
+    # red PR/main check instead of a silent stall. It does NOT replace the
+    # queue's run: validating the merged state remains the queue's job, and the
+    # queue's step is deliberately left untouched.
+    #
+    # Gate: STEP-level `needs.changes.outputs.frontend`, the established
+    # convention in this workflow (the `changes` detector publishes it, the
+    # "Frontend and WCAG" job consumes it). Step-level, never job-level, so a
+    # skipped run still reports the check as "success" rather than a non-green
+    # "skipped" (same reasoning as the `changes` job comment). On any
+    # non-pull_request event the detector sets every output true, so this job
+    # runs on every push to main and on workflow_dispatch.
+    #
+    # Cost (measured in the merge queue: 470 s for 271 files / 5380 tests, plus
+    # a cached `pnpm install`): a frontend-touching PR and a push to main each
+    # add ~8-9 runner-minutes on their own runner — parallel with backend-test
+    # (~25 min), so no added PR critical-path wall-clock; a backend-only PR
+    # skips every step (a few seconds of runner allocation).
+    name: Frontend unit suite (merge-queue parity)
+    needs: [changes]
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.frontend == 'true'
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        if: needs.changes.outputs.frontend == 'true'
+        with:
+          version: 11.28.6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        if: needs.changes.outputs.frontend == 'true'
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+        if: needs.changes.outputs.frontend == 'true'
+      # The queue's exact invocation. Do NOT add flags here: `--coverage` or a
+      # worker-count override would diverge from what the queue runs and defeat
+      # the point of this job (see the header comment).
+      - name: Run unit tests (exact merge-queue invocation)
+        if: needs.changes.outputs.frontend == 'true'
+        run: pnpm run test:unit
 
   sonarcloud-scan:
     name: SonarCloud scan (coverage import)
@@ -1081,10 +1248,11 @@ jobs:
           FRONTEND_CHANGED: ${{ needs.changes.outputs.frontend }}
           # FAR-1317 reviewer opt-in: a deletion-only production diff is a
           # deliberate human decision (retiring / subtracting code) that leaves
-          # nothing new to cover. The gate stays fail-closed by default; this
-          # flag — set ONLY by the reviewer-applied
-          # `coverage: deletion-only-approved` label — authorises the
-          # deletion-only skip-as-pass.
+          # nothing new to cover. Such a diff already passes under the
+          # no-added-lines exemption, so this flag does not change the exit
+          # code; set ONLY by the reviewer-applied
+          # `coverage: deletion-only-approved` label, it renders the pass as an
+          # explicit reviewer authorisation in the summary.
           DELETION_ONLY_APPROVED: "${{ contains(github.event.pull_request.labels.*.name, 'coverage: deletion-only-approved') }}"
         run: |
           # Provision an isolated venv with ONLY the gate's dependency
@@ -1109,9 +1277,11 @@ jobs:
           if [ "$FRONTEND_CHANGED" != "true" ]; then
             EXTRA_ARGS+=(--allow-missing-js-report)
           fi
-          # FAR-1317: authorise a reviewer-approved deletion-only diff only when
-          # the PR carries the label. The flag is opt-in; absent the label the
-          # gate still fails closed on a deletion-only production change.
+          # FAR-1317: apply the reviewer-authorisation rendering only when the
+          # PR carries the label. The flag is opt-in and affects only the
+          # summary status/wording; absent the label a deletion-only change
+          # still passes under the no-added-lines exemption, with no
+          # reviewer-authorisation trail.
           if [ "$DELETION_ONLY_APPROVED" = "true" ]; then
             EXTRA_ARGS+=(--allow-deletion-only-approved)
           fi
@@ -1142,7 +1312,7 @@ jobs:
           enable-cache: true
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.5
+          version: 11.28.6
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -1335,22 +1505,41 @@ jobs:
     # step so it keeps its documented meaning ("do not auto-dispatch the
     # Branch Fixer").
     if: github.event_name == 'pull_request' && always()
-    # FAR-1429: `needs` must list EVERY job that can fail on a PR. failure() and
-    # success() in the steps below consider all ancestor jobs, so a failing job
-    # missing from this list (tier1b-light, sonarcloud-scan,
-    # migration-heads-check were) never reached the Branch Fixer / reviewer
-    # gate. A job that is merely SKIPPED is neither failure() nor cancelled();
-    # every job here either always runs (path gates are step-level) or is only
-    # skipped because an ancestor already failed, which is itself a failure.
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    # FAR-1429: `needs` must list EVERY job that can fail on a PR, because the
+    # guard below reads `needs.*.result` and therefore sees ONLY the jobs named
+    # here — a failing job missing from this list (tier1b-light,
+    # sonarcloud-scan, migration-heads-check were) never reached the Branch
+    # Fixer / reviewer gate. Step-level `failure()` does NOT help: the runner
+    # evaluates it from this job's own status alone, so with no failing step in
+    # this job it is always false. A job that is merely SKIPPED is neither
+    # failure() nor cancelled(); every job here either always runs (path gates
+    # are step-level) or is only skipped because an ancestor already failed,
+    # which is itself a failure.
+    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
       pull-requests: write
+    # Guard predicate below is NEEDS-AWARE, not step-level `failure()`
+    # (contains(needs.*.result, 'failure') || cancelled()). Step-level
+    # `failure()` sees only THIS job's own previous steps: with every product
+    # job listed in `needs` and no failing step within this job, it was ALWAYS
+    # false, so the entire guard chain (superseded-check -> retry-check ->
+    # queue-check -> dispatch) skipped on every genuine PR CI failure,
+    # dead-ending the CI -> Branch Fixer path onto the PR Housekeeper cron.
+    # `cancelled()` is retained so a cancelled (superseded) run still reaches
+    # the superseded-check guard unchanged. Same needs-aware pattern as
+    # notify-main-failure and self-report-ci below.
+    #
+    # The consumers test `steps.retry-check.outputs.exhausted != 'true'`, not
+    # `== 'false'`: a skipped/empty output then reads as "not exhausted"
+    # rather than silently suppressing the dispatch. The retry-exhausted
+    # suppression is preserved — `exhausted=true` still blocks the dispatch,
+    # so there is no dispatch loop.
     steps:
       - name: Skip if this run was superseded by a newer push
         id: superseded-check
-        if: failure() || cancelled()
+        if: contains(needs.*.result, 'failure') || cancelled()
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
@@ -1378,10 +1567,11 @@ jobs:
 
       - name: Check retry limit
         id: retry-check
-        if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        if: (contains(needs.*.result, 'failure') || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          REPO: ${{ github.repository }}
           PR_NUM: ${{ github.event.pull_request.number }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
@@ -1403,7 +1593,13 @@ jobs:
           if [ "$FIX_COUNT" -ge 3 ]; then
             echo "exhausted=true" >> "$GITHUB_OUTPUT"
             echo "::warning::Branch fixer exhausted after $FIX_COUNT attempts against PR #${PR_NUM}."
-            gh pr comment "$PR_NUM" --body "## Branch Fixer Exhausted
+            # FAR-1997: this job is dispatch-only — it has NO actions/checkout
+            # step — so `gh` cannot infer the repository from a git remote and
+            # an unqualified `gh pr comment` dies with "fatal: not a git
+            # repository" before reaching the API. Pass the repository
+            # explicitly. (Same fix, same class, as the dispatch-failure notice
+            # below.)
+            gh pr comment "$PR_NUM" --repo "$REPO" --body "## Branch Fixer Exhausted
 
             The automated branch fixer has attempted $FIX_COUNT fixes against this PR but CI is still failing. Manual intervention is required.
 
@@ -1414,7 +1610,7 @@ jobs:
 
       - name: Skip if a merge-queue run is already in flight for this PR
         id: queue-check
-        if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted == 'false' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        if: (contains(needs.*.result, 'failure') || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
@@ -1425,7 +1621,8 @@ jobs:
           # A green CI run entered the merge queue, and then a THIRD-PARTY PR's
           # merge (or a review event) advanced main and cancelled this PR's
           # now-stale queue run. That cancellation surfaces as
-          # (failure() || cancelled()) here and dispatches a Branch Fixer run
+          # (contains(needs.*.result, 'failure') || cancelled()) here and
+          # dispatches a Branch Fixer run
           # even though nothing is broken and the queue is already re-running
           # this branch. If a merge-queue run for this PR is still in flight,
           # the queue owns the outcome — do not dispatch a competing fixer run.
@@ -1507,9 +1704,10 @@ jobs:
       # and hand-managed dispatches.
 
       - name: Trigger Modulo Branch Fixer
-        if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted == 'false' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        if: (contains(needs.*.result, 'failure') || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted != 'true' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          REPO: ${{ github.repository }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
           PR_NUM: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -1547,22 +1745,37 @@ jobs:
             '{branchName: $branchName, prNumber: $prNumber, headSha: $headSha, runUrl: $runUrl, failureDescription: $failureDescription, fingerprint: $fingerprint}')
           echo "PR #${PR_NUM} on branch '${BRANCH}' -- CI checks failed."
           echo "Sending to Modulo Branch Fixer pipeline..."
-          # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5
-          # attempts, ~5 min total). TIMESTAMP and HMAC are recomputed per
-          # attempt: the server enforces a +/-300s replay window on
-          # X-Modulo-Timestamp, so a signature computed once would fall
-          # outside the window after backoff sleep.
+          # Bounded backpressure retry. The webhook returns HTTP 429 when the
+          # Branch Fixer trigger's concurrency slots are exhausted and 503
+          # when the app is shedding load; 502/504 are gateway-side
+          # unavailability of the same class. Those are transient, so retry
+          # them on a patient but strictly bounded schedule - 3 attempts
+          # total, 10s then 30s - and then fail the step LOUDLY: a dispatch
+          # failure is never swallowed silently.
+          #
+          # HTTP 000 is curl's sentinel for a transport failure (no response
+          # at all). It is retried on the same schedule: it belongs to the
+          # same "server not reachable right now" class, and the
+          # `|| RESPONSE=""` below is what stops `bash -e` (GitHub Actions
+          # adds it to `run:` steps) from aborting the loop on the first curl
+          # error - without it a transient webhook blip permanently lost the
+          # dispatch. Every other status is non-retryable and fails loudly:
+          # in particular HTTP 500/501 are deliberately NOT retried, because a
+          # deterministic server-side error cannot be fixed by retrying and a
+          # retry only delays the loud failure annotation.
+          #
+          # TIMESTAMP and HMAC are recomputed on every attempt: the server
+          # enforces a +/-300s replay window on X-Modulo-Timestamp, so a
+          # signature computed once would fall outside the window after the
+          # 10s/30s sleeps.
+          MAX_ATTEMPTS=3
           DISPATCHED="false"
           LAST_HTTP=""
-          for i in 1 2 3 4 5; do
+          BODY_RESP=""
+          ATTEMPTS=0
+          for i in $(seq 1 "$MAX_ATTEMPTS"); do
             TIMESTAMP=$(date +%s)
             HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
-            # `|| RESPONSE=""` stops the default `bash -e` (GitHub Actions adds
-            # it to `run:` steps) from aborting this retry loop on the FIRST
-            # curl failure. Without it a curl timeout (exit 28) killed the step
-            # immediately, so the HTTP 000 retry branch below (the whole point
-            # of the loop) never ran and a transient webhook blip permanently
-            # lost the dispatch.
             RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "${WEBHOOK_URL}" \
               -H "Content-Type: application/json" \
               -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
@@ -1574,6 +1787,7 @@ jobs:
             [ -n "$HTTP_CODE" ] || HTTP_CODE="000"
             BODY_RESP=$(echo "$RESPONSE" | sed '$d')
             LAST_HTTP="$HTTP_CODE"
+            ATTEMPTS="$i"
             if [ "$HTTP_CODE" = "202" ]; then
               RESP_STATUS=$(echo "$BODY_RESP" | jq -r '.status // "accepted"')
               if [ "$RESP_STATUS" = "coalesced" ]; then
@@ -1596,10 +1810,14 @@ jobs:
               echo "::notice::Modulo Branch Fixer duplicate delivery suppressed (identical payload already accepted within the dedup window)"
               DISPATCHED="true"
               break
-            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-              DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
-              sleep "$DELAY"
+            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" = "502" ] || [ "$HTTP_CODE" = "503" ] || [ "$HTTP_CODE" = "504" ] || [ "$HTTP_CODE" = "000" ]; then
+              if [ "$i" -lt "$MAX_ATTEMPTS" ]; then
+                if [ "$i" -eq 1 ]; then DELAY=10; else DELAY=30; fi
+                echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE (attempt $i/${MAX_ATTEMPTS}) — retrying in ${DELAY}s"
+                sleep "$DELAY"
+              else
+                echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE on the final attempt ($i/${MAX_ATTEMPTS}) — no attempts left"
+              fi
             else
               echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
               break
@@ -1607,21 +1825,39 @@ jobs:
           done
           if [ "$DISPATCHED" != "true" ]; then
             DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-            echo "::error::Branch Fixer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — CI failure was not handed to the autonomous fix loop."
-            gh pr comment "$PR_NUM" --body "## Branch Fixer Dispatch Failed
+            echo "::error::Branch Fixer webhook dispatch failed after ${ATTEMPTS} attempt(s) (last HTTP ${LAST_HTTP}: ${DETAIL}) — CI failure was not handed to the autonomous fix loop."
+            # FAR-1997: this job is dispatch-only — it has NO actions/checkout
+            # step — so `gh` cannot infer the repository from a git remote, and
+            # `gh pr comment "$PR_NUM"` alone dies with "fatal: not a git
+            # repository" before it reaches the API. Passing the repository
+            # explicitly is the whole fix; it is also why no checkout is added.
+            #
+            # A dispatch failure whose notice cannot be posted leaves a stalled
+            # fix loop indistinguishable from a working one, so an unpostable
+            # notice is a HARD error (its own non-zero exit code), never a
+            # warning annotation: exit 1 = dispatch failed but the PR was told,
+            # exit 2 = dispatch failed AND the PR could not be told.
+            if ! gh pr comment "$PR_NUM" --repo "$REPO" --body "## Branch Fixer Dispatch Failed
 
             The CI failure notification could not be delivered to the Branch Fixer pipeline after multiple retries.
 
             **HTTP status:** \`${LAST_HTTP}\`
             **Detail:** ${DETAIL}
 
-            The automated fix loop is **not active** for this PR. Manual investigation may be needed." || echo "::warning::Failed to post dispatch-failure comment on PR #${PR_NUM}"
+            The automated fix loop is **not active** for this PR. Manual investigation may be needed."; then
+              echo "::error::Failed to post dispatch-failure comment on PR #${PR_NUM} — the stalled fix loop could not be announced."
+              exit 2
+            fi
             exit 1
           fi
+          # Explicit success exit: the dispatch was accepted (202) or was a
+          # handled duplicate (400 "Duplicate webhook payload"/coalesced).
+          echo "Branch Fixer dispatch delivered (HTTP ${LAST_HTTP})."
+          exit 0
 
       - name: Report Branch Fixer check status
         if: success()
-        run: echo "Branch Fixer trigger check passed (all required checks green or fixer dispatched)."
+        run: echo "Branch Fixer trigger check passed (required checks green, fixer dispatched, or dispatch suppressed by a guard)."
 
   notify-main-failure:
     name: Trigger Branch Fixer on main CI failure
@@ -1631,8 +1867,22 @@ jobs:
     # pre-deploy gate (e.g. SonarCloud, schema freshness, secret scan)
     # had no automated fix mechanism. The Branch Fixer creates its own
     # fix branch from main — branchName: main, prNumber: 0 signals this.
+    #
+    # FAR-1947/FAR-1429: `needs` must list EVERY job that can run and fail on
+    # this job's own events (push or workflow_dispatch to main) — the
+    # `contains(needs.*.result, 'failure')` guard below only sees jobs named
+    # here, so a failing job omitted from this list never reaches the dispatcher.
+    # `changes` always runs (no `if:`; a 5-min timeout can fail it).
+    # `tier1b-light` and the FAR-1947 `frontend-unit-parity` job run on every
+    # push to main (the path detector forces all outputs true off-PR).
+    # `coverage-gate` is NOT PR-only: its `if:` admits `workflow_dispatch`, so a
+    # manual dispatch to main runs it and its failure must reach the dispatcher.
+    # Still excluded, per each job's own condition: `sonar-new-issues-gate`
+    # (`if: github.event_name == 'pull_request'`), and `notify-pr-failure` /
+    # `self-report-ci` (both `github.event_name == 'pull_request' && ...`) never
+    # run on a push or dispatch to main, so they cannot fail there.
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && always()
-    needs: [backend-lint, backend-test, integration-changed, frontend, runner-ci-harness, sonarcloud-scan, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -1667,22 +1917,38 @@ jobs:
             --arg fingerprint "${FINGERPRINT}" \
             '{branchName: $branchName, prNumber: $prNumber, headSha: $headSha, runUrl: $runUrl, failureDescription: $failureDescription, fingerprint: $fingerprint}')
           echo "CI checks failed on main (${{ github.sha }}) -- dispatching Branch Fixer."
-          # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5
-          # attempts, ~5 min total). TIMESTAMP and HMAC are recomputed per
-          # attempt: the server enforces a +/-300s replay window on
-          # X-Modulo-Timestamp, so a signature computed once would fall
-          # outside the window after backoff sleep.
+          # Bounded backpressure retry, identical to notify-pr-failure's loop
+          # above (one retry policy for one endpoint). The webhook returns HTTP
+          # 429 when the Branch Fixer trigger's concurrency slots are exhausted
+          # and 503 when the app is shedding load; 502/504 are gateway-side
+          # unavailability of the same class. Those are transient, so retry
+          # them on a patient but strictly bounded schedule - 3 attempts
+          # total, 10s then 30s - and then fail the step LOUDLY: a dispatch
+          # failure is never swallowed silently.
+          #
+          # HTTP 000 is curl's sentinel for a transport failure (no response
+          # at all). It is retried on the same schedule: it belongs to the
+          # same "server not reachable right now" class, and the
+          # `|| RESPONSE=""` below is what stops `bash -e` (GitHub Actions
+          # adds it to `run:` steps) from aborting the loop on the first curl
+          # error - without it a transient webhook blip permanently lost the
+          # dispatch. Every other status is non-retryable and fails loudly:
+          # in particular HTTP 500/501 are deliberately NOT retried, because a
+          # deterministic server-side error cannot be fixed by retrying and a
+          # retry only delays the loud failure annotation.
+          #
+          # TIMESTAMP and HMAC are recomputed on every attempt: the server
+          # enforces a +/-300s replay window on X-Modulo-Timestamp, so a
+          # signature computed once would fall outside the window after the
+          # 10s/30s sleeps.
+          MAX_ATTEMPTS=3
           DISPATCHED="false"
           LAST_HTTP=""
-          for i in 1 2 3 4 5; do
+          BODY_RESP=""
+          ATTEMPTS=0
+          for i in $(seq 1 "$MAX_ATTEMPTS"); do
             TIMESTAMP=$(date +%s)
             HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
-            # `|| RESPONSE=""` stops the default `bash -e` (GitHub Actions adds
-            # it to `run:` steps) from aborting this retry loop on the FIRST
-            # curl failure. Without it a curl timeout (exit 28) killed the step
-            # immediately, so the HTTP 000 retry branch below (the whole point
-            # of the loop) never ran and a transient webhook blip permanently
-            # lost the dispatch.
             RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "${WEBHOOK_URL}" \
               -H "Content-Type: application/json" \
               -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
@@ -1694,6 +1960,7 @@ jobs:
             [ -n "$HTTP_CODE" ] || HTTP_CODE="000"
             BODY_RESP=$(echo "$RESPONSE" | sed '$d')
             LAST_HTTP="$HTTP_CODE"
+            ATTEMPTS="$i"
             if [ "$HTTP_CODE" = "202" ]; then
               RESP_STATUS=$(echo "$BODY_RESP" | jq -r '.status // "accepted"')
               if [ "$RESP_STATUS" = "coalesced" ]; then
@@ -1712,10 +1979,14 @@ jobs:
               echo "::notice::Branch Fixer duplicate delivery suppressed (identical payload already accepted within the dedup window)"
               DISPATCHED="true"
               break
-            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-              DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
-              sleep "$DELAY"
+            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" = "502" ] || [ "$HTTP_CODE" = "503" ] || [ "$HTTP_CODE" = "504" ] || [ "$HTTP_CODE" = "000" ]; then
+              if [ "$i" -lt "$MAX_ATTEMPTS" ]; then
+                if [ "$i" -eq 1 ]; then DELAY=10; else DELAY=30; fi
+                echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/${MAX_ATTEMPTS}) — retrying in ${DELAY}s"
+                sleep "$DELAY"
+              else
+                echo "::warning::Branch Fixer returned HTTP $HTTP_CODE on the final attempt ($i/${MAX_ATTEMPTS}) — no attempts left"
+              fi
             else
               echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
               break
@@ -1723,9 +1994,13 @@ jobs:
           done
           if [ "$DISPATCHED" != "true" ]; then
             DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-            echo "::error::Branch Fixer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — main CI failure was not handed to the autonomous fix loop."
+            echo "::error::Branch Fixer webhook dispatch failed after ${ATTEMPTS} attempt(s) (last HTTP ${LAST_HTTP}: ${DETAIL}) — main CI failure was not handed to the autonomous fix loop."
             exit 1
           fi
+          # Explicit success exit: the dispatch was accepted (202) or was a
+          # handled duplicate (400 "Duplicate webhook payload"/coalesced).
+          echo "Branch Fixer dispatch delivered (HTTP ${LAST_HTTP})."
+          exit 0
 
   # FAR-1843: the PR-reviewer dispatch (former job `notify-pr-review`, name
   # "Trigger PR Reviewer") has MOVED to .github/workflows/pr-review.yml,
@@ -1765,8 +2040,26 @@ jobs:
     # the URL secret points at the dogfood map's endpoint.
     #
     # NOT a required check: this job is observability only.
+    #
+    # FAR-1947/FAR-1429: the `!contains(needs.*.result, 'failure')` guard reads
+    # ONLY the jobs named in `needs`, so a failure of a job omitted here still
+    # satisfies the guard and self-reports the "ci" stage as done — a false-green
+    # observability report while the PR's run is red. The rule is precise: every
+    # PRODUCT job that can fail on a PR is listed — the 15 below, including the
+    # FAR-1947 `frontend-unit-parity` job plus the pre-existing `tier1b-light`,
+    # `runner-ci-harness` and `changes` (5-min timeout) omissions swept here
+    # (this list equals notify-pr-failure's). Notifier jobs are deliberately
+    # excluded from a notifier's `needs` (the convention notify-main-failure
+    # documents for its own list), and the exclusion cannot false-green:
+    # `notify-main-failure` never runs on a PR (its `if:` requires a
+    # push/workflow_dispatch to main), and `notify-pr-failure` cannot fail
+    # unless one of the 15 product jobs above already failed or the run was
+    # cancelled — every step of it that can fail is gated on
+    # `contains(needs.*.result, 'failure') || cancelled()` — and both of those
+    # conditions already make
+    # this job's guard false. `self-report-ci` cannot list itself.
     if: github.event_name == 'pull_request' && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
-    needs: [backend-lint, backend-test, integration-changed, frontend, coverage-gate, sonarcloud-scan, sonar-new-issues-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, frontend-unit-parity, runner-ci-harness, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     steps:
       - name: Self-report CI Validate stage to Modulo (fail-open, best-effort)

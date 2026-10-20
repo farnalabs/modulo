@@ -10,9 +10,11 @@ Validation performed:
 - ``exp`` is not expired
 - JWT signature matches the key from the JWKS
 - ``alg`` is restricted to an allowlist (``none`` is rejected)
+- ``nonce`` matches the expected value when one is supplied (FAR-1982)
 """
 
 import base64
+import hmac
 import json
 import logging
 import time
@@ -189,6 +191,8 @@ async def verify_id_token(
     jwks_uri: str,
     client_id: str,
     issuer: str,
+    *,
+    expected_nonce: str | None = None,
 ) -> dict[str, Any]:
     """Verify an OIDC ID token using the provider's JWKS.
 
@@ -197,12 +201,18 @@ async def verify_id_token(
         jwks_uri: The provider's JWKS URI (from the discovery document).
         client_id: The OAuth 2.0 client ID (validates the ``aud`` claim).
         issuer: The expected issuer URL (validates the ``iss`` claim).
+        expected_nonce: When supplied, the ID token MUST carry a ``nonce``
+            claim equal to this value (constant-time). This binds the ID
+            token to the authentication request that started the flow
+            (FAR-1982) and rejects a token replayed from another request.
+            Callers that did not send a nonce pass ``None``.
 
     Returns:
         The verified claims dict on success.
 
     Raises:
-        OidcVerifyError: If signature verification or claim validation fails.
+        OidcVerifyError: If signature verification, claim validation, or the
+            nonce binding fails.
 
     """
     header = _decode_jwt_header(id_token)
@@ -226,7 +236,9 @@ async def verify_id_token(
         else:
             raise
 
-    return await _decode_and_verify(id_token, jwk_dict, alg, client_id, issuer, jwks_uri, header_kid=kid)
+    return await _decode_and_verify(
+        id_token, jwk_dict, alg, client_id, issuer, jwks_uri, header_kid=kid, expected_nonce=expected_nonce
+    )
 
 
 async def verify_id_token_with_discovery(
@@ -277,6 +289,7 @@ async def _decode_and_verify(
     issuer: str,
     jwks_uri: str,
     header_kid: str | None = None,
+    expected_nonce: str | None = None,
 ) -> dict[str, Any]:
     """Construct the key from JWK and verify the JWT."""
     try:
@@ -308,5 +321,21 @@ async def _decode_and_verify(
             )
         except (JWTError, PyJWKError, OidcVerifyError) as exc2:
             raise OidcVerifyError(f"ID token verification failed after retry: {exc2}") from exc
+
+    # FAR-1982: bind the ID token to the authentication request. The nonce is
+    # checked only after the signature has verified (``jwt.decode`` above), so a
+    # forged ``nonce`` claim cannot satisfy it. A missing claim is rejected — the
+    # login flow always sends a nonce, and OIDC Core requires the IdP to echo it.
+    if expected_nonce is not None:
+        token_nonce = claims.get("nonce")
+        # Compare as UTF-8 bytes: ``hmac.compare_digest`` raises ``TypeError`` on
+        # str operands containing non-ASCII characters, and ``token_nonce`` is
+        # IdP-controlled. Comparing bytes keeps the check constant-time for a
+        # well-formed nonce and rejects a malformed one with the same error
+        # instead of escaping as an uncaught 500.
+        if not isinstance(token_nonce, str) or not hmac.compare_digest(
+            token_nonce.encode("utf-8"), expected_nonce.encode("utf-8")
+        ):
+            raise OidcVerifyError("ID token nonce does not match the authentication request")
 
     return dict(claims)

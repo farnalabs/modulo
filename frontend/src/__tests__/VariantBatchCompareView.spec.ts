@@ -152,6 +152,34 @@ describe('VariantBatchCompareView', () => {
     expect(batchMocks.fetchVariantBatch).toHaveBeenCalledWith('b1')
   })
 
+  it('styles a failed eval result with the destructive token', async () => {
+    batchMocks.fetchVariantBatch.mockResolvedValue({
+      data: mockBatch({
+        runs: [
+          run({
+            eval_results: [{ eval_id: 'e1', node_id: 'node-a', passed: false, score: 0.1 }],
+          }),
+        ],
+      }),
+      error: undefined,
+    })
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="variant-batch-expand-r1"]').trigger('click')
+    await nextTick()
+
+    const evalTag = wrapper
+      .findAll('span')
+      .find((s) => s.text().includes('node-a:') && s.text().includes('FAIL'))
+    expect(evalTag).toBeDefined()
+    expect(evalTag!.classes()).toContain('text-destructive')
+    wrapper.unmount()
+  })
+
   it('maps per-variant status badges to the RUN_STATUS vocabulary', async () => {
     batchMocks.fetchVariantBatch.mockResolvedValue({
       data: mockBatch({
@@ -197,6 +225,23 @@ describe('VariantBatchCompareView', () => {
 
     expect(wrapper.find('[data-testid="variant-batch-partial"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('Some variants failed')
+  })
+
+  it('renders the batch-failed notice when the batch status is failed', async () => {
+    batchMocks.fetchVariantBatch.mockResolvedValue({
+      data: mockBatch({ status: 'failed' }),
+      error: undefined,
+    })
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="variant-batch-failed"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="variant-batch-failed"]').text()).toContain(
+      'This batch finished with failures',
+    )
   })
 
   it('shows the server-computed completion signal', async () => {

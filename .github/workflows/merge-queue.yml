@@ -35,16 +35,25 @@ on:
     # contents:write.
     types: [merge-queue-chain]
 
-concurrency:
-  group: merge-queue
-  cancel-in-progress: false
-
 env:
   SECRET_KEY: ${{ secrets.SECRET_KEY }}
   FERNET_KEY: ${{ secrets.FERNET_KEY }}
-  # Authenticate GitHub git fetches so `uv sync --frozen` can resolve git-pinned
-  # dependencies (e.g. pytest-bdd @ refs/pull/827/head) without an anonymous
-  # fetch-by-SHA, which GitHub rejects from CI runners.
+  # THE single git-credential mechanism for this workflow (FAR-1940). It is an
+  # env-driven `url.<base>.insteadOf` rewrite, so the token travels in the
+  # remote URL and git sends ONE Authorization header. The default token is
+  # GITHUB_TOKEN, which authenticates GitHub git fetches so `uv sync --frozen`
+  # can resolve git-pinned dependencies (e.g. pytest-bdd @ refs/pull/827/head)
+  # without an anonymous fetch-by-SHA, which GitHub rejects from CI runners.
+  #
+  # Do NOT add a second mechanism -- specifically not a persisted
+  # `http.<url>.extraheader` Authorization header (which actions/checkout
+  # writes when persist-credentials is left at its default, and which the push
+  # steps used to set for themselves). Configuring the same PAT twice made git
+  # send two Authorization headers on every push and GitHub's receive-pack
+  # rejected it: `remote: Duplicate header: "Authorization"` (2026-10-13, run
+  # 39026353546) -- neither branch push could complete. Push steps that need the
+  # workflows-scoped PAT override GIT_CONFIG_KEY_0 for their own step only, and
+  # only the token changes; the rewrite itself stays here.
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/.insteadOf'
   GIT_CONFIG_VALUE_0: "https://github.com/"
@@ -108,8 +117,9 @@ jobs:
     # repository_dispatch (self-chain) honors the payload's not-before time so
     # chained passes pace ~10 min apart - the wait happens HERE on a tiny idle
     # runner, NOT inside the queue job, which would hold the merge-queue
-    # concurrency slot and delay other runs. (The pull_request_review and
-    # check_suite paths were removed in FAR-1428.)
+    # concurrency slot and delay other runs. The merge-queue concurrency group
+    # is scoped to the `queue` job precisely so this sleep cannot hold it.
+    # (The pull_request_review and check_suite paths were removed in FAR-1428.)
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
     permissions:
@@ -167,6 +177,14 @@ jobs:
     name: Merge queue -> main
     needs: [freeze-gate, event-gate]
     if: needs.freeze-gate.outputs.frozen == 'false' && needs.event-gate.outputs.should_run == 'true'
+    # The merge-queue concurrency group lives on THIS job, not at workflow
+    # level: only this job merges to main, so only it needs serialising. At
+    # workflow level the group was held by the whole run - including the
+    # event-gate ~10-min pacing sleep - so every chained pass queued behind an
+    # incumbent's sleep and waited out the full ~10 min before its own turn.
+    concurrency:
+      group: merge-queue
+      cancel-in-progress: false
     # 30 was the observed failure ceiling: the last successful pass took 29.1 min
     # (backend 19.9 + frontend 7.2 sequential) and every later pass hit the 30-min
     # job cancel before the merge step. 45 gives ~15 min of headroom for the
@@ -233,6 +251,15 @@ jobs:
         with:
           fetch-depth: 0
           ref: main
+          # FAR-1940: do not persist a token credential into .git/config. The
+          # single credential mechanism here is the workflow-level
+          # `url.<base>.insteadOf` rewrite (token in the remote URL); the
+          # http.extraheader Authorization header checkout leaves behind when
+          # this stays at its default was the SECOND mechanism, and the pair is
+          # what made git send two Authorization headers and GitHub reject every
+          # push ("remote: Duplicate header:"). This matches the repo-wide
+          # convention (every other checkout in .github/workflows/ sets it).
+          persist-credentials: false
 
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
         with:
@@ -241,7 +268,7 @@ jobs:
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.5
+          version: 11.28.6
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
@@ -575,6 +602,10 @@ jobs:
         env:
           WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
           HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          # Needed by the undelivered-notification fallback below (FAR-1939):
+          # `gh pr comment` authenticates with the job's GITHUB_TOKEN, which
+          # carries pull-requests:write (see the job's permissions block).
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured -- skipping notification"; exit 0; fi
@@ -626,7 +657,26 @@ jobs:
           done
           if [ "$DISPATCHED" != "true" ]; then
             DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-            echo "::error::Branch Fixer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — merge-conflict notification was not delivered."
+            # FAR-1939: an undelivered notification must never be SILENT, and it
+            # must be attributable to the PR(s) it concerns. On 2026-10-13 (run
+            # 39026353546) all five attempts returned HTTP 429 ("Concurrent run
+            # limit of 5 reached") and the only trace was this ::error:: inside
+            # an already-failing run's log - PR #1925 stayed conflicted with
+            # nothing on the PR, or anywhere durable, saying the Branch Fixer
+            # had never been asked to reconcile it. So: name the PR(s) in the
+            # annotation AND leave a durable comment on each of them, then keep
+            # failing this step (the durable signal is the fix; the retry count
+            # and backoff are deliberately unchanged).
+            echo "::error::Branch Fixer webhook dispatch failed for PR(s) ${CONFLICTS} (HTTP ${LAST_HTTP}: ${DETAIL}) — merge-conflict notification was not delivered."
+            for NUM in $CONFLICTS; do
+              [ -z "$NUM" ] && continue
+              UNDELIVERED_BODY="The merge queue could NOT deliver its merge-conflict notification to the Branch Fixer for this PR: all 5 webhook attempts failed (last HTTP ${LAST_HTTP}: ${DETAIL}). Until the conflict is reconciled, this PR stays conflicted and the queue keeps skipping it. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              if gh pr comment "$NUM" --body "$UNDELIVERED_BODY" > /dev/null 2>&1; then
+                echo "::notice::PR #$NUM: posted a comment recording that the Branch Fixer was never notified."
+              else
+                echo "::error::PR #$NUM: could not post the undelivered-notification comment either — this PR has NO durable signal that the Branch Fixer was never asked to reconcile it (webhook HTTP ${LAST_HTTP}: ${DETAIL})."
+              fi
+            done
             exit 1
           fi
       - name: Detect migration-number collisions in merged PRs
@@ -634,6 +684,10 @@ jobs:
         env:
           WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
           HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          # Needed by the undelivered-notification fallback below (FAR-1939):
+          # `gh pr comment` authenticates with the job's GITHUB_TOKEN, which
+          # carries pull-requests:write (see the job's permissions block).
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured -- skipping notification"; exit 0; fi
@@ -772,7 +826,20 @@ jobs:
           done
           if [ "$DISPATCHED" != "true" ]; then
             DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-            echo "::error::Branch Fixer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — migration-collision notification was not delivered."
+            # FAR-1939: an undelivered notification must never be SILENT, and it
+            # must be attributable to the PR(s) it concerns (see the merge-
+            # conflict notify step above for the incident). The colliding PR(s)
+            # get the durable comment; this step still fails afterwards.
+            echo "::error::Branch Fixer webhook dispatch failed for PR(s) ${collision_prs} (HTTP ${LAST_HTTP}: ${DETAIL}) — migration-collision notification was not delivered."
+            for NUM in $collision_prs; do
+              [ -z "$NUM" ] && continue
+              UNDELIVERED_BODY="The merge queue could NOT deliver its migration-number-collision notification to the Branch Fixer for this PR: all 5 webhook attempts failed (last HTTP ${LAST_HTTP}: ${DETAIL}). This PR's migration number collides with one already on main, so alembic reports multiple heads until it is renumbered. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              if gh pr comment "$NUM" --body "$UNDELIVERED_BODY" > /dev/null 2>&1; then
+                echo "::notice::PR #$NUM: posted a comment recording that the Branch Fixer was never notified."
+              else
+                echo "::error::PR #$NUM: could not post the undelivered-notification comment either — this PR has NO durable signal that the Branch Fixer was never asked to renumber its migration (webhook HTTP ${LAST_HTTP}: ${DETAIL})."
+              fi
+            done
             exit 1
           fi
       - name: Exit if nothing to merge
@@ -784,33 +851,35 @@ jobs:
       - name: Push merge-queue branch (for reference)
         if: steps.merge.outputs.merged_count != '0'
         env:
-          # Workflow-scoped PAT: the reference branch can contain merged
+          # Workflow-scoped PAT, carried by the workflow's SINGLE git-credential
+          # mechanism: the env-driven `url.<base>.insteadOf` rewrite below puts
+          # the token in the push URL, and only the token differs from the
+          # workflow-level default. The reference branch can contain merged
           # .github/workflows/* changes, which GITHUB_TOKEN (the github-actions
           # App) can NEVER push - GitHub has no `workflows` permission key for
           # the App token at all (2026-10-01: reference pushes were rejected
           # server-side with "refusing to allow a GitHub App to create or update
           # workflow ... without `workflows` permission").
-          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN }}
-          # Route BOTH git auth mechanisms to the same PAT: the workflow-level
-          # GIT_CONFIG_* insteadOf below rewrites the push URL with
-          # GITHUB_TOKEN, and actions/checkout persists a GITHUB_TOKEN
-          # basic-auth extraheader in .git/config. Whichever one git honours,
-          # it must be the workflow-scoped PAT for this push.
+          #
+          # FAR-1940: this step used to ALSO persist an
+          # http.https://github.com/.extraheader Authorization header with the
+          # same PAT. Two mechanisms, two Authorization headers on the wire, and
+          # GitHub answered `remote: Duplicate header: "Authorization"` - so the
+          # push never happened. Keep exactly one mechanism.
           GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.MODULO_REVIEWBOT_TOKEN }}@github.com/.insteadOf'
         shell: bash
         run: |
           TIMESTAMP=$(date +%s)
           # Best-effort: the reference branch is a debug aid only - a rejection
           # must not abort the queue before the real gates (migration heads,
-          # backend, frontend) run.
-          if [ -n "$GH_TOKEN" ]; then
-            git config --local --replace-all "http.https://github.com/.extraheader" \
-              "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
-          fi
+          # backend, frontend) run. It is still LOUD (FAR-1940): the ::error::
+          # annotation makes a credential regression searchable in the run
+          # summary instead of leaving the queue silently without a reference
+          # branch.
           if git push origin "merge-queue:refs/heads/merge-queue/active-${TIMESTAMP}" 2>&1; then
             echo "branch_ref=merge-queue/active-$TIMESTAMP" >> "$GITHUB_ENV"
           else
-            echo "::warning::Reference push failed (workflow-scoped PAT rejected or network error - see git output above). Queue continues without a reference branch."
+            echo "::error::Reference push failed (workflows-scoped PAT rejected or network error - the git output above names the reason). Queue continues without a reference branch."
           fi
 
       - name: Initialize failure tracking
@@ -1766,31 +1835,32 @@ jobs:
       - name: Preserve merge-queue branch on CI failure
         if: failure() && steps.merge.outputs.merged_count != '0'
         env:
-          # Same workflow-scoped PAT as the reference push: the preserved branch
-          # can contain merged .github/workflows/* changes, which GITHUB_TOKEN
-          # (the github-actions App) can never push - it has no `workflows`
-          # permission at all (2026-10-01).
-          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN }}
-          # Route BOTH git auth mechanisms to the same PAT (see the reference
-          # push step): workflow-level GIT_CONFIG_* insteadOf rewrites the push
-          # URL with GITHUB_TOKEN, and actions/checkout persists a GITHUB_TOKEN
-          # extraheader. Whichever git honours, it must be the PAT here.
+          # Same workflow-scoped PAT, carried by the SAME single mechanism as the
+          # reference push above (the env-driven `url.<base>.insteadOf` rewrite):
+          # the preserved branch can contain merged .github/workflows/* changes,
+          # which GITHUB_TOKEN (the github-actions App) can never push
+          # (2026-10-01).
+          #
+          # FAR-1940: the http.extraheader Authorization header that used to
+          # double-configure this PAT is gone - two mechanisms made git send two
+          # Authorization headers and GitHub rejected the push with
+          # `remote: Duplicate header: "Authorization"`, which is why this step
+          # could not preserve a branch at all.
           GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.MODULO_REVIEWBOT_TOKEN }}@github.com/.insteadOf'
         shell: bash
         run: |
           TIMESTAMP=$(date +%s)
-          # Best-effort: if the preserve push fails, the fixer still receives
-          # the notification (with the merged PRs), so the branch is a
-          # convenience, not a hard requirement.
-          if [ -n "$GH_TOKEN" ]; then
-            git config --local --replace-all "http.https://github.com/.extraheader" \
-              "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
-          fi
+          # NOT best-effort (FAR-1940): the Branch Fixer notification below
+          # carries this branch name, so a fixer run with no preserved branch has
+          # nothing to repair. A failed push therefore FAILS this step - the job
+          # is already failing, so this adds no new failure mode, it only makes
+          # the real one visible (the git output above names the reason).
           if git push origin "merge-queue:refs/heads/merge-queue/failed-${TIMESTAMP}" 2>&1; then
             echo "branch_ref=merge-queue/failed-$TIMESTAMP" >> "$GITHUB_ENV"
             echo "Preserved merge-queue branch at merge-queue/failed-$TIMESTAMP"
           else
-            echo "::warning::Could not preserve merge-queue branch (workflow-scoped PAT rejected or network error - see git output above)."
+            echo "::error::Could not preserve the merge-queue branch (workflows-scoped PAT rejected or network error - see git output above). The Branch Fixer notification below carries no branch to repair."
+            exit 1
           fi
 
       - name: Notify branch-fixer on CI failure
@@ -1798,6 +1868,10 @@ jobs:
         env:
           WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
           HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          # Needed by the undelivered-notification fallback below (FAR-1939):
+          # `gh pr comment` authenticates with the job's GITHUB_TOKEN, which
+          # carries pull-requests:write (see the job's permissions block).
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured -- skipping notification"; exit 0; fi
@@ -1852,7 +1926,23 @@ jobs:
           done
           if [ "$DISPATCHED" != "true" ]; then
             DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-            echo "::error::Branch Fixer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — merge-queue CI-failure notification was not delivered."
+            # FAR-1939: an undelivered notification must never be SILENT, and it
+            # must be attributable to the PR(s) it concerns (see the merge-
+            # conflict notify step for the incident). The affected PRs are the
+            # ones whose combined validation on the queue branch failed, plus any
+            # conflicts reported alongside it; each gets the durable comment and
+            # this step still fails afterwards.
+            AFFECTED=$(echo "$MERGED $CONFLICTS" | xargs)
+            echo "::error::Branch Fixer webhook dispatch failed for PR(s) ${AFFECTED} (HTTP ${LAST_HTTP}: ${DETAIL}) — merge-queue CI-failure notification was not delivered."
+            for NUM in $AFFECTED; do
+              [ -z "$NUM" ] && continue
+              UNDELIVERED_BODY="The merge queue could NOT deliver its CI-failure notification to the Branch Fixer for this PR: all 5 webhook attempts failed (last HTTP ${LAST_HTTP}: ${DETAIL}). The combined validation on the merge-queue branch failed (${FAILURE_DESC}), so nothing was merged and no fix was dispatched. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              if gh pr comment "$NUM" --body "$UNDELIVERED_BODY" > /dev/null 2>&1; then
+                echo "::notice::PR #$NUM: posted a comment recording that the Branch Fixer was never notified."
+              else
+                echo "::error::PR #$NUM: could not post the undelivered-notification comment either — this PR has NO durable signal that the Branch Fixer was never asked to fix the queue branch (webhook HTTP ${LAST_HTTP}: ${DETAIL})."
+              fi
+            done
             exit 1
           fi
 

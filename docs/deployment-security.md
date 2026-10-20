@@ -543,7 +543,7 @@ Configure alerts for these events in your monitoring system:
 | Failed login rate spike | Auth 401s > 10/min per IP | High | Security on-call |
 | Migration failure | Backend crash loop on startup | Critical | Ops channel |
 | CSRF token mismatch | 403 on state-changing endpoint | Medium | Ops channel |
-| Container image with Critical CVE | Manual image scan (`trivy image ghcr.io/farnalabs/modulo:<version>`) — not automated in CI | High | Security channel |
+| Container image with Critical CVE | Manual image scan (`trivy image ghcr.io/farnalabs/modulo:<version>`) – not automated in CI | High | Security channel |
 | Unexpected outbound connection | Network policy violation | Critical | Security on-call |
 
 ---
@@ -673,7 +673,7 @@ before marking a production deployment as complete.
 
 ### Containers
 
-- [ ] Deployed image tag scanned manually (`trivy image ghcr.io/farnalabs/modulo:<version>`) with zero critical/high CVEs — image scanning is not automated in CI (see §5.1)
+- [ ] Deployed image tag scanned manually (`trivy image ghcr.io/farnalabs/modulo:<version>`) with zero critical/high CVEs – image scanning is not automated in CI (see §5.1)
 - [ ] Container runs as non-root user (`whoami` != `root`)
 - [ ] Read-only root filesystem enabled for backend containers
 - [ ] Image pinned by digest, not tag (production)

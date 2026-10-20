@@ -69,7 +69,7 @@
               <template #cell-kind="{ row }">
                 <span
                   class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize"
-                  :class="(row as any).kind === 'self_reported' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'"
+                  :class="(row as any).kind === 'self_reported' ? 'bg-primary/10 text-primary-text' : 'bg-muted text-muted-foreground'"
                 >
                   {{ $t(`views.CostComponentsView.${(row as any).kind}`) }}
                 </span>
@@ -107,7 +107,7 @@
         </Card>
 
         <p v-if="formError" class="mt-3 text-sm text-destructive" data-testid="cost-components-form-error">{{ formError }}</p>
-        <p v-if="formSuccess" class="mt-3 text-sm text-success" data-testid="cost-components-form-success">{{ formSuccess }}</p>
+        <p v-if="formSuccess" class="mt-3 text-sm text-success-text" data-testid="cost-components-form-success">{{ formSuccess }}</p>
 
         <FormDialog
           v-model:open="dialogOpen"
@@ -194,7 +194,7 @@
                   </thead>
                   <tbody>
                     <tr v-for="p in availableParams" :key="p.name" class="border-b last:border-b-0">
-                      <td class="py-1 pr-3 font-mono text-primary">{{ p.name }}</td>
+                      <td class="py-1 pr-3 font-mono text-primary-text">{{ p.name }}</td>
                       <td class="py-1 pr-3 text-muted-foreground">{{ p.type }}</td>
                       <td class="py-1 text-muted-foreground">{{ p.meaning }}</td>
                     </tr>
@@ -217,10 +217,10 @@
         </FormDialog>
 
         <div v-if="deleteTarget" class="rounded-lg border p-4" :class="deleteTarget.kind === 'self_reported' ? 'border-warning/50 bg-warning/5' : 'border-destructive/50 bg-destructive/10'">
-          <p class="text-sm font-medium" :class="deleteTarget.kind === 'self_reported' ? 'text-warning-text' : 'text-destructive'">
+          <p class="text-sm font-medium" :class="deleteTarget.kind === 'self_reported' ? 'text-warning-text' : 'text-destructive-text'">
             {{ $t('views.CostComponentsView.delete_component', { name: deleteTarget.display_name }) }}
           </p>
-          <p class="mt-1 text-sm" :class="deleteTarget.kind === 'self_reported' ? 'text-warning-text' : 'text-destructive/80'">
+          <p class="mt-1 text-sm" :class="deleteTarget.kind === 'self_reported' ? 'text-warning-text' : 'text-destructive-text'">
             {{ deleteTarget.kind === 'self_reported' ? $t('views.CostComponentsView.delete_self_reported_warning') : $t('views.CostComponentsView.this_action_cannot_be_undone') }}
           </p>
           <div class="mt-3 flex items-center gap-2">

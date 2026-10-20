@@ -96,6 +96,28 @@ function classPresentInTree(wrapper: ReturnType<typeof mountSimple>, cls: string
   return walkMatches(tree, cls)
 }
 
+/**
+ * Every style rule reachable from `rules` by descending through grouping rules
+ * (`CSSMediaRule`, `CSSSupportsRule`): a grouping rule's children are walked
+ * recursively. Style rules nested inside another style rule (CSS nesting) are
+ * not traversed — this stylesheet uses none. A top-level-only walk cannot see
+ * the FAR-1901 declarations, which live inside
+ * `@media (min-width: 641px)` — so this recursion is what makes media-wrapped
+ * rules tripwire-able by the same selector/declaration assertions as the
+ * top-level ones.
+ */
+function allStyleRules(rules: CSSRuleList): CSSStyleRule[] {
+  const found: CSSStyleRule[] = []
+  for (let i = 0; i < rules.length; i++) {
+    const rule = rules[i]
+    if (rule instanceof CSSStyleRule) found.push(rule)
+    if (rule instanceof CSSGroupingRule && rule.cssRules.length > 0) {
+      found.push(...allStyleRules(rule.cssRules))
+    }
+  }
+  return found
+}
+
 /** Find OUR override stylesheet (identifiable by any `.json-viewer` rule). */
 function findOverrideSheet(): CSSStyleSheet | null {
   for (let i = 0; i < document.styleSheets.length; i++) {
@@ -107,24 +129,68 @@ function findOverrideSheet(): CSSStyleSheet | null {
       continue
     }
     if (!rules) continue
-    for (let j = 0; j < rules.length; j++) {
-      const rule = rules[j]
-      if (rule instanceof CSSStyleRule && rule.selectorText.includes('.json-viewer')) {
+    try {
+      if (allStyleRules(rules).some((rule) => rule.selectorText.includes('.json-viewer'))) {
         return sheet
       }
+    } catch (err) {
+      // jsdom can throw on foreign/at-rule boundaries — skip.
+      console.warn('Failed to read cssRules', err)
     }
   }
   return null
+}
+
+/**
+ * A grouping rule's own condition text (e.g. a media query's
+ * `(min-width: 641px)`, or a `@supports` condition). jsdom exposes it as
+ * `conditionText` on `CSSMediaRule` / `CSSSupportsRule`; older builds only
+ * carry the legacy `media.mediaText` for media rules, so both are read. An
+ * unrecognised grouping rule contributes an empty string.
+ */
+function atRuleCondition(rule: CSSGroupingRule): string {
+  const { conditionText } = rule as CSSGroupingRule & { conditionText?: string }
+  if (typeof conditionText === 'string' && conditionText.length > 0) return conditionText
+  const legacy = (rule as unknown as { media?: { mediaText?: string } }).media
+  return typeof legacy?.mediaText === 'string' ? legacy.mediaText : ''
+}
+
+/**
+ * The at-rule condition(s) enclosing every style rule whose selector contains
+ * `selectorPart`, outer-most first. The walk pushes each grouping rule's own
+ * condition as it descends, so a rule nested in `@media (min-width: 641px)`
+ * reports `[['(min-width: 641px)']]` — while the SAME rule hoisted to top
+ * level reports `[[]]` (no enclosing at-rule). That difference is what pins
+ * the FAR-1901 scoping: hoisting a desktop-only rule to every viewport must
+ * fail here, not only in the deploy-time @regression e2e run.
+ */
+function enclosingAtRuleConditions(sheet: CSSStyleSheet | null, selectorPart: string): string[][] {
+  if (!sheet) return []
+  const conditions: string[][] = []
+  const walk = (rules: CSSRuleList, chain: string[]): void => {
+    for (let i = 0; i < rules.length; i++) {
+      const rule = rules[i]
+      if (rule instanceof CSSStyleRule) {
+        if (rule.selectorText.includes(selectorPart)) conditions.push(chain.slice())
+      } else if (rule instanceof CSSGroupingRule && rule.cssRules.length > 0) {
+        walk(rule.cssRules, [...chain, atRuleCondition(rule)])
+      }
+    }
+  }
+  try {
+    walk(sheet.cssRules, [])
+  } catch (err) {
+    // jsdom can throw on foreign/at-rule boundaries — skip.
+    console.warn('Failed to read cssRules', err)
+  }
+  return conditions
 }
 
 function ruleSelectors(sheet: CSSStyleSheet | null): string[] {
   if (!sheet) return []
   const selectors: string[] = []
   try {
-    for (let j = 0; j < sheet.cssRules.length; j++) {
-      const rule = sheet.cssRules[j]
-      if (rule instanceof CSSStyleRule) selectors.push(rule.selectorText)
-    }
+    for (const rule of allStyleRules(sheet.cssRules)) selectors.push(rule.selectorText)
   } catch (err) {
     // jsdom can throw on foreign/at-rule boundaries — skip.
     console.warn('Failed to read cssRules', err)
@@ -137,9 +203,8 @@ function ruleDeclValues(sheet: CSSStyleSheet | null, selectorPart: string, prop:
   if (!sheet) return []
   const values: string[] = []
   try {
-    for (let j = 0; j < sheet.cssRules.length; j++) {
-      const rule = sheet.cssRules[j]
-      if (rule instanceof CSSStyleRule && rule.selectorText.includes(selectorPart)) {
+    for (const rule of allStyleRules(sheet.cssRules)) {
+      if (rule.selectorText.includes(selectorPart)) {
         values.push(rule.style.getPropertyValue(prop).trim())
       }
     }
@@ -341,6 +406,45 @@ describe('JsonViewer override contract', () => {
       expect(ruleDeclValues(sheet, part, 'flex-shrink')).toContain('0')
       expect(ruleDeclValues(sheet, part, 'white-space')).toContain('nowrap')
     }
+  })
+
+  it('sees declarations nested inside @media blocks (FAR-1901 desktop rules)', () => {
+    mountSimple()
+    const sheet = findOverrideSheet()
+    expect(sheet, 'expected our json-viewer override stylesheet to be mounted').not.toBeNull()
+
+    // FAR-1901: these two declarations live ONLY inside the desktop
+    // `@media (min-width: 641px)` block. The top-level-only walk this probe
+    // used before FAR-1923 could not see them, so a deletion or alteration
+    // was caught only by the deploy-time @regression e2e run. These
+    // assertions fail if the media-rule recursion is removed.
+    const commaSelector =
+      '.json-viewer .vjs-tree:not(.is-virtual) .vjs-tree-node > span:not([class]) > .vjs-value > .json-viewer-string-truncated'
+    const commaLineSelector =
+      '.json-viewer .vjs-tree:not(.is-virtual) .vjs-tree-node > span:not([class]) > span:not([class])'
+
+    expect(ruleSelectors(sheet)).toContain(commaSelector)
+    expect(ruleSelectors(sheet)).toContain(commaLineSelector)
+    expect(
+      ruleDeclValues(sheet, '.vjs-value > .json-viewer-string-truncated', 'max-width'),
+    ).toEqual(['calc(100% - 1ch)'])
+    expect(
+      ruleDeclValues(sheet, ':not([class]) > span:not([class])', 'vertical-align'),
+    ).toEqual(['bottom'])
+
+    // FAR-1923: pin the SCOPING, not just the contents. Both FAR-1901 rules
+    // live inside `@media (min-width: 641px)`; hoisting either to top level
+    // would widen the desktop-only rule to every viewport and collide with
+    // the FAR-1840 `<=640px` layout. A top-level rule has no enclosing
+    // at-rule and reports `[[]]`, so the scoping regression fails here.
+    expect(
+      enclosingAtRuleConditions(sheet, '.vjs-value > .json-viewer-string-truncated'),
+      'FAR-1901 max-width rule must stay scoped to @media (min-width: 641px)',
+    ).toEqual([['(min-width: 641px)']])
+    expect(
+      enclosingAtRuleConditions(sheet, ':not([class]) > span:not([class])'),
+      'FAR-1901 vertical-align rule must stay scoped to @media (min-width: 641px)',
+    ).toEqual([['(min-width: 641px)']])
   })
 
   it('copy writes the FULL value to the clipboard even when a long string is truncated', async () => {

@@ -318,11 +318,10 @@ class FeedbackManager:
         pipeline_id: UUID | None = None,
         page: int = 1,
         page_size: int = _DEFAULT_PAGE_SIZE,
-        include_total: bool = True,
     ) -> dict[str, Any]:
         conditions = _build_org_scoped_conditions(self._org_id, status, pipeline_id)
-        rows, total = await paginate_feedback_records(self._session, conditions, page, page_size, include_total)
-        return _paginated_response(rows, total, page, page_size, include_total=include_total)
+        rows, total = await paginate_feedback_records(self._session, conditions, page, page_size)
+        return _paginated_response(rows, total, page, page_size)
 
     @_rls
     async def get_feedback_record(self, record_id: UUID) -> FeedbackRecord | None:
@@ -416,7 +415,12 @@ class FeedbackManager:
 
     @staticmethod
     def _normalise_eval_def(eval_def: Any) -> Any:
-        """Normalise an ORM ``EvalDefinition`` row to the engine's DTO shape."""
+        """Normalise an ORM ``Eval`` row to the engine's DTO shape.
+
+        The legacy ``EvalDefinition`` entity is gone; the live ``Eval`` model has
+        no ``failure_behaviour`` column (the policy gate owns the action), so the
+        DTO default is used.
+        """
         if isinstance(eval_def, dict) or hasattr(eval_def, "config"):
             return eval_def
         if hasattr(eval_def, "config_json"):
@@ -430,7 +434,7 @@ class FeedbackManager:
                 name=eval_def.name,
                 eval_type=eval_def.eval_type,
                 config=eval_def.config_json,
-                failure_behaviour=eval_def.failure_behaviour,
+                failure_behaviour=getattr(eval_def, "failure_behaviour", "warn"),
                 pass_threshold=float(eval_def.pass_threshold) if eval_def.pass_threshold is not None else None,
                 suite_id=eval_def.suite_id,
             )
@@ -816,7 +820,6 @@ class FeedbackManager:
         date_to: datetime | None = None,
         page: int = 1,
         page_size: int = _DEFAULT_PAGE_SIZE,
-        include_total: bool = True,
     ) -> dict[str, Any]:
         conditions = _build_org_scoped_conditions(self._org_id, status, pipeline_id)
         if handler_type:
@@ -826,24 +829,21 @@ class FeedbackManager:
         if date_to:
             conditions.append(FeedbackRecord.created_at <= date_to)
 
-        rows, total = await paginate_feedback_records(self._session, conditions, page, page_size, include_total)
+        rows, total = await paginate_feedback_records(self._session, conditions, page, page_size)
         pipeline_map = await _enrich_with_pipeline_names(self._session, rows)
 
-        return _paginated_response(
-            rows, total, page, page_size, extra={"pipeline_map": pipeline_map}, include_total=include_total
-        )
+        return _paginated_response(rows, total, page, page_size, extra={"pipeline_map": pipeline_map})
 
     @_rls
     async def get_eval_proposals(
         self,
         page: int = 1,
         page_size: int = _DEFAULT_PAGE_SIZE,
-        include_total: bool = True,
     ) -> dict[str, Any]:
         conditions = [
             FeedbackRecord.organisation_id == self._org_id,
             FeedbackRecord.eval_gap.is_(True),
             FeedbackRecord.feedback_status.in_(["pending", "routing"]),
         ]
-        rows, total = await paginate_feedback_records(self._session, conditions, page, page_size, include_total)
-        return _paginated_response(rows, total, page, page_size, include_total=include_total)
+        rows, total = await paginate_feedback_records(self._session, conditions, page, page_size)
+        return _paginated_response(rows, total, page, page_size)

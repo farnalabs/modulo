@@ -13,12 +13,12 @@
 }
 
 .json-viewer .vjs-value-string {
-  color: hsl(var(--success));
+  color: hsl(var(--success-text));
 }
 
 .json-viewer .vjs-value-number,
 .json-viewer .vjs-value-boolean {
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text));
 }
 
 /* FAR-1605: --warning is a fill/accent hue — ~2.14:1 amber-on-white in light
@@ -38,7 +38,7 @@
 }
 
 .json-viewer .vjs-tree-brackets:hover {
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text));
 }
 
 .json-viewer .vjs-carets {
@@ -46,7 +46,7 @@
 }
 
 .json-viewer .vjs-carets:hover {
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text));
 }
 
 .json-viewer .vjs-tree-node:hover,
@@ -66,7 +66,7 @@
 }
 
 .json-viewer .vjs-tree-node-actions .vjs-tree-node-actions-item:hover {
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text));
 }
 
 .json-viewer .vjs-indent-unit.has-line {

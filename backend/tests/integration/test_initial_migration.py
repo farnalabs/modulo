@@ -53,100 +53,21 @@ pytestmark = pytest.mark.integration
 # run_node_outputs model docstring). Keyed table -> columns, enumerated from
 # compare_metadata (2026-09-06). A NEW JSONB(DB) -> JSON(ORM) divergence NOT
 # listed here FAILS the test.
-_JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
-    # permanent (documented repo divergence) — multi-backend JSON parity
-    "accounts": frozenset({"preferences"}),
-    "agents": frozenset(
-        {
-            "agent_commands",
-            "prompt_version_history",
-            "connector_type_refs",
-            "required_environment_capabilities",
-            "evals",
-            "retry_policy",
-        }
-    ),
-    "audit_events": frozenset({"payload_json"}),
-    "chat_messages": frozenset({"tool_calls_json", "tool_results_json"}),
-    # collection_install / composite_templates / library_primitives /
-    # library_sync_state: their JSON columns were converted to
-    # JSON().with_variant(JSONB(), "postgresql") in the ORM (migration 0310),
-    # so the ORM now maps the SAME variant the DB has. Their ignore entries
-    # were removed WITH the conversion — leaving them would silently mask a
-    # future accidental revert to plain JSON.
-    "connector_instances": frozenset({"config_json", "allowed_operations"}),
-    "environment_profiles": frozenset({"capabilities_json", "config_json", "secret_refs_json"}),
-    "error_events": frozenset({"context_json"}),
-    "error_forwarder_configs": frozenset({"config_json"}),
-    "eval_cases": frozenset({"input_payload", "expected_output"}),
-    "eval_definitions": frozenset({"config_json"}),
-    "eval_suites": frozenset({"eval_definition_ids"}),
-    # evals.config_json (migration 0254, FAR-1100 chunk 3): 0250 created the
-    # net-new column as plain json; 0254 promotes it to jsonb to match the
-    # 0147 standard while the ORM maps generic JSON for SQLite/MariaDB parity —
-    # the same multi-backend convention as eval_definitions.config_json.
-    "evals": frozenset({"config_json"}),
-    "feature_flag_catalog": frozenset({"depends_on"}),
-    "feedback_records": frozenset({"rejected_output", "correction_state"}),
-    # hitl_claims.context_json (main's 0190, FAR-613) and gate_config_json
-    # (0195, FAR-634): jsonb in the migration; generic JSON in the ORM for
-    # SQLite/MariaDB parity — the same pattern as decision_payload below.
-    "hitl_claims": frozenset({"decision_payload", "context_json", "gate_config_json"}),
-    "lifecycle_maps": frozenset({"content_json"}),
-    "metrics_staging": frozenset({"payload"}),
-    "model_backends": frozenset({"default_params", "fallback_backend_ids"}),
-    "notification_endpoints": frozenset({"events"}),
-    "organisations": frozenset({"settings_json", "otel_config_json", "export_bundle_json", "guardrail_pins_json"}),
-    "parameter_schemas": frozenset({"parameters"}),
-    "parameter_sets": frozenset({"values"}),
-    "pipeline_snapshots": frozenset(
-        {
-            "graph_json",
-            "connector_bindings_json",
-            "schema_pins_json",
-            "prompt_pins_json",
-            "model_backend_pins_json",
-            "composite_bindings_json",
-            "parameter_bindings_json",
-            "guardrail_pins_json",
-            "config_json",
-            "run_context_defaults",
-        }
-    ),
-    "pipelines": frozenset({"run_context_defaults", "rate_limit_config"}),
-    "assistant_skills": frozenset({"triggers"}),
-    # permanent (documented repo divergence) — the new table keeps its three
-    # blob columns after B2b (they ARE the store once the legacy columns go).
-    "run_node_outputs": frozenset({"outputs_json", "node_telemetry_json", "raw_output_markers", "artifacts_json"}),
-    # B2b/drop (migration 0215): the three legacy runs blob columns are GONE
-    # from BOTH sides, so their parity ignore entries were removed with them.
-    # The remaining entries are the multi-backend parity convention.
-    "runs": frozenset(
-        {
-            "cost_breakdown",
-            "node_token_usage",
-            "input_payload",
-            "run_classification",
-            "blocked_partial_summary",
-            "guardrail_summary_json",
-            "work_item_refs",
-            "variant_config_snapshot",
-        }
-    ),
-    "saved_views": frozenset({"filters", "columns"}),
-    "scheduled_reports": frozenset({"config_json", "recipient_config"}),
-    "schema_versions": frozenset({"definition_json"}),
-    # allowed_domains (migration 0246, FAR-855): jsonb in the migration
-    # (ADD COLUMN ... jsonb DEFAULT '[]'::jsonb); generic JSON in the ORM for
-    # SQLite/MariaDB parity — same convention as group_mappings.
-    "sso_providers": frozenset({"group_mappings", "allowed_domains"}),
-    "system_config": frozenset({"value"}),
-    "teams": frozenset({"notification_endpoints", "settings"}),
-    "triggers": frozenset({"config_json"}),
-    "variant_groups": frozenset({"variants"}),
-    "webhook_payloads": frozenset({"raw_payload"}),
-    "workspace_leases": frozenset({"resource_usage_json", "output_artifact_refs_json"}),
-}
+#
+# An entry describes a GENUINE divergence and is removed WITH the conversion:
+# once the ORM maps the shared
+# ``JSON().with_variant(JSONB(), "postgresql")`` alias the entry can never fire,
+# so leaving it in place would silently mask a future revert to plain JSON —
+# the exact failure this norm exists to prevent. FAR-1878 aligned the columns
+# migration 0147 promoted (plus the few that already carried an inline JSON
+# variant), and FAR-1941 aligned the remaining physical-jsonb columns, so their
+# entries were removed in those changes.
+#
+# The map is now EMPTY — the residual is closed. Every physical-jsonb column is
+# declared with the shared alias, so a JSONB(DB) -> JSON(ORM) ``modify_type``
+# diff can only be a genuine revert, and it FAILS the test rather than being
+# silently ignored.
+_JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {}
 # CHECK constraints that exist ONLY in migrations — added post-hoc by 0157
 # (strict numeric guards) and 0165 (counter/vocabulary guards) as DB-side
 # backstops; the ORM deliberately declares the portable subset or none (repo
@@ -255,6 +176,9 @@ _NO_ORM_MODEL_TABLES: frozenset[str] = frozenset(
         # Written by the migration only, never mapped by the ORM.
         # permanent (documented repo divergence)
         "eval_backfill_violations",
+        # FAR-1961: the legacy eval_definitions ORM entity was deleted while
+        # the table remains until a later slice drops it. Migration-owned only.
+        "eval_definitions",
     }
 )
 
@@ -546,8 +470,6 @@ class TestParityIgnoreListClassify:
         assert _is_benign_migration_managed(
             ("remove_constraint", self._check("suite_runs", "ck_eval_suite_run_total_cases"))
         )
-        # JSONB(DB) -> JSON(ORM) parity, listed column (cost_breakdown on runs).
-        assert _is_benign_migration_managed(("modify_type", None, "runs", "cost_breakdown", {}, JSONB(), JSON()))
         # Audit-chain FK + column (0108).
         assert _is_benign_migration_managed(("remove_fk", self._fk("agents", "created_by")))
         assert _is_benign_migration_managed(("remove_column", None, "agents", Column("created_by", UUID())))
@@ -567,9 +489,12 @@ class TestParityIgnoreListClassify:
         assert not _is_benign_migration_managed(
             ("add_constraint", self._check("deleted_defaults", "ck_deleted_defaults_signal_nonempty"))
         )
-        # Listed column (cost_breakdown on runs) — the multi-backend parity
-        # convention that survives the drop.
-        assert _is_benign_migration_managed(("modify_type", None, "runs", "cost_breakdown", {}, JSONB(), JSON()))
+        # FAR-1878/FAR-1941 aligned every physical-jsonb column to JSONB_COL, so
+        # their entries were removed WITH the conversion: the SAME modify_type
+        # diff for them must now be REAL drift, not silently ignored.
+        assert not _is_benign_migration_managed(("modify_type", None, "runs", "cost_breakdown", {}, JSONB(), JSON()))
+        assert not _is_benign_migration_managed(("modify_type", None, "runs", "node_token_usage", {}, JSONB(), JSON()))
+        assert not _is_benign_migration_managed(("modify_type", None, "runs", "input_payload", {}, JSONB(), JSON()))
         # B2b/drop (migration 0215) REMOVED the three runs-blob-column expiry
         # entries; the classifier's hypothetical remove_column case remains
         # valid for exercising the remaining audit-chain convention.

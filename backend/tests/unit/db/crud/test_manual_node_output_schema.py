@@ -124,7 +124,7 @@ class TestWiringThroughReplacePipelineGraph:
     """The guard is actually called by replace_pipeline_graph, not just the helper."""
 
     @patch("modulo.db.crud.pipeline.enforce_guardrail_binding_strip", new_callable=AsyncMock)
-    @patch("modulo.db.crud.pipeline.apply_gated_edge_diff", new_callable=AsyncMock)
+    @patch("modulo.db.crud.pipeline.apply_gated_edge_diff", new_callable=MagicMock)
     @patch("modulo.db.crud.pipeline.resolve_effective_privilege", new_callable=AsyncMock)
     async def test_replace_pipeline_graph_rejects_schemaless_manual_node(
         self,
@@ -134,7 +134,7 @@ class TestWiringThroughReplacePipelineGraph:
     ) -> None:
         """Calling replace_pipeline_graph with a schema-less manual node
         raises ManualNodeOutputSchemaError before any graph write."""
-        from modulo.db.crud.pipeline import replace_pipeline_graph
+        from modulo.db.crud.pipeline import GraphWriteActor, replace_pipeline_graph
 
         mock_privilege.return_value = True
 
@@ -172,8 +172,7 @@ class TestWiringThroughReplacePipelineGraph:
                 org_id=uuid.uuid4(),
                 nodes=[schemaless_node],
                 edges=[],
-                is_privileged=True,
-                caller_type="rest",
+                actor=GraphWriteActor(is_privileged=True, caller_type="rest"),
             )
 
         # The guard fires BEFORE any delete/insert — session.add_all is never called

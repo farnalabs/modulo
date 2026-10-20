@@ -16,14 +16,18 @@ import pytest
 
 from modulo.core.mcp.scope_validator import (
     CALLER_SCOPE_REQUIREMENTS,
+    SYSTEM_ADMIN_TOOLS,
     TOOL_SCOPE_REQUIREMENTS,
     VALID_CALLER_SCOPE_CLASSIFICATIONS,
     MCPAuthorizationError,
     MCPConfigurationError,
     _denial_message,
+    check_node_allowed_tools,
     check_tool_scope,
     classify_caller_scope,
+    get_request_allowed_tools,
     resolve_tool_access,
+    set_request_allowed_tools,
 )
 
 
@@ -39,7 +43,10 @@ class TestCheckToolScope:
             ("runner", "cancel_run"),
             ("runner", "list_pending_hitl"),
             ("runner", "copy_library_primitive"),
-            ("runner", "list_housekeeping"),
+            # FAR-1879: the MCP housekeeping LIST tool now shares the admin
+            # org-role floor of its REST twin (GET /api/v1/admin/housekeeping),
+            # so only an admin passes the scope-map leg.
+            ("admin", "list_housekeeping"),
             ("admin", "perform_housekeeping"),
             ("operator", "create_connector"),
             ("admin", "create_connector"),
@@ -65,7 +72,7 @@ class TestCheckToolScope:
             "runner-cancel_run",
             "runner-list_pending_hitl",
             "runner-copy_library_primitive",
-            "runner-list_housekeeping",
+            "admin-list_housekeeping",
             "admin-perform_housekeeping",
             "operator-create_connector",
             "admin-create_connector",
@@ -86,7 +93,10 @@ class TestCheckToolScope:
         ],
     )
     def test_authorized_role_passes(self, role: str, tool: str) -> None:
-        assert check_tool_scope(role, tool) is None
+        # FAR-1930: the admin housekeeping rows also carry the system-admin
+        # requirement, now enforced by the shared resolver — supply the claim
+        # for the declared tools so this row still pins the ROLE leg.
+        assert check_tool_scope(role, tool, is_system_admin=tool in SYSTEM_ADMIN_TOOLS) is None
 
     def test_query_analytics_resolves_to_viewer(self) -> None:
         from modulo.auth.permissions import resolve_required
@@ -98,6 +108,76 @@ class TestCheckToolScope:
         for role in ("viewer", "runner", "operator", "admin"):
             assert check_tool_scope(role, "query_analytics") is None
 
+    def test_housekeeping_tools_resolve_to_admin(self) -> None:
+        """FAR-1879/FAR-1930: both MCP housekeeping tools pin BOTH gates.
+
+        The admin org-role floor is the mapping-level pin (a regression of
+        either mapping to a runner/operator key fails here), and the
+        system-admin requirement comes from ``SYSTEM_ADMIN_TOOLS``. A caller
+        must hold both: the claim alone does not lift the role floor, and the
+        admin role alone does not satisfy the claim.
+        """
+        from modulo.auth.permissions import resolve_required
+        from modulo.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
+
+        for tool in ("list_housekeeping", "perform_housekeeping"):
+            assert TOOL_SCOPE_REQUIREMENTS[tool] == "housekeeping.manage"
+            assert resolve_required("housekeeping.manage") == "admin"
+            assert tool in SYSTEM_ADMIN_TOOLS
+            # Admin role + the claim → allowed.
+            assert check_tool_scope("admin", tool, is_system_admin=True) is None
+            # The claim does NOT lift the org-role floor.
+            with pytest.raises(MCPAuthorizationError):
+                check_tool_scope("operator", tool, is_system_admin=True)
+            # The admin role does NOT satisfy the claim on its own.
+            with pytest.raises(MCPAuthorizationError):
+                check_tool_scope("admin", tool)
+
+    def test_system_admin_subclass_only_when_it_is_the_sole_failing_leg(self) -> None:
+        """FAR-1930: ``MCPSystemAdminRequiredError`` is selected from the leg
+        the resolver REPORTS — never by re-resolving. A denial on any other leg
+        stays a plain ``MCPAuthorizationError``."""
+        from modulo.core.mcp.scope_validator import MCPSystemAdminRequiredError
+
+        with pytest.raises(MCPSystemAdminRequiredError):
+            check_tool_scope("admin", "list_housekeeping")
+
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope("operator", "list_housekeeping", is_system_admin=True)
+        assert not isinstance(excinfo.value, MCPSystemAdminRequiredError)
+
+    def test_resolver_reports_the_failing_leg(self) -> None:
+        """FAR-1930: the resolver reports WHICH leg denied so the caller never
+        re-runs it (the removed ``_is_sole_system_admin_denial`` re-resolution
+        depended on an unstated leg-ordering invariant). Pins the reported leg
+        for the system-admin, grants and unmapped legs — so reordering a leg
+        after the system-admin leg changes this test, not just the subclass."""
+        import modulo.core.mcp.scope_validator as sv
+
+        base = {
+            "tool": "list_housekeeping",
+            "action": None,
+            "role": "admin",
+            "key_scope": "org",
+            "auth_type": "jwt",
+            "allowed_tools": None,
+            "kill_switch": True,
+        }
+        allowed, _key, leg = sv._resolve_tool_access_detail(**base, grants=None, is_system_admin=False)
+        assert (allowed, leg) == (False, sv._LEG_SYSTEM_ADMIN)
+        allowed, _key, leg = sv._resolve_tool_access_detail(**base, grants=None, is_system_admin=True)
+        assert (allowed, leg) == (True, None)
+        # The grant-set leg runs BEFORE the system-admin leg, and the resolver
+        # reports it — the ordering is observed, not assumed.
+        allowed, _key, leg = sv._resolve_tool_access_detail(
+            **base, grants=frozenset({"run.trigger"}), is_system_admin=False
+        )
+        assert (allowed, leg) == (False, sv._LEG_GRANTS)
+        allowed, _key, leg = sv._resolve_tool_access_detail(
+            **{**base, "tool": "not_a_real_tool"}, grants=None, is_system_admin=False
+        )
+        assert (allowed, leg) == (False, sv._LEG_UNMAPPED)
+
     @pytest.mark.parametrize(
         ("role", "tool"),
         [
@@ -107,8 +187,14 @@ class TestCheckToolScope:
             ("viewer", "copy_library_primitive"),
             ("viewer", "review_hitl"),
             ("viewer", "list_housekeeping"),
+            ("runner", "list_housekeeping"),
+            ("operator", "list_housekeeping"),
             ("runner", "review_hitl"),
             ("runner", "perform_housekeeping"),
+            # FAR-1879: both MCP housekeeping tools now require the admin
+            # org-role floor (housekeeping.manage), matching their REST twins —
+            # a runner or operator must be rejected.
+            ("operator", "perform_housekeeping"),
             ("viewer", "create_connector"),
             ("runner", "create_connector"),
             ("viewer", "create_trigger"),
@@ -127,8 +213,11 @@ class TestCheckToolScope:
             "viewer-copy_library_primitive",
             "viewer-review_hitl",
             "viewer-list_housekeeping",
+            "runner-list_housekeeping",
+            "operator-list_housekeeping",
             "runner-review_hitl",
             "runner-perform_housekeeping",
+            "operator-perform_housekeeping",
             "viewer-create_connector",
             "runner-create_connector",
             "viewer-create_trigger",
@@ -386,6 +475,68 @@ class TestAllowedToolsNarrowing:
         # the role (viewer lacks pipeline.create -> denied by the role check).
         with pytest.raises(MCPAuthorizationError):
             check_tool_scope("viewer", "create_pipeline", allowed_tools=["create_pipeline"])
+
+
+class TestCheckNodeAllowedTools:
+    """FAR-1976: the standalone node ``allowed_tools`` leg.
+
+    ``check_node_allowed_tools`` applies ONLY the chokepoint's leg-1 narrowing
+    for the tools that bypass ``check_tool_scope`` entirely. It carries no role
+    leg, so it must be a pure allow-list check whose refusal message is
+    byte-identical to the chokepoint's.
+    """
+
+    def test_no_scope_is_unrestricted(self) -> None:
+        assert check_node_allowed_tools("list_pipelines", allowed_tools=None) is None
+
+    def test_in_scope_tool_passes(self) -> None:
+        assert check_node_allowed_tools("list_pipelines", allowed_tools=["list_pipelines", "get_run_status"]) is None
+
+    def test_out_of_scope_tool_raises_chokepoint_message(self) -> None:
+        with pytest.raises(MCPAuthorizationError) as exc_info:
+            check_node_allowed_tools("list_pipelines", allowed_tools=["get_run_status"])
+        assert str(exc_info.value) == "Tool 'list_pipelines' is outside the node's allowed_tools scope"
+
+    def test_message_matches_the_chokepoint_leg_one_message(self) -> None:
+        """The two enforcement sites cannot diverge on caller-facing text."""
+        expected = _denial_message(
+            tool_name="list_pipelines",
+            normalized="list_pipelines",
+            action=None,
+            act=None,
+            current_role="admin",
+            key_scope="org",
+            auth_type="jwt",
+            allowed_set={"get_run_status"},
+        )
+        with pytest.raises(MCPAuthorizationError) as exc_info:
+            check_node_allowed_tools("list_pipelines", allowed_tools=["get_run_status"])
+        assert str(exc_info.value) == expected
+
+    def test_empty_allow_list_is_deny_by_default(self) -> None:
+        with pytest.raises(MCPAuthorizationError, match="allowed_tools scope"):
+            check_node_allowed_tools("list_pipelines", allowed_tools=[])
+
+    def test_matching_is_case_insensitive(self) -> None:
+        assert check_node_allowed_tools("LIST_PIPELINES", allowed_tools=["list_pipelines"]) is None
+
+    def test_falls_back_to_the_request_scoped_value(self) -> None:
+        previous = get_request_allowed_tools()
+        set_request_allowed_tools(["get_run_status"])
+        try:
+            with pytest.raises(MCPAuthorizationError, match="allowed_tools scope"):
+                check_node_allowed_tools("list_pipelines")
+        finally:
+            set_request_allowed_tools(previous)
+
+    def test_non_string_tool_name_raises(self) -> None:
+        with pytest.raises(MCPAuthorizationError, match="must be a string"):
+            check_node_allowed_tools(123, allowed_tools=["list_pipelines"])  # type: ignore[arg-type]
+
+    def test_unmapped_tool_passes_when_unrestricted(self) -> None:
+        """This leg carries no role/resolution check: a tool with no scope
+        entry is unaffected when no node scope is present."""
+        assert check_node_allowed_tools("not_a_registered_tool", allowed_tools=None) is None
 
 
 class TestMCPAuthorizationError:
@@ -899,19 +1050,21 @@ class TestCallerScopeClassificationFailFast:
 
 class TestCheckToolScopeDelegation:
     """``check_tool_scope`` stays the single entry point and delegates the
-    decision to the pure resolver — the seam test patches
-    ``resolve_tool_access`` and asserts handlers reach it transitively."""
+    decision to the pure resolver — the seam test patches the authoritative
+    ``_resolve_tool_access_detail`` and asserts handlers reach it
+    transitively. (FAR-1930: ``check_tool_scope`` reads the failing leg from
+    that detailed resolver so it never re-resolves.)"""
 
     def test_seam_check_tool_scope_calls_resolver(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import modulo.core.mcp.scope_validator as sv
 
         calls: list[dict[str, object]] = []
 
-        def _fake_resolve(**kwargs: object) -> tuple[bool, str]:
+        def _fake_resolve(**kwargs: object) -> tuple[bool, str, str | None]:
             calls.append(kwargs)
-            return True, "run.trigger"
+            return True, "run.trigger", None
 
-        monkeypatch.setattr(sv, "resolve_tool_access", _fake_resolve)
+        monkeypatch.setattr(sv, "_resolve_tool_access_detail", _fake_resolve)
         sv.check_tool_scope("runner", "trigger_pipeline", key_scope="org", auth_type="api_key")
         assert len(calls) == 1
         call = calls[0]
@@ -923,18 +1076,18 @@ class TestCheckToolScopeDelegation:
     @pytest.mark.asyncio
     async def test_seam_handler_reaches_resolver_transitively(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The production wiring: an MCP tool handler → _check_agent_tool_scope
-        → check_tool_scope → resolve_tool_access, with key_scope/auth_type
-        threaded from the request ContextVars."""
+        → check_tool_scope → _resolve_tool_access_detail, with
+        key_scope/auth_type threaded from the request ContextVars."""
         import modulo.api.mcp_server as ms
         import modulo.core.mcp.scope_validator as sv
 
         calls: list[dict[str, object]] = []
 
-        def _fake_resolve(**kwargs: object) -> tuple[bool, str]:
+        def _fake_resolve(**kwargs: object) -> tuple[bool, str, str | None]:
             calls.append(kwargs)
-            return True, "hitl.list"
+            return True, "hitl.list", None
 
-        monkeypatch.setattr(sv, "resolve_tool_access", _fake_resolve)
+        monkeypatch.setattr(sv, "_resolve_tool_access_detail", _fake_resolve)
         token_role = ms._ctx_role.set("runner")
         token_org = ms._ctx_org_id.set(uuid.UUID(_FAKE_ID))
         token_scope = ms._ctx_key_scope.set("org")

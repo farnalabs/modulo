@@ -14,6 +14,9 @@ and the subscribable webhook subset in ``api/routes.admin_notifications.py``
   - Feedback/system:  feedback_pending, system_announcement
   - Guardrails:       guardrail_enforcement_gap, guardrail_kill_switch,
                       guardrail_unexpected_skip
+  - Capacity:         queue_pressure_notice, queue_pressure_warning,
+                      queue_pressure_critical, capacity_backpressure,
+                      capacity_saturation, capacity_recovered (FAR-1344)
   (event_mapper additionally configures the two HITL gate-removal events
   hitl_review_removed / hitl_review_removal_denied, which are AuditEvent-only.)
 
@@ -55,6 +58,9 @@ from modulo.db.rls import set_rls_org
 
 __all__ = [
     "EVENT_BUDGET_EXCEEDED",
+    "EVENT_CAPACITY_BACKPRESSURE",
+    "EVENT_CAPACITY_RECOVERED",
+    "EVENT_CAPACITY_SATURATION",
     "EVENT_CIRCUIT_BREAKER_TRIPPED",
     "EVENT_CLAIM_EXPIRED",
     "EVENT_EVAL_BLOCKED",
@@ -68,6 +74,9 @@ __all__ = [
     "EVENT_HITL_DEADLINE_WARNING",
     "EVENT_HITL_OVERDUE",
     "EVENT_ORG_TRIGGERS_AUTO_PAUSED",
+    "EVENT_QUEUE_PRESSURE_CRITICAL",
+    "EVENT_QUEUE_PRESSURE_NOTICE",
+    "EVENT_QUEUE_PRESSURE_WARNING",
     "EVENT_RUN_FAILED",
     "EVENT_RUN_STALLED",
     "EVENT_SYSTEM_ANNOUNCEMENT",
@@ -250,6 +259,31 @@ EVENT_GUARDRAIL_KILL_SWITCH = "guardrail_kill_switch"
 # soft-deleted snapshot-pin state (an unexpected skip): the control silently
 # stopped evaluating and the operator must be paged.
 EVENT_GUARDRAIL_UNEXPECTED_SKIP = "guardrail_unexpected_skip"
+# FAR-1344 — capacity alerting. The org layer is SIGNAL + ALERT, never a
+# refusal: these events tell an operator that capacity is saturating BEFORE
+# work starts failing. The queue-pressure ladder is three DISTINCT event types
+# (rather than one event with a payload severity) because the in-app render
+# config maps exactly one level per event type — a distinct type per rung is
+# what gives each rung its own severity (notice=info, warning=warning,
+# critical=error) without special-casing the mapper. Dedup, escalation-only
+# re-notify and auto-clear live in ``core/capacity_alerts.py``; the alert fires
+# whether or not ``queue_timeout`` is configured, because it is the escalation
+# path for the queue-forever default.
+EVENT_QUEUE_PRESSURE_NOTICE = "queue_pressure_notice"
+EVENT_QUEUE_PRESSURE_WARNING = "queue_pressure_warning"
+EVENT_QUEUE_PRESSURE_CRITICAL = "queue_pressure_critical"
+# A pipeline's admission is currently backpressured (FAR-604 D3) — new trigger
+# fires are being refused. Distinct from the queue rungs: this is the gate that
+# has ALREADY started refusing work, not a warning that it is about to.
+EVENT_CAPACITY_BACKPRESSURE = "capacity_backpressure"
+# An ORG-level limit (org run concurrency or org sandbox concurrency) has been
+# fully held longer than the saturation threshold while work is queued — the
+# limit itself, not any one pipeline's cap, is what is binding.
+EVENT_CAPACITY_SATURATION = "capacity_saturation"
+# Auto-clear: the queue drained / the limit freed while an alert was open. The
+# open alert is closed with this one event, so an operator is not left holding a
+# stale "critical" with no resolution signal.
+EVENT_CAPACITY_RECOVERED = "capacity_recovered"
 
 
 @dataclass

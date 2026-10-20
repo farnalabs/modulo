@@ -181,7 +181,7 @@ const releaseResultText = computed(() => {
 const btnIcon =
   'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50'
 const btnDanger =
-  'inline-flex h-6 shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-destructive/50 bg-destructive/10 px-2 text-[11px] font-medium text-destructive transition-colors hover:bg-destructive/20 disabled:cursor-not-allowed disabled:opacity-50'
+  'inline-flex h-6 shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-destructive/50 bg-destructive/10 px-2 text-[11px] font-medium text-destructive-text transition-colors hover:bg-destructive/20 disabled:cursor-not-allowed disabled:opacity-50'
 
 /**
  * Read-only status probe. Failures land in the assertive region verbatim, so a
