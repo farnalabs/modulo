@@ -10,7 +10,10 @@ resolution-markers = [
 ]
 
 [manifest]
-constraints = [{ name = "pip", specifier = ">=26.2" }]
+constraints = [
+    { name = "certifi", specifier = ">=2026.10.19" },
+    { name = "pip", specifier = ">=26.2" },
+]
 
 [[package]]
 name = "aiodocker"
