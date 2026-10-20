@@ -28,12 +28,13 @@ from modulo.connectors.base import (
     ConnectorPermissionError,
     ConnectorResult,
 )
-from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
+from modulo.core.run_admission import (
+    count_trigger_slot_occupancy,
+)
+from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 
 _log = logging.getLogger(__name__)
-
-_ACTIVE_STATUSES = ACTIVE_RUN_STATUSES
 
 
 # ---------------------------------------------------------------------------
@@ -438,14 +439,14 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
 
 
 async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> int:
-    result = await session.execute(
-        select(func.count()).where(
-            Run.trigger_id == trigger_id,
-            Run.status.in_(_ACTIVE_STATUSES),
-            Run.cancellation_requested.is_(False),
-        )
-    )
-    return int(result.scalar_one() or 0)
+    """Count the runs occupying this polling trigger's concurrency slots.
+
+    FAR-1999: a ``pending`` run counts only inside the create→dispatch grace
+    window. Delegates to the shared
+    :func:`modulo.core.run_admission.count_trigger_slot_occupancy`, so polling
+    shares one implementation of the grace semantics with every other lane.
+    """
+    return await count_trigger_slot_occupancy(session, trigger_id)
 
 
 async def _daily_spend_limit_reached(
