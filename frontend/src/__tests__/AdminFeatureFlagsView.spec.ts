@@ -145,14 +145,19 @@ describe('AdminFeatureFlagsView', () => {
     const header = wrapper.find('header')
     expect(header.find('.animate-pulse').exists()).toBe(true)
     expect(header.find('.animate-spin').exists()).toBe(false)
-    expect(header.find('[role="status"]').text()).toContain('Loading plan info')
+    const status = header.find('output')
+    expect(status.exists()).toBe(true)
+    expect(status.attributes('aria-busy')).toBe('true')
+    expect(status.text()).toContain('Loading plan info')
   })
 
   it('makes the flag-name tooltip trigger keyboard-focusable', async () => {
     const wrapper = await mountView()
     const flagName = wrapper.find('[data-testid="flag-name-flag-connectors"]')
     expect(flagName.exists()).toBe(true)
-    expect(flagName.attributes('tabindex')).toBe('0')
+    expect(flagName.element.tagName).toBe('BUTTON')
+    expect(flagName.attributes('type')).toBe('button')
+    expect(flagName.attributes('tabindex')).toBeUndefined()
   })
 
   it('shows error message with retry on API error', async () => {
