@@ -1,6 +1,6 @@
 """Add ``pipelines.queue_timeout_seconds`` (FAR-1883).
 
-Revision ID: 0321_pipeline_queue_timeout
+Revision ID: 0322_pipeline_queue_timeout
 Revises: 0320_evidence_redaction_rules
 Create Date: 2026-10-18
 
@@ -32,8 +32,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0321_pipeline_queue_timeout"
-down_revision: str | None = "0320_evidence_redaction_rules"
+revision: str = "0322_pipeline_queue_timeout"
+down_revision: str | None = "0321_organisation_cost_state"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
