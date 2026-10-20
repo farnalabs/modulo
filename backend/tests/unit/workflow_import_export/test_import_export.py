@@ -1743,6 +1743,72 @@ async def test_materialize_drops_malformed_agent_commands_with_a_warning(
     assert any("malformed agent_commands" in warning for warning in result["warnings"])
 
 
+async def test_materialize_strips_malformed_node_agent_commands_before_the_sync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-2008: a node's malformed ``agent_commands`` never reaches the Agent row.
+
+    A bundle bypasses the typed node model, so the shared sync sees the raw
+    node dict. The sync now accepts only a clean ``list[str]`` and skips a
+    mixed list such as ``["ok", 3]`` entirely — but the imported GRAPH would
+    still carry the malformed value, claiming a command the row does not hold.
+    Import must strip the key from the node and disclose why.
+
+    Fails on the pre-fix code in two ways: the node keeps ``["ok", 3]``, and the
+    sync writes that non-str list into the just-created Agent row (which then
+    breaks ``AgentResponse`` validation for every ``GET /api/v1/agents``).
+    """
+    created = _patch_crud(monkeypatch)
+    export_agent_id = uuid.uuid4()
+    node_id = uuid.uuid4()
+    bundle_command = "opencode run -- bundle"
+    # The Agent row the importer just created; the sync re-reads it by id.
+    created_agent = SimpleNamespace(id=uuid.uuid4(), agent_commands=[bundle_command])
+    created["agent"].return_value = created_agent
+    agent_row_result = MagicMock()
+    agent_row_result.scalars.return_value = [created_agent]
+    audit = AsyncMock()
+    monkeypatch.setattr(mod, "append_audit_event", audit)
+    bundle = _make_bundle(
+        pipeline={
+            "name": "Imported",
+            "description": "d",
+            "graph_nodes_json": [
+                {
+                    "id": str(node_id),
+                    "agent_id": str(export_agent_id),
+                    "agent_commands": ["ok", 3],
+                }
+            ],
+            "retry_policy": {},
+            "node_timeout_seconds": 900,
+            "run_context_defaults": {},
+        },
+        agents=[
+            {
+                "id": str(export_agent_id),
+                "name": "Agent A",
+                "prompt_template": "pt",
+                "agent_commands": [bundle_command],
+            }
+        ],
+    )
+
+    result = await materialize_import(_FakeSession(agent_row_result), _ORG_ID, _ACCOUNT_ID, bundle)
+
+    imported_nodes = created["pipeline"].return_value.graph_nodes_json
+    assert len(imported_nodes) == 1
+    assert "agent_commands" not in imported_nodes[0]
+    # The sync skipped the malformed node, so the created row keeps the
+    # bundle's declared command instead of the node's non-str list.
+    assert created_agent.agent_commands == [bundle_command]
+    # Nothing was synced, so no attribution event was written either.
+    audit.assert_not_awaited()
+    warning = next(w for w in result["warnings"] if "malformed agent_commands" in w)
+    assert str(node_id) in warning
+    assert "Imported" in warning
+
+
 async def test_materialize_rejects_unpinned_git_ref_in_bundled_agent_commands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

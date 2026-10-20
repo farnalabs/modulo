@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.agent_command_sync import sync_agent_row_commands
+from modulo.core.agent_command_sync import is_clean_agent_commands, sync_agent_row_commands
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.graph_validator import GraphValidator, check_sandbox_only_field_placement
 from modulo.core.graph_validator._types import ValidationResult
@@ -1493,6 +1493,47 @@ def _reject_sandbox_only_fields_off_sandbox(graph_nodes: list[dict[str, Any]]) -
     raise ValueError("Invalid bundle: sandbox-only node fields are set on non-sandbox_agent nodes — " + problems)
 
 
+def _strip_malformed_node_agent_commands(
+    graph_nodes: list[dict[str, Any]],
+    created_agent_ids: set[str],
+    pname: str,
+    warnings: list[str],
+) -> None:
+    """Drop a malformed node-level ``agent_commands`` from imported nodes (FAR-2008).
+
+    Bundle import hands raw bundle node dicts to the shared Agent-row sync with
+    no typed validation (the Pydantic ``PipelineGraphNode`` model is bypassed),
+    and the shared sync accepts a node value only when it is a clean
+    ``list[str]``. A value that is not — a mixed list such as ``["ok", 3]``, a
+    scalar, ``[None]`` — is therefore stripped HERE, in place, with a disclosed
+    warning: the sync silently skips it, so leaving it on the persisted node
+    would make the graph claim a command the Agent row does not hold (the node
+    value stands only while the row is NULL, and it cannot be materialised).
+
+    Only nodes bound to an Agent CREATED by this import are touched — the same
+    trust boundary the sync itself uses; a node bound to a pre-existing Agent
+    is never modified.
+
+    A clean list (every item a ``str``, at least one non-empty) is left
+    untouched so it still syncs into the created Agent row.
+    """
+    for node in graph_nodes:
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("agent_id")) not in created_agent_ids:
+            continue
+        if "agent_commands" not in node:
+            continue
+        if is_clean_agent_commands(node["agent_commands"]):
+            continue
+        del node["agent_commands"]
+        warnings.append(
+            f"Node '{node.get('id')}' in imported pipeline '{pname}' declares malformed "
+            "agent_commands (expected a list of strings with at least one non-empty string). "
+            "The node commands will be omitted."
+        )
+
+
 async def _materialize_pipeline_and_edges(
     ctx: _ImportContext,
     sections: _ImportSections,
@@ -1553,6 +1594,14 @@ async def _materialize_pipeline_and_edges(
     # CREATED by this import are eligible; a node bound to a pre-existing Agent
     # is left untouched (the pre-FAR-2008 behaviour), never silently synced.
     created_agent_ids = set(agent_id_map.values())
+    # A bundle bypasses the Pydantic node model, so the node path needs the
+    # same type check the Agent declaration path (``_base_agent_args``) already
+    # applies: the target column is ``list[str] | None``, and a mixed list such
+    # as ``["ok", 3]`` written through the sync would break ``AgentResponse``
+    # validation for EVERY read of the org's agents (``GET /api/v1/agents``).
+    # Strip the malformed value from the imported node and disclose it, rather
+    # than persist a graph that claims a command the row cannot hold.
+    _strip_malformed_node_agent_commands(graph_nodes, created_agent_ids, pname, ctx.warnings)
     import_bound_nodes = [
         node for node in graph_nodes if isinstance(node, dict) and str(node.get("agent_id")) in created_agent_ids
     ]

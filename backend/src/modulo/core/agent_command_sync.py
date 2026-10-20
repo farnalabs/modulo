@@ -59,7 +59,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, TypeGuard
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,6 +68,39 @@ from modulo.core.pipeline_engine.git_content import validate_agent_git_content_v
 from modulo.db.models.agent import Agent
 
 logger = logging.getLogger(__name__)
+
+
+def is_clean_agent_commands(value: object) -> TypeGuard[list[str]]:
+    """Whether ``value`` is a syncable node-level ``agent_commands`` list (FAR-2008).
+
+    The bound ``Agent`` row's column is typed ``list[str] | None``, so a list
+    carrying ANY non-``str`` item cannot be persisted without breaking
+    ``AgentResponse`` validation on every subsequent read of the organisation's
+    agents (``GET /api/v1/agents`` — one bad row takes the whole list down).
+    A node value is therefore accepted only when it is
+
+    * a non-empty ``list``,
+    * whose EVERY item is a ``str`` (empty strings are allowed — ``list[str]``
+      permits them), and
+    * with at least one NON-EMPTY string, so a commandless list never clobbers
+      a populated Agent row.
+
+    Anything else — a scalar, a mixed-type list such as ``["ok", 3]``, ``[None]``,
+    an empty list, an empty-string-only list — is treated as ABSENT. Callers
+    skip the WHOLE value rather than syncing its well-typed prefix: a partial
+    sync would persist a command set nobody declared.
+
+    A ``TypeGuard``: a true result narrows the caller's value to ``list[str]``.
+    """
+    if not isinstance(value, list) or not value:
+        return False
+    has_non_empty = False
+    for item in value:
+        if not isinstance(item, str):
+            return False
+        if item:
+            has_non_empty = True
+    return has_non_empty
 
 
 def extract_agent_command_sync_updates(nodes: list[dict[str, Any]]) -> dict[uuid.UUID, list[str]]:
@@ -83,6 +116,15 @@ def extract_agent_command_sync_updates(nodes: list[dict[str, Any]]) -> dict[uuid
     FIRST node's list wins (deterministic; snapshot materialization applies one
     row value to every node bound to that agent, so per-node divergence is not
     representable).
+
+    Requirement (FAR-2008): the value must be a non-empty ``list[str]`` — every
+    item a ``str`` — with at least one non-empty string, per
+    :func:`is_clean_agent_commands`. A mixed list such as ``["ok", 3]`` is
+    skipped ENTIRELY (never partially synced): the target column is
+    ``list[str] | None``, so writing it verbatim would wedge
+    ``GET /api/v1/agents`` response validation for the whole organisation.
+    Callers that accept untrusted input (bundle import) additionally strip such
+    a value from the graph and warn, so the graph and the Agent row agree.
     """
     updates: dict[uuid.UUID, list[str]] = {}
     for node in nodes:
@@ -90,11 +132,7 @@ def extract_agent_command_sync_updates(nodes: list[dict[str, Any]]) -> dict[uuid
             continue
         raw_agent_id = node.get("agent_id")
         agent_commands = node.get("agent_commands")
-        if raw_agent_id is None or not isinstance(agent_commands, list) or not agent_commands:
-            continue
-        # Skip genuinely commandless nodes (no non-empty string item at all) so
-        # an empty-string-only list does not clobber a populated Agent row.
-        if not any(isinstance(c, str) and c for c in agent_commands):
+        if raw_agent_id is None or not is_clean_agent_commands(agent_commands):
             continue
         try:
             agent_id = uuid.UUID(str(raw_agent_id))

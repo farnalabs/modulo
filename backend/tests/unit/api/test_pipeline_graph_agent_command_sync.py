@@ -123,6 +123,35 @@ def test_extract_updates_does_not_skip_leading_empty_item() -> None:
     assert updates == {agent_id: ["", "b"]}
 
 
+def test_extract_updates_skips_a_list_with_a_non_str_item() -> None:
+    """FAR-2008: a mixed list such as ["ok", 3] is skipped ENTIRELY.
+
+    The target column is ``list[str] | None``; writing a non-str item through
+    the sync breaks ``AgentResponse`` validation for every read of the org's
+    agents. The well-typed prefix must NOT be partially synced — the node
+    declared a command set nobody can persist, so the whole value is absent.
+    """
+    agent_id = uuid.uuid4()
+    nodes: list[dict[str, Any]] = [
+        {"id": str(uuid.uuid4()), "agent_id": str(agent_id), "agent_commands": ["ok", 3]},
+    ]
+    assert not _extract_agent_command_sync_updates(nodes)
+
+
+def test_extract_updates_accepts_an_all_str_list_with_an_empty_item() -> None:
+    """FAR-2008: the requirement is ``list[str]``, which permits empty strings.
+
+    ["ok", ""] is a clean list (every item a str, one non-empty string), so it
+    still syncs — the type guard must not be tightened into the Agent
+    declaration path's non-empty-string rule.
+    """
+    agent_id = uuid.uuid4()
+    nodes: list[dict[str, Any]] = [
+        {"id": str(uuid.uuid4()), "agent_id": str(agent_id), "agent_commands": ["ok", ""]},
+    ]
+    assert _extract_agent_command_sync_updates(nodes) == {agent_id: ["ok", ""]}
+
+
 def test_extract_updates_skips_unbound_and_commandless_nodes() -> None:
     """Nodes without an agent_id, without an agent_commands, with an empty
     command, or with an unparseable agent_id are all skipped."""
