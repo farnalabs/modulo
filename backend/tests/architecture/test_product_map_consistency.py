@@ -595,6 +595,7 @@ OWNED_PAGES = {
         "frontend/src/components/hitl/HitlReviewCard.vue",
         "frontend/src/components/HitlBriefing.vue",
     ),
+    "/settings/notifications": "frontend/src/views/SettingsNotificationsView.vue",
     "/settings/email": (
         "frontend/src/views/SettingsEmailView.vue",
         "frontend/src/components/FeatureGate.vue",

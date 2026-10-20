@@ -58,6 +58,7 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'settings-hitl-review': { icon: 'ShieldQuestion', labelKey: 'components.SidebarNav.item_hitl_review' },
   'settings-observability': { icon: 'Eye', labelKey: 'components.SidebarNav.item_observability' },
   'settings-email': { icon: 'Mail', labelKey: 'components.SidebarNav.item_email_settings' },
+  'settings-notifications': { icon: 'Bell', labelKey: 'components.SidebarNav.item_notification_preferences' },
   'settings-error-forwarders': { icon: 'AlertTriangle', labelKey: 'components.SidebarNav.item_error_forwarders' },
   'settings-guardrails': { icon: 'ShieldAlert', labelKey: 'components.SidebarNav.item_settings_guardrails' },
   'admin-users': { icon: 'UserCircle', labelKey: 'components.SidebarNav.item_users' },
