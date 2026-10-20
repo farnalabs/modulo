@@ -351,7 +351,11 @@ _TRIAGE_RAW_OUTPUT_TAIL_CHARS = 4000
 _TRIAGE_LOG_TAIL_CHARS = 6000
 
 
-def _deadline_triage_from_markers(markers: dict[str, Any] | None) -> list[dict[str, Any]]:
+def _deadline_triage_from_markers(
+    markers: dict[str, Any] | None,
+    *,
+    run_attempt_count: int | None = None,
+) -> list[dict[str, Any]]:
     """Project cancellation/deadline-kill triage markers for the run detail (FAR-704).
 
     Only markers carrying the ``deadline_triage is True`` signature are
@@ -359,6 +363,13 @@ def _deadline_triage_from_markers(markers: dict[str, Any] | None) -> list[dict[s
     output, stall) is ignored here. String fields are truncated to bounded
     display tails (the retained marker stays authoritative in the store).
     Sorted by attempt_key for a deterministic response order.
+
+    FAR-1886 B1: every entry also carries ``run_attempt_count`` — the RUN's
+    ``runs.node_attempt_count`` (how many node executions had been recorded
+    when the read ran), supplied by the caller from the run row it already
+    loaded. It is DATA, never a cause: an attempt proves one started, not why
+    the run stopped. Both the REST and MCP detail surfaces pass it, so their
+    entry shapes stay identical.
     """
     if not isinstance(markers, dict):
         return []
@@ -379,15 +390,24 @@ def _deadline_triage_from_markers(markers: dict[str, Any] | None) -> list[dict[s
                 "stdout_length": marker.get("stdout_length"),
                 "stderr_length": marker.get("stderr_length"),
                 "delivery_done": marker.get("delivery_done") is True,
+                "run_attempt_count": run_attempt_count,
             }
         )
     return entries
+
+
+def _run_attempt_count(run: Any) -> int | None:
+    """The run's ``node_attempt_count`` as an int, or ``None`` when absent."""
+    value = getattr(run, "node_attempt_count", None)
+    return value if isinstance(value, int) else None
 
 
 async def _do_get_deadline_triage(
     factory: async_sessionmaker[AsyncSession],
     principal: TenantPrincipal,
     run_id: uuid.UUID,
+    *,
+    run_attempt_count: int | None = None,
 ) -> list[dict[str, Any]] | None:
     """Load the run's deadline-kill triage evidence (FAR-704).
 
@@ -395,13 +415,15 @@ async def _do_get_deadline_triage(
     projects the ``deadline_triage``-signed ones. Best-effort like
     ``_do_get_workspace_inputs``: a DB failure degrades to None (the run
     response is valid without triage evidence); empty list when the run has
-    no triage markers.
+    no triage markers. ``run_attempt_count`` is the caller's already-loaded
+    run value (FAR-1886 B1) — no second read, and the same value the MCP
+    detail surface passes.
     """
     try:
         async with factory() as session, session.begin():
             await set_rls_org(session, principal.organisation_id)
             markers = await read_run_markers(session, run_id=run_id, organisation_id=principal.organisation_id)
-            return _deadline_triage_from_markers(markers)
+            return _deadline_triage_from_markers(markers, run_attempt_count=run_attempt_count)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -1095,6 +1117,15 @@ class RunResponse(BaseModel):
     # node_deadline_exceeded) is triageable from the run page even though no
     # node envelope reached the Agent Return Contract columns. Empty list
     # when the run has no such marker; None on a failed read.
+    #
+    # FAR-1886 B1: entries also carry ``run_attempt_count`` (the run's
+    # ``runs.node_attempt_count``, read from the run row), and every
+    # run-level terminal path — the age gate and stranded-pending backstop
+    # (``run.no_progress``), the node-deadline reaper and
+    # ``harness.worker_lost`` — now writes a synthetic run-level entry
+    # carrying the reason that path observed, so those runs are no longer
+    # indistinguishable from a silent stall. The reason is the observation,
+    # not a cause inferred from the counter.
     deadline_triage: list[dict[str, Any]] | None = None
 
 
@@ -1928,7 +1959,17 @@ async def get_run_status(
             lambda: _do_get_run_observability(factory, principal, run)
         )
         workspace_inputs = await _run_with_retry(lambda: _do_get_workspace_inputs(factory, principal, run_id))
-        deadline_triage = await _run_with_retry(lambda: _do_get_deadline_triage(factory, principal, run_id))
+        deadline_triage = await _run_with_retry(
+            lambda: _do_get_deadline_triage(
+                factory,
+                principal,
+                run_id,
+                # FAR-1886 B1: the attempt counter is data on the triage
+                # envelope; take it from the run row already loaded above so
+                # the REST and MCP detail surfaces cannot diverge.
+                run_attempt_count=_run_attempt_count(run),
+            )
+        )
     except IntegrityError:
         _log.exception(_CODE_RUNS_GET_RUN_STATUS)
         raise HTTPException(

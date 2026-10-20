@@ -3849,3 +3849,43 @@ class TestResolveTerminalizer:
         )
         with pytest.raises(AttributeError, match="not found in module"):
             ch._resolve_terminalizer(spec)
+
+
+class TestAgeGateTerminalTriage:
+    """FAR-1886 B1 — the ``run.no_progress`` age gate persists a run-level
+    triage marker for every row it terminalises.
+
+    Without this wiring the age-gate run's ``deadline_triage`` is ``[]``, so
+    "executor died" and "silent stall" cannot be told apart from the run page.
+    The marker writer itself is covered in
+    ``tests/unit/pipeline_engine/test_terminal_triage.py``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_mid_graph_wedge_persists_one_run_level_triage_entry_per_row(self) -> None:
+        run_id = uuid.uuid4()
+        session = _MockSession([])
+        session.terminalizer_rows["no_progress"] = [run_id]
+        writer = AsyncMock(return_value=True)
+        with patch.object(ch, "persist_terminal_triage_marker", writer):
+            terminalised = await ch._terminalize_mid_graph_wedges(session, ORG, max_age_minutes=135)
+
+        assert terminalised == [run_id]
+        writer.assert_awaited_once()
+        kwargs = writer.await_args.kwargs
+        assert kwargs["run_id"] == run_id
+        assert kwargs["organisation_id"] == ORG
+        # The truthful age-gate code rides the marker — never the supersede code.
+        assert kwargs["error_code"] == "no_progress"
+        # The reason is the gate's OWN observation, not an "executor lost"
+        # cause inferred from the attempt counter.
+        assert kwargs["reason"] == ch._TERMINAL_TRIAGE_REASON_AGE_BOUND
+
+    @pytest.mark.asyncio
+    async def test_mid_graph_wedge_writes_no_triage_when_no_rows_are_collected(self) -> None:
+        session = _MockSession([])
+        writer = AsyncMock(return_value=True)
+        with patch.object(ch, "persist_terminal_triage_marker", writer):
+            terminalised = await ch._terminalize_mid_graph_wedges(session, ORG, max_age_minutes=135)
+        assert not terminalised
+        writer.assert_not_awaited()

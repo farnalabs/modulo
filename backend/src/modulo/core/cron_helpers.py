@@ -5892,6 +5892,17 @@ async def _fail_node_deadline_run(
     )
     run.completed_at = now
     await session.flush()
+    # FAR-1886 B1: the reaper terminalises a run whose executor is gone, so
+    # there is no in-process attempt marker left to project. Persist the
+    # synthetic run-level entry (best-effort; the terminalisation above is
+    # already in this transaction).
+    await persist_terminal_triage_marker(
+        session,
+        run_id=run_id,
+        organisation_id=org_id,
+        error_code=_NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+        reason=_TERMINAL_TRIAGE_REASON_NODE_DEADLINE,
+    )
     summary["node_deadline_reaped"] += 1
     _log.error(
         "dispatcher_reconcile.node_deadline_reaped run=%s org=%s pipeline=%s trigger=%s "
@@ -5926,6 +5937,162 @@ async def _fail_node_deadline_run(
         },
     )
     return True
+
+
+# ---------------------------------------------------------------------------
+# FAR-1886 B1 — terminal-path triage markers.
+#
+# ``deadline_triage`` used to exist only for ``node.deadline_exceeded`` (the
+# sandbox cancellation-retention marker written by node_runner). The
+# run-level terminalisers — the age gate (``run.no_progress``) and the
+# graceful worker-shutdown handback (``harness.worker_lost``) — wrote no
+# marker at all, so their runs returned ``deadline_triage: []`` and "executor
+# died" was indistinguishable from "silent stall". These paths have no
+# sandbox attempt to retain (or the attempt's marker is gone with the dead
+# executor), so they persist ONE synthetic run-level entry carrying the same
+# envelope signature and an explicit ``no_output_reason``.
+#
+# The entry is a marker ROW in the dedicated attempt-keyed retention store
+# (never ``outputs_json`` / ``node_telemetry_json`` — the Agent Return
+# Contract columns). The key is deliberately UNPARSEABLE by the
+# ``run:<uuid>:node:<id>:<suffix>`` grammar so the row lands on the
+# ``__unknown__`` sentinel node id (evidence preserved, FAR-188); a parseable
+# key would squat a real node id.
+# ---------------------------------------------------------------------------
+_TERMINAL_TRIAGE_ATTEMPT_KEY_PREFIX = "terminal-triage:"
+# The reason is PASSED IN by each terminaliser and states only what that
+# terminaliser actually observed — never a cause inferred from a counter.
+# Whether node attempts were recorded is reported as DATA on the envelope
+# (``run_attempt_count``, read from ``runs.node_attempt_count``), not folded
+# into this text: "attempts > 0" proves an attempt started, not that an
+# executor was lost (a live-but-stalled executor is collected by the age
+# gate too).
+_TERMINAL_TRIAGE_REASON_AGE_BOUND = "no node progress within the age bound"
+_TERMINAL_TRIAGE_REASON_STRANDED_PENDING = "stranded pending run past the age bound"
+_TERMINAL_TRIAGE_REASON_NODE_DEADLINE = "node started, no terminal envelope before its deadline"
+_TERMINAL_TRIAGE_REASON_WORKER_LOST = "executor lost (worker handoff)"
+# Bounded like ``node_runner._RAW_OUTPUT_MARKER_PERSIST_TIMEOUT``: the run-row
+# lock taken below is client-bounded so a contended row can never stall the
+# caller's terminalisation transaction.
+_TERMINAL_TRIAGE_PERSIST_TIMEOUT = 5.0
+
+
+def _terminal_triage_attempt_key(run_id: uuid.UUID) -> str:
+    """The synthetic, grammar-unparseable attempt key for a run-level entry."""
+    return f"{_TERMINAL_TRIAGE_ATTEMPT_KEY_PREFIX}{run_id}"
+
+
+async def _write_terminal_triage_marker(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    error_code: str,
+    reason: str,
+) -> bool:
+    """The savepoint-scoped body of :func:`persist_terminal_triage_marker`.
+
+    EVERY read and the write live inside ONE savepoint. A DB-level read
+    failure (e.g. a serialisation error on the shared reconcile transaction)
+    aborts only the savepoint, never the caller's transaction — so the
+    terminalisations that transaction already wrote still commit.
+    """
+    from modulo.db.crud.run_node_outputs import read_run_markers, write_run_markers
+
+    async with session.begin_nested():
+        # Same serialisation contract as ``node_runner._write_raw_output_marker``:
+        # the run-row FOR UPDATE makes the markers read-merge-write atomic, so a
+        # concurrent writer's key is never dropped by ``write_run_markers``'
+        # delete-absent half.
+        run = (
+            await session.execute(
+                select(Run).where(Run.id == run_id, Run.organisation_id == organisation_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if run is None:
+            _log.warning(
+                "cron_helpers.terminal_triage_marker_skip_row_not_found",
+                extra={"run_id": str(run_id), "error_code": error_code},
+            )
+            return False
+        markers = dict(await read_run_markers(session, run_id=run_id, organisation_id=organisation_id) or {})
+        key = _terminal_triage_attempt_key(run_id)
+        markers[key] = {
+            "_modulo_marker": True,
+            "status": "failed",
+            "summary": f"Run terminalised by {error_code} — run-level triage evidence (FAR-1886)",
+            "raw_output": "",
+            "parse_error": "",
+            "pr_url": None,
+            "exit_code": -1,
+            "stdout_length": 0,
+            "stderr_length": 0,
+            "attempt_key": key,
+            "node_id": None,
+            "deadline_triage": True,
+            "no_output_reason": reason,
+            "sandbox_log_tail": "",
+        }
+        await write_run_markers(
+            session,
+            run_id=run_id,
+            organisation_id=organisation_id,
+            markers=markers,
+        )
+    return True
+
+
+async def persist_terminal_triage_marker(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    error_code: str,
+    reason: str,
+) -> bool:
+    """Persist a run-level triage marker for a terminalisation (FAR-1886 B1).
+
+    Used by the age gate (``run.no_progress``), the stranded-pending backstop
+    (``run.no_progress``), the FAR-1999 node-deadline reaper
+    (``node_deadline_exceeded``) and the ``harness.worker_lost`` terminal-fail
+    path — none of which has a prior sandbox attempt marker to project. The
+    marker carries the SAME ``deadline_triage``/``no_output_reason``/tail/stdout
+    envelope signature as the FAR-704 per-attempt marker, so the run-detail
+    projection needs no special case.
+
+    ``reason`` is REQUIRED and is the caller's own observation (see the
+    ``_TERMINAL_TRIAGE_REASON_*`` vocabulary). This helper never derives a
+    cause from a counter — ``run_attempt_count`` on the projected envelope is
+    the data that lets an operator judge, without claiming why.
+
+    Best-effort by design: observability must never break the repair that
+    already committed. The read-merge-write runs in its OWN savepoint and is
+    bounded by ``_TERMINAL_TRIAGE_PERSIST_TIMEOUT``. Returns ``True`` when
+    the marker was written.
+
+    Must be called with a bound, matching RLS organisation context (the
+    ``run_node_outputs`` write contract) inside an open transaction.
+    """
+    try:
+        return await asyncio.wait_for(
+            _write_terminal_triage_marker(
+                session,
+                run_id=run_id,
+                organisation_id=organisation_id,
+                error_code=error_code,
+                reason=reason,
+            ),
+            timeout=_TERMINAL_TRIAGE_PERSIST_TIMEOUT,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "cron_helpers.terminal_triage_marker_failed",
+            extra={"run_id": str(run_id), "error_code": error_code},
+            exc_info=True,
+        )
+        return False
 
 
 def _build_re_dispatch_predicate(
@@ -6982,6 +7149,16 @@ async def _terminalize_mid_graph_wedges(
     )
     rows = result.all()
     for (run_id,) in rows:
+        # FAR-1886 B1: the age gate has no sandbox attempt marker to project,
+        # so persist the synthetic run-level triage entry (best-effort; the
+        # terminalisation above is already in this transaction).
+        await persist_terminal_triage_marker(
+            session,
+            run_id=run_id,
+            organisation_id=org_id,
+            error_code=_NO_PROGRESS_ERROR_CODE,
+            reason=_TERMINAL_TRIAGE_REASON_AGE_BOUND,
+        )
         _log.warning(
             "dispatcher_reconcile: age-bound wedge terminalized %s with no_progress (started > %d min ago)",
             run_id,
@@ -7150,6 +7327,17 @@ async def _terminalize_stranded_pending_runs(
     )
     rows = result.all()
     for (run_id,) in rows:
+        # FAR-1886 B1: a stranded pending row was never dispatched to an
+        # executor that could retain a per-attempt marker, so persist the
+        # synthetic run-level entry (best-effort; the terminalisation above is
+        # already in this transaction).
+        await persist_terminal_triage_marker(
+            session,
+            run_id=run_id,
+            organisation_id=org_id,
+            error_code=_NO_PROGRESS_ERROR_CODE,
+            reason=_TERMINAL_TRIAGE_REASON_STRANDED_PENDING,
+        )
         _log.warning(
             "dispatcher_reconcile: stranded foreign-dispatcher pending run terminalized %s "
             "(pending past the age bound %d min; no reclaim leg could recover it)",

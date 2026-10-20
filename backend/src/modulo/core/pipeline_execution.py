@@ -1335,6 +1335,62 @@ async def mark_complete(
         await _advance_journeys_from_stored_refs(aeng, run_id, org_id, RUN_COMPLETE_STATUS)
 
 
+# FAR-1886 B1: the graceful worker-shutdown handback's registry code
+# (``worker_handoff.WORKER_LOST_ERROR_CODE``). Its terminal path writes no
+# sandbox attempt marker, so the run-detail triage surface was empty for the
+# exact class it exists to explain. Defined here as a literal (not imported
+# from ``worker_handoff``, which imports THIS module) and compared exactly:
+# the legacy ``worker_lost`` spelling belongs to a different class (its alias
+# is ``harness.dispatch_failed``, not worker-loss).
+_WORKER_LOST_TRIAGE_ERROR_CODE = "harness.worker_lost"
+
+
+async def _persist_worker_lost_triage(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+) -> None:
+    """Best-effort run-level triage marker for a ``harness.worker_lost`` fail.
+
+    FAR-1886 B1. The worker was shut down mid-run, so the executor that would
+    have written a per-attempt cancellation marker is gone; without this the
+    run's ``deadline_triage`` is ``[]`` and an operator cannot tell "executor
+    died" from "silent stall". The marker is written by
+    ``cron_helpers.persist_terminal_triage_marker`` in its own RLS-scoped
+    session, with the reason this path actually observed; ANY failure is
+    logged and swallowed — triage must never fail the terminal write that
+    already committed.
+    """
+    from modulo.core.cron_helpers import (
+        _TERMINAL_TRIAGE_REASON_WORKER_LOST,
+        persist_terminal_triage_marker,
+    )
+
+    try:
+        factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+        async with factory() as session, session.begin():
+            await set_rls_org(session, uuid.UUID(org_id))
+            await persist_terminal_triage_marker(
+                session,
+                run_id=uuid.UUID(run_id),
+                organisation_id=uuid.UUID(org_id),
+                error_code=_WORKER_LOST_TRIAGE_ERROR_CODE,
+                # The reason states the observation this path can make: the
+                # worker that owned the run is gone, so no further output can
+                # arrive. It is NOT derived from the run's attempt counter (an
+                # attempt merely proves one started).
+                reason=_TERMINAL_TRIAGE_REASON_WORKER_LOST,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "pipeline_execution.worker_lost_triage_failed",
+            extra={"run_id": run_id, "org_id": org_id},
+            exc_info=True,
+        )
+
+
 async def fail_run_terminal(
     aeng: AsyncEngine,
     run_id: str,
@@ -1410,6 +1466,11 @@ async def fail_run_terminal(
             raise
         except Exception:
             _log.warning("pipeline_execution.terminal_failed_facts_failed run=%s", run_id, exc_info=True)
+        # FAR-1886 B1: a worker-shutdown terminal fail has no in-process
+        # executor left to retain a sandbox marker, so persist the run-level
+        # triage entry here (its own session, fail-open).
+        if error_code == _WORKER_LOST_TRIAGE_ERROR_CODE:
+            await _persist_worker_lost_triage(aeng, run_id, org_id)
     return ok
 
 
@@ -2022,7 +2083,9 @@ async def _fail_overdue_node(
         return
     error_detail = (
         f"Node '{node_id}' did not complete within its configured timeout_seconds "
-        f"({_timeout}s) — absolute node-deadline watchdog (half-alive stall)"
+        f"({_timeout}s) — node-deadline watchdog ended the dispatch. The cause is "
+        "not asserted here; retained deadline_triage evidence is conditional, not "
+        "guaranteed."
     )
     terminal_written = await fail_run_terminal(
         aeng,
