@@ -6703,21 +6703,41 @@ def _summarize_reconcile_error(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"[:200]
 
 
-def _locked_row_disproves_nodeless_premise(run: Any) -> bool:
+async def _locked_row_disproves_nodeless_premise(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    run: Any,
+) -> bool:
     """FAR-1914: does a row already locked ``FOR UPDATE`` fail the nodeless premise?
 
-    The locked-read twin of :func:`_fresh_row_is_node_started_or_gone`, used by
-    the age-bound router (:func:`_terminalize_aged_nodeless_zombies`) so the
-    premise check and the terminal write share ONE row lock. The caller has
-    already read ``run`` with ``session.get(Run, run_id,
-    with_for_update=True)``; whatever this function returns stays true until
-    that transaction commits, which is the guarantee the router's docstring
-    states.
+    The locked-read twin of ``_ZERO_PROGRESS_SHAPE_SQL``, used by the age-bound
+    router (:func:`_terminalize_aged_nodeless_zombies`) so the premise check and
+    the terminal write share ONE row lock. The caller has already read ``run``
+    with ``session.get(Run, run_id, with_for_update=True)``; whatever this
+    function returns stays true until that transaction commits, which is the
+    guarantee the router's docstring states.
+
+    Every leg of the scan's zero-progress shape is re-checked — all FIVE:
+
+    1. ``status`` is still ``running`` (a row that left running is not this
+       gate's class);
+    2. ``dispatch_phase`` is NOT ``first_node_dispatched`` (FAR-1649: a durably
+       recorded start means re-execution is unsafe and "dispatched no node" is
+       false);
+    3. ``node_token_usage`` is NULL (a node consumed tokens);
+    4. ``node_attempt_count`` is 0. The attempt counter is committed BEFORE the
+       node runs, so it is the EARLIEST durable evidence that a node was
+       attempted — it catches a start whose best-effort ``dispatch_phase``
+       stamp was late or dropped (FAR-1714);
+    5. NO ``__final__`` output row and NO checkpoint row for the run — both
+       re-queried through the shared :func:`_final_row_absent_expr` /
+       :func:`_checkpoint_absent_expr` predicates (the definitions the
+       row-level nodeless predicate and the reconcile scan's labelled columns
+       use). A node that reported between the scan and the lock is caught here
+       even when both the phase and the attempt count look pre-node.
 
     Returns True when the row must NOT be terminal-failed as a
-    claimed-but-nodeless zombie: it is missing, has left ``running``, has
-    durably STARTED a node (``first_node_dispatched`` — FAR-1649: re-execution
-    is unsafe and "dispatched no node" is false), or carries node token usage.
+    claimed-but-nodeless zombie.
     """
     if run is None:
         # The row vanished (deleted / not visible under this org's RLS): there
@@ -6729,7 +6749,24 @@ def _locked_row_disproves_nodeless_premise(run: Any) -> bool:
         return True
     if getattr(run, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:
         return True
-    return getattr(run, "node_token_usage", None) is not None
+    if getattr(run, "node_token_usage", None) is not None:
+        return True
+    if int(getattr(run, "node_attempt_count", 0) or 0) != 0:
+        return True
+    from sqlalchemy import select as sa_select
+
+    from modulo.db.models.run import Run
+
+    flags = (
+        await session.execute(
+            sa_select(
+                _final_row_absent_expr().label("outputs_absent"),
+                _checkpoint_absent_expr().label("checkpoints_absent"),
+            ).where(Run.id == run_id)
+        )
+    ).one()
+    # Either leg being present disproves "zero progress": a node reported.
+    return bool(not flags.outputs_absent or not flags.checkpoints_absent)
 
 
 async def _terminalize_aged_nodeless_zombies(
@@ -6767,16 +6804,19 @@ async def _terminalize_aged_nodeless_zombies(
     gate only closes the tail (runs whose repair the row loop never reached).
 
     FAR-1914: the SELECT returns a row SNAPSHOT, so each selected row is
-    re-read with ``SELECT ... FOR UPDATE`` and the zero-node premise is checked
-    on THAT LOCKED ENTITY before the terminal write. Because the lock is held
-    until this transaction commits, the row cannot change between the check and
-    :func:`_fail_nodeless_run`'s write — and because ``_fail_nodeless_run``
-    re-reads by primary key, it receives the same locked identity-mapped
-    instance rather than a second snapshot. A run whose executor dispatched its
-    first node in the SELECT→write window (or that left ``running``, or whose
-    locked row could not be read — fail closed) is DEFERRED (counted
-    ``nodeless_fresh_premise_deferred``) instead of terminal-failed on a
-    premise its current state disproves.
+    re-read with ``SELECT ... FOR UPDATE`` and the FULL zero-progress shape is
+    re-checked on that locked row before the terminal write: still ``running``,
+    phase not ``first_node_dispatched``, ``node_token_usage`` NULL,
+    ``node_attempt_count`` 0 (the earliest durable "a node ran" evidence — the
+    phase stamp is best-effort and can be late/dropped, FAR-1714), and no
+    ``__final__`` output row and no checkpoint row (both re-queried against the
+    locked id). Because the lock is held until this transaction commits, the
+    row cannot change between the check and :func:`_fail_nodeless_run`'s write
+    — and because ``_fail_nodeless_run`` re-reads by primary key, it receives
+    the same locked identity-mapped instance rather than a second snapshot. A
+    run that fails ANY of those legs (or whose locked row could not be read —
+    fail closed) is DEFERRED (counted ``nodeless_fresh_premise_deferred``)
+    instead of terminal-failed on a premise its current state disproves.
 
     Returns the ids actually routed to the chokepoint (empty when the tick found
     nothing, or when every selected row was deferred as no longer nodeless).
@@ -6806,14 +6846,16 @@ async def _terminalize_aged_nodeless_zombies(
         # lock is held until this transaction commits, so no writer can move the
         # row between this check and ``_fail_nodeless_run``'s terminal write
         # (which re-reads the same identity-mapped instance by primary key).
-        # A locked read that fails is treated like any other unverifiable
-        # premise: fail CLOSED and defer (a started node may have side effects).
+        # A locked read or premise query that fails is treated like any other
+        # unverifiable premise: fail CLOSED and defer (a started node may have
+        # side effects).
         try:
             locked = await session.get(Run, run_id, with_for_update=True)
+            premise_disproved = await _locked_row_disproves_nodeless_premise(session, run_id, locked)
         except Exception:
             _log.warning(
-                "dispatcher_reconcile.aged_nodeless_locked_read_failed run=%s org=%s "
-                "— could not re-verify the zero-node premise under the row lock; "
+                "dispatcher_reconcile.aged_nodeless_locked_premise_unreadable run=%s org=%s "
+                "— could not re-read and re-verify the zero-node premise under the row lock; "
                 "held back (fail closed, FAR-1914)",
                 run_id,
                 org_id,
@@ -6821,7 +6863,7 @@ async def _terminalize_aged_nodeless_zombies(
             )
             summary["nodeless_fresh_premise_deferred"] += 1
             continue
-        if _locked_row_disproves_nodeless_premise(locked):
+        if premise_disproved:
             # Its OWN counter — a routine fresh-premise race, NOT the row-level
             # belt's regression alarm (``node_started_deferred``).
             summary["nodeless_fresh_premise_deferred"] += 1

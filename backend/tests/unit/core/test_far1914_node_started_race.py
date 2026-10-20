@@ -27,6 +27,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import TextClause
 
 from modulo.core import cron_helpers as ch
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
@@ -53,6 +54,18 @@ def _nodeless_snapshot(*, phase: Any, claim_count: int) -> SimpleNamespace:
         claim_count=claim_count,
         retry_policy=None,
     )
+
+
+def _locked_row(**overrides: Any) -> SimpleNamespace:
+    """The locked run entity the age router re-reads (pre-node by default)."""
+    fields: dict[str, Any] = {
+        "status": "running",
+        "dispatch_phase": "claimed",
+        "node_token_usage": None,
+        "node_attempt_count": 0,
+    }
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
 
 
 class _FreshSession:
@@ -83,17 +96,36 @@ class _RouterSession:
     ``fresh`` may be a single row (returned for every id) or a dict keyed by
     run id (a mixed batch); a missing id yields ``None``, exactly like a row
     that vanished between the scan and the locked read.
+
+    ``execute`` serves two statements: the router's scan snapshot (a
+    ``TextClause``) and the locked premise's output/checkpoint absence query,
+    whose flagged result is configured by ``outputs_absent`` /
+    ``checkpoints_absent``.
     """
 
-    def __init__(self, selected: list[uuid.UUID], fresh: Any) -> None:
+    def __init__(
+        self,
+        selected: list[uuid.UUID],
+        fresh: Any,
+        *,
+        outputs_absent: bool = True,
+        checkpoints_absent: bool = True,
+    ) -> None:
         self._selected = selected
         self._fresh = fresh
+        self._flags = SimpleNamespace(outputs_absent=outputs_absent, checkpoints_absent=checkpoints_absent)
         self.flushed = False
         self.get_calls: list[tuple[uuid.UUID, bool]] = []
 
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+        if isinstance(stmt, TextClause):
+            # The router's scan snapshot (the aged zero-progress ids collected).
+            result = MagicMock()
+            result.all.return_value = [(run_id,) for run_id in self._selected]
+            return result
+        # The locked premise's output/checkpoint absence query.
         result = MagicMock()
-        result.all.return_value = [(run_id,) for run_id in self._selected]
+        result.one.return_value = self._flags
         return result
 
     async def get(self, model: Any, pk: Any, with_for_update: bool = False) -> Any:
@@ -454,6 +486,97 @@ async def test_aged_nodeless_router_mixed_batch_routes_only_the_routable_id() ->
     assert summary["node_started_deferred"] == 0
     assert session.get_calls == [(routable, True), (deferred, True)]
     assert session.flushed is True
+
+
+@pytest.mark.asyncio
+async def test_aged_nodeless_router_defers_a_row_that_left_running() -> None:
+    """A locked row that already LEFT ``running`` is not this gate's class."""
+    run_id = uuid.uuid4()
+    summary = _summary()
+    fail = AsyncMock()
+    session = _RouterSession([run_id], _locked_row(status="complete"))
+    with patch.object(ch, "_fail_nodeless_run", fail):
+        routed = await ch._terminalize_aged_nodeless_zombies(
+            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
+        )
+
+    assert routed == []
+    fail.assert_not_awaited()
+    assert summary["nodeless_fresh_premise_deferred"] == 1
+    assert session.get_calls == [(run_id, True)]
+
+
+@pytest.mark.asyncio
+async def test_aged_nodeless_router_defers_a_row_with_node_token_usage() -> None:
+    """A locked row carrying token usage proves a node consumed tokens."""
+    run_id = uuid.uuid4()
+    summary = _summary()
+    fail = AsyncMock()
+    session = _RouterSession([run_id], _locked_row(node_token_usage=1234))
+    with patch.object(ch, "_fail_nodeless_run", fail):
+        routed = await ch._terminalize_aged_nodeless_zombies(
+            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
+        )
+
+    assert routed == []
+    fail.assert_not_awaited()
+    assert summary["nodeless_fresh_premise_deferred"] == 1
+
+
+@pytest.mark.asyncio
+async def test_aged_nodeless_router_defers_a_row_with_node_attempts() -> None:
+    """``node_attempt_count`` is committed BEFORE the node runs.
+
+    It therefore catches a started node whose best-effort ``dispatch_phase``
+    stamp was late or dropped (FAR-1714) — a row the phase leg alone would
+    still mislabel "dispatched no node".
+    """
+    run_id = uuid.uuid4()
+    summary = _summary()
+    fail = AsyncMock()
+    session = _RouterSession([run_id], _locked_row(node_attempt_count=1))
+    with patch.object(ch, "_fail_nodeless_run", fail):
+        routed = await ch._terminalize_aged_nodeless_zombies(
+            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
+        )
+
+    assert routed == []
+    fail.assert_not_awaited()
+    assert summary["nodeless_fresh_premise_deferred"] == 1
+
+
+@pytest.mark.asyncio
+async def test_aged_nodeless_router_defers_a_row_with_a_final_output() -> None:
+    """A ``__final__`` output row means a node reported after the scan."""
+    run_id = uuid.uuid4()
+    summary = _summary()
+    fail = AsyncMock()
+    session = _RouterSession([run_id], _locked_row(), outputs_absent=False)
+    with patch.object(ch, "_fail_nodeless_run", fail):
+        routed = await ch._terminalize_aged_nodeless_zombies(
+            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
+        )
+
+    assert routed == []
+    fail.assert_not_awaited()
+    assert summary["nodeless_fresh_premise_deferred"] == 1
+
+
+@pytest.mark.asyncio
+async def test_aged_nodeless_router_defers_a_row_with_a_checkpoint() -> None:
+    """A checkpoint row means a super-step completed after the scan."""
+    run_id = uuid.uuid4()
+    summary = _summary()
+    fail = AsyncMock()
+    session = _RouterSession([run_id], _locked_row(), checkpoints_absent=False)
+    with patch.object(ch, "_fail_nodeless_run", fail):
+        routed = await ch._terminalize_aged_nodeless_zombies(
+            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
+        )
+
+    assert routed == []
+    fail.assert_not_awaited()
+    assert summary["nodeless_fresh_premise_deferred"] == 1
 
 
 @pytest.mark.asyncio
