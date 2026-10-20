@@ -17,6 +17,27 @@ services:
 
   redis:
     image: redis:8-alpine
+    # FAR-2002 — bound the queue store, and evict only what the reconciler can
+    # repair. Without a maxmemory, Redis runs `noeviction`: a worker wedge grows
+    # the SAQ queue until every enqueue fails with `OOM command not allowed`.
+    #
+    # `volatile-lru` touches ONLY keys that carry a TTL. In the SAQ key space
+    # that is exactly the job hashes — queued ones get a 1h TTL from the
+    # dispatcher (`SAQ_QUEUED_JOB_TTL`), completed ones a 300s TTL from SAQ,
+    # and in-flight ones have their TTL cleared on dequeue. The queue's
+    # structural keys (`queued`/`active` lists, `incomplete` zset) are
+    # persistent, so they are never evicted — losing one would drop queued work
+    # with no job hash for `dispatcher_reconcile` to detect. An evicted queued
+    # job hash is repaired: `q.job()` goes absent and the pending+`saq` leg
+    # re-enqueues it after `SAQ_REENQUEUE_WINDOW`.
+    #
+    # Raise REDIS_MAXMEMORY for a larger queue budget; keep the policy.
+    command:
+      - redis-server
+      - "--maxmemory"
+      - "${REDIS_MAXMEMORY:-256mb}"
+      - "--maxmemory-policy"
+      - "volatile-lru"
     ports:
       - "127.0.0.1:6379:6379"
 
