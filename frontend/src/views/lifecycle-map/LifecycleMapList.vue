@@ -90,8 +90,6 @@
                 :aria-label="$t('views.LifecycleMapList.edit')"
                 data-testid="lifecycle-map-list-edit"
                 @click.stop="editMap(m)"
-                @keydown.enter.stop
-                @keydown.space.prevent.stop
               >
                 <Pencil :size="12" aria-hidden="true" />
               </button>
