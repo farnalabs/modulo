@@ -215,6 +215,19 @@ describe('PublishCompositeFlow', () => {
     expect(wrapper.text()).toContain('Name & Description')
   })
 
+  it('names the modal dialog with a stable, non-step-varying heading', async () => {
+    const wrapper = mountFlow()
+    await flushPromises()
+    const dialog = wrapper.find('dialog')
+    expect(dialog.attributes('aria-labelledby')).toBe('publish-composite-title')
+    const title = wrapper.find('#publish-composite-title')
+    expect(title.exists()).toBe(true)
+    expect(title.text()).toBe('Publish composite')
+    // The name must not change with the step.
+    await advanceToStep(wrapper, 2)
+    expect(wrapper.find('#publish-composite-title').text()).toBe('Publish composite')
+  })
+
   it('closes via a backdrop click on the modal dialog', async () => {
     const wrapper = mountFlow()
     await flushPromises()
@@ -253,5 +266,38 @@ describe('PublishCompositeFlow', () => {
     expect(dialogEl.open).toBe(false)
     expect(wrapper.emitted('close')).toHaveLength(1)
     wrapper.unmount()
+  })
+
+  it('returns focus to the trigger when the modal closes', async () => {
+    const trigger = document.createElement('button')
+    trigger.textContent = 'Open publish flow'
+    document.body.appendChild(trigger)
+    trigger.focus()
+    expect(document.activeElement).toBe(trigger)
+
+    const wrapper = mount(PublishCompositeFlow, {
+      props: { compositeId: 'comp-1', ports: [makePort()] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const dialogEl = wrapper.find('dialog').element as HTMLDialogElement
+    const focused = document.activeElement as HTMLElement
+    expect(dialogEl.contains(focused)).toBe(true)
+
+    await wrapper.find('dialog').trigger('click')
+    await flushPromises()
+
+    expect(dialogEl.open).toBe(false)
+    expect(document.activeElement).toBe(trigger)
+    wrapper.unmount()
+    trigger.remove()
+  })
+
+  it('unmounts safely while the modal is open', async () => {
+    const wrapper = mountFlow()
+    await flushPromises()
+    expect((wrapper.find('dialog').element as HTMLDialogElement).open).toBe(true)
+    expect(() => wrapper.unmount()).not.toThrow()
   })
 })

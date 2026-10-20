@@ -1,54 +1,53 @@
 <template>
   <Teleport to="body">
-    <div v-if="isOpen" class="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]">
-      <div class="fixed inset-0 bg-black/50" @click="close" @keydown.escape="close" aria-hidden="true" />
-      <dialog
-        open
-        class="relative z-10 m-0 w-full max-w-lg rounded-lg border bg-background p-0 text-foreground shadow-xl"
-        aria-label="Command palette"
-      >
-        <div class="flex items-center gap-2 border-b px-4">
-          <SvgIcon name="Search" class="h-4 w-4 shrink-0 text-muted-foreground" />
-          <input
-            id="commandpalette-search-input"
-            ref="inputRef"
-            v-model="query"
-            :aria-label="$t('components.AppLayout.search_pages')"
-            placeholder="Search pages..."
-            class="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-            @keydown.down.prevent="selectedIndex = Math.min(selectedIndex + 1, filteredItems.length - 1)"
-            @keydown.up.prevent="selectedIndex = Math.max(selectedIndex - 1, 0)"
-            @keydown.enter.prevent="navigate"
-          />
+    <dialog
+      v-if="isOpen"
+      ref="dialogRef"
+      class="mx-auto mt-[15vh] w-full max-w-lg rounded-lg border bg-background p-0 text-foreground shadow-xl backdrop:bg-black/50"
+      aria-label="Command palette"
+      @click="onBackdropClick"
+    >
+      <div class="flex items-center gap-2 border-b px-4">
+        <SvgIcon name="Search" class="h-4 w-4 shrink-0 text-muted-foreground" />
+        <input
+          id="commandpalette-search-input"
+          ref="inputRef"
+          v-model="query"
+          :aria-label="$t('components.AppLayout.search_pages')"
+          placeholder="Search pages..."
+          class="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          @keydown.down.prevent="selectedIndex = Math.min(selectedIndex + 1, filteredItems.length - 1)"
+          @keydown.up.prevent="selectedIndex = Math.max(selectedIndex - 1, 0)"
+          @keydown.enter.prevent="navigate"
+        />
+      </div>
+      <div class="max-h-80 overflow-y-auto p-2" data-cmdk-container>
+        <div
+          v-if="filteredItems.length === 0 && query.length > 0"
+          class="px-3 py-8 text-center text-sm text-muted-foreground"
+        >
+          No results found
         </div>
-        <div class="max-h-80 overflow-y-auto p-2" data-cmdk-container>
-          <div
-            v-if="filteredItems.length === 0 && query.length > 0"
-            class="px-3 py-8 text-center text-sm text-muted-foreground"
-          >
-            No results found
-          </div>
-          <button type="button"
-            v-for="(item, idx) in filteredItems"
-            :key="item.path + item.label"
-            :class="[
-              'flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors',
-              idx === selectedIndex ? 'bg-accent text-accent-foreground' : 'text-foreground',
-            ]"
-            @click="goTo(item.path)"
-            @mouseenter="selectedIndex = idx"
-            @focus="selectedIndex = idx"
-          >
-            <SvgIcon :name="item.icon" class="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span class="flex-1 truncate">{{ item.label }}</span>
-            <span v-if="item.section" class="shrink-0 text-xs text-muted-foreground">{{ item.section }}</span>
-          </button>
-        </div>
-        <div class="border-t px-4 py-2 text-xs text-muted-foreground text-right">
-          &uarr;&darr; navigate &middot; &crarr; open &middot; Esc close
-        </div>
-      </dialog>
-    </div>
+        <button type="button"
+          v-for="(item, idx) in filteredItems"
+          :key="item.path + item.label"
+          :class="[
+            'flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors',
+            idx === selectedIndex ? 'bg-accent text-accent-foreground' : 'text-foreground',
+          ]"
+          @click="goTo(item.path)"
+          @mouseenter="selectedIndex = idx"
+          @focus="selectedIndex = idx"
+        >
+          <SvgIcon :name="item.icon" class="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span class="flex-1 truncate">{{ item.label }}</span>
+          <span v-if="item.section" class="shrink-0 text-xs text-muted-foreground">{{ item.section }}</span>
+        </button>
+      </div>
+      <div class="border-t px-4 py-2 text-xs text-muted-foreground text-right">
+        &uarr;&darr; navigate &middot; &crarr; open &middot; Esc close
+      </div>
+    </dialog>
   </Teleport>
 </template>
 
@@ -72,6 +71,7 @@ const isOpen = ref(false)
 const query = ref('')
 const selectedIndex = ref(0)
 const inputRef = ref<HTMLInputElement | null>(null)
+const dialogRef = ref<HTMLDialogElement | null>(null)
 
 const searchItems = computed<SearchItem[]>(() => {
   const seen = new Set<string>()
@@ -150,17 +150,29 @@ watch(filteredItems, () => {
   }
 })
 
-function open() {
+async function open() {
   isOpen.value = true
   query.value = ''
   selectedIndex.value = 0
-  nextTick(() => {
-    inputRef.value?.focus()
-  })
+  await nextTick()
+  // A modal palette: showModal() makes the opaque sheet genuinely modal —
+  // the background is inert and focus is contained — instead of only looking
+  // modal while Tab can still reach the page behind it. Guarded because a
+  // second showModal() on an already-open dialog throws InvalidStateError.
+  const dialog = dialogRef.value
+  if (dialog && !dialog.open) dialog.showModal()
+  inputRef.value?.focus()
 }
 
 function close() {
+  const dialog = dialogRef.value
+  if (dialog?.open) dialog.close()
   isOpen.value = false
+}
+
+/** A click whose target is the dialog itself is a click on ::backdrop. */
+function onBackdropClick(event: MouseEvent) {
+  if (event.target === event.currentTarget) close()
 }
 
 defineExpose({ open })

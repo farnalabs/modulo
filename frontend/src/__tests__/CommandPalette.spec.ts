@@ -21,7 +21,7 @@ beforeEach(() => {
 async function openPalette() {
   const wrapper = mount(CommandPalette, { attachTo: document.body })
   mounted.push(wrapper)
-  ;(wrapper.vm as unknown as { open: () => void }).open()
+  await (wrapper.vm as unknown as { open: () => Promise<void> }).open()
   await nextTick()
   await nextTick()
   return wrapper
@@ -110,16 +110,52 @@ describe('CommandPalette', () => {
     expect(document.querySelector('input[placeholder="Search pages..."]')).toBeNull()
   })
 
-  it('closes on Escape via the overlay backdrop keydown handler', async () => {
+  it('is a genuinely modal dialog (opened with showModal, focus inside)', async () => {
+    const showModal = vi.spyOn(HTMLDialogElement.prototype, 'showModal')
+    await openPalette()
+
+    const dialog = document.querySelector('dialog') as HTMLDialogElement | null
+    expect(dialog).not.toBeNull()
+    // showModal() is the whole point: the opaque sheet is modal, not merely
+    // painted over the page while Tab can still reach it.
+    expect(showModal).toHaveBeenCalledTimes(1)
+    expect(dialog!.open).toBe(true)
+    expect(dialog!.contains(document.activeElement)).toBe(true)
+    showModal.mockRestore()
+  })
+
+  it('closes on a backdrop click', async () => {
     await openPalette()
     expect(paletteInput()).not.toBeNull()
 
-    // The template @keydown.escape="close" binding on the backdrop overlay.
-    const backdrop = document.querySelector('.fixed.inset-0.bg-black\\/50') as HTMLElement | null
-    expect(backdrop).not.toBeNull()
-    backdrop!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    // A click whose target is the dialog itself is a ::backdrop click.
+    const dialog = document.querySelector('dialog') as HTMLDialogElement
+    dialog.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await nextTick()
 
     expect(document.querySelector('input[placeholder="Search pages..."]')).toBeNull()
+  })
+
+  it('returns focus to the previously focused trigger when it closes', async () => {
+    const trigger = document.createElement('button')
+    trigger.textContent = 'Open palette'
+    document.body.appendChild(trigger)
+    trigger.focus()
+
+    await openPalette()
+    expect(document.activeElement).not.toBe(trigger)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+
+    expect(document.activeElement).toBe(trigger)
+    trigger.remove()
+  })
+
+  it('unmounts safely while the modal is open', async () => {
+    const wrapper = await openPalette()
+    expect((document.querySelector('dialog') as HTMLDialogElement).open).toBe(true)
+    expect(() => wrapper.unmount()).not.toThrow()
+    mounted.pop()
   })
 })

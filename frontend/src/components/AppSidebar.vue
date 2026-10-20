@@ -68,13 +68,18 @@
       aria-hidden="true"
     />
 
-    <dialog
+    <!-- A real modal: full-screen backdrop, Tab trap, first-focusable focus on
+         open, Escape and focus restore back to the rail. `aria-modal` tells AT
+         the visually covered background is unavailable; a bare <dialog open>
+         would be non-modal and break that contract. -->
+    <aside
       v-if="mobileExpanded"
       id="mobile-nav-panel"
       ref="mobilePanelRef"
-      open
+      role="dialog"
+      aria-modal="true"
       :aria-label="$t('components.AppLayout.main_navigation')"
-      class="fixed top-0 left-0 z-40 m-0 h-full w-64 max-h-none max-w-none border-r bg-background p-4 flex flex-col overflow-y-auto text-foreground md:hidden"
+      class="fixed top-0 left-0 z-40 h-full w-64 border-r bg-background p-4 flex flex-col overflow-y-auto text-foreground md:hidden"
     >
       <SidebarFull
         :is-system-admin="isSystemAdmin"
@@ -90,7 +95,7 @@
         @toggle-theme="$emit('toggle-theme')"
         @open-command-palette="$emit('open-command-palette')"
       />
-    </dialog>
+    </aside>
   </template>
 
   <!-- Mobile + flag UNRESOLVED (FAR-1237): a neutral placeholder occupies the

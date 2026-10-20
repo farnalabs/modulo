@@ -114,10 +114,12 @@ const dialogRef = ref<HTMLDialogElement | null>(null);
 // The flow is mounted only while the parent wants it open, so opening as a
 // real modal is a mount-time action. showModal() gives viewport-size layout,
 // real inertness, focus containment and native Escape — none of which a bare
-// `<dialog open>` has.
+// `<dialog open>` has. Guarded because a second showModal() on an open dialog
+// throws InvalidStateError.
 onMounted(async () => {
   await nextTick();
-  dialogRef.value?.showModal();
+  const dialog = dialogRef.value;
+  if (dialog && !dialog.open) dialog.showModal();
 });
 
 function closeDialog() {
@@ -128,12 +130,18 @@ function closeDialog() {
 <template>
   <dialog
     ref="dialogRef"
+    aria-labelledby="publish-composite-title"
     class="w-full max-w-lg border-0 bg-transparent p-0 text-foreground backdrop:bg-black/50"
     @click.self="closeDialog"
     @keydown.escape="closeDialog"
     @close="emit('close')"
   >
     <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
+      <!-- A stable, non-step-varying name for the modal (WCAG 4.1.2). The step
+           indicator below changes per step and must not name the dialog. -->
+      <h2 id="publish-composite-title" class="sr-only">
+        {{ $t('components.pipeline.composite.PublishCompositeFlow.publish_composite') }}
+      </h2>
       <!-- Step indicator -->
       <div class="mb-6 flex items-center justify-between">
         <div v-for="s in steps" :key="s.num" class="flex items-center">

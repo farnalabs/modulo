@@ -4223,6 +4223,7 @@ export default {
           "select": "Select..."
         },
         "PublishCompositeFlow": {
+          "publish_composite": "Publish composite",
           "a_reusable_composite_that_performs_code_review_across_multip": "A reusable composite that performs code review across multiple agents",
           "name_description": "Name & Description",
           "version": "Version *",
