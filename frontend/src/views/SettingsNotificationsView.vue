@@ -194,7 +194,7 @@ async function loadPreferences(): Promise<void> {
       })
       return
     }
-    optOuts.value = { ...(data?.notification_opt_outs ?? {}) }
+    optOuts.value = data?.notification_opt_outs ?? {}
     const level = data?.dashboard_level
     dashboardLevel.value = level && isDashboardLevel(level)
       ? level

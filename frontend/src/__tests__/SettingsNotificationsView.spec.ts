@@ -24,7 +24,8 @@ const PREFERENCES_PATH = '/api/v1/notifications/in-app/preferences'
 
 interface PreferencesPayload {
   dashboard_level?: string
-  notification_opt_outs: Record<string, boolean>
+  // Optional: the view must tolerate a payload that omits the map entirely.
+  notification_opt_outs?: Record<string, boolean>
 }
 
 function okGet(payload: PreferencesPayload) {
@@ -323,6 +324,140 @@ describe('SettingsNotificationsView', () => {
 
     expect(switchByCategory(wrapper, 'run.failed').attributes('aria-busy')).toBeUndefined()
     expect(wrapper.find('[data-testid="settings-notifications-status"]').text()).toBe('')
+  })
+
+  it('renders the empty state when GET returns no categories', async () => {
+    // A payload with no notification_opt_outs at all also exercises the
+    // `?? {}` fallback: an absent key must render the empty state, never throw.
+    okGet({ dashboard_level: 'warning' })
+    const wrapper = await mountView()
+
+    expect(wrapper.find('[data-testid="settings-notifications-empty"]').exists()).toBe(true)
+    expect(switches(wrapper)).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('falls back to a generic label for a category with no curated translation', async () => {
+    okGet({ dashboard_level: 'warning', notification_opt_outs: { 'brand.new': false } })
+    const wrapper = await mountView()
+
+    const row = switchByCategory(wrapper, 'brand.new').element.closest('li')
+    // Internal wire vocabulary must never reach a user.
+    expect(row?.textContent).toContain('Other notification')
+    expect(row?.textContent).not.toContain('brand.new')
+    wrapper.unmount()
+  })
+
+  it('surfaces a thrown GET error inline instead of leaving the page loading', async () => {
+    mockApi.GET.mockRejectedValue(new Error('network down'))
+    const wrapper = await mountView()
+
+    expect(wrapper.find('[data-testid="settings-notifications-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-notifications-loading"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('surfaces a thrown PUT error inline and keeps the previous state', async () => {
+    okGet({ dashboard_level: 'warning', notification_opt_outs: { 'run.failed': false } })
+    mockApi.PUT.mockRejectedValue(new Error('network down'))
+    const wrapper = await mountView()
+
+    await switchByCategory(wrapper, 'run.failed').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="settings-notifications-save-error"]').exists()).toBe(true)
+    expect(switchByCategory(wrapper, 'run.failed').attributes('aria-checked')).toBe('true')
+    wrapper.unmount()
+  })
+
+  it('ignores a second category toggle while a save is already in flight', async () => {
+    okGet({
+      dashboard_level: 'warning',
+      notification_opt_outs: { 'run.failed': false, 'hitl.awaiting': false },
+    })
+    const pendingPut = deferred<{ data: Record<string, never>, error: undefined }>()
+    mockApi.PUT.mockReturnValue(pendingPut.promise)
+    const wrapper = await mountView()
+
+    // Both clicks land before the re-render applies `disabled`, so the second
+    // one reaches the handler and must be rejected by the busy guard.
+    void switchByCategory(wrapper, 'run.failed').trigger('click')
+    await switchByCategory(wrapper, 'hitl.awaiting').trigger('click')
+    await flushPromises()
+
+    expect(mockApi.PUT).toHaveBeenCalledTimes(1)
+    pendingPut.resolve({ data: {}, error: undefined })
+    await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('ignores an out-of-vocabulary or in-flight dashboard-level change', async () => {
+    okGet({
+      dashboard_level: 'warning',
+      notification_opt_outs: { 'run.failed': false },
+    })
+    const wrapper = await mountView()
+    const select = levelSelect(wrapper)
+
+    // A value outside DASHBOARD_LEVELS is rejected before any request is made.
+    ;(select.element as HTMLSelectElement).value = 'nonsense'
+    await select.trigger('change')
+    expect(mockApi.PUT).not.toHaveBeenCalled()
+
+    // A change that arrives while another save is in flight is dropped.
+    const pendingPut = deferred<{ data: Record<string, never>, error: undefined }>()
+    mockApi.PUT.mockReturnValue(pendingPut.promise)
+    void switchByCategory(wrapper, 'run.failed').trigger('click')
+    await select.setValue('error')
+    expect(mockApi.PUT).toHaveBeenCalledTimes(1)
+
+    pendingPut.resolve({ data: {}, error: undefined })
+    await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('surfaces a level save failure and retries the same level', async () => {
+    okGet({
+      dashboard_level: 'warning',
+      notification_opt_outs: { 'run.failed': false },
+    })
+    mockApi.PUT.mockResolvedValue({ data: undefined, error: { detail: 'save rejected' } })
+    const wrapper = await mountView()
+
+    await levelSelect(wrapper).setValue('error')
+    await flushPromises()
+
+    const saveError = wrapper.find('[data-testid="settings-notifications-save-error"]')
+    expect(saveError.exists()).toBe(true)
+    expect(saveError.text()).toContain('save rejected')
+
+    okPut()
+    await saveError.find('[data-testid="error-alert-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(mockApi.PUT).toHaveBeenCalledTimes(2)
+    expect(mockApi.PUT.mock.calls[1][1].body).toEqual({ dashboard_level: 'error' })
+    expect(selectedLevel(wrapper)).toBe('error')
+    expect(wrapper.find('[data-testid="settings-notifications-save-error"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('does nothing when a retry is requested with no failed save recorded', async () => {
+    okGet({
+      dashboard_level: 'warning',
+      notification_opt_outs: { 'run.failed': false },
+    })
+    const wrapper = await mountView()
+    // The retry control only renders with a failure recorded, so reach the
+    // guard directly to prove an out-of-order retry cannot fire a request.
+    const setupState = (wrapper.vm as unknown as {
+      $: { setupState: { retryFailedSave: () => Promise<void> } }
+    }).$.setupState
+
+    await setupState.retryFailedSave()
+
+    expect(mockApi.PUT).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('gives every backend notification category a curated label', () => {
