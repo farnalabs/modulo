@@ -30,7 +30,11 @@ from modulo.api.constants import (
     MSG_RESOURCE_ALREADY_EXISTS,
     MSG_UNEXPECTED_ERROR,
 )
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
 from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import (
     _get_engine,
@@ -3092,7 +3096,10 @@ async def observe_run_node(
         ) from None
 
     except SQLAlchemyError as exc:
+        # FAR-1825: ``observe_node`` bounds the observation-row lock, so 55P03
+        # is reachable here — a busy row is a 409 conflict, not the 503 below.
         raise_session_contract_error(exc, _CODE_RUNS_OBSERVE_RUN_NODE)
+        raise_lock_timeout_conflict_if(exc, _CODE_RUNS_OBSERVE_RUN_NODE)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

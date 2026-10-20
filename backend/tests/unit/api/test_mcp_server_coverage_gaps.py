@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jwt import InvalidTokenError as JWTError
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import modulo.api.mcp_server as ms
@@ -116,6 +116,7 @@ from modulo.api.mcp_server import (
     search_library,
     set_org_triggers_paused,
     update_eval_definition,
+    update_parameter_set,
     update_pipeline_graph,
     update_trigger,
     validate_current_auth,
@@ -3436,3 +3437,57 @@ class TestCreatePipelineQueueTimeout(_AuthContext):
         with patch("modulo.db.crud.pipeline.create_pipeline", new=AsyncMock(return_value=pipeline)) as create:
             await ms.create_pipeline(name="p")
         assert create.await_args.kwargs["queue_timeout_seconds"] is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-1825: SQLSTATE 55P03 on a bounded row lock is `lock_timeout`, not a
+# database outage. The category-C CRUD sweep bounded every reachable row lock,
+# so a contended identifier/set row now raises from update_parameter_set and
+# from every other tool fronting a swept helper.
+# ---------------------------------------------------------------------------
+
+
+class _LockTimeoutDriverError(Exception):
+    """Driver-error double carrying an asyncpg ``sqlstate``."""
+
+    def __init__(self, state: str) -> None:
+        super().__init__(f"driver error {state}")
+        self.sqlstate = state
+
+
+def _lock_timeout_error() -> OperationalError:
+    return OperationalError("SELECT ... FOR UPDATE", {}, _LockTimeoutDriverError("55P03"))
+
+
+class TestLockTimeoutMapping(_AuthContext):
+    """FAR-1825: 55P03 maps to a branchable ``lock_timeout`` tool error."""
+
+    def test_shared_mapper_maps_55p03_to_lock_timeout(self) -> None:
+        result = ms._tool_exception_error("Failed to update parameter set", _lock_timeout_error(), "mcp.test")
+
+        assert result["error"] == "lock_timeout"
+        assert "another change is in progress" in result["detail"]
+
+    def test_shared_mapper_keeps_a_generic_sqlalchemy_error_as_database_unavailable(self) -> None:
+        result = ms._tool_exception_error("Failed to update parameter set", SQLAlchemyError("dead"), "mcp.test")
+
+        assert result["error"] == "database_unavailable"
+
+    async def test_update_parameter_set_maps_55p03_to_lock_timeout(self) -> None:
+        sid = uuid.uuid4()
+        pset = SimpleNamespace(
+            id=uuid.uuid4(),
+            parameter_schema_id=sid,
+            organisation_id=_ORG_ID,
+        )
+        schema = SimpleNamespace(id=sid, organisation_id=_ORG_ID)
+        with (
+            patch.object(ms, "validate_current_auth", AsyncMock(return_value=True)),
+            patch("modulo.db.crud.parameter_schema.get_schema", AsyncMock(return_value=schema)),
+            patch("modulo.db.crud.parameter_set.get_set", AsyncMock(return_value=pset)),
+            patch("modulo.db.crud.parameter_set.update_set", AsyncMock(side_effect=_lock_timeout_error())),
+        ):
+            result = await update_parameter_set(schema_id=str(sid), set_id=str(pset.id), version=1)
+
+        assert result["error"] == "lock_timeout"
+        assert "another change is in progress" in result["detail"]

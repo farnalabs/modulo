@@ -118,11 +118,18 @@ async def _get_account_locked(session: AsyncSession, account_id: uuid.UUID) -> A
     lock is held until the CALLER's transaction commits or rolls back: this
     helper is begin-AGNOSTIC (it never opens or closes a transaction).
 
-    FAR-1825: bounded here because this is the request transaction's first row
-    lock on every preferences path (REST ``/me/settings``,
-    ``/me/hitl-email-preferences``, the in-app dashboard preferences PUT and
-    the MCP ``set_hitl_email_alerts`` tool). A contended Account row must raise
-    55P03 (a visible 409), never park the pooled connection indefinitely.
+    FAR-1825: bounded here because this lock is the request transaction's
+    FIRST row lock on three of its four surfaces — REST ``PUT /me/settings``
+    (the write branch of ``update_user_settings``), REST
+    ``PUT /me/hitl-email-preferences`` and the MCP ``set_hitl_email_alerts``
+    tool. On the FOURTH, the in-app dashboard preferences PUT
+    (``in_app_notifications.update_preferences``), it is NOT first: that route
+    writes the notification-preference rows (DELETE/INSERT) before calling
+    ``update_account_preferences``, so the route sets
+    ``set_mutation_row_lock_timeout`` at the top of its own transaction and
+    the bound is already in force here. Either way a contended Account row
+    raises 55P03 (a visible 409), never park the pooled connection
+    indefinitely.
     """
     from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 

@@ -46,7 +46,7 @@ grep -rn 'FOR UPDATE' backend/src/modulo --include='*.py' \
 ```
 
 Cross-check: a full `grep -rn 'with_for_update' backend/src/modulo --include='*.py'`
-returns **66** hits; the 7-hit difference is prose (docstrings/comments), which the
+returns **69** hits; the 8-hit difference is prose (docstrings/comments), which the
 `\.` / `=` patterns in command (1) exclude. The per-site inventory in §2 was generated
 by a one-off script that additionally resolves the enclosing `def`/`async def` for each
 hit; the raw `file:line` set is exactly reproducible from command (1).
@@ -94,7 +94,7 @@ Each site is assigned **exactly one** category:
 
 ---
 
-## 3. SQLAlchemy `.with_for_update` inventory (59 sites)
+## 3. SQLAlchemy `.with_for_update` inventory (61 sites)
 
 `lock` = the effective PostgreSQL strength (`with_for_update()` → `FOR UPDATE`;
 `key_share=True` → `FOR NO KEY UPDATE`; `read=True` → `FOR SHARE`). `txn` = transaction the
@@ -106,7 +106,7 @@ unrelated writer or is held across non-lock work.
 
 | # | file:line | function | lock | txn | hold / blocking scope | over-serialises |
 |---|---|---|---|---|---|---|
-| A1 | `api/mcp_server.py:4371` | `bind_connector_to_node` | FOR UPDATE | caller txn | Pipeline row locked while the MCP graph/connector-binding write commits. | no – pipeline single-writer. |
+| A1 | `api/mcp_server.py:4641` (`bind_connector_to_node`, defined at 4601) | `bind_connector_to_node` | FOR UPDATE | caller txn | Pipeline row locked while the MCP graph/connector-binding write commits. | no – pipeline single-writer. |
 | A2 | `api/routes/triggers.py:379` | `_require_team_gate_in_txn` | FOR UPDATE | mutation txn, bounded by `set_mutation_row_lock_timeout` | TOCTOU re-check of the pipeline team gate; blocks pipeline graph writers for the RMW. | no. |
 | A3 | `api/routes/pipelines.py:3400` | `_reapply_team_gate_inside_mutation_txn` | FOR UPDATE | mutation txn, bounded | Same team-gate TOCTOU re-check (the route-side twin of A2). | no. |
 | A4 | `db/crud/pipeline_snapshot.py:441` | `_acquire_snapshot_allocation_lock` | FOR NO KEY UPDATE (`key_share=True`) | caller txn, bounded by `set_mutation_row_lock_timeout` | Snapshot-allocation slot; deliberately the weakest key-preserving lock so it does not conflict with FK-only writers. Timeout → `SnapshotLockNotAvailableError` (retryable 503). | no. |
@@ -400,8 +400,12 @@ original finding.
    CRUD helper; C5/C6 already bounded by the shared org-patch helper), and recorded C10/C11/
    C21 as deliberately unbounded (no production caller). Pinned by
    `backend/tests/unit/api/test_far1825_lock_timeout_sweep.py`. Category B is unchanged by
-   this sweep; B9 (`_enforce_user_key_quota`, the Account-row key-mint quota) shares the
-   Account row with C8 and is the remaining B-series candidate.
+   this sweep and its residual is the WHOLE B series, not one row: B1–B8 (the
+   `auth/**` API-key / OAuth-code / token-family credentials, `db/crud/token_family.py`'s
+   three locks and `core/mcp_setup_handoff`'s one-time-token consume) also take
+   caller-transaction locks with **no** bound, and B9 (`_enforce_user_key_quota`, the
+   Account-row key-mint quota) shares the Account row with C8. A B-series sweep is a
+   separate delivery.
 
 ---
 
@@ -535,9 +539,9 @@ at `cron_helpers.py:8763`). Category C remains exactly **20** sites.
   C4 (route top), C7, C8, C9, C12, C13, C14, C15, C16, C17, C18, C19, C20, C22, C23.
   Each now issues `set_mutation_row_lock_timeout(session)` before its first
   `SELECT … FOR UPDATE`. The helper is transaction-scoped (`SET LOCAL lock_timeout`,
-  Postgres-only), so a contended row raises SQLSTATE 55P03 and the existing DB-error
-  mapping turns it into a visible 409 (REST) or a branchable tool error (MCP) — never an
-  unbounded wait.
+  Postgres-only), so a contended row raises SQLSTATE 55P03 — never an unbounded wait.
+  **The mapping that turns that 55P03 into a visible answer differs per surface and is
+  recorded in "Mapping truth" below.**
 - **Already bounded one frame up:** C5 and C6. Both are reached only through the shared
   org JSON-column patch (`update_org_json_column_patch`), which calls
   `_take_settings_patch_lock_wait` before dispatching to `_apply_json_column_patch_generic`;
@@ -550,12 +554,30 @@ at `cron_helpers.py:8763`). Category C remains exactly **20** sites.
   path must sweep it in the same change; the FAR-1825 guard fails if that happens
   silently.
 
-**Structural guard.** `backend/tests/unit/api/test_far1825_lock_timeout_sweep.py` is a
-token scanner: it re-derives the C site counts per file, asserts every swept function sets
-the bound *before* its first row-lock token, pins the caller-bounded C5/C6 shape, and
-asserts the no-caller sites stay unreachable. Known residual (accepted): a NEW transitive
-helper in a file not listed in the guard is not discovered by token scanning — adding a
-category-C lock means adding it to the guard and this inventory in the same change.
+**Structural guard.** `backend/tests/unit/api/test_far1825_lock_timeout_sweep.py` is an
+**AST** scanner (not a token scanner): it re-derives the C site counts per file, asserts
+every swept function issues an awaited `set_mutation_row_lock_timeout(...)` *before* its
+first row-lock call (a comment/docstring mention cannot satisfy it), pins the
+caller-bounded C5/C6 shape, asserts each route arm in front of a swept helper classifies
+55P03, and asserts the no-caller sites stay unreachable (alias-aware). It also carries a
+**repo-wide file-set assertion**: the set of files under `backend/src/modulo` that take a
+row-lock call must equal the known inventory allowlist, so a NEW file with an unbounded
+lock fails CI instead of being invisible. Adding a row-lock call means updating that
+allowlist and this inventory in the same change.
+
+**Mapping truth per surface (after the FAR-1825 pre-PR gate fixes).** A bound only helps
+if the 55P03 it produces reaches the client as a conflict rather than an outage:
+
+| Surface | Mapping |
+|---|---|
+| REST route with a local `except SQLAlchemyError` arm | `raise_lock_timeout_conflict_if(exc, <route key>)`, immediately after the session-contract guard (which returns for every error except `InvalidRequestError`), → **409** with the canonical "another change is in progress" detail. Converted: `model_backends.create`, `parameter_schemas.update` (schema + set), `agents` (apply-optimized-prompt, rollback-prompt, replace-bindings), `admin_sso.create/update`, `lifecycle_maps` (import, update, update-version, graduate), `runs.observe_run_node`, `auth.accept_invite`, `in_app_notifications.update_preferences`, `admin_assistant.set_org_context_source`. |
+| REST route WITHOUT a local arm (falls through to `@handle_db_errors`) | The shared classifier maps 55P03 → **409** already. |
+| MCP tool | The shared mapper (`_tool_exception_error`) and every tool's explicit `except SQLAlchemyError` arm call `_tool_lock_timeout_error` → `{"error": "lock_timeout"}`. `cancel_run` and `update_pipeline_graph` keep their bespoke `lock_timeout` payloads. |
+| Pre-auth accept-invite audit append | The fail-open `invite_consumed` append is wrapped in a SAVEPOINT, so a 55P03 (now reachable via the audit-chain-head lock) rolls back only the audit write; the enrollment still commits and the route answers 200. |
+| Workflow-import binding replace | `_persist_bindings` wraps `replace_agent_bindings` in a SAVEPOINT, so a contended Agent row rolls back only the bindings and the import continues with its existing warning. |
+
+Known residual (accepted): the repo-wide scan covers SQLAlchemy row-lock shapes only;
+raw-SQL `FOR UPDATE` (the two §4 sites) and a dynamic `getattr` call are not discovered.
 
 **Out-of-scope findings recorded, not fixed here** (both are category A/B, not C):
 
@@ -565,6 +587,9 @@ category-C lock means adding it to the guard and this inventory in the same chan
    contended pipeline row. The row's `txn` note says "caller txn" but not "bounded".
    Follow-up: add the bound inside `bind_connector_to_node` (same shape as A19) or accept
    it explicitly.
-2. **B9 `api/routes/api_keys.py::_enforce_user_key_quota`** locks the Account row (shared
-   with C8) without a bound in its own route transaction. It sits in category B, which
-   FAR-1825 did not sweep; it is the remaining B-series candidate.
+2. **The whole B series is unbounded**, not only B9. B1–B8 (`auth/api_key.py`,
+   `auth/oauth.py`, `db/crud/token_family.py`, `core/mcp_setup_handoff`) and B9
+   (`api/routes/api_keys.py::_enforce_user_key_quota`, which shares the Account row with
+   C8) all take caller-transaction locks with no `set_mutation_row_lock_timeout` in front
+   of them. Category B was out of scope for FAR-1825; a B-series sweep (with the same
+   surface-mapping work) is a separate delivery.

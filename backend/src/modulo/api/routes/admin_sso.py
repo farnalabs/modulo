@@ -17,7 +17,11 @@ from modulo.api.constants import (
     MSG_INTERNAL_SERVER_ERROR,
     MSG_RESOURCE_ALREADY_EXISTS,
 )
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     get_db_session,
@@ -404,7 +408,10 @@ async def create_provider_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        # FAR-1825: ``create_provider`` bounds the SSO-name uniqueness lock, so
+        # 55P03 is reachable here — a busy row is a 409 conflict, not the 503.
         raise_session_contract_error(exc, "admin_sso.create_provider_endpoint")
+        raise_lock_timeout_conflict_if(exc, "admin_sso.create_provider_endpoint")
         _log.warning("SSO providers DB error on create: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -495,7 +502,10 @@ async def update_provider_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        # FAR-1825: ``update_provider`` bounds the SSO-name uniqueness lock, so
+        # 55P03 is reachable here — a busy row is a 409 conflict, not the 503.
         raise_session_contract_error(exc, "admin_sso.update_provider_endpoint")
+        raise_lock_timeout_conflict_if(exc, "admin_sso.update_provider_endpoint")
         _log.warning("SSO providers DB error on update: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

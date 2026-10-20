@@ -16,7 +16,11 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_CSRF_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.middleware.csrf import CsrfMiddleware
 from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
@@ -740,16 +744,28 @@ async def _audit_invite_consumed_fail_open(
     org_id: uuid.UUID,
     invitation_id: uuid.UUID,
 ) -> None:
-    """Record ``invite_consumed``; an audit failure never fails enrollment."""
+    """Record ``invite_consumed``; an audit failure never fails enrollment.
+
+    FAR-1825: ``append_audit_event`` takes the per-org audit-chain-head row
+    lock (``FOR UPDATE``) and the accept-invite transaction now bounds its
+    lock waits, so a contended chain head can raise SQLSTATE 55P03. Without a
+    savepoint that error aborts the CALLER's transaction: ``async with
+    session.begin()`` then exits normally on the swallowed exception and
+    COMMIT degrades to ROLLBACK, silently discarding the enrollment the route
+    has already written while still answering HTTP 200. The savepoint rolls
+    back only the audit append, so the fail-open contract holds for a lock
+    timeout exactly as it does for any other audit failure.
+    """
     try:
-        await append_audit_event(
-            session,
-            org_id=org_id,
-            event_type="invite_consumed",
-            resource_type="invitation",
-            resource_id=invitation_id,
-            payload_json={"invitation_id": str(invitation_id)},
-        )
+        async with session.begin_nested():
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type="invite_consumed",
+                resource_type="invitation",
+                resource_id=invitation_id,
+                payload_json={"invitation_id": str(invitation_id)},
+            )
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -930,7 +946,11 @@ async def accept_invite(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        # FAR-1825: the accept-invite transaction's first row lock is bounded
+        # (``get_valid_by_token_hash``), so 55P03 is reachable here — a busy
+        # invitation row is a 409 conflict, not the 503 below.
         raise_session_contract_error(exc, "auth.accept_invite")
+        raise_lock_timeout_conflict_if(exc, "auth.accept_invite")
         _log.exception(_CODE_AUTH_ACCEPT_INVITE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

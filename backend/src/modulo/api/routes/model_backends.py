@@ -19,7 +19,11 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_NOT_FOUND, MSG_RESOURCE_ALREADY_EXISTS
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     deny_break_glass_mint_any_credential,
@@ -739,7 +743,11 @@ async def create_model_backend_endpoint(
             detail=_MSG_MODEL_BACKENDS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        # FAR-1825: the create transaction bounds its first row lock (the
+        # same-name uniqueness SELECT ... FOR UPDATE), so 55P03 is reachable
+        # here and must be a 409 conflict, not the generic 503 below.
         raise_session_contract_error(exc, "model_backends.create_model_backend_endpoint")
+        raise_lock_timeout_conflict_if(exc, "model_backends.create_model_backend_endpoint")
         logger.exception(_CODE_MODEL_BACKENDS_CREATE_MODEL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
