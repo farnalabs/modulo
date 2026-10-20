@@ -354,6 +354,17 @@ jobs:
       - name: Validate manifest nav structure
         working-directory: .
         run: uv run --no-build --project backend --no-sync python scripts/run_validate_nav_config.py
+      - name: Product map consistency (declared data-testids)
+        # BLOCKING, deliberately in the fast lint job rather than only in
+        # Test (Backend). The test file itself only reads manifest.yaml, the
+        # router and .vue sources (no app imports), but pytest loads
+        # tests/conftest.py which pulls app modules - ~35s cold on Windows,
+        # ~5-10s in CI Linux. Still far faster than the 45-min Test (Backend)
+        # round trip. `Test (Backend)` still runs it as part of the full suite;
+        # leaving it ONLY there meant a PR that adds a static data-testid
+        # without declaring it in the manifest went red after ~45 minutes and
+        # the Branch Fixer patched the manifest.
+        run: uv run --no-build --no-sync python -m pytest tests/architecture/test_product_map_consistency.py -q --tb=short
       - name: Trivy filesystem scan (dependency CVEs + misconfigs)
         uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297
         # Pin the vulnerability DB to the canonical GHCR repository instead of

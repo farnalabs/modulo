@@ -173,6 +173,15 @@
         language: system
         files: ^(frontend/src/manifest\.yaml|frontend/src/config/navigation\.ts)$
         pass_filenames: false
+      # Product map consistency (declared data-testids) -- guards the manifest
+      # drift class that costs a 45-min round trip (Branch Fixer patches the
+      # manifest). Only fires when manifest, views/ or components/ change.
+      - id: product-map-consistency
+        name: product map consistency (declared data-testids)
+        entry: uv run --directory backend --no-sync python -m pytest tests/architecture/test_product_map_consistency.py -q
+        language: system
+        files: ^frontend/src/(manifest\.yaml|views/|components/)
+        pass_filenames: false
       # TEMPORARY (FAR-588 / ADR 029 D3): forbids the retired "sandbox agent" /
       # "external agent" user-facing terms in locales + views/components.
       # Remove this hook (and scripts/run_check_vocabulary_sweep.py) at GA.
