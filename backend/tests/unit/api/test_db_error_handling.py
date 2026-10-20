@@ -16,7 +16,7 @@ emitted on the ``SQLAlchemyError`` path, and success-path value passthrough.
 import asyncio
 import logging
 import uuid
-from collections.abc import Awaitable
+from collections.abc import AsyncIterator, Awaitable
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +32,7 @@ from sqlalchemy.exc import (
     SQLAlchemyError,
 )
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, prime_stream, reemit_primed_stream
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, TriggersPausedError
 
 
@@ -747,3 +747,130 @@ class TestOrgDeletedMapping:
 
         messages = [r.getMessage() for r in caplog.records]
         assert any("prefix.org_deleted.org_deleted" in m for m in messages)
+
+
+async def _stream_items(*values: Any) -> AsyncIterator[Any]:
+    for value in values:
+        yield value
+
+
+async def _stream_raising(exc: BaseException) -> AsyncIterator[Any]:
+    raise exc
+    yield  # pragma: no cover - unreachable; keeps this an async generator
+
+
+class TestPrimeStream:
+    """``prime_stream`` pulls the first item and maps a start-up failure.
+
+    The three streaming exports (run-retention export, audit scan, analytics
+    scan) used to hand-roll this mapping — each a narrower copy that silently
+    downgraded ``IntegrityError``/SQLSTATE 55P03/``ValidationError`` to 503/500.
+    These tests pin that the shared helper routes every arm through the ONE
+    classifier, so the fix cannot silently regress.
+    """
+
+    async def test_returns_the_first_item(self) -> None:
+        assert await prime_stream(_stream_items(1, 2, 3), "prime.test") == 1
+
+    async def test_empty_stream_returns_none(self) -> None:
+        assert await prime_stream(_stream_items(), "prime.test") is None
+
+    @pytest.mark.parametrize(
+        ("exc", "expected"),
+        [
+            (_integrity_error(), status.HTTP_409_CONFLICT),
+            (_programming_error(), status.HTTP_501_NOT_IMPLEMENTED),
+            (SQLAlchemyError("connection lost"), status.HTTP_503_SERVICE_UNAVAILABLE),
+            (_validation_error(), status.HTTP_422_UNPROCESSABLE_CONTENT),
+            (RuntimeError("boom"), status.HTTP_500_INTERNAL_SERVER_ERROR),
+        ],
+        ids=["integrity-409", "programming-501", "sqlalchemy-503", "validation-422", "generic-500"],
+    )
+    async def test_routes_startup_failure_through_the_shared_classifier(self, exc: Exception, expected: int) -> None:
+        with pytest.raises(HTTPException) as excinfo:
+            await prime_stream(_stream_raising(exc), "prime.test")
+        assert excinfo.value.status_code == expected
+
+    async def test_lock_timeout_maps_to_409_not_503(self) -> None:
+        exc = OperationalError("stmt", {}, _DriverError("lock timeout", "55P03"))
+        with pytest.raises(HTTPException) as excinfo:
+            await prime_stream(_stream_raising(exc), "prime.test")
+        assert excinfo.value.status_code == status.HTTP_409_CONFLICT
+
+    async def test_http_exception_passes_through_untouched(self) -> None:
+        original = HTTPException(status_code=418, detail="teapot")
+        with pytest.raises(HTTPException) as excinfo:
+            await prime_stream(_stream_raising(original), "prime.test")
+        assert excinfo.value is original
+
+    async def test_cancelled_error_is_never_swallowed(self) -> None:
+        with pytest.raises(asyncio.CancelledError):
+            await prime_stream(_stream_raising(asyncio.CancelledError()), "prime.test")
+
+    async def test_domain_mapper_takes_precedence_over_the_classifier(self) -> None:
+        mapped = HTTPException(status_code=429, detail="rate limited")
+        original = SQLAlchemyError("boom")
+        seen: list[Exception] = []
+
+        def _mapper(exc: Exception) -> HTTPException | None:
+            seen.append(exc)
+            return mapped
+
+        with pytest.raises(HTTPException) as excinfo:
+            await prime_stream(_stream_raising(original), "prime.domain", map_domain_error=_mapper)
+        assert excinfo.value is mapped
+        assert seen == [original]
+
+    async def test_domain_mapper_returning_none_falls_through_to_the_classifier(self) -> None:
+        def _mapper(exc: Exception) -> HTTPException | None:
+            return None
+
+        with pytest.raises(HTTPException) as excinfo:
+            await prime_stream(_stream_raising(SQLAlchemyError("boom")), "prime.domain", map_domain_error=_mapper)
+        assert excinfo.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+
+    async def test_domain_mapper_is_skipped_for_an_http_exception(self) -> None:
+        original = HTTPException(status_code=418, detail="teapot")
+
+        def _mapper(exc: Exception) -> HTTPException | None:
+            raise AssertionError("the domain mapper must never see an HTTPException")
+
+        with pytest.raises(HTTPException) as excinfo:
+            await prime_stream(_stream_raising(original), "prime.domain", map_domain_error=_mapper)
+        assert excinfo.value is original
+
+
+class TestReemitPrimedStream:
+    """``reemit_primed_stream`` is the ONE first-item-then-rest chunker."""
+
+    async def test_first_then_rest_preserving_order(self) -> None:
+        chunks = [chunk async for chunk in reemit_primed_stream(_stream_items(2, 3), 1, lambda n: f"{n}\n")]
+        assert chunks == ["1\n", "2\n", "3\n"]
+
+    async def test_none_first_starts_at_the_stream(self) -> None:
+        chunks = [chunk async for chunk in reemit_primed_stream(_stream_items(1, 2), None, lambda n: f"{n}\n")]
+        assert chunks == ["1\n", "2\n"]
+
+    async def test_header_precedes_and_trailer_follows_the_items(self) -> None:
+        chunks = [
+            chunk
+            async for chunk in reemit_primed_stream(
+                _stream_items(2, 3), 1, lambda n: f"{n}\n", header="H\n", trailer="T\n"
+            )
+        ]
+        assert chunks == ["H\n", "1\n", "2\n", "3\n", "T\n"]
+
+    async def test_trailer_is_omitted_when_the_stream_raises_after_the_first_item(self) -> None:
+        async def _stream() -> AsyncIterator[Any]:
+            yield 2
+            raise SQLAlchemyError("mid-stream boom")
+
+        seen: list[str] = []
+
+        async def _collect() -> None:
+            async for chunk in reemit_primed_stream(_stream(), 1, lambda n: f"{n}\n", trailer="T\n"):
+                seen.append(chunk)
+
+        with pytest.raises(SQLAlchemyError):
+            await _collect()
+        assert seen == ["1\n", "2\n"], "the completeness trailer must not be emitted on a truncated stream"
