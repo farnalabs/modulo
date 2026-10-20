@@ -14,9 +14,10 @@ Postgres and proves the whole self-hosted disaster-recovery loop:
   6. ``modulo backup`` -> pg_dump + checkpoint JSON exports + manifest
   7. ``modulo restore`` that backup into the second, empty database
   8. assert the seeded rows survived the restore
-  9. ``alembic downgrade -1`` on the restored DB, assert it moved OFF head
- 10. ``alembic upgrade heads`` again, assert it is back at head
- 11. assert the seeded rows still survived the downgrade/upgrade cycle
+  9. ``alembic downgrade -1`` on the restored DB, assert it moved OFF head and
+     the seeded rows are still there
+ 10. ``alembic upgrade heads`` again, assert it is back at head with the seeded
+     rows still intact
 
 Every step failure exits non-zero: no step is reported as having run unless
 it ran, and the downgrade/upgrade steps assert the recorded revision actually
