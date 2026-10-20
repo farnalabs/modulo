@@ -133,6 +133,15 @@ class TestParseLsRemote:
         refs = parse_ls_remote(output)
         assert refs["refs/heads/main"] == "abc1234def0000000000000000000000000000"
 
+    def test_duplicate_ref_keeps_first_occurrence(self) -> None:
+        """A repeated non-peeled ref does not overwrite the first SHA."""
+        output = (
+            "1111111111111111111111111111111111111111\trefs/heads/main\n"
+            "2222222222222222222222222222222222222222\trefs/heads/main\n"
+        )
+        refs = parse_ls_remote(output)
+        assert refs["refs/heads/main"] == "1111111111111111111111111111111111111111"
+
     def test_empty_sha_or_ref_name_skipped(self) -> None:
         """An entry missing its SHA or its ref name is skipped, not stored."""
         output = (

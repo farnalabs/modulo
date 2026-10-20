@@ -915,6 +915,8 @@ class TestReconcileMetrics:
         assert fake_meter.counter("modulo_work_item_refs_by_source_total").calls == [
             {"value": 2, "attributes": {"source": "api"}}
         ]
+        # An unknown event is ignored (forward compatibility), not an error.
+        reconcile_mod._refs_event_sink("some_future_event", {"count": 1})
 
     def test_record_functions_noop_without_meter(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(reconcile_mod, "_get_meter", lambda: None)

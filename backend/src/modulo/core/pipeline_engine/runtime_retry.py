@@ -447,8 +447,7 @@ async def _execute_edge_retry_source(
             await _sleep(attempts, edge_policy)
             src_out = await _invoke_with_key(source_fn, source_id, state, ctx.idempotency_key)
             merged = dict(state)
-            if isinstance(src_out, dict):
-                merged.update(src_out)
+            merged.update(src_out)
             return await _invoke_with_key(ctx.raw_fn, ctx.node_id, merged, ctx.idempotency_key)
         except asyncio.CancelledError:
             raise

@@ -705,6 +705,8 @@ def test_bridge_main_help_wrap_config_and_bad_json(monkeypatch, tmp_path, capsys
         lambda self, tool, args, direction, result_summary="": {"action": "pass", "blocked": False},
     )
     assert sb.main(["--notify", "{bad json", "--endpoint", "x"]) == 0
+    # A non-object JSON payload (an array) is refused with a clear error.
+    assert sb.main(["--notify", "[]", "--endpoint", "x"]) == 2
 
 
 def test_decide_before_honours_blocked_flag(monkeypatch):
