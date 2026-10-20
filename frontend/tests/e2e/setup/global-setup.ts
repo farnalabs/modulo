@@ -19,6 +19,7 @@ async function waitForTargetHealth(target: string, baseURL: string, healthUrl: s
   while (Date.now() < deadline) {
     attempts += 1
     try {
+      // e2e-route-check: ignore non-API health probe - healthUrl is supplied at runtime
       const response = await fetch(healthUrl, { signal: AbortSignal.timeout(10000) })
       if (response.ok) {
         const elapsedSeconds = Math.round((Date.now() - start) / 1000)

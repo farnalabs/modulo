@@ -41,6 +41,7 @@ type StubRouter = (url: string) => StubbedResponse | undefined
  * poison the next test in the same Playwright worker.
  */
 function stubFetch(route: StubRouter): () => void {
+  // e2e-route-check: ignore captures the original global fetch to restore it; no request is issued
   const original = globalThis.fetch
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
