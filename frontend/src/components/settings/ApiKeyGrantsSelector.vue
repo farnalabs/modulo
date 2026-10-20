@@ -84,7 +84,7 @@ const groups = computed(() => {
 function groupLabel(prefix: string): string {
   const key = `views.SettingsMcpView.grants_group_${prefix}`
   if (te(key)) return t(key)
-  return prefix.charAt(0).toUpperCase() + prefix.slice(1).replace(/_/g, ' ')
+  return prefix.charAt(0).toUpperCase() + prefix.slice(1).replaceAll(/_/g, ' ')
 }
 
 function toggle(name: string) {
