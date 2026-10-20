@@ -1579,7 +1579,7 @@ export interface paths {
         };
         /**
          * Sso Providers
-         * @description List configured SSO providers (OIDC) and whether SAML is enabled.
+         * @description List the SSO providers this instance advertises on the login page.
          *
          *     Pre-auth discovery endpoint: the login page fetches it BEFORE any user is
          *     authenticated, so it must never require a user and must never surface an
@@ -1590,14 +1590,20 @@ export interface paths {
          *     anonymous path resolves system-level licenses only — org-level licenses
          *     are unreachable pre-auth.
          *
-         *     OIDC providers are merged from the sso_providers DB table (preferred) and
-         *     the env-var fallback, deduplicated by provider_id. The DB read goes through
-         *     the system session (``modulo_system`` role, instance-global) so the login
-         *     page reflects every org's enabled providers; when the system read returns
-         *     nothing (unprovisioned role), fall back to the app session scoped to the
-         *     first org (single-org self-hosted behaviour). SAML is enabled if any enabled
-         *     SAML provider exists in the DB, or if env-var SAML is fully configured
-         *     (enabled + license + metadata).
+         *     FAR-1978 — the response is SCOPED. ``display_name`` is admin-chosen free
+         *     text and can name a tenant, so an anonymous caller must never read a
+         *     provider row from an org they did not resolve by slug:
+         *
+         *     - Single-org instance (exactly one login-active org): that org's enabled
+         *       OIDC providers (filtered by ``organisation_id``) plus env-var providers.
+         *       This is the only path the single-org login page (`LoginView.vue`) uses.
+         *     - Zero or more than one login-active org: environment-level configuration
+         *       only — env-var OIDC providers and env-var SAML. No DB provider name is
+         *       listed.
+         *
+         *     SAML is enabled on the single-org path if any enabled SAML provider exists
+         *     in the DB, or if env-var SAML is fully configured (enabled + license +
+         *     metadata); on the multi-org path only the env-var configuration counts.
          */
         get: operations["sso_providers_api_v1_auth_sso_providers_get"];
         put?: never;
@@ -2144,10 +2150,10 @@ export interface paths {
          *     Served unauthenticated on purpose: the CI/CD deploy pipelines
          *     (deploy.yml, rc-validate.yml, deploy-watchdog.yml,
          *     deploy-staleness-check.yml) call it without a principal to verify which
-         *     build is live. The repo is public, so the git metadata is already
-         *     world-readable. Only genuinely non-public locals (hostname, ci_job_url)
-         *     are omitted. If values are absent they fall back to empty strings so the
-         *     endpoint is always safe to call.
+         *     build is live. Only public-safe build identifiers are returned; source-repo
+         *     free text (git_branch, git_commit_message) and other non-public locals
+         *     (hostname, ci_job_url) are omitted. If values are absent they fall back to
+         *     empty strings so the endpoint is always safe to call.
          */
         get: operations["deployment_info_api_v1_deployment_get"];
         put?: never;
@@ -7606,11 +7612,22 @@ export interface paths {
          *     ``validate_binding`` is called to verify the gate-to-eval binding is
          *     still valid after the update.  Violations are logged at WARNING with
          *     structured context but the caller receives a generic 400 (criteria 5-9).
+         *
+         *     The load-and-mutate runs under the same transaction-scoped advisory lock
+         *     as create/toggle (FAR-1750), so a concurrent POST/PATCH cannot interleave
+         *     with this read-modify-write. A lock-acquisition timeout (SQLSTATE 57014)
+         *     surfaces through the standard 503 DB-error mapping.
          */
         put: operations["update_policy_gate_api_v1_evals__eval_id__policy_gate_put"];
         /**
          * Create Policy Gate
          * @description Create a PolicyGate for an eval (admin only).
+         *
+         *     POST is CREATE-ONLY (FAR-1750, decision of record): an eval that already
+         *     has a live gate is refused with a typed 409 — updating (including
+         *     changing ``evaluation_mode``) is ``PUT``, which is the single replace
+         *     path. With ``evaluation_mode`` omitted, a fresh create defaults to
+         *     ``automatic``.
          *
          *     The gate inherits the eval's edit permission — no separate permission
          *     check is performed (criterion 14).
@@ -7622,8 +7639,9 @@ export interface paths {
          *     (criteria 5-9).
          *
          *     Concurrent creates are serialised via a transaction-scoped advisory lock
-         *     (section 4.4/5).  A ``UniqueViolation`` while holding the lock → 409.
-         *     A lock-acquisition timeout (SQLSTATE 57014) → 503.
+         *     (section 4.4/5).  A POST that finds a live gate while holding the lock →
+         *     409; a ``UniqueViolation`` (true race) → 409. A lock-acquisition timeout
+         *     (SQLSTATE 57014) → 503.
          */
         post: operations["create_policy_gate_api_v1_evals__eval_id__policy_gate_post"];
         /**
@@ -7674,8 +7692,8 @@ export interface paths {
          *     (CO-3).
          *
          *     The load-and-mutate runs under the same transaction-scoped advisory lock
-         *     as create-or-replace (FAR-967 F6) so a concurrent replace cannot
-         *     interleave with this read-modify-write.  A lock-acquisition timeout
+         *     as create/update (FAR-967 F6) so a concurrent write cannot interleave
+         *     with this read-modify-write.  A lock-acquisition timeout
          *     (SQLSTATE 57014) → 503.
          *
          *     An audit-log entry is emitted (best-effort, same path as create/update).
@@ -15256,6 +15274,12 @@ export interface components {
             candidates: components["schemas"]["CandidateItem"][];
             /** Count */
             count: number;
+            /** Status */
+            status: string;
+            /** Error */
+            error?: {
+                [key: string]: string;
+            } | null;
         };
         /** HousekeepingScanResponse */
         HousekeepingScanResponse: {
@@ -21393,6 +21417,32 @@ export interface components {
             prev_cursor?: string | null;
             /** Total */
             total: number;
+            result_counts?: components["schemas"]["TriggerEventResultCounts"] | null;
+        };
+        /**
+         * TriggerEventResultCounts
+         * @description Capacity-outcome counts for the last two 24h windows (FAR-1344).
+         *
+         *     ``recent``/``previous`` are keyed by ``validation_result`` for the capacity
+         *     vocabulary only — an org-wide summary, not a filtered page count.
+         */
+        TriggerEventResultCounts: {
+            /** Window Hours */
+            window_hours: number;
+            /** Recent */
+            recent: {
+                [key: string]: number;
+            };
+            /** Previous */
+            previous: {
+                [key: string]: number;
+            };
+            /** Total Recent */
+            total_recent: number;
+            /** Total Previous */
+            total_previous: number;
+            /** Direction */
+            direction: string;
         };
         /** TriggerRunRequest */
         TriggerRunRequest: {
@@ -38622,7 +38672,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Conflict — concurrent gate creation */
+            /** @description Conflict — a live gate already exists (use PUT), or concurrent creation */
             409: {
                 headers: {
                     [name: string]: unknown;

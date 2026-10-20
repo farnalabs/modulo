@@ -23,7 +23,7 @@
         <p class="text-sm text-destructive" role="alert" data-testid="org-hitl-review-window-load-error">{{ hitlWindowLoadError }}</p>
         <button
           type="button"
-          class="text-sm font-medium text-primary underline underline-offset-2 hover:no-underline"
+          class="text-sm font-medium text-primary-text underline underline-offset-2 hover:no-underline"
           data-testid="org-hitl-review-window-retry"
           @click="loadHitlReviewWindow"
         >
@@ -89,7 +89,7 @@
         >{{ hitlWindowError }}</p>
         <p
           v-else-if="hitlWindowSaved"
-          class="mt-2 text-sm text-success"
+          class="mt-2 text-sm text-success-text"
           role="status"
           data-testid="org-hitl-review-window-saved"
         >{{ $t('views.AdminOrgSettingsView.hitl_review_window_saved') }}</p>
@@ -215,7 +215,7 @@
           <span class="text-sm text-destructive">Export failed: {{ exportError }}</span>
           <button
             type="button"
-            class="text-sm font-medium text-primary underline underline-offset-2 hover:no-underline"
+            class="text-sm font-medium text-primary-text underline underline-offset-2 hover:no-underline"
             @click="startExport"
           >
             Retry
@@ -236,7 +236,7 @@
           </button>
           <button
             type="button"
-            class="text-sm font-medium text-primary underline underline-offset-2 hover:no-underline"
+            class="text-sm font-medium text-primary-text underline underline-offset-2 hover:no-underline"
             @click="resetExport"
           >
             Export again
@@ -270,7 +270,7 @@
       </SectionCard>
 
       <!-- Delete Organization -->
-      <SectionCard title="Delete Organisation" description="Permanently delete this organisation and all associated data. This action cannot be undone." class="border-destructive/30" title-class="text-destructive" description-class="text-destructive/80">
+      <SectionCard title="Delete Organisation" description="Permanently delete this organisation and all associated data. This action cannot be undone." class="border-destructive/30" title-class="text-destructive" description-class="text-destructive-text">
         <Button type="button" severity="danger" class="h-8 px-2.5" @click="deleteDialogOpen = true">
           Delete Organisation
         </Button>

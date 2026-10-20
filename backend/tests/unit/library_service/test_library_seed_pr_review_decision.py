@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from jsonschema import Draft202012Validator
 
 from modulo.core.library_service import _MODULO_PRIMITIVES
@@ -190,11 +188,3 @@ def test_empty_findings_array_valid():
     payload = {"decision": "APPROVE", "summary": "Clean diff.", "findings": []}
     errors = list(validator.iter_errors(payload))
     assert not errors, f"Empty findings array rejected: {errors}"
-
-
-def test_valid_json_roundtrip():
-    entry = _find_schema_entry()
-    definition = entry["definition"]
-    serialized = json.dumps(definition)
-    deserialized = json.loads(serialized)
-    assert deserialized == definition

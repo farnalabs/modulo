@@ -1,5 +1,6 @@
 """SSO routes: OIDC and SAML 2.0 login flows."""
 
+import hmac
 import logging
 import secrets
 import uuid
@@ -38,12 +39,15 @@ from modulo.auth.sso import (
     saml_get_auth_url,
     saml_process_response,
     sign_saml_relay_state,
+    sign_state,
     verify_saml_relay_state,
+    verify_state,
 )
 from modulo.core.audit_coverage import audited_system, bind_audit_org
 from modulo.core.license import verify_license_key
 from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.core.sanitize_log import sanitise_log_value
+from modulo.db.crud.organisation import list_login_active_orgs
 from modulo.db.crud.sso_provider import (
     get_enabled_saml_provider,
     get_provider_by_provider_id,
@@ -51,6 +55,7 @@ from modulo.db.crud.sso_provider import (
 )
 from modulo.db.models.organisation import SYSTEM_ORG_ID, Organisation
 from modulo.db.models.sso_provider import SsoProvider
+from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -193,23 +198,43 @@ class SsoProvidersResponse(BaseModel):
     saml: bool
 
 
-async def _list_enabled_oidc_global(
+async def _single_login_active_org(session: AsyncSession) -> Organisation | None:
+    """Return THE login-active org when this instance is single-org, else ``None``.
+
+    FAR-1978: the legacy discovery endpoint may only surface org-level provider
+    rows when there is exactly one login-active org — the single-org login path.
+    ``login-context`` uses the same predicate and the SPA calls this endpoint
+    only when ``login-context`` reported ``multi_org=false`` with a resolved
+    org, i.e. exactly one login-active org. Zero orgs (unconfigured) or more
+    than one (multi-tenant) means no single org can be assumed, so the caller
+    must return environment-level configuration only.
+    """
+    orgs = await list_login_active_orgs(session)
+    return orgs[0] if len(orgs) == 1 else None
+
+
+async def _list_enabled_oidc_for_org(
     system_session: AsyncSession | None,
     app_session: AsyncSession,
+    org_id: uuid.UUID,
 ) -> list[Any]:
-    """List enabled OIDC providers via the system session (global), then app fallback.
+    """List ONE org's enabled OIDC providers — never a sibling org's.
 
-    The system session (``modulo_system`` role, BYPASSRLS) sees every org's
-    providers; when it returns nothing (role unprovisioned -> zero rows), fall
-    back to the app session scoped to the first org (single-org behaviour).
+    The system session (``modulo_system`` role, BYPASSRLS) sees every org, so
+    the result is filtered by ``organisation_id`` before it is returned. When
+    the system role is unprovisioned the read runs as ``modulo_app`` and
+    returns zero RLS-scoped rows, so the app session is bound to the SAME org
+    and read as a fallback; the explicit org filter stays as defense-in-depth.
     """
     providers: list[Any] = []
     if system_session is not None:
         async with system_session.begin():
             providers = await list_enabled_oidc_providers(system_session)
+        providers = [p for p in providers if p.organisation_id == org_id]
     if not providers:
-        await _set_default_rls_org(app_session)
+        await set_rls_org(app_session, org_id)
         providers = await list_enabled_oidc_providers(app_session)
+        providers = [p for p in providers if p.organisation_id == org_id]
     return providers
 
 
@@ -228,6 +253,20 @@ async def _get_enabled_saml_global(
     return provider
 
 
+def _env_saml_available(settings: Settings) -> bool:
+    """Environment-level SAML availability (verified licence + IdP metadata).
+
+    FAR-1733: the env-var licence key is verified (signature + expiry), never
+    trusted on mere presence — an unverifiable key does NOT enable the env
+    SAML path (fail-closed).
+    """
+    return bool(
+        settings.modulo_saml_enabled
+        and verify_license_key(getattr(settings, "modulo_license_key", "") or "") is not None
+        and (bool(settings.modulo_saml_idp_metadata_url) or bool(settings.modulo_saml_idp_metadata_xml))
+    )
+
+
 async def is_saml_available(
     settings: Settings,
     system_session: AsyncSession | None,
@@ -244,17 +283,13 @@ async def is_saml_available(
     returns the first enabled provider globally via ``.limit(1)``).  This is
     therefore an instance-wide boolean — there is no per-org SAML support yet.
 
-    FAR-1733: the env-var licence key is verified (signature + expiry), never
-    trusted on mere presence — an unverifiable key does NOT enable the env
-    SAML path (fail-closed; the DB-provider path is unaffected).
+    FAR-1978: this DB read is only used on the single-org path. Multi-org
+    callers use ``_env_saml_available`` directly so no org's DB configuration
+    (not even a boolean derived from it) is exposed to an anonymous caller.
     """
     db_saml = await _get_enabled_saml_global(system_session, app_session)
     db_saml_ok = db_saml is not None and bool(db_saml.metadata_xml or db_saml.metadata_url)
-    return db_saml_ok or (
-        settings.modulo_saml_enabled
-        and verify_license_key(getattr(settings, "modulo_license_key", "") or "") is not None
-        and (bool(settings.modulo_saml_idp_metadata_url) or bool(settings.modulo_saml_idp_metadata_xml))
-    )
+    return db_saml_ok or _env_saml_available(settings)
 
 
 async def _anonymous_plan_context(settings: Settings, session: AsyncSession) -> Any:
@@ -274,7 +309,7 @@ async def sso_providers(
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
 ) -> SsoProvidersResponse:
-    """List configured SSO providers (OIDC) and whether SAML is enabled.
+    """List the SSO providers this instance advertises on the login page.
 
     Pre-auth discovery endpoint: the login page fetches it BEFORE any user is
     authenticated, so it must never require a user and must never surface an
@@ -285,14 +320,20 @@ async def sso_providers(
     anonymous path resolves system-level licenses only — org-level licenses
     are unreachable pre-auth.
 
-    OIDC providers are merged from the sso_providers DB table (preferred) and
-    the env-var fallback, deduplicated by provider_id. The DB read goes through
-    the system session (``modulo_system`` role, instance-global) so the login
-    page reflects every org's enabled providers; when the system read returns
-    nothing (unprovisioned role), fall back to the app session scoped to the
-    first org (single-org self-hosted behaviour). SAML is enabled if any enabled
-    SAML provider exists in the DB, or if env-var SAML is fully configured
-    (enabled + license + metadata).
+    FAR-1978 — the response is SCOPED. ``display_name`` is admin-chosen free
+    text and can name a tenant, so an anonymous caller must never read a
+    provider row from an org they did not resolve by slug:
+
+    - Single-org instance (exactly one login-active org): that org's enabled
+      OIDC providers (filtered by ``organisation_id``) plus env-var providers.
+      This is the only path the single-org login page (`LoginView.vue`) uses.
+    - Zero or more than one login-active org: environment-level configuration
+      only — env-var OIDC providers and env-var SAML. No DB provider name is
+      listed.
+
+    SAML is enabled on the single-org path if any enabled SAML provider exists
+    in the DB, or if env-var SAML is fully configured (enabled + license +
+    metadata); on the multi-org path only the env-var configuration counts.
     """
     plan = await _anonymous_plan_context(settings, session)
     if not plan.feature_enabled("sso"):
@@ -300,15 +341,18 @@ async def sso_providers(
 
     try:
         async with session.begin():
-            oidc_providers = await _list_enabled_oidc_global(system_session, session)
-            db_ids = {p.provider_id for p in oidc_providers}
+            scoped_org = await _single_login_active_org(session)
+            db_oidc_providers: list[Any] = (
+                [] if scoped_org is None else await _list_enabled_oidc_for_org(system_session, session, scoped_org.id)
+            )
+            db_ids = {p.provider_id for p in db_oidc_providers}
             oidc_list: list[dict[str, str]] = [
                 {
                     "provider_id": p.provider_id,
                     "display_name": p.name or getattr(p, "preset", "custom"),
                     "preset": getattr(p, "preset", "custom"),
                 }
-                for p in oidc_providers
+                for p in db_oidc_providers
                 if p.provider_id
             ]
 
@@ -323,7 +367,11 @@ async def sso_providers(
                         }
                     )
 
-            saml_enabled = await is_saml_available(settings, system_session, session)
+            saml_enabled = (
+                await is_saml_available(settings, system_session, session)
+                if scoped_org is not None
+                else _env_saml_available(settings)
+            )
             return SsoProvidersResponse(
                 oidc=[OidcProviderInfo(**p) for p in oidc_list],
                 saml=saml_enabled,
@@ -342,6 +390,109 @@ async def sso_providers(
 # OIDC
 # ---------------------------------------------------------------------------
 
+# FAR-1982: the login leg mints a per-request ``nonce`` (which the IdP binds
+# into the ID token) and a PKCE ``code_verifier`` (whose S256 challenge travels
+# in the authorize URL), and must carry both across the IdP round-trip to the
+# callback. They are stored in a short-lived, httpOnly correlation cookie.
+#
+# Cookie-prefix decision (FAR-1982): the ``__Host-`` prefix is ADOPTED. A
+# host-only cookie resists a sibling subdomain swapping in a ``Domain=`` cookie
+# of the same name *while it exists*, but a subdomain sibling can set one when
+# the victim has none (cookie tossing) and shadow the correlation value. The
+# ``__Host-`` prefix closes that: the browser refuses to attach a ``Domain=``
+# attribute to a ``__Host-``-named cookie (and requires ``Secure`` + ``Path=/``),
+# so the only cookie that can satisfy this name is the host-only one this
+# server set. The cost is exactly those mandatory attributes:
+#   * ``Secure`` unconditionally — over plain HTTP a browser stores the cookie
+#     only for a potentially-trustworthy origin (``localhost``/``127.0.0.1``).
+#     A dev instance reached at a non-localhost HTTP host (LAN IP, custom
+#     /etc/hosts name) therefore loses the cookie and the login fails CLOSED.
+#     The repo's docker-compose local dev serves ``http://localhost:8000``
+#     (potentially-trustworthy) and sets no ``DEBUG``, so the documented local
+#     path is unaffected; ``Settings.debug`` (env ``DEBUG``) still relaxes
+#     ``Secure`` on the post-login auth cookies, so a debug instance on a
+#     non-localhost HTTP host keeps its session but cannot complete SSO login.
+#   * ``Path=/`` — the cookie is sent on every same-host request for its 10-min
+#     lifetime rather than only under ``/api/v1/auth/oidc``; a minor scope cost.
+# SameSite is LAX (NOT Strict as the post-login auth cookies use): the
+# IdP -> callback leg is a CROSS-SITE top-level GET navigation, on which Strict
+# cookies are withheld, so a Strict cookie would break every legitimate login.
+_OIDC_FLOW_COOKIE = "__Host-modulo_oidc_flow"
+_OIDC_FLOW_TTL_SECONDS = 600  # 10 minutes, matching the SAML RelayState TTL
+
+
+def _set_oidc_flow_cookie(
+    response: Response,
+    raw_state: str,
+    nonce: str,
+    code_verifier: str,
+    settings: Settings,
+) -> None:
+    """Bind the request nonce + PKCE verifier to this browser (FAR-1982).
+
+    The value is the HMAC-signed ``raw_state:nonce:code_verifier`` payload, so a
+    cookie not written by this server cannot satisfy the callback's binding
+    check. The signed ``state`` proves non-forgery; this cookie proves the
+    callback belongs to THIS browser and carries the secrets the exchange needs.
+    """
+    response.set_cookie(
+        key=_OIDC_FLOW_COOKIE,
+        value=sign_state(f"{raw_state}:{nonce}:{code_verifier}", settings.secret_key),
+        httponly=True,
+        samesite="lax",
+        secure=True,
+        max_age=_OIDC_FLOW_TTL_SECONDS,
+        path="/",
+    )
+
+
+def _clear_oidc_flow_cookie(response: Response) -> None:
+    """Expire the correlation cookie once the flow has completed."""
+    response.set_cookie(
+        key=_OIDC_FLOW_COOKIE,
+        value="",
+        httponly=True,
+        samesite="lax",
+        secure=True,
+        max_age=0,
+        path="/",
+    )
+
+
+def _read_oidc_flow_cookie(request: Request, state: str, settings: Settings) -> tuple[str, str] | None:
+    """Return ``(nonce, code_verifier)`` for a bound flow, else ``None``.
+
+    Fail closed on every malformed input: an absent/unverifiable cookie, a
+    tampered state, a cookie whose ``raw_state`` does not match the returned
+    state, or an empty nonce/verifier all return ``None`` and the caller raises
+    an auth failure before any token exchange (FAR-1982).
+    """
+    state_data = verify_state(state, settings.secret_key)
+    if not state_data or ":" not in state_data:
+        return None
+    # ``state`` is ``<provider_id>:<raw_state>`` (see oidc_get_authorize_url);
+    # raw_state is a UUID, so rsplit isolates it even if a provider_id slug ever
+    # contained a colon.
+    raw_state = state_data.rsplit(":", 1)[-1]
+
+    cookie_value = request.cookies.get(_OIDC_FLOW_COOKIE)
+    if not cookie_value:
+        return None
+    cookie_data = verify_state(cookie_value, settings.secret_key)
+    if not cookie_data:
+        return None
+    # ``raw_state``/``nonce``/``code_verifier`` all use URL-safe alphabets that
+    # exclude ``:``, so a 2-split is unambiguous.
+    parts = cookie_data.split(":", 2)
+    if len(parts) != 3:
+        return None
+    cookie_raw_state, nonce, code_verifier = parts
+    if not hmac.compare_digest(cookie_raw_state, raw_state):
+        return None
+    if not nonce or not code_verifier:
+        return None
+    return nonce, code_verifier
+
 
 @router.get("/oidc/{provider}/login")
 @handle_db_errors("sso.oidc_login")
@@ -359,11 +510,17 @@ async def oidc_login(
 
     try:
         async with session.begin():
-            auth_url, _ = await oidc_get_authorize_url(provider, settings, redirect_uri, system_session, session)
+            auth_url, raw_state, nonce, code_verifier = await oidc_get_authorize_url(
+                provider, settings, redirect_uri, system_session, session
+            )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 
-    return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
+    response = Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
+    # FAR-1982: carry the nonce + PKCE verifier to the callback in a
+    # browser-bound, tossing-resistant cookie.
+    _set_oidc_flow_cookie(response, raw_state, nonce, code_verifier, settings)
+    return response
 
 
 @router.get("/oidc/{provider}/callback")
@@ -388,17 +545,39 @@ async def oidc_callback(
         # page with an error code rather than rendering a raw JSON page.
         raise SsoCallbackError(SSO_ERROR_AUTH_FAILED)
 
+    # FAR-1982: the signed state only proves non-forgery — the nonce and PKCE
+    # verifier that bind the ID token and the code exchange to THIS browser ride
+    # in the login-time correlation cookie. Require it (fail closed) so a
+    # callback replayed from another browser cannot complete.
+    flow = _read_oidc_flow_cookie(request, state, settings)
+    if flow is None:
+        _log.warning("sso.oidc_flow_unbound provider=%s", sanitise_log_value(provider))
+        raise SsoCallbackError(SSO_ERROR_AUTH_FAILED)
+    expected_nonce, code_verifier = flow
+
     public_url = get_public_url(settings).rstrip("/")
     redirect_uri = f"{public_url}/api/v1/auth/oidc/{provider}/callback"
 
     tokens = await _run_sso_callback_process(
         session,
-        partial(oidc_process_callback, code, state, settings, system_session, session, redirect_uri),
+        partial(
+            oidc_process_callback,
+            code,
+            state,
+            settings,
+            system_session,
+            session,
+            redirect_uri,
+            expected_nonce=expected_nonce,
+            code_verifier=code_verifier,
+        ),
         log_context=f"OIDC callback for provider {sanitise_log_value(provider)}",
         contract_tag="sso.oidc_callback",
     )
 
-    return _redirect_to_frontend(tokens, settings)
+    response = _redirect_to_frontend(tokens, settings)
+    _clear_oidc_flow_cookie(response)
+    return response
 
 
 # ---------------------------------------------------------------------------

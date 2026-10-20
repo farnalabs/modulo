@@ -1,10 +1,10 @@
 <template>
   <BackLink to="/library" :label="$t('views.CompositeEditorView.back_to_library')" />
   <div class="flex h-[calc(100vh-3.5rem)]">
-    <div v-if="loading" class="flex flex-1 flex-col gap-4 p-6" :aria-label="$t('views.CompositeEditorView.loading_canvas')" role="status">
+    <output v-if="loading" class="flex flex-1 flex-col gap-4 p-6" :aria-label="$t('views.CompositeEditorView.loading_canvas')">
       <SkeletonBlock height-class="h-8 w-64" />
       <SkeletonBlock height-class="flex-1 w-full" />
-    </div>
+    </output>
 
     <div v-else-if="pageError" class="flex flex-1 items-center justify-center p-6">
       <ErrorAlert :message="pageError" :on-retry="retry" />
@@ -29,7 +29,7 @@
         <button type="button"
           v-if="canManage"
           data-testid="composite-editor-publish"
-          class="rounded-md bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-500"
+          class="rounded-md bg-green-700 px-3 py-1 text-xs font-medium text-white hover:bg-green-600"
           @click="showPublishFlow = true"
         >
           {{ $t('views.CompositeEditorView.publish') }}
@@ -60,7 +60,7 @@
           </template>
           <template #node-agent="nodeProps">
             <div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm">
-              <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-primary">{{ $t('views.CompositeEditorView.node_agent_badge') }}</div>
+              <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-primary-text">{{ $t('views.CompositeEditorView.node_agent_badge') }}</div>
               <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
             </div>
           </template>
@@ -74,7 +74,7 @@
                render as AGENT. Display only — no authoring controls. -->
           <template #node-dispatch="nodeProps">
             <div class="rounded-lg border-2 border-cyan-500/60 bg-cyan-500/10 px-4 py-2 shadow-sm">
-              <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-600 dark:text-cyan-300">{{ $t('views.CompositeEditorView.node_dispatch_badge') }}</div>
+              <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-700 dark:text-cyan-300">{{ $t('views.CompositeEditorView.node_dispatch_badge') }}</div>
               <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
             </div>
           </template>

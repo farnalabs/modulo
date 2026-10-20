@@ -68,10 +68,10 @@ const props = defineProps<{
 
 const iconBgClass = computed(() => {
   const map: Record<string, string> = {
-    primary: "bg-primary/10 text-primary",
-    success: "bg-success/10 text-success",
+    primary: "bg-primary/10 text-primary-text",
+    success: "bg-success/10 text-success-text",
     warning: "bg-warning/10 text-warning-text",
-    destructive: "bg-destructive/10 text-destructive",
+    destructive: "bg-destructive/10 text-destructive-text",
     muted: "bg-muted text-muted-foreground",
   };
   return map[props.color ?? "primary"];
@@ -79,7 +79,7 @@ const iconBgClass = computed(() => {
 
 const valueClass = computed(() => {
   const map: Record<string, string> = {
-    success: "text-success",
+    success: "text-success-text",
     warning: "text-warning-text",
     destructive: "text-destructive",
   };
@@ -115,8 +115,8 @@ function arrowFor(delta: number): string {
 }
 
 function classFor(delta: number, inverted: boolean): string {
-  if (delta > 0) return inverted ? 'text-destructive' : 'text-success'
-  if (delta < 0) return inverted ? 'text-success' : 'text-destructive'
+  if (delta > 0) return inverted ? 'text-destructive' : 'text-success-text'
+  if (delta < 0) return inverted ? 'text-success-text' : 'text-destructive'
   return 'text-muted-foreground'
 }
 

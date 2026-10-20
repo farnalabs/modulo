@@ -528,7 +528,8 @@ def _host_port_from_database_url(url: str) -> tuple[str, int | None]:
     try:
         parsed = urlparse(url)
         host = parsed.hostname or "unknown"
-        port = (5432 if host not in LOOPBACK_HOSTS else None) if parsed.port is None else parsed.port
+        default_port = None if host in LOOPBACK_HOSTS else 5432
+        port = default_port if parsed.port is None else parsed.port
     except ValueError:
         return "unknown", None
     return host, port
@@ -903,6 +904,97 @@ def _build_composed_config(data_dir: Path, state: Any) -> dict[str, str]:
         return {}
 
 
+def _probe_postgres_admin(composed: dict[str, str]) -> None:
+    """Admin probe: raise when the bundled Postgres is not reachable."""
+    admin_url = composed.get("DATABASE_ADMIN_URL") or ""
+    if not admin_url:
+        raise RuntimeError("no composed DATABASE_ADMIN_URL (state/secrets unavailable)")
+    import asyncpg  # asyncpg does not publish a py.typed marker
+
+    from modulo.db.bootstrap_role import _asyncpg_admin_connect
+
+    dsn, ssl_arg = _asyncpg_admin_connect(admin_url)
+
+    async def _go() -> None:
+        conn = await asyncpg.connect(dsn, ssl=ssl_arg, timeout=5)
+        try:
+            await conn.fetchval("SELECT 1")
+        finally:
+            await conn.close()
+
+    asyncio.run(_go())
+
+
+def _probe_role_posture_violations(composed: dict[str, str]) -> list[str]:
+    """Role-posture probe: the bootstrap role allow-list violations."""
+    admin_url = composed.get("DATABASE_ADMIN_URL") or ""
+    app_url = composed.get("DATABASE_URL") or ""
+    if not admin_url or not app_url:
+        raise RuntimeError("no composed database URLs (state/secrets unavailable)")
+    import asyncpg
+
+    from modulo.db.bootstrap_role import (
+        _asyncpg_admin_connect,
+        _find_allow_list_violations,
+        _parse_role,
+    )
+
+    async def _go() -> list[str]:
+        dsn, ssl_arg = _asyncpg_admin_connect(admin_url)
+        conn = await asyncpg.connect(dsn, ssl=ssl_arg, timeout=5)
+        try:
+            return list(await _find_allow_list_violations(conn, _parse_role(app_url)))
+        finally:
+            await conn.close()
+
+    return asyncio.run(_go())
+
+
+def _probe_redis_ping(redis_port: int, redis_url: str) -> None:
+    """Redis probe: raise when ping/auth fails on the configured port."""
+    if not redis_url:
+        raise RuntimeError("no composed REDIS_URL (state/secrets unavailable)")
+    import redis
+
+    client = redis.Redis(
+        host="127.0.0.1",
+        port=redis_port,
+        password=_password_from_url(redis_url),
+        socket_connect_timeout=5,
+        socket_timeout=5,
+    )
+    if not client.ping():
+        raise RuntimeError("redis PING failed")
+
+
+def _probe_db_migrations_at_head(composed: dict[str, str]) -> bool:
+    """Migration probe: True when the DB is at the alembic head."""
+    database_url = composed.get("DATABASE_URL") or ""
+    if not database_url:
+        raise RuntimeError("no composed DATABASE_URL (state/secrets unavailable)")
+
+    from modulo.db.health_checks import db_is_at_migration_head
+
+    async def _go() -> bool:
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        from modulo.db.url_utils import split_engine_sslmode
+
+        # FAR-1440: the composed DATABASE_URL preserves ``sslmode`` end to
+        # end, so translate it before building the probe engine — the raw
+        # URL raises TypeError at first connect on a TLS deploy, which the
+        # doctor would misreport as "not at head".
+        engine_url, ssl_arg = split_engine_sslmode(database_url)
+        connect_args: dict[str, Any] = {"ssl": ssl_arg} if ssl_arg is not None else {}
+        engine = create_async_engine(engine_url, connect_args=connect_args)
+        try:
+            return bool(await db_is_at_migration_head(engine))
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_go())
+
+
 def _build_database_probes(
     composed: dict[str, str],
     redis_port: int,
@@ -915,93 +1007,16 @@ def _build_database_probes(
 ]:
     """Return (probe_postgres, role_violations, probe_redis, migrations_at_head).
 
-    Each probe reads from the pre-composed config dict and raises on failure.
+    Each probe reads from the pre-composed config dict and raises on failure;
+    the composed config / ports are bound here so the returned callables take
+    no arguments.
     """
-
-    def _probe_postgres() -> None:
-        admin_url = composed.get("DATABASE_ADMIN_URL") or ""
-        if not admin_url:
-            raise RuntimeError("no composed DATABASE_ADMIN_URL (state/secrets unavailable)")
-        import asyncpg  # asyncpg does not publish a py.typed marker
-
-        from modulo.db.bootstrap_role import _asyncpg_admin_connect
-
-        dsn, ssl_arg = _asyncpg_admin_connect(admin_url)
-
-        async def _go() -> None:
-            conn = await asyncpg.connect(dsn, ssl=ssl_arg, timeout=5)
-            try:
-                await conn.fetchval("SELECT 1")
-            finally:
-                await conn.close()
-
-        asyncio.run(_go())
-
-    def _probe_role_violations() -> list[str]:
-        admin_url = composed.get("DATABASE_ADMIN_URL") or ""
-        app_url = composed.get("DATABASE_URL") or ""
-        if not admin_url or not app_url:
-            raise RuntimeError("no composed database URLs (state/secrets unavailable)")
-        import asyncpg
-
-        from modulo.db.bootstrap_role import (
-            _asyncpg_admin_connect,
-            _find_allow_list_violations,
-            _parse_role,
-        )
-
-        async def _go() -> list[str]:
-            dsn, ssl_arg = _asyncpg_admin_connect(admin_url)
-            conn = await asyncpg.connect(dsn, ssl=ssl_arg, timeout=5)
-            try:
-                return list(await _find_allow_list_violations(conn, _parse_role(app_url)))
-            finally:
-                await conn.close()
-
-        return asyncio.run(_go())
-
-    def _probe_redis() -> None:
-        if not redis_url:
-            raise RuntimeError("no composed REDIS_URL (state/secrets unavailable)")
-        import redis
-
-        client = redis.Redis(
-            host="127.0.0.1",
-            port=redis_port,
-            password=_password_from_url(redis_url),
-            socket_connect_timeout=5,
-            socket_timeout=5,
-        )
-        if not client.ping():
-            raise RuntimeError("redis PING failed")
-
-    def _probe_migrations_at_head() -> bool:
-        database_url = composed.get("DATABASE_URL") or ""
-        if not database_url:
-            raise RuntimeError("no composed DATABASE_URL (state/secrets unavailable)")
-
-        from modulo.db.health_checks import db_is_at_migration_head
-
-        async def _go() -> bool:
-            from sqlalchemy.ext.asyncio import create_async_engine
-
-            from modulo.db.url_utils import split_engine_sslmode
-
-            # FAR-1440: the composed DATABASE_URL preserves ``sslmode`` end to
-            # end, so translate it before building the probe engine — the raw
-            # URL raises TypeError at first connect on a TLS deploy, which the
-            # doctor would misreport as "not at head".
-            engine_url, ssl_arg = split_engine_sslmode(database_url)
-            connect_args: dict[str, Any] = {"ssl": ssl_arg} if ssl_arg is not None else {}
-            engine = create_async_engine(engine_url, connect_args=connect_args)
-            try:
-                return bool(await db_is_at_migration_head(engine))
-            finally:
-                await engine.dispose()
-
-        return asyncio.run(_go())
-
-    return _probe_postgres, _probe_role_violations, _probe_redis, _probe_migrations_at_head
+    return (
+        partial(_probe_postgres_admin, composed),
+        partial(_probe_role_posture_violations, composed),
+        partial(_probe_redis_ping, redis_port, redis_url),
+        partial(_probe_db_migrations_at_head, composed),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1208,6 +1223,105 @@ def _build_system_probes(
     )
 
 
+def _probe_data_dir_writable(root: Path) -> None:
+    probe_path = root / f".doctor-write-probe-{os.getpid()}"
+    probe_path.write_text("ok", encoding="utf-8")
+    probe_path.unlink()
+
+
+def _effective_uid() -> int | None:
+    return os.getuid() if hasattr(os, "getuid") else None
+
+
+def _probe_username_of_uid(uid: int) -> str | None:
+    # sys.platform (not os.name) so mypy narrows the non-Windows branch:
+    # the stdlib `pwd` module has no attributes in typeshed on win32, and
+    # `warn_unused_ignores` (strict) forbids a platform-specific type:ignore.
+    if sys.platform == "win32":
+        return None  # TODO(P3): Windows SID — account mapping
+    try:
+        import pwd
+    except ImportError:
+        return None
+    try:
+        # getattr - not a direct attribute access (`pwd.getpwuid`): typeshed
+        # exposes pwd only on POSIX, so the direct bind fails mypy on
+        # Windows builds while CI's Linux run has the full module.
+        record: Any = getattr(pwd, "getpwuid")(uid)  # noqa: B009 - see comment
+        name = getattr(record, "pw_name", None)
+        return str(name) if name else None
+    except KeyError:
+        return None
+
+
+def _probe_file_owner(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    return _probe_username_of_uid(path.stat().st_uid)
+
+
+def _probe_listening_on(port: int) -> list[str]:
+    if sys.platform != "linux":
+        return []  # /proc absent; TODO(P3) Windows/macOS external-bind inspection
+    return _parse_listeners_from_proc(port)
+
+
+def _probe_launcher_running(data_dir: Path) -> bool:
+    from modulo.launcher.supervisor import LOCK_SUFFIX, _pid_alive, _read_lock_holder
+
+    # Mirrors collect_status: the lock sibling of the data dir names the holder.
+    lock_path = data_dir.parent / (data_dir.name + LOCK_SUFFIX)
+    holder = _read_lock_holder(lock_path)
+    return holder is not None and _pid_alive(holder.pid)
+
+
+def _probe_env_file_pinned() -> bool:
+    from modulo.settings import pinned_env_file
+
+    return pinned_env_file() is not None
+
+
+def _probe_secrets_mode(root: Path) -> int | None:
+    # TODO(P3): Windows ACL equivalence (icacls); the POSIX stat bits are
+    # the P1a source of truth.
+    if sys.platform == "win32":
+        return None
+    secrets_path = root / _SECRETS_FILENAME
+    if not secrets_path.is_file():
+        return None
+    return secrets_path.stat().st_mode & 0o777
+
+
+def _probe_degraded_reason(data_dir: Path) -> str | None:
+    from modulo.launcher.supervisor import RUNTIME_FILENAME, read_degraded_reason
+
+    return read_degraded_reason(data_dir / RUNTIME_FILENAME)
+
+
+def _probe_port_owner_description(port: int) -> str | None:
+    owners = _port_owner_descriptions(port)
+    return "; ".join(owners) if owners else None
+
+
+def _probe_last_backup_at(state: Any) -> float | None:
+    if state is None or state.last_backup_at is None:
+        return None
+    try:
+        from datetime import datetime
+
+        return datetime.fromisoformat(state.last_backup_at).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+def _probe_tls_keypair_expiry(data_dir: Path) -> float | None:
+    return _tls_keypair_expiry(data_dir)
+
+
+def _probe_env_value(env_snapshot: dict[str, str], name: str) -> str | None:
+    return env_snapshot.get(name)
+
+
 def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
     """Build the probe set used by ``run_doctor`` outside unit tests.
 
@@ -1216,69 +1330,6 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
     data-dir artefacts.
     """
     composed = _build_composed_config(data_dir, state)
-
-    # --- Filesystem probes (depend on data_dir) ---
-
-    def _probe_writable(root: Path) -> None:
-        probe_path = root / f".doctor-write-probe-{os.getpid()}"
-        probe_path.write_text("ok", encoding="utf-8")
-        probe_path.unlink()
-
-    def _effective_uid() -> int | None:
-        return os.getuid() if hasattr(os, "getuid") else None
-
-    def _username_of_uid(uid: int) -> str | None:
-        # sys.platform (not os.name) so mypy narrows the non-Windows branch:
-        # the stdlib `pwd` module has no attributes in typeshed on win32, and
-        # `warn_unused_ignores` (strict) forbids a platform-specific type:ignore.
-        if sys.platform == "win32":
-            return None  # TODO(P3): Windows SID — account mapping
-        try:
-            import pwd
-        except ImportError:
-            return None
-        try:
-            # getattr - not a direct attribute access (`pwd.getpwuid`): typeshed
-            # exposes pwd only on POSIX, so the direct bind fails mypy on
-            # Windows builds while CI's Linux run has the full module.
-            record: Any = getattr(pwd, "getpwuid")(uid)  # noqa: B009 - see comment
-            name = getattr(record, "pw_name", None)
-            return str(name) if name else None
-        except KeyError:
-            return None
-
-    def _file_owner(path: Path) -> str | None:
-        if not path.exists():
-            return None
-        return _username_of_uid(path.stat().st_uid)
-
-    def _listening_on(port: int) -> list[str]:
-        if sys.platform != "linux":
-            return []  # /proc absent; TODO(P3) Windows/macOS external-bind inspection
-        return _parse_listeners_from_proc(port)
-
-    def _probe_launcher_running() -> bool:
-        from modulo.launcher.supervisor import LOCK_SUFFIX, _pid_alive, _read_lock_holder
-
-        # Mirrors collect_status: the lock sibling of the data dir names the holder.
-        lock_path = data_dir.parent / (data_dir.name + LOCK_SUFFIX)
-        holder = _read_lock_holder(lock_path)
-        return holder is not None and _pid_alive(holder.pid)
-
-    def _probe_env_file_pinned() -> bool:
-        from modulo.settings import pinned_env_file
-
-        return pinned_env_file() is not None
-
-    def _probe_secrets_mode(root: Path) -> int | None:
-        # TODO(P3): Windows ACL equivalence (icacls); the POSIX stat bits are
-        # the P1a source of truth.
-        if sys.platform == "win32":
-            return None
-        secrets_path = root / _SECRETS_FILENAME
-        if not secrets_path.is_file():
-            return None
-        return secrets_path.stat().st_mode & 0o777
 
     # --- Database probes (depend on composed config) ---
 
@@ -1308,47 +1359,22 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
         _probe_second_install_hint,
     ) = _build_system_probes(data_dir)
 
-    def _probe_degraded_reason() -> str | None:
-        from modulo.launcher.supervisor import RUNTIME_FILENAME, read_degraded_reason
-
-        return read_degraded_reason(data_dir / RUNTIME_FILENAME)
-
-    def _probe_port_owner_description(port: int) -> str | None:
-        owners = _port_owner_descriptions(port)
-        return "; ".join(owners) if owners else None
-
-    def _probe_last_backup_at() -> float | None:
-        if state is None or state.last_backup_at is None:
-            return None
-        try:
-            from datetime import datetime
-
-            return datetime.fromisoformat(state.last_backup_at).timestamp()
-        except (ValueError, TypeError):
-            return None
-
-    def _probe_tls_expiry() -> float | None:
-        return _tls_keypair_expiry(data_dir)
-
     env_snapshot = dict(os.environ)
-
-    def __probe_env_value(name: str) -> str | None:
-        return env_snapshot.get(name)
 
     return DoctorProbes(
         disk_free_bytes=lambda root: shutil.disk_usage(str(root)).free,
-        assert_writable=_probe_writable,
-        listening_on=_listening_on,
+        assert_writable=_probe_data_dir_writable,
+        listening_on=_probe_listening_on,
         probe_postgres=_probe_postgres,
         role_violations=_probe_role_violations,
         probe_redis=_probe_redis,
         migrations_at_head=_probe_migrations_at_head,
         effective_uid=_effective_uid,
-        username_of_uid=_username_of_uid,
-        file_owner=_file_owner,
+        username_of_uid=_probe_username_of_uid,
+        file_owner=_probe_file_owner,
         secrets_mode=_probe_secrets_mode,
         ambient_env_names=_probe_ambient_env_names,
-        env_value=__probe_env_value,
+        env_value=partial(_probe_env_value, env_snapshot),
         service_installed=lambda: False,  # FAR-674's service registry is not landed yet
         available_memory_bytes=_probe_available_memory_bytes,
         data_dir_pg_version=_probe_data_dir_pg_version,
@@ -1359,13 +1385,13 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
         modulo_on_path=_probe_modulo_on_path,
         install_root=_probe_install_root,
         second_install_hint=_probe_second_install_hint,
-        degraded_reason=_probe_degraded_reason,
+        degraded_reason=partial(_probe_degraded_reason, data_dir),
         port_owner_description=_probe_port_owner_description,
-        last_backup_at=_probe_last_backup_at,
-        tls_expiry=_probe_tls_expiry,
+        last_backup_at=partial(_probe_last_backup_at, state),
+        tls_expiry=partial(_probe_tls_keypair_expiry, data_dir),
         cwd_env_file=_cwd_env_file(),
         env_file_pinned=_probe_env_file_pinned,
-        launcher_running=_probe_launcher_running,
+        launcher_running=partial(_probe_launcher_running, data_dir),
     )
 
 
@@ -1380,27 +1406,38 @@ def _cwd_env_file() -> Path | None:
     return candidate if candidate.exists() else None
 
 
-def _parse_listeners_from_proc(port: int) -> list[str]:
-    """LISTEN sockets on *port* from /proc/net{,6}/tcp (Linux only)."""
+def _listen_hosts_in_table(proc_path: Path, family: int, port: int) -> set[str]:
+    """Addresses with a LISTEN socket on *port* in one /proc net table."""
+    try:
+        lines = proc_path.read_text(encoding="ascii").splitlines()[1:]
+    except (OSError, ValueError):
+        return set()
+    hosts: set[str] = set()
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 4 or fields[3] != "0A":  # 0A = LISTEN
+            continue
+        host_hex, port_hex = fields[1].split(":")
+        if int(port_hex, 16) != port:
+            continue
+        try:
+            hosts.add(_decode_proc_address(host_hex, family))
+        except (ValueError, OSError):
+            continue
+    return hosts
 
+
+def _listen_hosts_on_port(port: int) -> list[str]:
+    """Every address with a LISTEN socket on *port* (Linux /proc; sorted)."""
     hosts: set[str] = set()
     for proc_path, family in ((Path("/proc/net/tcp"), socket.AF_INET), (Path("/proc/net/tcp6"), socket.AF_INET6)):
-        try:
-            lines = proc_path.read_text(encoding="ascii").splitlines()[1:]
-        except (OSError, ValueError):
-            continue
-        for line in lines:
-            fields = line.split()
-            if len(fields) < 4 or fields[3] != "0A":  # 0A = LISTEN
-                continue
-            host_hex, port_hex = fields[1].split(":")
-            if int(port_hex, 16) != port:
-                continue
-            try:
-                hosts.add(_decode_proc_address(host_hex, family))
-            except (ValueError, OSError):
-                continue
+        hosts.update(_listen_hosts_in_table(proc_path, family, port))
     return sorted(hosts)
+
+
+def _parse_listeners_from_proc(port: int) -> list[str]:
+    """LISTEN sockets on *port* from /proc/net{,6}/tcp (Linux only)."""
+    return _listen_hosts_on_port(port)
 
 
 def _decode_proc_address(host_hex: str, family: int) -> str:
@@ -1422,32 +1459,10 @@ def _port_owner_descriptions(port: int) -> list[str]:
     then reports the loopback-only honest pass). This is a real probe, not a
     stub: it actually inspects the kernel socket table (no silent pass).
     """
-    owners: list[str] = []
     if sys.platform != "linux":
-        return owners
-    foreign_hosts: set[str] = set()
-    for proc_path, family in (
-        (Path("/proc/net/tcp"), socket.AF_INET),
-        (Path("/proc/net/tcp6"), socket.AF_INET6),
-    ):
-        try:
-            lines = proc_path.read_text(encoding="ascii").splitlines()[1:]
-        except (OSError, ValueError):
-            continue
-        for line in lines:
-            fields = line.split()
-            if len(fields) < 4 or fields[3] != "0A":  # 0A = LISTEN
-                continue
-            host_hex, port_hex = fields[1].split(":")
-            if int(port_hex, 16) != port:
-                continue
-            try:
-                host = _decode_proc_address(host_hex, family)
-            except (ValueError, OSError):
-                continue
-            if host.lower() not in LOOPBACK_HOSTS:
-                foreign_hosts.add(host)
-    return [f"foreign service bound to {host}" for host in sorted(foreign_hosts)]
+        return []
+    foreign_hosts = [host for host in _listen_hosts_on_port(port) if host.lower() not in LOOPBACK_HOSTS]
+    return [f"foreign service bound to {host}" for host in foreign_hosts]
 
 
 def _tls_keypair_expiry(data_dir: Path) -> float | None:
@@ -1685,7 +1700,12 @@ def _print_report(data_dir: Path, results: list[CheckResult], healthy: bool, emi
     emit(f"modulo doctor — data dir: {data_dir}")
     width = max(len(result.name) for result in results)
     for result in results:
-        status = "FAIL" if not result.ok else ("warn" if result.warning else "ok  ")
+        if not result.ok:
+            status = "FAIL"
+        elif result.warning:
+            status = "warn"
+        else:
+            status = "ok  "
         emit(f"  [{status}] {result.name:<{width}}  {result.detail}")
     if healthy:
         warn_names = sorted({r.name for r in results if r.ok and r.warning})

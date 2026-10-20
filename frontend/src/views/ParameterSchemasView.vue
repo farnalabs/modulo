@@ -67,10 +67,10 @@
         </div>
 
         <div v-if="deleteConfirmId" class="mt-4 rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-          <p class="text-sm font-medium text-destructive">
+          <p class="text-sm font-medium text-destructive-text">
             {{ $t('views.ParameterSchemasView.delete_confirm', { name: deleteConfirmName }) }}
           </p>
-          <p v-if="deleteRefError" class="mt-1 text-sm text-destructive/80">{{ deleteRefError }}</p>
+          <p v-if="deleteRefError" class="mt-1 text-sm text-destructive-text">{{ deleteRefError }}</p>
           <div class="mt-3 flex items-center gap-2">
             <Button :disabled="deleting" severity="danger" data-testid="paramschema-delete-confirm" @click="doDelete">
               {{ deleting ? $t('views.ParameterSchemasView.deleting') : $t('views.ParameterSchemasView.delete') }}
@@ -140,7 +140,7 @@
             an automatic Retry could double-create, so none is offered.
           -->
           <ErrorAlert v-if="saveError" :message="saveError" :retryable="false" />
-          <div v-if="saveSuccess" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success">
+          <div v-if="saveSuccess" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success-text">
             {{ saveSuccess }}
           </div>
 
@@ -309,7 +309,7 @@
                         </div>
                         <button
                           type="button"
-                          class="text-xs text-primary hover:underline"
+                          class="text-xs text-primary-text hover:underline"
                           data-testid="paramschema-add-option"
                           @click="(param.options = param.options || []).push('')"
                         >
@@ -577,10 +577,10 @@
           </div>
 
           <div v-if="deleteSetConfirmId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-            <p class="text-sm font-medium text-destructive">
+            <p class="text-sm font-medium text-destructive-text">
               {{ $t('views.ParameterSchemasView.delete_set_confirm', { name: deleteSetConfirmName }) }}
             </p>
-            <p v-if="deleteSetError" class="mt-1 text-sm text-destructive/80">{{ deleteSetError }}</p>
+            <p v-if="deleteSetError" class="mt-1 text-sm text-destructive-text">{{ deleteSetError }}</p>
             <div class="mt-3 flex items-center gap-2">
               <Button :disabled="deletingSet" severity="danger" data-testid="paramschema-delete-set-confirm" @click="doDeleteSet">
                 {{ deletingSet ? $t('views.ParameterSchemasView.deleting') : $t('views.ParameterSchemasView.delete') }}
@@ -626,7 +626,7 @@
               <div v-if="!references.agents?.length" class="text-sm text-muted-foreground">—</div>
               <ul v-else class="space-y-1">
                 <li v-for="agent in references.agents" :key="agent.id" class="text-sm">
-                  <router-link :to="`/admin/agents/${agent.id}`" class="text-primary hover:underline" :data-testid="`paramschema-ref-agent-${agent.id}`">
+                  <router-link :to="`/admin/agents/${agent.id}`" class="text-primary-text hover:underline" :data-testid="`paramschema-ref-agent-${agent.id}`">
                     {{ agent.name || shortId(agent.id) }}
                   </router-link>
                 </li>
@@ -710,12 +710,12 @@
           </div>
 
           <div v-if="validateResult !== null" class="space-y-2">
-            <div v-if="validateResult.valid" class="rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success">
+            <div v-if="validateResult.valid" class="rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success-text">
               {{ $t('views.ParameterSchemasView.validation_passed') }}
             </div>
             <div v-else class="rounded-lg border border-destructive/50 bg-destructive/10 p-3">
-              <p class="text-sm font-medium text-destructive">{{ $t('views.ParameterSchemasView.validation_failed') }}</p>
-              <ul v-if="validateResult.errors?.length" class="mt-1 list-inside list-disc text-sm text-destructive/90">
+              <p class="text-sm font-medium text-destructive-text">{{ $t('views.ParameterSchemasView.validation_failed') }}</p>
+              <ul v-if="validateResult.errors?.length" class="mt-1 list-inside list-disc text-sm text-destructive-text">
                 <li v-for="e in validateResult.errors" :key="e">{{ e.field || e.message || e }}</li>
               </ul>
             </div>

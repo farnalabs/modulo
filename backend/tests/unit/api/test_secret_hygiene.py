@@ -166,7 +166,29 @@ class TestValueLooksSensitive:
         assert _value_looks_sensitive("modulo-production") is False
 
 
-class TestGetOrgConfigMasking(AuthContext):
+class _SystemAdminAuthContext(AuthContext):
+    """Auth context carrying the FAR-1942 ``is_system_admin`` claim.
+
+    ``get_org_config`` mirrors its REST twin's strict system-admin gate; the
+    masking tests below exercise the response body, so they run as a system
+    admin.
+    """
+
+    def setup_method(self) -> None:
+        super().setup_method()
+        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+
+        _ctx_role.set("admin")
+        _ctx_is_system_admin.set(True)
+
+    def teardown_method(self) -> None:
+        from modulo.api.mcp_server import _ctx_is_system_admin
+
+        _ctx_is_system_admin.set(False)
+        super().teardown_method()
+
+
+class TestGetOrgConfigMasking(_SystemAdminAuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.system_config.list_config")

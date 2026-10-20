@@ -40,7 +40,7 @@ function mountView() {
   return mount(AdminConnectorsView, {
     global: {
       stubs: {
-        LoadingSpinner: true,
+        TableSkeleton: true,
         ErrorAlert: true,
         FeatureGate: { template: '<div><slot /></div>' },
       },
@@ -79,7 +79,7 @@ describe('AdminConnectorsView', () => {
     const wrapper = mount(AdminConnectorsView, {
       global: {
         stubs: {
-          LoadingSpinner: true,
+          TableSkeleton: true,
           ErrorAlert: true,
           FeatureGate: { template: '<div><slot /></div>' },
         },
@@ -105,7 +105,7 @@ describe('AdminConnectorsView', () => {
     const wrapper = mount(AdminConnectorsView, {
       global: {
         stubs: {
-          LoadingSpinner: true,
+          TableSkeleton: true,
           ErrorAlert: true,
           FeatureGate: { template: '<div><slot /></div>' },
         },
@@ -528,7 +528,7 @@ describe('AdminConnectorsView — FAR-617 add/delete/error-state coverage', () =
     return mount(AdminConnectorsView, {
       global: {
         stubs: {
-          LoadingSpinner: true,
+          TableSkeleton: true,
           ErrorAlert: capturingErrorAlert,
           FeatureGate: { template: '<div><slot /></div>' },
         },
@@ -545,19 +545,19 @@ describe('AdminConnectorsView — FAR-617 add/delete/error-state coverage', () =
     mockDelete.mockResolvedValue({ response: { status: 204, ok: true }, error: undefined })
   })
 
-  it('shows the loading spinner while the initial GET is in flight', async () => {
+  it('shows the table skeleton while the initial GET is in flight', async () => {
     mockGet.mockReturnValue(new Promise(() => {}))
     const wrapper = mount(AdminConnectorsView, {
       global: {
         stubs: {
-          LoadingSpinner: true,
+          TableSkeleton: true,
           ErrorAlert: true,
           FeatureGate: { template: '<div><slot /></div>' },
         },
       },
     })
     await nextTick()
-    expect(wrapper.find('loading-spinner-stub').exists()).toBe(true)
+    expect(wrapper.find('table-skeleton-stub').exists()).toBe(true)
     wrapper.unmount()
   })
 

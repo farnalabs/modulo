@@ -13,7 +13,7 @@
         type="button"
         data-testid="hitl-gate-copy-id"
         :aria-label="$t('hitl.gate.copy_review_id')"
-        class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
+        class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary-text hover:bg-primary/10"
         @click="copyText(gate.review_id)"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
@@ -25,7 +25,7 @@
     <RouterLink
       v-if="showRunLink"
       :to="`/runs/${gate.run_id}`"
-      class="text-xs text-primary hover:underline"
+      class="text-xs text-primary-text hover:underline"
       data-testid="hitl-gate-run-link"
     >
       {{ $t('hitl.gate.run_label') }} <span class="font-mono">{{ shortId(gate.run_id) }}</span>
@@ -59,7 +59,7 @@
       </div>
       <div v-if="gate.decision" class="flex justify-between">
         <span class="text-muted-foreground">{{ $t('hitl.gate.decision_label') }}</span>
-        <span :class="gate.decision === 'approved' ? 'text-success' : 'text-destructive'">{{ gate.decision }}</span>
+        <span :class="gate.decision === 'approved' ? 'text-success-text' : 'text-destructive'">{{ gate.decision }}</span>
       </div>
       <div v-if="gate.claimed_by" class="flex justify-between">
         <span class="text-muted-foreground">{{ $t('hitl.gate.claimed_by_label') }}</span>
@@ -86,7 +86,7 @@
         <span class="text-xs font-semibold text-muted-foreground">{{ $t('hitl.gate.edit_subject') }}</span>
         <button
           type="button"
-          class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
+          class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary-text hover:bg-primary/10"
           data-testid="hitl-gate-edit-subject"
           :aria-label="$t('hitl.gate.edit_subject')"
           @click="startEditSubject"
@@ -179,7 +179,7 @@
         v-else
         data-testid="hitl-gate-choice-fallback"
         role="status"
-        class="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+        class="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive-text"
       >
         {{ $t('hitl.gate.choice_no_options') }}
       </p>
@@ -220,7 +220,7 @@
           type="button"
           :disabled="Boolean(actioning)"
           data-testid="hitl-gate-reject"
-          class="flex-1 rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+          class="flex-1 rounded-lg bg-destructive-fill px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive-fill/90 disabled:opacity-50"
           @click="rejectGate"
         >
           {{ actioning === 'reject' ? $t('hitl.gate.rejecting') : $t('hitl.gate.reject') }}
@@ -249,10 +249,10 @@
         {{ claiming ? $t('hitl.gate.claiming') : $t('hitl.gate.re_claim') }}
       </Button>
     </div>
-    <div v-if="status === 'approved'" class="rounded-lg bg-success/10 p-3 text-sm text-success">
+    <div v-if="status === 'approved'" class="rounded-lg bg-success/10 p-3 text-sm text-success-text">
       {{ $t('hitl.gate.approved_banner') }}
     </div>
-    <div v-if="status === 'rejected'" class="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+    <div v-if="status === 'rejected'" class="rounded-lg bg-destructive/10 p-3 text-sm text-destructive-text">
       {{ rejectedBannerText }}
     </div>
     <div v-if="status === 'claimed' && claimToken" class="rounded-lg bg-muted p-3 text-xs">
@@ -267,7 +267,7 @@
       v-if="message"
       data-testid="hitl-gate-message"
       class="text-sm"
-      :class="message.type === 'error' ? 'text-destructive' : 'text-success'"
+      :class="message.type === 'error' ? 'text-destructive' : 'text-success-text'"
     >
       {{ message.text }}
     </div>

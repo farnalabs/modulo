@@ -62,11 +62,15 @@ with a documented time-boxed CVE-allowlist), runs container-structure-test,
 publishes `released-<minor>`, and advances the seed/docs digest constant
 (the digest-drift guard asserts the constant matches the published tag).
 Until that job is live, an operator advance is manual: build, scan, pin the
-new digest in the template constants, and re-seed/apply.
+new digest in the template constants, and apply it from the Runners page
+(re-seeding does not update an existing profile).
 
-Operator-pinned older digests SURVIVE: seeding is idempotent and template
-updates are surfaced per row ("shipped template updated - apply"), never
-silently applied.
+Template-owned values are refreshed by the per-row "shipped template updated
+- apply" action, never silently. The image reference is template-owned only
+while the profile still carries the release placeholder digest (or no image):
+that state reports drift when the release constant advances, and apply writes
+the new digest. Once you set your own image it survives untouched and is not
+reported as drift.
 
 > **⚠️ Dispatch breakage window – placeholder digest (known GA follow-up).**
 > As shipped, `BUNDLED_RUNNER_IMAGE_REF` is the **all-zero `sha256:0000…0000`
@@ -77,7 +81,7 @@ silently applied.
 > `SandboxDispatchUnboundError` naming the placeholder digest and pointing here,
 > instead of letting the run appear to complete and then error at pull time.
 > Until the GHCR publish job lands the real released digest (or an operator
-> pins a built digest into the template constants and re-seeds/applies), **every
+> pins a built digest into the template constants and applies), **every
 > pipeline bound to a Bundled Runner profile fails at dispatch.** Critically, the
 > migration `0191_bundled_runner_seed_backfill` re-points the legacy `modulo-dev`
 > `local_docker` row to the Bundled Runner, so any pipeline that previously ran
@@ -101,9 +105,11 @@ validator rejects `retained`/`cache` for `runner_docker` (dispatch
 re-checks). Runner workspaces are throwaway by design.
 
 Template drift is computed live against the shipped constants; the Runners
-page (D5) will surface per-row "shipped template updated - apply" and the
-apply action refreshes template-owned fields (provider, digest, hardening,
-network defaults) while preserving operator-owned ones.
+page (D5) will surface per-row "shipped template updated - apply". The apply
+action refreshes template-owned fields (provider, hardening, network
+defaults) and rewrites the image reference only while the row still carries
+the release placeholder digest (or no image). An operator-set image reference
+survives and is not reported as drift.
 
 ## 5. What runs where (network shape)
 

@@ -37,15 +37,24 @@ interface ManifestEntry {
   feature_flag: string | null
   visibility?: 'public' | 'public_preview' | 'private_preview' | 'in_dev'
   system_admin_only?: boolean
+  sidebar_group?: string | null
 }
 
 const manifestRoutes = (manifest as { routes?: Record<string, ManifestEntry> })?.routes ?? {}
 const manifestSidebarGroups = (manifest as { sidebar_groups?: Record<string, { system_admin_only?: boolean }> })?.sidebar_groups ?? {}
 const manifestByName = new Map<string, ManifestEntry & { path: string }>()
+// FAR-1950: the same entries indexed by their manifest path. A navigation can
+// resolve to a route record whose `name` is undefined (a named parent with an
+// unnamed, empty-path default child — Vue Router R0103), so the path index is
+// the fallback that keeps the gate bound to the record the manifest describes.
+const manifestByPath = new Map<string, ManifestEntry & { path: string }>()
 const manifestPathToName = new Map<string, string>()
 for (const [path, entry] of Object.entries(manifestRoutes)) {
-  if (entry?.name) {
-    manifestByName.set(entry.name, { ...entry, path })
+  if (!entry) continue
+  const withPath = { ...entry, path }
+  manifestByPath.set(path, withPath)
+  if (entry.name) {
+    manifestByName.set(entry.name, withPath)
     manifestPathToName.set(path, entry.name)
   }
 }
@@ -90,6 +99,7 @@ const CostComponentsView = () => import('../views/CostComponentsView.vue')
 const AdminConnectorsView = () => import('../views/AdminConnectorsView.vue')
 const AdminNodeCategoriesView = () => import('../views/AdminNodeCategoriesView.vue')
 const AdminViewsView = () => import('../views/AdminViewsView.vue')
+const AdminEvidenceRedactionView = () => import('../views/AdminEvidenceRedactionView.vue')
 const AdminModelBackendsView = () => import('../views/AdminModelBackendsView.vue')
 const AdminOrgSettingsView = () => import('../views/AdminOrgSettingsView.vue')
 const AdminRunRetentionView = () => import('../views/AdminRunRetentionView.vue')
@@ -432,6 +442,11 @@ const router = createRouter({
       component: AdminViewsView,
     },
     {
+      path: '/admin/evidence-redaction',
+      name: 'admin-evidence-redaction',
+      component: AdminEvidenceRedactionView,
+    },
+    {
       path: '/admin/model-backends',
       name: 'admin-model-backends',
       component: AdminModelBackendsView,
@@ -596,12 +611,19 @@ const router = createRouter({
       // AdminRunnersView layout (PageTabs + persistent status strip).
       // Profile create/edit keep real nested editor routes under the
       // profiles tab so legacy deep links map 1:1.
+      //
+      // FAR-1950: the `name` sits on the empty-path default child, NOT on the
+      // parent. A named parent with an unnamed, empty-path child is Vue
+      // Router's R0103 trap: `/admin/runners/profiles` resolves to the child,
+      // so `to.name` was `undefined`, hydrateManifestMeta early-returned, and
+      // the role/tier gate silently never ran. It also means resolving the
+      // parent by name would fail to render this child.
       path: '/admin/runners/profiles',
-      name: 'admin-runners-profiles',
       component: AdminRunnersView,
       children: [
         {
           path: '',
+          name: 'admin-runners-profiles',
           component: RunnersProfilesTab,
         },
         {
@@ -624,12 +646,14 @@ const router = createRouter({
       ],
     },
     {
+      // FAR-1950: same R0103 fix as the profiles tab above — the name lives on
+      // the empty-path default child.
       path: '/admin/runners/concurrency',
-      name: 'admin-runners-concurrency',
       component: AdminRunnersView,
       children: [
         {
           path: '',
+          name: 'admin-runners-concurrency',
           component: RunnersConcurrencyTab,
         },
       ],
@@ -686,17 +710,125 @@ const router = createRouter({
   },
 })
 
+type RouteLocationTarget = Parameters<Parameters<typeof router.beforeEach>[0]>[0]
+
+/**
+ * Resolve the manifest entry for a navigation target.
+ *
+ * The primary key is the route *name* (the manifest registry is name-keyed).
+ * FAR-1950: a route can be a named parent with an unnamed, empty-path default
+ * child (Vue Router R0103) — Vue Router then resolves the navigation to the
+ * child, so `to.name` is `undefined` and a name-only lookup silently dropped
+ * the gate (it never ran for /admin/runners/{profiles,concurrency}). Fall back
+ * to the deepest `to.matched` record that is either named in the manifest or
+ * whose full path is a manifest key, so the gate hydrates from whichever
+ * record the manifest actually describes.
+ */
+function resolveManifestEntry(to: RouteLocationTarget): (ManifestEntry & { path: string }) | undefined {
+  if (typeof to.name === 'string') {
+    const byName = manifestByName.get(to.name)
+    if (byName) return byName
+  }
+  // `to.matched` is always present on a real navigation, but the exported
+  // helpers are also driven with partial route objects in unit tests — stay
+  // tolerant rather than throwing (a throw is caught by the guard and would
+  // redirect to the dashboard).
+  const matched = to.matched ?? []
+  for (let i = matched.length - 1; i >= 0; i -= 1) {
+    const record = matched[i]
+    if (typeof record.name === 'string') {
+      const byName = manifestByName.get(record.name)
+      if (byName) return byName
+    }
+    const byPath = manifestByPath.get(record.path)
+    if (byPath) return byPath
+  }
+  return undefined
+}
+
+/**
+ * The hydrated route meta carries a manifest-declared gate signal (role /
+ * tier / system admin / permissions).
+ *
+ * This is the hydration-success half of the FAR-1950 fail-closed check: a
+ * signal present on `to.meta` proves `hydrateManifestMeta` reached this route,
+ * so the backstop must NOT fire. It deliberately mirrors
+ * `entryCarriesGate`'s declared signals — including `required_permissions`,
+ * which `enforceRoleTierVisibility` does not itself enforce (permissions are a
+ * sidebar concern) but which `hydrateManifestMeta` copies onto `to.meta`.
+ * Without it the two halves disagree: a permissions-only gate would look
+ * "declared but unhydrated" and fail-closed redirect even a user holding the
+ * permission.
+ */
+function metaCarriesGate(meta: RouteLocationTarget['meta'] | undefined): boolean {
+  return Boolean(
+    meta?.requiresSystemAdmin ||
+      meta?.requiredRoles?.length ||
+      meta?.requiredTier ||
+      meta?.requiredPermissions?.length,
+  )
+}
+
+/**
+ * The manifest entry *declares* a gate. Mirrors the signals
+ * `hydrateManifestMeta` reads: role, tier, permissions, route-level
+ * `system_admin_only`, or a system-admin sidebar group. Deliberately NOT the
+ * hydrated `to.meta` — this is the manifest-side half of the FAR-1950
+ * fail-closed check.
+ */
+export function entryCarriesGate(entry: ManifestEntry | undefined): boolean {
+  if (!entry) return false
+  const groupId = entry.sidebar_group
+  return Boolean(
+    entry.required_tier ||
+      entry.required_roles?.length ||
+      entry.required_permissions?.length ||
+      entry.system_admin_only ||
+      (groupId && manifestSidebarGroups[groupId]?.system_admin_only),
+  )
+}
+
+/**
+ * The manifest path a navigation corresponds to, derived independently of
+ * `resolveManifestEntry`: by `to.path` / the matched route record paths — the
+ * raw path index, never a name lookup. Used by the fail-closed backstop.
+ */
+function manifestPathForRoute(to: RouteLocationTarget): string | undefined {
+  const matched = to.matched ?? []
+  for (let i = matched.length - 1; i >= 0; i -= 1) {
+    const recordPath = matched[i].path
+    if (manifestByPath.has(recordPath)) return recordPath
+  }
+  if (manifestByPath.has(to.path)) return to.path
+  return undefined
+}
+
+/**
+ * FAR-1950: fail closed when the manifest declares a gate for this route but
+ * hydration left `to.meta` ungated — the silent-fail-open shape that let
+ * /admin/runners/{profiles,concurrency} render without enforcing anything.
+ *
+ * Returns the manifest path that should have been gated, or `undefined` when
+ * the navigation is consistent (either the meta is already gated, or the
+ * manifest declares no gate for this path). The caller warns and redirects;
+ * this is the structural form of "fail closed, log it".
+ */
+export function findUnhydratedGatedManifestPath(to: RouteLocationTarget): string | undefined {
+  if (metaCarriesGate(to.meta)) return undefined
+  const manifestPath = manifestPathForRoute(to)
+  if (!manifestPath) return undefined
+  return entryCarriesGate(manifestRoutes[manifestPath]) ? manifestPath : undefined
+}
+
 /**
  * Hydrate to.meta fields from the manifest registry so downstream guards
- * and breadcrumb logic see a single canonical source.  Manifest entries
- * are keyed by route *name*; the parent path is resolved to a route name
- * via manifestPathToName.
+ * and breadcrumb logic see a single canonical source. Manifest entries are
+ * keyed by route *name*; the parent path is resolved to a route name via
+ * manifestPathToName. Routes that resolve to an unnamed child are resolved
+ * from `to.matched` (FAR-1950 — see `resolveManifestEntry`).
  */
-export function hydrateManifestMeta(to: Parameters<Parameters<typeof router.beforeEach>[0]>[0]): void {
-  const routeName = to.name
-  if (typeof routeName !== 'string') return
-
-  const entry = manifestByName.get(routeName)
+export function hydrateManifestMeta(to: RouteLocationTarget): void {
+  const entry = resolveManifestEntry(to)
   if (!entry) return
 
   to.meta.breadcrumb = entry.breadcrumb
@@ -716,13 +848,8 @@ export function hydrateManifestMeta(to: Parameters<Parameters<typeof router.befo
   // `system_admin_only: true` — the two signals OR together.
   // NOTE: the SIDEBAR filter (config/navigation.ts) honours BOTH signals too
   // (FAR-1796), so the router gate and the sidebar cannot disagree.
-  const routePath = (entry as unknown as { path?: string }).path
-    ?? manifestByName.get(routeName)?.path
-  if (routePath) {
-    const routeEntry = manifestRoutes[routePath] as unknown as {
-      sidebar_group?: string
-      system_admin_only?: boolean
-    } | undefined
+  if (entry.path) {
+    const routeEntry = manifestRoutes[entry.path]
     const groupId = routeEntry?.sidebar_group
     if (routeEntry?.system_admin_only || (groupId && manifestSidebarGroups[groupId]?.system_admin_only)) {
       to.meta.requiresSystemAdmin = true
@@ -802,6 +929,53 @@ export async function enforceRoleTierVisibility(
 
 // Note: the phantom `variant_batch_compare` feature flag was removed in FAR-926.
 
+/**
+ * Enforce the manifest-declared role / tier / visibility gate, or fail closed
+ * when the manifest declares a gate for the resolved path but hydration left
+ * `to.meta` ungated (FAR-1950). Extracted from the navigation guard to keep its
+ * cognitive complexity within the SonarCloud budget.
+ */
+async function enforceManifestGate(
+  to: RouteLocationTarget,
+  token: string,
+): Promise<{ name: string } | true> {
+  if (to.meta?.requiresSystemAdmin || to.meta?.requiredRoles?.length || to.meta?.requiredTier) {
+    return enforceRoleTierVisibility(to, token)
+  }
+  // FAR-1950: the manifest declares a gate for this path but hydration left
+  // to.meta ungated — the gate would silently never run, which is how
+  // /admin/runners/{profiles,concurrency} rendered ungated for any caller.
+  // Fail closed (dashboard) and say so, rather than rendering the surface.
+  const unhydratedGatedPath = findUnhydratedGatedManifestPath(to)
+  if (unhydratedGatedPath) {
+    console.warn(
+      `[router] manifest gate for ${unhydratedGatedPath} was not hydrated onto the resolved route (name=${String(to.name)}); failing closed to the dashboard`,
+    )
+    return { name: 'dashboard' }
+  }
+  return true
+}
+
+/**
+ * Enforce a manifest-declared feature flag (FAR-656): a route whose manifest
+ * entry carries feature_flag is reachable only while that flag resolves true —
+ * a disabled flag redirects to the dashboard. navigation.ts filters the sidebar
+ * item on the same flag so nav and route stay consistent.
+ */
+async function enforceRouteFeatureFlag(
+  to: RouteLocationTarget,
+): Promise<{ name: string } | true> {
+  if (!to.meta?.featureFlag) return true
+  const planStore = usePlanStore()
+  if (!planStore.loaded) {
+    await planStore.fetchPlan()
+  }
+  if (!planStore.featureEnabled(to.meta.featureFlag)) {
+    return { name: 'dashboard' }
+  }
+  return true
+}
+
 router.beforeEach(async (to) => {
   try {
     // FAR-535 demo auto-login: /demo never renders as a page. The guard owns
@@ -829,25 +1003,13 @@ router.beforeEach(async (to) => {
     if (to.name === 'login' || to.name === 'org-login') return true // login page without token — allowed
     if (!token) return { name: 'login' }
 
-    // Role / tier / visibility enforcement
-    if (to.meta?.requiresSystemAdmin || to.meta?.requiredRoles?.length || to.meta?.requiredTier) {
-      const denied = await enforceRoleTierVisibility(to, token)
-      if (denied !== true) return denied
-    }
+    // Role / tier / visibility enforcement, plus the FAR-1950 fail-closed
+    // backstop for a manifest-gated path that hydration did not reach.
+    const denied = await enforceManifestGate(to, token)
+    if (denied !== true) return denied
 
-    // Manifest-declared route flags (FAR-656): a route whose manifest entry
-    // carries feature_flag is reachable only while that flag resolves true —
-    // a disabled flag redirects to the dashboard. navigation.ts filters the
-    // sidebar item on the same flag so nav and route stay consistent.
-    if (to.meta?.featureFlag) {
-      const planStore = usePlanStore()
-      if (!planStore.loaded) {
-        await planStore.fetchPlan()
-      }
-      if (!planStore.featureEnabled(to.meta.featureFlag)) {
-        return { name: 'dashboard' }
-      }
-    }
+    const flagDenied = await enforceRouteFeatureFlag(to)
+    if (flagDenied !== true) return flagDenied
 
   } catch (err) {
     console.error('[router] navigation guard error:', err)

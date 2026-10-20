@@ -15,7 +15,7 @@ These ceilings are a HARD stop on billable work (spec §5.1 cost controls):
   executor (``PipelineExecutor._check_spend_ceiling_gate``) halts a brand-new
   run BEFORE any billable step when the org has zero remaining budget, and (2)
   the terminal ledger block refuses the ledger when a run would push the org's
-  consumed total (``organisations.org_cumulative_spend_cents``) past its
+  consumed total (``organisation_cost_state.org_cumulative_spend_cents``) past its
   ceiling, terminalizing as ``cost_ceiling_exceeded`` and halting future runs.
 
 Both values are stored in integer CENTS to avoid floating-point drift in the

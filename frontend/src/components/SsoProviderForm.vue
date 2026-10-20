@@ -8,7 +8,7 @@
           class="flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           :class="
             data.provider_type === 'oidc'
-              ? 'border-primary bg-primary/10 text-primary'
+              ? 'border-primary bg-primary/10 text-primary-text'
               : 'border-input bg-background hover:bg-accent'
           "
           @click="
@@ -30,7 +30,7 @@
           class="flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           :class="
             data.provider_type === 'saml'
-              ? 'border-primary bg-primary/10 text-primary'
+              ? 'border-primary bg-primary/10 text-primary-text'
               : 'border-input bg-background hover:bg-accent'
           "
           @click="
@@ -64,7 +64,7 @@
           class="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           :class="
             data.preset === p.id
-              ? 'border-primary bg-primary/10 text-primary'
+              ? 'border-primary bg-primary/10 text-primary-text'
               : 'border-input bg-background hover:bg-accent'
           "
           :data-testid="`sso-preset-${p.id}`"
@@ -250,7 +250,7 @@
 
     <!-- Callback URL (create + edit) -->
     <div v-if="callbackUrl" class="rounded-lg border border-primary/30 bg-primary/5 p-3">
-      <p class="text-xs font-medium text-primary">{{ $t('components.SsoProviderForm.callback_url_label') }}</p>
+      <p class="text-xs font-medium text-primary-text">{{ $t('components.SsoProviderForm.callback_url_label') }}</p>
       <p class="mt-1 break-all font-mono text-xs text-muted-foreground">{{ callbackUrl }}</p>
       <button
         type="button"
@@ -264,7 +264,7 @@
         </svg>
         {{ copySuccess ? $t('components.SsoProviderForm.copied') : $t('components.SsoProviderForm.copy_callback_url') }}
       </button>
-      <span v-if="copySuccess" class="ml-2 text-xs text-primary" role="status" aria-live="polite" data-testid="sso-callback-url-copied">
+      <span v-if="copySuccess" class="ml-2 text-xs text-primary-text" role="status" aria-live="polite" data-testid="sso-callback-url-copied">
         {{ $t('components.SsoProviderForm.copied') }}
       </span>
     </div>
@@ -278,7 +278,7 @@
              silently re-committed on save. -->
         <div
           v-if="unrestrictedOptionHidden"
-          class="mb-2 rounded-lg border border-destructive/50 bg-destructive/5 p-3 text-xs text-destructive"
+          class="mb-2 rounded-lg border border-destructive/50 bg-destructive/5 p-3 text-xs text-destructive-text"
           role="alert"
           data-testid="sso-unrestricted-locked-notice"
         >
@@ -347,11 +347,11 @@
             @change="onModeChange('unrestricted')"
           />
           <div class="min-w-0">
-            <span class="text-sm font-medium text-destructive">{{ $t('components.SsoProviderForm.mode_unrestricted') }}</span>
+            <span class="text-sm font-medium text-destructive-text">{{ $t('components.SsoProviderForm.mode_unrestricted') }}</span>
             <p class="mt-0.5 text-xs text-muted-foreground">{{ $t('components.SsoProviderForm.mode_unrestricted_help') }}</p>
             <div
               v-if="provisioningMode === 'unrestricted'"
-              class="mt-2 rounded border border-destructive/50 bg-destructive/5 p-2 text-xs text-destructive"
+              class="mt-2 rounded border border-destructive/50 bg-destructive/5 p-2 text-xs text-destructive-text"
               role="alert"
               data-testid="sso-unrestricted-warning"
             >
@@ -373,7 +373,7 @@
         <span
           v-for="(domain, idx) in data.allowed_domains"
           :key="domain"
-          class="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+          class="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary-text"
         >
           {{ domain }}
           <button

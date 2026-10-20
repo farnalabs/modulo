@@ -11,19 +11,19 @@ export function isSupersededRun(status: string | null | undefined, errorCode: st
 
 export function runStatusBadgeClass(status: string): string {
   const map: Record<string, string> = {
-    complete: 'bg-success/10 text-success',
-    failed: 'bg-destructive/10 text-destructive',
-    stalled: 'bg-destructive/10 text-destructive',
-    budget_exceeded: 'bg-destructive/10 text-destructive',
-    compensation_failed: 'bg-destructive/10 text-destructive',
+    complete: 'bg-success/10 text-success-text',
+    failed: 'bg-destructive/10 text-destructive-text',
+    stalled: 'bg-destructive/10 text-destructive-text',
+    budget_exceeded: 'bg-destructive/10 text-destructive-text',
+    compensation_failed: 'bg-destructive/10 text-destructive-text',
     router_no_match: 'bg-warning/10 text-warning-text',
-    running: 'bg-primary/10 text-primary',
+    running: 'bg-primary/10 text-primary-text',
     pending: 'bg-muted text-muted-foreground',
     awaiting_human: 'bg-warning/10 text-warning-text',
     hitl_parked: 'bg-warning/10 text-warning-text',
     cancelled: 'bg-muted text-muted-foreground',
     rejected: 'bg-muted text-muted-foreground',
-    eval_failed: 'bg-destructive/10 text-destructive',
+    eval_failed: 'bg-destructive/10 text-destructive-text',
     claimed: 'bg-warning/10 text-warning-text',
     unknown: 'bg-muted text-muted-foreground',
   }

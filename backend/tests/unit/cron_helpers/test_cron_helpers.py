@@ -4528,6 +4528,29 @@ class TestOrgFailureStatsContract:
         assert ch._dispatcher_reconcile_stats["org_statement_timeouts"] == 6
 
 
+class TestFar1914FreshPremiseCounterContract:
+    """FAR-1914: fresh-premise deferrals are their OWN counter.
+
+    ``node_started_deferred`` is documented as belt hits only ("non-zero =
+    regression alarm"); the fresh-premise deferrals are a ROUTINE production
+    race, so conflating them would make the alarm unreadable. These pin the
+    separate summary default and the in-process copy-through."""
+
+    def test_dispatcher_summary_defaults_the_fresh_premise_counter(self) -> None:
+        summary = ch._dispatcher_summary()
+        assert summary["nodeless_fresh_premise_deferred"] == 0
+        # The belt-hit alarm keeps its own (independent) default.
+        assert summary["node_started_deferred"] == 0
+
+    def test_set_dispatcher_reconcile_stats_carries_the_fresh_premise_counter(self) -> None:
+        """A missing copy line would silently zero the counter in the
+        in-process mirror — the exact failure this pins."""
+        ch.set_dispatcher_reconcile_stats({"nodeless_fresh_premise_deferred": 7, "node_started_deferred": 0})
+        assert ch._dispatcher_reconcile_stats["nodeless_fresh_premise_deferred"] == 7
+        assert ch._dispatcher_reconcile_stats["node_started_deferred"] == 0
+        ch.set_dispatcher_reconcile_stats({})
+
+
 class TestSystemEnginePoolKnobs:
     """FAR-1621 proposal 3: ``_get_system_engine`` mirrors
     ``db.session._build_engine``'s pool settings and connect timeout — and the

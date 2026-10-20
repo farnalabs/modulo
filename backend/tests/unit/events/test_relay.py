@@ -69,7 +69,7 @@ class _FakeBroker:
 
 async def _establish(relay: EventRelay, broker: _FakeBroker, org: str = _ORG) -> _FakePubSub:
     """Acquire, wait for subscribe, drain the subscription confirmation."""
-    await relay.acquire(org)
+    relay.acquire(org)
     await asyncio.wait_for(broker.subscribed.wait(), timeout=5)
     ps = broker.pubsubs[0]
     await ps.inbox.put({"type": "subscribe", "channel": f"resource:{org}"})
@@ -164,7 +164,7 @@ async def test_refcount_keeps_subscription_until_last_release(bus: EventBus, bro
     relay = _make_relay(broker, bus)
     try:
         await _establish(relay, broker)
-        await relay.acquire(_ORG)  # second client
+        relay.acquire(_ORG)  # second client
         await relay.release(_ORG)  # first leaves — still one client
         assert _ORG in relay._org_tasks
         assert len(broker.pubsubs) == 1  # no re-subscribe churn
@@ -477,7 +477,7 @@ async def test_wait_ready_unknown_org_returns_false(bus: EventBus, broker: _Fake
 async def test_wait_ready_times_out_before_subscription(bus: EventBus, broker: _FakeBroker) -> None:
     relay = _make_relay(broker, bus)
     try:
-        await relay.acquire(_ORG)
+        relay.acquire(_ORG)
         await asyncio.wait_for(broker.subscribed.wait(), timeout=5)
         # No subscribe confirmation frame is delivered -> wait_ready times out.
         assert await relay.wait_ready(_ORG, max_wait_s=0.05) is False
@@ -674,7 +674,7 @@ async def test_subscribe_error_before_established_skips_backfill(
     relay = _make_relay(broker, bus, backfill_loader=loader)
     try:
         with caplog.at_level("WARNING", logger="modulo.core.events.relay"):
-            await relay.acquire(_ORG)
+            relay.acquire(_ORG)
             await asyncio.wait_for(broker.subscribed.wait(), timeout=5)  # retry succeeded
         assert loader_calls == []  # never established -> no backfill
         assert "event_relay.subscription_error" in caplog.text
@@ -722,7 +722,7 @@ async def test_stop_org_without_ready_entry_still_stops(bus: EventBus, broker: _
     """_stop_org handles an org task with no matching ready event."""
     relay = _make_relay(broker, bus)
     try:
-        await relay.acquire(_ORG)
+        relay.acquire(_ORG)
         await asyncio.wait_for(broker.subscribed.wait(), timeout=5)
         relay._ready.pop(_ORG, None)
         await relay._stop_org(_ORG)

@@ -381,7 +381,7 @@ async def test_subscribe_permission_response_receives_message(
 ) -> None:
     decision = {"decision": "allow"}
     redis_client.pubsub.return_value = _pubsub("assistant:channel:permission:req-1", decision)
-    result = await registry.subscribe_permission_response("req-1", timeout=1.0)
+    result = await registry.subscribe_permission_response("req-1")
     assert result == decision
     redis_client.pubsub.return_value.subscribe.assert_awaited_once_with("assistant:channel:permission:req-1")
     redis_client.pubsub.return_value.unsubscribe.assert_awaited_once()
@@ -392,7 +392,8 @@ async def test_subscribe_permission_response_timeout_returns_none(
     registry: AssistantRedisRegistry, redis_client: MagicMock
 ) -> None:
     redis_client.pubsub.return_value = _pubsub("assistant:channel:permission:req-1", None)
-    result = await registry.subscribe_permission_response("req-1", timeout=0.01)
+    with patch("modulo.core.assistant.redis_registry._PERMISSION_RESPONSE_TIMEOUT", 0.01):
+        result = await registry.subscribe_permission_response("req-1")
     assert result is None
 
 
@@ -410,7 +411,7 @@ async def test_subscribe_permission_response_invalid_json_warns(
     pubsub.get_message = AsyncMock(side_effect=_bad_message)
     redis_client.pubsub.return_value = pubsub
     with caplog.at_level("WARNING", logger="modulo.core.assistant.redis_registry"):
-        result = await registry.subscribe_permission_response("req-1", timeout=1.0)
+        result = await registry.subscribe_permission_response("req-1")
     assert result is None
     assert "Invalid JSON in permission pubsub response" in caplog.text
 
@@ -422,7 +423,7 @@ async def test_publish_ui_results(registry: AssistantRedisRegistry, redis_client
 
 async def test_subscribe_ui_results_receives_message(registry: AssistantRedisRegistry, redis_client: MagicMock) -> None:
     redis_client.pubsub.return_value = _pubsub("assistant:channel:ui_results:sess-1", {"x": 1})
-    assert await registry.subscribe_ui_results("sess-1", timeout=1.0) is True
+    assert await registry.subscribe_ui_results("sess-1") is True
     redis_client.pubsub.return_value.unsubscribe.assert_awaited_once()
     redis_client.pubsub.return_value.aclose.assert_awaited_once()
 
@@ -431,7 +432,8 @@ async def test_subscribe_ui_results_timeout_returns_false(
     registry: AssistantRedisRegistry, redis_client: MagicMock
 ) -> None:
     redis_client.pubsub.return_value = _pubsub("assistant:channel:ui_results:sess-1", None)
-    assert await registry.subscribe_ui_results("sess-1", timeout=0.01) is False
+    with patch("modulo.core.assistant.redis_registry._UI_RESULTS_TIMEOUT", 0.01):
+        assert await registry.subscribe_ui_results("sess-1") is False
 
 
 async def test_publish_resume(registry: AssistantRedisRegistry, redis_client: MagicMock) -> None:
@@ -441,7 +443,7 @@ async def test_publish_resume(registry: AssistantRedisRegistry, redis_client: Ma
 
 async def test_subscribe_resume_receives_message(registry: AssistantRedisRegistry, redis_client: MagicMock) -> None:
     redis_client.pubsub.return_value = _pubsub("assistant:channel:resume:sess-1", {"x": 1})
-    assert await registry.subscribe_resume("sess-1", timeout=1.0) is True
+    assert await registry.subscribe_resume("sess-1") is True
     redis_client.pubsub.return_value.unsubscribe.assert_awaited_once()
     redis_client.pubsub.return_value.aclose.assert_awaited_once()
 
@@ -450,7 +452,8 @@ async def test_subscribe_resume_timeout_returns_false(
     registry: AssistantRedisRegistry, redis_client: MagicMock
 ) -> None:
     redis_client.pubsub.return_value = _pubsub("assistant:channel:resume:sess-1", None)
-    assert await registry.subscribe_resume("sess-1", timeout=0.01) is False
+    with patch("modulo.core.assistant.redis_registry._RESUME_TIMEOUT", 0.01):
+        assert await registry.subscribe_resume("sess-1") is False
 
 
 def _blocking_pubsub(channel: str) -> MagicMock:
@@ -477,7 +480,8 @@ async def test_subscribe_permission_response_async_timeout_returns_none(
     registry: AssistantRedisRegistry, redis_client: MagicMock
 ) -> None:
     redis_client.pubsub.return_value = _blocking_pubsub("assistant:channel:permission:req-1")
-    result = await registry.subscribe_permission_response("req-1", timeout=0.01)
+    with patch("modulo.core.assistant.redis_registry._PERMISSION_RESPONSE_TIMEOUT", 0.01):
+        result = await registry.subscribe_permission_response("req-1")
     assert result is None
     redis_client.pubsub.return_value.unsubscribe.assert_awaited_once()
     redis_client.pubsub.return_value.aclose.assert_awaited_once()
@@ -487,7 +491,8 @@ async def test_subscribe_ui_results_async_timeout_returns_false(
     registry: AssistantRedisRegistry, redis_client: MagicMock
 ) -> None:
     redis_client.pubsub.return_value = _blocking_pubsub("assistant:channel:ui_results:sess-1")
-    assert await registry.subscribe_ui_results("sess-1", timeout=0.01) is False
+    with patch("modulo.core.assistant.redis_registry._UI_RESULTS_TIMEOUT", 0.01):
+        assert await registry.subscribe_ui_results("sess-1") is False
     redis_client.pubsub.return_value.unsubscribe.assert_awaited_once()
     redis_client.pubsub.return_value.aclose.assert_awaited_once()
 
@@ -496,7 +501,8 @@ async def test_subscribe_resume_async_timeout_returns_false(
     registry: AssistantRedisRegistry, redis_client: MagicMock
 ) -> None:
     redis_client.pubsub.return_value = _blocking_pubsub("assistant:channel:resume:sess-1")
-    assert await registry.subscribe_resume("sess-1", timeout=0.01) is False
+    with patch("modulo.core.assistant.redis_registry._RESUME_TIMEOUT", 0.01):
+        assert await registry.subscribe_resume("sess-1") is False
     redis_client.pubsub.return_value.unsubscribe.assert_awaited_once()
     redis_client.pubsub.return_value.aclose.assert_awaited_once()
 
@@ -531,5 +537,5 @@ async def test_subscribe_permission_response_cancelled_propagates(
     pubsub.aclose = AsyncMock()
     redis_client.pubsub.return_value = pubsub
     with pytest.raises(asyncio.CancelledError):
-        await registry.subscribe_permission_response("req-1", timeout=1.0)
+        await registry.subscribe_permission_response("req-1")
     pubsub.aclose.assert_not_called()

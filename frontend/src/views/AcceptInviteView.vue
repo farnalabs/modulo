@@ -73,7 +73,7 @@
         v-else
         aria-live="polite"
         data-testid="accept-invite-success"
-        class="mt-5 rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success"
+        class="mt-5 rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success-text"
       >
         {{ successMessage }}
       </div>

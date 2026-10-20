@@ -135,6 +135,13 @@ def _evaluate_run(run: Any) -> str:
     for entry in breakdown:
         if not isinstance(entry, dict):
             continue
+        # Non-billable components (FAR-1780): a ``self_reported`` agent-declared
+        # component carries ``billable: False`` and is excluded from
+        # ``build_cost_breakdown``'s total by design — the probe must compare
+        # the total to the BILLABLE sum only, or every declared-only agent
+        # spends a false mismatch.
+        if entry.get("billable") is False:
+            continue
         amount = entry.get("amount_usd")
         if amount is None:
             continue

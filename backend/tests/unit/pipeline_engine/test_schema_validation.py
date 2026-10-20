@@ -13,6 +13,7 @@ Verifies:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -703,6 +704,33 @@ class TestRepairPrompt:
         # Only 10 values should appear
         assert "val10" not in prompt
         assert "val9" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Test extracted structured-error helpers (S3776 refactor)
+# ---------------------------------------------------------------------------
+
+
+class TestStructuredErrorHelpers:
+    """Branch coverage for ``_error_info`` and ``_format_repair_error``."""
+
+    def test_error_info_omits_absent_optional_metadata(self) -> None:
+        """An error with no message/validator_value/instance keeps only the
+        pointer and constraint; the three optional fields are omitted."""
+        from modulo.core.pipeline_engine.schema_repair import _error_info
+
+        error = SimpleNamespace(json_path="$", validator="required", message="", validator_value=None, instance=None)
+        assert _error_info(error) == {"pointer": "", "constraint": "required"}
+
+    def test_format_repair_error_skips_absent_constraint_and_non_list_allowed(self) -> None:
+        """A missing constraint line is skipped, and a non-list ``allowed``
+        value is rendered via ``str()`` rather than list-capped."""
+        from modulo.core.pipeline_engine.schema_repair import _format_repair_error
+
+        rendered = _format_repair_error(3, {"pointer": "$.colour", "allowed": "red"})
+        assert "Constraint:" not in rendered
+        assert "Location: $.colour" in rendered
+        assert "Allowed values: red" in rendered
 
 
 # ---------------------------------------------------------------------------

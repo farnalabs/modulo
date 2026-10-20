@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any, Literal, Self, cast
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1622,6 +1622,22 @@ async def confirm_import_endpoint(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from None
+    except ValueError as exc:
+        # FAR-1846: ``materialize_import`` rejects an invalid bundle with the
+        # module's bad-input idiom (``ValueError``) — an unsupported format
+        # version, or a sandbox-only field (egress_policy / egress_allowlist /
+        # read_only / git_credentials / single_pr_per_run) on a non-sandbox
+        # node. Without this arm the shared ``handle_db_errors`` backstop maps
+        # the uncaught ValueError to a generic 500, hiding which node/field the
+        # caller must repair. ``GitContentRefError`` (a ValueError subclass)
+        # has its own arm above. ``pydantic.ValidationError`` is also a
+        # ValueError but keeps its established mapping in the shared backstop.
+        if isinstance(exc, ValidationError):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from None
     except IntegrityError:
         _log.exception("library.confirm_import_endpoint")
         raise _conflict_error() from None
@@ -2700,6 +2716,72 @@ async def _install_response(
     )
 
 
+async def _install_collection_in_transaction(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    org_id: uuid.UUID,
+    primitive_id: uuid.UUID,
+) -> tuple[CollectionInstall, list[dict[str, Any]]]:
+    """Install a collection and run the post-install gates in one transaction.
+
+    Extracted from :func:`install_collection_endpoint` so the route keeps a
+    flat failure-mapping ``except`` chain while the transaction body — the
+    connector-team gate and the RLS-scoped entity load — stays in one place.
+    """
+    async with session.begin():
+        await _set_rls_context(session, principal)
+        install = await install_collection(
+            session,
+            org_id=org_id,
+            created_by=principal.account_id,
+            collection_id=primitive_id,
+        )
+        # FAR-1515 MAJOR 4: a collection install materialises the same
+        # rewired graph as a workflow import — run the same connector-team
+        # gate (collection installs carry no owner team, so only the
+        # team-private-connector direction can fire). Rolls the whole
+        # install back with the import it guards. The freshly-created
+        # pipeline is read back inside the same transaction; a manifest
+        # without a pipeline id (test doubles, partial provenance) has
+        # nothing to gate.
+        installed_pipeline_id = (install.resolved_manifest or {}).get("pipeline_id")
+        if installed_pipeline_id:
+            # The manifest is SERVER data written by the install itself, so
+            # a malformed id is a server-side defect, not caller input.
+            # Parse it HERE (its own try/except) rather than letting the
+            # bundle-validation ``except ValueError`` arm below remap it:
+            # that arm exists for invalid *caller* bundles, and answering a
+            # corrupt manifest with a 422 would blame the caller for a 500.
+            # str() accepts both the real str id and a UUID instance.
+            try:
+                installed_pipeline_uuid = uuid.UUID(str(installed_pipeline_id))
+            except ValueError:
+                _log.exception(
+                    "install_collection_endpoint: resolved manifest carries a malformed pipeline_id %r",
+                    installed_pipeline_id,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Collection install manifest is corrupt: pipeline_id is not a valid UUID.",
+                ) from None
+            installed_pipeline = await get_pipeline(session, installed_pipeline_uuid, organisation_id=org_id)
+            await _enforce_imported_connector_team_gate(
+                session,
+                org_id=org_id,
+                owner_team_id=None,
+                bindings=(
+                    extract_connector_bindings(list(installed_pipeline.graph_nodes_json or []))
+                    if installed_pipeline is not None
+                    else []
+                ),
+            )
+        # FAR-1754: load the entity list while the org RLS context is
+        # still live — the child table's policy fails CLOSED outside the
+        # transaction, so a post-transaction load would silently return [].
+        installed_entities = await _load_installed_entities(session, install.install_id)
+    return install, installed_entities
+
+
 @router.post(
     "/collections/{primitive_id}/install",
     status_code=status.HTTP_201_CREATED,
@@ -2721,42 +2803,12 @@ async def install_collection_endpoint(
     org_id = _require_organisation_id(principal)
     await _require_library_collection_flag(org_id)
     try:
-        async with session.begin():
-            await _set_rls_context(session, principal)
-            install = await install_collection(
-                session,
-                org_id=org_id,
-                created_by=principal.account_id,
-                collection_id=primitive_id,
-            )
-            # FAR-1515 MAJOR 4: a collection install materialises the same
-            # rewired graph as a workflow import — run the same connector-team
-            # gate (collection installs carry no owner team, so only the
-            # team-private-connector direction can fire). Rolls the whole
-            # install back with the import it guards. The freshly-created
-            # pipeline is read back inside the same transaction; a manifest
-            # without a pipeline id (test doubles, partial provenance) has
-            # nothing to gate.
-            installed_pipeline_id = (install.resolved_manifest or {}).get("pipeline_id")
-            if installed_pipeline_id:
-                # str() accepts both the real str id and a UUID instance.
-                installed_pipeline = await get_pipeline(
-                    session, uuid.UUID(str(installed_pipeline_id)), organisation_id=org_id
-                )
-                await _enforce_imported_connector_team_gate(
-                    session,
-                    org_id=org_id,
-                    owner_team_id=None,
-                    bindings=(
-                        extract_connector_bindings(list(installed_pipeline.graph_nodes_json or []))
-                        if installed_pipeline is not None
-                        else []
-                    ),
-                )
-            # FAR-1754: load the entity list while the org RLS context is
-            # still live — the child table's policy fails CLOSED outside the
-            # transaction, so a post-transaction load would silently return [].
-            installed_entities = await _load_installed_entities(session, install.install_id)
+        install, installed_entities = await _install_collection_in_transaction(
+            session,
+            principal,
+            org_id,
+            primitive_id,
+        )
     except GitContentRefError as exc:
         _log.warning("install_collection_endpoint: unpinned git-content agent prompt rejected: %s", exc)
         raise HTTPException(
@@ -2776,6 +2828,22 @@ async def install_collection_endpoint(
     except CollectionInstallError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except ValueError as exc:
+        # FAR-1846: a collection install materialises a bundle through
+        # ``materialize_import`` (``core/library_service/install.py``), so the
+        # same invalid-bundle ``ValueError`` rejections (unsupported format
+        # version, sandbox-only fields on a non-sandbox node) reach this route.
+        # Map them to 422 naming the offending node/field instead of letting
+        # the shared ``handle_db_errors`` backstop answer a generic 500.
+        # ``CollectionInstallError`` and ``GitContentRefError`` (ValueError
+        # subclass) have their own arms above; ``pydantic.ValidationError``
+        # keeps its established mapping in the shared backstop.
+        if isinstance(exc, ValidationError):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from None
     except IntegrityError:

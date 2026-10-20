@@ -253,7 +253,7 @@ The Bundled Runner is the self-hosted default Runner packaging: a first-party `m
 - **Workspace hardening (at provision)** – non-root user (uid 1001 on first-party images), read-only rootfs + tmpfs `workdir`/`/tmp` (512m/128m), dropped capabilities + `no-new-privileges`, 1.0 CPU / 1 GiB, a dedicated workspace bridge network (never the compose/backend network; per-profile `none` egress opt-in), and provider-neutral `workspace_metadata` mapped to container Labels: `modulo.run.id`, `modulo.org.id`, `modulo.node.id`, plus the machine deployment-identity label (`modulo.machine.id`, from `MODULO_RUNNER_MACHINE_ID` with a hostname fallback) and a creation-marker label.
 - **Compose overlay (`deploy/compose/runner.yml`)** – opt-in via the `runner` compose profile. It adds a digest-pinned **filtered socket proxy** (the linuxserver/socket-proxy class; per-category allowlist derived mechanically from the backend's real Docker API surface – containers list/create/start/stop/remove + inspect + exec-create, exec-start/inspect, images inspect/list/create, ping/version/info; no networks endpoints, the workspace network is compose-defined) as the DEFAULT Docker endpoint via `MODULO_DOCKER_HOST`, and guarantees the dedicated `modulo-runner-workspace` bridge network exists (compose never creates unreferenced networks under `--profile` – the holder service references it). Workspaces never join the compose network, so a provisioned workspace cannot reach the proxy endpoint; the proxy publishes no host ports. Full posture + residual exposure: [`docs/security/bundled-runner-trust-boundary.md`](security/bundled-runner-trust-boundary.md); setup: [`docs/security/bundled-runner-operator-guide.md`](security/bundled-runner-operator-guide.md).
 - **Orphan reconciler (`runner_reconciler.py`, system cron every 5 min)** – leak repair without WorkspaceLease: lists labelled workspace containers (machine-scoped by the deployment-identity label), cross-references active runs (fail-safe: ANY cross-reference error aborts the sweep destroying nothing and emits `runner.reconciler.sweep_aborted`), destroys orphans older than the 5-min grace period with a destroy-path false-positive re-check (`runner.reconciler.suspected_false_positive` is the D4 rollback signal), applies the 24h max-lifetime backstop regardless of run state (`runner.workspace.reclaimed_max_lifetime`), and runs in a LOG-ONLY soak mode until `RUNNER_RECONCILER_DESTROY_ENABLED=true`. Liveness rides the shared sweep-stats contract (`saq:cron:stats:runner_workspace_reconcile`), surfaced as the advisory `runner_workspace_reconcile` check on `/healthz/ready`.
-- **Seeded Environment Profile "Bundled Runner (Docker)"** – provider `runner_docker`, per-minor release-advanced digest constant (`modulo/db/bundled_runner_template.py`; migration 0191 mirrors it and the release job's digest-drift guard asserts they match), hardening + network preset, and `persistence_policy` LOCKED to `ephemeral` (CRUD validator rejects `retained`/`cache` for `runner_docker`, dispatch re-checks). Seeded per org at org-creation; orgs predating the hook receive it via the one-time backfill migration 0191, which re-points the legacy `modulo-dev` `local_docker` row to the Bundled Runner. Template drift is computed live against the shipped constants (`template_drift_status`) – operator-pinned older digests survive and divergent rows surface "shipped template updated - apply" (D5 UI) instead of being silently re-applied.
+- **Seeded Environment Profile "Bundled Runner (Docker)"** – provider `runner_docker`, per-minor release-advanced digest constant (`modulo/db/bundled_runner_template.py`; migration 0191 mirrors it and the release job's digest-drift guard asserts they match), hardening + network preset, and `persistence_policy` LOCKED to `ephemeral` (CRUD validator rejects `retained`/`cache` for `runner_docker`, dispatch re-checks). Seeded per org at org-creation; orgs predating the hook receive it via the one-time backfill migration 0191, which re-points the legacy `modulo-dev` `local_docker` row to the Bundled Runner. Template drift is computed live against the shipped constants (`template_drift_status`) – divergent rows surface "shipped template updated - apply" (D5 UI) instead of being silently re-applied. The apply refreshes the image reference only while the row still carries the release placeholder digest (or no image); an operator-set image reference survives and is not reported as drift.
 - **Docker-marked acceptance suite** – `backend/tests/docker/` (marker `docker`, run explicitly with `pytest -m docker`; `MODULO_RUNNER_DIND_TESTS=1` opts into the dind engine-kill strip) verifies hardening, streaming live output, container/engine kill classifying retryable (never `ExecResult(0)`), destroy, reconciler orphan destroy + active-run spare, and the proxy allowlist matrix with the runtime completeness assertion (the exercise must trigger no proxy rejection). CI/compose wiring of this suite plus the GHCR publish job (structure test, trivy/grype gates, digest-drift guard, cosign/SBOM) is the D4 GA/CI follow-up item.
 
 ### Auth System (`modulo/auth/`)
@@ -363,16 +363,16 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   `running` until the 30-minute heartbeat TTL above detects the loss (and
   misattributes it to the dispatch path), the worker's SAQ `shutdown` hook
   processes every run it still owns the moment shutdown begins, and each run
-  takes one of two paths. If a re-run is safe — a pre-node run (zero nodes
+  takes one of two paths. If a re-run is safe – a pre-node run (zero nodes
   executed, so nothing can double-execute) within its retry budget, or a
   node-started run whose graph is idempotent and whose `retry_policy` permits
-  the re-run — the claim is freed (row reset to `pending`,
+  the re-run – the claim is freed (row reset to `pending`,
   `dispatched_at`/`dispatcher`/`heartbeat_at` cleared) and stamped with the
   truthful `harness.worker_lost` code plus a detail naming the shutdown;
   `dispatcher_reconcile` re-dispatches it on its next 60s tick, so an
   in-flight run at a release is handed back within ~1 minute of the new worker
-  becoming ready — never 30-35 minutes. If a re-run is NOT safe — a
-  non-idempotent node-started graph, or a `retry_policy` that forbids it — the
+  becoming ready – never 30-35 minutes. If a re-run is NOT safe – a
+  non-idempotent node-started graph, or a `retry_policy` that forbids it – the
   run is failed in place with the same `harness.worker_lost` code and a detail
   naming why, rather than being put on the un-gated re-dispatch leg (which
   would re-EXECUTE a side-effecting node). Both writes are claim-token-fenced
@@ -431,12 +431,36 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   `created_at` bumped, and a `coalesced` TriggerEvent is recorded. On by
   default; disable per trigger with `config_json.coalesce_pending: false`.
   Replays never coalesce.
-- **Dispatcher backpressure:** trigger dispatch (webhook, cron, polling)
+- **Dispatcher backpressure (per-funnel wedge posture):** trigger dispatch
   refuses NEW runs when the pipeline's pending queue exceeds
-  `max(3 x max_concurrent_runs, 5)` rows or its oldest pending run is older
-  than `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` (default 60 min). Refusals are
-  loud: a `backpressure_skipped` TriggerEvent carries the depths, and the
-  webhook path answers 429 so the sender retries.
+  `max(3 x max_concurrent_runs, 5)` rows, or its oldest genuinely-wedged
+  pending run is older than `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` (default
+  60 min). `org_capacity_limited` rows are excluded from the age leg — a busy
+  org is not a wedged pipeline — while `pipeline_capacity` rows still count: a
+  pipeline pinned at its own cap (possibly by a leaked slot) is itself the
+  wedge this guard exists to break. How the refusal reaches the delivery
+  depends on the funnel (FAR-1342):
+
+  | Funnel | At a wedged pipeline | Why |
+  |---|---|---|
+  | Webhook | HTTP 429, no run created | The delivery is discrete and the sender can retry; refusing beats queueing work that will never run. |
+  | Cron | The fire is CONSUMED and recorded: a `backpressure_skipped` TriggerEvent plus `last_fired_at` stamped | A cron fire has no sender to retry it; the next scheduled fire carries the future. `next_fire_at` was already advanced at enqueue time, so the epoch is consumed rather than re-fired (the missed-fire catch-up only re-fires an epoch advanced but never fired). |
+  | Polling | Skipped and recorded; the next poll interval re-fires | The poll repeats naturally on its own schedule, so deferral is free. |
+  | Manual / MCP | Exempt — no backpressure check | A human explicitly asked for this run; capacity gates may still DEFER its dispatch, but they do not refuse it. |
+
+  Invariant: **a pending run may wait indefinitely while its pipeline makes
+  progress; a pipeline making NO progress stops accepting new work.** Every
+  refusal is recorded: the webhook arm re-writes its `backpressure_skipped`
+  event in a fresh transaction after the main transaction unwinds (otherwise
+  the in-transaction write would roll back with the refusal), and all three
+  refusing funnels record the same `validation_result`, so an operator sees the
+  skip in `/api/v1/admin/trigger-events` and the per-trigger event log, and it
+  is counted in the capacity-outcome summary. The FAR-1344 wedge alert
+  evaluates the same predicate on every dispatcher-reconcile tick, pairing the
+  skip with a notification. Webhook replays bypass the guard (an intentional
+  re-fire must never be refused). The guard fails OPEN on a read error (admits,
+  with a warning) and is today shape-based: a slow-but-progressing pipeline can
+  still be refused until FAR-1355's progress-based detection replaces it.
 - **Legacy stale-run sweep:** pending runs past the never-dispatched window
   (`SAQ_NEVER_DISPATCHED_WINDOW`), capacity-marked runs past the TTL
   (`capacity_timeout`), and legacy non-SAQ `running` rows with 5+ claims
@@ -647,29 +671,29 @@ surfaces with `auth_type` / `key_scope` / masked-prefix payload stamps.
 
 **Service accounts (FAR-1478, ADR 056 / 058).** A service principal is a
 first-class `accounts` row (`kind='service'`, carrying no email, password or
-SSO identity — structurally unreachable by every login/invite/SSO/SCIM path,
+SSO identity – structurally unreachable by every login/invite/SSO/SCIM path,
 FAR-1385 slice 1; `accounts.kind` itself is immutable after insert, enforced
 by the `trg_accounts_kind_immutable` DB trigger, so a human row can never be
-flipped into a service row — or vice versa — by any writer). Org admins
+flipped into a service row – or vice versa – by any writer). Org admins
 provision, read, list, rename and decommission them at
 `/api/v1/service-accounts`; an `admin` org-role grant on a service
 principal is rejected with 422 at the surface and structurally refused by a
-DB trigger (`trg_org_memberships_service_role_ceiling`, migration 0315) — the
+DB trigger (`trg_org_memberships_service_role_ceiling`, migration 0315) – the
 role ceiling is `operator`, never admin. Service accounts hold team
 memberships through the normal team surface (team roles never include admin).
 Keys minted for a service principal are OWNED by it (`org_api_keys.account_id`
 is the service account, never the minting human): a human admin bootstraps one
 via `POST /api/v1/service-accounts/{id}/keys`, and the service principal
 mints its own with its own `mk_` credential (MCP `create_api_key`, or the same
-endpoint acting as the principal itself — a key may only mint keys for its own
+endpoint acting as the principal itself – a key may only mint keys for its own
 principal). Service-owned keys are capped at **365 days** (ADR 058's tiered
-TTL — the service half of the 365d-service / 90d-user-scoped resolution),
+TTL – the service half of the 365d-service / 90d-user-scoped resolution),
 enforced at the `create_api_key` AND `update_api_key` choke points so every
-surface — mint and extension alike — refuses the same way (a mint-only cap
+surface – mint and extension alike – refuses the same way (a mint-only cap
 would let any runner/operator extend a service-owned key arbitrarily via
 `PUT /api/v1/api-keys/{id}`). Decommission is explicit and one-way: it stamps
 `accounts.decommissioned_at` (CHECK-restricted to service rows), tombstones
-the org membership, flips `active` off and bulk-revokes every live key — a
+the org membership, flips `active` off and bulk-revokes every live key – a
 service account survives human offboarding and is retired only by that
 deliberate act; the human user-admin surface refuses service targets that are
 members of the caller's org (non-members surface as 404 first, so the
@@ -865,7 +889,7 @@ non-production use.
 
 Hosted Ubicloud runners (ubicloud-standard-2). Workflows:
 - Lint, type-check, unit test, frontend build, audit, and WCAG contrast test on every push
-- Each backend/frontend container is built once and published to ghcr.io only from `main` or a version tag, gated by image smoke checks (`import modulo`, `nginx -t`) only. The publish job does not yet scan the built image — the trivy/grype gates, digest-drift guard and cosign/SBOM attest are the D4 GA/CI follow-up item noted above. CI's Trivy check is a filesystem scan of the repository (dependency CVEs + misconfigurations), not a scan of the built images
+- Each backend/frontend container is built once and published to ghcr.io only from `main` or a version tag, gated by image smoke checks (`import modulo`, `nginx -t`) only. The publish job does not yet scan the built image – the trivy/grype gates, digest-drift guard and cosign/SBOM attest are the D4 GA/CI follow-up item noted above. CI's Trivy check is a filesystem scan of the repository (dependency CVEs + misconfigurations), not a scan of the built images
 - Staging smoke, WCAG, and regression suites share one dependency/browser setup while retaining separate result artifacts
 - Release workflow (tag-driven, semver)
 

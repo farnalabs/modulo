@@ -264,6 +264,19 @@ PERMISSIONS: dict[str, str] = {
     "lifecycle_map.update": "operator",
     "lifecycle_map.delete": "operator",
     "lifecycle_map.list": "viewer",
+    # runners — the ``GET /api/v1/runners/status`` read model (per-machine
+    # probe strip, per-profile health/drift, and the org's sandbox-concurrency
+    # contract). FAR-1955: this is an ADMIN surface (the manifest declares
+    # ``/admin/runners/*`` with ``required_roles: [admin]``), but it previously
+    # rode ``environment_profile.list`` — a viewer-granted key — so any member
+    # could read the capacity/concurrency contract. Split by surface rather
+    # than tightening the shared key: ``environment_profile.list`` stays viewer
+    # because the pipeline editor (``/pipelines/:id/editor``, member-readable)
+    # reads ``GET /api/v1/environment-profiles`` on mount. The key is plural
+    # ``runners.`` (mirroring the REST namespace) and deliberately NOT
+    # ``runner.status``: ``run.status`` is an existing VIEWER-level key, so a
+    # one-character typo in a gate would silently downgrade to viewer.
+    "runners.status": "admin",
     # environment profiles
     "environment_profile.create": "operator",
     "environment_profile.update": "operator",

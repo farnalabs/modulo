@@ -4,7 +4,7 @@ The ``circuit_breaker_enabled`` boolean persisted in the org's
 ``settings_json`` ``cost_controls`` block is surfaced in AdminCostControlsView
 as "Auto-stop on budget exceeded". When it is ON and the org crosses its
 DAILY spend limit (``organisations.daily_spend_limit``) or its spend ceiling
-(``spend_ceiling_cents``), the existing org-wide trigger pause
+(``organisation_cost_state.spend_ceiling_cents``), the existing org-wide trigger pause
 (``PUT /api/v1/admin/orgs/{org_id}/triggers/pause`` semantics) engages
 automatically so no NEW trigger-initiated runs start. In-flight runs are never
 aborted, and the auto-pause never un-pauses itself — resuming stays a manual

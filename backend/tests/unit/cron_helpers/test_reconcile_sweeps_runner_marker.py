@@ -15,6 +15,7 @@ stubbed so argument evaluation never reaches a real engine.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import ExitStack
 from typing import Any
@@ -167,3 +168,86 @@ async def test_best_effort_sweeps_swallow_drift_runner_enforcement_failures(
     assert any(_DRIFT_FAILED_TOKEN in message for message in caplog.messages)
     assert any(_RUNNER_MARKER_FAILED_TOKEN in message for message in caplog.messages)
     assert any(_ENFORCEMENT_FAILED_TOKEN in message for message in caplog.messages)
+
+
+@pytest.mark.asyncio
+async def test_capacity_alerts_sweep_lands_counts_and_logs_when_it_dispatches(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-1344: a dispatch (or an org error) is logged and counted."""
+    redis_client = AsyncMock()
+    summary: dict[str, Any] = {}
+
+    with ExitStack() as stack:
+        _enter_benign_sweeps(stack)
+        stack.enter_context(
+            patch(
+                "modulo.core.capacity_alerts.evaluate_capacity_alerts",
+                new_callable=AsyncMock,
+                return_value={"orgs_evaluated": 2, "dispatched": 1, "notify_failed": 0, "org_errors": 0},
+            )
+        )
+        stack.enter_context(
+            patch(
+                "modulo.core.runner_capacity.reconcile_runner_dispatch_markers",
+                new_callable=AsyncMock,
+                return_value={},
+            )
+        )
+        stack.enter_context(caplog.at_level(logging.INFO, logger="modulo.core.cron_helpers"))
+        await ch._run_reconcile_sweeps(redis_client, summary)
+
+    assert summary["capacity_alerts_orgs"] == 2
+    assert summary["capacity_alerts_dispatched"] == 1
+    assert summary["capacity_alerts_failed"] == 0
+    assert any("dispatcher_reconcile.capacity_alerts" in message for message in caplog.messages)
+
+
+@pytest.mark.asyncio
+async def test_capacity_alerts_sweep_reraises_cancelled() -> None:
+    """Cancellation must abort the reconcile tick, not be swallowed as a warning."""
+    redis_client = AsyncMock()
+    summary: dict[str, Any] = {}
+
+    with ExitStack() as stack:
+        _enter_benign_sweeps(stack)
+        stack.enter_context(
+            patch(
+                "modulo.core.capacity_alerts.evaluate_capacity_alerts",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            )
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await ch._run_reconcile_sweeps(redis_client, summary)
+
+
+@pytest.mark.asyncio
+async def test_capacity_alerts_sweep_swallows_a_generic_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failure in the capacity sweep is a warning, never an aborted tick."""
+    redis_client = AsyncMock()
+    summary: dict[str, Any] = {}
+
+    with ExitStack() as stack:
+        _enter_benign_sweeps(stack)
+        stack.enter_context(
+            patch(
+                "modulo.core.capacity_alerts.evaluate_capacity_alerts",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("db down"),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "modulo.core.runner_capacity.reconcile_runner_dispatch_markers",
+                new_callable=AsyncMock,
+                return_value={},
+            )
+        )
+        stack.enter_context(caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"))
+        await ch._run_reconcile_sweeps(redis_client, summary)
+
+    assert "capacity_alerts_dispatched" not in summary
+    assert any("dispatcher_reconcile.capacity_alerts_failed" in message for message in caplog.messages)

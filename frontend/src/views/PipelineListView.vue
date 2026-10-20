@@ -385,7 +385,7 @@
             </button>
             <button
               type="button"
-              class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90"
+              class="rounded-lg bg-destructive-fill px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive-fill/90"
               data-testid="pipeline-list-delete-confirm"
               @click="handleDelete"
             >

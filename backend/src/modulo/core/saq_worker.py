@@ -1362,7 +1362,10 @@ async def retention_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
 
     checkpoints_deleted = 0
     try:
-        async with _make_system_session_factory()() as session, session.begin():
+        # No outer ``session.begin()`` here: the checkpoint sweep owns its own
+        # per-batch transactions and commits each one (FAR-1971b), so a mid-tick
+        # cancellation cannot roll back batches that already succeeded.
+        async with _make_system_session_factory()() as session:
             checkpoints_deleted = await batch_delete_langgraph_checkpoints(session)
     except ProgrammingError:
         _log.warning(
@@ -2313,6 +2316,10 @@ async def _startup_event_bus_hook(_ctx: dict[str, Any]) -> None:
        publishes reach other processes.
     3. Spawn the connect+subscribe loop as a background task with backoff —
        workers subscribe but NEVER relay (the web process owns the pump).
+    4. (FAR-1992) install the provider/platform DB-capacity probe so
+       WORKER-created runs (cron/polling triggers run in this process) can
+       auto-detect capacity exactly as the API process does. Installed BEFORE
+       the Redis steps below, which can ``return`` early when Redis is absent.
 
     LAZY and FAIL-OPEN end to end: every step is try/except log-and-continue.
     A Redis blip at boot must NEVER crash the worker (``policy="always"``
@@ -2339,6 +2346,21 @@ async def _startup_event_bus_hook(_ctx: dict[str, Any]) -> None:
         raise
     except Exception:
         _log.exception("saq_worker.event_listeners_register_failed")
+
+    # FAR-1992: the capacity hard-stop gate runs in create_run, which this
+    # process also drives (cron/polling triggers create runs). Install the
+    # provider/platform probe here too, BEFORE the Redis steps below (either of
+    # which can return early). Fail-open: an unconfigured/failed probe leaves
+    # the port unset and the chain falls through to "none" (inert).
+    try:
+        from modulo.core.capacity_providers import build_platform_capacity_probe
+        from modulo.db.capacity import set_platform_capacity_probe
+
+        set_platform_capacity_probe(build_platform_capacity_probe(get_settings()))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("saq_worker.capacity_platform_probe_failed", exc_info=True)
 
     settings = get_settings()
     if not settings.redis_url:

@@ -362,24 +362,24 @@ class TestFindNewerVersion:
 
 
 class TestLoadInstall:
-    async def test_missing(self) -> None:
+    async def test_missing_install_raises_not_found(self) -> None:
         session = _session()
         with pytest.raises(UpgradeInstallNotFoundError):
             await _load_install(session, uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
 
-    async def test_wrong_collection(self) -> None:
+    async def test_collection_mismatch_raises_not_found(self) -> None:
         inst = _install()
         session = _session(get_map={(CollectionInstall, inst.install_id): inst})
         with pytest.raises(UpgradeInstallNotFoundError):
             await _load_install(session, inst.organisation_id, inst.install_id, uuid.uuid4())
 
-    async def test_wrong_org(self) -> None:
+    async def test_org_mismatch_raises_not_found(self) -> None:
         inst = _install()
         session = _session(get_map={(CollectionInstall, inst.install_id): inst})
         with pytest.raises(UpgradeInstallNotFoundError):
             await _load_install(session, uuid.uuid4(), inst.install_id, inst.collection_id)
 
-    async def test_ok(self) -> None:
+    async def test_matching_install_is_returned(self) -> None:
         inst = _install()
         session = _session(get_map={(CollectionInstall, inst.install_id): inst})
         assert await _load_install(session, inst.organisation_id, inst.install_id, inst.collection_id) is inst
@@ -1073,6 +1073,7 @@ class TestUpgradeCollection:
         assert ("wf", "pipeline") in preserved
         reported = {(r["slug"], r["change"]) for r in result["reported"]}
         assert ("a_add", "added") in reported
+        assert ("s_add", "removed") in reported
         assert any("could not be resolved" in w for w in result["warnings"])
         # install repointed at the new version and snapshot refreshed
         assert install.collection_version == "1.1"
@@ -1285,7 +1286,7 @@ async def _run_upgrade(
 
 
 class TestUpgradeCollectionBranches:
-    async def test_schema_branch_paths(self) -> None:
+    async def test_schema_delta_reconciles_unmodified_and_preserves_modified(self) -> None:
         org = uuid.uuid4()
         e_ok, e_false, e_nofp, e_mod, e_other, e_x, e_u = (str(uuid.uuid4()) for _ in range(7))
         delta = {
@@ -1319,13 +1320,13 @@ class TestUpgradeCollectionBranches:
             new_manifest_pins=[{"slug": s, "version": "1.1"} for s in resolve_map],
         )
         reconciled = {(r["slug"], r["entity_type"]) for r in result["reconciled"]}
-        assert ("s_ok", "schema") in reconciled
-        assert ("s_nofp", "schema") in reconciled
+        assert reconciled == {("s_ok", "schema"), ("s_nofp", "schema")}
         preserved = {(p["slug"], p["entity_type"]) for p in result["preserved"]}
-        assert ("s_mod", "schema") in preserved
-        assert any("could not be resolved" in w for w in result["warnings"])
+        assert preserved == {("s_mod", "schema")}
+        assert not result["reported"]
+        assert any("'s_noprim' could not be resolved" in w for w in result["warnings"])
 
-    async def test_agent_branch_paths(self) -> None:
+    async def test_agent_delta_reconciles_unmodified_and_preserves_modified(self) -> None:
         org = uuid.uuid4()
         a_ok, a_false, a_nofp, a_mod, a_other, a_x = (str(uuid.uuid4()) for _ in range(6))
         delta = {
@@ -1357,13 +1358,13 @@ class TestUpgradeCollectionBranches:
             new_manifest_pins=[{"slug": s, "version": "1.1"} for s in resolve_map],
         )
         reconciled = {(r["slug"], r["entity_type"]) for r in result["reconciled"]}
-        assert ("a_ok", "agent") in reconciled
-        assert ("a_nofp", "agent") in reconciled
+        assert reconciled == {("a_ok", "agent"), ("a_nofp", "agent")}
         preserved = {(p["slug"], p["entity_type"]) for p in result["preserved"]}
-        assert ("a_mod", "agent") in preserved
-        assert any("could not be resolved" in w for w in result["warnings"])
+        assert preserved == {("a_mod", "agent")}
+        assert not result["reported"]
+        assert any("'a_noprim' could not be resolved" in w for w in result["warnings"])
 
-    async def test_workflow_branch_paths(self) -> None:
+    async def test_workflow_delta_reconciles_embedded_and_preserves_structural(self) -> None:
         org = uuid.uuid4()
         pipe, e_wa, e_ws, e_wmod, e_wn, e_wf, e_wmis = (str(uuid.uuid4()) for _ in range(7))
         delta = {
@@ -1432,16 +1433,14 @@ class TestUpgradeCollectionBranches:
             new_manifest_pins=[{"slug": s, "version": "1.1"} for s in resolve_map],
         )
         preserved = {(p["slug"], p["entity_type"]) for p in result["preserved"]}
-        assert ("w_ok", "pipeline") in preserved  # structural
-        assert ("w_mod", "agent") in preserved  # modified embedded agent
+        assert preserved == {("w_ok", "pipeline"), ("w_mod", "agent")}
         reconciled = {(r["slug"], r["entity_type"]) for r in result["reconciled"]}
-        assert ("w_ok", "agent") in reconciled
-        assert ("w_ok", "schema") in reconciled
+        assert reconciled == {("w_ok", "agent"), ("w_ok", "schema"), ("w_nofp", "agent")}
         warnings = result["warnings"]
-        assert any("could not be resolved" in w for w in warnings)
-        assert any("not aligned" in w for w in warnings)
+        assert any("'w_noprim' could not be resolved" in w for w in warnings)
+        assert any("'w_mis' not aligned" in w for w in warnings)
         reported = {(r["slug"], r["change"]) for r in result["reported"]}
-        assert ("added", "added") in reported
+        assert reported == {("added", "added")}
 
     async def test_fills_missing_primitive_type_on_old_pins(self) -> None:
         org = uuid.uuid4()

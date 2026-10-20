@@ -98,9 +98,9 @@ def _run_state() -> dict[str, Any]:
     }
 
 
-def _install_log_tail(monkeypatch: pytest.MonkeyPatch, tail: bytes = b"r4-tail") -> AsyncMock:
+def _install_log_tail(monkeypatch: pytest.MonkeyPatch, tail: bytes = b"r4-tail") -> MagicMock:
     """Route the R1 log-tail seam to a fake so the dispatch never hits urllib."""
-    builder = AsyncMock(return_value=MagicMock(read_log_tail=AsyncMock(return_value=tail)))
+    builder = MagicMock(return_value=MagicMock(read_log_tail=AsyncMock(return_value=tail)))
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_log_tail_provider", builder)
     return builder
 
@@ -644,7 +644,7 @@ async def test_provider_selected_allowlist_rides_the_spec_metadata(
     isolation = MagicMock(apply_isolation=AsyncMock())
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_isolation_provider",
-        AsyncMock(return_value=isolation),
+        MagicMock(return_value=isolation),
     )
 
     allowlist = [{"host": "api.example.com", "port": 443}]

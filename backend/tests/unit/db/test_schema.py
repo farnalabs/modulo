@@ -1,5 +1,58 @@
 from modulo.db.models import Base
 
+# Tables DELIBERATELY exempt from the "every resource table carries an
+# ``organisation_id`` column" rule. Membership is PINNED by
+# ``test_org_scoped_exempt_tables_is_pinned`` below (mirroring
+# ``test_rls_coverage.py``'s ``test_organisations_table_is_the_only_exclusion``):
+# adding a table here is a deliberate, reviewable act, never a silent escape.
+_ORG_SCOPED_EXEMPT_TABLES: frozenset[str] = frozenset(
+    {
+        # Root tenant entity — read before an org context exists.
+        "organisations",
+        "accounts",
+        "system_config",
+        # system_audit_events (FAR-1517) is the org-independent durable ledger:
+        # it records the org id as a PLAIN ``org_id`` value on purpose, because
+        # the organisation_id column is exactly what the RLS regime and the ORM
+        # tenant filter key on, and both must not scope the record out once the
+        # org is gone.
+        "system_audit_events",
+        "tier_catalog",
+        "feature_flag_catalog",
+        "library_sync_state",
+        # collection_install_entity is the per-entity child of the org-scoped
+        # collection_install table; access is always via the parent's
+        # install_id, so it deliberately carries no organisation_id of its own.
+        "collection_install_entity",
+        # organisation_cost_state (FAR-1833) is a one-row-per-org child keyed by
+        # ``org_id`` (its primary key), not ``organisation_id``, so it is outside
+        # the generic organisation_id sweep. It STILL enables its own ``org_id``
+        # RLS policy (migration 0321) — the exemption here is about the column
+        # name, not the tenancy posture.
+        "organisation_cost_state",
+    }
+)
+
+
+def test_org_scoped_exempt_tables_is_pinned() -> None:
+    """Pin the exact organisation_id-exemption set.
+
+    A future addition to the exemption set must be deliberate (and reviewed),
+    never a silent way to dodge the organisation_id contract — the same guard
+    style as ``test_rls_coverage.py::test_organisations_table_is_the_only_exclusion``.
+    """
+    assert sorted(_ORG_SCOPED_EXEMPT_TABLES) == [
+        "accounts",
+        "collection_install_entity",
+        "feature_flag_catalog",
+        "library_sync_state",
+        "organisation_cost_state",
+        "organisations",
+        "system_audit_events",
+        "system_config",
+        "tier_catalog",
+    ]
+
 
 def test_initial_schema_contains_required_tables() -> None:
     required = {
@@ -25,7 +78,6 @@ def test_initial_schema_contains_required_tables() -> None:
         "error_notification_rules",
         "eval_cases",
         "eval_datasets",
-        "eval_definitions",
         "eval_results",
         "eval_suites",
         "evals",
@@ -61,6 +113,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "org_api_keys",
         "org_daily_run_counts",
         "org_memberships",
+        "organisation_cost_state",
         "organisations",
         "pipeline_edges",
         "pipeline_folders",
@@ -110,24 +163,7 @@ def test_initial_schema_contains_required_tables() -> None:
 
 def test_all_resource_tables_are_organisation_scoped() -> None:
     for name, table in Base.metadata.tables.items():
-        if name not in (
-            "organisations",
-            "accounts",
-            "system_config",
-            # system_audit_events (FAR-1517) is the org-independent durable
-            # ledger: it records the org id as a PLAIN ``org_id`` value on
-            # purpose, because the organisation_id column is exactly what the
-            # RLS regime and the ORM tenant filter key on, and both must not
-            # scope the record out once the org is gone.
-            "system_audit_events",
-            "tier_catalog",
-            "feature_flag_catalog",
-            "library_sync_state",
-            # collection_install_entity is the per-entity child of the org-scoped
-            # collection_install table; access is always via the parent's
-            # install_id, so it deliberately carries no organisation_id of its own.
-            "collection_install_entity",
-        ):
+        if name not in _ORG_SCOPED_EXEMPT_TABLES:
             assert "organisation_id" in table.c, f"{name} is missing organisation_id"
 
 

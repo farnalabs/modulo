@@ -7,7 +7,11 @@ invariants:
 
 1. **Parity** — for a representative fixture of raw run rows, the new
    SQL-aggregated implementation produces buckets identical to the RETIRED
-   Python algorithm (transcribed below as the reference). The SQL semantics
+   Python algorithm (transcribed below as the reference), plus ONE
+   documented FAR-1780 delta applied to BOTH sides: the per-entry billable
+   filter (non-billable `billable: false` self_reported entries are
+   excluded from the summed amounts, since the in-process total now sums
+   billable entries only). The SQL semantics
    are transliterated into Python by ``_sql_aggregate_rows`` /
    ``_sql_legacy_total``; a real-Postgres integration run is what proves the
    SQL text itself (unit mocks cannot), so the SQL is kept conservative:
@@ -32,7 +36,10 @@ import pytest
 
 from modulo.core.cost_controller import (
     _REPORT_COMPONENT_LIMIT,
+    _SQL_COST_COMPONENT_BUCKETS,
+    _SQL_EXPORT_MODEL,
     build_cost_report_buckets,
+    get_cost_export_rows,
 )
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -58,6 +65,19 @@ def _freeze_datetime() -> Any:
 # ---------------------------------------------------------------------------
 
 
+def _is_billable_excluded(entry: dict[str, Any]) -> bool:
+    """FAR-1780: the per-entry billable filter (shared by reference + SQL).
+
+    Matches the buckets SQL's ``IS DISTINCT FROM 'false'`` WHERE:
+    an explicit JSON-boolean ``false`` ``billable`` excludes the entry;
+    every other value (``True``, absent, non-boolean, null) defaults to
+    billable, mirroring ``entry.get("billable", True)`` in the in-process
+    aggregator.
+    """
+    billable = entry.get("billable")
+    return isinstance(billable, bool) and billable is False
+
+
 def _reference_buckets_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Runs-derived buckets exactly as the retired Python path computed them.
 
@@ -65,6 +85,13 @@ def _reference_buckets_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     and returns the five runs-derived keys. The ledger-derived keys
     (``annotations_by_team``, ``org_run_count``) come from other queries and
     are out of scope.
+
+    ``_is_billable_excluded`` is a deliberate POST-retirement delta (FAR-1780)
+    applied to BOTH the reference and the SQL transliteration: the run's
+    stored breakdown now carries non-billable self_reported entries the
+    retired path could never see, so summing them would drift the buckets
+    above the billed money. Excluding them FIRST restores the parity
+    invariant (buckets == billed components).
     """
     from modulo.core.cost_controller import _report_amount
 
@@ -88,6 +115,8 @@ def _reference_buckets_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         bucket = team_components.setdefault(team_id, {})
         for entry in breakdown:
             if not isinstance(entry, dict):
+                continue
+            if _is_billable_excluded(entry):
                 continue
             name = entry.get("component")
             if not isinstance(name, str) or not name:
@@ -182,6 +211,8 @@ def _sql_aggregate_rows(rows: list[dict[str, Any]]) -> list[SimpleNamespace]:
         team_id = row["owner_team_id"]
         for elem in breakdown:
             if not isinstance(elem, dict):
+                continue
+            if _is_billable_excluded(elem):
                 continue
             name = elem.get("component")
             if not isinstance(name, str) or not name:
@@ -308,6 +339,24 @@ def _representative_rows() -> list[dict[str, Any]]:
                 {"component": "credit", "amount_usd": "-0.250000"},
             ],
         },
+        {  # FAR-1780: the billable filter — a declared self_reported entry
+            # (billable false, EXCLUDED from the summed amounts), an explicit
+            # billable true and a legacy-style entry with NO billable key
+            # (both default to billable, INCLUDED).
+            "owner_team_id": _TEAM_B,
+            "total_cost_usd": Decimal("1.500000"),
+            "cost_breakdown": [
+                {
+                    "component": "model_declared",
+                    "source": "self_reported",
+                    "provenance": "reported",
+                    "billable": False,
+                    "amount_usd": "4.000000",
+                },
+                {"component": "storage_explicit", "billable": True, "amount_usd": "0.600000"},
+                {"component": "ingress", "amount_usd": "0.900000"},
+            ],
+        },
     ]
 
 
@@ -339,6 +388,11 @@ def test_fixture_covers_the_distinguishing_branches() -> None:
     ]
     assert buckets["components_by_team"][team_b_key] == [
         {"name": "tokens", "amount_usd": "1.250000"},
+        # ingress (0.900000) and storage_explicit (0.600000) from the billable
+        # filter run; model_declared (4.000000, billable false) is ABSENT —
+        # the declared money never enters the buckets.
+        {"name": "ingress", "amount_usd": "0.900000"},
+        {"name": "storage_explicit", "amount_usd": "0.600000"},
         {"name": "egress", "amount_usd": "0.300000"},
         {"name": "model", "amount_usd": "0.100000"},
         {"name": "zero", "amount_usd": "0.000000"},
@@ -347,8 +401,10 @@ def test_fixture_covers_the_distinguishing_branches() -> None:
     assert buckets["components_by_team"]["__org__"] == [{"name": "storage", "amount_usd": "0.750000"}]
     assert buckets["legacy_total"] == "2.000000"
     assert buckets["org_unassigned_components"] == "0.750000"
-    # team_a 2.0 + 0.25, team_b 1.25 + 0.30 + 0.10 + 0.0 - 0.25, org 0.75, legacy 2.0
-    assert buckets["org_total"] == "6.400000"
+    # team_a 2.0 + 0.25, team_b 1.25 + 0.90 + 0.60 + 0.30 + 0.10 + 0.0 - 0.25
+    # (= 2.90), org 0.75, legacy 2.0 — the declared 4.000000 (billable false)
+    # is NOT in the total.
+    assert buckets["org_total"] == "7.900000"
     assert buckets["has_more"] is False
 
 
@@ -396,6 +452,74 @@ async def test_none_amount_component_is_kept_as_zero_row() -> None:
     buckets = await build_cost_report_buckets(session, org_id=_ORG_ID, period="month")
 
     assert buckets["components_by_team"][str(_TEAM_A)] == [{"name": "zero", "amount_usd": "0.000000"}]
+
+
+async def test_billable_false_component_is_excluded_from_buckets() -> None:
+    """A declared-only self_reported entry (billable false) contributes 0.
+
+    The run stores the agent's declared cost with ``billable: false`` and the
+    in-process total now excludes non-billable entries, so a run whose
+    breakdown is DECLARED ONLY must not materialise any bucket row: the team
+    key is absent (like the malformed-drop case) and ``org_total`` stays
+    0.000000 instead of carrying the declared 0.040000. An explicit
+    ``billable: true`` and a legacy-style entry WITHOUT a billable key are
+    still summed (the SQL's per-entry filter defaults them to billable).
+    """
+    rows = [
+        {
+            "owner_team_id": _TEAM_A,
+            "total_cost_usd": Decimal("0.040000"),
+            "cost_breakdown": [
+                {
+                    "component": "model_declared",
+                    "source": "self_reported",
+                    "provenance": "reported",
+                    "billable": False,
+                    "amount_usd": "0.040000",
+                },
+            ],
+        }
+    ]
+    session = _mock_session(_sql_aggregate_rows(rows), _sql_legacy_total(rows))
+
+    buckets = await build_cost_report_buckets(session, org_id=_ORG_ID, period="month")
+
+    assert str(_TEAM_A) not in buckets["components_by_team"]
+    assert not buckets["components_by_team"]
+    assert buckets["org_total"] == "0.000000"
+
+
+async def test_billable_true_and_absent_key_entries_are_still_summed() -> None:
+    """The billable filter only excludes JSON-boolean false; everything else stays.
+
+    Guards the filter against over-matching: an explicit ``billable: true``
+    and a pre-FAR-1780 entry with NO ``billable`` key (which is DISTINCT FROM
+    JSON-boolean ``false``) must both keep contributing — they mirror the
+    Python aggregator's ``entry.get("billable", True)`` default.
+    """
+    rows = [
+        {
+            "owner_team_id": _TEAM_A,
+            "total_cost_usd": Decimal("1.500000"),
+            "cost_breakdown": [
+                {"component": "explicit_true", "billable": True, "amount_usd": "1.000000"},
+                {"component": "legacy_absent", "amount_usd": "0.500000"},
+                {"component": "null_billable", "billable": None, "amount_usd": "2.000000"},
+                {"component": "string_billable", "billable": "false", "amount_usd": "3.000000"},
+            ],
+        }
+    ]
+    session = _mock_session(_sql_aggregate_rows(rows), _sql_legacy_total(rows))
+
+    buckets = await build_cost_report_buckets(session, org_id=_ORG_ID, period="month")
+
+    entries = buckets["components_by_team"][str(_TEAM_A)]
+    assert entries == [
+        {"name": "string_billable", "amount_usd": "3.000000"},
+        {"name": "null_billable", "amount_usd": "2.000000"},
+        {"name": "explicit_true", "amount_usd": "1.000000"},
+        {"name": "legacy_absent", "amount_usd": "0.500000"},
+    ]
 
 
 async def test_components_sorted_by_amount_desc_then_name() -> None:
@@ -507,6 +631,10 @@ async def test_component_buckets_statement_expands_and_groups_in_sql() -> None:
     assert "total_clamped" in components_sql
     assert ":org_id" in components_sql
     assert ":since" in components_sql
+    # FAR-1780: the per-entry billable filter rides the lateral WHERE as the
+    # null-safe IS DISTINCT FROM predicate, so the buckets sum billable money
+    # only (declared self_reported entries are the non-billable agents' claims).
+    assert "elem->'billable' IS DISTINCT FROM 'false'::jsonb" in components_sql
     # self-contained fragment: only the runs table is named in its own FROM
     assert "FROM runs" in components_sql
     assert "org_daily_run_counts" not in components_sql
@@ -539,6 +667,45 @@ async def test_numeric_string_regex_is_embedded_in_the_buckets_sql() -> None:
     components_sql = str(session.execute.await_args_list[0].args[0])
     occurrences = components_sql.count(_NUMERIC_STRING_RE)
     assert occurrences == 2
+
+
+async def test_export_model_statement_applies_the_billable_filter() -> None:
+    """FAR-1780 NEW-2: the per-model export CSV sums BILLABLE entries only.
+
+    ``_SQL_EXPORT_MODEL`` (behind ``get_cost_export_rows(group_by="model")``)
+    drives the /admin/costs export CSV; summing the agent's DECLARED unbilled
+    ``billable: false`` self_reported entries there would drift the CSV's
+    ``total_spend_usd`` above the billed components the buckets now sum. The
+    filter rides the lateral WHERE as the null-safe ``IS DISTINCT FROM``
+    predicate, so an absent key, a JSON-null or any non-boolean value defaults
+    to billable while only a JSON-boolean ``false`` is excluded.
+    """
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+
+    rows = await get_cost_export_rows(session, org_id=_ORG_ID, group_by="model", period="month")
+
+    assert rows == []
+    export_sql = str(session.execute.await_args_list[0].args[0])
+    assert "elem->'billable' IS DISTINCT FROM 'false'::jsonb" in export_sql
+    assert "elem->>'source' = 'self_reported'" in export_sql
+    params = session.execute.await_args_list[0].args[1]
+    assert params["org_id"] == _ORG_ID
+    assert "pattern" in params
+
+
+def test_export_model_billable_filter_mirrors_the_buckets_filter() -> None:
+    """The export SQL's per-entry billable filter is the BUCKETS filter, verbatim.
+
+    Mirrored-semantics pin: both static literals must carry the exact same
+    null-safe ``IS DISTINCT FROM 'false'`` predicate, so a drift on one
+    surface (buckets vs /admin/costs export) cannot ship silently. A mock
+    cannot execute SQL — the DB-level proof of the filter is the real-Postgres
+    integration run in ``tests/integration/test_cost_buckets_sql_execution.py``.
+    """
+    fragment = "elem->'billable' IS DISTINCT FROM 'false'::jsonb"
+    assert fragment in _SQL_COST_COMPONENT_BUCKETS
+    assert fragment in _SQL_EXPORT_MODEL
 
 
 async def test_queries_are_scoped_to_org_and_period() -> None:

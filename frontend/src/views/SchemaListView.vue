@@ -138,14 +138,14 @@
                     <td class="px-4 py-3">
                       <span
                         v-if="schema.deprecated"
-                        class="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive"
+                        class="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive-text"
                       >
                         <span class="h-1.5 w-1.5 rounded-full bg-destructive" aria-hidden="true" />
                         {{ $t('views.SchemaListView.deprecated') }}
                       </span>
                       <span
                         v-else
-                        class="inline-flex items-center gap-1 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success"
+                        class="inline-flex items-center gap-1 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success-text"
                       >
                         <span class="h-1.5 w-1.5 rounded-full bg-success" aria-hidden="true" />
                         {{ $t('views.SchemaListView.active') }}

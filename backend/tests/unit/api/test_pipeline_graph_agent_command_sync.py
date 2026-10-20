@@ -7,9 +7,20 @@ PATCH read back correctly but every run silently executed the stale Agent-row
 command. These tests pin the sync ("what you PATCH is what runs") at three
 levels: the pure extractor, the DB sync helper against a mocked session, and
 the PUT /graph endpoint wiring.
+
+FAR-1845: every writer of node-level ``agent_commands`` must run this sync
+inside the same transaction, before the graph write. The three writers are the
+REST graph-write endpoints (covered here), the MCP full-graph writer
+(``test_mcp_graph_writer_syncs_agent_rows_before_the_graph_write``) and the
+snapshot-rollback writer (``test_rollback_endpoint_*``). The rollback path was
+the remaining divergence: it rewrote ``graph_nodes_json`` from the target
+snapshot with no Agent-row sync, so a restored command read back from the graph
+but was overwritten by the stale Agent row at run-snapshot time.
 """
 
 import uuid
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,6 +29,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from modulo.api import mcp_server as ms
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
 from modulo.api.main import app
 from modulo.api.routes.pipelines import (
@@ -38,6 +50,7 @@ _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _PIPELINE_ID = uuid.uuid4()
+_SNAP_ID = uuid.UUID("44444444-4444-4444-4444-444444444444")
 
 _REPO = "https://github.com/example/repo.git"
 _SHA_A = "a" * 40
@@ -527,3 +540,240 @@ async def test_finalize_locked_graph_save_maps_unpinned_ref_to_422() -> None:
 
     assert exc_info.value.status_code == 422
     assert "not pinned" in exc_info.value.detail
+
+
+# ---------------------------------------------------------------------------
+# FAR-1845: the snapshot-rollback writer must sync the restored nodes'
+# agent_commands into their bound Agent rows, inside the same transaction and
+# BEFORE the graph write — "what you restore is what runs".
+#
+# The route's post-lock callback rides ``rollback_to_snapshot``'s
+# ``post_lock_gate`` hook (FAR-1515), which the production function invokes
+# under the pipeline row lock and BEFORE it rewrites ``graph_nodes_json``. The
+# fake below reproduces that documented invocation point so the test pins the
+# route's ordering (sync -> connector gate -> write) without standing up the
+# whole snapshot machinery.
+# ---------------------------------------------------------------------------
+
+
+def _snapshot_for_response() -> MagicMock:
+    """A stand-in the rollback response serialiser can render."""
+    s = MagicMock()
+    s.id = uuid.uuid4()
+    s.pipeline_id = _PIPELINE_ID
+    s.snapshot_version = 4
+    s.tag = None
+    s.notes = None
+    s.created_at = datetime(2025, 1, 1, tzinfo=UTC)
+    s.account_id = _USER_ID
+    s.version_kind = "edit"
+    s.created_kind = "rollback"
+    s.draft = False
+    s.channel = "none"
+    s.environment_profile_id = None
+    return s
+
+
+def _locked_pipeline() -> MagicMock:
+    p = MagicMock()
+    p.organisation_id = _ORG_ID
+    p.owner_team_id = None
+    return p
+
+
+async def test_rollback_endpoint_syncs_agent_rows_from_the_restored_snapshot(client: TestClient) -> None:
+    """Wiring + ordering: the rollback post-lock gate runs the FAR-488a
+    Agent-row sync with the TARGET snapshot's nodes (and the locked pipeline's
+    org id) BEFORE the graph write, then still runs the connector-team gate.
+
+    FAILS without the FAR-1845 change: the pre-change callback only ran the
+    connector gate (and returned early when the graph had no connector
+    bindings), so no Agent-row sync was ever invoked on rollback.
+    """
+    agent_id = uuid.uuid4()
+    connector_id = uuid.uuid4()
+    restored_node = _node(uuid.uuid4(), agent_id=agent_id, agent_commands=["opencode run -- restored"])
+    restored_node["connector_binding"] = {"type": "github", "instance_id": str(connector_id)}
+    target = MagicMock()
+    target.graph_json = {"nodes": [restored_node], "edges": []}
+    pipeline = _locked_pipeline()
+    new_snapshot = _snapshot_for_response()
+
+    order: list[str] = []
+    sync_calls: list[dict[str, Any]] = []
+
+    async def _fake_rollback(*_args: Any, **kwargs: Any) -> MagicMock:
+        # Production ``rollback_to_snapshot`` invokes ``post_lock_gate`` under
+        # the row lock and BEFORE it rewrites graph_nodes_json — reproduce that
+        # call site exactly.
+        order.append("rollback_start")
+        await kwargs["post_lock_gate"](target, pipeline)
+        order.append("graph_write")
+        return new_snapshot
+
+    async def _record_sync(*_args: Any, **kwargs: Any) -> int:
+        order.append("sync")
+        sync_calls.append(kwargs)
+        return 1
+
+    async def _record_gate(*_args: Any, **_kwargs: Any) -> None:
+        order.append("connector_gate")
+
+    with (
+        patch("modulo.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
+        patch("modulo.api.routes.pipelines._enforce_connector_team_bindings", new=_record_gate),
+    ):
+        resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAP_ID}/rollback")
+
+    assert resp.status_code == 200, resp.text
+    assert order == ["rollback_start", "sync", "connector_gate", "graph_write"], order
+    assert len(sync_calls) == 1
+    assert sync_calls[0]["org_id"] == _ORG_ID
+    assert sync_calls[0]["nodes"] == target.graph_json["nodes"]
+
+
+async def test_rollback_endpoint_syncs_even_without_connector_bindings(client: TestClient) -> None:
+    """The Agent-row sync is NOT behind the connector gate's early return: a
+    restored graph with no connector bindings still syncs (the pre-change hook
+    returned before doing anything when there were no bindings)."""
+    agent_id = uuid.uuid4()
+    restored_node = _node(uuid.uuid4(), agent_id=agent_id, agent_commands=["opencode run -- restored"])
+    target = MagicMock()
+    target.graph_json = {"nodes": [restored_node], "edges": []}
+    pipeline = _locked_pipeline()
+
+    sync_calls: list[dict[str, Any]] = []
+
+    async def _fake_rollback(*_args: Any, **kwargs: Any) -> MagicMock:
+        await kwargs["post_lock_gate"](target, pipeline)
+        return _snapshot_for_response()
+
+    async def _record_sync(*_args: Any, **kwargs: Any) -> int:
+        sync_calls.append(kwargs)
+        return 1
+
+    gate_mock = AsyncMock()
+    with (
+        patch("modulo.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
+        patch("modulo.api.routes.pipelines._enforce_connector_team_bindings", new=gate_mock),
+    ):
+        resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAP_ID}/rollback")
+
+    assert resp.status_code == 200, resp.text
+    assert len(sync_calls) == 1
+    assert sync_calls[0]["nodes"] == target.graph_json["nodes"]
+    gate_mock.assert_not_awaited()
+
+
+async def test_rollback_endpoint_maps_unpinned_ref_sync_to_422(client: TestClient) -> None:
+    """A poisoned (unpinned ``git+``) ref in the restored snapshot fails the
+    rollback closed: the sync's ``GitContentRefError`` maps to HTTP 422 (the
+    same mapping every graph-write endpoint uses), never the decorator's 500.
+    Mirrors ``test_put_graph_endpoint_maps_unpinned_ref_sync_to_422``."""
+    agent_id = uuid.uuid4()
+    restored_node = _node(uuid.uuid4(), agent_id=agent_id, agent_commands=[_UNPINNED_REF])
+    target = MagicMock()
+    target.graph_json = {"nodes": [restored_node], "edges": []}
+    pipeline = _locked_pipeline()
+    sync_error = GitContentRefError("agent_commands[0] git content ref ... is not pinned to a commit SHA")
+
+    async def _fake_rollback(*_args: Any, **kwargs: Any) -> MagicMock:
+        await kwargs["post_lock_gate"](target, pipeline)
+        return _snapshot_for_response()
+
+    with (
+        patch("modulo.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(side_effect=sync_error)),
+    ):
+        resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAP_ID}/rollback")
+
+    assert resp.status_code == 422
+    assert "not pinned" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-1845: per-writer coverage for the MCP full-graph writer.
+#
+# The MCP write already syncs (FAR-1810 / PR #1848) but had no test pinning it;
+# the ordering matters for the same reason as the REST path — the write mints
+# the edit snapshot whose ``_materialize_agent_fields`` overwrites bound nodes
+# from the Agent row, so a sync that ran after the write would pin the stale
+# command into the snapshot.
+# ---------------------------------------------------------------------------
+
+
+async def test_mcp_graph_writer_syncs_agent_rows_before_the_graph_write() -> None:
+    """The MCP ``_replace_pipeline_graph_txn`` writer takes the pipeline row
+    lock BEFORE the FAR-488a Agent-row sync, which in turn runs BEFORE
+    ``replace_pipeline_graph`` stamps the edit snapshot.
+
+    FAR-1845: the standardised order is Pipeline -> Agent. Syncing first (which
+    UPDATEs Agent rows, flushed by autoflush) and only then taking the pipeline
+    ``FOR UPDATE`` would acquire Agent -> Pipeline and could deadlock a
+    concurrent graph write or snapshot rollback sharing an Agent.
+    """
+    order: list[str] = []
+    nodes = [_node(uuid.uuid4(), agent_id=uuid.uuid4(), agent_commands=["opencode run -- mcp"])]
+    pipeline = MagicMock()
+    pipeline.owner_team_id = None
+    pipeline.graph_nodes_json = []
+
+    lock_statements: list[Any] = []
+
+    class _LockResult:
+        def scalar_one_or_none(self) -> Any:
+            return pipeline
+
+    async def _record_pipeline_lock(stmt: Any, *_args: Any, **_kwargs: Any) -> _LockResult:
+        # FAR-1845: capture the statement, not just the ordering. Without this
+        # the test still passes if the lock degrades to a plain ``select``.
+        lock_statements.append(stmt)
+        order.append("lock")
+        return _LockResult()
+
+    async def _record_sync(*_args: Any, **_kwargs: Any) -> int:
+        order.append("sync")
+        return 1
+
+    async def _record_replace(*_args: Any, **_kwargs: Any) -> tuple[list[Any], list[Any]]:
+        order.append("replace")
+        return (nodes, [])
+
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=_record_pipeline_lock)
+
+    @asynccontextmanager
+    async def _fake_session(_org_id: uuid.UUID):
+        yield session
+
+    with (
+        patch.object(ms, "_session", _fake_session),
+        patch.object(ms, "_reject_unsupported_dispatch_bindings", new=AsyncMock(return_value=None)),
+        patch.object(ms, "_team_scoped_key_mismatch", return_value=False),
+        patch.object(ms, "merge_masked_graph_nodes", new=lambda incoming, _stored: incoming),
+        patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+        patch("modulo.db.crud.pipeline.replace_pipeline_graph", new=_record_replace),
+        patch("modulo.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
+    ):
+        result = await ms._replace_pipeline_graph_txn(
+            _ORG_ID,
+            uuid.uuid4(),
+            str(uuid.uuid4()),
+            nodes,
+            [],
+            is_privileged=True,
+            graph_account_id=_USER_ID,
+            is_guardrail_admin=False,
+        )
+
+    assert order == ["lock", "sync", "replace"], order
+    assert len(lock_statements) == 1, lock_statements
+    lock_stmt = lock_statements[0]
+    assert lock_stmt._for_update_arg is not None  # type: ignore[attr-defined]
+    assert "FROM pipelines" in str(lock_stmt)
+    assert "FOR UPDATE" in str(lock_stmt)
+    assert result[0] == nodes

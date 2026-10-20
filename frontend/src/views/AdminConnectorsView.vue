@@ -9,7 +9,16 @@
       </Button>
     </header>
 
-    <LoadingSpinner v-if="loading" />
+    <!-- STATE-3 (ux-conformance): the column layout is known before the first
+         row arrives, so the loading placeholder is a determinate table
+         skeleton (shared TableSkeleton) instead of an indeterminate spinner. -->
+    <TableSkeleton
+      v-if="loading"
+      :columns="5"
+      :rows="5"
+      :aria-label="$t('common.loading')"
+      data-testid="admin-connectors-loading"
+    />
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadConnectors" />
 
@@ -112,12 +121,12 @@
         </form>
       </div>
 
-      <div v-if="nativeConnectors.length === 0" class="card p-8 text-center">
-        <p class="text-lg font-medium">{{ $t('views.AdminConnectorsView.no_connectors_configured') }}</p>
-        <p class="mt-1 text-sm text-muted-foreground">
-          {{ $t('views.AdminConnectorsView.add_a_connector_to_integrate') }}
-        </p>
-      </div>
+      <EmptyState
+        v-if="nativeConnectors.length === 0"
+        :title="$t('views.AdminConnectorsView.no_connectors_configured')"
+        :description="$t('views.AdminConnectorsView.add_a_connector_to_integrate')"
+        data-testid="admin-connectors-empty"
+      />
 
       <div v-else class="table-wrapper overflow-x-auto">
         <table class="w-full text-left text-sm">
@@ -139,7 +148,7 @@
             >
               <td class="table-cell font-medium">{{ connector.name }}</td>
               <td class="table-cell">
-                <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary-text">
                   {{ connector.connector_type }}
                 </span>
               </td>
@@ -147,11 +156,12 @@
               <td class="table-cell">
                 <span
                   class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
-                  :class="connector.enabled ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
+                  :class="connector.enabled ? 'bg-success/10 text-success-text' : 'bg-muted text-muted-foreground'"
                 >
                   <span
                     class="h-1.5 w-1.5 rounded-full"
                     :class="connector.enabled ? 'bg-success' : 'bg-muted-foreground'"
+                    aria-hidden="true"
                   />
                   {{ connector.enabled ? $t('views.AdminConnectorsView.enabled') : $t('views.AdminConnectorsView.disabled') }}
                 </span>
@@ -187,7 +197,7 @@
               >
                 <td class="table-cell font-medium">{{ connector.name }}</td>
                 <td class="table-cell">
-                  <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                  <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary-text">
                     {{ connector.connector_type }}
                   </span>
                 </td>
@@ -286,8 +296,8 @@
       </div>
 
       <div v-if="deleteConfirmConnectorId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-        <p class="text-sm font-medium text-destructive">{{ $t('views.AdminConnectorsView.delete_confirm', { name: deleteConfirmName }) }}</p>
-        <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminConnectorsView.this_action_cannot_be_undone') }}</p>
+        <p class="text-sm font-medium text-destructive-text">{{ $t('views.AdminConnectorsView.delete_confirm', { name: deleteConfirmName }) }}</p>
+        <p class="mt-1 text-sm text-destructive-text">{{ $t('views.AdminConnectorsView.this_action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
           <Button :disabled="deleting" severity="danger" data-testid="admin-connectors-delete-confirm" @click="deleteConnector">
             {{ deleting ? $t('views.AdminConnectorsView.deleting') : $t('views.AdminConnectorsView.delete') }}
@@ -300,7 +310,7 @@
             {{ $t('views.AdminConnectorsView.cancel') }}
           </button>
         </div>
-        <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
+        <div v-if="deleteError" class="mt-2 text-sm text-destructive-text">{{ deleteError }}</div>
       </div>
     </template>
   </div>
@@ -317,7 +327,8 @@ import type { components } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useProductAnalytics } from '../composables/useProductAnalytics'
 import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import TableSkeleton from '../components/shared/TableSkeleton.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'

@@ -359,6 +359,125 @@ def test_enrich_union_sandbox_without_report_has_no_reported_keys() -> None:
     assert not any(key.startswith("reported_") for key in union["node-a"])
 
 
+# ---------------------------------------------------------------------------
+# _fold_datum_provenance — envelope per-datum classes propagate (FAR-1780)
+# ---------------------------------------------------------------------------
+
+
+_PROV_BASE_USAGE = {"node-a": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}}
+
+
+def test_enrich_union_propagates_envelope_datum_provenance() -> None:
+    """A sandbox envelope's per-datum ``reported`` map propagates onto the
+    union's corresponding folded keys (token datums via the shared chain,
+    the model-cost datum onto its pinned keys) — springing from BOTH views
+    (split telemetry, legacy inner output)."""
+    telemetry = {
+        "node-a": {
+            "status": "completed",
+            "model_cost_usd": 0.04,
+            **_REPORTED_TOKENS,
+            "provenance": {
+                "model_cost_usd": "reported",
+                "model_tokens_input": "reported",
+                "model_tokens_total": "reported",
+            },
+        }
+    }
+    union = _enrich_union(_PROV_BASE_USAGE, {}, {"node-a": "sandbox_agent"}, merged_telemetry=telemetry)
+    entry = union["node-a"]
+    # model_cost_raw_usd is NOT stamped: the report carried no raw field, the
+    # fold pops it, and a stamp rides only a SURVIVING value.
+    assert entry["provenance"] == {
+        "model_cost_usd": "reported",
+        "reported_input_tokens": "reported",
+        "reported_total_tokens": "reported",
+    }
+
+
+def test_enrich_union_propagates_from_legacy_inner_output() -> None:
+    """Legacy (non-split) rows carry the map inside the envelope's inner
+    output — the same propagation applies with no telemetry column."""
+    outputs = {
+        "node-a": {
+            "status": "completed",
+            "wall_clock_time_ms": 1500,
+            "model_cost_usd": 0.04,
+            "model_tokens_input": 1234,
+            "provenance": {"model_cost_usd": "reported", "model_tokens_input": "reported"},
+        }
+    }
+    union = _enrich_union(_PROV_BASE_USAGE, outputs, {"node-a": "sandbox_agent"})
+    entry = union["node-a"]
+    # No raw datum declared -> no raw fold -> no raw stamp.
+    assert entry["provenance"] == {"model_cost_usd": "reported", "reported_input_tokens": "reported"}
+
+
+def test_enrich_union_refused_report_is_not_stamped() -> None:
+    """An unproven-zero model-cost report is REFUSED by the fold — and the
+    refused value's key is NOT stamped as the agent's claim (the stamp
+    follows the SURVIVING value, checked post-fold)."""
+    telemetry = {
+        "node-a": {
+            "status": "completed",
+            "model_cost_usd": 0.0,
+            "provenance": {"model_cost_usd": "reported", "model_tokens_input": "reported"},
+        }
+    }
+    union = _enrich_union(_PROV_BASE_USAGE, {}, {"node-a": "sandbox_agent"}, merged_telemetry=telemetry)
+    entry = union["node-a"]
+    assert "model_cost_usd" not in entry
+    assert "provenance" not in entry
+
+
+def test_enrich_union_hostile_class_value_is_not_stamped() -> None:
+    """A producer cannot inject a provenance class map with a foreign value —
+    only the EXACT ``reported`` datum value propagates (engine-assigned,
+    never self-asserted)."""
+    telemetry = {
+        "node-a": {
+            "status": "completed",
+            "model_cost_usd": 0.04,
+            "provenance": {"model_cost_usd": "attested"},
+        }
+    }
+    union = _enrich_union(_PROV_BASE_USAGE, {}, {"node-a": "sandbox_agent"}, merged_telemetry=telemetry)
+    assert "provenance" not in union["node-a"]
+
+
+def test_enrich_union_stale_stored_provenance_is_popped() -> None:
+    """The stored union NEVER carries a provenance class across enriches —
+    replace semantics: a stored map is popped and rebuilt only from THIS
+    enrich's source."""
+    usage = {
+        "node-a": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "reported_input_tokens": 4,
+            "provenance": {"reported_input_tokens": "reported"},
+        }
+    }
+    telemetry = {"node-a": {"status": "completed", "wall_clock_time_ms": 900}}
+    union = _enrich_union(usage, {}, {"node-a": "sandbox_agent"}, merged_telemetry=telemetry)
+    assert "provenance" not in union["node-a"]
+
+
+def test_enrich_union_stamp_absent_when_no_actual_datum_survives() -> None:
+    """A map stamping only engine-set datums (clamped/out-of-band booleans
+    are NOT mapped — engine-authored) with no surviving mapped value
+    produces NO provenance key at all."""
+    telemetry = {
+        "node-a": {
+            "status": "completed",
+            "wall_clock_time_ms": 900,
+            "provenance": {"model_cost_clamped": "reported", "summary": "reported"},
+        }
+    }
+    union = _enrich_union(_PROV_BASE_USAGE, {}, {"node-a": "sandbox_agent"}, merged_telemetry=telemetry)
+    assert "provenance" not in union["node-a"]
+
+
 def test_fold_token_usage_output_absent_keeps_stored_reported() -> None:
     """Branch 3 (output ABSENT): the stored-union reported_* values are the
     fallback authority — left untouched when valid, mirroring

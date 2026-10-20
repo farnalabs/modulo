@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import uuid
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.db.crud.run import (
@@ -32,11 +33,14 @@ from modulo.db.crud.run import (
     _is_valid_pin_entry,
     _merge_rank_guarded_refs,
     _pin_fingerprint_mismatch,
+    _resolve_store_org,
+    _store_run_outputs_with_retry,
     _strip_reserved_keys,
     read_coalesce_key,
     run_idempotency_key,
     run_idempotency_ref,
 )
+from modulo.db.lifecycle_refs import REFS_EVENT_MALFORMED, set_refs_counter_hook
 
 _ORG_ID = uuid.uuid4()
 
@@ -550,3 +554,93 @@ def test_select_guardrail_definitions_with_pins_returns_pinned() -> None:
     )
     result_out = _select_guardrail_definitions([], [output_def], [{"name": "x"}], None)
     assert result_out == []
+
+
+# ---------------------------------------------------------------------------
+# _canonicalise_ref_entries — no assigned-source event when everything drops
+# ---------------------------------------------------------------------------
+
+
+def test_canonicalise_ref_entries_all_malformed_suppresses_assigned_source_event() -> None:
+    """Every entry dropped ⇒ canonical_count is 0, so the assigned-source
+    count is NOT emitted (only the malformed count)."""
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    def _record(event: str, attrs: dict[str, Any]) -> None:
+        events.append((event, dict(attrs)))
+
+    set_refs_counter_hook(_record)
+    try:
+        result = _canonicalise_ref_entries([42, None], force_source="derived")
+    finally:
+        set_refs_counter_hook(None)
+
+    assert result is None
+    assert [event for event, _attrs in events] == [REFS_EVENT_MALFORMED]
+    assert events[0][1] == {"count": 2}
+
+
+# ---------------------------------------------------------------------------
+# _resolve_store_org — the optional row org
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_store_org_uses_session_org_when_row_org_is_absent() -> None:
+    session_org = uuid.uuid4()
+    resolved = _resolve_store_org(session_org, None, origin="unit-test", run_id=uuid.uuid4(), claim_token=None)
+    assert resolved == session_org
+
+
+def test_resolve_store_org_returns_the_matching_row_org() -> None:
+    org = uuid.uuid4()
+    resolved = _resolve_store_org(org, org, origin="unit-test", run_id=uuid.uuid4(), claim_token=None)
+    assert resolved == org
+
+
+# ---------------------------------------------------------------------------
+# _store_run_outputs_with_retry — the second (retry) iteration
+# ---------------------------------------------------------------------------
+
+
+class _RecordingSavepoint:
+    """Async savepoint double counting how many times it was entered."""
+
+    def __init__(self) -> None:
+        self.entries = 0
+
+    async def __aenter__(self) -> None:
+        self.entries += 1
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+
+def _statement_timeout_error() -> OperationalError:
+    err = OperationalError("stmt", {}, Exception("statement timeout"))
+    err.orig = type("_FakePG", (Exception,), {"sqlstate": "57014"})("statement timeout")
+    return err
+
+
+async def test_store_run_outputs_with_retry_enters_the_second_attempt() -> None:
+    """A 57014 on attempt 1 retries in a NEW savepoint (the loop back-edge)
+    and returns without raising when attempt 2 succeeds."""
+    savepoint = _RecordingSavepoint()
+    session = MagicMock()
+    session.begin_nested = MagicMock(return_value=savepoint)
+    replace = AsyncMock(side_effect=[_statement_timeout_error(), None])
+
+    with patch("modulo.db.crud.run.replace_run_node_outputs", replace):
+        await _store_run_outputs_with_retry(
+            session,
+            run_id=uuid.uuid4(),
+            organisation_id=_ORG_ID,
+            outputs={"n1": {"a": 1}},
+            telemetry=None,
+            claim_token=None,
+            origin="unit-test",
+            inherited_outputs=None,
+            inherited_telemetry=None,
+        )
+
+    assert replace.await_count == 2
+    assert savepoint.entries == 2

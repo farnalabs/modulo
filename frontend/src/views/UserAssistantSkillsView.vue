@@ -48,7 +48,7 @@
               <td class="px-4 py-3">
                 <button type="button"
                   class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors"
-                  :class="skill.active ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
+                  :class="skill.active ? 'bg-success/10 text-success-text' : 'bg-muted text-muted-foreground'"
                   :disabled="!!skillToggling[skill.id]"
                   @click="toggleSkillActive(skill)"
                 >

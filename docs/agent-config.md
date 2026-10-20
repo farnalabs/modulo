@@ -127,6 +127,8 @@ Runs on-save (via the REST API's `PUT /{pipeline_id}/graph` endpoint) and pre-ru
 | `TOPOLOGY_UNKNOWN_TARGET` | Error | Edge target references a non-existent node |
 | `TOPOLOGY_CYCLE` | Error | Graph has a cycle or no entry node |
 | `TOPOLOGY_NODE_MISSING_ID` | Error | A node is missing its `id` field |
+| `TOPOLOGY_NODE_RESERVED_ID_PREFIX` | Error | Node id uses the reserved `hitl_review_` prefix, which is reserved for synthesized HITL gate nodes |
+| `TOPOLOGY_NODE_DB_SENTINEL_PREFIX` | Error | Node id uses the reserved `__` prefix, the `run_node_outputs` sentinel namespace (`__run_meta__` / `__unknown__` / `__final__`) |
 | `TOPOLOGY_NESTING_EXCEEDED` | Error | Graph nesting depth exceeds the maximum allowed depth (3) |
 | `TOPOLOGY_UNREACHABLE` | Warning | Node is unreachable from the entry node |
 
@@ -167,15 +169,19 @@ Runs on-save (via the REST API's `PUT /{pipeline_id}/graph` endpoint) and pre-ru
 | `SANDBOX_RESOURCE_LIMITS_UNKNOWN_KEY` | Error | `resource_limits` contains unknown keys (fail-closed, never silently dropped) |
 | `SANDBOX_READ_ONLY_INVALID` | Error | `read_only` is not a genuine boolean (FAR-212) |
 | `SANDBOX_GIT_CREDENTIALS_INVALID` | Error | `git_credentials` scope is not recognised (FAR-212) |
-| `SANDBOX_POLICY_FIELD_ON_NON_SANDBOX` | Error | `read_only` / `git_credentials` set on a non-`sandbox_agent` node |
+| `SANDBOX_POLICY_FIELD_ON_NON_SANDBOX` | Error | `read_only` / `git_credentials` / `single_pr_per_run` / `egress_policy` / `egress_allowlist` set on a non-`sandbox_agent` node |
 | `SANDBOX_WALLCLOCK_BUDGET_INVALID` | Error | `wallclock_budget_seconds` is not a valid positive budget (FAR-296) |
 | `SANDBOX_LOOP_INTERCEPT_MALFORMED` | Error | `loop_intercept` config is not a valid object (FAR-211) |
 | `SANDBOX_LOOP_INTERCEPT_EMPTY_PATTERNS` | Warning | `loop_intercept.intercepted_tool_patterns` is empty; no tool calls will be intercepted |
 | `SANDBOX_SINGLE_PR_PER_RUN_INVALID` | Error | `single_pr_per_run` is not a boolean (true = arm the one-PR-per-run guard for this sandbox run) |
 | `SANDBOX_MANAGED_INPUTS_INVALID` | Error | The sandbox node's managed workspace inputs config is invalid |
+| `SANDBOX_MODEL_VAR_REQUIRES_MODEL_CLASS` | Error | The `{{ model }}` template variable has no resolution source (the node's `model_class`, or registry pipeline-map / `pipelines_default` coverage for this pipeline); without one the reference would render empty and dispatch the sandbox with a blank model (FAR-1743 / ADR 037) |
 
 **Dispatch / connector binding (FAR-1141)**
 
 | Code | Severity | Rule |
 |---|---|---|
+| `CONNECTOR_NOT_FOUND` | Error | A connector binding references a `connector_instance_id` that does not resolve to an existing connector instance |
+| `CONNECTOR_INACTIVE` | Error | A connector binding targets an instance whose status is not `active` |
+| `CONNECTOR_MISSING_OPERATIONS` | Error | A connector binding targets an instance whose allowed-operations ACL does not permit an operation the node's routed verb requires |
 | `CONNECTOR_DISPATCH_UNSUPPORTED` | Error | A dispatch binding targets a connector instance whose type does not implement the CI-runner operations (`trigger_run` / `get_run_status` / `get_run_logs` / `list_runs`) |

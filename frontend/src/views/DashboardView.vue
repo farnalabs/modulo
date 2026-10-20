@@ -76,7 +76,7 @@
               </span>
               <span class="text-xs text-muted-foreground">{{ summary.eval_pass_rate.total_evals }} {{ $t('views.DashboardView.total_evals') }}</span>
             </div>
-            <Sparkline class="mt-2 h-12 w-full" :data="evalSparklineData" :labels="summaryTrendLabels" missing-data="carry-forward" unit="%" color="hsl(var(--primary))" :show-y-axis="true" />
+            <Sparkline class="mt-2 h-12 w-full" :data="evalSparklineData" :labels="summaryTrendLabels" missing-data="carry-forward" unit="%" color="hsl(var(--primary-text))" :show-y-axis="true" />
           </div>
           <div v-else class="flex items-center justify-center py-6 text-sm text-muted-foreground">{{ $t('views.DashboardView.no_eval_data_yet') }}</div>
         </router-link>
@@ -122,7 +122,7 @@
                 @keydown.space.prevent="toggleTeam(team.id)">
               <td class="py-2.5 font-medium">{{ team.name }}</td>
               <td class="py-2.5 text-right">{{ team.total_runs }}</td>
-              <td class="py-2.5 text-right text-success">{{ team.run_counts_by_status?.running ?? 0 }}</td>
+              <td class="py-2.5 text-right text-success-text">{{ team.run_counts_by_status?.running ?? 0 }}</td>
               <td class="py-2.5 text-right text-destructive">{{ team.run_counts_by_status?.failed ?? 0 }}</td>
               <td class="py-2.5 text-right">{{ team.eval_pass_rate ? team.eval_pass_rate.pass_rate + '%' : '—' }}</td>
               <td class="py-2.5 text-right">
@@ -153,11 +153,11 @@
         <div v-if="trendData.length > 1" class="space-y-4">
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.run_count') }}</p>
-            <Sparkline class="h-16 w-full" :data="trendRunCounts" :labels="trendLabels" :unit="$t('views.DashboardView.runs')" color="hsl(var(--primary))" :show-y-axis="true" :show-x-ticks="true" />
+            <Sparkline class="h-16 w-full" :data="trendRunCounts" :labels="trendLabels" :unit="$t('views.DashboardView.runs')" color="hsl(var(--primary-text))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.eval_pass_rate_label') }}</p>
-            <Sparkline class="h-16 w-full" :data="trendEvalRates" :labels="trendLabels" missing-data="carry-forward" unit="%" color="hsl(var(--success))" :show-y-axis="true" :show-x-ticks="true" />
+            <Sparkline class="h-16 w-full" :data="trendEvalRates" :labels="trendLabels" missing-data="carry-forward" unit="%" color="hsl(var(--success-text))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.token_spend') }}</p>
@@ -169,7 +169,7 @@
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.rejection_rate') }}</p>
-            <Sparkline class="h-16 w-full" :data="trendRejectionRate" :labels="trendLabels" missing-data="carry-forward" unit="%" color="hsl(var(--destructive))" :show-y-axis="true" :show-x-ticks="true" />
+            <Sparkline class="h-16 w-full" :data="trendRejectionRate" :labels="trendLabels" missing-data="carry-forward" unit="%" color="hsl(var(--destructive-text))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
         </div>
         <div v-else class="flex items-center justify-center py-12">
@@ -199,7 +199,7 @@
                 v-if="isDispatchedRun(run.execution_origin)"
                 :data-testid="'dashboard-dispatched-' + run.id"
                 :title="$t('common.execution_origin.dispatched_hint')"
-                class="inline-flex items-center rounded-full bg-cyan-500/10 px-2 py-0.5 text-xs font-medium text-cyan-600 dark:bg-cyan-900 dark:text-cyan-300"
+                class="inline-flex items-center rounded-full bg-cyan-500/10 px-2 py-0.5 text-xs font-medium text-cyan-700 dark:bg-cyan-900 dark:text-cyan-300"
               >{{ $t('common.execution_origin.dispatched') }}</span>
               <span class="text-xs text-muted-foreground hidden sm:inline">{{ run.trigger_type }}</span>
             </div>
@@ -281,7 +281,7 @@ const evalTrend = computed(() => {
 })
 
 const evalTrendClass = computed(() => {
-  if (evalTrend.value === 'up') return 'text-success'
+  if (evalTrend.value === 'up') return 'text-success-text'
   if (evalTrend.value === 'down') return 'text-destructive'
   return 'text-muted-foreground'
 })
@@ -384,7 +384,7 @@ const evalDeltaArrow = computed(() => {
   return '→'
 })
 const evalDeltaClass = computed(() => {
-  if (evalDeltaDirection.value === 'up') return 'text-success'
+  if (evalDeltaDirection.value === 'up') return 'text-success-text'
   if (evalDeltaDirection.value === 'down') return 'text-destructive'
   return 'text-muted-foreground'
 })
@@ -406,7 +406,7 @@ const spendDeltaArrow = computed(() => {
 const spendDeltaClass = computed(() => {
   // Inverted for a cost metric: spend going UP is bad (red), spend going DOWN is good (green).
   if (spendDeltaDirection.value === 'up') return 'text-destructive'
-  if (spendDeltaDirection.value === 'down') return 'text-success'
+  if (spendDeltaDirection.value === 'down') return 'text-success-text'
   return 'text-muted-foreground'
 })
 const spendDeltaPctText = computed(() => {

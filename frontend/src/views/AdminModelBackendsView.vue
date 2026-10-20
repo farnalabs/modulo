@@ -8,13 +8,27 @@
         </Button>
       </header>
 
-      <LoadingSpinner v-if="loading" />
+      <TableSkeleton
+        v-if="loading"
+        :columns="7"
+        :rows="5"
+        :aria-label="$t('common.loading')"
+        data-testid="admin-model-backends-loading"
+      />
 
       <ErrorAlert v-else-if="error" :message="error" :on-retry="loadBackends" />
 
       <template v-else>
         <div v-if="formMode === 'add'" class="card p-6">
           <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminModelBackendsView.new_model_backend') }}</h2>
+          <ErrorAlert
+            v-if="presetsError"
+            compact
+            class="mb-4"
+            :message="presetsError"
+            :on-retry="loadPresets"
+            data-testid="admin-model-backends-presets-error"
+          />
           <div v-if="presets.length > 0 && !selectedPresetId && !manualMode" class="mb-6">
             <h3 class="mb-1 text-sm font-medium">{{ $t('views.AdminModelBackendsView.preset_picker_title') }}</h3>
             <p class="mb-3 text-sm text-muted-foreground">{{ $t('views.AdminModelBackendsView.preset_picker_description') }}</p>
@@ -56,7 +70,7 @@
           <div v-if="selectedPreset" class="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
             <div class="flex items-center justify-between">
               <div>
-                <span class="text-sm font-medium text-primary">{{ selectedPreset.display_name }}</span>
+                <span class="text-sm font-medium text-primary-text">{{ selectedPreset.display_name }}</span>
                 <span class="ml-2 text-xs text-muted-foreground">{{ selectedPreset.default_model_id }}</span>
               </div>
               <button
@@ -73,7 +87,7 @@
               :href="selectedPreset.api_key_docs_url"
               target="_blank"
               rel="noopener noreferrer"
-              class="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+              class="mt-2 inline-flex items-center gap-1 text-xs text-primary-text hover:underline"
               data-testid="admin-model-backends-preset-docs-link"
             >
               {{ $t('views.AdminModelBackendsView.preset_get_api_key') }}
@@ -222,7 +236,7 @@
                 >
                   <td class="table-cell font-medium">{{ backend.name }}</td>
                   <td class="table-cell">
-                    <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                    <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary-text">
                       {{ backend.provider }}
                     </span>
                   </td>
@@ -231,7 +245,7 @@
                   <td class="table-cell">
                     <span
                       class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
-                      :class="backend.has_credentials ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
+                      :class="backend.has_credentials ? 'bg-success/10 text-success-text' : 'bg-muted text-muted-foreground'"
                     >
                       <span
                         aria-hidden="true"
@@ -289,7 +303,7 @@
                                   <td class="table-cell">
                                     <span
                                       class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
-                                      :class="ref.reference_type === 'direct_node' ? 'bg-primary/10 text-primary' : 'bg-warning/10 text-warning-text'"
+                                      :class="ref.reference_type === 'direct_node' ? 'bg-primary/10 text-primary-text' : 'bg-warning/10 text-warning-text'"
                                     >
                                       {{ ref.reference_type === 'direct_node' ? $t('views.AdminModelBackendsView.ref_type_direct') : $t('views.AdminModelBackendsView.ref_type_agent') }}
                                     </span>
@@ -351,7 +365,7 @@
               >
                 <td class="table-cell font-medium">{{ backend.name }}</td>
                 <td class="table-cell">
-                  <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                  <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary-text">
                     {{ backend.provider }}
                   </span>
                 </td>
@@ -454,8 +468,8 @@
         </div>
 
         <div v-if="deleteConfirmBackendId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-          <p class="text-sm font-medium text-destructive">{{ $t('views.AdminModelBackendsView.delete_confirm', { name: deleteConfirmName }) }}</p>
-          <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminModelBackendsView.this_action_cannot_be_undone') }}</p>
+          <p class="text-sm font-medium text-destructive-text">{{ $t('views.AdminModelBackendsView.delete_confirm', { name: deleteConfirmName }) }}</p>
+          <p class="mt-1 text-sm text-destructive-text">{{ $t('views.AdminModelBackendsView.this_action_cannot_be_undone') }}</p>
           <div class="mt-3 flex items-center gap-2">
           <Button :disabled="deleting" severity="danger" data-testid="admin-model-backends-delete-confirm" @click="deleteBackend">
             {{ deleting ? $t('views.AdminModelBackendsView.deleting') : $t('views.AdminModelBackendsView.delete') }}
@@ -469,7 +483,7 @@
               {{ $t('views.AdminModelBackendsView.cancel') }}
             </button>
           </div>
-          <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
+          <div v-if="deleteError" class="mt-2 text-sm text-destructive-text">{{ deleteError }}</div>
         </div>
       </template>
     </div>
@@ -484,6 +498,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { useProductAnalytics } from '../composables/useProductAnalytics'
@@ -542,7 +557,7 @@ const { data: backendsResp, loading, error, load: loadBackends } = useDataFetch(
   { initialValue: { items: [] } as { items: ModelBackendItem[] } }
 )
 
-const { data: presetsResp } = useDataFetch(
+const { data: presetsResp, error: presetsError, load: loadPresets } = useDataFetch(
   () => api.GET('/api/v1/model-backends/presets'),
   { initialValue: { items: [] } as { items: PresetItem[] } }
 )

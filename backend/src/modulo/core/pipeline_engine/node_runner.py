@@ -154,7 +154,12 @@ from modulo.core.pipeline_engine.sandbox_mode import (
     _validate_sandbox_mode_config,
     sandbox_jinja_environment,
 )
-from modulo.core.provenance import DISPATCH_DATUM_PROVENANCE, PROVENANCE_KEY, WITNESSED_VIA_KEY
+from modulo.core.provenance import (
+    DISPATCH_DATUM_PROVENANCE,
+    PROVENANCE_KEY,
+    PROVENANCE_REPORTED,
+    WITNESSED_VIA_KEY,
+)
 from modulo.core.run_context.autonomy import (
     AutonomyResolution,
     is_autonomy_gating_enabled,
@@ -1125,7 +1130,7 @@ def _compute_sandbox_cost(elapsed_seconds: float, output_json: Any) -> float:
     return round(total, 6)
 
 
-async def _build_log_tail_provider(api_key: str) -> "RuntimeProvider | None":
+def _build_log_tail_provider(api_key: str) -> "RuntimeProvider | None":
     """Build the E2B RuntimeProvider for the sandbox log probe (FAR-1050 R1).
 
     A dedicated seam so unit tests can substitute a
@@ -1137,7 +1142,7 @@ async def _build_log_tail_provider(api_key: str) -> "RuntimeProvider | None":
 
     try:
         provider_hub = RuntimeProviderHub()
-        await provider_hub.initialise({"e2b": {"type": "e2b", "api_key": api_key}})
+        provider_hub.initialise({"e2b": {"type": "e2b", "api_key": api_key}})
     except Exception:
         return None
     return provider_hub.get("e2b")
@@ -1196,7 +1201,7 @@ async def _read_log_tail_via_provider(
     if not api_key:
         return ""
     try:
-        provider = await _build_log_tail_provider(api_key)
+        provider = _build_log_tail_provider(api_key)
         if provider is None:
             return ""
         raw = await provider.read_log_tail(sandbox_id, max_bytes=max_bytes)
@@ -1205,7 +1210,7 @@ async def _read_log_tail_via_provider(
         return ""
 
 
-async def _build_isolation_provider(api_key: str) -> "RuntimeProvider | None":
+def _build_isolation_provider(api_key: str) -> "RuntimeProvider | None":
     """FAR-1050 R3 isolation: build the E2B RuntimeProvider.
 
     Sibling seam of :func:`_build_log_tail_provider` — delegates to it so
@@ -1214,7 +1219,7 @@ async def _build_isolation_provider(api_key: str) -> "RuntimeProvider | None":
     provider cannot be constructed — the caller fails CLOSED (isolation is
     enforcement-critical), never open.
     """
-    return await _build_log_tail_provider(api_key)
+    return _build_log_tail_provider(api_key)
 
 
 async def _apply_isolation_via_provider(
@@ -1303,7 +1308,7 @@ async def _apply_isolation_via_provider(
     _seam_built_provider: RuntimeProvider | None = None
     if _is_legacy_e2b_route(provider_type):
         api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
-        provider = await _build_isolation_provider(api_key) if api_key else None
+        provider = _build_isolation_provider(api_key) if api_key else None
         if provider is None:
             raise SandboxTierRefusedError(
                 "sandbox isolation could not resolve the E2B runtime provider (set MODULO_E2B_API_KEY and restart)"
@@ -1355,7 +1360,7 @@ async def _apply_isolation_via_provider(
             await _close_seam_provider(_seam_built_provider)
 
 
-async def _build_file_io_provider(api_key: str) -> "RuntimeProvider | None":
+def _build_file_io_provider(api_key: str) -> "RuntimeProvider | None":
     """FAR-1050 R2b file I/O: build the E2B RuntimeProvider.
 
     Sibling seam of :func:`_build_isolation_provider` — delegates to
@@ -1366,7 +1371,7 @@ async def _build_file_io_provider(api_key: str) -> "RuntimeProvider | None":
     provider cannot be constructed (never raises) — the caller maps that to
     a typed failure rather than silently degrading to ``sandbox.files``.
     """
-    return await _build_log_tail_provider(api_key)
+    return _build_log_tail_provider(api_key)
 
 
 async def _file_io_provider_for(
@@ -1408,7 +1413,7 @@ async def _file_io_provider_for(
             return borrowed_provider, sandbox_id
         return await _build_profile_provider(str(provider_type)), sandbox_id
     api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
-    provider = await _build_file_io_provider(api_key) if api_key else None
+    provider = _build_file_io_provider(api_key) if api_key else None
     if provider is None:
         raise RuntimeProviderError(
             "sandbox file I/O could not resolve the E2B runtime provider (set MODULO_E2B_API_KEY and restart)"
@@ -9107,6 +9112,145 @@ def _format_sandbox_provider_error(exc: Exception, provider_exc_type: type | Non
     return msg
 
 
+#: FAR-1780: the sandbox envelope cost/token datum fields whose values are
+#: extracted from the producer's ``output.json``. DERIVED from the extraction
+#: vocabularies above (the token destinations + the agent's declared cost
+#: fields ``model_cost_usd`` / ``model_cost_raw_usd``) so the reported-datum
+#: stamp list cannot drift from what those helpers actually emit — a key
+#: lands here only if an extraction helper can emit it FROM THE REPORT.
+#:
+#: ``model_cost_display_usd`` / ``model_cost_clamped`` /
+#: ``model_cost_out_of_band_high`` are deliberately EXCLUDED: they are
+#: ENGINE-COMPUTED, never agent claims. ``_build_model_cost_fields`` writes
+#: them UNCONDITIONALLY per report (the display clamp value and the explicit
+#: clamp / out-of-band flags derived from the TRUE raw), so per-key presence
+#: identifies nothing about the producer — stamping them would over-attest
+#: engine derivations as producer claims (matching finalize.py's
+#: ``_UNION_PROVENANCE_DATUM_KEYS``, which excludes exactly those three).
+_SANDBOX_AGENT_COST_DATUM_FIELDS: frozenset[str] = frozenset(dst for _, dst in _TOKEN_USAGE_FIELD_MAP) | frozenset(
+    {
+        "model_cost_usd",
+        "model_cost_raw_usd",
+    }
+)
+
+#: FAR-1780: the extraction datums lifted verbatim from a parsed producer
+#: ``output.json`` (the main extraction branch). For EACH datum the map
+#: ``_EXTRACTED_DATUM_SOURCE_KEYS`` below names the report key it is lifted
+#: from — these carry the agent's OWN report ONLY when that branch ran (llm
+#: mode): script mode never extracts (its summary is engine-generated), and
+#: when output.json fails to parse the builder's ``changed_files``/``pr_url``
+#: are empty placeholders, not an agent report. The datum tuple is kept as
+#: the declarative vocabulary (test suites and future union propagation read
+#: it); the stamp loop walks the key map, which cannot name a key outside it.
+_EXTRACTED_DATUM_SOURCE_KEYS: dict[str, str] = {
+    "summary": "summary",
+    "changed_files": "changed_files",
+    "pr_url": "pr_url",
+    "agent_status": "status",
+    "agent_outcome": "outcome",
+}
+_SANDBOX_AGENT_EXTRACTION_DATUM_FIELDS: tuple[str, ...] = tuple(
+    _EXTRACTED_DATUM_SOURCE_KEYS,
+)
+
+
+def _sandbox_summary_is_reported(output: _SandboxNodeOutput, report: dict[str, Any]) -> bool:
+    """True when the envelope summary IS the producer's reported summary.
+
+    The engine rewrites ``summary`` for a failed command or a generic
+    exception, and an extraction over an empty / missing report summary is
+    engine-authored — neither is an agent claim.
+    """
+    producer_summary = report.get("summary", "")
+    return bool(producer_summary) and output.summary == producer_summary
+
+
+def _sandbox_extracted_datum_is_reported(output: _SandboxNodeOutput, key: str) -> bool:
+    """True when an extracted datum reflects the producer's absorbed report.
+
+    ``agent_status`` / ``agent_outcome`` are stamped only when the extraction
+    actually absorbed a string (a non-string report value, or a session-lost
+    echo, leaves the engine-authored ``None``). The other extraction datums
+    have no engine placeholder that can masquerade as a claim once their
+    source key is present.
+    """
+    if key not in {"agent_status", "agent_outcome"}:
+        return True
+    return isinstance(getattr(output, key), str)
+
+
+def _sandbox_reported_extraction_datums(output: _SandboxNodeOutput, report: dict[str, Any]) -> dict[str, Any]:
+    """The extraction datums the producer's ``output.json`` actually supplied."""
+    reported: dict[str, Any] = {}
+    for key, source_key in _EXTRACTED_DATUM_SOURCE_KEYS.items():
+        if key == "summary":
+            if _sandbox_summary_is_reported(output, report):
+                reported[key] = PROVENANCE_REPORTED
+        elif source_key in report and _sandbox_extracted_datum_is_reported(output, key):
+            reported[key] = PROVENANCE_REPORTED
+    return reported
+
+
+def _sandbox_reported_datum_provenance(
+    inner: dict[str, Any], output: _SandboxNodeOutput, *, sandbox_mode: str
+) -> dict[str, Any]:
+    """The per-datum ``provenance`` map for a sandbox_agent envelope (FAR-1780).
+
+    A sandbox envelope MIXES agent-claimed and engine-observed facts, so the
+    whole-dict stamp the dispatch arm applies would over-claim
+    ``exit_code`` / ``wall_clock_time_ms``. Instead the envelope types its
+    agent-claimed datums ``reported`` under the ONE envelope ``provenance``
+    key as a per-datum map — ``{datum_name: PROVENANCE_REPORTED}`` — leaving
+    every engine-observed datum unstamped.
+
+    Classifying *which* keys are agent-reported:
+
+    - ``output_json`` IS the verbatim producer surface — always reported when
+      present, in every sandbox mode (script mode's parsed output included:
+      it is still the substrate's own report).
+    - the extraction keys are reported ONLY in llm mode (``sandbox_mode ==
+      "llm"`` — the validated LLM-mode value; legacy builders passing no mode
+      keep their unstamped key set) AND the producer's report actually wrote
+      each datum's SOURCE key (the ``_EXTRACTED_DATUM_SOURCE_KEYS`` map —
+      e.g. ``agent_status`` is lifted from the report's ``status`` key, so a
+      literal ``"agent_status"`` report key stamps nothing under it) —
+      ``changed_files``/``pr_url`` defaults for an omitted key (``[]`` /
+      ``""``) and the absorbed status keys' engine-None (a non-string report
+      value, or a session-lost echo the extraction refuses to absorb) are
+      engine placeholders, not agent claims. ``summary`` additionally ONLY
+      when the envelope's summary value IS the one extracted from the
+      producer's ``output.json``. Two substitutions produce an engine value:
+      the failed-node substitution replaces an empty extracted summary with
+      ``command_error`` / "Sandbox agent command failed", and the generic
+      exception envelope stamps the ``SANDBOX_AGENT_FAILED_SUMMARY``
+      constant — in both the envelope value differs from (or the extraction
+      found nothing in) ``output.json``, so neither is agent-reported.
+    - the cost/token fields are reported per-key presence: those extraction
+      helpers emit a key only for a real producer report (an unproven zero is
+      never written), so presence alone identifies an agent claim. The three
+      ENGINE-COMPUTED cost annotations (``model_cost_display_usd``,
+      ``model_cost_clamped``, ``model_cost_out_of_band_high``) are explicitly
+      NOT in this set — they are written UNCONDITIONALLY per report
+      (display clamp + flags derived from the TRUE raw), so presence never
+      identifies an agent claim for them.
+
+    Engine-observed or engine-derived keys (``status``, ``exit_code``,
+    ``wall_clock_time_ms``, ``cost_estimate_usd``, ``agent_stdout``/stderr and
+    their lengths/artifacts, ``error_*``, ``sandbox_*``, ``stall_reason``,
+    ``workspace_drift*``, ``provider``/``via_provider``) are deliberately NOT
+    stamped — stamping them would attest Modulo's own measurements as producer
+    claims (the taxonomy's over-claim failure mode).
+    """
+    reported: dict[str, Any] = {}
+    if output.output_json is not _UNSET:
+        reported["output_json"] = PROVENANCE_REPORTED
+    if sandbox_mode == "llm" and isinstance(output.output_json, dict):
+        reported.update(_sandbox_reported_extraction_datums(output, output.output_json))
+    reported.update(dict.fromkeys(_SANDBOX_AGENT_COST_DATUM_FIELDS & set(inner), PROVENANCE_REPORTED))
+    return reported
+
+
 def _build_sandbox_node_envelope(
     *,
     node_id: str,
@@ -9114,9 +9258,9 @@ def _build_sandbox_node_envelope(
     exclude_from_output: frozenset[str] = frozenset(),
     provider: str = "",
     via_provider: bool = False,
+    sandbox_mode: str = "",
 ) -> dict[str, Any]:
     """Assemble a sandbox_agent node envelope from grouped output fields.
-
     The envelope shape is ``{artifacts: [{node_id, status, output}], output}``.
     The artifact's inner ``output`` carries the FULL field set; the top-level
     ``output`` is the reduced telemetry view that omits ``output_json`` and
@@ -9141,6 +9285,14 @@ def _build_sandbox_node_envelope(
     so the key is a historical attribution field; callers that pass no tier
     (the Bundled Runner route) get neither, so their envelope key set is
     unchanged.
+
+    FAR-1780: passing ``sandbox_mode`` (the node's validated sandbox mode)
+    lets the builder type the envelope's agent-claimed datums. When the
+    reported-datum map is non-empty it is stamped under the ONE envelope
+    ``provenance`` key into BOTH views (see
+    :func:`_sandbox_reported_datum_provenance` for the per-datum rules).
+    Callers that pass no mode get no stamp (builder-level tests construct
+    partial envelopes that way); the production paths always pass it.
     """
     inner: dict[str, Any] = {
         "status": output.status,
@@ -9196,6 +9348,16 @@ def _build_sandbox_node_envelope(
     if output.modulo_synthetic_failure:
         inner[MODULO_SYNTHETIC_FAILURE_MARKER] = True
     inner["attempt_key"] = output.attempt_key
+    # FAR-1780: type every agent-claimed datum in the envelope ``reported``
+    # under the ONE envelope ``provenance`` key (a per-datum map) — the
+    # extracted cost/token fields, the verbatim ``output_json`` and the LLM
+    # extraction keys. Engine-observed keys stay unstamped. The stamp rides
+    # BOTH views: the full artifact output AND the reduced telemetry view
+    # (and, after the P1b split, ``node_telemetry_json``), so every surface
+    # rendering or persisting a BYO value sees its class.
+    reported = _sandbox_reported_datum_provenance(inner, output, sandbox_mode=sandbox_mode)
+    if reported:
+        inner[PROVENANCE_KEY] = reported
     excluded = frozenset(("output_json", "exit_code")) | exclude_from_output
     outer = {key: value for key, value in inner.items() if key not in excluded}
     return {
@@ -12082,6 +12244,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             exclude_from_output=frozenset({"changed_files", "pr_url"}),
             provider=_resolved_provider,
             via_provider=True,
+            sandbox_mode=sandbox_mode,
         )
 
     except asyncio.CancelledError:
@@ -12341,6 +12504,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             exclude_from_output=frozenset(),
             provider=_resolved_provider,
             via_provider=True,
+            sandbox_mode=sandbox_mode,
         )
     finally:
         # FAR-1315: settle this node's run-scoped one-PR guard slot. Runs ONLY
@@ -12398,7 +12562,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         _claim_receipt = await harvest_gh_pr_claim_bounded(
                             _claim_receipt_exec,
                             run_scope=run_id,
-                            timeout=20.0,
                         )
                     # Cancellation is RECORDED, not re-raised here: the dispatch
                     # re-raises it only after the sandbox kill / provider close /

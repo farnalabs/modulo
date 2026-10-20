@@ -49,7 +49,7 @@
               <span
                 v-for="evt in ep.events"
                 :key="evt"
-                class="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+                class="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary-text"
               >
                 {{ evt }}
               </span>
@@ -60,8 +60,8 @@
               class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
               :class="
                 ep.auto_disabled
-                  ? 'bg-destructive/10 text-destructive'
-                  : 'bg-success/10 text-success'
+                  ? 'bg-destructive/10 text-destructive-text'
+                  : 'bg-success/10 text-success-text'
               "
             >
               <span
@@ -104,7 +104,7 @@
           v-if="testResults[ep.id]"
           class="mt-2 rounded bg-muted p-2 text-xs"
           :class="
-            testResults[ep.id].success ? 'text-success' : 'text-destructive'
+            testResults[ep.id].success ? 'text-success-text' : 'text-destructive'
           "
         >
           <template v-if="testResults[ep.id].success">
@@ -123,17 +123,17 @@
           v-if="deleteConfirmId === ep.id"
           class="mt-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3"
         >
-          <p class="text-sm font-medium text-destructive">
+          <p class="text-sm font-medium text-destructive-text">
             Delete this webhook endpoint?
           </p>
-          <p class="mt-1 text-sm text-destructive/80">
+          <p class="mt-1 text-sm text-destructive-text">
             This will stop all notifications to this URL.
           </p>
           <div class="mt-3 flex items-center gap-2">
             <button type="button"
               :disabled="deleting"
               data-testid="team-notif-delete-confirm"
-              class="rounded-lg bg-destructive px-3 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+              class="rounded-lg bg-destructive-fill px-3 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive-fill/90 disabled:opacity-50"
               @click="deleteEndpoint(ep.id)"
             >
               {{ deleting ? "Deleting..." : "Delete" }}
@@ -325,7 +325,7 @@
 
       <button type="button"
         v-if="canManage && !showAddForm && !editingId"
-        class="mt-3 flex items-center gap-1 text-sm text-primary hover:underline"
+        class="mt-3 flex items-center gap-1 text-sm text-primary-text hover:underline"
         data-testid="team-notif-add-button"
         @click="openAddForm"
       >

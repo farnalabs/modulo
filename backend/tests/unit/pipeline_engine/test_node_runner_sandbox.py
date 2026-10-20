@@ -3366,13 +3366,13 @@ async def test_agent_command_dispatched_under_bash(monkeypatch):
     # Log-tail seam: keep the dispatch off the real urllib tail probe.
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
-        AsyncMock(return_value=MagicMock(read_log_tail=AsyncMock(return_value=b"far1470-tail"))),
+        MagicMock(return_value=MagicMock(read_log_tail=AsyncMock(return_value=b"far1470-tail"))),
     )
     # File-I/O seam: serve output.json so the run completes cleanly.
     file_io = FakeFileIOProvider(files={"/home/user/output.json": _FAR1470_OUTPUT})
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_file_io_provider",
-        AsyncMock(return_value=file_io),
+        MagicMock(return_value=file_io),
     )
     dispatch = install_fake_dispatch(monkeypatch, ref="sbx-far1470", exit_code=0)
 
