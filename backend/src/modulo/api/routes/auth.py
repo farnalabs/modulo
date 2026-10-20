@@ -748,15 +748,20 @@ async def _audit_invite_consumed_fail_open(
 
     FAR-1825: ``append_audit_event`` takes the per-org audit-chain-head row
     lock (``FOR UPDATE``) and the accept-invite transaction now bounds its
-    lock waits, so a contended chain head can raise SQLSTATE 55P03. Without a
-    savepoint that error aborts the CALLER's transaction: ``async with
-    session.begin()`` then exits normally on the swallowed exception and
-    COMMIT degrades to ROLLBACK, silently discarding the enrollment the route
-    has already written while still answering HTTP 200. The savepoint rolls
-    back only the audit append, so the fail-open contract holds for a lock
-    timeout exactly as it does for any other audit failure.
+    lock waits, so a contended chain head can raise SQLSTATE 55P03.
+
+    The append is already savepoint-contained: every attempt inside
+    ``append_audit_event`` runs in its own ``session.begin_nested()``, so a
+    55P03 rolls back only that attempt and never poisons the caller's
+    transaction. This outer savepoint is explicit defence-in-depth: it states
+    the fail-open helper's guarantee locally, so the enrollment cannot be
+    silently discarded (COMMIT degrading to ROLLBACK) even if that inner seam
+    changes. It is not what prevents the poisoning today.
     """
     try:
+        # Defence-in-depth: ``append_audit_event`` already savepoints each
+        # attempt; this outer savepoint makes the fail-open guarantee explicit
+        # here rather than dependent on that inner seam.
         async with session.begin_nested():
             await append_audit_event(
                 session,

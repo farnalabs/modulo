@@ -786,14 +786,15 @@ def _lock_timeout_error() -> OperationalError:
     return OperationalError("SELECT ... FOR UPDATE", {}, _LockTimeoutDriverError("55P03"))
 
 
-async def test_sso_audit_lock_timeout_is_contained_in_a_savepoint() -> None:
-    """A 55P03 from the audit append rolls back ONLY the savepoint.
+async def test_sso_audit_lock_timeout_is_contained_by_the_outer_savepoint() -> None:
+    """A 55P03 from the audit append must not fail the SSO login.
 
     ``get_live_for_email`` (C17) is now bounded, so the per-org audit-chain-head
     lock taken by ``append_audit_event`` can raise 55P03 in the same SSO JIT
-    transaction. Without a savepoint that error would abort the CALLER's
-    transaction, so the swallow below would hide a dead transaction and the
-    token-issue writes would fail — contradicting the fail-open contract.
+    transaction. ``append_audit_event`` already wraps each attempt in its own
+    savepoint, so the caller's transaction is not poisoned. The helper's outer
+    savepoint is defence-in-depth: this test pins that it observes the
+    lock-timeout error while the helper stays fail-open.
     """
     session = AsyncMock(spec=AsyncSession)
     nested = MagicMock()
@@ -814,13 +815,14 @@ async def test_sso_audit_lock_timeout_is_contained_in_a_savepoint() -> None:
 
     session.begin_nested.assert_called_once()
     audit.assert_awaited_once()
-    # The savepoint observed (and did not suppress) the lock timeout — the
-    # mechanism that keeps the outer transaction usable.
+    # The outer savepoint observed (and did not suppress) the lock timeout.
+    # Defence-in-depth: the logger's per-attempt savepoint contains the failed
+    # append today; this seam keeps the helper's guarantee explicit.
     assert observed_exception_types == [OperationalError]
 
 
 async def test_sso_audit_success_runs_inside_the_savepoint() -> None:
-    """The append still happens, inside a savepoint, when the audit succeeds."""
+    """The append still happens, inside the outer savepoint, when it succeeds."""
     session = AsyncMock(spec=AsyncSession)
     nested = MagicMock()
     nested.__aenter__ = AsyncMock(return_value=None)

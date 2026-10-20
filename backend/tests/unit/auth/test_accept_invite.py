@@ -498,10 +498,11 @@ def test_accept_invite_unexpected_exception_maps_to_500(client: TestClient) -> N
 # ---------------------------------------------------------------------------
 # FAR-1825: the accept-invite transaction now bounds its first row lock
 # (``get_valid_by_token_hash``), so the audit-chain-head lock taken by the
-# fail-open ``invite_consumed`` append can raise SQLSTATE 55P03. Without a
-# savepoint that error aborts the CALLER's transaction, the swallowed exception
-# lets ``async with session.begin()`` exit "normally", COMMIT degrades to
-# ROLLBACK, and the route answers 200 with the enrollment silently discarded.
+# fail-open ``invite_consumed`` append can raise SQLSTATE 55P03.
+# ``append_audit_event`` ALREADY wraps each attempt in its own savepoint, so
+# the caller's transaction was never poisoned by this path. The helper keeps
+# its OWN outer savepoint as explicit defence-in-depth; the test below pins
+# that outer seam (and the fail-open 200), not a poisoning it prevents today.
 # ---------------------------------------------------------------------------
 
 
@@ -517,15 +518,17 @@ def _lock_timeout_error() -> OperationalError:
     return OperationalError("SELECT ... FOR UPDATE", {}, _LockTimeoutDriverError("55P03"))
 
 
-def test_accept_invite_audit_lock_timeout_is_contained_in_a_savepoint(
+def test_accept_invite_audit_lock_timeout_is_contained_by_the_outer_savepoint(
     client: TestClient, mock_session: AsyncMock
 ) -> None:
-    """A 55P03 from the audit append rolls back ONLY the savepoint.
+    """A 55P03 from the audit append still answers 200; the enrollment survives.
 
-    The route must still return 200 and the enrollment writes must still have
-    run; the audit append is isolated to a savepoint whose ``__aexit__`` sees
-    the lock-timeout error (i.e. SQLAlchemy issues ROLLBACK TO SAVEPOINT rather
-    than leaving the outer transaction aborted).
+    ``append_audit_event`` already contains the failed attempt in its own
+    per-attempt savepoint, so the caller's transaction is not poisoned. The
+    helper's outer savepoint is defence-in-depth: this test pins that the
+    outer ``__aexit__`` observes the lock-timeout error (SQLAlchemy issues
+    ROLLBACK TO SAVEPOINT there) while the route still returns 200 and the
+    enrollment writes still ran.
     """
     invitation = _make_invitation()
     patches = _base_patches(invitation)
@@ -561,6 +564,7 @@ def test_accept_invite_audit_lock_timeout_is_contained_in_a_savepoint(
     # The enrollment write ran, and only the audit append failed.
     create_account.assert_awaited_once()
     audit.assert_awaited_once()
-    # The savepoint observed (and did not suppress) the lock timeout — the
-    # mechanism that keeps the outer transaction usable.
+    # The outer savepoint observed (and did not suppress) the lock timeout.
+    # Defence-in-depth: the logger's per-attempt savepoint contains the failed
+    # append today; this seam keeps the helper's guarantee explicit.
     assert nested_exceptions == [OperationalError]

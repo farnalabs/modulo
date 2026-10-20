@@ -162,6 +162,7 @@ _MAPPED_55P03_ROUTE_ARMS: tuple[tuple[str, str], ...] = (
     ("api/routes/lifecycle_maps.py", "import_lifecycle_map_endpoint"),
     ("api/routes/lifecycle_maps.py", "update_lifecycle_map_endpoint"),
     ("api/routes/lifecycle_maps.py", "update_lifecycle_map_version_endpoint"),
+    ("api/routes/lifecycle_maps.py", "save_lifecycle_map_version_endpoint"),
     ("api/routes/lifecycle_maps.py", "graduate_lifecycle_map_stage_endpoint"),
     ("api/routes/runs.py", "observe_run_node"),
     ("api/routes/auth.py", "accept_invite"),

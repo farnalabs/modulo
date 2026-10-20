@@ -426,18 +426,22 @@ async def _audit_invite_consumed_fail_open(session: AsyncSession, org_id: uuid.U
     FAR-1825: ``append_audit_event`` takes the per-org audit-chain-head row lock
     (``FOR UPDATE``) and the SSO JIT transaction now bounds its lock waits
     (C17 ``get_live_for_email``). A contended chain head can therefore raise
-    SQLSTATE 55P03, and without a savepoint that error aborts the CALLER's
-    transaction: the swallowed exception lets ``async with session.begin()``
-    exit "normally", COMMIT degrades to ROLLBACK, and the token-issue writes
-    that follow fail — contradicting "audit failure never fails the login".
+    SQLSTATE 55P03.
 
-    The savepoint rolls back ONLY the audit append, so the fail-open contract
-    holds for a lock timeout exactly as it does for any other audit failure.
-    Mirrors the REST twin in ``api/routes/auth.py``.
+    The append is already savepoint-contained: every attempt inside
+    ``append_audit_event`` runs in its own ``session.begin_nested()``, so a
+    55P03 rolls back only that attempt and never poisons the caller's
+    transaction. This outer savepoint is explicit defence-in-depth: it states
+    the fail-open guarantee locally so the token-issue writes that follow
+    cannot be lost if that inner seam changes. It is not what prevents the
+    poisoning today. Mirrors the REST twin in ``api/routes/auth.py``.
     """
     from modulo.core.audit_logger import append_audit_event
 
     try:
+        # Defence-in-depth: ``append_audit_event`` already savepoints each
+        # attempt; this outer savepoint makes the fail-open guarantee explicit
+        # here rather than dependent on that inner seam.
         async with session.begin_nested():
             await append_audit_event(
                 session,

@@ -1199,7 +1199,11 @@ async def save_lifecycle_map_version_endpoint(
             detail=_MSG_MAP_VERSION_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
+        # FAR-1825: the lifecycle-map version lock is bounded in the service
+        # helper, so 55P03 is reachable here — a busy map row is a 409
+        # conflict, not the 503 below.
         raise_session_contract_error(exc, "lifecycle_maps.save_lifecycle_map_version_endpoint")
+        raise_lock_timeout_conflict_if(exc, "lifecycle_maps.save_lifecycle_map_version_endpoint")
         _log.exception(_CODE_LIFECYCLE_MAPS_SAVE_VERSION)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
