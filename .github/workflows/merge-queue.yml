@@ -516,6 +516,35 @@ jobs:
           merged_prs=""
           conflict_prs=""
           noop_prs=""
+          migration_skip_prs=""
+
+          # Migration-number gate (pre-merge, per PR). A PR that adds a migration
+          # file whose numeric prefix is already held by a DIFFERENT filename does
+          # NOT conflict in git (the filenames differ) but produces two Alembic
+          # heads on the combined branch, which fails `alembic upgrade head` at
+          # startup. Excluding it here - BEFORE it is squash-merged into the
+          # batch - is what stops one malformed PR poisoning every other PR in
+          # the batch. 2026-10-20: PR #2029 added 0321_pipeline_queue_timeout
+          # while main held 0321_organisation_cost_state; ten approved PRs were
+          # squash-merged into the batch, the heads gate failed afterwards, and
+          # the whole batch was abandoned (~4 hours, 10 PRs blocked by one).
+          #
+          # Semantics mirror the detector this replaces: only migration files a
+          # PR adds (or renames onto) are checked; renames/deletions release
+          # their old prefix; an already-accepted PR's claim stays authoritative
+          # so a colliding second PR cannot steal the prefix. Accepted PRs extend
+          # the map, so two PRs in the SAME batch that claim one prefix are also
+          # caught (the second is excluded).
+          MIG_DIR="backend/src/modulo/db/migrations/versions"
+          declare -A prefix_holder
+          while IFS= read -r fname; do
+            [ -z "$fname" ] && continue
+            base=$(basename "$fname")
+            prefix="${base%%_*}"
+            [ -n "$prefix" ] && prefix_holder["$prefix"]="$base"
+          done < <(git ls-tree --name-only main -- "$MIG_DIR/" 2>/dev/null | grep '\.py$' || true)
+          : > /tmp/migration_collision_prs.txt
+          : > /tmp/migration_collision_details.txt
 
           while IFS= read -r pr; do
             NUM=$(echo "$pr" | jq -r '.number')
@@ -540,6 +569,101 @@ jobs:
             # Ensure clean working tree
             git reset --hard HEAD 2>/dev/null || true
             git fetch origin "+refs/pull/$NUM/head:refs/heads/pr-$NUM" 2>&1
+
+            # --- Migration-number gate: exclude, never poison the batch ---
+            # Evaluated BEFORE the squash-merge so a colliding PR can never enter
+            # the combined branch. The PR stays OPEN (untouched) for the next
+            # cycle; the Branch Fixer is notified by the dedicated step below.
+            #
+            # This PR's own claims/releases are STAGED and applied only if the PR
+            # is accepted. Applying them as we scan would leave a SKIPPED PR's
+            # other migration prefixes in the accumulated map, causing later PRs
+            # to be excluded for a prefix nothing in the batch actually holds.
+            COLLIDES=false
+            unset staged_claim staged_release 2>/dev/null || true
+            declare -A staged_claim=()
+            declare -A staged_release=()
+
+            # effective_prefix_holder returns the filename currently holding the
+            # prefix, treating this PR's staged releases/claims as already applied.
+            effective_prefix_holder() {
+              local p="$1"
+              if [ -n "${staged_claim[$p]+x}" ]; then
+                printf '%s' "${staged_claim[$p]}"
+                return 0
+              fi
+              if [ -n "${prefix_holder[$p]+x}" ]; then
+                if [ -n "${staged_release[$p]+x}" ] && [ "${staged_release[$p]}" = "${prefix_holder[$p]}" ]; then
+                  return 0
+                fi
+                printf '%s' "${prefix_holder[$p]}"
+              fi
+              return 0
+            }
+
+            while IFS=$'\t' read -r status path extra; do
+              [ -z "$path" ] && continue
+              case "$status" in
+                R*)
+                  # Rename: the old path releases its prefix, the new path claims its own.
+                  old_base=$(basename "$path")
+                  old_prefix="${old_base%%_*}"
+                  new_base=$(basename "$extra")
+                  new_prefix="${new_base%%_*}"
+                  if [ -n "$old_prefix" ]; then staged_release["$old_prefix"]="$old_base"; fi
+                  if [ -n "$new_prefix" ]; then
+                    HOLDER=$(effective_prefix_holder "$new_prefix")
+                    if [ -n "$HOLDER" ] && [ "$HOLDER" != "$new_base" ]; then
+                      COLLIDES=true
+                      echo "    MIGRATION COLLISION: PR #$NUM adds $new_base, prefix $new_prefix already held by $HOLDER"
+                      echo "PR #$NUM: adds $new_base, numeric prefix $new_prefix is already held by $HOLDER" >> /tmp/migration_collision_details.txt
+                    else
+                      staged_claim["$new_prefix"]="$new_base"
+                    fi
+                  fi
+                  ;;
+                D)
+                  # Deletion: release the prefix if this PR removed the file holding it.
+                  base=$(basename "$path")
+                  prefix="${base%%_*}"
+                  if [ -n "$prefix" ]; then staged_release["$prefix"]="$base"; fi
+                  ;;
+                *)
+                  # Addition or modification of a migration file. Only genuinely
+                  # NEW prefixes extend the accumulated set - the existing holder
+                  # (main or an earlier-accepted PR) stays authoritative so a
+                  # colliding PR cannot steal the prefix and cause false positives
+                  # on later PRs that touch the original file.
+                  base=$(basename "$path")
+                  prefix="${base%%_*}"
+                  [ -z "$prefix" ] && continue
+                  HOLDER=$(effective_prefix_holder "$prefix")
+                  if [ -n "$HOLDER" ] && [ "$HOLDER" != "$base" ]; then
+                    COLLIDES=true
+                    echo "    MIGRATION COLLISION: PR #$NUM adds $base, prefix $prefix already held by $HOLDER"
+                    echo "PR #$NUM: adds $base, numeric prefix $prefix is already held by $HOLDER" >> /tmp/migration_collision_details.txt
+                  else
+                    staged_claim["$prefix"]="$base"
+                  fi
+                  ;;
+              esac
+            done < <(git diff --name-status "main...pr-${NUM}" -- "$MIG_DIR" 2>/dev/null || true)
+
+            if [ "$COLLIDES" = "true" ]; then
+              migration_skip_prs="$migration_skip_prs $NUM"
+              echo "PR #$NUM EXCLUDED from this batch (migration-number collision - combining it would produce multiple Alembic heads). The rest of the batch is unaffected."
+              continue
+            fi
+
+            # Accepted: commit this PR's staged releases/claims to the batch map.
+            for prefix in "${!staged_release[@]}"; do
+              if [ -n "${prefix_holder[$prefix]+x}" ] && [ "${prefix_holder[$prefix]}" = "${staged_release[$prefix]}" ]; then
+                unset 'prefix_holder[$prefix]'
+              fi
+            done
+            for prefix in "${!staged_claim[@]}"; do
+              prefix_holder["$prefix"]="${staged_claim[$prefix]}"
+            done
 
             echo "Attempting squash-merge into merge-queue..."
             if git merge --squash "pr-$NUM" 2>&1; then
@@ -567,19 +691,28 @@ jobs:
           merged_prs=$(echo "$merged_prs" | xargs)
           conflict_prs=$(echo "$conflict_prs" | xargs)
           noop_prs=$(echo "$noop_prs" | xargs)
+          migration_skip_prs=$(echo "$migration_skip_prs" | xargs)
 
           # Store PR numbers in files for later steps
           echo "$merged_prs" > /tmp/merged_prs.txt
           echo "$conflict_prs" > /tmp/conflict_prs.txt
           echo "$noop_prs" > /tmp/noop_prs.txt
+          echo "$migration_skip_prs" > /tmp/migration_collision_prs.txt
+
+          migration_skip_count=0
+          if [ -n "$migration_skip_prs" ]; then
+            migration_skip_count=$(echo "$migration_skip_prs" | wc -w)
+          fi
 
           {
             echo "merged_prs=$merged_prs"
             echo "conflict_prs=$conflict_prs"
             echo "noop_prs=$noop_prs"
+            echo "migration_collision_prs=$migration_skip_prs"
             echo "merged_count=$(echo "$merged_prs" | wc -w)"
             echo "conflict_count=$(echo "$conflict_prs" | wc -w)"
             echo "noop_count=$(echo "$noop_prs" | wc -w)"
+            echo "migration_collision_count=$migration_skip_count"
           } >> "$GITHUB_OUTPUT"
 
           echo ""
@@ -587,6 +720,10 @@ jobs:
           echo "Merged: $merged_prs"
           echo "Duplicates (no changes to merge): $noop_prs"
           echo "Conflicts: $conflict_prs"
+          echo "Excluded (migration-number collision): $migration_skip_prs"
+          if [ "$migration_skip_count" -gt 0 ]; then
+            echo "::warning::Excluded $migration_skip_count PR(s) from this batch for migration-number collisions: $migration_skip_prs - the rest of the batch continues."
+          fi
 
       - name: Close duplicate PRs (changes already on main)
         if: steps.merge.outputs.noop_count != '0' && steps.merge.outputs.noop_count != ''
@@ -695,169 +832,6 @@ jobs:
             done
             exit 1
           fi
-      - name: Detect migration-number collisions in merged PRs
-        if: steps.merge.outputs.merged_count != '0'
-        env:
-          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
-          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
-          # Needed by the undelivered-notification fallback below (FAR-1939):
-          # `gh pr comment` authenticates with the job's GITHUB_TOKEN, which
-          # carries pull-requests:write (see the job's permissions block).
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured -- skipping notification"; exit 0; fi
-
-          MIG_DIR="backend/src/modulo/db/migrations/versions"
-          declare -A prefix_holder
-          collision_prs=""
-
-          # Seed the accumulated prefix set from main's current migration tree. Each
-          # migration file holds its numeric prefix (NNNN_name.py), so a PR that
-          # introduces a prefix already held by a DIFFERENT filename is a collision.
-          while IFS= read -r fname; do
-            [ -z "$fname" ] && continue
-            base=$(basename "$fname")
-            prefix="${base%%_*}"
-            [ -n "$prefix" ] && prefix_holder["$prefix"]="$base"
-          done < <(git ls-tree --name-only main -- "$MIG_DIR/" 2>/dev/null | grep '\.py$' || true)
-
-          # Process merged PRs oldest-first (same order as the squash-merge), so the
-          # accumulated set mirrors the migration tree immediately before each PR merged.
-          for NUM in $(cat /tmp/merged_prs.txt 2>/dev/null || echo ""); do
-            [ -z "$NUM" ] && continue
-            git fetch origin "+refs/pull/$NUM/head:refs/heads/pr-$NUM" >/dev/null 2>&1 || true
-            if ! git rev-parse --verify -q "pr-$NUM" >/dev/null 2>&1; then
-              echo "  PR #$NUM branch unavailable -- skipping collision check"
-              continue
-            fi
-
-            echo "  PR #$NUM: checking migration-number collisions..."
-            while IFS=$'\t' read -r status path extra; do
-              [ -z "$path" ] && continue
-              case "$status" in
-                R*)
-                  # Rename: the old path releases its prefix, the new path claims its own.
-                  old_base=$(basename "$path")
-                  old_prefix="${old_base%%_*}"
-                  new_base=$(basename "$extra")
-                  new_prefix="${new_base%%_*}"
-                  [ -n "$old_prefix" ] && [ -n "${prefix_holder[$old_prefix]+x}" ] && [ "${prefix_holder[$old_prefix]}" = "$old_base" ] && unset 'prefix_holder[$old_prefix]'
-                  if [ -n "$new_prefix" ]; then
-                    if [ -n "${prefix_holder[$new_prefix]+x}" ]; then
-                      if [ "${prefix_holder[$new_prefix]}" != "$new_base" ]; then
-                        echo "    COLLISION: PR #$NUM adds $new_base, prefix $new_prefix already held by ${prefix_holder[$new_prefix]}"
-                        collision_prs="$collision_prs $NUM"
-                      fi
-                    else
-                      prefix_holder["$new_prefix"]="$new_base"
-                    fi
-                  fi
-                  ;;
-                D)
-                  # Deletion: release the prefix if this PR removed the file holding it.
-                  base=$(basename "$path")
-                  prefix="${base%%_*}"
-                  [ -n "$prefix" ] && [ -n "${prefix_holder[$prefix]+x}" ] && [ "${prefix_holder[$prefix]}" = "$base" ] && unset 'prefix_holder[$prefix]'
-                  ;;
-                *)
-                  # Addition or modification of a migration file. Only genuinely
-                  # NEW prefixes are added to the accumulated set — the existing
-                  # holder (main or an earlier-merged PR) stays authoritative so
-                  # a colliding PR does not steal the prefix and trigger false
-                  # positives on subsequent PRs that touch the original file.
-                  base=$(basename "$path")
-                  prefix="${base%%_*}"
-                  [ -z "$prefix" ] && continue
-                  if [ -n "${prefix_holder[$prefix]+x}" ]; then
-                    if [ "${prefix_holder[$prefix]}" != "$base" ]; then
-                      echo "    COLLISION: PR #$NUM adds $base, prefix $prefix already held by ${prefix_holder[$prefix]}"
-                      collision_prs="$collision_prs $NUM"
-                    fi
-                  else
-                    prefix_holder["$prefix"]="$base"
-                  fi
-                  ;;
-              esac
-            done < <(git diff --name-status "main...pr-${NUM}" -- "$MIG_DIR" 2>/dev/null || true)
-          done
-
-          collision_prs=$(echo "$collision_prs" | xargs)
-          collision_count=0
-          if [ -n "$collision_prs" ]; then
-            collision_count=$(echo "$collision_prs" | wc -w)
-          fi
-
-          echo "$collision_prs" > /tmp/migration_collision_prs.txt
-          echo "migration_collision_count=$collision_count" >> "$GITHUB_OUTPUT"
-
-          if [ "$collision_count" -eq 0 ]; then
-            echo "No migration-number collisions detected."
-            exit 0
-          fi
-
-          echo "Migration-number collisions detected in PRs: $collision_prs"
-          BODY=$(jq -n \
-            --arg repo "${{ github.repository }}" \
-            --arg phase "migration-collision" \
-            --arg collisionPrs "$collision_prs" \
-            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            '{repository: $repo, phase: $phase, collisionPrs: $collisionPrs, runUrl: $run_url}')
-          # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5 attempts).
-          DISPATCHED="false"
-          LAST_HTTP=""
-          for i in 1 2 3 4 5; do
-            TIMESTAMP=$(date +%s)
-            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
-            RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "$WEBHOOK_URL" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "$BODY")
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-            LAST_HTTP="$HTTP_CODE"
-            if [ "$HTTP_CODE" = "202" ]; then
-              echo "Fixer notified of migration collisions in PRs: $collision_prs"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "400" ] && echo "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
-              # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
-              # engine's byte-level idempotency guard (DuplicateWebhookError) —
-              # the identical delivery was already ACCEPTED within the ~5-min
-              # dedup window (a concurrent run or a workflow re-run). A handled
-              # no-op, NOT a dispatch failure.
-              echo "::notice::Branch Fixer duplicate delivery suppressed (identical migration-collision payload already accepted within the dedup window)"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-              DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
-              sleep "$DELAY"
-            else
-              DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: ${DETAIL}"
-              break
-            fi
-          done
-          if [ "$DISPATCHED" != "true" ]; then
-            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-            # FAR-1939: an undelivered notification must never be SILENT, and it
-            # must be attributable to the PR(s) it concerns (see the merge-
-            # conflict notify step above for the incident). The colliding PR(s)
-            # get the durable comment; this step still fails afterwards.
-            echo "::error::Branch Fixer webhook dispatch failed for PR(s) ${collision_prs} (HTTP ${LAST_HTTP}: ${DETAIL}) — migration-collision notification was not delivered."
-            for NUM in $collision_prs; do
-              [ -z "$NUM" ] && continue
-              UNDELIVERED_BODY="The merge queue could NOT deliver its migration-number-collision notification to the Branch Fixer for this PR: all 5 webhook attempts failed (last HTTP ${LAST_HTTP}: ${DETAIL}). This PR's migration number collides with one already on main, so alembic reports multiple heads until it is renumbered. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-              if gh pr comment "$NUM" --body "$UNDELIVERED_BODY" > /dev/null 2>&1; then
-                echo "::notice::PR #$NUM: posted a comment recording that the Branch Fixer was never notified."
-              else
-                echo "::error::PR #$NUM: could not post the undelivered-notification comment either — this PR has NO durable signal that the Branch Fixer was never asked to renumber its migration (webhook HTTP ${LAST_HTTP}: ${DETAIL})."
-              fi
-            done
-            exit 1
-          fi
       - name: Exit if nothing to merge
         if: steps.merge.outputs.merged_count == '0'
         run: |
@@ -909,23 +883,316 @@ jobs:
         working-directory: backend
         run: uv sync --frozen
 
-      - name: Check migration heads (hard gate)
+      - name: Check migration heads (hard gate, isolates the offending PR)
+        id: migration_heads
         if: steps.merge.outputs.merged_count != '0'
-        working-directory: backend
         shell: bash
         run: |
           # Migration heads must be exactly 1 on the combined branch. Parallel PRs
-          # can each add a migration off the same base, creating multiple heads that
-          # only appear when combined. A multi-head chain breaks app startup
-          # (alembic upgrade head fails) so this is a hard merge gate.
-          uv run --no-build --no-sync python -m alembic heads 2>&1 | tee /tmp/alembic_heads.txt
-          HEAD_COUNT=$(grep -c "\(head\)\|\(effective head\)" /tmp/alembic_heads.txt || true)
-          if [ "$HEAD_COUNT" -ne 1 ]; then
-            echo "::error::Alembic migration graph has $HEAD_COUNT heads (expected 1) on the merged branch. Parallel PRs added migrations off the same base without a merge point. Merge a migration-merge PR (like 0036_merge_all_heads) before proceeding."
-            echo "Migration heads check failed" >> /tmp/failure_description.txt
+          # can each add a migration off the same base, creating multiple heads
+          # that only appear when combined. A multi-head chain breaks app startup
+          # (`alembic upgrade head` fails).
+          #
+          # ISOLATION (2026-10-20): a multi-head graph used to abandon the ENTIRE
+          # batch - ten approved PRs merged into the validation branch, the heads
+          # gate failed, and nothing reached main for ~4 hours, every tick. A
+          # single malformed PR must never hold the rest of the batch hostage. So
+          # when heads != 1, attribute each batch-introduced head to the PR that
+          # introduced it, DROP those PR(s) from the batch, rebuild the branch and
+          # re-validate; the remaining PRs still merge. Attribution is mechanical
+          # (the head's migration file is not on main, so exactly one batch PR's
+          # `main...pr-N` diff adds it), not heuristic. If a batch head cannot be
+          # attributed, the step FAILS with the exact revisions/files named - the
+          # dropped-attribution case is a real defect, never a silent batch loss.
+          MIG_DIR="backend/src/modulo/db/migrations/versions"
+          HEADS_FILE=/tmp/alembic_heads.txt
+          : > /tmp/migration_heads_offenders.txt
+          HEAD_COUNT=0
+
+          compute_heads() {
+            ( cd backend && uv run --no-build --no-sync python -m alembic heads 2>&1 ) | tee "$HEADS_FILE"
+            HEAD_COUNT=$(grep -c "\(head\)\|\(effective head\)" "$HEADS_FILE" || true)
+          }
+
+          # Rebuild `merge-queue` from main by squash-merging every PR still in
+          # /tmp/merged_prs.txt except the offenders. Any PR that now conflicts
+          # (it already passed the collect/merge guards, so this is rare) is
+          # dropped too and reported alongside the conflicts - never merged blind.
+          rebuild_batch_without() {
+            local offenders="$1"
+            local new_merged=""
+            local new_conflict=""
+            local NUM
+            local batch_words
+            # /tmp/merged_prs.txt is a SINGLE whitespace-separated line (the merge
+            # step's format, also consumed by the CI-failure webhook payload), so
+            # split on whitespace rather than assuming one PR per line.
+            batch_words=$(xargs < /tmp/merged_prs.txt 2>/dev/null || true)
+            git checkout -B merge-queue main >/dev/null 2>&1
+            for NUM in $batch_words; do
+              [ -z "$NUM" ] && continue
+              case " $offenders " in *" $NUM "*) continue ;; esac
+              git fetch origin "+refs/pull/$NUM/head:refs/heads/pr-$NUM" >/dev/null 2>&1 || true
+              if ! git rev-parse --verify -q "pr-$NUM" >/dev/null 2>&1; then
+                echo "  PR #$NUM branch unavailable during rebuild - dropping it from this batch"
+                continue
+              fi
+              if git merge --squash "pr-$NUM" >/dev/null 2>&1; then
+                if git diff --cached --quiet; then
+                  echo "  PR #$NUM has no changes relative to the rebuilt branch (already on main) - dropping as duplicate"
+                else
+                  git commit -q -m "squash! Merge PR #$NUM"
+                  new_merged="$new_merged $NUM"
+                fi
+              else
+                git merge --abort >/dev/null 2>&1 || true
+                git reset --hard HEAD >/dev/null 2>&1 || true
+                echo "  MERGE CONFLICT in PR #$NUM during rebuild - dropping it from this batch"
+                new_conflict="$new_conflict $NUM"
+              fi
+            done
+            printf '%s\n' "$(echo "$new_merged" | xargs)" > /tmp/merged_prs.txt
+            if [ -n "$new_conflict" ]; then
+              local prior_conflicts
+              prior_conflicts=$(cat /tmp/conflict_prs.txt 2>/dev/null || true)
+              # Never read and truncate the same file in one pipeline: write the
+              # merged list aside, then swap it in.
+              printf '%s %s\n' "$prior_conflicts" "$(echo "$new_conflict" | xargs)" | xargs | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs > /tmp/conflict_prs.new
+              mv /tmp/conflict_prs.new /tmp/conflict_prs.txt
+            fi
+          }
+
+          MAX_DROP_ROUNDS=3
+          ROUND=0
+          while :; do
+            compute_heads
+            echo "Alembic heads on the combined batch: $HEAD_COUNT"
+            if [ "$HEAD_COUNT" -eq 1 ]; then
+              break
+            fi
+
+            if [ "$ROUND" -ge "$MAX_DROP_ROUNDS" ]; then
+              echo "::error::Could not resolve the Alembic multi-head graph after $MAX_DROP_ROUNDS drop-and-rebuild rounds. Heads: $(grep -E '\(head\)|\(effective head\)' "$HEADS_FILE" | paste -sd ', ' -). Excluded so far: $(xargs < /tmp/migration_heads_offenders.txt 2>/dev/null). Refusing to merge a multi-head batch."
+              echo "Migration heads check failed (multi-head graph could not be attributed/resolved)" >> /tmp/failure_description.txt
+              exit 1
+            fi
+            ROUND=$((ROUND + 1))
+
+            echo "::warning::Batch has $HEAD_COUNT Alembic heads - attributing the offending PR(s) and dropping them so the rest of the batch can land (round $ROUND/$MAX_DROP_ROUNDS)."
+            BATCH_WORDS=$(xargs < /tmp/merged_prs.txt 2>/dev/null || true)
+            mapfile -t HEAD_REVS < <(grep -E '\(head\)|\(effective head\)' "$HEADS_FILE" | awk '{print $1}' | sort -u)
+            OFFENDERS=""
+            UNATTRIBUTED=""
+            for REV in "${HEAD_REVS[@]}"; do
+              [ -z "$REV" ] && continue
+              HEAD_FILE="$MIG_DIR/${REV}.py"
+              if git cat-file -e "main:${HEAD_FILE}" 2>/dev/null; then
+                echo "  head $REV (${HEAD_FILE}) is already on main - not attributable to a batch PR"
+                continue
+              fi
+              # Exactly one batch PR adds this file (two PRs adding one path would
+              # have conflicted at squash-merge time, not here). Scan the batch's
+              # own PR diffs - the PR branches were fetched by the merge step.
+              FOUND_PRS=""
+              for CAND in $BATCH_WORDS; do
+                [ -z "$CAND" ] && continue
+                git rev-parse --verify -q "pr-$CAND" >/dev/null 2>&1 || continue
+                if git diff --name-only "main...pr-${CAND}" -- "$HEAD_FILE" 2>/dev/null | grep -qx "$HEAD_FILE"; then
+                  FOUND_PRS="$FOUND_PRS $CAND"
+                fi
+              done
+              FOUND_PRS=$(echo "$FOUND_PRS" | xargs)
+              if [ -z "$FOUND_PRS" ]; then
+                echo "  head $REV (${HEAD_FILE}) is not on main and no batch PR adds it - cannot attribute"
+                UNATTRIBUTED="$UNATTRIBUTED $REV(${HEAD_FILE})"
+              else
+                echo "  head $REV (${HEAD_FILE}) introduced by batch PR(s): $FOUND_PRS"
+                for FOUND_PR in $FOUND_PRS; do
+                  echo "PR #$FOUND_PR: adds ${HEAD_FILE} (revision '$REV'), which branches the migration graph into multiple Alembic heads on the combined batch." >> /tmp/migration_collision_details.txt
+                done
+                OFFENDERS="$OFFENDERS $FOUND_PRS"
+              fi
+            done
+            OFFENDERS=$(echo "$OFFENDERS" | xargs | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)
+
+            if [ -z "$OFFENDERS" ]; then
+              echo "::error::Alembic reports $HEAD_COUNT heads but none is attributable to a batch PR (heads: $(grep -E '\(head\)|\(effective head\)' "$HEADS_FILE" | paste -sd ', ' -); unattributed: ${UNATTRIBUTED:-none on main}). Main's own migration graph is broken, or a PR rewrote an existing migration's down_revision; refusing to merge."
+              echo "Migration heads check failed (multi-head graph not attributable to a batch PR)" >> /tmp/failure_description.txt
+              exit 1
+            fi
+
+            # MINIMAL DROP: a fork has more than one head, and dropping ANY
+            # branch at that fork resolves it - but dropping every attributed PR
+            # would also delay a legitimate PR that merely extends the chain
+            # (e.g. one chained onto the surviving head). So first try each
+            # candidate ALONE and keep the single drop that yields one head; only
+            # when no single drop fixes the graph is the whole set dropped.
+            ORIGINAL_BATCH=$(xargs < /tmp/merged_prs.txt 2>/dev/null || true)
+            OFFENDER_SET=""
+            CANDIDATE_COUNT=$(echo "$OFFENDERS" | wc -w)
+            if [ "$CANDIDATE_COUNT" -gt 1 ]; then
+              for CANDIDATE in $OFFENDERS; do
+                printf '%s\n' "$ORIGINAL_BATCH" > /tmp/merged_prs.txt
+                echo "  trying a minimal drop of PR #$CANDIDATE alone..."
+                rebuild_batch_without "$CANDIDATE"
+                compute_heads
+                if [ "$HEAD_COUNT" -eq 1 ]; then
+                  OFFENDER_SET="$CANDIDATE"
+                  echo "  minimal drop found: dropping PR #$CANDIDATE alone restores a single head"
+                  break
+                fi
+              done
+            fi
+            if [ -z "$OFFENDER_SET" ]; then
+              OFFENDER_SET="$OFFENDERS"
+            fi
+
+            echo "Dropping from the batch (migration-head offenders): $OFFENDER_SET"
+            echo "$OFFENDER_SET" >> /tmp/migration_heads_offenders.txt
+            for NUM in $OFFENDER_SET; do
+              printf '%s\n' "$NUM" >> /tmp/migration_collision_prs.txt
+            done
+
+            # Restore the full batch, then rebuild without the chosen offender(s)
+            # so the branch state matches /tmp/merged_prs.txt.
+            printf '%s\n' "$ORIGINAL_BATCH" > /tmp/merged_prs.txt
+            rebuild_batch_without "$OFFENDER_SET"
+            echo "Batch rebuilt without the offender(s). Re-validating migration heads..."
+          done
+
+          OFFENDERS_FOUND=false
+          if [ -s /tmp/migration_heads_offenders.txt ]; then
+            OFFENDERS_FOUND=true
+          fi
+          REMAINING=$(xargs < /tmp/merged_prs.txt 2>/dev/null || true)
+          REMAINING_COUNT=$(echo "$REMAINING" | wc -w)
+          {
+            echo "offenders_found=$OFFENDERS_FOUND"
+            echo "offenders=$(xargs < /tmp/migration_heads_offenders.txt 2>/dev/null)"
+            echo "remaining_prs=$REMAINING"
+            echo "remaining_count=$REMAINING_COUNT"
+          } >> "$GITHUB_OUTPUT"
+          echo "Migration heads OK ($HEAD_COUNT head) for the remaining batch: '$REMAINING'"
+          if [ "$OFFENDERS_FOUND" = "true" ]; then
+            echo "::warning::Isolated the multi-head failure to PR(s) $(xargs < /tmp/migration_heads_offenders.txt); the remaining $REMAINING_COUNT PR(s) continue through validation and merge."
+          fi
+
+      - name: Notify fixer of migration collisions (PRs excluded from the batch)
+        # Runs for BOTH exclusion sources: the pre-merge migration-number gate in
+        # the merge step, and the heads check's drop-and-rebuild (which appends
+        # what it dropped to the same list). `always()` matters - an excluded PR
+        # must be reported even if the batch later fails validation.
+        if: always() && (steps.merge.outputs.migration_collision_count != '0' || steps.migration_heads.outputs.offenders_found == 'true')
+        env:
+          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          # Needed by the durable comments below: `gh pr comment` authenticates
+          # with the job's GITHUB_TOKEN, which carries pull-requests:write.
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          COLLISIONS=$(xargs < /tmp/migration_collision_prs.txt 2>/dev/null || true)
+          if [ -z "$COLLISIONS" ]; then
+            echo "No migration-collision PRs to notify about."
+            exit 0
+          fi
+
+          # Durable, attributable record on every excluded PR, posted BEFORE (and
+          # independently of) the webhook. The old detector exited early when
+          # WEBHOOK_URL was unset, which with skip-instead-of-abort would leave a
+          # PR silently excluded from every batch with no trace on the PR itself.
+          DETAILS=$(cat /tmp/migration_collision_details.txt 2>/dev/null || true)
+          for NUM in $COLLISIONS; do
+            [ -z "$NUM" ] && continue
+            THIS_DETAIL=$(echo "$DETAILS" | grep -F "PR #$NUM:" || true)
+            if [ -z "$THIS_DETAIL" ]; then
+              THIS_DETAIL="PR #$NUM: the batch's combined migration graph did not resolve to a single Alembic head once this PR was included."
+            fi
+            COMMENT_BODY=$(printf '%s\n' \
+              "The merge queue EXCLUDED this PR from the current merge batch: combining it with the rest of the batch breaks the Alembic migration graph (more than one head), which fails \`alembic upgrade head\` at app startup." \
+              "" \
+              "**Why this PR:**" \
+              "" \
+              "$THIS_DETAIL" \
+              "" \
+              "The rest of the approved batch was validated and merged without it. This PR stays OPEN and is skipped again on the next queue tick until the migration is renumbered - give it the next free numeric prefix and chain \`down_revision\` to the current main head (see \`scripts/run_check_migration_heads.py\`)." \
+              "" \
+              "Queue tick: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}")
+            if gh pr comment "$NUM" --body "$COMMENT_BODY" > /dev/null 2>&1; then
+              echo "  PR #$NUM: posted the exclusion reason as a durable comment."
+            else
+              echo "::error::PR #$NUM: could not post the exclusion-reason comment - the PR is excluded from the batch with no durable trace."
+            fi
+          done
+
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "No webhook URL configured -- skipping Branch Fixer notification (the PR comment above is the durable record)."
+            exit 0
+          fi
+
+          echo "Migration-collision PRs excluded from the batch: $COLLISIONS"
+          BODY=$(jq -n \
+            --arg repo "${{ github.repository }}" \
+            --arg phase "migration-collision" \
+            --arg collisionPrs "$COLLISIONS" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{repository: $repo, phase: $phase, collisionPrs: $collisionPrs, runUrl: $run_url}')
+          # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5 attempts).
+          DISPATCHED="false"
+          LAST_HTTP=""
+          for i in 1 2 3 4 5; do
+            TIMESTAMP=$(date +%s)
+            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
+            RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "$WEBHOOK_URL" \
+              -H "Content-Type: application/json" \
+              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+              -d "$BODY")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+            LAST_HTTP="$HTTP_CODE"
+            if [ "$HTTP_CODE" = "202" ]; then
+              echo "Fixer notified of migration collisions in PRs: $COLLISIONS"
+              DISPATCHED="true"
+              break
+            elif [ "$HTTP_CODE" = "400" ] && echo "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
+              # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
+              # engine's byte-level idempotency guard (DuplicateWebhookError) -
+              # the identical delivery was already ACCEPTED within the ~5-min
+              # dedup window (a concurrent run or a workflow re-run). A handled
+              # no-op, NOT a dispatch failure.
+              echo "::notice::Branch Fixer duplicate delivery suppressed (identical migration-collision payload already accepted within the dedup window)"
+              DISPATCHED="true"
+              break
+            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+              DELAY=$((2 ** (i - 1) * 5))
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
+              sleep "$DELAY"
+            else
+              DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: ${DETAIL}"
+              break
+            fi
+          done
+          if [ "$DISPATCHED" != "true" ]; then
+            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
+            # FAR-1939: an undelivered notification must never be SILENT, and it
+            # must be attributable to the PR(s) it concerns (see the merge-
+            # conflict notify step above for the incident). The excluded PR(s)
+            # already got the durable exclusion comment above; record the failed
+            # dispatch on each of them too, then fail the step.
+            echo "::error::Branch Fixer webhook dispatch failed for PR(s) ${COLLISIONS} (HTTP ${LAST_HTTP}: ${DETAIL}) — migration-collision notification was not delivered."
+            for NUM in $COLLISIONS; do
+              [ -z "$NUM" ] && continue
+              UNDELIVERED_BODY="The merge queue could NOT deliver its migration-number-collision notification to the Branch Fixer for this PR: all 5 webhook attempts failed (last HTTP ${LAST_HTTP}: ${DETAIL}). This PR has been EXCLUDED from the merge batch and its migration must be renumbered before it can land. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              if gh pr comment "$NUM" --body "$UNDELIVERED_BODY" > /dev/null 2>&1; then
+                echo "::notice::PR #$NUM: posted a comment recording that the Branch Fixer was never notified."
+              else
+                echo "::error::PR #$NUM: could not post the undelivered-notification comment either — this PR has NO durable signal that the Branch Fixer was never asked to renumber its migration (webhook HTTP ${LAST_HTTP}: ${DETAIL})."
+              fi
+            done
             exit 1
           fi
-          echo "Migration heads OK ($HEAD_COUNT head)"
 
       # Backend lint+tests and the full frontend pipeline run CONCURRENTLY in
       # this one step (previously two sequential steps: backend ~20 min then
@@ -943,7 +1210,10 @@ jobs:
       # failure()`, used to append "Frontend checks failed" even when the
       # BACKEND step was the one that failed and frontend never ran.
       - name: Backend lint + tests and frontend checks (concurrent)
-        if: steps.merge.outputs.merged_count != '0'
+        # remaining_count is set by the heads check: if EVERY PR in the batch was
+        # dropped as a migration-head offender the branch is just main, so the
+        # ~20-minute combined validation has nothing new to prove and is skipped.
+        if: steps.merge.outputs.merged_count != '0' && steps.migration_heads.outputs.remaining_count != '0'
         shell: bash
         run: |
           # --- Frontend checks: background subshell (was a separate sequential step) ---
@@ -1050,7 +1320,8 @@ jobs:
       # If CI passed -- merge source PRs
       - name: Merge source PRs via gh pr merge
         id: ghmerge
-        if: success() && steps.merge.outputs.merged_count != '0' && steps.toctou.outputs.aborted != 'true'
+        # remaining_count excludes PRs the heads check dropped from the batch.
+        if: success() && steps.merge.outputs.merged_count != '0' && steps.migration_heads.outputs.remaining_count != '0' && steps.toctou.outputs.aborted != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           # Workflows-capable credential, used ONLY for PRs that touch
@@ -1067,12 +1338,17 @@ jobs:
           # FAR-530: the merge step's own output is the authoritative record of
           # which PRs squash-merged into the queue branch (oldest first). It does
           # not depend on ref ordering the way a git-log range scrape does.
+          # Kept as a FALLBACK only: /tmp/merged_prs.txt is authoritative because
+          # the migration-heads drop-and-rebuild step rewrites it, and a dropped
+          # PR must never be gh-merged from a stale step output.
           MERGE_STEP_PRS: ${{ steps.merge.outputs.merged_prs }}
         shell: bash
         run: |
-          # FAR-530: primary source is the merge step's output; the git-log range
-          # stays only as a defensive fallback.
-          PR_NUMS="$MERGE_STEP_PRS"
+          # FAR-530: primary source is /tmp/merged_prs.txt (the merge step writes
+          # it, the heads step rewrites it after dropping offenders); the merge
+          # step's output and the git-log range stay as defensive fallbacks.
+          PR_NUMS=$(xargs < /tmp/merged_prs.txt 2>/dev/null || true)
+          [ -z "$PR_NUMS" ] && PR_NUMS="$MERGE_STEP_PRS"
           [ -z "$PR_NUMS" ] && PR_NUMS=$(git log main..merge-queue --oneline | grep -oP 'PR #\K\d+' | tac || true)
           echo "Merging source PRs (in oldest-first order):"
           echo "$PR_NUMS"
@@ -1686,7 +1962,7 @@ jobs:
           echo "Merged-branch sweep complete."
 
       - name: Trigger main CI and deploy after merge
-        if: success() && steps.merge.outputs.merged_count != '0' && steps.toctou.outputs.aborted != 'true'
+        if: success() && steps.merge.outputs.merged_count != '0' && steps.migration_heads.outputs.remaining_count != '0' && steps.toctou.outputs.aborted != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
