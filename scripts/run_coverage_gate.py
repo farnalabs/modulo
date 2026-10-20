@@ -1436,11 +1436,11 @@ def _file_added_line_numbers(safe_range: str, safe_path: str) -> set[int] | None
             check=False,
             cwd=str(REPO_ROOT),
         )
+        if result.returncode != 0 or not result.stdout:
+            return None
+        return _parse_added_line_numbers(result.stdout)
     except Exception:  # best-effort per-file parse; skip on any error
         return None
-    if result.returncode != 0 or not result.stdout:
-        return None
-    return _parse_added_line_numbers(result.stdout)
 
 
 def _collect_added_line_numbers(
