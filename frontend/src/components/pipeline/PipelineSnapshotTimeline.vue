@@ -46,6 +46,19 @@
              read-only historic version view (FAR-1812) via the host editor's
              `view` event; the radio selects the version for the diff/restore
              actions, which stay on this component. -->
+        <!-- FAR-1895: the loaded window holds no substantive version row. That
+             is NOT the same as "this pipeline has no version" — a run streak
+             longer than the window pushes the newest version below it. Say so
+             explicitly (with the runs, unattributed, in the bucket below)
+             rather than fabricating an `initial` row from a run snapshot. -->
+        <p
+          v-if="versionGroups.length === 0"
+          class="mb-3 text-sm text-muted-foreground"
+          data-testid="snapshot-timeline-no-version-in-window"
+        >
+          {{ $t('components.PipelineSnapshotTimeline.no_version_in_window') }}
+        </p>
+
         <div class="mb-3 max-h-56 space-y-2 overflow-y-auto">
           <div v-for="g in versionGroups" :key="g.key" class="space-y-1">
             <div class="flex items-stretch gap-1">
@@ -149,6 +162,47 @@
                 class="flex w-full items-center justify-between gap-2 rounded-md border border-dashed px-2 py-1 text-left text-[10px] text-muted-foreground hover:bg-accent"
                 :aria-label="$t('components.PipelineSnapshotTimeline.open_version_aria', { version: r.snapshot_version })"
                 :data-testid="`snapshot-timeline-earlier-run-${r.id}`"
+                @click="emit('view', r.id)"
+              >
+                <span class="font-medium">v{{ r.snapshot_version }}</span>
+                <span>{{ formatDate(r.created_at) }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- FAR-1895: a version-DESC all-run window with NO resolved current
+               version holds the NEWEST runs (the newest version is below the
+               window, or the resolving query failed). They are NOT "earlier"
+               and must not claim to be, so they render in their own bucket with
+               no version attribution. -->
+          <div
+            v-if="unattributedRuns.length > 0"
+            class="rounded-md border border-dashed p-1.5"
+            data-testid="snapshot-timeline-unattributed"
+          >
+            <button
+              type="button"
+              class="w-full rounded-md px-1 py-0.5 text-left text-[10px] font-medium text-muted-foreground hover:bg-accent"
+              :aria-expanded="expandedGroups.has('unattributed')"
+              aria-controls="snapshot-timeline-runs-unattributed"
+              data-testid="snapshot-timeline-unattributed-toggle"
+              @click="toggleGroup('unattributed')"
+            >
+              {{ $t('components.PipelineSnapshotTimeline.ran_unattributed', { count: unattributedRuns.length }) }}
+            </button>
+            <div
+              :hidden="!expandedGroups.has('unattributed')"
+              id="snapshot-timeline-runs-unattributed"
+              data-testid="snapshot-timeline-unattributed-list"
+              class="mt-1 space-y-1"
+            >
+              <button
+                v-for="r in unattributedRuns"
+                :key="r.id"
+                type="button"
+                class="flex w-full items-center justify-between gap-2 rounded-md border border-dashed px-2 py-1 text-left text-[10px] text-muted-foreground hover:bg-accent"
+                :aria-label="$t('components.PipelineSnapshotTimeline.open_version_aria', { version: r.snapshot_version })"
+                :data-testid="`snapshot-timeline-unattributed-run-${r.id}`"
                 @click="emit('view', r.id)"
               >
                 <span class="font-medium">v{{ r.snapshot_version }}</span>
@@ -293,13 +347,24 @@ interface VersionGroup {
   key: string
   /** The snapshot the row renders and deep-links to. */
   anchor: TimelineSnapshot
-  /** Badge kind: the created_kind, or 'initial' for the legacy anchor. */
+  /** Badge kind: the anchor's created_kind (a real version, never a fabricated one). */
   kind: string
   /** Run snapshots that executed this version, newest first. */
   runs: TimelineSnapshot[]
 }
 
-const props = defineProps<{ pipelineId: string }>()
+const props = defineProps<{
+  pipelineId: string
+  /**
+   * FAR-1895: the pipeline's resolved CURRENT version (the same value the
+   * toolbar chip shows), resolved by the host through a query no run streak
+   * can starve. Used ONLY as the anchor when this panel's own (windowed) page
+   * contains no substantive row — see groupHistory. Optional so the component
+   * still mounts standalone; absent it renders the explicit
+   * "no version in the loaded history" state instead of inventing one.
+   */
+  currentVersion?: TimelineSnapshot | null
+}>()
 // FAR-1812: `view` asks the host editor to open this snapshot as a read-only
 // historical version (deep link).
 // FAR-1816: `restore` hands the selected version to the host editor's shared
@@ -335,7 +400,11 @@ const hasMore = computed(() => snapshots.value.length < snapshotsTotal.value)
 function isRenderableSnapshot(s: TimelineSnapshot): boolean {
   // FAR-1817: match the editor's own snapshot load — a version-0 placeholder
   // must never render as a row or capture every run.
-  return typeof s.snapshot_version === 'number' && s.snapshot_version > 0
+  // FAR-1895: a draft auto-save (`draft: true`, created_kind='edit') is not a
+  // version. The request excludes drafts server-side; drop any that still
+  // arrive so a draft can never be a version row (nor be mistaken for a run
+  // annotation, which would attribute it to a version it did not execute).
+  return typeof s.snapshot_version === 'number' && s.snapshot_version > 0 && s.draft !== true
 }
 
 /**
@@ -347,29 +416,56 @@ function isRenderableSnapshot(s: TimelineSnapshot): boolean {
  * monotonically and a run freezes the live graph at run-start (the state the
  * newest prior substantive version recorded).
  *
- * A pipeline with NO substantive version at all (its history predates edit
- * boundaries — FAR-1810) renders under a single 'initial' anchor taken from
- * its oldest run; no synthetic edit versions are invented.
+ * FAR-1895: a loaded window with NO substantive row is NOT evidence that the
+ * pipeline has no version — the window is bounded (page_size + "Load more"),
+ * and a run streak longer than the window pushes the newest version below it.
+ * The panel therefore anchors on the host-resolved `currentVersion` (the same
+ * value the chip shows, resolved by a query no run streak can starve) when the
+ * window has no substantive row, and renders an explicit "no version in the
+ * loaded history" state when even that is unavailable. It never promotes a run
+ * to a fabricated `initial` version: that is exactly how the timeline could
+ * show "v500 Initial" while the chip showed "v2".
  *
- * M2: runs OLDER than every substantive version are NOT attributed to any
- * version — they are returned as `earlierRuns` and rendered as an explicit
- * "earlier versions" bucket. Folding them onto the oldest row would assert a
- * provenance the run does not have.
+ * M2: runs OLDER than every substantive version in the window are NOT
+ * attributed to any version — they are returned as `earlierRuns` and rendered
+ * as an explicit "earlier versions" bucket. Folding them onto the oldest row
+ * would assert a provenance the run does not have.
+ *
+ * FAR-1895: a window with NO substantive row AND no resolved `currentVersion`
+ * is a THIRD case, distinct from M2. Those runs are not known to be earlier —
+ * rows arrive version-DESC, so an all-run window holds the NEWEST runs (the
+ * newest version is below the window, or the query that resolves it failed).
+ * They are returned as `unattributedRuns` and rendered without any version
+ * claim, never folded into the "earlier" bucket, which would assert a
+ * provenance (and a direction) the rows do not have.
  */
-function groupHistory(rows: TimelineSnapshot[]): { groups: VersionGroup[]; earlierRuns: TimelineSnapshot[] } {
+function groupHistory(
+  rows: TimelineSnapshot[],
+  currentVersion: TimelineSnapshot | null,
+): { groups: VersionGroup[]; earlierRuns: TimelineSnapshot[]; unattributedRuns: TimelineSnapshot[] } {
   const substantive = rows.filter((s) => isSubstantiveKind(s.created_kind))
   const runs = rows.filter((s) => !isSubstantiveKind(s.created_kind))
   if (substantive.length === 0) {
-    if (runs.length === 0) return { groups: [], earlierRuns: [] }
-    const oldest = runs[runs.length - 1]
+    if (runs.length === 0) return { groups: [], earlierRuns: [], unattributedRuns: [] }
+    if (!currentVersion) {
+      // No substantive row in the window and no resolved version to anchor on:
+      // we cannot say whether these runs executed a version newer or older than
+      // the window, so they carry NO version attribution and are NOT labelled
+      // "earlier". The panel states the gap; the runs stay reachable here.
+      return { groups: [], earlierRuns: [], unattributedRuns: runs }
+    }
+    // The resolved version sits BELOW every run in the window (it is the
+    // newest version and is absent from the window), so each run executed it —
+    // attributing them to it is truthful, and clicking the row opens it.
     return {
       groups: [{
-        key: `initial:${oldest.id}`,
-        anchor: oldest,
-        kind: 'initial',
-        runs: runs.filter((r) => r.id !== oldest.id),
+        key: currentVersion.id,
+        anchor: currentVersion,
+        kind: currentVersion.created_kind,
+        runs,
       }],
       earlierRuns: [],
+      unattributedRuns: [],
     }
   }
   const groups: VersionGroup[] = substantive.map((s) => ({
@@ -387,12 +483,13 @@ function groupHistory(rows: TimelineSnapshot[]): { groups: VersionGroup[]; earli
     if (group) group.runs.push(run)
     else earlierRuns.push(run)
   }
-  return { groups, earlierRuns }
+  return { groups, earlierRuns, unattributedRuns: [] }
 }
 
-const groupedHistory = computed(() => groupHistory(snapshots.value))
+const groupedHistory = computed(() => groupHistory(snapshots.value, props.currentVersion ?? null))
 const versionGroups = computed(() => groupedHistory.value.groups)
 const earlierRuns = computed(() => groupedHistory.value.earlierRuns)
+const unattributedRuns = computed(() => groupedHistory.value.unattributedRuns)
 
 const compareOptions = computed(() =>
   versionGroups.value.map((g) => {
@@ -480,9 +577,15 @@ async function loadSnapshots(): Promise<void> {
     // snapshots that executed it, so load the widest window the endpoint
     // allows (page_size caps at 100) rather than the 20 that sufficed for a
     // flat list.
+    // FAR-1895: `exclude_drafts` drops in-progress auto-saves from the window
+    // (and from `total`, so the truncation notice stays honest). Runs are
+    // committed snapshots, so they are kept for the annotation.
     const { data, error } = await withTimeout((signal) =>
       api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
-        params: { path: { pipeline_id: props.pipelineId }, query: { page_size: SNAPSHOT_PAGE_SIZE } },
+        params: {
+          path: { pipeline_id: props.pipelineId },
+          query: { page_size: SNAPSHOT_PAGE_SIZE, exclude_drafts: true },
+        },
         signal,
       }),
     )
@@ -516,7 +619,10 @@ async function loadMoreSnapshots(): Promise<void> {
     const nextPage = snapshotsPage.value + 1
     const { data, error } = await withTimeout((signal) =>
       api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
-        params: { path: { pipeline_id: props.pipelineId }, query: { page_size: SNAPSHOT_PAGE_SIZE, page: nextPage } },
+        params: {
+          path: { pipeline_id: props.pipelineId },
+          query: { page_size: SNAPSHOT_PAGE_SIZE, page: nextPage, exclude_drafts: true },
+        },
         signal,
       }),
     )
