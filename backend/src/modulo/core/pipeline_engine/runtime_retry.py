@@ -54,6 +54,7 @@ from langgraph.errors import NodeCancelledError
 
 from modulo.connectors.base import node_fires_dispatch_job
 from modulo.core.pipeline_engine import retry_compensation as rc
+from modulo.core.pipeline_engine.model_backend_errors import non_retryable_provider_code
 from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
 from modulo.core.pipeline_engine.retry_compensation import NodeRetryPolicy
 
@@ -165,6 +166,13 @@ def failure_event(exc: BaseException) -> str | None:
     Internal cancellation (``asyncio.CancelledError``) is never retried.
     """
     if _is_never_retryable(exc):
+        return None
+    # FAR-2006: a provider credential / funding refusal is permanent even
+    # though it surfaces as the transient ``SandboxNodeFailedError`` carrier.
+    # Classify it from the retained sandbox output before the transient-class
+    # branch, or an inline node retry re-executes a 401/402 that can never
+    # succeed (the measured three-attempt, ~10-min-per-attempt waste).
+    if non_retryable_provider_code(str(exc)) is not None:
         return None
     if isinstance(exc, TimeoutError):
         return "timeout"

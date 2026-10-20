@@ -13,6 +13,7 @@ Mock/fake based — no Postgres required (mirrors test_executor.py).
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any
@@ -301,6 +302,119 @@ async def test_execute_reraises_sandbox_node_failed_error():
     assert any("status='pending'" in s for s in statements)
     mock_finalize.assert_not_awaited()
     registry.close.assert_called_once_with(run.id)
+
+
+async def test_execute_provider_billing_refusal_is_not_retried():
+    """FAR-2006: a 402 provider refusal is terminal on the FIRST attempt.
+
+    It arrives as the normally-retryable ``SandboxNodeFailedError``, but the
+    retained sandbox output carries HTTP 402 "Insufficient account funds" — a
+    permanent refusal. The executor must NOT reset the run to pending (retry
+    budget remains) and must record ``provider.billing``, not
+    ``sandbox.no_output_json``.
+    """
+    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
+    final_run = _make_run(
+        run_id=run.id,
+        status="failed",
+        claim_count=10,
+        node_attempt_count=1,
+        claim_token="tok-claim-abc",
+    )
+    snapshot = _make_snapshot()
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(SandboxNodeFailedError('HTTP 402 "Insufficient account funds"', node_id="node-a"))
+    registry = _mock_registry()
+    broker = registry.get_or_create.return_value
+    settings = MagicMock(saq_run_retries=5)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(
+            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
+        )
+
+    # Terminal on attempt 1 — the retry budget (5) is irrelevant.
+    assert result is final_run
+    assert not any("status='pending'" in s for s in statements)
+    call = mock_finalize.await_args
+    assert call is not None
+    assert call.kwargs["status"] == "failed"
+    assert call.kwargs["error_code"] == "provider.billing"
+    assert "not retried" in call.kwargs["error_detail"]
+    assert "Insufficient account funds" in call.kwargs["error_detail"]
+    run_failed = [c.args for c in broker.publish.call_args_list if c.args and c.args[0] == "run_failed"]
+    assert run_failed
+    assert run_failed[0][1]["error"] == "provider.billing"
+
+
+async def test_execute_provider_auth_refusal_dispatches_the_alert():
+    """FAR-2006: a 401 refusal reaches the existing Notifier alert path.
+
+    The alert is the whole point of the ticket — a whole night ran at zero
+    throughput with nothing surfaced. A dedicated ``provider_failure`` event is
+    dispatched (admin scope) with the run and pipeline identity.
+    """
+    from modulo.core.notifier import EVENT_PROVIDER_FAILURE
+    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
+    final_run = _make_run(
+        run_id=run.id,
+        pipeline_id=run.pipeline_id,
+        status="failed",
+        claim_count=10,
+        node_attempt_count=1,
+        claim_token="tok-claim-abc",
+    )
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(SandboxNodeFailedError('HTTP 401 "This API key has expired"', node_id="node-a"))
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5)
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("modulo.core.pipeline_engine.executor._safe_pipeline_name", new=AsyncMock(return_value="Branch Fixer")),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock(), notifier=notifier)
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
+
+    assert mock_finalize.await_args is not None
+    assert mock_finalize.await_args.kwargs["error_code"] == "provider.authentication"
+    notifier.dispatch_event.assert_awaited_once()
+    kwargs = notifier.dispatch_event.await_args.kwargs
+    assert kwargs["event_type"] == EVENT_PROVIDER_FAILURE
+    assert kwargs["run_id"] == run.id
+    assert kwargs["payload"]["error_code"] == "provider.authentication"
+    assert kwargs["payload"]["pipeline_name"] == "Branch Fixer"
 
 
 async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted():
@@ -644,6 +758,112 @@ async def test_execute_non_cancellation_exception_still_terminal_fails():
     assert mock_finalize.await_args.kwargs.get("error_code") == "RuntimeError"
     assert mock_finalize.await_args.kwargs["status"] == "failed"
     assert not any("status='pending'" in s for s in statements)
+
+
+async def test_execute_generic_exception_carrying_provider_refusal_is_reclassified():
+    """FAR-2006: a 401/402 delivered as a GENERIC exception is reclassified.
+
+    The provider SDK raises a plain error class (``APIStatusError``) rather than
+    the sandbox carrier; its raw class name resolved to ``harness.unknown``, so
+    the generic catch must classify the message and record
+    ``provider.authentication`` — which is also what makes the terminal-path
+    alert fire.
+    """
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
+    final_run = _make_run(
+        run_id=run.id,
+        status="failed",
+        claim_count=10,
+        node_attempt_count=1,
+        claim_token="tok-claim-abc",
+    )
+    snapshot = _make_snapshot()
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
+    factory = _make_session_factory(session)
+    # A generic (non-SandboxNodeFailedError) exception whose message carries the
+    # measured gateway echo, raised OUT of preparation so it reaches the
+    # executor's generic handler (stream errors are mapped by
+    # ``_stream_exception_outcome``). The class name alone would be
+    # harness.unknown; the message classification is what reclassifies it.
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch(
+            "modulo.core.pipeline_engine.executor.get_or_compile",
+            side_effect=RuntimeError('HTTP 401 "This API key has expired"'),
+        ),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(
+            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
+        )
+
+    assert result is final_run
+    call = mock_finalize.await_args
+    assert call is not None
+    assert call.kwargs["status"] == "failed"
+    # Reclassified from "RuntimeError" to the permanent provider code.
+    assert call.kwargs["error_code"] == "provider.authentication"
+    assert not any("status='pending'" in s for s in statements)
+
+
+async def test_execute_generic_prestream_failure_keeps_its_class_name():
+    """Negative twin: a pre-stream failure with NO provider signature keeps the
+    existing generic classification (``type(exc).__name__``) — the FAR-2006
+    reclassification must never over-match an ordinary preparation error."""
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
+    final_run = _make_run(
+        run_id=run.id,
+        status="failed",
+        claim_count=10,
+        node_attempt_count=1,
+        claim_token="tok-claim-abc",
+    )
+    snapshot = _make_snapshot()
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch(
+            "modulo.core.pipeline_engine.executor.get_or_compile",
+            side_effect=RuntimeError("graph compilation failed"),
+        ),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(
+            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
+        )
+
+    assert result is final_run
+    call = mock_finalize.await_args
+    assert call is not None
+    assert call.kwargs["status"] == "failed"
+    assert call.kwargs["error_code"] == "RuntimeError"
 
 
 # ---------------------------------------------------------------------------
@@ -1131,3 +1351,147 @@ async def test_execute_gate_prove_the_fix_suppression_requires_decision():
 
     assert any("status='pending'" in s for s in statements), "decision False -> gate must not fire, reset + re-raise"
     mock_finalize.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# PipelineExecutor._alert_provider_failure — failure-isolated alert dispatch
+# ---------------------------------------------------------------------------
+
+
+def _make_alert_executor(notifier: MagicMock | None) -> PipelineExecutor:
+    """An executor whose session factory the tests override per case."""
+    executor = PipelineExecutor(MagicMock(), notifier=notifier)
+    executor._session_factory = _make_session_factory(_make_session(_make_snapshot()))
+    return executor
+
+
+async def test_alert_provider_failure_ignores_non_provider_error_codes():
+    """Only a permanent provider refusal pages — a transient code is a no-op.
+
+    The guard returns BEFORE the name lookup, so a run that failed for any
+    other reason costs no extra DB session.
+    """
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock()
+    executor = _make_alert_executor(notifier)
+    lookup = AsyncMock(return_value="Branch Fixer")
+
+    with patch("modulo.core.pipeline_engine.executor._safe_pipeline_name", new=lookup):
+        await executor._alert_provider_failure(
+            run_id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            final_status="failed",
+            error_code="model.provider_timeout",
+        )
+
+    lookup.assert_not_awaited()
+    notifier.dispatch_event.assert_not_awaited()
+
+
+async def test_alert_provider_failure_dispatches_when_name_lookup_fails():
+    """A failed pipeline-name lookup must NOT suppress the alert.
+
+    The name is cosmetic; the operator signal is not. Fail open WITH a log and
+    dispatch with a placeholder name.
+    """
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock()
+    executor = _make_alert_executor(notifier)
+    lookup = AsyncMock(side_effect=RuntimeError("db unavailable"))
+
+    with (
+        patch("modulo.core.pipeline_engine.executor._safe_pipeline_name", new=lookup),
+        patch("modulo.core.pipeline_engine.executor._log") as mock_log,
+    ):
+        await executor._alert_provider_failure(
+            run_id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            final_status="failed",
+            error_code="provider.billing",
+        )
+
+    mock_log.warning.assert_called_once()
+    assert mock_log.warning.call_args.args[0] == "pipeline.provider_failure_alert_name_lookup_failed"
+    notifier.dispatch_event.assert_awaited_once()
+    assert notifier.dispatch_event.await_args.kwargs["payload"]["pipeline_name"] == "unknown pipeline"
+
+
+async def test_alert_provider_failure_propagates_cancellation_from_name_lookup():
+    """Cancellation while looking up the name must propagate, never be swallowed.
+
+    Terminalization is cancellation-aware everywhere else; the alert helper
+    must not convert a cancelled task into a completed one.
+    """
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock()
+    executor = _make_alert_executor(notifier)
+    lookup = AsyncMock(side_effect=asyncio.CancelledError())
+
+    with (
+        patch("modulo.core.pipeline_engine.executor._safe_pipeline_name", new=lookup),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await executor._alert_provider_failure(
+            run_id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            final_status="failed",
+            error_code="provider.authentication",
+        )
+
+    notifier.dispatch_event.assert_not_awaited()
+
+
+async def test_alert_provider_failure_swallows_and_logs_dispatch_failure():
+    """A webhook/in-app dispatch failure must never crash terminalization.
+
+    Fail open WITH a log: the run is already terminal, so the alert is
+    best-effort — but a silent failure is indistinguishable from a delivered
+    alert, so the exception is logged.
+    """
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock(side_effect=RuntimeError("webhook down"))
+    executor = _make_alert_executor(notifier)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor._safe_pipeline_name", new=AsyncMock(return_value="Branch Fixer")),
+        patch("modulo.core.pipeline_engine.executor._log") as mock_log,
+    ):
+        await executor._alert_provider_failure(
+            run_id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            final_status="failed",
+            error_code="provider.billing",
+        )
+
+    mock_log.exception.assert_called_once()
+    assert mock_log.exception.call_args.args[0] == "pipeline.provider_failure_alert_failed"
+    notifier.dispatch_event.assert_awaited_once()
+
+
+async def test_alert_provider_failure_propagates_cancellation_from_dispatch():
+    """Cancellation during dispatch propagates out of the alert helper.
+
+    The notifier is awaited inside the terminalization tail; swallowing a
+    cancellation here would keep a cancelled run alive.
+    """
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock(side_effect=asyncio.CancelledError())
+    executor = _make_alert_executor(notifier)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor._safe_pipeline_name", new=AsyncMock(return_value="Branch Fixer")),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await executor._alert_provider_failure(
+            run_id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            final_status="failed",
+            error_code="provider.authentication",
+        )
+
+    notifier.dispatch_event.assert_awaited_once()

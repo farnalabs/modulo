@@ -330,6 +330,26 @@ class TestFAR102Filters:
         assert "error_code" in keys, "the raw error_code column must be selected for the dimension"
         assert "key_label" not in keys
 
+    def test_error_code_dimension_surfaces_provider_refusal_slices(self) -> None:
+        """FAR-2006: provider.authentication / provider.billing are their OWN slices.
+
+        The facts table stores the raw code and the dimension canonicalizes it
+        through map_legacy_code — a registered dotted code must pass through
+        unchanged (never collapse into the unknown bucket).
+        """
+        for code in ("provider.authentication", "provider.billing"):
+            assert _row_dimension_key(SimpleNamespace(error_code=code), AnalyticsDimension.ERROR_CODE) == code
+        # The unknown-slice complement therefore excludes both (they are known).
+        from modulo.core.pipeline_engine.error_codes import known_error_codes
+
+        known = known_error_codes()
+        assert "provider.authentication" in known
+        assert "provider.billing" in known
+        # A filter on either code expands to just itself.
+        stmt, params = build_facts_query(_query(error_code="provider.billing"))
+        assert set(params["error_codes"]) == {"provider.billing"}
+        assert "provider.billing" not in str(stmt), "error_code must be bound, never interpolated"
+
     def test_stall_error_codes_are_bound_not_interpolated(self) -> None:
         stmt, params = build_facts_query(_query())
         sql = str(stmt.compile(dialect=postgresql.dialect()))

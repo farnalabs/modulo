@@ -61,6 +61,11 @@ def test_provider_codes_present_with_expected_attributes():
     connection = ERROR_CODE_REGISTRY["provider.connection"]
     assert connection.error_class == "provider"
     assert connection.retryable is True
+    # FAR-2006: a 402 is an account-funding refusal — permanent like auth.
+    billing = ERROR_CODE_REGISTRY["provider.billing"]
+    assert billing.error_class == "provider"
+    assert billing.retryable is False
+    assert billing.alert_severity == "critical"
 
 
 def test_provider_aliases_resolve_to_provider_class():
@@ -240,6 +245,7 @@ def test_is_retryable_provider_transient_codes():
     assert is_retryable("provider.rate_limited") is True
     assert is_retryable("provider.connection") is True
     assert is_retryable("provider.authentication") is False
+    assert is_retryable("provider.billing") is False
     # Raw class names resolve through the aliases to the same defaults.
     assert is_retryable("RateLimitError") is True
     assert is_retryable("ProviderUnavailableError") is True

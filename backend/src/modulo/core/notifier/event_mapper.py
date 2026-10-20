@@ -6,6 +6,10 @@ the webhook-subscribable subset is ``AVAILABLE_EVENTS`` in
   - hitl_awaiting     → level: info,   scope: org,   category: "hitl.awaiting"
   - run_failed        → level: error,  scope: org,   category: "run.failed"
   - run_stalled       → level: warning, scope: org,   category: "run.stalled"
+  - provider_failure  → level: error,  scope: admin, category: "provider.failure"
+                        (FAR-2006 — a non-retryable 401/402 refusal; admin
+                        scope because the fix is a provider key/balance
+                        action, not a pipeline edit)
   - budget_exceeded   → level: warning, scope: org,   category: "run.budget_exceeded"
   - circuit_breaker_tripped → level: warning, scope: admin, category: "costs.circuit_breaker_tripped"
   - claim_expired     → level: info,   scope: org,   category: "hitl.claim_expired"
@@ -59,6 +63,7 @@ from modulo.core.notifier import (
     EVENT_HITL_DEADLINE_WARNING,
     EVENT_HITL_OVERDUE,
     EVENT_ORG_TRIGGERS_AUTO_PAUSED,
+    EVENT_PROVIDER_FAILURE,
     EVENT_QUEUE_PRESSURE_CRITICAL,
     EVENT_QUEUE_PRESSURE_NOTICE,
     EVENT_QUEUE_PRESSURE_WARNING,
@@ -101,6 +106,18 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "scope": "org",
         "category": "run.failed",
         "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    # FAR-2006: a provider auth/billing refusal is terminal and never retried,
+    # and its remedy is an ADMIN action (rotate/fund the provider key), hence
+    # admin scope. Level error so it reaches the in-app surface and any
+    # subscribed pager; TTL matches the other long-lived failure alerts.
+    EVENT_PROVIDER_FAILURE: {
+        "level": "error",
+        "scope": "admin",
+        "category": "provider.failure",
+        "dismiss_strategy": "org_admin",
         "dismissible_at_scope": True,
         "ttl_hours": 168,
     },
@@ -349,6 +366,7 @@ _TITLE_TEMPLATES: dict[str, str] = {
     EVENT_HITL_AWAITING: "HITL review needed — {pipeline_name}",
     EVENT_RUN_FAILED: "Run failed — {pipeline_name}",
     EVENT_RUN_STALLED: "Run stalled — {pipeline_name}",
+    EVENT_PROVIDER_FAILURE: "Model provider refused runs — {error_code}",
     EVENT_BUDGET_EXCEEDED: "Budget exceeded — {pipeline_name}",
     EVENT_CLAIM_EXPIRED: "HITL claim expired — {pipeline_name}",
     EVENT_HITL_OVERDUE: "HITL overdue — {pipeline_name}",
@@ -381,6 +399,11 @@ _BODY_TEMPLATES: dict[str, str] = {
     EVENT_RUN_FAILED: 'Run for "{pipeline_name}" failed with error: {error_code}.',
     EVENT_RUN_STALLED: (
         'Run for "{pipeline_name}" stalled — the agent produced no output for the configured stall timeout.'
+    ),
+    EVENT_PROVIDER_FAILURE: (
+        'Pipeline "{pipeline_name}" was refused by the model provider with {error_code}. '
+        "This failure is NOT retried — re-dispatching cannot succeed. Check the provider account: "
+        "the API key may be invalid, expired or revoked, or the account balance/quota may be exhausted."
     ),
     EVENT_BUDGET_EXCEEDED: 'Run for "{pipeline_name}" exceeded its token budget.',
     EVENT_CLAIM_EXPIRED: 'A HITL claim on "{pipeline_name}" has expired.',
@@ -469,6 +492,7 @@ _ACTION_URL_TEMPLATES: dict[str, str | None] = {
     EVENT_HITL_AWAITING: _RUN_DETAIL_URL,
     EVENT_RUN_FAILED: _RUN_DETAIL_URL,
     EVENT_RUN_STALLED: _RUN_DETAIL_URL,
+    EVENT_PROVIDER_FAILURE: _RUN_DETAIL_URL,
     EVENT_BUDGET_EXCEEDED: _RUN_DETAIL_URL,
     EVENT_CLAIM_EXPIRED: _RUN_DETAIL_URL,
     EVENT_HITL_OVERDUE: _RUN_DETAIL_URL,

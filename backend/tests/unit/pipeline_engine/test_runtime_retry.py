@@ -155,6 +155,20 @@ def test_classify_attempt_matrix(
     assert outcome.event == expected_event
 
 
+def test_provider_refusal_is_never_retried_inline() -> None:
+    """FAR-2006: a 401/402 carrier exception is terminal at the node retry layer.
+
+    ``SandboxNodeFailedError`` is normally retryable, but a provider
+    credential/funding refusal can never succeed — the inline retry must not
+    re-execute it.
+    """
+    policy = NodeRetryPolicy(max_attempts=3, backoff_seconds=0.0, events=frozenset({"error"}))
+    for text in ('HTTP 401 "This API key has expired"', 'HTTP 402 "Insufficient account funds"'):
+        outcome = _classify_attempt(None, policy, SandboxNodeFailedError(text))
+        assert outcome.kind == "terminal_failure"
+        assert outcome.event is None
+
+
 def test_should_retry_budget_predicate() -> None:
     retry_outcome = _classify_attempt(None, NodeRetryPolicy(3, 0.0, frozenset({"error"})), SandboxNodeFailedError("x"))
     success_outcome = _classify_attempt({"ok": True}, NodeRetryPolicy(3, 0.0, frozenset({"error"})), None)
