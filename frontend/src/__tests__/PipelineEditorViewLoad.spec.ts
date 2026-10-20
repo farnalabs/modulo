@@ -289,4 +289,54 @@ describe('PipelineEditorView — page load', () => {
     warnSpy.mockRestore()
     wrapper.unmount()
   })
+
+  it('does not let a stalled auxiliary version-chip request delay the editor load (FAR-1895)', async () => {
+    // The chip's server-filtered version query (`exclude_created_kind`) NEVER
+    // settles here. It is an auxiliary request, so the catalog-driven load must
+    // still resolve and paint — spinner gone, toolbar up, pipeline named —
+    // while that version request is STILL OUTSTANDING.
+    //
+    // Under the old `await versionRequest` inside loadCatalog this test FAILS:
+    // loadCatalog never resolves, so the useDataFetch Promise.all never
+    // resolves, `loading` stays true and the full-page spinner stays up.
+    let releaseVersionRequest: (value: unknown) => void = () => {}
+    let versionRequestObserved = false
+    apiGetMock.mockImplementation((url: string, init?: any) => {
+      if (url.includes('/snapshots')) {
+        if (Array.isArray(init?.params?.query?.exclude_created_kind)) {
+          versionRequestObserved = true
+          return new Promise((resolve) => { releaseVersionRequest = resolve })
+        }
+        return Promise.resolve({
+          data: { items: [{ id: 's0', snapshot_version: 0 }, { id: 's2', snapshot_version: 2 }] },
+          error: undefined,
+        })
+      }
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: graphPayload(), error: undefined })
+      }
+      if (url.includes('/pipelines/{pipeline_id}')) {
+        return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    await nextTick()
+
+    // The load completed while the version request is still in flight.
+    expect(versionRequestObserved).toBe(true)
+    const vm = wrapper.vm as any
+    expect(vm.loading).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-toolbar"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Test Pipeline')
+
+    // Cleanup: release the stalled request so no deadline timer lingers.
+    releaseVersionRequest({ data: { items: [] }, error: undefined })
+    await flushPromises()
+    wrapper.unmount()
+  })
 })
