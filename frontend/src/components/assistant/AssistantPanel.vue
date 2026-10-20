@@ -674,7 +674,7 @@ onUnmounted(() => {
   color: hsl(var(--foreground));
 }
 .assistant-tab.active {
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text));
   border-bottom-color: hsl(var(--primary));
 }
 .assistant-floating-btn {

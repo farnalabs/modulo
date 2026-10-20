@@ -70,10 +70,20 @@ def _patch_auth() -> Generator[None, None, None]:
         _ms._ctx_org_id.reset(org_token)
 
 
+def _statement_entity(stmt: object) -> object | None:
+    """ORM entity a ``select()`` targets, or ``None`` for a non-ORM statement."""
+    descriptions = getattr(stmt, "column_descriptions", None) or []
+    if not descriptions:
+        return None
+    return descriptions[0].get("entity")
+
+
 def _patch_session_and_audit(
     monkeypatch: pytest.MonkeyPatch, *, old_edge: _EdgeRow | None
 ) -> tuple[AsyncMock, AsyncMock]:
     import modulo.api.mcp_server as _ms
+    from modulo.db.models.pipeline import Pipeline
+    from modulo.db.models.pipeline_edge import PipelineEdge
 
     session = AsyncMock()
     pipeline = _PipelineRow()
@@ -82,15 +92,18 @@ def _patch_session_and_audit(
     edge_result = MagicMock()
     edge_result.scalars.return_value = [old_edge] if old_edge else []
 
-    calls = [pipeline_result, pipeline_result, edge_result]
-    if old_edge:
-        calls = [pipeline_result, pipeline_result, edge_result]
-    else:
-        calls = [pipeline_result, pipeline_result, edge_result]
-
     async def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
-        if calls:
-            return calls.pop(0)
+        # FAR-1845: statement-aware rather than position-aware. The graph
+        # transaction now reads the pipeline row TWICE (the plain read and the
+        # lock taken before the Agent-row sync), so a fixed side-effect list
+        # shifts every result by one and silently feeds the edge snapshot to a
+        # pipeline read. Match on what each statement selects instead, so the
+        # denial assertions below still exercise the real weakening path.
+        entity = _statement_entity(stmt)
+        if entity is Pipeline:
+            return pipeline_result
+        if entity is PipelineEdge:
+            return edge_result
         return MagicMock()
 
     session.execute = AsyncMock(side_effect=_execute)

@@ -107,7 +107,7 @@
                   v-for="(link, index) in level.links"
                   :key="link.to"
                   :to="link.to"
-                  class="text-sm font-medium text-primary hover:underline"
+                  class="text-sm font-medium text-primary-text hover:underline"
                   :data-testid="`governance-level-link-${level.id}-${index}`"
                 >
                   {{ $t(link.labelKey) }}

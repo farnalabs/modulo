@@ -114,16 +114,12 @@ class TestCreateEvalDefinition:
         _clear_context()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.db.models.eval_definition.EvalDefinition")
     @patch("modulo.api.mcp_server._session")
     async def test_create_persists_and_returns_dict(
         self,
         mock_session: AsyncMock,
-        mock_eval_def_cls: MagicMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        created = _make_eval_def(name="my-eval", eval_type="regex", config_json={"k": "v"})
-        mock_eval_def_cls.side_effect = lambda **kw: created
         # pipeline existence check must resolve to a truthy pipeline
         mock_session.return_value = _make_session_cm(object())
 
@@ -141,18 +137,14 @@ class TestCreateEvalDefinition:
         assert result["version"] == 1
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.db.models.eval_definition.EvalDefinition")
     @patch("modulo.api.mcp_server._session")
     async def test_operator_can_create(
         self,
         mock_session: AsyncMock,
-        mock_eval_def_cls: MagicMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
         """FAR-735: operators may create eval definitions (admin no longer required)."""
         _set_context("operator")
-        created = _make_eval_def(name="my-eval", eval_type="regex", config_json={"k": "v"})
-        mock_eval_def_cls.side_effect = lambda **kw: created
         mock_session.return_value = _make_session_cm(object())
 
         result = await create_eval_definition(

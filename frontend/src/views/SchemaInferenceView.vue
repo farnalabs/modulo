@@ -115,7 +115,7 @@
                 <td class="py-2">
                   <span
                     class="inline-block rounded px-1.5 py-0.5 text-xs font-medium"
-                    :class="field.required ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'"
+                    :class="field.required ? 'bg-primary/10 text-primary-text' : 'bg-muted text-muted-foreground'"
                   >
                     {{ field.required ? $t('views.SchemaInferenceView.yes') : $t('views.SchemaInferenceView.no') }}
                   </span>
@@ -130,7 +130,7 @@
         <div class="mb-4">
           <button type="button"
             data-testid="schema-inference-toggle-raw-json"
-            class="flex items-center gap-1 text-sm text-primary hover:underline"
+            class="flex items-center gap-1 text-sm text-primary-text hover:underline"
             :aria-expanded="showRawJson"
             aria-controls="schema-inference-raw-json"
             @click="showRawJson = !showRawJson"
@@ -160,7 +160,7 @@
           </button>
         </div>
         <div v-if="publishError" class="mt-3 text-sm text-destructive">{{ publishError }}</div>
-        <div v-if="publishSuccess" class="mt-3 text-sm text-success">{{ publishSuccess }}</div>
+        <div v-if="publishSuccess" class="mt-3 text-sm text-success-text">{{ publishSuccess }}</div>
       </section>
     </template>
   </div>

@@ -126,6 +126,41 @@ describe('AdminPluginsView', () => {
     expect(wrapper.text()).toContain('Unhealthy')
   })
 
+  it('styles expanded health details for both the healthy and unhealthy branches', async () => {
+    const { api: mockApi } = await import('../lib/api/client')
+    ;(mockApi.GET as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: [
+        mockPlugins[0],
+        { ...mockPlugins[0], PLUGIN_ID: 'modulo-unhealthy', health_ok: false, health_detail: 'Failed to load entry point broken_con' },
+      ],
+      error: undefined,
+    })
+
+    const wrapper = mount(AdminPluginsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          FeatureGate: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    const expandButtons = wrapper.findAll('[data-testid="admin-plugins-expand"]')
+    expect(expandButtons).toHaveLength(2)
+    await expandButtons[0].trigger('click')
+    await expandButtons[1].trigger('click')
+    await nextTick()
+
+    const healthy = wrapper.findAll('p').find((p) => p.text() === 'Loaded')!
+    const unhealthy = wrapper.findAll('p').find((p) => p.text().includes('Failed to load entry point'))!
+    expect(healthy.classes()).toContain('text-success-text')
+    expect(unhealthy.classes()).toContain('text-destructive')
+  })
+
   it('shows empty state when no plugins', async () => {
     const { api: mockApi } = await import('../lib/api/client')
     ;(mockApi.GET as ReturnType<typeof vi.fn>).mockResolvedValue({

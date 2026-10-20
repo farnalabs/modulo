@@ -22,6 +22,49 @@ set -e
 export PYTHONPATH="/app/src:${PYTHONPATH:-}"
 FLY_PROCESS_GROUP="${FLY_PROCESS_GROUP:-app}"
 
+# ---------------------------------------------------------------------------
+# FAR-2004 — bounded, signal-forwarding shutdown.
+#
+# Fly sends the kill signal to PID 1 (this script) and then waits
+# `kill_timeout` seconds before SIGKILL (fly.toml; Fly's default is 5s). The
+# previous handler was `trap 'kill 0; wait'`. `kill 0` signals EVERY process
+# in the process group INCLUDING this shell, so bash re-enters the trap after
+# each `kill 0` — observed as an infinite TRAP loop that never reaches `wait`
+# and never lets the children finish draining. The worker group then died by
+# SIGKILL, before SAQ's own bounded shutdown (30s job-drain grace + up to 60s
+# cancellation hard deadline) could release its in-flight runs through the
+# FAR-1627 shutdown handoff. Every run executing on the worker was orphaned
+# as `running` until the 135-minute age gate.
+#
+# The handler below instead:
+#   1. forwards SIGTERM to the two SAQ worker PIDs only (SAQ stops dequeuing
+#      and drains — it does NOT accept new node executions),
+#   2. waits a bounded window for them to exit (SAQ's own shutdown hook, which
+#      releases/requeues the runs still in its in-flight registry, runs inside
+#      that exit), and
+#   3. exits — so Fly's stop is clean well before kill_timeout.
+# It never signals the whole process group.
+#
+# The path overrides exist so the release-path script can be exercised by
+# tests without a container (backend/tests/architecture/
+# test_deploy_worker_shutdown.py).
+RUN_WORKER_PID_FILE="${RUN_WORKER_PID_FILE:-/tmp/run-worker.pid}"
+SYSTEM_WORKER_PID_FILE="${SYSTEM_WORKER_PID_FILE:-/tmp/system-worker.pid}"
+WORKER_DRAIN_FLAG="${WORKER_DRAIN_FLAG:-/tmp/worker-draining}"
+# Must be >= SAQ's shutdown ceiling (30s grace + 60s cancellation) + handback
+# time, and comfortably below fly.toml's top-level kill_timeout. Enforced by
+# the architecture test above.
+WORKER_DRAIN_DEADLINE_S="${WORKER_DRAIN_DEADLINE_S:-140}"
+APP_DRAIN_DEADLINE_S="${APP_DRAIN_DEADLINE_S:-60}"
+
+# True when the PID names a live process. Deliberately a helper so callers use
+# `if _pid_alive ...` and `set -e` is never tripped by the kill probe itself.
+_pid_alive() {
+    local pid="$1"
+    [[ -n "$pid" ]] || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
 # Sliding window crash guard: track crash timestamps in a temp file so a
 # worker that periodically dies does not cycle forever without triggering the
 # limit. Reset the window on a successful run (clean exit or ran >= 300s).
@@ -32,7 +75,7 @@ FLY_PROCESS_GROUP="${FLY_PROCESS_GROUP:-app}"
 # modulo.launcher.policy` works with PYTHONPATH=/app/src). Behaviour is
 # identical to the former inline values (300s window, 5 crashes, 1s sleep);
 # a broken generator is FATAL (silent default-drift is forbidden).
-POLICY_ENV_FILE="/tmp/modulo-supervision-policy.env"
+POLICY_ENV_FILE="${POLICY_ENV_FILE:-/tmp/modulo-supervision-policy.env}"
 if ! python3 -m modulo.launcher.policy > "$POLICY_ENV_FILE" 2>/dev/null || [[ ! -s "$POLICY_ENV_FILE" ]]; then
     echo "FATAL: could not generate supervision policy constants (python3 -m modulo.launcher.policy)." >&2
     exit 1
@@ -223,7 +266,7 @@ if [[ "$FLY_PROCESS_GROUP" = "worker" ]]; then
             RUNS_START=$(date +%s)
             ( python3 -m saq modulo.core.saq_worker.runs_settings ) &
             SAQ_RUNS_PID=$!
-            echo $SAQ_RUNS_PID > /tmp/run-worker.pid
+            echo $SAQ_RUNS_PID > "$RUN_WORKER_PID_FILE"
             # `wait || EXIT=$?` both survives `set -e` (a nonzero wait would
             # otherwise abort this wrapper on the FIRST crash, bypassing the
             # sliding-window tolerance) AND captures the worker's real exit code
@@ -233,6 +276,13 @@ if [[ "$FLY_PROCESS_GROUP" = "worker" ]]; then
             wait $SAQ_RUNS_PID || RUNS_EXIT=$?
             RUNS_END=$(date +%s)
             _log_crash $RUNS_EXIT
+            # FAR-2004: a drain was requested — this exit is the worker's
+            # graceful shutdown, not a crash. Stop restarting so the entrypoint
+            # can observe the worker gone and complete its bounded drain.
+            if [[ -f "$WORKER_DRAIN_FLAG" ]]; then
+                echo "SAQ runs worker drained — not restarting (worker shutdown requested)"
+                return 0
+            fi
             RUNS_ELAPSED=$((RUNS_END - RUNS_START))
             if [[ $RUNS_ELAPSED -le $SLIDING_WINDOW_S ]] && [[ $RUNS_EXIT -ne 0 ]]; then
                 _record_crash "$RUNS_CRASH_LOG"
@@ -267,7 +317,7 @@ if [[ "$FLY_PROCESS_GROUP" = "worker" ]]; then
             # web app in the same process.
             ( python3 -m modulo.core.saq_worker ) &
             SAQ_SYSTEM_PID=$!
-            echo $SAQ_SYSTEM_PID > /tmp/system-worker.pid
+            echo $SAQ_SYSTEM_PID > "$SYSTEM_WORKER_PID_FILE"
             # `wait || EXIT=$?` both survives `set -e` (a nonzero wait would
             # otherwise abort this wrapper on the FIRST crash, bypassing the
             # sliding-window tolerance) AND captures the worker's real exit code
@@ -277,6 +327,11 @@ if [[ "$FLY_PROCESS_GROUP" = "worker" ]]; then
             wait $SAQ_SYSTEM_PID || SYSTEM_EXIT=$?
             SYSTEM_END=$(date +%s)
             _log_crash $SYSTEM_EXIT
+            # FAR-2004: drain requested — stop restarting (see the runs worker).
+            if [[ -f "$WORKER_DRAIN_FLAG" ]]; then
+                echo "SAQ system worker drained — not restarting (worker shutdown requested)"
+                return 0
+            fi
             SYSTEM_ELAPSED=$((SYSTEM_END - SYSTEM_START))
             if [[ $SYSTEM_ELAPSED -le $SLIDING_WINDOW_S ]] && [[ $SYSTEM_EXIT -ne 0 ]]; then
                 _record_crash "$SYSTEM_CRASH_LOG"
@@ -306,8 +361,8 @@ if [[ "$FLY_PROCESS_GROUP" = "worker" ]]; then
     # The subshell exits 0 on failure (|| true) and is `disown`ed so a health-
     # server crash can never fail the container through `set -e`/`wait`, and so
     # the main `wait` below still returns the SAQ wrappers' exit status alone
-    # (fail-closed on crash-limit preserved). `kill 0` in the SIGTERM/SIGINT
-    # trap still tears it down on deploy.
+    # (fail-closed on crash-limit preserved). The bounded drain handler tears
+    # it down on deploy.
     # -----------------------------------------------------------------------
     echo "=== Starting worker health liveness server (0.0.0.0:${WORKER_HEALTH_PORT:-8082}) ==="
     (
@@ -316,7 +371,10 @@ import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-_PID_FILES = ("/tmp/run-worker.pid", "/tmp/system-worker.pid")
+_PID_FILES = (
+    os.environ.get("RUN_WORKER_PID_FILE", "/tmp/run-worker.pid"),
+    os.environ.get("SYSTEM_WORKER_PID_FILE", "/tmp/system-worker.pid"),
+)
 _PORT = int(os.environ.get("WORKER_HEALTH_PORT", "8082"))
 
 
@@ -357,7 +415,57 @@ PY
     disown "$WORKER_HEALTH_PID" || true
     echo "Worker health server PID: $WORKER_HEALTH_PID"
 
-    trap 'kill 0; wait' SIGTERM SIGINT
+    # -----------------------------------------------------------------------
+    # FAR-2004: bounded drain on SIGTERM/SIGINT (see the top-of-file comment).
+    # The handler is installed only after both workers and the health server
+    # are up; a signal before this point has nothing to drain.
+    # -----------------------------------------------------------------------
+    drain_workers() {
+        local deadline alive pid f
+        echo "WORKER_DRAIN: begin (deadline=${WORKER_DRAIN_DEADLINE_S}s)"
+        # Tell the restart wrappers to stop restarting once their worker exits.
+        : > "$WORKER_DRAIN_FLAG"
+        # Forward the signal to the SAQ workers only — never to this shell and
+        # never to the whole process group. SAQ stops dequeuing on SIGTERM and
+        # starts its bounded shutdown; its shutdown hook (FAR-1627) releases or
+        # truthfully fails the runs still in its in-flight registry.
+        for f in "$RUN_WORKER_PID_FILE" "$SYSTEM_WORKER_PID_FILE"; do
+            pid=$(cat "$f" 2>/dev/null || true)
+            if _pid_alive "$pid"; then
+                kill -TERM "$pid" 2>/dev/null || true
+            fi
+        done
+        deadline=$(( $(date +%s) + WORKER_DRAIN_DEADLINE_S ))
+        while :; do
+            alive=0
+            for f in "$RUN_WORKER_PID_FILE" "$SYSTEM_WORKER_PID_FILE"; do
+                pid=$(cat "$f" 2>/dev/null || true)
+                if _pid_alive "$pid"; then
+                    alive=1
+                fi
+            done
+            if [[ $alive -eq 0 ]]; then
+                echo "WORKER_DRAIN: complete — in-flight workers exited"
+                break
+            fi
+            if [[ $(date +%s) -ge $deadline ]]; then
+                echo "WORKER_DRAIN: deadline (${WORKER_DRAIN_DEADLINE_S}s) reached with workers still alive — stopping container" >&2
+                break
+            fi
+            sleep 1
+        done
+        # Stop the restart wrappers and the health server. The wrappers normally
+        # exit on their own once the drain flag is set; this is the bounded
+        # backstop. Fly's kill_timeout then bounds anything still alive.
+        for pid in "$SAQ_RUNS_WRAPPER_PID" "$SAQ_SYSTEM_WRAPPER_PID" "$WORKER_HEALTH_PID"; do
+            if _pid_alive "$pid"; then
+                kill -TERM "$pid" 2>/dev/null || true
+            fi
+        done
+        exit 0
+    }
+    trap 'drain_workers' SIGTERM SIGINT
+    echo "WORKER_READY: drain trap installed (kill_timeout must exceed ${WORKER_DRAIN_DEADLINE_S}s)"
     wait
 
 else
@@ -377,6 +485,7 @@ PY
 
     echo "=== Starting nginx ==="
     nginx -g "daemon off;" &
+    NGINX_PID=$!
 
     echo "=== Admin user seeding handled by backend lifespan startup ==="
 
@@ -389,7 +498,29 @@ PY
         --limit-concurrency 100 &
     UVICORN_PID=$!
 
-    trap 'kill 0; wait' SIGTERM SIGINT
+    # FAR-2004: same self-signal defect as the worker branch — `kill 0`
+    # re-entered this shell's own trap forever instead of waiting for the
+    # children. Forward to the two real children and wait, bounded.
+    drain_app() {
+        local deadline
+        echo "APP_DRAIN: begin"
+        if _pid_alive "$UVICORN_PID"; then
+            kill -TERM "$UVICORN_PID" 2>/dev/null || true
+        fi
+        if _pid_alive "$NGINX_PID"; then
+            kill -TERM "$NGINX_PID" 2>/dev/null || true
+        fi
+        deadline=$(( $(date +%s) + APP_DRAIN_DEADLINE_S ))
+        while _pid_alive "$UVICORN_PID" || _pid_alive "$NGINX_PID"; do
+            if [[ $(date +%s) -ge $deadline ]]; then
+                echo "APP_DRAIN: deadline (${APP_DRAIN_DEADLINE_S}s) reached — stopping container" >&2
+                break
+            fi
+            sleep 1
+        done
+        exit 0
+    }
+    trap 'drain_app' SIGTERM SIGINT
     wait
 
 fi

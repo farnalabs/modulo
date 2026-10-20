@@ -140,7 +140,7 @@
             an automatic Retry could double-create, so none is offered.
           -->
           <ErrorAlert v-if="saveError" :message="saveError" :retryable="false" />
-          <div v-if="saveSuccess" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success">
+          <div v-if="saveSuccess" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success-text">
             {{ saveSuccess }}
           </div>
 
@@ -309,7 +309,7 @@
                         </div>
                         <button
                           type="button"
-                          class="text-xs text-primary hover:underline"
+                          class="text-xs text-primary-text hover:underline"
                           data-testid="paramschema-add-option"
                           @click="(param.options = param.options || []).push('')"
                         >
@@ -626,7 +626,7 @@
               <div v-if="!references.agents?.length" class="text-sm text-muted-foreground">—</div>
               <ul v-else class="space-y-1">
                 <li v-for="agent in references.agents" :key="agent.id" class="text-sm">
-                  <router-link :to="`/admin/agents/${agent.id}`" class="text-primary hover:underline" :data-testid="`paramschema-ref-agent-${agent.id}`">
+                  <router-link :to="`/admin/agents/${agent.id}`" class="text-primary-text hover:underline" :data-testid="`paramschema-ref-agent-${agent.id}`">
                     {{ agent.name || shortId(agent.id) }}
                   </router-link>
                 </li>
@@ -710,7 +710,7 @@
           </div>
 
           <div v-if="validateResult !== null" class="space-y-2">
-            <div v-if="validateResult.valid" class="rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success">
+            <div v-if="validateResult.valid" class="rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success-text">
               {{ $t('views.ParameterSchemasView.validation_passed') }}
             </div>
             <div v-else class="rounded-lg border border-destructive/50 bg-destructive/10 p-3">

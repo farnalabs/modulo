@@ -459,4 +459,15 @@ describe('AdminCostControlsView', () => {
     expect(putCalls[0][1].body).toHaveProperty('alert_thresholds')
     expect(putCalls[0][1].body).not.toHaveProperty('alertThresholds')
   })
+
+  it('confirms a saved budget with the success token', async () => {
+    const wrapper = await mountView()
+    await wrapper.find('[data-testid="cc-budget-save"]').trigger('click')
+    await flushPromises()
+
+    const confirmation = wrapper.findAll('p').find((p) => p.text().includes('Budget updated.'))
+    expect(confirmation, 'the saved-budget confirmation must render').toBeDefined()
+    expect(confirmation!.classes()).toContain('text-success-text')
+    wrapper.unmount()
+  })
 })

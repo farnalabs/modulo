@@ -12,7 +12,7 @@ diffs, and pins applied snapshots (``guardrail_pins_json``) so drift can be
 detected when the live rows diverge from the applied config.
 
 The PR-style workflow is: **propose** (validate + hash + diff) → **apply**
-(the approve/merge step — reconciles the live ``EvalDefinition`` rows) →
+(the approve/merge step — reconciles the live ``Eval`` rows) →
 **reject** (discard the proposal). Every step is audited.
 
 Constraints honoured here (mirroring the engine):
@@ -96,7 +96,7 @@ class GuardrailConfigItem(BaseModel):
     """One guardrail as code — the full DTO the engine's rows are built from.
 
     ``id`` is the STABLE per-guardrail slug used for idempotent re-imports and
-    diffs; it maps to the applied ``EvalDefinition.name``. ``name`` is the
+    diffs; it maps to the applied ``Eval.name``. ``name`` is the
     human-readable label.
     """
 

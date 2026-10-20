@@ -67,7 +67,7 @@
               >
                 <div class="flex min-w-0 items-center gap-2">
                   <span class="text-xs font-medium">v{{ g.anchor.snapshot_version }}</span>
-                  <span class="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                  <span class="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary-text">
                     {{ kindLabel(g.kind) }}
                   </span>
                   <span

@@ -123,7 +123,7 @@
       <div
         v-if="retrySuccessMessage"
         data-testid="admin-notification-log-retry-success"
-        class="mt-3 rounded-lg border border-success/50 bg-success/10 px-4 py-3 text-sm text-success"
+        class="mt-3 rounded-lg border border-success/50 bg-success/10 px-4 py-3 text-sm text-success-text"
       >
         {{ retrySuccessMessage }}
       </div>
@@ -197,7 +197,7 @@
                 {{ entry.last_error || '—' }}
               </td>
               <td class="table-cell">
-                <div v-if="retryMessages[entry.id]" class="text-xs" :class="retryMessages[entry.id].type === 'error' ? 'text-destructive' : 'text-success'">
+                <div v-if="retryMessages[entry.id]" class="text-xs" :class="retryMessages[entry.id].type === 'error' ? 'text-destructive' : 'text-success-text'">
                   {{ retryMessages[entry.id].text }}
                 </div>
                 <button
@@ -205,7 +205,7 @@
                   type="button"
                   :disabled="retryingId === entry.id"
                   data-testid="admin-notification-log-retry"
-                  class="rounded-md bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-40"
+                  class="rounded-md bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary-text hover:bg-primary/20 disabled:opacity-40"
                   @click.stop="retryDelivery(entry)"
                 >
                   {{ retryingId === entry.id ? $t('views.AdminNotificationDeliveryLogView.retrying') : $t('views.AdminNotificationDeliveryLogView.retry') }}

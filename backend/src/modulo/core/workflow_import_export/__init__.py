@@ -413,28 +413,50 @@ def _strip_deep_values(
     its whole value above).
     """
     if isinstance(value, dict):
-        kept: dict[str, Any] = {}
-        for key, item in value.items():
-            key_name = str(key)
-            child_path = f"{path}.{key_name}" if path else key_name
-            if is_sensitive_key(key_name):
-                redactions.append(_redaction(node_id, field, child_path, "sensitive_key"))
-                continue
-            if isinstance(item, str) and _has_secret_value(item):
-                redactions.append(_redaction(node_id, field, child_path, "secret_value"))
-                continue
-            kept[key] = _strip_deep_values(node_id, field, item, child_path, redactions)
-        return kept
+        return _strip_deep_dict(node_id, field, value, path, redactions)
     if isinstance(value, list):
-        kept_list: list[Any] = []
-        for index, element in enumerate(value):
-            element_path = f"{path}[{index}]"
-            if isinstance(element, str) and _has_secret_value(element):
-                redactions.append(_redaction(node_id, field, element_path, "secret_value"))
-                continue
-            kept_list.append(_strip_deep_values(node_id, field, element, element_path, redactions))
-        return kept_list
+        return _strip_deep_list(node_id, field, value, path, redactions)
     return value
+
+
+def _strip_deep_dict(
+    node_id: str,
+    field: str,
+    value: dict[Any, Any],
+    path: str,
+    redactions: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Strip a dict's sensitive-key / secret-value entries (recursing into values)."""
+    kept: dict[str, Any] = {}
+    for key, item in value.items():
+        key_name = str(key)
+        child_path = f"{path}.{key_name}" if path else key_name
+        if is_sensitive_key(key_name):
+            redactions.append(_redaction(node_id, field, child_path, "sensitive_key"))
+            continue
+        if isinstance(item, str) and _has_secret_value(item):
+            redactions.append(_redaction(node_id, field, child_path, "secret_value"))
+            continue
+        kept[key] = _strip_deep_values(node_id, field, item, child_path, redactions)
+    return kept
+
+
+def _strip_deep_list(
+    node_id: str,
+    field: str,
+    value: list[Any],
+    path: str,
+    redactions: list[dict[str, str]],
+) -> list[Any]:
+    """Strip secret-shaped string elements from a list (recursing into elements)."""
+    kept_list: list[Any] = []
+    for index, element in enumerate(value):
+        element_path = f"{path}[{index}]"
+        if isinstance(element, str) and _has_secret_value(element):
+            redactions.append(_redaction(node_id, field, element_path, "secret_value"))
+            continue
+        kept_list.append(_strip_deep_values(node_id, field, element, element_path, redactions))
+    return kept_list
 
 
 def _strip_node_credentials(node: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
@@ -639,63 +661,72 @@ async def _build_agents_list(
     if not agent_ids:
         return agents_list
     agent_result = await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))
-    agents = list(agent_result.scalars())
-    for a in agents:
-        agents_list.append(
-            {
-                "id": str(a.id),
-                "name": a.name,
-                "description": a.description,
-                "input_schema_id": str(a.input_schema_id) if a.input_schema_id else None,
-                "input_schema_version": a.input_schema_version or DEFAULT_SCHEMA_VERSION,
-                "output_schema_id": str(a.output_schema_id) if a.output_schema_id else None,
-                "output_schema_version": a.output_schema_version or DEFAULT_SCHEMA_VERSION,
-                "prompt_template": a.prompt_template,
-                "model_backend_id": str(a.model_backend_id) if a.model_backend_id else None,
-                "connector_type_refs": list(a.connector_type_refs or []),
-                "evals": list(a.evals or []),
-                "retry_policy": dict(a.retry_policy or {}),
-                "token_budget": a.token_budget,
-            }
-        )
+    for a in agent_result.scalars():
+        agents_list.append(_agent_export_dict(a))
         if a.input_schema_id:
             schema_ids.add(a.input_schema_id)
         if a.output_schema_id:
             schema_ids.add(a.output_schema_id)
         if a.model_backend_id:
             model_backend_ids.add(a.model_backend_id)
-        # FAR-592 (D6): agent runner bindings export NAME-BASED (stripped to
-        # name-bound specs; no organisation ids, no credentials) so the
-        # round-trip import rebinds by the same name-based mechanism the
-        # model backends use.
-        binding_rows = await session.execute(select(AgentRunnerBinding).where(AgentRunnerBinding.agent_id == a.id))
-        bindings_list: list[dict[str, Any]] = []
-        bound_used_ids: set[uuid.UUID] = set()
-        for binding_row in binding_rows.scalars():
-            backend_row = await session.get(ModelBackend, binding_row.model_backend_id)
-            if backend_row is None:
-                # FAR-592 (D6 qa rider): the backend row is not visible — warn
-                # (symmetric with the import-side omit warning) instead of
-                # silently dropping the binding from the export.
-                logger.warning(
-                    "export_pipeline_bundle: agent '%s' binding references an invisible model "
-                    "backend '%s'; the binding is omitted from the export",
-                    _sanitise_log_value(a.name),
-                    binding_row.model_backend_id,
-                )
-                continue
-            bindings_list.append(
-                {
-                    "model_backend_name": backend_row.name,
-                    "target_env_var": binding_row.target_env_var,
-                    "source_field": binding_row.source_field,
-                }
-            )
-            bound_used_ids.add(binding_row.model_backend_id)
+        bindings_list, bound_used_ids = await _agent_runner_bindings(session, a)
         model_backend_ids.update(bound_used_ids)
         if bindings_list:
             agents_list[-1]["model_backend_bindings"] = bindings_list
     return agents_list
+
+
+def _agent_export_dict(a: Agent) -> dict[str, Any]:
+    """Serialise one agent row into the bundle's agents-section shape."""
+    return {
+        "id": str(a.id),
+        "name": a.name,
+        "description": a.description,
+        "input_schema_id": str(a.input_schema_id) if a.input_schema_id else None,
+        "input_schema_version": a.input_schema_version or DEFAULT_SCHEMA_VERSION,
+        "output_schema_id": str(a.output_schema_id) if a.output_schema_id else None,
+        "output_schema_version": a.output_schema_version or DEFAULT_SCHEMA_VERSION,
+        "prompt_template": a.prompt_template,
+        "model_backend_id": str(a.model_backend_id) if a.model_backend_id else None,
+        "connector_type_refs": list(a.connector_type_refs or []),
+        "evals": list(a.evals or []),
+        "retry_policy": dict(a.retry_policy or {}),
+        "token_budget": a.token_budget,
+    }
+
+
+async def _agent_runner_bindings(
+    session: AsyncSession,
+    a: Agent,
+) -> tuple[list[dict[str, Any]], set[uuid.UUID]]:
+    """Export an agent's runner bindings NAME-BASED (FAR-592 D6).
+
+    Returns ``(bindings_list, used_backend_ids)``. A binding whose model backend
+    row is not visible is warned about (symmetric with the import-side omit
+    warning) rather than silently dropped from the export.
+    """
+    binding_rows = await session.execute(select(AgentRunnerBinding).where(AgentRunnerBinding.agent_id == a.id))
+    bindings_list: list[dict[str, Any]] = []
+    bound_used_ids: set[uuid.UUID] = set()
+    for binding_row in binding_rows.scalars():
+        backend_row = await session.get(ModelBackend, binding_row.model_backend_id)
+        if backend_row is None:
+            logger.warning(
+                "export_pipeline_bundle: agent '%s' binding references an invisible model "
+                "backend '%s'; the binding is omitted from the export",
+                _sanitise_log_value(a.name),
+                binding_row.model_backend_id,
+            )
+            continue
+        bindings_list.append(
+            {
+                "model_backend_name": backend_row.name,
+                "target_env_var": binding_row.target_env_var,
+                "source_field": binding_row.source_field,
+            }
+        )
+        bound_used_ids.add(binding_row.model_backend_id)
+    return bindings_list, bound_used_ids
 
 
 async def _build_schemas_list(session: AsyncSession, schema_ids: set[uuid.UUID]) -> list[dict[str, Any]]:
@@ -1516,7 +1547,7 @@ async def _materialize_pipeline_and_edges(
     _apply_imported_retry_policy(pipeline, sections.pipeline_info, ctx.warnings)
     await ctx.session.flush()
 
-    pipeline_edges_added = await _materialize_edges(ctx, pipeline, sections.edges_data)
+    pipeline_edges_added = _materialize_edges(ctx, pipeline, sections.edges_data)
     await ctx.session.flush()
 
     prim = await _create_import_primitive(ctx, pipeline, bundle, pname, sections.pipeline_info)
@@ -1777,18 +1808,7 @@ async def _materialize_schemas(
             ctx.warnings.append("Skipping schema with no 'id' field in bundle.")
             continue
 
-        if export_schema_id in ctx.overrides.schema_ids:
-            schema_id_map[export_schema_id] = ctx.overrides.schema_ids[export_schema_id]
-            if export_schema_id in ctx.overrides.schema_versions:
-                schema_version_map[export_schema_id] = ctx.overrides.schema_versions[export_schema_id]
-            continue
-
-        existing_schema_id = sd.get("_resolved_id")
-        if existing_schema_id:
-            schema_id_map[export_schema_id] = existing_schema_id
-            existing_version = sd.get("_resolved_version")
-            if existing_version:
-                schema_version_map[export_schema_id] = existing_version
+        if _resolve_schema_without_create(ctx, sd, export_schema_id, schema_id_map, schema_version_map):
             continue
 
         definition = sd.get("definition_json")
@@ -1836,6 +1856,34 @@ async def _materialize_schemas(
         schema_version_map[export_schema_id] = new_sv.version
 
     return schema_id_map, schema_version_map
+
+
+def _resolve_schema_without_create(
+    ctx: _ImportContext,
+    sd: dict[str, Any],
+    export_schema_id: str,
+    schema_id_map: dict[str, str],
+    schema_version_map: dict[str, str],
+) -> bool:
+    """Resolve an override- or ``_resolved_id``-backed schema without creating it.
+
+    Returns ``True`` when the schema was fully handled (the caller skips it).
+    """
+    if export_schema_id in ctx.overrides.schema_ids:
+        schema_id_map[export_schema_id] = ctx.overrides.schema_ids[export_schema_id]
+        if export_schema_id in ctx.overrides.schema_versions:
+            schema_version_map[export_schema_id] = ctx.overrides.schema_versions[export_schema_id]
+        return True
+
+    existing_schema_id = sd.get("_resolved_id")
+    if existing_schema_id:
+        schema_id_map[export_schema_id] = existing_schema_id
+        existing_version = sd.get("_resolved_version")
+        if existing_version:
+            schema_version_map[export_schema_id] = existing_version
+        return True
+
+    return False
 
 
 async def _load_schema_names(ctx: _ImportContext) -> set[str]:
@@ -2301,12 +2349,16 @@ async def _create_imported_pipeline(
             raise
 
 
-async def _materialize_edges(
+def _materialize_edges(
     ctx: _ImportContext,
     pipeline: Pipeline,
     edges_data: list[dict[str, Any]],
 ) -> list[PipelineEdge]:
-    """Create the imported edges; returns the edges added."""
+    """Create the imported edges; returns the edges added.
+
+    Sync by design: it only builds ORM rows and stages them on the session —
+    there is no await work (S7503).
+    """
     pipeline_edges_added: list[PipelineEdge] = []
     for ed in edges_data:
         try:

@@ -166,11 +166,11 @@ describe('StageNode bgClass', () => {
 /* ── labelClass computed ──────────────────────────────────────────────── */
 
 describe('StageNode labelClass', () => {
-  it('returns text-primary for modulo', async () => {
+  it('returns text-primary-text for modulo', async () => {
     const wrapper = mountNode({ data: { name: 'Test', description: '', stage_type: 'modulo', owner: null, graduated: false } })
     await flushPromises()
     const vm = wrapper.vm as unknown as { labelClass: string }
-    expect(vm.labelClass).toBe('text-primary')
+    expect(vm.labelClass).toBe('text-primary-text')
   })
 
   it('returns text-sky-500 for external', async () => {
