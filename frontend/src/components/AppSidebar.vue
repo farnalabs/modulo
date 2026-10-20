@@ -73,7 +73,6 @@
       id="mobile-nav-panel"
       ref="mobilePanelRef"
       open
-      aria-modal="true"
       :aria-label="$t('components.AppLayout.main_navigation')"
       class="fixed top-0 left-0 z-40 m-0 h-full w-64 max-h-none max-w-none border-r bg-background p-4 flex flex-col overflow-y-auto text-foreground md:hidden"
     >

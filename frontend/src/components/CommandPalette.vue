@@ -6,7 +6,6 @@
         open
         class="relative z-10 m-0 w-full max-w-lg rounded-lg border bg-background p-0 text-foreground shadow-xl"
         aria-label="Command palette"
-        aria-modal="true"
       >
         <div class="flex items-center gap-2 border-b px-4">
           <SvgIcon name="Search" class="h-4 w-4 shrink-0 text-muted-foreground" />
