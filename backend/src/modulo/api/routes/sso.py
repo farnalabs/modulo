@@ -390,74 +390,108 @@ async def sso_providers(
 # OIDC
 # ---------------------------------------------------------------------------
 
-# FAR-1979: the signed ``state`` proves the callback was not FORGED, but not
-# that it belongs to THIS browser — anyone can start a login at the IdP and
-# obtain a validly signed state. Without a browser-carried correlation value an
-# attacker can drive a victim's browser to the callback carrying the ATTACKER's
-# ``code``+``state``, silently completing a login-CSRF into the attacker's
-# account (and the reverse). The login route therefore sets a short-lived,
-# httpOnly, host-only correlation cookie and the callback requires it to match
-# the ``state`` returned by the IdP (fail closed on absence or mismatch).
+# FAR-1982: the login leg mints a per-request ``nonce`` (which the IdP binds
+# into the ID token) and a PKCE ``code_verifier`` (whose S256 challenge travels
+# in the authorize URL), and must carry both across the IdP round-trip to the
+# callback. They are stored in a short-lived, httpOnly correlation cookie.
 #
-# SameSite is LAX — NOT Strict as the auth cookies use: the IdP -> callback leg
-# is a CROSS-SITE top-level GET navigation, on which Strict cookies are
-# withheld, so a Strict cookie would break every legitimate login. Lax cookies
-# ARE sent on top-level GET navigations, which is exactly the callback leg.
-_OIDC_LOGIN_STATE_COOKIE = "modulo_oidc_login_state"
-_OIDC_LOGIN_STATE_TTL_SECONDS = 600  # 10 minutes, matching the SAML RelayState TTL
+# Cookie-prefix decision (FAR-1982): the ``__Host-`` prefix is ADOPTED. A
+# host-only cookie resists a sibling subdomain swapping in a ``Domain=`` cookie
+# of the same name *while it exists*, but a subdomain sibling can set one when
+# the victim has none (cookie tossing) and shadow the correlation value. The
+# ``__Host-`` prefix closes that: the browser refuses to attach a ``Domain=``
+# attribute to a ``__Host-``-named cookie (and requires ``Secure`` + ``Path=/``),
+# so the only cookie that can satisfy this name is the host-only one this
+# server set. The cost is exactly those mandatory attributes:
+#   * ``Secure`` unconditionally — over plain HTTP a browser stores the cookie
+#     only for a potentially-trustworthy origin (``localhost``/``127.0.0.1``).
+#     A dev instance reached at a non-localhost HTTP host (LAN IP, custom
+#     /etc/hosts name) therefore loses the cookie and the login fails CLOSED.
+#     The repo's docker-compose local dev serves ``http://localhost:8000``
+#     (potentially-trustworthy) and sets no ``DEBUG``, so the documented local
+#     path is unaffected; ``Settings.debug`` (env ``DEBUG``) still relaxes
+#     ``Secure`` on the post-login auth cookies, so a debug instance on a
+#     non-localhost HTTP host keeps its session but cannot complete SSO login.
+#   * ``Path=/`` — the cookie is sent on every same-host request for its 10-min
+#     lifetime rather than only under ``/api/v1/auth/oidc``; a minor scope cost.
+# SameSite is LAX (NOT Strict as the post-login auth cookies use): the
+# IdP -> callback leg is a CROSS-SITE top-level GET navigation, on which Strict
+# cookies are withheld, so a Strict cookie would break every legitimate login.
+_OIDC_FLOW_COOKIE = "__Host-modulo_oidc_flow"
+_OIDC_FLOW_TTL_SECONDS = 600  # 10 minutes, matching the SAML RelayState TTL
 
 
-def _set_oidc_login_state_cookie(response: Response, raw_state: str, settings: Settings) -> None:
-    """Bind the OIDC flow to this browser (FAR-1979 login-CSRF remediation).
+def _set_oidc_flow_cookie(
+    response: Response,
+    raw_state: str,
+    nonce: str,
+    code_verifier: str,
+    settings: Settings,
+) -> None:
+    """Bind the request nonce + PKCE verifier to this browser (FAR-1982).
 
-    The stored value is the HMAC-signed ``raw_state`` so a cookie that was not
-    written by this server cannot satisfy the callback's binding check.
+    The value is the HMAC-signed ``raw_state:nonce:code_verifier`` payload, so a
+    cookie not written by this server cannot satisfy the callback's binding
+    check. The signed ``state`` proves non-forgery; this cookie proves the
+    callback belongs to THIS browser and carries the secrets the exchange needs.
     """
     response.set_cookie(
-        key=_OIDC_LOGIN_STATE_COOKIE,
-        value=sign_state(raw_state, settings.secret_key),
+        key=_OIDC_FLOW_COOKIE,
+        value=sign_state(f"{raw_state}:{nonce}:{code_verifier}", settings.secret_key),
         httponly=True,
         samesite="lax",
-        secure=not settings.debug,
-        max_age=_OIDC_LOGIN_STATE_TTL_SECONDS,
-        path="/api/v1/auth/oidc",
+        secure=True,
+        max_age=_OIDC_FLOW_TTL_SECONDS,
+        path="/",
     )
 
 
-def _clear_oidc_login_state_cookie(response: Response, settings: Settings) -> None:
-    """Expire the browser-binding cookie once the flow has completed."""
+def _clear_oidc_flow_cookie(response: Response) -> None:
+    """Expire the correlation cookie once the flow has completed."""
     response.set_cookie(
-        key=_OIDC_LOGIN_STATE_COOKIE,
+        key=_OIDC_FLOW_COOKIE,
         value="",
         httponly=True,
         samesite="lax",
-        secure=not settings.debug,
+        secure=True,
         max_age=0,
-        path="/api/v1/auth/oidc",
+        path="/",
     )
 
 
-def _oidc_state_is_browser_bound(request: Request, state: str, settings: Settings) -> bool:
-    """Return True only when ``state`` matches this browser's login cookie (FAR-1979).
+def _read_oidc_flow_cookie(request: Request, state: str, settings: Settings) -> tuple[str, str] | None:
+    """Return ``(nonce, code_verifier)`` for a bound flow, else ``None``.
 
     Fail closed on every malformed input: an absent/unverifiable cookie, a
-    tampered state, or a state whose browser-correlation nonce differs from the
-    cookie all return False and the caller raises an auth failure.
+    tampered state, a cookie whose ``raw_state`` does not match the returned
+    state, or an empty nonce/verifier all return ``None`` and the caller raises
+    an auth failure before any token exchange (FAR-1982).
     """
     state_data = verify_state(state, settings.secret_key)
     if not state_data or ":" not in state_data:
-        return False
+        return None
     # ``state`` is ``<provider_id>:<raw_state>`` (see oidc_get_authorize_url);
-    # raw_state is a UUID, so rsplit isolates it even if a provider_id slug
-    # ever contained a colon.
+    # raw_state is a UUID, so rsplit isolates it even if a provider_id slug ever
+    # contained a colon.
     raw_state = state_data.rsplit(":", 1)[-1]
-    cookie_value = request.cookies.get(_OIDC_LOGIN_STATE_COOKIE)
+
+    cookie_value = request.cookies.get(_OIDC_FLOW_COOKIE)
     if not cookie_value:
-        return False
-    cookie_raw_state = verify_state(cookie_value, settings.secret_key)
-    if not cookie_raw_state:
-        return False
-    return hmac.compare_digest(cookie_raw_state, raw_state)
+        return None
+    cookie_data = verify_state(cookie_value, settings.secret_key)
+    if not cookie_data:
+        return None
+    # ``raw_state``/``nonce``/``code_verifier`` all use URL-safe alphabets that
+    # exclude ``:``, so a 2-split is unambiguous.
+    parts = cookie_data.split(":", 2)
+    if len(parts) != 3:
+        return None
+    cookie_raw_state, nonce, code_verifier = parts
+    if not hmac.compare_digest(cookie_raw_state, raw_state):
+        return None
+    if not nonce or not code_verifier:
+        return None
+    return nonce, code_verifier
 
 
 @router.get("/oidc/{provider}/login")
@@ -476,16 +510,16 @@ async def oidc_login(
 
     try:
         async with session.begin():
-            auth_url, raw_state = await oidc_get_authorize_url(
+            auth_url, raw_state, nonce, code_verifier = await oidc_get_authorize_url(
                 provider, settings, redirect_uri, system_session, session
             )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 
     response = Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
-    # FAR-1979: bind the flow to THIS browser so the callback can reject a state
-    # replayed from another browser (login-CSRF).
-    _set_oidc_login_state_cookie(response, raw_state, settings)
+    # FAR-1982: carry the nonce + PKCE verifier to the callback in a
+    # browser-bound, tossing-resistant cookie.
+    _set_oidc_flow_cookie(response, raw_state, nonce, code_verifier, settings)
     return response
 
 
@@ -501,8 +535,11 @@ async def oidc_callback(
 ) -> RedirectResponse:
     """Handle the OIDC provider's callback (authorization code exchange).
 
-    On success, redirects the browser to the frontend callback URL with
-    access and refresh tokens as query parameters.
+    On success, responds with a 307 redirect to the frontend callback URL. The
+    access token is carried in the URL fragment (``#access_token=...``); the
+    refresh token is never placed in the URL and is delivered only as the
+    httpOnly ``modulo_refresh`` cookie set on the same redirect, alongside the
+    ``XSRF-TOKEN`` double-submit CSRF cookie.
     """
     code = request.query_params.get("code")
     state = request.query_params.get("state")
@@ -511,25 +548,38 @@ async def oidc_callback(
         # page with an error code rather than rendering a raw JSON page.
         raise SsoCallbackError(SSO_ERROR_AUTH_FAILED)
 
-    # FAR-1979: the signed state only proves non-forgery — it does not show
-    # that THIS browser began the flow. Require the login-time correlation
-    # cookie so a state replayed from another browser (login-CSRF) is rejected.
-    if not _oidc_state_is_browser_bound(request, state, settings):
-        _log.warning("sso.oidc_state_not_browser_bound provider=%s", sanitise_log_value(provider))
+    # FAR-1982: the signed state only proves non-forgery — the nonce and PKCE
+    # verifier that bind the ID token and the code exchange to THIS browser ride
+    # in the login-time correlation cookie. Require it (fail closed) so a
+    # callback replayed from another browser cannot complete.
+    flow = _read_oidc_flow_cookie(request, state, settings)
+    if flow is None:
+        _log.warning("sso.oidc_flow_unbound provider=%s", sanitise_log_value(provider))
         raise SsoCallbackError(SSO_ERROR_AUTH_FAILED)
+    expected_nonce, code_verifier = flow
 
     public_url = get_public_url(settings).rstrip("/")
     redirect_uri = f"{public_url}/api/v1/auth/oidc/{provider}/callback"
 
     tokens = await _run_sso_callback_process(
         session,
-        partial(oidc_process_callback, code, state, settings, system_session, session, redirect_uri),
+        partial(
+            oidc_process_callback,
+            code,
+            state,
+            settings,
+            system_session,
+            session,
+            redirect_uri,
+            expected_nonce=expected_nonce,
+            code_verifier=code_verifier,
+        ),
         log_context=f"OIDC callback for provider {sanitise_log_value(provider)}",
         contract_tag="sso.oidc_callback",
     )
 
     response = _redirect_to_frontend(tokens, settings)
-    _clear_oidc_login_state_cookie(response, settings)
+    _clear_oidc_flow_cookie(response)
     return response
 
 
@@ -916,8 +966,11 @@ async def saml_acs(
 ) -> RedirectResponse:
     """Handle the SAML Assertion Consumer Service POST from the IdP.
 
-    On success, redirects the browser to the frontend callback URL with
-    access and refresh tokens as query parameters.
+    On success, responds with a 307 redirect to the frontend callback URL. The
+    access token is carried in the URL fragment (``#access_token=...``); the
+    refresh token is never placed in the URL and is delivered only as the
+    httpOnly ``modulo_refresh`` cookie set on the same redirect, alongside the
+    ``XSRF-TOKEN`` double-submit CSRF cookie.
     """
     bind_audit_org(request, SYSTEM_ORG_ID)
     # This legacy route has no provider slug in its path (saml_process_response

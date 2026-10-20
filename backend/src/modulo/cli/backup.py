@@ -671,47 +671,79 @@ def _launcher_snapshot_files(
         },
     }
     checksums: list[str] = []
-    state_path = data_dir / _LAUNCHER_STATE_FILE
-    if state_path.exists():
-        shutil.copy2(state_path, backup_dir / _LAUNCHER_STATE_FILE)
-        section["state_json_included"] = True
-        checksums.append(_LAUNCHER_STATE_FILE)
-        try:
-            section["state_mac"] = _read_state_mac(state_path)
-        except RuntimeError as exc:
-            _log.warning("backup_state_identity_unreadable path=%s error=%s", state_path, exc)
-    secrets_path = data_dir / _LAUNCHER_SECRETS_FILE
-    conf_path = data_dir / _LAUNCHER_CONF_FILE
+    _snapshot_launcher_state(data_dir, backup_dir, section, checksums)
     if include_secrets:
-        if secrets_path.exists():
-            shutil.copy2(secrets_path, backup_dir / _LAUNCHER_SECRETS_FILE)
-            section["secrets_file"]["included"] = True
-            checksums.append(_LAUNCHER_SECRETS_FILE)
-        if conf_path.exists():
-            shutil.copy2(conf_path, backup_dir / _LAUNCHER_CONF_FILE)
-            section["conf_profile"]["included"] = True
-            checksums.append(_LAUNCHER_CONF_FILE)
-        # The loud warning fires ONLY when at least one secret-bearing file
-        # was actually copied — a --include-secrets run over a data dir with
-        # no secrets/conf on disk stayed credential-free.
-        if section["secrets_file"]["included"] or section["conf_profile"]["included"]:
-            click.echo(
-                "WARNING: --include-secrets produced a FULL-fidelity archive that contains the launcher "
-                "secrets file and the credential-bearing conf profile (generated Postgres/Redis passwords "
-                "and the state HMAC key). Protect the archive accordingly — anyone holding it gains full "
-                "access to the bundled services. A default archive excludes all of this.",
-                err=True,
-            )
-    tls_dir = data_dir / _TLS_DIRNAME
-    if tls_dir.is_dir():
-        target_tls = backup_dir / _TLS_DIRNAME
-        target_tls.mkdir(exist_ok=True)
-        for tls_file in sorted(tls_dir.iterdir()):
-            if tls_file.is_file():
-                shutil.copy2(tls_file, target_tls / tls_file.name)
-                section["tls_files"].append(f"{_TLS_DIRNAME}/{tls_file.name}")
-                checksums.append(f"{_TLS_DIRNAME}/{tls_file.name}")
+        _snapshot_launcher_secrets(data_dir, backup_dir, section, checksums)
+    _snapshot_tls_files(data_dir, backup_dir, section, checksums)
     return section, checksums
+
+
+def _snapshot_launcher_state(
+    data_dir: Path,
+    backup_dir: Path,
+    section: dict[str, Any],
+    checksums: list[str],
+) -> None:
+    """Copy the credential-free launcher ``state.json`` and record its MAC."""
+    state_path = data_dir / _LAUNCHER_STATE_FILE
+    if not state_path.exists():
+        return
+    shutil.copy2(state_path, backup_dir / _LAUNCHER_STATE_FILE)
+    section["state_json_included"] = True
+    checksums.append(_LAUNCHER_STATE_FILE)
+    try:
+        section["state_mac"] = _read_state_mac(state_path)
+    except RuntimeError as exc:
+        _log.warning("backup_state_identity_unreadable path=%s error=%s", state_path, exc)
+
+
+def _snapshot_launcher_secrets(
+    data_dir: Path,
+    backup_dir: Path,
+    section: dict[str, Any],
+    checksums: list[str],
+) -> None:
+    """Copy the credential-bearing launcher files (``--include-secrets`` only)."""
+    secrets_path = data_dir / _LAUNCHER_SECRETS_FILE
+    if secrets_path.exists():
+        shutil.copy2(secrets_path, backup_dir / _LAUNCHER_SECRETS_FILE)
+        section["secrets_file"]["included"] = True
+        checksums.append(_LAUNCHER_SECRETS_FILE)
+    conf_path = data_dir / _LAUNCHER_CONF_FILE
+    if conf_path.exists():
+        shutil.copy2(conf_path, backup_dir / _LAUNCHER_CONF_FILE)
+        section["conf_profile"]["included"] = True
+        checksums.append(_LAUNCHER_CONF_FILE)
+    # The loud warning fires ONLY when at least one secret-bearing file
+    # was actually copied — a --include-secrets run over a data dir with
+    # no secrets/conf on disk stayed credential-free.
+    if section["secrets_file"]["included"] or section["conf_profile"]["included"]:
+        click.echo(
+            "WARNING: --include-secrets produced a FULL-fidelity archive that contains the launcher "
+            "secrets file and the credential-bearing conf profile (generated Postgres/Redis passwords "
+            "and the state HMAC key). Protect the archive accordingly — anyone holding it gains full "
+            "access to the bundled services. A default archive excludes all of this.",
+            err=True,
+        )
+
+
+def _snapshot_tls_files(
+    data_dir: Path,
+    backup_dir: Path,
+    section: dict[str, Any],
+    checksums: list[str],
+) -> None:
+    """Copy the data dir's ``tls/`` ride-alongs into the archive."""
+    tls_dir = data_dir / _TLS_DIRNAME
+    if not tls_dir.is_dir():
+        return
+    target_tls = backup_dir / _TLS_DIRNAME
+    target_tls.mkdir(exist_ok=True)
+    for tls_file in sorted(tls_dir.iterdir()):
+        if tls_file.is_file():
+            shutil.copy2(tls_file, target_tls / tls_file.name)
+            section["tls_files"].append(f"{_TLS_DIRNAME}/{tls_file.name}")
+            checksums.append(f"{_TLS_DIRNAME}/{tls_file.name}")
 
 
 def _record_last_backup(data_dir: Path, timestamp: str) -> None:
@@ -935,28 +967,48 @@ def _read_and_validate_manifest(backup_dir: Path) -> dict[str, Any]:
             "from an archive whose manifest shape cannot be trusted."
         )
     _check_manifest_version(manifest)
+    _validate_manifest_scalars(manifest)
+    _validate_manifest_schema_versions(manifest)
+    _validate_manifest_checksums(manifest)
+    _validate_manifest_launcher_snapshot(manifest)
+    return manifest
+
+
+def _validate_manifest_scalars(manifest: dict[str, Any]) -> None:
+    """Every echoed scalar field must carry its declared string type."""
     for key in ("timestamp", "backup_type", "db_version"):
         if key in manifest and not isinstance(manifest[key], str):
             raise click.ClickException(f"backup manifest field {key} is not a string: {manifest[key]!r}")
+    if "fernet_key_hash" in manifest and not isinstance(manifest["fernet_key_hash"], str):
+        raise click.ClickException(
+            f"backup manifest field fernet_key_hash is not a string: {manifest['fernet_key_hash']!r}"
+        )
+
+
+def _validate_manifest_schema_versions(manifest: dict[str, Any]) -> None:
+    """``schema_versions`` must be a list of strings."""
     schema_versions = manifest.get("schema_versions", [])
     if not isinstance(schema_versions, list) or any(not isinstance(v, str) for v in schema_versions):
         raise click.ClickException(
             f"backup manifest field schema_versions is not a list of strings: {schema_versions!r}"
         )
+
+
+def _validate_manifest_checksums(manifest: dict[str, Any]) -> None:
+    """``file_checksums`` must be a mapping of strings when present."""
     checksums = manifest.get("file_checksums")
     if checksums is not None and (
         not isinstance(checksums, dict)
         or any(not isinstance(k, str) or not isinstance(v, str) for k, v in checksums.items())
     ):
         raise click.ClickException("backup manifest field file_checksums is not a mapping of strings")
-    if "fernet_key_hash" in manifest and not isinstance(manifest["fernet_key_hash"], str):
-        raise click.ClickException(
-            f"backup manifest field fernet_key_hash is not a string: {manifest['fernet_key_hash']!r}"
-        )
+
+
+def _validate_manifest_launcher_snapshot(manifest: dict[str, Any]) -> None:
+    """``launcher_snapshot`` must be an object when present."""
     launcher = manifest.get("launcher_snapshot")
     if launcher is not None and not isinstance(launcher, dict):
         raise click.ClickException("backup manifest field launcher_snapshot is not an object")
-    return manifest
 
 
 def _check_schema_downgrade(manifest: dict[str, Any]) -> None:
@@ -1169,12 +1221,24 @@ def _preview_restore(
     """
     click.echo("DRY RUN — no changes will be made.")
 
+    _preview_db_restore(backup_dir)
+    _preview_json_exports(backup_dir)
+    _preview_credential_restore(backup_dir, manifest, settings, previous_fernet_key)
+
+    click.echo("\nDry run complete — no changes were made.")
+
+
+def _preview_db_restore(backup_dir: Path) -> None:
+    """Describe the full-DB restore step of a dry run."""
     db_sql = backup_dir / _DB_SQL_FILE
     if db_sql.exists():
         click.echo(f"  WOULD restore database schema and data via psql from {db_sql.name}")
     else:
         click.echo("  No database.sql found — WOULD skip full DB restore")
 
+
+def _preview_json_exports(backup_dir: Path) -> None:
+    """Describe the checkpoint JSON export restores of a dry run."""
     for json_name, label in (
         (_BLOBS_JSON_FILE, "checkpoint blob records"),
         (_CHECKPOINTS_JSON_FILE, "checkpoint records"),
@@ -1187,30 +1251,39 @@ def _preview_restore(
         else:
             click.echo(f"  No {json_name} found — WOULD skip")
 
-    creds_json = backup_dir / _CREDS_JSON_FILE
-    if creds_json.exists():
-        creds: dict[str, list[dict[str, Any]]] = json.loads(creds_json.read_text(encoding="utf-8"))
-        current_key_hash = _fernet_key_hash(settings.fernet_key)
-        backup_key_hash = manifest.get("fernet_key_hash", "")
-        if current_key_hash == backup_key_hash:
-            click.echo("  FERNET_KEY unchanged — WOULD skip credential re-encryption")
-        else:
-            if not previous_fernet_key:
-                raise click.ClickException(
-                    "FERNET_KEY has changed since backup. Provide --previous-fernet-key to re-encrypt credentials."
-                )
-            total = 0
-            for table, rows in creds.items():
-                count = sum(1 for row in rows if row.get("credentials_ciphertext"))
-                total += count
-                if count:
-                    click.echo(f"  WOULD re-encrypt {count} {table} credentials")
-            if not total:
-                click.echo("  FERNET_KEY changed but no credentials carry ciphertext — nothing to re-encrypt")
-    else:
-        click.echo("  No credentials_references.json found — WOULD skip credential restore")
 
-    click.echo("\nDry run complete — no changes were made.")
+def _preview_credential_restore(
+    backup_dir: Path,
+    manifest: dict[str, Any],
+    settings: Any,
+    previous_fernet_key: str | None,
+) -> None:
+    """Describe the credential re-encryption step of a dry run."""
+    creds_json = backup_dir / _CREDS_JSON_FILE
+    if not creds_json.exists():
+        click.echo("  No credentials_references.json found — WOULD skip credential restore")
+        return
+    creds: dict[str, list[dict[str, Any]]] = json.loads(creds_json.read_text(encoding="utf-8"))
+    if _fernet_key_hash(settings.fernet_key) == manifest.get("fernet_key_hash", ""):
+        click.echo("  FERNET_KEY unchanged — WOULD skip credential re-encryption")
+        return
+    if not previous_fernet_key:
+        raise click.ClickException(
+            "FERNET_KEY has changed since backup. Provide --previous-fernet-key to re-encrypt credentials."
+        )
+    _preview_credential_reencryption(creds)
+
+
+def _preview_credential_reencryption(creds: dict[str, list[dict[str, Any]]]) -> None:
+    """Echo a per-table count of credentials that WOULD be re-encrypted."""
+    total = 0
+    for table, rows in creds.items():
+        count = sum(1 for row in rows if row.get("credentials_ciphertext"))
+        total += count
+        if count:
+            click.echo(f"  WOULD re-encrypt {count} {table} credentials")
+    if not total:
+        click.echo("  FERNET_KEY changed but no credentials carry ciphertext — nothing to re-encrypt")
 
 
 # ── restore command internals ────────────────────────────────────────────────

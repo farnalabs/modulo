@@ -155,7 +155,7 @@ async def test_exchange_code_json_decode_error() -> None:
     with patch("modulo.auth.sso.httpx.AsyncClient") as client_type:
         client_type.return_value.__aenter__.return_value = client
         with pytest.raises(ValueError, match="Invalid JSON in OIDC token response"):
-            await _exchange_code("https://tok", "cid", "csec", "code", "http://cb")
+            await _exchange_code("https://tok", "cid", "csec", "code", "http://cb", "verifier")
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +249,16 @@ async def test_callback_missing_client_secret() -> None:
         ),
         pytest.raises(ValueError, match="missing required configuration"),
     ):
-        await oidc_process_callback("code", signed, settings, session, session, "http://cb")
+        await oidc_process_callback(
+            "code",
+            signed,
+            settings,
+            session,
+            session,
+            "http://cb",
+            expected_nonce="test-nonce",
+            code_verifier="test-verifier",
+        )
 
 
 async def test_callback_missing_token_endpoint() -> None:
@@ -267,7 +276,16 @@ async def test_callback_missing_token_endpoint() -> None:
         ),
         pytest.raises(ValueError, match="No token_endpoint"),
     ):
-        await oidc_process_callback("code", signed, settings, session, session, "http://cb")
+        await oidc_process_callback(
+            "code",
+            signed,
+            settings,
+            session,
+            session,
+            "http://cb",
+            expected_nonce="test-nonce",
+            code_verifier="test-verifier",
+        )
 
 
 async def test_callback_missing_id_token() -> None:
@@ -288,7 +306,16 @@ async def test_callback_missing_id_token() -> None:
         patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={}),
         pytest.raises(ValueError, match="missing a valid id_token"),
     ):
-        await oidc_process_callback("code", signed, settings, session, session, "http://cb")
+        await oidc_process_callback(
+            "code",
+            signed,
+            settings,
+            session,
+            session,
+            "http://cb",
+            expected_nonce="test-nonce",
+            code_verifier="test-verifier",
+        )
 
 
 async def test_callback_missing_jwks_or_issuer() -> None:
@@ -309,7 +336,16 @@ async def test_callback_missing_jwks_or_issuer() -> None:
         patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
         pytest.raises(ValueError, match="missing jwks_uri or issuer"),
     ):
-        await oidc_process_callback("code", signed, settings, session, session, "http://cb")
+        await oidc_process_callback(
+            "code",
+            signed,
+            settings,
+            session,
+            session,
+            "http://cb",
+            expected_nonce="test-nonce",
+            code_verifier="test-verifier",
+        )
 
 
 async def test_callback_missing_email() -> None:
@@ -331,7 +367,16 @@ async def test_callback_missing_email() -> None:
         patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock, return_value={}),
         pytest.raises(ValueError, match="did not return an email"),
     ):
-        await oidc_process_callback("code", signed, settings, session, session, "http://cb")
+        await oidc_process_callback(
+            "code",
+            signed,
+            settings,
+            session,
+            session,
+            "http://cb",
+            expected_nonce="test-nonce",
+            code_verifier="test-verifier",
+        )
 
 
 async def test_callback_no_app_session() -> None:
@@ -357,7 +402,16 @@ async def test_callback_no_app_session() -> None:
         ),
         pytest.raises(RuntimeError, match="No app session"),
     ):
-        await oidc_process_callback("code", signed, settings, session, None, "http://cb")
+        await oidc_process_callback(
+            "code",
+            signed,
+            settings,
+            session,
+            None,
+            "http://cb",
+            expected_nonce="test-nonce",
+            code_verifier="test-verifier",
+        )
 
 
 async def test_callback_groups_not_a_list() -> None:
@@ -390,7 +444,16 @@ async def test_callback_groups_not_a_list() -> None:
             "modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock, return_value={"access_token": "a"}
         ) as issue_mock,
     ):
-        await oidc_process_callback("code", signed, settings, session, session, "http://cb")
+        await oidc_process_callback(
+            "code",
+            signed,
+            settings,
+            session,
+            session,
+            "http://cb",
+            expected_nonce="test-nonce",
+            code_verifier="test-verifier",
+        )
     issue_mock.assert_called_once()
 
 
@@ -431,7 +494,16 @@ async def test_callback_applies_group_mappings() -> None:
         patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
         patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock, return_value={"access_token": "a"}),
     ):
-        await oidc_process_callback("code", signed, settings, session, session, "http://cb")
+        await oidc_process_callback(
+            "code",
+            signed,
+            settings,
+            session,
+            session,
+            "http://cb",
+            expected_nonce="test-nonce",
+            code_verifier="test-verifier",
+        )
         mock_apply.assert_awaited_once()
 
 

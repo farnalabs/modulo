@@ -18,6 +18,16 @@ services:
 
   redis-local:
     image: redis:8-alpine
+    # FAR-2002 — same bound/policy as the root compose's `redis` service (see
+    # the long rationale there): a hard maxmemory so the host is protected, and
+    # `volatile-lru` so eviction can only touch TTL-bearing job hashes the
+    # reconciler can re-dispatch — never the queue's structural list/zset keys.
+    command:
+      - redis-server
+      - "--maxmemory"
+      - "${REDIS_MAXMEMORY:-256mb}"
+      - "--maxmemory-policy"
+      - "volatile-lru"
     ports:
       - "127.0.0.1:6380:6379"
 

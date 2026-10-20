@@ -88,6 +88,8 @@ from modulo.core.pipeline_engine.decorator import (
 from modulo.core.pipeline_engine.error_codes import (
     _CODE_SANDBOX_AGENT_FAILED,
     _CODE_SANDBOX_NO_OUTPUT_JSON,
+    ERROR_CODE_REGISTRY,
+    LEGACY_ALIASES,
     map_legacy_code,
     sanitize_error_text,
 )
@@ -139,6 +141,7 @@ from modulo.db.crud.hitl_review_config import (
     resolve_hitl_review_config,
     resolve_review_window_for_gate,
 )
+from modulo.db.crud.organisation_cost_state import get_org_cost_state
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import (
@@ -719,6 +722,23 @@ _NEVER_RETRYABLE_SCRIPT_RAW: frozenset[str] = frozenset(
     }
 )
 
+# FAR-1800: provider BILLING faults are non-retryable by nature — the provider
+# account is out of funds (HTTP 402) or the model is disabled for the key, so
+# every retry re-hits the same wall and only burns a sandbox dispatch. Excluded
+# from ``failure`` policy retries exactly like the script-mode terminal codes.
+#
+# DELIBERATELY NARROW: this is NOT "every registry-non-retryable code". The
+# registry also marks ``agent.stall`` and ``agent.failed`` non-retryable, yet a
+# run-level ``failure``/``stall`` policy is allowed to retry those (the operator
+# explicitly asked for it, and a fixed prompt/backend can recover). Only the
+# billing/provisioning refusal class is refused outright.
+_NEVER_RETRYABLE_PROVIDER_CODES: frozenset[str] = frozenset(
+    {
+        "model.insufficient_funds",
+        "model_disabled",
+    }
+)
+
 
 def _failure_event_matches(
     event_set: set[Any],
@@ -751,6 +771,10 @@ def _failure_event_matches(
     # This covers both the canonical mapped code and the raw exception-class
     # spelling the generic catch publishes.
     if mapped in _NEVER_RETRYABLE_SCRIPT_CODES or code in _NEVER_RETRYABLE_SCRIPT_RAW:
+        return False
+    # FAR-1800: a provider billing/provisioning refusal cannot recover on retry,
+    # so a ``failure`` policy must not re-dispatch it.
+    if mapped in _NEVER_RETRYABLE_PROVIDER_CODES or code in _NEVER_RETRYABLE_PROVIDER_CODES:
         return False
     # FAR-136 Gap 2: exclude sandbox-agent hang deaths.
     is_cancel = code == "node_cancelled" or mapped == "node.cancelled"
@@ -1279,6 +1303,49 @@ def _node_output_sandbox_session_lost(node_output: Any) -> str | None:
     return reason
 
 
+def _node_output_sandbox_session_lost_text(node_output: Any) -> str:
+    """The retained text surfaces of a FAR-227 session-lost envelope (FAR-1800).
+
+    ``_node_output_sandbox_session_lost`` returns the marker REASON, which for
+    the E2B wrapper's dead-session echo is the fixed PLACEHOLDER ("No output
+    from agent - session interrupted"). The terminal provider error that killed
+    the opencode session lives elsewhere in the retained text: the wrapper
+    writes ``output.json`` as ``{"status": "failed", "summary": <placeholder>,
+    "no_output_reason": <tail of the opencode output>}``, so an HTTP 402
+    "Insufficient account funds" refusal is in ``no_output_reason`` (a JSON
+    string — parsed here, so its inner quotes are real) and/or the captured
+    stdout. This helper collects those surfaces so the caller can CLASSIFY the
+    real cause instead of masking a non-retryable billing fault as the
+    retryable ``sandbox.no_output_json``.
+
+    Walks BOTH envelope views — the top-level telemetry ``output`` and each
+    artifact's ``output`` — exactly like ``_node_output_has_idempotency_gate``:
+    the top-level view omits ``output_json``, so the artifact view is the only
+    place ``no_output_reason`` survives. Only top-level STRING members of
+    ``output_json`` are scanned (the wrapper's shape, and bounded by the
+    stdout retention cap). Returns "" for any shape that carries no text, so
+    the caller falls back to the marker reason.
+    """
+    if not isinstance(node_output, dict):
+        return ""
+    candidates: list[Any] = [node_output.get("output")]
+    artifacts = node_output.get("artifacts")
+    if isinstance(artifacts, list):
+        candidates.extend(a.get("output") for a in artifacts if isinstance(a, dict))
+    parts: list[str] = []
+    for inner in candidates:
+        if not isinstance(inner, dict):
+            continue
+        for key in ("error", "summary", "error_message", "no_output_reason", "agent_stdout", "agent_stderr"):
+            value = inner.get(key)
+            if isinstance(value, str) and value:
+                parts.append(value)
+        output_json = inner.get("output_json")
+        if isinstance(output_json, dict):
+            parts.extend(v for v in output_json.values() if isinstance(v, str) and v)
+    return "\n".join(parts)
+
+
 def _should_skip_retry(node_id: str | None, markers: Any, run_id: Any) -> bool:
     """FAR-228 guard B decision: should a transient node failure be suppressed
     as a retry because the run's delivery was already made?
@@ -1737,6 +1804,14 @@ class _StreamState:
     # sandbox-session-lost marker (the E2B wrapper's fallback echo — a dead
     # opencode session). Routes to retryable ``sandbox.no_output_json``.
     session_lost_reason: str | None = None
+    # FAR-1800: the envelope's retained text surfaces (output.json's
+    # ``no_output_reason`` + the captured stdout/stderr), which is where the
+    # terminal PROVIDER error that killed the session lives. The marker reason
+    # above is the wrapper's fixed placeholder, so classification must run
+    # against THIS text — a session killed by an HTTP 402 billing refusal must
+    # terminalise ``model.insufficient_funds``, not be masked as the retryable
+    # ``sandbox.no_output_json``.
+    session_lost_retained_text: str | None = None
     # FAR-1487: ids of HITL gates whose REJECTED artifact was stamped
     # ``reject_disposition == "terminate"`` in this stream. The gate's router
     # ENDs the graph on such a rejection, which is a NORMAL stream exit, so
@@ -1777,8 +1852,10 @@ def _stream_terminal_reason(
     session-lost node, or ``None`` when the run completed normally.
 
     Extracted from ``_stream_graph``'s post-loop tail (pure refactor). A dead
-    sandbox session routes to the retryable ``sandbox.no_output_json``, a
-    self-reported agent failure elevates to ``agent.failed``, and a node that
+    sandbox session routes to the retryable ``sandbox.no_output_json`` — unless
+    the envelope's retained text classifies to a provider error code
+    (``model.insufficient_funds`` for an HTTP 402 billing refusal, FAR-1800) —
+    a self-reported agent failure elevates to ``agent.failed``, and a node that
     stalled takes priority (existing precedence preserved). ``None`` means the
     caller returns ``complete``; ``run_completed`` is published later, only after
     finalize commits the terminal status (FAR-1534), by
@@ -1786,10 +1863,20 @@ def _stream_terminal_reason(
     """
     usage = state.node_token_usage or None
     if state.session_lost_reason and not state.stall_reason:
+        # FAR-1800: the marker reason is the wrapper's fixed PLACEHOLDER, so the
+        # provider classification must run against the envelope's RETAINED text
+        # (output.json's ``no_output_reason`` / the stdout tail), falling back to
+        # the reason itself for callers that only carry that. A session killed
+        # by an HTTP 402 funds refusal is a NON-retryable billing fault — it
+        # must surface as ``model.insufficient_funds`` rather than be masked as
+        # the retryable ``sandbox.no_output_json`` (whose every retry re-hits the
+        # same wall). Fail open: no signature -> today's retryable code,
+        # unchanged.
+        _classified = classify_provider_error(state.session_lost_retained_text or state.session_lost_reason)
         return _terminal_failure(
             broker,
             "failed",
-            _CODE_SANDBOX_NO_OUTPUT_JSON,
+            _classified or _CODE_SANDBOX_NO_OUTPUT_JSON,
             _sanitize_detail(state.session_lost_reason, limit=5000),
             usage,
         )
@@ -1832,6 +1919,51 @@ def _all_capacities_ok(pipeline_ok: bool, sandbox_ok: bool, run_ok: bool) -> boo
     return pipeline_ok and sandbox_ok and run_ok
 
 
+def _is_non_retryable_error_code(code: str | None) -> bool:
+    """True when *code* is a REGISTERED error code its registry marks non-retryable.
+
+    A code with NO registry entry has no retryability verdict to honour, so it
+    is NOT treated as non-retryable — the caller's existing behaviour is
+    preserved (the same fail-open posture the provider classifier takes). Legacy
+    spellings resolve through ``LEGACY_ALIASES`` first, so a raw
+    ``model_insufficient_funds`` is judged as its canonical code.
+    """
+    if not code:
+        return False
+    spec = ERROR_CODE_REGISTRY.get(LEGACY_ALIASES.get(code, code))
+    if spec is None:
+        return False
+    return not spec.retryable
+
+
+def _non_retryable_failure_detail(
+    non_retryable_code: str,
+    exc: Exception,
+    node_attempt_count: int,
+    retries: int,
+) -> str:
+    """Terminal detail for a failure whose error class cannot be retried (FAR-1800).
+
+    A billing/credential refusal (HTTP 402 -> ``model.insufficient_funds``)
+    re-hits the same wall on every attempt, so the requeue gate refuses it. The
+    wording must not claim a retry was attempted when budget remained: the run
+    is a FIRST-attempt terminal in that case, and a retries-exhausted terminal
+    only when the budget was already spent.
+    """
+    if node_attempt_count < retries:
+        return _sanitize_detail(
+            f"Sandbox node failed with non-retryable error {non_retryable_code}; "
+            "not retried because a retry re-hits the same fault: " + str(exc),
+            limit=5000,
+        )
+    return _sanitize_detail(
+        "Sandbox node failed after retries exhausted; the last failure is "
+        f"non-retryable ({non_retryable_code}) and a further retry would "
+        "re-hit the same fault: " + str(exc),
+        limit=5000,
+    )
+
+
 def _can_fenced_requeue(
     node_attempt_count: int,
     retries: int,
@@ -1839,13 +1971,24 @@ def _can_fenced_requeue(
     stalled: bool,
     script_lease_ok: bool,
     graph_idempotent: bool,
+    error_code: str | None = None,
 ) -> bool:
     """Can a transient node failure be fenced back to ``pending`` for a retry?
 
     False when the retry budget is exhausted, the run is owned by a successor
     (superseded), the zombie watchdog stalled it, a script lease is still live,
-    or the graph contains a non-idempotent node (FAR-295).
+    the graph contains a non-idempotent node (FAR-295), or — FAR-1800 — the
+    failure class is REGISTERED NON-RETRYABLE. A billing/credential fault (HTTP
+    402 -> ``model.insufficient_funds``) re-hits the same wall on every attempt,
+    so re-dispatching it only burns sandbox dispatches until the SAQ retry
+    budget is spent; the run must terminal-fail on the FIRST attempt instead.
+    ``error_code`` is the failure's already-classified code (``None`` when no
+    signature matched, which leaves the outcome unchanged). This NARROWS when
+    the fence fires — it never weakens it: every existing invariant (claim
+    token, fencing, script lease, idempotency) still applies.
     """
+    if _is_non_retryable_error_code(error_code):
+        return False
     return node_attempt_count < retries and not superseded and not stalled and script_lease_ok and graph_idempotent
 
 
@@ -2333,11 +2476,13 @@ class PipelineExecutor:
     ) -> Run | None:
         """Halt a run BEFORE any billable step when the org budget is exhausted.
 
-        Reads the org's FAR-391 lifetime spend ceiling and its consumed total. If
-        the org is already at/over its ceiling (no remaining budget for ANY new
-        run), the run is terminalized as ``cost_ceiling_exceeded`` and returned so
-        ``execute()`` never spawns an LLM / E2B call. Returns ``None`` when the
-        run may proceed (no ceiling, budget remaining, or any read error).
+        Reads the org's FAR-391 lifetime spend ceiling and its consumed total
+        from the per-org cost-state row (``organisation_cost_state``; FAR-1833).
+        If the org is already at/over its ceiling (no remaining budget for ANY
+        new run), the run is terminalized as ``cost_ceiling_exceeded`` and
+        returned so ``execute()`` never spawns an LLM / E2B call. Returns
+        ``None`` when the run may proceed (no ceiling, budget remaining, or any
+        read error).
 
         FAIL-OPEN by design (mirrors ``_check_capacity``): a settings/DB read
         failure must NEVER block the run — the terminal ledger block in
@@ -2371,6 +2516,10 @@ class PipelineExecutor:
                 ).scalar_one_or_none()
                 if org is None:
                     return None
+                # FAR-1833: the ceiling/cumulative live on the per-org cost-state
+                # row; a missing row is the defaults (both ceilings unlimited,
+                # cumulative 0), not an error.
+                state = await get_org_cost_state(session, org_id)
                 # Pass a minimal 1-cent charge as the "next run" so the gate
                 # honours the documented at-ceiling / kill-switch semantics: with
                 # zero remaining budget (cumulative >= ceiling, or ceiling == 0)
@@ -2380,9 +2529,9 @@ class PipelineExecutor:
                 # exceed it) is halted. A genuinely non-empty remaining budget
                 # (>= 1 cent) still passes so the run can execute.
                 decision = evaluate_org_spend_ceiling(
-                    org_cumulative_spend_cents=org.org_cumulative_spend_cents or 0,
+                    org_cumulative_spend_cents=(state.org_cumulative_spend_cents or 0) if state is not None else 0,
                     additional_cents=1,
-                    spend_ceiling_cents=org.spend_ceiling_cents,
+                    spend_ceiling_cents=state.spend_ceiling_cents if state is not None else None,
                 )
                 if decision.allowed:
                     return None
@@ -5410,9 +5559,11 @@ class PipelineExecutor:
         - ``{"decision": "superseded"}`` — the run is owned by a successor or
           was already terminal-failed by the zombie watchdog; cleaned up, never
           reset, never terminal-failed here.
-        - ``{"decision": "terminal", ...}`` — retries exhausted; the run_failed
-          event was published and the caller terminal-fails with the returned
-          code/detail.
+        - ``{"decision": "terminal", ...}`` — no retry will be attempted: either
+          the retry budget is exhausted, or the REQUIRED requeue was refused
+          because the failure class is non-retryable (FAR-1800 — a first-attempt
+          terminal). The run_failed event was published and the caller
+          terminal-fails with the returned code/detail.
         """
         from modulo.settings import get_settings
 
@@ -5482,6 +5633,12 @@ class PipelineExecutor:
                 "error_detail": "delivery already sent; transient retry suppressed by idempotency gate",
                 "gated_node_id": _gated_node_id,
             }
+        # FAR-1800: classify the transient failure's retained stdout ONCE, so the
+        # requeue gate and the terminal code agree. The exception message embeds
+        # the retained stdout tail (the no-output diagnostic), which is where a
+        # provider refusal (HTTP 402 "Insufficient account funds") appears.
+        # Fail open: an unrecognised failure yields None and keeps today's path.
+        failure_code = classify_provider_error(str(exc))
         if _can_fenced_requeue(
             node_attempt_count,
             retries,
@@ -5489,6 +5646,7 @@ class PipelineExecutor:
             stalled,
             script_lease_ok,
             graph_idempotent,
+            error_code=failure_code,
         ):
             # Fenced pending-reset: a conditional UPDATE guarded by OUR
             # captured claim token + status='running' so a superseded
@@ -5514,11 +5672,12 @@ class PipelineExecutor:
                 model_backend_hub=model_backend_hub, connector_hub=connector_hub, run_id=run_id
             )
             return {"decision": "superseded"}
-        # Retries exhausted — terminal failure with a MEANINGFUL code
-        # (not the raw langgraph class name). Publish the run_failed
-        # event so WS subscribers get a live failure notification,
-        # consistent with every other terminal-failure path in this
-        # file.
+        # Retries exhausted — or (FAR-1800) requeue was REFUSED because the
+        # failure class is non-retryable, so no retry was attempted at all.
+        # Terminal failure with a MEANINGFUL code (not the raw langgraph class
+        # name). Publish the run_failed event so WS subscribers get a live
+        # failure notification, consistent with every other terminal-failure
+        # path in this file.
         #
         # Write cap: 5000, NOT 500 — the transient node-cancelled
         # detail is the only place the FAR-197 no-output.json
@@ -5535,6 +5694,7 @@ class PipelineExecutor:
             graph_idempotent=graph_idempotent,
             node_attempt_count=node_attempt_count,
             retries=retries,
+            non_retryable_code=failure_code if _is_non_retryable_error_code(failure_code) else None,
         )
         broker.publish("run_failed", {"error": error_code, "detail": error_detail})
         return {
@@ -6160,72 +6320,89 @@ class PipelineExecutor:
         graph_idempotent: bool,
         node_attempt_count: int,
         retries: int,
+        non_retryable_code: str | None = None,
     ) -> tuple[str, str]:
-        """Terminal failure code/detail for a retries-exhausted transient node failure."""
+        """Terminal failure code/detail for a retries-exhausted transient node failure.
+
+        ``non_retryable_code`` (FAR-1800) is the failure's classified code when
+        the requeue gate REFUSED to re-dispatch it because that class is
+        non-retryable. The retries-exhausted wording would then be a lie (no
+        retry was attempted) and would hide the real cause, so it is replaced by
+        the registry code plus an explicit non-retryable explanation.
+        """
         if not script_lease_ok:
             # FAR-296 Phase 2: a stale script_executing lease blocked the
             # requeue — a script process may have run, so the side-effect
             # state is unknown. Terminal (never retried) with the
             # needs-human ``script.side_effect_unknown`` code.
-            error_code = _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN
-            error_detail = _sanitize_detail(
+            return _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN, _sanitize_detail(
                 "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
                 "not retried — needs human review: " + str(exc),
                 limit=5000,
             )
+        if non_retryable_code is not None:
+            # FAR-1800: a retry cannot succeed for this class (e.g. an HTTP 402
+            # billing refusal), so the requeue gate refused it. The WORDING
+            # depends on whether any retry budget ever existed: with budget
+            # left, the run is terminal on the FIRST attempt (say no retry was
+            # attempted); with the budget already exhausted, claiming "not
+            # retried" would be false — the retries DID run, and the last
+            # failure happens to be non-retryable.
+            return non_retryable_code, _non_retryable_failure_detail(
+                non_retryable_code, exc, node_attempt_count, retries
+            )
+        error_code = "node_cancelled"
+        if not graph_idempotent and node_attempt_count < retries:
+            # FAR-295: the run was NOT retried because a node in the
+            # graph is non-idempotent (idempotent=false) — a retry
+            # would re-execute a side-effecting step. Distinguish
+            # this from the retries-exhausted message so the run
+            # detail readout explains WHY it terminal-failed on the
+            # first attempt.
+            error_detail = _sanitize_detail(
+                "Sandbox node failed (transient); retry suppressed because a node in the "
+                "graph is non-idempotent (idempotent=false) and re-running could double-execute "
+                "a side effect: " + str(exc),
+                limit=5000,
+            )
+        elif isinstance(exc, NodeCancelledError):
+            error_detail = _sanitize_detail(
+                "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=5000
+            )
         else:
-            error_code = "node_cancelled"
-            if not graph_idempotent and node_attempt_count < retries:
-                # FAR-295: the run was NOT retried because a node in the
-                # graph is non-idempotent (idempotent=false) — a retry
-                # would re-execute a side-effecting step. Distinguish
-                # this from the retries-exhausted message so the run
-                # detail readout explains WHY it terminal-failed on the
-                # first attempt.
-                error_detail = _sanitize_detail(
-                    "Sandbox node failed (transient); retry suppressed because a node in the "
-                    "graph is non-idempotent (idempotent=false) and re-running could double-execute "
-                    "a side effect: " + str(exc),
-                    limit=5000,
-                )
-            elif isinstance(exc, NodeCancelledError):
-                error_detail = _sanitize_detail(
-                    "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=5000
-                )
-            else:
-                # SandboxNodeFailedError: the FAR-197 no-output diagnostic
-                # is a fully bounded message designed to survive this
-                # surface in full — keep the limit at the sanitizer/column
-                # cap (5000), not the 500 used for the short
-                # NodeCancelledError string, or the kill-reason log tail
-                # would be the first thing truncated (FAR-197 review).
-                error_detail = _sanitize_detail(
-                    "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
-                )
-                # FAR-1526: a SandboxNodeFailedError (no-output stall / stream
-                # drop) used to terminal-fail under the GENERIC
-                # ``node_cancelled`` code — whose registry guidance reads "Node
-                # was cancelled." — so a stall was bucketed as a cancellation in
-                # the error dashboard and daily facts, while the SAME exception
-                # escaping through the executor's generic catch canonicalises to
-                # ``sandbox.no_output_json`` (LEGACY_ALIASES). Surface the
-                # exception's own canonical code here too: one failure class, one
-                # code. EXCEPTION: the FAR-136 hang death carries "likely hung"
-                # in the detail and is excluded from ``failure`` retries ONLY
-                # while its code resolves to ``node.cancelled`` — that marker
-                # keeps the generic code.
-                if isinstance(exc, SandboxNodeFailedError) and "likely hung" not in error_detail:
-                    error_code = _CODE_SANDBOX_NO_OUTPUT_JSON
-                # FAR-734: scan the retained stdout (embedded in the
-                # exception message) for terminal provider-error
-                # signatures.  When a signature matches, upgrade the
-                # generic ``node_cancelled`` code to the specific
-                # ``model.*`` code so the Error Dashboard and daily facts
-                # bucket it as a first-class failure dimension.  Fail
-                # open: when no signature matches the generic code stays.
-                _provider_code = classify_provider_error(str(exc))
-                if _provider_code is not None:
-                    error_code = _provider_code
+            # SandboxNodeFailedError: the FAR-197 no-output diagnostic
+            # is a fully bounded message designed to survive this
+            # surface in full — keep the limit at the sanitizer/column
+            # cap (5000), not the 500 used for the short
+            # NodeCancelledError string, or the kill-reason log tail
+            # would be the first thing truncated (FAR-197 review).
+            error_detail = _sanitize_detail(
+                "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
+            )
+            # FAR-1526: a SandboxNodeFailedError (no-output stall / stream
+            # drop) used to terminal-fail under the GENERIC
+            # ``node_cancelled`` code — whose registry guidance reads "Node
+            # was cancelled." — so a stall was bucketed as a cancellation in
+            # the error dashboard and daily facts, while the SAME exception
+            # escaping through the executor's generic catch canonicalises to
+            # ``sandbox.no_output_json`` (LEGACY_ALIASES). Surface the
+            # exception's own canonical code here too: one failure class, one
+            # code. EXCEPTION: the FAR-136 hang death carries "likely hung"
+            # in the detail and is excluded from ``failure`` retries ONLY
+            # while its code resolves to ``node.cancelled`` — that marker
+            # keeps the generic code.
+            if isinstance(exc, SandboxNodeFailedError) and "likely hung" not in error_detail:
+                error_code = _CODE_SANDBOX_NO_OUTPUT_JSON
+            # FAR-734: scan the retained stdout (embedded in the
+            # exception message) for terminal provider-error
+            # signatures.  When a signature matches, upgrade the
+            # generic ``node_cancelled`` code to the specific
+            # ``model.*`` code so the Error Dashboard and daily facts
+            # bucket it as a first-class failure dimension.  Fail
+            # open: when no signature matches the generic code stays.
+            _provider_code = classify_provider_error(str(exc))
+            if _provider_code is not None:
+                error_code = _provider_code
         return error_code, error_detail
 
     async def _read_retry_attempt_state(
@@ -6999,6 +7176,11 @@ class PipelineExecutor:
             ctx.broker,
             name,
         )
+        # FAR-1800: capture the session-lost envelope's RETAINED text from the
+        # RAW output (same object the markers were read from, BEFORE any FAR-209
+        # interception rewrites it) — the wrapper's ``no_output_reason`` is the
+        # only place the killing provider error (e.g. HTTP 402) survives.
+        session_lost_text = _node_output_sandbox_session_lost_text(output) if session_lost else None
         # FAR-305: standalone post-node eval path — run any node-scoped evals
         # for this node against its inner output dict. This is independent of
         # HITL gates: a plain node (no gate) now gets its node-scoped evals
@@ -7021,6 +7203,7 @@ class PipelineExecutor:
             state.agent_failure_reason = agent_failure
         if session_lost:
             state.session_lost_reason = session_lost
+            state.session_lost_retained_text = session_lost_text
 
     async def _handle_stream_event(
         self,

@@ -42,6 +42,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _StallDetector,
     _wait_command_with_exec_process,
     _WatchdogWallClock,
+    _WatchdogWatchConfig,
 )
 
 
@@ -110,11 +111,9 @@ async def test_probe_success_alone_no_longer_keeps_a_silent_node_alive() -> None
         stall=stall,
         node_id="n1",
         run_id="run-far1088",
-        watch_log_path=None,
-        watch_globs=[],
+        watch=_WatchdogWatchConfig(log_path=None, globs=[], percentage_delta=None),
         resource_limits=None,
         sandbox_mode="llm",
-        stdout_percentage_delta=None,
         stream_broker=None,
         drained_chunks=[],
         wall_clock=_WatchdogWallClock(None, 0.0),

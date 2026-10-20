@@ -19,7 +19,7 @@ const CLASS_STYLES: Record<string, string> = {
   sandbox: 'bg-warning/10 text-warning-text',
   node: 'bg-warning/10 text-warning-text',
   connector: 'bg-warning/10 text-warning-text',
-  capacity: 'bg-primary/10 text-primary',
+  capacity: 'bg-primary/10 text-primary-text',
   provider: 'bg-warning/10 text-warning-text',
   // Styling is keyed on the code's CLASS (first dotted segment), so this covers
   // every ``model.*`` code. It carries the billing fault

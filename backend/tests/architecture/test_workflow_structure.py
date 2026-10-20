@@ -267,6 +267,48 @@ def test_merge_queue_concurrency_is_scoped_to_the_queue_job() -> None:
     )
 
 
+# --- The queue only collects PRs that target main ---------------------------
+
+
+def _collect_step() -> dict:
+    for step in _queue_steps(_load_yaml(MERGE_QUEUE_YML)):
+        if step.get("id") == "collect":
+            return step
+    raise AssertionError(
+        "merge-queue.yml: the 'collect' step (id: collect) is missing — the queue's PR selection moved"
+    )
+
+
+def test_merge_queue_collects_only_prs_targeting_main() -> None:
+    """A stacked PR must never enter the queue.
+
+    The queue squash-merges each collected PR's head into a branch cut from
+    main. A stacked PR (its base is another, still-unmerged feature branch)
+    carries that whole base branch in its head, which conflicts with whatever
+    main has taken since the base was cut. 2026-10-20: PR #2029 (stacked on
+    unmerged #2017) was approved and GREEN, was collected, conflicted on
+    ``classify.py`` / ``trigger-engine.md`` / ``manifest.yaml``, and failed
+    every queue pass, starving the queue of all merges. It becomes eligible
+    only when its base lands and it is retargeted to main.
+    """
+    run = _collect_step().get("run") or ""
+    violations: list[str] = []
+    if "baseRefName" not in run:
+        violations.append(
+            "  the collect step's `gh pr list --json` does not request `baseRefName` — it cannot filter stacked PRs"
+        )
+    if "BASE_REF=$(echo \"$pr\" | jq -r '.baseRefName')" not in run:
+        violations.append("  the collect step does not read each PR's base branch into BASE_REF")
+    if 'if [ "$BASE_REF" != "main" ]' not in run:
+        violations.append("  the collect step does not skip PRs whose base branch is not main")
+    if "continue" not in run:
+        violations.append("  the collect step's base-branch gate does not `continue` (the PR would still be queued)")
+    assert not violations, (
+        "merge-queue.yml can queue a stacked PR and deadlock every pass on its base-branch conflict:\n"
+        + "\n".join(violations)
+    )
+
+
 # --- FAR-1939: an undelivered Branch Fixer notification is never silent -----
 
 #: The curl invocation every Branch Fixer webhook POST funnels through. All

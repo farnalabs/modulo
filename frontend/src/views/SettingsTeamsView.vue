@@ -45,7 +45,7 @@
           </div>
         </div>
         <div v-if="createError" class="mt-3 text-sm text-destructive">{{ createError }}</div>
-        <div v-if="createSuccess" class="mt-3 text-sm text-success">{{ createSuccess }}</div>
+        <div v-if="createSuccess" class="mt-3 text-sm text-success-text">{{ createSuccess }}</div>
       </div>
 
       <EmptyState
@@ -208,7 +208,7 @@
               </button>
             </div>
 
-            <button type="button" v-else class="mt-3 flex items-center gap-1 text-sm text-primary hover:underline" data-testid="settings-teams-add-member" @click="addMemberTeamId = team.id">
+            <button type="button" v-else class="mt-3 flex items-center gap-1 text-sm text-primary-text hover:underline" data-testid="settings-teams-add-member" @click="addMemberTeamId = team.id">
               <Plus class="h-4 w-4" aria-hidden="true" />
               {{ $t('views.SettingsTeamsView.add_member') }}
             </button>

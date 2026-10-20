@@ -981,7 +981,7 @@ function renderMarkdown(text: string): string {
 }
 .assistant-analytics-link {
   @apply inline-flex items-center gap-1 text-xs font-medium hover:opacity-80;
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text));
 }
 .assistant-analytics-link:focus-visible {
   outline: 2px solid hsl(var(--ring));
@@ -1050,7 +1050,7 @@ function renderMarkdown(text: string): string {
   border-left: 2px solid hsl(var(--primary));
 }
 .assistant-slash-item.active .assistant-slash-command {
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text));
 }
 .assistant-slash-item.active .assistant-slash-desc {
   color: hsl(var(--foreground));
@@ -1058,7 +1058,7 @@ function renderMarkdown(text: string): string {
 
 .assistant-slash-command {
   @apply font-mono font-medium shrink-0;
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text));
 }
 .assistant-slash-desc {
   @apply text-xs truncate;

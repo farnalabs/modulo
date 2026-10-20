@@ -499,23 +499,22 @@ SAQ_JOB_HEARTBEAT = 300
 # db/models/run.py:ck_runs_status.
 RUN_COMPLETE_STATUS = "complete"
 
-# Durable backstop for capacity-blocked pending runs. Sized to exceed the
-# worst-case queue wait: (max_concurrent - 1) * node timeout, with margin for
-# the 120->600s exponential retry backoff plus worker restarts.
-CAPACITY_TIMEOUT_TTL_MINUTES = 120
-
+# FAR-1883: a capacity-queued run waits INDEFINITELY by default. There is no
+# instance-wide queued TTL - the old 120-minute ``CAPACITY_TIMEOUT_TTL_MINUTES``
+# terminal-fail silently lost work that could simply have waited. An operator
+# can opt a pipeline into a bounded wait with ``pipelines.queue_timeout_seconds``
+# (NULL = never). The queue-state alerting (FAR-1343/FAR-1344) is the escalation
+# path while a run waits - not a per-run timer.
+#
 # Re-dispatch TTL for stranded capacity-blocked runs. A run demoted to
 # ``pending`` with a capacity marker stays pending — there is NO in-process
 # retry loop since the Tier 3 removal of ``_retry_pending`` (plan F3b) — and is
 # recovered by the durable sweep paths: ``dispatcher_reconcile`` re-dispatches
 # it when capacity frees; ``stale_run_recovery_sweep`` re-dispatches stranded
 # capacity-blocked runs whose heartbeat is stale (the in-process loop is
-# provably gone); and the ``CAPACITY_TIMEOUT_TTL_MINUTES`` backstop
-# TERMINAL-FAILS a legitimate never-executed run past the 120-min window.
-# This window re-dispatches a stranded run long before that backstop — but
-# ONLY when its heartbeat is stale (the in-process loop is provably gone), and
-# never once it is already past the capacity_timeout TTL (those must fail, not
-# be resurrected forever).
+# provably gone). This window re-dispatches a stranded run, but ONLY when its
+# heartbeat is stale (the in-process loop is provably gone); a stale run with
+# no expiry configured is never terminalised - it keeps waiting.
 _STRANDED_REDISPATCH_TTL_MINUTES = 12
 
 # FAR-1715: independent zero-progress terminaliser for ``dispatcher='saq'``
@@ -2894,13 +2893,14 @@ async def _sweep_org_stale_runs(
     wl_window: int,
     stranded_rows: list[Any],
     terminalised_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    queue_expired_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
 ) -> tuple[int, int, int]:
-    """Run one org's stale-run UPDATE set; return (never, capacity_timeout, lost) counts.
+    """Run one org's stale-run UPDATE set; return (never, queue_expired, lost) counts.
 
-    Runs inside the caller's RLS-scoped transaction and mutates ``stranded_rows``
-    and ``terminalised_run_ids`` in place so the caller can post-process them once
-    the transaction commits. Extracted from :func:`stale_run_recovery_sweep` to keep
-    that function's control flow shallow.
+    Runs inside the caller's RLS-scoped transaction and mutates ``stranded_rows``,
+    ``terminalised_run_ids`` and ``queue_expired_run_ids`` in place so the caller
+    can post-process them once the transaction commits. Extracted from
+    :func:`stale_run_recovery_sweep` to keep that function's control flow shallow.
 
     FAR-1601 (row-lock bound, 55P03 contract): the bound is issued FIRST in
     the org transaction, so every one of the four ``UPDATE runs`` branches
@@ -2960,6 +2960,45 @@ async def _sweep_org_stale_runs(
     never_count = never_result.rowcount or 0
     terminalised_run_ids.extend((row[0], org_id) for row in never_result.all())
 
+    # FAR-1883: per-pipeline queue expiry, run BEFORE the stranded re-dispatch
+    # so a run that expires this tick is never also re-dispatched.
+    #
+    # Scope is ONLY capacity-queued rows (pending + a capacity marker). It
+    # deliberately does NOT touch never-dispatched rows (their own 300s path)
+    # or enqueue-failed rows (their own TTL): one TTL per state class. NULL
+    # ``queue_timeout_seconds`` means NEVER - the run waits for capacity
+    # indefinitely, and the queue-state alert (FAR-1343/FAR-1344) is the
+    # escalation path.
+    #
+    # Expiry is a SUPERSESSION, not a failure: the run ends ``rejected`` with
+    # the distinct ``queue.expired`` code, so it is visible/filterable and
+    # counted in its own analytics bucket without entering failure counts,
+    # thresholds or paging. Anchored on ``created_at`` ("time queued",
+    # documented as such); a pending->running->pending demote bounce does not
+    # reset it.
+    queue_expired_result = await conn.execute(
+        text(
+            "UPDATE runs "
+            "SET status = 'rejected', error_code = 'queue.expired', "
+            "error_detail = :detail, completed_at = now() "
+            "FROM pipelines p "
+            "WHERE runs.pipeline_id = p.id "
+            "AND runs.status = 'pending' "
+            "AND runs.organisation_id = :oid "
+            "AND runs.error_code IN ('org_capacity_limited', 'pipeline_capacity') "
+            "AND p.queue_timeout_seconds IS NOT NULL "
+            "AND runs.created_at < now() - (p.queue_timeout_seconds * interval '1 second') "
+            "AND runs.cancellation_requested = false "
+            "RETURNING runs.id"
+        ),
+        {
+            "oid": str(org_id),
+            "detail": "Waited in the capacity queue past the pipeline's queue_timeout.",
+        },
+    )
+    queue_expired_count = queue_expired_result.rowcount or 0
+    queue_expired_run_ids.extend((row[0], org_id) for row in queue_expired_result.all())
+
     stranded_result = await conn.execute(
         text(
             "UPDATE runs "
@@ -2968,69 +3007,15 @@ async def _sweep_org_stale_runs(
             "AND organisation_id = :oid "
             "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
             "AND (heartbeat_at IS NULL OR heartbeat_at < now() - (:redispatch_ttl * interval '1 minute')) "
-            "AND created_at >= now() - (:fail_ttl * interval '1 minute') "
             "AND cancellation_requested = false "
             "RETURNING id, organisation_id"
         ),
         {
             "oid": str(org_id),
             "redispatch_ttl": _STRANDED_REDISPATCH_TTL_MINUTES,
-            "fail_ttl": CAPACITY_TIMEOUT_TTL_MINUTES,
         },
     )
     stranded_rows.extend(stranded_result.all())
-
-    # FAR-705: capacity.* is a RETRYABLE registry class (all four capacity
-    # codes carry retryable=True), so a run that exhausted its TTL while
-    # waiting for capacity must not be dropped on the first pass. The per-run
-    # capacity-retry budget (``SAQ_CAPACITY_RETRY_BUDGET``, default 3) caps
-    # total capacity retries for CLAIMED runs. REAL semantics of the gate
-    # below: ``claim_count`` counts ALL claims (not just capacity cycles).
-    # NEVER-CLAIMED rows (claim_count = 0 — the dominant capacity path is
-    # dispatch-time deferral WITHOUT a claim) terminalize at the TTL exactly
-    # as they did before the budget existed. A heartbeat-age test CANNOT
-    # provide that guarantee: the stranded-refresh UPDATE above keeps
-    # restamping heartbeat_at on never-claimed rows while they are inside
-    # the TTL window, so past the crossing the refreshed heartbeat would have
-    # to age a further full TTL before firing — terminalising never-claimed
-    # rows at ~2xTTL and leaving the budget with no effect on the dominant
-    # path. The ``claim_count = 0`` disjunct fires at the TTL crossing
-    # regardless of that refreshed heartbeat. CLAIMED rows (claim_count >= 1)
-    # get the budget grace — pending while within budget — bounded by the
-    # heartbeat-staleness backstop: the last claim heartbeat ages past the
-    # TTL only when no further claim arrives (claims are claim-cap-bounded,
-    # and a budget >= SAQ_RUN_CLAIM_CAP config makes the budget comparison
-    # unsatisfiable), so termination is preserved for every config. The
-    # heartbeat is written only by the claim SQL (atomically with the
-    # claim_count increment) and the execution keepalive — both require a
-    # claim — so claim_count >= 1 implies a non-NULL heartbeat and no
-    # separate ``heartbeat_at IS NULL`` disjunct is needed. (The backstop age
-    # is the TTL itself, NOT a larger multiple.)
-    capacity_retry_budget = int(getattr(get_settings(), "saq_capacity_retry_budget", 3))
-    capacity_timeout_result = await conn.execute(
-        text(
-            "UPDATE runs "
-            "SET status = 'failed', error_code = 'capacity_timeout', "
-            "error_detail = :detail, completed_at = now() "
-            "WHERE status = 'pending' "
-            "AND organisation_id = :oid "
-            "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
-            "AND created_at < now() - (:ttl * interval '1 minute') "
-            "AND cancellation_requested = false "
-            "AND (claim_count = 0 "
-            "OR claim_count > :capacity_retry_budget "
-            "OR heartbeat_at < now() - (:ttl * interval '1 minute')) "
-            "RETURNING id"
-        ),
-        {
-            "oid": str(org_id),
-            "ttl": CAPACITY_TIMEOUT_TTL_MINUTES,
-            "detail": "Waited in capacity queue past the TTL.",
-            "capacity_retry_budget": capacity_retry_budget,
-        },
-    )
-    capacity_timeout_count = capacity_timeout_result.rowcount or 0
-    terminalised_run_ids.extend((row[0], org_id) for row in capacity_timeout_result.all())
 
     lost_result = await conn.execute(
         text(
@@ -3052,7 +3037,7 @@ async def _sweep_org_stale_runs(
     )
     lost_count = lost_result.rowcount or 0
     terminalised_run_ids.extend((row[0], org_id) for row in lost_result.all())
-    return never_count, capacity_timeout_count, lost_count
+    return never_count, queue_expired_count, lost_count
 
 
 # FAR-1715: the sweep's zero-progress UPDATE, assembled from a static template
@@ -3225,8 +3210,14 @@ async def _advance_terminalised_run(
     async_engine: AsyncEngine,
     run_id: uuid.UUID,
     org_id: uuid.UUID,
+    *,
+    status: str = "failed",
 ) -> None:
     """Advance a terminalised sweep run's journeys, fact and audit record.
+
+    ``status`` is the run's terminal status as the journey advance should see
+    it (default ``failed``; queue expiry passes ``rejected`` so a supersession
+    never counts as a failed journey cycle).
 
     The sweep's raw terminal UPDATEs never run ``finalize_cost``, so the swept
     runs' journeys would never advance (FAR-143 follow-up) and the runs would
@@ -3241,7 +3232,7 @@ async def _advance_terminalised_run(
     """
     from modulo.core.run_terminal_advance import advance_terminalised_run
 
-    await advance_terminalised_run(async_engine, run_id, org_id, source="stale_run_recovery")
+    await advance_terminalised_run(async_engine, run_id, org_id, source="stale_run_recovery", status=status)
 
 
 async def stale_run_recovery_sweep(
@@ -3263,8 +3254,13 @@ async def stale_run_recovery_sweep(
       ``org_capacity_limited``/``pipeline_capacity``) whose heartbeat is stale
       are RE-DISPATCHED (durable restart durability — see
       :func:`_re_dispatch_capacity_blocked`), never failed.
-    - Capacity-blocked pending runs past ``CAPACITY_TIMEOUT_TTL_MINUTES`` are
-      marked ``failed`` with ``capacity_timeout``.
+    - Capacity-queued pending runs whose PIPELINE sets ``queue_timeout_seconds``
+      and whose ``created_at`` is older than that window are ENDED as a
+      supersession: status ``rejected`` with the distinct ``queue.expired``
+      code (FAR-1883). NULL ``queue_timeout_seconds`` means the run waits
+      indefinitely - there is no instance-wide queued TTL. The expiry never
+      touches never-dispatched rows (their own 300s path) or enqueue-failed
+      rows (their own TTL).
     - Running runs with a heartbeat older than the worker-lost window and
       5+ claims are marked ``failed`` with ``worker_lost``.
     - FAR-1715: running ``dispatcher='saq'`` runs with ZERO node progress
@@ -3275,8 +3271,8 @@ async def stale_run_recovery_sweep(
       nodeless router, sharing its predicate shape and knob
       (:func:`_sweep_org_saq_zero_progress_runs`). The ``status='running'``
       guard makes double-firing with the reconcile path a no-op.
-    - Every run terminalised by the sweep (never_dispatched / capacity_timeout
-      / worker_lost / saq zero-progress) has its journeys advanced from its
+    - Every run terminalised by the sweep (never_dispatched / queue.expired /
+      worker_lost / saq zero-progress) has its journeys advanced from its
       CREATE-STAMPED refs
       (FAR-143 follow-up) — the raw UPDATEs never run ``finalize_cost``, so
       without this the swept runs' journeys would never move. Fail-open per
@@ -3299,8 +3295,8 @@ async def stale_run_recovery_sweep(
     ``RUN_CLAIM_STALE_SECONDS=450`` (SAQ runs only). The never-dispatched and
     worker-lost branches are scoped to legacy-dispatched rows
     (``dispatcher IS NULL OR dispatcher != 'saq'``) — SAQ runs never carry
-    worker_lost/never_dispatched (plan F1). The capacity-timeout backstop is
-    SAQ-relevant (capacity-deferred runs) and is NOT dispatcher-scoped.
+    worker_lost/never_dispatched (plan F1). The per-pipeline queue expiry is
+    capacity-only (capacity-deferred runs) and is NOT dispatcher-scoped.
     """
     settings = get_settings()
     nd_window = never_dispatched_window if never_dispatched_window is not None else settings.saq_never_dispatched_window
@@ -3327,12 +3323,16 @@ async def stale_run_recovery_sweep(
     )
     never_count = 0
     lost_count = 0
-    capacity_timeout_count = 0
+    queue_expired_count = 0
     zero_progress_count = 0
     stranded_rows: list[Any] = []
     # Runs terminalised to ``failed`` by this sweep — (run_id, org_id) —
     # whose journeys must advance once the UPDATEs commit (FAR-143 follow-up).
     terminalised_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
+    # FAR-1883: queue-expired runs end ``rejected`` (a supersession, never a
+    # failure) and are advanced with that status so they never count as a
+    # failed journey cycle.
+    queue_expired_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
     try:
         # Collect all org ids FIRST in system context (organisations is the
         # root table — the app role owns it, owner bypasses RLS). The sweep's
@@ -3348,7 +3348,7 @@ async def stale_run_recovery_sweep(
             return {
                 "never_dispatched_swept": 0,
                 "worker_lost_swept": 0,
-                "capacity_timeout_swept": 0,
+                "queue_expired_swept": 0,
                 "saq_zero_progress_swept": 0,
                 "stranded_capacity_redispatched": 0,
                 "redispatch_outcomes": {},
@@ -3356,13 +3356,14 @@ async def stale_run_recovery_sweep(
 
         for org_id in org_ids:
             async with async_engine.connect() as conn, conn.begin():
-                never_delta, capacity_delta, lost_delta = await _sweep_org_stale_runs(
+                never_delta, queue_expired_delta, lost_delta = await _sweep_org_stale_runs(
                     conn,
                     org_id=org_id,
                     nd_window=nd_window,
                     wl_window=wl_window,
                     stranded_rows=stranded_rows,
                     terminalised_run_ids=terminalised_run_ids,
+                    queue_expired_run_ids=queue_expired_run_ids,
                 )
                 # FAR-1715: the independent SAQ zero-progress branch runs in
                 # the SAME per-org transaction, after the legacy branches (its
@@ -3376,7 +3377,7 @@ async def stale_run_recovery_sweep(
                     terminalised_run_ids=terminalised_run_ids,
                 )
                 never_count += never_delta
-                capacity_timeout_count += capacity_delta
+                queue_expired_count += queue_expired_delta
                 lost_count += lost_delta
                 zero_progress_count += zero_progress_delta
         stranded_count = len(stranded_rows)
@@ -3393,13 +3394,17 @@ async def stale_run_recovery_sweep(
         # capacity-blocked) are NOT terminal — no advance.
         for run_id, run_org_id in terminalised_run_ids:
             await _advance_terminalised_run(async_engine, run_id, run_org_id)
+        # Queue expiry is a supersession, not a failure - advance journeys with
+        # ``rejected`` so it never increments a journey's failed run_count.
+        for run_id, run_org_id in queue_expired_run_ids:
+            await _advance_terminalised_run(async_engine, run_id, run_org_id, status="rejected")
 
-        if never_count or lost_count or capacity_timeout_count or zero_progress_count or stranded_count:
+        if never_count or lost_count or queue_expired_count or zero_progress_count or stranded_count:
             _log.info(
-                "Stale run recovery: %d never-dispatched, %d capacity-timeout, %d worker-lost, "
+                "Stale run recovery: %d never-dispatched, %d queue-expired, %d worker-lost, "
                 "%d saq zero-progress runs swept, %d stranded capacity-blocked runs re-dispatched (%s)",
                 never_count,
-                capacity_timeout_count,
+                queue_expired_count,
                 lost_count,
                 zero_progress_count,
                 stranded_count,
@@ -3408,7 +3413,7 @@ async def stale_run_recovery_sweep(
         return {
             "never_dispatched_swept": never_count,
             "worker_lost_swept": lost_count,
-            "capacity_timeout_swept": capacity_timeout_count,
+            "queue_expired_swept": queue_expired_count,
             "saq_zero_progress_swept": zero_progress_count,
             "stranded_capacity_redispatched": stranded_count,
             "redispatch_outcomes": redispatch_outcomes,
@@ -3426,7 +3431,7 @@ async def stale_run_recovery_sweep(
         return {
             "never_dispatched_swept": never_count,
             "worker_lost_swept": lost_count,
-            "capacity_timeout_swept": capacity_timeout_count,
+            "queue_expired_swept": queue_expired_count,
             "saq_zero_progress_swept": zero_progress_count,
             "stranded_capacity_redispatched": 0,
             "redispatch_outcomes": {},

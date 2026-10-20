@@ -28,14 +28,14 @@ import uuid
 from collections import Counter
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-from modulo.db.models.run import AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS, Run
+from modulo.db.models.run import ACTIVE_RUN_STATUSES, AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS, Run
 from modulo.db.sqlstates import is_row_lock_timeout
 from modulo.settings import get_settings
 
@@ -45,6 +45,94 @@ _log = logging.getLogger(__name__)
 # enumeration runs in system context (organisations is the root table), then
 # every per-org statement runs inside set_config('app.organisation_id', ...).
 _SQL_SET_ORG_ID = "SELECT set_config('app.organisation_id', :val, true)"
+
+# FAR-1999: statuses that hold a TRIGGER concurrency slot regardless of age.
+# ``pending`` is deliberately absent — it is handled by the grace window in
+# :func:`trigger_slot_count_predicate` because a run that has not been
+# dispatched is not executing. Every other active status (running/claimed/
+# unknown/awaiting_human/hitl_parked) is genuinely in flight or held and stays
+# counted at any age, exactly as before this change.
+TRIGGER_SLOT_HOLDING_STATUSES: frozenset[str] = ACTIVE_RUN_STATUSES - {"pending"}
+
+#: FAR-1999: how long a ``pending`` run may occupy one of its trigger's
+#: concurrency slots. A run accepted but not yet dispatched (queued, or
+#: capacity-deferred behind the pipeline/org admission gates) holds the slot
+#: for this create→dispatch handoff window only; after it, the queued run stops
+#: counting and the trigger can accept new work for the LIVE slots. The window
+#: is deliberately a small fixed bound rather than a settings knob: the queue
+#: it can admit is separately bounded by FAR-604 backpressure (depth
+#: ``max(3 x pipeline max_concurrent_runs, 5)`` plus a 60-minute age leg), and
+#: actual execution stays gated by the pipeline/org capacity checks at dispatch
+#: time. Five minutes is far above any healthy create→dispatch handoff.
+TRIGGER_PENDING_SLOT_GRACE_SECONDS = 300
+
+
+def trigger_slot_count_predicate(
+    trigger_id: uuid.UUID,
+    *,
+    pending_grace_seconds: int,
+    now: datetime | None = None,
+) -> Any:
+    """SQL predicate for runs occupying one of *trigger_id*'s concurrency slots.
+
+    FAR-1999 — a run holds a trigger slot when EITHER:
+
+    * its status is a slot-holding status (:data:`TRIGGER_SLOT_HOLDING_STATUSES`
+      — executing, claimed, unknown, or parked on a human), at any age; or
+    * it is ``pending`` and was created within *pending_grace_seconds*.
+
+    A ``pending`` run older than the grace window is queued, not executing: it
+    may be capacity-deferred behind a full pipeline/org admission gate and can
+    sit that way for the whole capacity TTL. Counting it as a live slot let a
+    single such row block its trigger's dispatch lane for tens of minutes
+    (FAR-1999 measurement: ~50 minutes). The run keeps its queue position and
+    is still dispatched by ``dispatcher_reconcile`` when capacity frees; it
+    simply stops consuming a concurrency slot while it is not executing.
+
+    ``cancellation_requested`` is excluded, accepting NULL as "not requested"
+    (pre-migration rows), matching the historical counters.
+    """
+    anchor = now or datetime.now(UTC)
+    created_after = anchor - timedelta(seconds=max(int(pending_grace_seconds), 0))
+    return and_(
+        Run.trigger_id == trigger_id,
+        or_(
+            Run.status.in_(TRIGGER_SLOT_HOLDING_STATUSES),
+            and_(
+                Run.status == "pending",
+                Run.created_at >= created_after,
+            ),
+        ),
+        or_(Run.cancellation_requested.is_(False), Run.cancellation_requested.is_(None)),
+    )
+
+
+async def count_trigger_slot_occupancy(session: Any, trigger_id: uuid.UUID) -> int:
+    """Count the runs occupying one of *trigger_id*'s concurrency slots.
+
+    The single shared implementation for EVERY trigger dispatch lane — cron,
+    webhook, polling and agent-signal all delegate here. FAR-1999: a
+    ``pending`` run (accepted but not yet dispatched — queued, or
+    capacity-deferred behind the pipeline/org admission gates) counts only
+    inside the create→dispatch grace window, not for the whole time it sits in
+    the queue. See :func:`trigger_slot_count_predicate` for the predicate and
+    the full semantics.
+
+    Defined once here rather than inlined per lane: the grace window is the
+    observable contract a widening must reach in every lane, and four
+    independent copies is exactly the drift the duplicate-logic architecture
+    gate exists to prevent.
+    """
+    result = await session.execute(
+        select(func.count()).where(
+            trigger_slot_count_predicate(
+                trigger_id,
+                pending_grace_seconds=TRIGGER_PENDING_SLOT_GRACE_SECONDS,
+            )
+        )
+    )
+    return int(result.scalar_one() or 0)
+
 
 # heartbeat_stale is the FAR-604 P1 code for the heartbeat-stale slot
 # force-release: DISTINCT from worker_lost (which maps to

@@ -1357,6 +1357,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/org/mcp-human-linked-hitl-authority": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Org Mcp Authority
+         * @description Read the caller's OWN org human-linked MCP HITL authority setting.
+         */
+        get: operations["get_org_mcp_authority_api_v1_admin_org_mcp_human_linked_hitl_authority_get"];
+        /**
+         * Set Org Mcp Authority
+         * @description Set the caller's OWN org override for the human-linked MCP HITL authority.
+         *
+         *     Writes ``feature_overrides[mcp_human_linked_hitl_authority]`` through the
+         *     atomic nested patch (a single statement merging just this sub-field), so a
+         *     concurrent writer of a DIFFERENT flag override is not dropped. ``enabled``
+         *     False is the tightening direction: it refuses every MCP credential on a
+         *     ``human_only`` gate, restoring the pre-ADR-063 behaviour.
+         */
+        put: operations["set_org_mcp_authority_api_v1_admin_org_mcp_human_linked_hitl_authority_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -1615,8 +1645,11 @@ export interface paths {
          * Oidc Callback
          * @description Handle the OIDC provider's callback (authorization code exchange).
          *
-         *     On success, redirects the browser to the frontend callback URL with
-         *     access and refresh tokens as query parameters.
+         *     On success, responds with a 307 redirect to the frontend callback URL. The
+         *     access token is carried in the URL fragment (``#access_token=...``); the
+         *     refresh token is never placed in the URL and is delivered only as the
+         *     httpOnly ``modulo_refresh`` cookie set on the same redirect, alongside the
+         *     ``XSRF-TOKEN`` double-submit CSRF cookie.
          */
         get: operations["oidc_callback_api_v1_auth_oidc__provider__callback_get"];
         put?: never;
@@ -1743,8 +1776,11 @@ export interface paths {
          * Saml Acs
          * @description Handle the SAML Assertion Consumer Service POST from the IdP.
          *
-         *     On success, redirects the browser to the frontend callback URL with
-         *     access and refresh tokens as query parameters.
+         *     On success, responds with a 307 redirect to the frontend callback URL. The
+         *     access token is carried in the URL fragment (``#access_token=...``); the
+         *     refresh token is never placed in the URL and is delivered only as the
+         *     httpOnly ``modulo_refresh`` cookie set on the same redirect, alongside the
+         *     ``XSRF-TOKEN`` double-submit CSRF cookie.
          */
         post: operations["saml_acs_api_v1_auth_saml_acs_post"];
         delete?: never;
@@ -16254,6 +16290,26 @@ export interface components {
             /** Marked */
             marked: number;
         };
+        /**
+         * McpAuthorityResponse
+         * @description The org's human-linked MCP HITL authority setting.
+         *
+         *     ``enabled`` is the effective intent: the org override when one is set, else
+         *     the flag's documented default. ``overridden`` reports whether the org has an
+         *     explicit override (so the UI can distinguish "on by default" from "on
+         *     because someone set it").
+         */
+        McpAuthorityResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Overridden */
+            overridden: boolean;
+        };
+        /** McpAuthorityUpdateRequest */
+        McpAuthorityUpdateRequest: {
+            /** Enabled */
+            enabled: boolean;
+        };
         /** McpConfigResponse */
         McpConfigResponse: {
             /** Mcp Url */
@@ -17383,6 +17439,11 @@ export interface components {
              * @description Per-pipeline HITL review window override (60-604800s = 1 min..7 days). How long a fired review may sit unclaimed/undecided before the run is cancelled to release its concurrency slot. Precedence: this value > the org default (settings) > the instance/env default. null = no override (inherit). Resolved once at gate fire time.
              */
             hitl_review_window_seconds?: number | null;
+            /**
+             * Queue Timeout Seconds
+             * @description Per-pipeline capacity-queue timeout in seconds (1..604800 = 7 days). null (default) = NEVER expire: a capacity-queued run waits indefinitely and the queue-state alert is the escalation path. When set, a pending run carrying a capacity marker older than this window (anchored on created_at, the time it was queued) is ended as a SUPERSESSION (status rejected, error_code queue.expired) - never a failure, never paged. Applies ONLY to capacity-queued runs; never-dispatched and enqueue-failed runs keep their own timeouts. Cron pipelines should set this to their period (e.g. 3600 for an hourly cron) so a stale fire self-drops; webhook/manual/MCP pipelines should leave it null.
+             */
+            queue_timeout_seconds?: number | null;
             /** Run Context Defaults */
             run_context_defaults?: {
                 [key: string]: unknown;
@@ -18011,6 +18072,8 @@ export interface components {
             node_timeout_seconds: number;
             /** Hitl Review Window Seconds */
             hitl_review_window_seconds?: number | null;
+            /** Queue Timeout Seconds */
+            queue_timeout_seconds?: number | null;
             /** Run Context Defaults */
             run_context_defaults: {
                 [key: string]: unknown;
@@ -18151,6 +18214,11 @@ export interface components {
              * @description Per-pipeline HITL review window override (60-604800s). Omit to leave unchanged; null clears the override (inherit the org/instance default).
              */
             hitl_review_window_seconds?: number | null;
+            /**
+             * Queue Timeout Seconds
+             * @description Per-pipeline capacity-queue timeout (1..604800s). Omit to leave unchanged; null clears it (never expire - the default). On expiry a capacity-queued run is ended as a supersession (queue.expired), not a failure. Cron pipelines should set it to their period; webhook/manual/MCP pipelines should leave it null.
+             */
+            queue_timeout_seconds?: number | null;
             /** Run Context Defaults */
             run_context_defaults?: {
                 [key: string]: unknown;
@@ -25765,6 +25833,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DbCapacityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_org_mcp_authority_api_v1_admin_org_mcp_human_linked_hitl_authority_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpAuthorityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    set_org_mcp_authority_api_v1_admin_org_mcp_human_linked_hitl_authority_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpAuthorityUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpAuthorityResponse"];
                 };
             };
             /** @description Validation Error */

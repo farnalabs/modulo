@@ -58,13 +58,13 @@
                 v-tooltip.top="providerTooltip(p)">
                 <span
                   class="flex h-10 w-10 items-center justify-center rounded-full text-lg font-bold"
-                  :class="p.configured ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'"
+                  :class="p.configured ? 'bg-success/20 text-success-text' : 'bg-muted text-muted-foreground'"
                 >
                   <Check v-if="p.configured" aria-hidden="true" class="h-[18px] w-[18px]" stroke-width="3" />
                   <X v-else aria-hidden="true" class="h-[18px] w-[18px]" stroke-width="3" />
                 </span>
                 <span class="text-sm font-medium">{{ p.label }}</span>
-                <span class="text-xs" :class="p.configured ? 'text-success' : 'text-muted-foreground'">
+                <span class="text-xs" :class="p.configured ? 'text-success-text' : 'text-muted-foreground'">
                   {{ p.configured ? $t('views.AdminAssistantView.configured') : $t('views.AdminAssistantView.not_set') }}
                 </span>
               </span>
@@ -92,14 +92,14 @@
             <div class="flex items-center gap-3">
               <span
                 class="flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold"
-                :class="p.configured ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'"
+                :class="p.configured ? 'bg-success/20 text-success-text' : 'bg-muted text-muted-foreground'"
               >
                   <Check v-if="p.configured" aria-hidden="true" class="h-[18px] w-[18px]" stroke-width="3" />
                   <X v-else aria-hidden="true" class="h-[18px] w-[18px]" stroke-width="3" />
               </span>
               <span class="text-sm font-medium">{{ p.label }}</span>
             </div>
-            <span class="text-xs" :class="p.configured ? 'text-success' : 'text-muted-foreground'">
+            <span class="text-xs" :class="p.configured ? 'text-success-text' : 'text-muted-foreground'">
               {{ p.configured ? $t('views.AdminAssistantView.configured') : $t('views.AdminAssistantView.not_set') }}
             </span>
           </div>
@@ -518,7 +518,7 @@
                 <td class="table-cell">
                   <button type="button"
                     class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors disabled:opacity-50"
-                    :class="skill.active ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
+                    :class="skill.active ? 'bg-success/10 text-success-text' : 'bg-muted text-muted-foreground'"
                     :disabled="skillToggling[skill.id]"
                     data-testid="assistant-skill-toggle"
                     :aria-pressed="skill.active"

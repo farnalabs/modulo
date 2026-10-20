@@ -5026,6 +5026,71 @@ class TestTransientFailureDetail:
         assert "retry suppressed because a node in the graph is non-idempotent" in detail
         assert "idempotent=false" in detail
 
+    def test_provider_signature_in_sandbox_failure_upgrades_code(self) -> None:
+        """FAR-734: a retries-exhausted SandboxNodeFailedError whose retained
+        stdout carries a provider signature surfaces that specific code rather
+        than the generic ``node_cancelled``."""
+        exc = SandboxNodeFailedError(
+            '{"type":"error","error":{"name":"RateLimitError","data":{"statusCode":429}}}',
+            node_id="node-a",
+        )
+        code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=exc, script_lease_ok=True, graph_idempotent=True, node_attempt_count=1, retries=1
+        )
+        assert code == "model.rate_limited"
+
+    def test_non_retryable_code_detail_names_the_class_not_exhaustion(self) -> None:
+        """FAR-1800: when requeue was REFUSED because the failure class is
+        non-retryable, the terminal detail must name that class — the retries
+        were never attempted, so the retries-exhausted wording would be false."""
+        exc = SandboxNodeFailedError("insufficient funds", node_id="node-a")
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=exc,
+            script_lease_ok=True,
+            graph_idempotent=True,
+            node_attempt_count=0,
+            retries=1,
+            non_retryable_code="model.insufficient_funds",
+        )
+        assert code == "model.insufficient_funds"
+        assert "non-retryable error model.insufficient_funds" in detail
+        assert "not retried" in detail
+        assert "after retries exhausted" not in detail
+
+    def test_non_retryable_code_with_exhausted_budget_says_both(self) -> None:
+        """FAR-1800: when the retry budget is ALREADY exhausted, "not retried
+        because a retry re-hits the same fault" would be false — the retries DID
+        run. The detail must say the budget was exhausted AND that the last
+        failure is non-retryable."""
+        exc = SandboxNodeFailedError("insufficient funds", node_id="node-a")
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=exc,
+            script_lease_ok=True,
+            graph_idempotent=True,
+            node_attempt_count=1,
+            retries=1,
+            non_retryable_code="model.insufficient_funds",
+        )
+        assert code == "model.insufficient_funds"
+        assert "after retries exhausted" in detail
+        assert "last failure is non-retryable (model.insufficient_funds)" in detail
+        assert "not retried because a retry re-hits the same fault" not in detail
+
+    def test_script_lease_unknown_outranks_non_retryable_code(self) -> None:
+        """The needs-human side-effect-unknown verdict stays first: an unknown
+        script side effect outranks a non-retryable provider code."""
+        exc = SandboxNodeFailedError("insufficient funds", node_id="node-a")
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=exc,
+            script_lease_ok=False,
+            graph_idempotent=True,
+            node_attempt_count=0,
+            retries=1,
+            non_retryable_code="model.insufficient_funds",
+        )
+        assert code == "script.side_effect_unknown"
+        assert "needs human review" in detail
+
 
 def _make_connector_init_session(rows: list[Any]) -> AsyncMock:
     """Session whose execute() yields non-empty ConnectorInstance rows for _init_connector_hub."""

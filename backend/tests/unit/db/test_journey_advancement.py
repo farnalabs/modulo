@@ -24,8 +24,9 @@ Part 3 wiring (FAR-143 part 3):
   * the raw writers (``mark_complete`` / ``fail_run_terminal``) advance
     journeys from stored refs via ``_advance_journeys_from_stored_refs``
   * the stale-run recovery sweep advances journeys for every run it
-    terminalises to ``failed`` (never_dispatched / capacity_timeout /
-    worker_lost), and never for runs it merely re-dispatches
+    terminalises (never_dispatched / worker_lost as ``failed``, queue.expired
+    as the ``rejected`` supersession), and never for runs it merely
+    re-dispatches
 """
 
 import re
@@ -1261,14 +1262,15 @@ class TestRawWriterJourneyAdvance:
 
 class TestStaleRunSweepJourneyAdvance:
     """FAR-143 follow-up — stale_run_recovery_sweep advances journeys for every
-    run it terminalises to ``failed`` (never_dispatched / capacity_timeout /
-    worker_lost), fail-open per run, and never for runs it merely re-dispatches.
+    run it terminalises (never_dispatched / worker_lost as ``failed``,
+    queue.expired as the ``rejected`` supersession), fail-open per run, and
+    never for runs it merely re-dispatches.
 
     The wiring is proven by monkeypatching the shared advance half
     (``run_terminal_advance.advance_journeys_from_stored_refs`` — the sweep's
     ``_advance_terminalised_run`` delegates to the shared orchestrator,
     FAR-604 F4) and asserting it is invoked exactly once per terminalised run
-    with the run's id, org, and ``failed`` (the helper's own end-to-end
+    with the run's id, org, and terminal status (the helper's own end-to-end
     behaviour is covered by
     ``TestRawWriterJourneyAdvance.test_advance_from_stored_refs_real``).
     """
@@ -1338,27 +1340,35 @@ class TestStaleRunSweepJourneyAdvance:
 
     async def test_terminalised_runs_advance_journeys(self, monkeypatch: pytest.MonkeyPatch) -> None:
         nd_run = uuid.uuid4()
-        ct_run = uuid.uuid4()
+        qx_run = uuid.uuid4()
         wl_run = uuid.uuid4()
         result, advanced = await self._run_sweep(
             monkeypatch,
             terminal_rows={
                 "never_dispatched": nd_run,
-                "capacity_timeout": ct_run,
+                "queue.expired": qx_run,
                 "worker_lost": wl_run,
             },
         )
         assert result["never_dispatched_swept"] == 1
-        assert result["capacity_timeout_swept"] == 1
+        assert result["queue_expired_swept"] == 1
         assert result["worker_lost_swept"] == 1
         assert advanced.await_count == 3
         got = {a.args[1]: a.args[2] for a in advanced.await_args_list}
         assert got == {
             str(nd_run): str(self._ORG),
-            str(ct_run): str(self._ORG),
+            str(qx_run): str(self._ORG),
             str(wl_run): str(self._ORG),
         }
-        assert all(a.args[3] == "failed" for a in advanced.await_args_list)
+        # FAR-1883: queue expiry is a SUPERSESSION - its journey advance must
+        # carry ``rejected``, never the failed-terminal status that would
+        # increment the journey's failed run_count.
+        statuses = {a.args[1]: a.args[3] for a in advanced.await_args_list}
+        assert statuses == {
+            str(nd_run): "failed",
+            str(qx_run): "rejected",
+            str(wl_run): "failed",
+        }
 
     async def test_run_without_refs_still_wires_advance(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # The sweep wires the helper for every terminalised run even when the
@@ -1379,6 +1389,6 @@ class TestStaleRunSweepJourneyAdvance:
         )
         assert result["stranded_capacity_redispatched"] == 1
         assert result["never_dispatched_swept"] == 0
-        assert result["capacity_timeout_swept"] == 0
+        assert result["queue_expired_swept"] == 0
         assert result["worker_lost_swept"] == 0
         advanced.assert_not_awaited()

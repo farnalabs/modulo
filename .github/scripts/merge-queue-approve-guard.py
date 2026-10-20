@@ -72,6 +72,26 @@ def load_concatenated(path: str):
     return items
 
 
+def _is_stale_commit(c: dict, approve_epoch: int) -> bool:
+    """Return True when *c* is a non-merge commit that invalidates the approval.
+
+    Merge commits keep the approval valid.  A missing or malformed committer
+    date is unverifiable, so it fails closed (counts as stale), matching the
+    reviews side and the documented contract.
+    """
+    parents = c.get("parents") or []
+    if len(parents) != 1:
+        return False
+    cd = (c.get("commit") or {}).get("committer", {}).get("date")
+    if not cd:
+        return True
+    try:
+        ce = _parse_iso(cd)
+    except Exception:
+        return True
+    return ce > approve_epoch
+
+
 def decide(reviews, commits, head_sha: str | None = None):
     """Return (verdict, reason). verdict is ``'ok'`` or ``'stale'``."""
     approved = [r for r in reviews if r.get("state") == "APPROVED"]
@@ -86,26 +106,7 @@ def decide(reviews, commits, head_sha: str | None = None):
     except Exception:
         return "stale", f"approval timestamp parse failed ({submitted!r}) - fail closed"
 
-    stale = 0
-    for c in commits:
-        parents = c.get("parents") or []
-        if len(parents) != 1:
-            continue  # merge commits keep the approval valid
-        cd = (c.get("commit") or {}).get("committer", {}).get("date")
-        if not cd:
-            # Missing committer date -> unverifiable -> fail closed (stale),
-            # matching the reviews side and the documented contract.
-            stale += 1
-            continue
-        try:
-            ce = _parse_iso(cd)
-        except Exception:
-            # Malformed committer date -> unverifiable -> fail closed (stale),
-            # matching the reviews side and the documented contract.
-            stale += 1
-            continue
-        if ce > approve_epoch:
-            stale += 1
+    stale = sum(1 for c in commits if _is_stale_commit(c, approve_epoch))
 
     if stale > 0:
         return (

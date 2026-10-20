@@ -150,6 +150,8 @@ class _EntrypointHarness:
         self.run_dir = tmp_path / "run"
         self.run_dir.mkdir()
         self.log_path = self.run_dir / "entrypoint.log"
+        self.run_pid_file = self.run_dir / "run-worker.pid"
+        self.system_pid_file = self.run_dir / "system-worker.pid"
         self.deadline_s = deadline_s
         self.ignore_term = ignore_term
         self._write_stubs()
@@ -157,15 +159,20 @@ class _EntrypointHarness:
 
     def _write_stubs(self) -> None:
         # ``python3`` stands in for every interpreter call the entrypoint
-        # makes. The SAQ worker becomes a long-lived sleep (or, for the
-        # bounded test, a TERM-ignoring sleep).
+        # makes. BOTH SAQ workers become a long-lived sleep (or, for the
+        # bounded test, a TERM-ignoring sleep) — matching production, where
+        # neither worker exits on its own. The system worker is launched as
+        # ``python3 -m modulo.core.saq_worker``, so its case must be matched
+        # too: falling through to the no-op branch would make it exit
+        # immediately and re-register a new PID every second, leaving the
+        # drain loop racing a churning (sometimes dead) PID file.
         saq_command = "exec bash -c 'trap \"\" TERM; exec sleep 300'" if self.ignore_term else "exec sleep 300"
         python_stub = f"""#!/bin/bash
 if [ "$1" = "-m" ]; then
   case "$2" in
     modulo.launcher.policy)
       echo "SLIDING_WINDOW_S=300"; echo "SLIDING_CRASH_LIMIT=5"; echo "SLIDING_RESTART_SLEEP_S=1"; exit 0;;
-    saq)
+    saq|modulo.core.saq_worker)
       {saq_command};;
     *) exit 0;;
   esac
@@ -185,8 +192,8 @@ exit 0
         return {
             **os.environ,
             "PATH": f"{self.bin_dir}:/usr/bin:/bin",
-            "RUN_WORKER_PID_FILE": str(self.run_dir / "run-worker.pid"),
-            "SYSTEM_WORKER_PID_FILE": str(self.run_dir / "system-worker.pid"),
+            "RUN_WORKER_PID_FILE": str(self.run_pid_file),
+            "SYSTEM_WORKER_PID_FILE": str(self.system_pid_file),
             "WORKER_DRAIN_FLAG": str(self.run_dir / "worker-draining"),
             "POLICY_ENV_FILE": str(self.run_dir / "policy.env"),
             "FLY_PROCESS_GROUP": "worker",
@@ -205,15 +212,36 @@ exit 0
         )
 
     def wait_ready(self, timeout_s: float = 20.0) -> bool:
+        """Wait for the drain trap AND both workers' PID files to be live.
+
+        ``WORKER_READY`` is printed as soon as the trap is installed, but the
+        restart wrappers write the PID files asynchronously. Signalling before
+        they exist makes the drain correctly find nothing to wait for (it takes
+        the ``complete`` branch), so the deadline path under test never runs —
+        the race that made this suite fail intermittently under parallel CI
+        load.
+        """
         assert self.proc is not None
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            if "WORKER_READY" in self.log_path.read_text(encoding="utf-8"):
+            if "WORKER_READY" in self.log_path.read_text(encoding="utf-8") and self._workers_registered():
                 return True
             if self.proc.poll() is not None:
                 return False
             time.sleep(0.02)
         return False
+
+    def _workers_registered(self) -> bool:
+        for path in (self.run_pid_file, self.system_pid_file):
+            try:
+                pid = int(path.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                return False
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return False
+        return True
 
     def log(self) -> str:
         return self.log_path.read_text(encoding="utf-8")

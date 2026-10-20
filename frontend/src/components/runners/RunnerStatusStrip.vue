@@ -86,7 +86,7 @@ const showMachineCount = computed(() => machines.value.length > 1)
 // qa F18: ONE keyed visual map — tone (dot + text/border) per state, instead
 // of two parallel switch objects that could drift apart.
 const STATE_TONE: Record<StripState | 'loading' | 'not_enabled' | 'fetch_failed', { strip: string; dot: string }> = {
-  healthy: { strip: 'border-success/40 bg-success/10 text-success', dot: 'bg-success' },
+  healthy: { strip: 'border-success/40 bg-success/10 text-success-text', dot: 'bg-success' },
   not_enabled: { strip: 'border-border bg-muted/40 text-muted-foreground', dot: 'bg-muted-foreground' },
   engine_unreachable: { strip: 'border-destructive/40 bg-destructive/10 text-destructive-text', dot: 'bg-destructive' },
   image_not_pulled: { strip: 'border-warning/40 bg-warning/10 text-warning-text', dot: 'bg-warning' },

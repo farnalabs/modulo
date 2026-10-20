@@ -145,7 +145,7 @@
                       </span>
                       <span
                         v-else
-                        class="inline-flex items-center gap-1 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success"
+                        class="inline-flex items-center gap-1 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success-text"
                       >
                         <span class="h-1.5 w-1.5 rounded-full bg-success" aria-hidden="true" />
                         {{ $t('views.SchemaListView.active') }}

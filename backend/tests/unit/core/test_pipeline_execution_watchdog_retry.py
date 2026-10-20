@@ -1175,7 +1175,12 @@ def test_resolve_schedule_state_valid_uses_the_run_schedule() -> None:
 
 
 # ---------------------------------------------------------------------------
-# FAR-705 — per-run capacity-retry budget on the stale-run sweep
+# FAR-1883 — per-pipeline queue timeout on the stale-run sweep
+#
+# (This section replaced the FAR-705 capacity-retry-budget coverage: the
+# instance-wide 120-minute ``capacity_timeout`` TTL and its budget gate were
+# removed, so the sweep's capacity branch is now the per-pipeline
+# ``queue.expired`` supersession.)
 # ---------------------------------------------------------------------------
 
 
@@ -1220,90 +1225,93 @@ def _compile_sql(stmt: object) -> str:
     return str(stmt)
 
 
-async def _run_sweep_capture_capacity_stmt(budget: int) -> tuple[str, dict[str, object]]:
-    """Run one stale sweep with the given capacity budget; return the compiled
-    capacity_timeout UPDATE statement + its bound params."""
+async def _run_sweep_capture_queue_expired_stmt() -> tuple[str, dict[str, object]]:
+    """Run one stale sweep; return the compiled queue-expiry UPDATE + bind."""
     statements: list[str] = []
     params: list[dict[str, object]] = []
     engine = _sweep_engine(statements, params)
-    with patch(
-        "modulo.core.pipeline_execution.get_settings",
-        lambda: MagicMock(saq_capacity_retry_budget=budget),
-    ):
-        never, capacity, lost = await _sweep_org_stale_runs(
-            engine.connect(),
-            org_id=uuid.uuid4(),
-            nd_window=300,
-            wl_window=600,
-            stranded_rows=[],
-            terminalised_run_ids=[],
-        )
+    never, expired, lost = await _sweep_org_stale_runs(
+        engine.connect(),
+        org_id=uuid.uuid4(),
+        nd_window=300,
+        wl_window=600,
+        stranded_rows=[],
+        terminalised_run_ids=[],
+        queue_expired_run_ids=[],
+    )
     assert never == 0
-    assert capacity == 0
+    assert expired == 0
     assert lost == 0
-    capacity_stmts = [(s, p) for s, p in zip(statements, params, strict=True) if "capacity_timeout" in s]
-    assert len(capacity_stmts) == 1
-    sql, bound = capacity_stmts[0]
+    expired_stmts = [(s, p) for s, p in zip(statements, params, strict=True) if "error_code = 'queue.expired'" in s]
+    assert len(expired_stmts) == 1
+    sql, bound = expired_stmts[0]
     return _compile_sql(sql), bound
 
 
-@pytest.mark.parametrize("budget", [0, 3, 7])
-async def test_sweep_capacity_timeout_guards_on_capacity_retry_budget(budget: int):
-    """FAR-705: the capacity_timeout terminalisation gates CLAIMED runs on the
-    per-run capacity-retry budget — the loop-cap that keeps the retryable
-    capacity.* class from resurrecting a run forever — while NEVER-CLAIMED
-    rows (claim_count = 0) terminalize at the TTL via their own disjunct and
-    the claim-heartbeat staleness backstop covers a stale last claim."""
-    sql, bound = await _run_sweep_capture_capacity_stmt(budget)
-    assert (
-        "AND (claim_count = 0 "
-        "OR claim_count > :capacity_retry_budget "
-        "OR heartbeat_at < now() - (:ttl * interval '1 minute'))" in sql
+async def test_sweep_queue_expiry_is_per_pipeline_and_capacity_only():
+    """FAR-1883: the queue timeout is a PER-PIPELINE column, not an
+    instance-wide TTL, and applies ONLY to capacity-queued rows (pending + a
+    capacity marker). It is anchored on created_at ("time queued") - never a
+    heartbeat or dispatch timestamp - so a pending->running->pending demote
+    bounce cannot reset the clock."""
+    sql, bound = await _run_sweep_capture_queue_expired_stmt()
+    assert "FROM pipelines p" in sql
+    assert "runs.pipeline_id = p.id" in sql
+    assert "p.queue_timeout_seconds IS NOT NULL" in sql
+    assert "runs.created_at < now() - (p.queue_timeout_seconds * interval '1 second')" in sql
+    assert "runs.status = 'pending'" in sql
+    assert "runs.error_code IN ('org_capacity_limited', 'pipeline_capacity')" in sql
+    # One TTL per state class: the expiry must not touch never-dispatched or
+    # enqueue-failed rows.
+    assert "never_dispatched" not in sql
+    assert "enqueue_failed" not in sql
+    assert "heartbeat_at" not in sql
+    assert "dispatched_at" not in sql
+    assert set(bound) == {"oid", "detail"}
+
+
+async def test_sweep_queue_expiry_is_a_supersession_not_a_failure():
+    """FAR-1883: expiry ENDS the run as a supersession - status ``rejected``
+    with the distinct ``queue.expired`` code - never ``failed``, so it cannot
+    enter failure counts/thresholds or page anyone, and it does not reuse
+    ``capacity_timeout``'s retired terminal-FAIL meaning."""
+    sql, bound = await _run_sweep_capture_queue_expired_stmt()
+    assert "SET status = 'rejected'" in sql
+    assert "error_code = 'queue.expired'" in sql
+    assert "status = 'failed'" not in sql
+    assert "capacity_timeout" not in sql
+    assert bound["detail"] == "Waited in the capacity queue past the pipeline's queue_timeout."
+
+
+async def test_sweep_never_dispatched_branch_keeps_its_own_window():
+    """FAR-1883: one TTL per state class - the never-dispatched branch still
+    bounds on its own ``nd_window`` (300s default) and must not read the new
+    per-pipeline ``queue_timeout_seconds``."""
+    statements: list[str] = []
+    params: list[dict[str, object]] = []
+    engine = _sweep_engine(statements, params)
+    await _sweep_org_stale_runs(
+        engine.connect(),
+        org_id=uuid.uuid4(),
+        nd_window=300,
+        wl_window=600,
+        stranded_rows=[],
+        terminalised_run_ids=[],
+        queue_expired_run_ids=[],
     )
-    assert bound["capacity_retry_budget"] == budget
-
-
-@pytest.mark.parametrize("budget", [0, 3, 20])
-async def test_sweep_capacity_backstop_restores_termination_guarantee(budget: int):
-    """FAR-705 fix: the budget gate alone can never terminalize a budget >=
-    SAQ_RUN_CLAIM_CAP config (claims are refused at claim_count >= the cap,
-    so the comparison is unsatisfiable for budget=20), and a heartbeat-age
-    test can never terminalize a NEVER-CLAIMED row — the dominant capacity
-    path is dispatch-time deferral WITHOUT a claim, so claim_count stays 0,
-    and the stranded-refresh UPDATE restamps the row's heartbeat while it is
-    inside the TTL window, so past the crossing the refreshed heartbeat would
-    age a further full TTL (terminalising at ~2xTTL with the budget having no
-    effect). The ``claim_count = 0`` disjunct fires at the TTL crossing for
-    never-claimed rows, and the heartbeat-staleness backstop restores the
-    guarantee for CLAIMED rows: a row whose last claim heartbeat is itself
-    older than the TTL terminal-fails regardless of claim_count. The backstop
-    age is the TTL itself (NOT a larger multiple)."""
-    sql, bound = await _run_sweep_capture_capacity_stmt(budget)
-    assert "claim_count = 0" in sql
-    assert "heartbeat_at IS NULL" not in sql
-    assert "OR heartbeat_at < now() - (:ttl * interval '1 minute'))" in sql
-    assert "hard_cap_ttl" not in bound
-
-
-async def test_sweep_capacity_within_budget_row_stays_pending():
-    """FAR-705 fix: a within-budget CLAIMED row with a claim heartbeat inside
-    the TTL window matches NONE of the terminalisation disjuncts — the
-    claim_count = 0 disjunct requires no claim at all, the budget disjunct is
-    strict (a claim_count == budget row does not fire it), and the age
-    disjunct requires the last claim heartbeat to be itself older than the
-    TTL — so it keeps the pending/re-dispatch behaviour."""
-    sql, bound = await _run_sweep_capture_capacity_stmt(3)
-    assert "claim_count = 0" in sql
-    assert "claim_count > :capacity_retry_budget" in sql
-    assert "claim_count >= :capacity_retry_budget" not in sql
-    assert "heartbeat_at IS NULL" not in sql
-    assert "heartbeat_at < now() - (:ttl * interval '1 minute'))" in sql
-    assert bound["capacity_retry_budget"] == 3
+    never = [(s, p) for s, p in zip(statements, params, strict=True) if "error_code = 'never_dispatched'" in s]
+    assert len(never) == 1
+    never_sql, never_bound = never[0]
+    assert ":nd_window" in never_sql
+    assert "queue_timeout_seconds" not in never_sql
+    assert never_bound["nd_window"] == 300
 
 
 def test_capacity_retry_budget_setting_default_and_override(monkeypatch: pytest.MonkeyPatch):
-    """The new setting defaults to 3 (the FAR-705 budget) and honours its env
-    override."""
+    """FAR-1883: the FAR-705 budget knob is RETIRED (nothing reads it now that
+    the capacity_timeout TTL is gone), but the field is retained so an
+    existing deployment's env value is accepted rather than rejected; its
+    default and env override still parse."""
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
     monkeypatch.setenv("SECRET_KEY", "a" * 32)
     monkeypatch.setenv("FERNET_KEY", "a" * 32)

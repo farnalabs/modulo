@@ -24,7 +24,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 import jwt
 from authlib.oauth2 import OAuth2Error as _OAuth2Error
@@ -250,6 +250,14 @@ def _redirect_uri_rejection_reason(uri: str) -> str | None:
     """Return why ``uri`` is not a safe redirect URI, or ``None`` if it is."""
     if not uri:
         return "Redirect URI must be a non-empty string"
+    structural = _structural_rejection_reason(uri)
+    if structural is not None:
+        return structural
+    return _parsed_rejection_reason(uri)
+
+
+def _structural_rejection_reason(uri: str) -> str | None:
+    """Reject a URI on its raw characters, before any parsing."""
     if len(uri) > MAX_REDIRECT_URI_LENGTH:
         # Checked before the per-character scan so an oversized value costs
         # O(1) rather than a walk over the whole string.
@@ -265,14 +273,18 @@ def _redirect_uri_rejection_reason(uri: str) -> str | None:
         return "Redirect URI must not contain a wildcard"
     if "#" in uri:
         return "Redirect URI must not contain a fragment"
+    return None
+
+
+def _parsed_rejection_reason(uri: str) -> str | None:
+    """Reject a URI on its parsed components (scheme, host, port)."""
     try:
         parts = urlsplit(uri)
     except ValueError:
         return "Redirect URI is malformed"
-    if parts.scheme not in ALLOWED_REDIRECT_SCHEMES or not parts.netloc or not parts.hostname:
-        return "Redirect URI must be an absolute http(s) URI"
-    if parts.username is not None or parts.password is not None:
-        return "Redirect URI must not contain userinfo"
+    components = _components_rejection_reason(parts)
+    if components is not None:
+        return components
     try:
         port = parts.port
     except ValueError:
@@ -282,6 +294,15 @@ def _redirect_uri_rejection_reason(uri: str) -> str | None:
         return "Redirect URI has an invalid port"
     if parts.scheme == "http" and not _is_loopback_host(parts.hostname or ""):
         return "Redirect URI must use https unless the host is loopback"
+    return None
+
+
+def _components_rejection_reason(parts: SplitResult) -> str | None:
+    """Reject a parsed URI lacking an absolute http(s) host, or carrying userinfo."""
+    if parts.scheme not in ALLOWED_REDIRECT_SCHEMES or not parts.netloc or not parts.hostname:
+        return "Redirect URI must be an absolute http(s) URI"
+    if parts.username is not None or parts.password is not None:
+        return "Redirect URI must not contain userinfo"
     return None
 
 

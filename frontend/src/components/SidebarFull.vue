@@ -8,7 +8,7 @@
           <LogoMark :size="24" transparent />
         </div>
         <h2 class="text-lg font-bold tracking-tight">{{ $t('components.AppLayout.modulo') }}</h2>
-        <Badge v-if="planStore.currentTier" severity="secondary" class="border border-border text-[10px] px-1.5 py-0 leading-none opacity-70">
+        <Badge v-if="planStore.currentTier" severity="secondary" class="border border-border text-[10px] px-1.5 py-0 leading-none">
           {{ planStore.getTierLabel(planStore.currentTier) }}
         </Badge>
       </router-link>
@@ -33,7 +33,7 @@
         :aria-label="$t('components.AppLayout.user_profile_link', { label: userInitial })"
       >
         <div
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary"
+          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary-text"
           :title="userEmail"
         >
           {{ userInitial }}

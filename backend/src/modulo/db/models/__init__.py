@@ -67,6 +67,7 @@ from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthTokenFamil
 from modulo.db.models.onboarding_progress import OnboardingProgress
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
+from modulo.db.models.organisation_cost_state import OrganisationCostState
 from modulo.db.models.parameter_schema import ParameterSchema
 from modulo.db.models.parameter_set import ParameterSet
 from modulo.db.models.pipeline import Pipeline
@@ -168,6 +169,7 @@ __all__ = [
     "OrgMembership",
     "OrgScoped",
     "Organisation",
+    "OrganisationCostState",
     "ParameterSchema",
     "ParameterSet",
     "Pipeline",

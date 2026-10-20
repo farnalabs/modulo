@@ -349,6 +349,25 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
+  it('renders its own short label (not the generic superseded copy) for a queue-expired run (FAR-1883)', async () => {
+    mockRunStatus = 'rejected'
+    mockErrorCode = 'queue.expired'
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    const badge = wrapper.find('[data-testid="run-detail-status-superseded"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('Expired while queued')
+    expect(badge.text()).not.toContain('Superseded by a newer version')
+    expect(badge.text()).not.toBe('rejected')
+    // The tooltip/accessible name resolves the queue-expired description, not
+    // the generic supersession copy.
+    expect(badge.attributes('title')).toContain('capacity queue')
+    wrapper.unmount()
+  })
+
   it('renders the plain rejected status badge for a human rejection', async () => {
     mockRunStatus = 'rejected'
     mockErrorCode = 'hitl.rejected'
@@ -2605,6 +2624,26 @@ describe('RunDetailView HITL gates', () => {
     wrapper.unmount()
   })
 
+  it('hoists an error-type HITL message with the destructive token', async () => {
+    mockPendingGates = [gate({ claimed_by: 'me@example.com', claimed_by_me: true })]
+    mockClaimResult = { claim_token: 'ct-1' }
+    const wrapper = await mountAwaiting('claimed')
+    const HitlReviewCard = (await import('../components/hitl/HitlReviewCard.vue')).default
+    const card = wrapper.findComponent(HitlReviewCard)
+    expect(card.exists()).toBe(true)
+
+    const run = (wrapper.vm as unknown as { run: { status: string } }).run
+    run.status = 'complete'
+    card.vm.$emit('decided', { type: 'error', text: 'Gate failed.' })
+    await flushPromises()
+    await nextTick()
+
+    const message = wrapper.find('[data-testid="run-detail-hitl-message"]')
+    expect(message.exists()).toBe(true)
+    expect(message.classes()).toContain('text-destructive')
+    wrapper.unmount()
+  })
+
   it('rejects the gate and routes to the reject target', async () => {
     // The routed copy is only truthful when the gate actually HAS a reject
     // route — the fire-time briefing carries consequences.reject for that case.
@@ -3057,6 +3096,27 @@ describe('RunDetailView FAR-582 artifact listing', () => {
     const stdoutLink = wrapper.find('[data-testid="run-detail-artifact-stdout"]') as any
     expect(stdoutLink.attributes('href')).toContain('/api/v1/runs/test-run-id/nodes/node-a/attempts/')
     expect(stdoutLink.attributes('href')).toContain('/artifacts/stdout')
+    wrapper.unmount()
+  })
+
+  it('shows the full-log download hint when an inline log is truncated', async () => {
+    mockArtifactArtifacts = [
+      { attempt_key: 'run:test-run-id:node:node-a:0', stream: 'stdout', size_bytes: 1024, sha256: 'aa', compression: 'zstd' },
+    ]
+    const wrapper = await mountWithArtifacts(
+      { ...baseDetail(), node_token_usage: { 'node-a': { input_tokens: 10, output_tokens: 20 } } },
+      {
+        outputs_json: { 'node-a': { input: {}, output: {} } },
+        node_telemetry: { 'node-a': { agent_stdout: 'x'.repeat(20001) } },
+      },
+    )
+    await wrapper.find('[data-testid="run-detail-toggle-logs"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const section = wrapper.find('[data-testid="run-detail-node-artifacts"]')
+    expect(section.exists()).toBe(true)
+    expect(section.text()).toContain('Download the full log to view the complete output')
     wrapper.unmount()
   })
 

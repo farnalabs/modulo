@@ -198,7 +198,7 @@ function badgeClass(variant?: 'primary' | 'warning' | 'destructive'): string {
 }
 
 .page-tab.active {
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text));
   background-color: hsl(var(--background));
   border-color: hsl(var(--border));
   box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
@@ -220,7 +220,7 @@ function badgeClass(variant?: 'primary' | 'warning' | 'destructive'): string {
 
 .badge-primary {
   background-color: hsla(var(--primary) / 0.12);
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text));
 }
 
 .badge-warning {
@@ -230,7 +230,7 @@ function badgeClass(variant?: 'primary' | 'warning' | 'destructive'): string {
 
 .badge-destructive {
   background-color: hsla(var(--destructive) / 0.12);
-  color: hsl(var(--destructive));
+  color: hsl(var(--destructive-text));
 }
 
 @media (max-width: 640px) {

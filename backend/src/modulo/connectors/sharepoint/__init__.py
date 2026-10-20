@@ -115,81 +115,83 @@ class SharePointConnector(ConnectorBase):
         async with self._client() as client:
             match q.resource:
                 case "sites":
-                    params: dict[str, Any] = {}
-                    search = q.filters.get("search")
-                    if search:
-                        params["search"] = search
-                    if q.limit:
-                        params["$top"] = q.limit
-                    if q.cursor:
-                        params[_SKIP_TOKEN] = q.cursor
-                    r = await client.get("/sites", params=params)
-                    r.raise_for_status()
-                    records, next_cursor, total = self._page(r.json(), q.limit)
-                    return ConnectorResult(records=records, next_cursor=next_cursor, total=total)
-
+                    return await self._query_sites(client, q)
                 case "lists":
-                    site_id = q.filters.get("site_id")
-                    if not site_id:
-                        raise ValueError("SharePoint lists query requires 'site_id' filter")
-                    params = {}
-                    if q.limit:
-                        params["$top"] = q.limit
-                    if q.cursor:
-                        params[_SKIP_TOKEN] = q.cursor
-                    r = await client.get(f"/sites/{site_id}/lists", params=params)
-                    r.raise_for_status()
-                    records, next_cursor, total = self._page(r.json(), q.limit)
-                    return ConnectorResult(records=records, next_cursor=next_cursor, total=total)
-
+                    return await self._query_lists(client, q)
                 case "list_items":
-                    site_id = q.filters.get("site_id")
-                    list_id = q.filters.get("list_id")
-                    if not site_id or not list_id:
-                        raise ValueError("SharePoint list_items query requires 'site_id' and 'list_id' filters")
-                    params = {}
-                    if q.limit:
-                        params["$top"] = q.limit
-                    if q.cursor:
-                        params[_SKIP_TOKEN] = q.cursor
-                    r = await client.get(f"/sites/{site_id}/lists/{list_id}/items", params=params)
-                    r.raise_for_status()
-                    records, next_cursor, total = self._page(r.json(), q.limit)
-                    return ConnectorResult(records=records, next_cursor=next_cursor, total=total)
-
+                    return await self._query_list_items(client, q)
                 case "drive":
-                    site_id = q.filters.get("site_id")
-                    drive_id = q.filters.get("drive_id")
-                    if not site_id or not drive_id:
-                        raise ValueError("SharePoint drive query requires 'site_id' and 'drive_id' filters")
-                    path = q.filters.get("path", "/")
-                    if path == "/" or not path:
-                        url = f"/sites/{site_id}/drives/{drive_id}/root/children"
-                    else:
-                        url = f"/sites/{site_id}/drives/{drive_id}/root:/{path.strip('/')}:/children"
-                    params = {}
-                    if q.limit:
-                        params["$top"] = q.limit
-                    if q.cursor:
-                        params[_SKIP_TOKEN] = q.cursor
-                    r = await client.get(url, params=params)
-                    r.raise_for_status()
-                    records, next_cursor, total = self._page(r.json(), q.limit)
-                    return ConnectorResult(records=records, next_cursor=next_cursor, total=total)
-
+                    return await self._query_drive(client, q)
                 case "file":
-                    site_id = q.filters.get("site_id")
-                    drive_id = q.filters.get("drive_id")
-                    path = q.filters.get("path")
-                    if not site_id or not drive_id or not path:
-                        raise ValueError("SharePoint file query requires 'site_id', 'drive_id', and 'path' filters")
-                    r = await client.get(f"/sites/{site_id}/drives/{drive_id}/root:/{path.strip('/')}:/content")
-                    r.raise_for_status()
-                    content = r.text
-                    return ConnectorResult(records=[{"path": path, "content": content}])
-
+                    return await self._query_file(client, q)
                 case _:
                     raise ValueError(f"Unsupported SharePoint resource: {q.resource!r}")
+
+    @staticmethod
+    def _page_params(q: ConnectorQuery, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Merge the limit/cursor pagination filters into request params."""
+        merged = dict(params or {})
+        if q.limit:
+            merged["$top"] = q.limit
+        if q.cursor:
+            merged[_SKIP_TOKEN] = q.cursor
+        return merged
+
+    async def _query_collection(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        params: dict[str, Any],
+        limit: int,
+    ) -> ConnectorResult:
+        """GET a paged collection and wrap it as a ConnectorResult."""
+        r = await client.get(url, params=params)
+        r.raise_for_status()
+        records, next_cursor, total = self._page(r.json(), limit)
+        return ConnectorResult(records=records, next_cursor=next_cursor, total=total)
+
+    async def _query_sites(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        params: dict[str, Any] = {}
+        search = q.filters.get("search")
+        if search:
+            params["search"] = search
+        return await self._query_collection(client, "/sites", self._page_params(q, params), q.limit)
+
+    async def _query_lists(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        site_id = q.filters.get("site_id")
+        if not site_id:
+            raise ValueError("SharePoint lists query requires 'site_id' filter")
+        return await self._query_collection(client, f"/sites/{site_id}/lists", self._page_params(q), q.limit)
+
+    async def _query_list_items(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        site_id = q.filters.get("site_id")
+        list_id = q.filters.get("list_id")
+        if not site_id or not list_id:
+            raise ValueError("SharePoint list_items query requires 'site_id' and 'list_id' filters")
+        url = f"/sites/{site_id}/lists/{list_id}/items"
+        return await self._query_collection(client, url, self._page_params(q), q.limit)
+
+    async def _query_drive(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        site_id = q.filters.get("site_id")
+        drive_id = q.filters.get("drive_id")
+        if not site_id or not drive_id:
+            raise ValueError("SharePoint drive query requires 'site_id' and 'drive_id' filters")
+        path = q.filters.get("path", "/")
+        if path == "/" or not path:
+            url = f"/sites/{site_id}/drives/{drive_id}/root/children"
+        else:
+            url = f"/sites/{site_id}/drives/{drive_id}/root:/{path.strip('/')}:/children"
+        return await self._query_collection(client, url, self._page_params(q), q.limit)
+
+    async def _query_file(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        site_id = q.filters.get("site_id")
+        drive_id = q.filters.get("drive_id")
+        path = q.filters.get("path")
+        if not site_id or not drive_id or not path:
+            raise ValueError("SharePoint file query requires 'site_id', 'drive_id', and 'path' filters")
+        r = await client.get(f"/sites/{site_id}/drives/{drive_id}/root:/{path.strip('/')}:/content")
+        r.raise_for_status()
+        return ConnectorResult(records=[{"path": path, "content": r.text}])
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         async with self._client() as client:

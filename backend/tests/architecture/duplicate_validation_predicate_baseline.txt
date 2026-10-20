@@ -33,7 +33,6 @@
 # Regenerate after untangling a group:
 #   cd backend && uv run python scripts/update_duplicate_validation_predicate_baseline.py
 {"block": ["api/mcp_server.py:_parse_api_key_expires_at", "api/routes/api_keys.py:_parse_expires_at"]}
-{"block": ["api/routes/analytics.py:_scan_body", "api/routes/audit.py:_scan_body"]}
 {"block": ["api/routes/health.py:_configured_queues", "core/watchdog/worker_liveness.py:_configured_queues"]}
 {"block": ["cli/backup.py:_pg_child_env", "launcher/upgrade.py:_pg_child_env"]}
 {"block": ["core/feedback_manager/__init__.py:_dispatch_reject_correction_in_session", "core/guardrails/conformance.py:_set_rls", "db/crud/organisation.py:delete_organisation"]}

@@ -61,7 +61,7 @@
         <p v-if="submitted && !form.provider_type" id="envprofile-form-provider-error" role="alert" class="mt-1 text-xs text-destructive">{{ $t('views.EnvironmentProfileForm.provider_type_is_required') }}</p>
         <p v-if="formTierLabel" id="envprofile-form-tier-hint" role="status" class="mt-1 text-xs text-muted-foreground">
           <span
-            class="mr-1 inline-block rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+            class="mr-1 inline-block rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary-text"
             data-testid="envprofile-form-tier-badge"
           >{{ formTierLabel }}</span>
         </p>
@@ -98,7 +98,7 @@
         <output
           v-if="imageRefState === 'pinned'"
           id="envprofile-form-image-state"
-          class="mt-1 flex items-center gap-1 text-xs text-success"
+          class="mt-1 flex items-center gap-1 text-xs text-success-text"
           data-testid="envprofile-form-image-pinned"
         >
           <ShieldCheck :size="14" aria-hidden="true" />
@@ -140,7 +140,7 @@
             v-for="cap in availableCapabilities"
             :key="cap"
             class="inline-flex items-center gap-1.5 rounded-lg border border-input px-3 py-1.5 text-sm cursor-pointer transition-colors"
-            :class="form.capabilities.includes(cap) ? 'bg-primary/10 border-primary/30 text-primary' : 'hover:bg-accent'"
+            :class="form.capabilities.includes(cap) ? 'bg-primary/10 border-primary/30 text-primary-text' : 'hover:bg-accent'"
           >
             <input
               type="checkbox"

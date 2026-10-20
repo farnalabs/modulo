@@ -1759,6 +1759,42 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
             result = await update_pipeline_graph(pipeline_id=str(uuid.uuid4()), nodes=nodes, edges=edges)
         assert result["error"] == "pipeline_not_found"
 
+    async def test_pipeline_gone_before_the_row_lock_returns_not_found(self) -> None:
+        """FAR-1845: the transaction re-reads the pipeline under ``FOR UPDATE``.
+
+        The first read can succeed and the row still be gone by the time the
+        lock is taken (a concurrent delete committed in between). That branch
+        must fail closed with the SAME envelope as the first read — and it must
+        not run the Agent-row sync or the graph write.
+        """
+        nodes, edges = self._valid_graph()
+        pipeline = MagicMock()
+        pipeline.owner_team_id = None
+        pipeline.graph_nodes_json = []
+        pipeline_id = str(uuid.uuid4())
+
+        async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+            if getattr(stmt, "_for_update_arg", None) is not None:
+                return _make_execute_result(scalar_one_or_none=None)
+            return _make_execute_result(scalar_one_or_none=pipeline)
+
+        session = _mock_session()
+        session.execute = AsyncMock(side_effect=_execute)
+        sync = AsyncMock()
+        replace = AsyncMock()
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("modulo.core.agent_command_sync.sync_agent_row_commands", new=sync),
+            patch("modulo.db.crud.pipeline.replace_pipeline_graph", new=replace),
+        ):
+            result = await update_pipeline_graph(pipeline_id=pipeline_id, nodes=nodes, edges=edges)
+
+        assert result == {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+        sync.assert_not_awaited()
+        replace.assert_not_awaited()
+
     async def test_dispatch_binding_persists_non_idempotent(self) -> None:
         """FAR-1141 (CRITICAL 1): the MCP path validated the graph and then
         DISCARDED the model result, persisting the raw node dicts — so the
@@ -1793,8 +1829,11 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         # an empty scalars list (the referenced instance is absent, so the
         # capability check is skipped) rather than an unconfigured AsyncMock
         # child whose ``.scalars()`` yields a coroutine.
+        # FAR-1845: the transaction now also takes the pipeline row lock with a
+        # direct ``session.execute`` SELECT, so the same Result-like object must
+        # return the pipeline from ``scalar_one_or_none``.
         session = _mock_session()
-        session.execute.return_value = _make_execute_result()
+        session.execute.return_value = _make_execute_result(scalar_one_or_none=pipeline)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
@@ -3344,3 +3383,56 @@ class TestRemainingAuthPathGaps(_AuthContext):
         creds, err = ms._extract_oauth_refresh_credentials(request, {"grant_type": "refresh_token"})
         assert not creds
         assert err is not None
+
+
+class TestCreatePipelineQueueTimeout(_AuthContext):
+    """FAR-1883: the MCP ``create_pipeline`` tool must accept, bound-check and
+    thread the per-pipeline capacity-queue timeout — the field was otherwise
+    unsettable through the MCP surface."""
+
+    @pytest.fixture(autouse=True)
+    def _auth_ok(self):
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
+            yield
+
+    @staticmethod
+    def _pipeline_double() -> MagicMock:
+        pipeline = MagicMock()
+        pipeline.id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+        pipeline.name = "p"
+        pipeline.description = None
+        pipeline.visibility = "org"
+        pipeline.max_concurrent_runs = 5
+        pipeline.default_autonomy_level = "manual_approval"
+        pipeline.circuit_breaker_threshold = None
+        pipeline.max_autonomy_level = None
+        pipeline.business_owner_id = None
+        pipeline.reliability_owner_id = None
+        pipeline.created_at = None
+        return pipeline
+
+    @pytest.mark.parametrize("bad", [0, -1, 604801])
+    async def test_out_of_range_queue_timeout_rejected_before_db(self, bad: int) -> None:
+        """FAR-1883: the MCP create tool enforces the same 1..604800 envelope as
+        the REST/Pydantic layer and the DB CHECK, up front, so an out-of-range
+        value is a clean tool error rather than a DB IntegrityError."""
+        result = await ms.create_pipeline(name="p", timeouts=ms.PipelineTimeoutOverrides(queue_timeout_seconds=bad))
+        assert result["error"] == "validation_failed"
+        assert result["field"] == "queue_timeout_seconds"
+        assert "1 and 604800" in result["detail"]
+
+    async def test_in_bounds_queue_timeout_threaded_to_crud(self) -> None:
+        pipeline = self._pipeline_double()
+        with patch("modulo.db.crud.pipeline.create_pipeline", new=AsyncMock(return_value=pipeline)) as create:
+            result = await ms.create_pipeline(
+                name="p", timeouts=ms.PipelineTimeoutOverrides(queue_timeout_seconds=3600)
+            )
+        assert result["id"] == str(pipeline.id)
+        assert create.await_args.kwargs["queue_timeout_seconds"] == 3600
+
+    async def test_omitted_queue_timeout_threads_null(self) -> None:
+        """Omitting the argument means NULL (never expire), the shipped default."""
+        pipeline = self._pipeline_double()
+        with patch("modulo.db.crud.pipeline.create_pipeline", new=AsyncMock(return_value=pipeline)) as create:
+            await ms.create_pipeline(name="p")
+        assert create.await_args.kwargs["queue_timeout_seconds"] is None

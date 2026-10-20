@@ -49,34 +49,57 @@ def _run_gh(repo: str):
     return proc.returncode, proc.stdout.strip(), (proc.stderr or "").strip()
 
 
-def query_release_freeze(repo: str, attempts: int, backoff: int, run_gh=_run_gh):
-    """Return (verdict, message) where verdict is 'frozen'|'open'|'fail-closed'."""
-    last_stderr = ""
-    for attempt in range(1, attempts + 1):
-        try:
-            rc, out, err = run_gh(repo)
-        except FileNotFoundError as exc:
-            rc, out, err = None, "", f"gh executable not found: {exc}"
-        last_stderr = err or "(no error output)"
-        if rc == 0 and out.isdigit():
-            count = int(out)
-            if count > 0:
-                return "frozen", f"'release-freeze' tag present (count={count})"
-            return "open", f"no 'release-freeze' tag present (count={count})"
-        if attempt < attempts:
-            print(
-                f"::warning::release-freeze query failed (attempt {attempt}/{attempts})"
-                + (f": {err}" if err else " - no data")
-                + " - retrying",
-                file=sys.stderr,
-                flush=True,
-            )
-            time.sleep(attempt * backoff)
+def _run_query(run_gh, repo: str) -> tuple[int | None, str, str]:
+    """Run the gh query once, mapping a missing executable to an error string."""
+    try:
+        return run_gh(repo)
+    except FileNotFoundError as exc:
+        return None, "", f"gh executable not found: {exc}"
+
+
+def _interpret_query_result(rc: int | None, out: str) -> tuple[str, str] | None:
+    """Return the verdict for a successful tag-count response, else ``None``."""
+    if rc != 0 or not out.isdigit():
+        return None
+    count = int(out)
+    if count > 0:
+        return "frozen", f"'release-freeze' tag present (count={count})"
+    return "open", f"no 'release-freeze' tag present (count={count})"
+
+
+def _warn_retry(attempt: int, attempts: int, err: str) -> None:
+    """Emit the retry warning for a failed tag query."""
+    print(
+        f"::warning::release-freeze query failed (attempt {attempt}/{attempts})"
+        + (f": {err}" if err else " - no data")
+        + " - retrying",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _final_failure(attempts: int, last_stderr: str) -> tuple[str, str]:
+    """Return the fail-closed verdict after every attempt failed."""
     return (
         "fail-closed",
         f"gh api failed querying release-freeze tag after {attempts} attempts"
         + (f" - last error: {last_stderr}" if last_stderr else ""),
     )
+
+
+def query_release_freeze(repo: str, attempts: int, backoff: int, run_gh=_run_gh):
+    """Return (verdict, message) where verdict is 'frozen'|'open'|'fail-closed'."""
+    last_stderr = ""
+    for attempt in range(1, attempts + 1):
+        rc, out, err = _run_query(run_gh, repo)
+        last_stderr = err or "(no error output)"
+        verdict = _interpret_query_result(rc, out)
+        if verdict is not None:
+            return verdict
+        if attempt < attempts:
+            _warn_retry(attempt, attempts, err)
+            time.sleep(attempt * backoff)
+    return _final_failure(attempts, last_stderr)
 
 
 def main(argv):

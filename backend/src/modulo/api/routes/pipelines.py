@@ -81,6 +81,10 @@ from modulo.connectors.base import (
     node_fires_dispatch_job,
     node_routes_binding_to_connector,
 )
+from modulo.core.agent_command_sync import (
+    extract_agent_command_sync_updates,
+    sync_agent_row_commands,
+)
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event, append_audit_event_isolated
 from modulo.core.capability_scope import (
@@ -91,7 +95,7 @@ from modulo.core.capability_scope import (
 )
 from modulo.core.exceptions import SnapshotLockNotAvailableError
 from modulo.core.graph_validator import HITL_DESCRIPTION_MIN_LENGTH, GraphValidator
-from modulo.core.pipeline_engine.git_content import GitContentRefError, validate_agent_git_content_values
+from modulo.core.pipeline_engine.git_content import GitContentRefError
 from modulo.core.pipeline_engine.scatter_join import (
     FanOutConfig,
     JoinAggregateSpec,
@@ -177,6 +181,13 @@ from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.soft_delete import include_soft_deleted
 from modulo.util import sanitise_log_value as _sanitise_log_value
+
+# FAR-2008: the FAR-488a Agent-row sync lives in ``modulo.core`` (bundle import
+# must reach it without importing the API layer). These module-level aliases
+# keep the historical private names importable/patchable from this module —
+# route tests (and ``mcp_server``) reference ``_sync_agent_row_commands`` here.
+_sync_agent_row_commands = sync_agent_row_commands
+_extract_agent_command_sync_updates = extract_agent_command_sync_updates
 
 _CODE_PIPELINE_LIST = "pipeline.list"
 _CODE_ROUTES_PIPELINES = "routes.pipelines"
@@ -714,6 +725,24 @@ class PipelineCreate(TeamVisibilityMixin):
             "(inherit). Resolved once at gate fire time."
         ),
     )
+    queue_timeout_seconds: int | None = Field(
+        None,
+        ge=1,
+        le=604800,
+        description=(
+            "Per-pipeline capacity-queue timeout in seconds (1..604800 = 7 days). "
+            "null (default) = NEVER expire: a capacity-queued run waits "
+            "indefinitely and the queue-state alert is the escalation path. When "
+            "set, a pending run carrying a capacity marker older than this window "
+            "(anchored on created_at, the time it was queued) is ended as a "
+            "SUPERSESSION (status rejected, error_code queue.expired) - never a "
+            "failure, never paged. Applies ONLY to capacity-queued runs; "
+            "never-dispatched and enqueue-failed runs keep their own timeouts. "
+            "Cron pipelines should set this to their period (e.g. 3600 for an "
+            "hourly cron) so a stale fire self-drops; webhook/manual/MCP "
+            "pipelines should leave it null."
+        ),
+    )
     run_context_defaults: dict[str, Any] = Field(default_factory=dict)
     default_autonomy_level: str = "manual_approval"
     max_autonomy_level: str | None = Field(
@@ -851,6 +880,18 @@ class PipelineUpdate(TeamVisibilityMixin):
         description=(
             "Per-pipeline HITL review window override (60-604800s). Omit to leave "
             "unchanged; null clears the override (inherit the org/instance default)."
+        ),
+    )
+    queue_timeout_seconds: int | None = Field(
+        None,
+        ge=1,
+        le=604800,
+        description=(
+            "Per-pipeline capacity-queue timeout (1..604800s). Omit to leave "
+            "unchanged; null clears it (never expire - the default). On expiry a "
+            "capacity-queued run is ended as a supersession (queue.expired), not a "
+            "failure. Cron pipelines should set it to their period; webhook/"
+            "manual/MCP pipelines should leave it null."
         ),
     )
     run_context_defaults: dict[str, Any] | None = None
@@ -1069,6 +1110,8 @@ class PipelineResponse(BaseModel):
     # FAR-1257: nullable per-pipeline HITL review-window override; null = no
     # override (inherit org default, then instance default).
     hitl_review_window_seconds: int | None = None
+    # FAR-1883: nullable per-pipeline capacity-queue timeout; NULL = never.
+    queue_timeout_seconds: int | None = None
     run_context_defaults: dict[str, Any]
     default_autonomy_level: str | None = None
     # FAR-1163: nullable ceiling (NULL = effective ceiling is the default).
@@ -3022,6 +3065,7 @@ async def create_pipeline_endpoint(
                 lock_wait_timeout_seconds=req.lock_wait_timeout_seconds,
                 node_timeout_seconds=req.node_timeout_seconds,
                 hitl_review_window_seconds=req.hitl_review_window_seconds,
+                queue_timeout_seconds=req.queue_timeout_seconds,
                 run_context_defaults=req.run_context_defaults,
                 default_autonomy_level=req.default_autonomy_level,
                 max_autonomy_level=req.max_autonomy_level,
@@ -3170,97 +3214,6 @@ async def _validate_graph_save(
         )
         for issue in validation.issues
     ]
-
-
-def _extract_agent_command_sync_updates(nodes: list[dict[str, Any]]) -> dict[uuid.UUID, list[str]]:
-    """FAR-488a: full ``agent_commands`` list per distinct bound agent.
-
-    A node WITHOUT an ``agent_id`` needs no sync (its node-level command always
-    stands at snapshot time — ``_apply_agent_fields`` only materializes bound
-    agents). A node carrying no usable ``agent_commands`` value has nothing to
-    sync. The WHOLE list is carried (not just its first item) so a multi-item
-    bound node keeps every command at snapshot time — the Agent row is what
-    actually runs, and truncating to the first item would be a silent
-    divergence (FAR-488-class). When several nodes bind the SAME agent, the
-    FIRST node's list wins (deterministic; snapshot materialization applies one
-    row value to every node bound to that agent, so per-node divergence is not
-    representable).
-    """
-    updates: dict[uuid.UUID, list[str]] = {}
-    for node in nodes:
-        if not isinstance(node, dict):
-            continue
-        raw_agent_id = node.get("agent_id")
-        agent_commands = node.get("agent_commands")
-        if raw_agent_id is None or not isinstance(agent_commands, list) or not agent_commands:
-            continue
-        # Skip genuinely commandless nodes (no non-empty string item at all) so
-        # an empty-string-only list does not clobber a populated Agent row.
-        if not any(isinstance(c, str) and c for c in agent_commands):
-            continue
-        try:
-            agent_id = uuid.UUID(str(raw_agent_id))
-        except (TypeError, ValueError):
-            continue
-        updates.setdefault(agent_id, list(agent_commands))
-    return updates
-
-
-async def _sync_agent_row_commands(
-    session: AsyncSession,
-    *,
-    org_id: uuid.UUID,
-    nodes: list[dict[str, Any]],
-) -> int:
-    """FAR-488a: sync a PATCHed node ``agent_commands`` into the bound Agent row.
-
-    At snapshot time ``_apply_agent_fields`` overwrites a bound node's
-    ``agent_commands`` with the Agent row's non-NULL value, while the graph PATCH
-    used to persist node-level commands to ``graph_nodes_json`` only — so an
-    operator's PATCH read back correctly but every run silently executed the
-    stale Agent-row command (FAR-488 incident, 2026-08-29). Syncing the row
-    inside the SAME transaction as the graph write makes "what you PATCH is
-    what runs" hold.
-
-    Deliberate skip cases: a node without ``agent_id`` (nothing bound — the
-    node value already stands); an Agent row with a NULL ``agent_commands``
-    (the node value already stands at snapshot time); an incoming list equal to
-    the row value (no-op — including a multi-item list already matching the
-    node, so re-saving an unchanged multi-item bound node does NOT drop items).
-    Returns the number of Agent rows updated.
-
-    FAR-220: every incoming command list passes the shared Agent save gate
-    (:func:`validate_agent_git_content_values`) BEFORE any write. The graph
-    validator's git-content gate runs only for ``sandbox_agent`` nodes, so an
-    ``agent``-type node could otherwise carry an unpinned ``git+`` ref into
-    this sync and overwrite a gated Agent row ungated — validation would pass
-    and the poisoned row would flow into bound sandbox nodes at snapshot time
-    via ``_apply_agent_fields``. The typed :class:`GitContentRefError`
-    propagates out of the enclosing transaction, so the graph write rolls back
-    and the route handlers map it to 422.
-    """
-    updates = _extract_agent_command_sync_updates(nodes)
-    if not updates:
-        return 0
-    # Fail closed before any read or write: an unpinned ref is invalid input
-    # regardless of the row's current value, so even a no-op PATCH carrying
-    # one is rejected (the row itself must be remediated through the gated
-    # Agent save paths first).
-    for incoming_commands in updates.values():
-        validate_agent_git_content_values(agent_commands=incoming_commands)
-    result = await session.execute(select(Agent).where(Agent.id.in_(list(updates)), Agent.organisation_id == org_id))
-    changed = 0
-    for agent in result.scalars():
-        incoming = updates.get(agent.id)
-        if incoming is None or agent.agent_commands is None or agent.agent_commands == incoming:
-            continue
-        logger.info(
-            "pipeline.graph.agent_commands_synced",
-            extra={"agent_id": str(agent.id), "organisation_id": str(org_id)},
-        )
-        agent.agent_commands = list(incoming)
-        changed += 1
-    return changed
 
 
 # ---------------------------------------------------------------------------
@@ -3625,7 +3578,12 @@ async def replace_pipeline_graph_endpoint(
             # the snapshot (and any rollback replaying it) pin the command the
             # operator just saved; pre-change the sync ran AFTER the write, so
             # the snapshot carried the stale command.
-            await _sync_agent_row_commands(session, org_id=principal.organisation_id, nodes=node_data)
+            await _sync_agent_row_commands(
+                session,
+                org_id=principal.organisation_id,
+                nodes=node_data,
+                pipeline_id=pipeline_id,
+            )
             graph = await replace_pipeline_graph(
                 session,
                 pipeline_id=pipeline_id,
@@ -4107,7 +4065,7 @@ async def _apply_graph_update(
     # and it must run BEFORE the write mints the edit snapshot — the snapshot
     # materializes bound nodes from the Agent row, so syncing first pins the
     # command the operator just saved.
-    await _sync_agent_row_commands(session, org_id=org_id, nodes=node_data)
+    await _sync_agent_row_commands(session, org_id=org_id, nodes=node_data, pipeline_id=pipeline_id)
     graph = await replace_pipeline_graph(
         session,
         pipeline_id=pipeline_id,
@@ -5826,9 +5784,56 @@ async def rollback_snapshot_endpoint(
             # mirrored here: it remains a save-time-only rule (ModelBackendHub
             # has no invocation-time visibility gate), so rollbacks are judged
             # on connector bindings only.
-
-            async def _connector_team_gate_after_lock(target: PipelineSnapshot, pipeline: Pipeline) -> None:
+            #
+            # FAR-1845: the contract for the pipeline graph-write surfaces is
+            # "sync the bound Agent rows inside the SAME transaction, BEFORE the
+            # graph write" (FAR-488a: what you save/restore is what runs). The
+            # REST full-graph/PATCH writes, the MCP full-graph write, this
+            # snapshot rollback and (since FAR-2008) bundle import all honour
+            # it through the shared ``core.agent_command_sync`` helper.
+            # ``rollback_to_snapshot``
+            # rewrites ``pipeline.graph_nodes_json``
+            # from the target snapshot verbatim, so without this sync the live
+            # graph would claim the restored command while
+            # ``_materialize_agent_fields`` let the stale Agent row win at
+            # run-snapshot time — the rollback would appear to change the
+            # command and the run would execute the old one. The caller owns
+            # the sync because ``rollback_to_snapshot`` (db layer) cannot import
+            # api (import-linter db-does-not-import-api), exactly as
+            # the REST graph-write endpoints own theirs.
+            async def _rollback_post_lock_gate(target: PipelineSnapshot, pipeline: Pipeline) -> None:
                 snapshot_nodes = target.graph_json.get("nodes", []) if isinstance(target.graph_json, dict) else []
+                # Sync the bound Agent rows FIRST — never behind an early
+                # return. The connector-team gate below short-circuits a graph
+                # with no connector bindings, but the Agent-row sync must run
+                # for every restored snapshot regardless of connector content.
+                synced = await _sync_agent_row_commands(
+                    session,
+                    org_id=pipeline.organisation_id,
+                    nodes=snapshot_nodes,
+                    pipeline_id=pipeline_id,
+                )
+                # FAR-2008: a rollback can rewrite a SHARED Agent row's commands
+                # (one Agent may be bound by several pipelines). The structured
+                # log line attributes the agent, but only an audit event makes
+                # the mutation durable and queryable, so emit one in the SAME
+                # transaction whenever the sync actually changed a row — naming
+                # every changed Agent id, not just a count, so the audit chain
+                # identifies the mutated rows. A no-op rollback writes nothing
+                # and therefore records nothing.
+                if synced:
+                    await append_audit_event(
+                        session,
+                        org_id=pipeline.organisation_id,
+                        event_type="pipeline.agent_commands_synced",
+                        actor_user_id=principal.account_id,
+                        resource_type="pipeline",
+                        resource_id=pipeline_id,
+                        payload_json={
+                            "agent_count": len(synced),
+                            "agent_ids": [str(agent_id) for agent_id in synced],
+                        },
+                    )
                 stored_bindings = extract_connector_bindings(snapshot_nodes)
                 if not stored_bindings:
                     return
@@ -5849,7 +5854,7 @@ async def rollback_snapshot_endpoint(
                 is_guardrail_admin=_is_guardrail_admin(principal),
                 grants_deny_privilege=_grants_deny_privilege(principal),
                 grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
-                post_lock_gate=_connector_team_gate_after_lock,
+                post_lock_gate=_rollback_post_lock_gate,
             )
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
         await _handle_graph_write_denials(
@@ -5858,6 +5863,13 @@ async def rollback_snapshot_endpoint(
             pipeline_id=pipeline_id,
             exc=exc,
         )
+    except GitContentRefError as exc:
+        # FAR-1845/FAR-220: the rollback's Agent-row command sync validated an
+        # unpinned git content ref in the restored snapshot and failed closed
+        # INSIDE the transaction — the rollback is rolled back with it. Surface
+        # 422 instead of the decorator's 500, the same mapping every graph-write
+        # endpoint uses; a poisoned ref must never be restored silently.
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -6540,7 +6552,7 @@ async def _save_graph(
     # bound Agent rows BEFORE the write mints the edit snapshot, so the snapshot
     # materializes the command the operator just saved rather than the pre-sync
     # Agent-row value (a no-op when the node commands already mirror the row).
-    await _sync_agent_row_commands(session, org_id=org_id, nodes=nodes)
+    await _sync_agent_row_commands(session, org_id=org_id, nodes=nodes, pipeline_id=pipeline_id)
     return await replace_pipeline_graph(
         session,
         pipeline_id=pipeline_id,

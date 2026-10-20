@@ -122,7 +122,7 @@
                     <button
                       type="button"
                       class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors disabled:opacity-50"
-                      :class="t.active ? 'bg-success/10 text-success hover:bg-success/20' : 'bg-muted text-muted-foreground hover:bg-muted/80'"
+                      :class="t.active ? 'bg-success/10 text-success-text hover:bg-success/20' : 'bg-muted text-muted-foreground hover:bg-muted/80'"
                       :disabled="triggerToggling[t.id]"
                       data-testid="settings-triggers-toggle"
                       @click="toggleActive(t)"
@@ -866,7 +866,7 @@ const agentReportedConfidenceDetail = computed(() =>
 )
 
 function outcomeBadgeClass(classification: string | null | undefined): string {
-  if (classification === OUTCOME_DELIVERED) return 'bg-success/10 text-success'
+  if (classification === OUTCOME_DELIVERED) return 'bg-success/10 text-success-text'
   if (classification === 'no_delivery') return 'bg-amber-500/10 text-amber-600'
   return 'bg-muted text-muted-foreground'
 }

@@ -181,6 +181,10 @@ async def _sweep_never_dispatched(db_engine: AsyncEngine, org_id: uuid.UUID) -> 
             wl_window=_WL_WINDOW,
             stranded_rows=[],
             terminalised_run_ids=[],
+            # FAR-1883: this harness pins the never-dispatched leg only; the
+            # seeded pipelines carry no queue_timeout so the queue-expiry leg
+            # can never fire here (an empty collector is the faithful value).
+            queue_expired_run_ids=[],
         )
 
 

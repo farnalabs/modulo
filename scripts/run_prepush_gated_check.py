@@ -76,6 +76,17 @@ def _git_diff_names(base: str = "origin/main", *, _retry: bool = True) -> list[s
     return [line for line in result.stdout.splitlines() if line]
 
 
+def _consume_glob_star(pattern: str, index: int) -> tuple[str, int]:
+    """Translate a ``*`` or ``**`` token into ``(regex_fragment, next_index)``."""
+    n = len(pattern)
+    if index + 1 < n and pattern[index + 1] == "*":
+        index += 2
+        if index < n and pattern[index] == "/":
+            return "(?:.*/)?", index + 1
+        return ".*", index
+    return "[^/]*", index + 1
+
+
 def _glob_to_regex(pattern: str) -> re.Pattern[str]:
     """Translate a repository-relative glob into a compiled regex.
 
@@ -98,16 +109,8 @@ def _glob_to_regex(pattern: str) -> re.Pattern[str]:
     while i < n:
         ch = pattern[i]
         if ch == "*":
-            if i + 1 < n and pattern[i + 1] == "*":
-                i += 2
-                if i < n and pattern[i] == "/":
-                    out.append("(?:.*/)?")
-                    i += 1
-                else:
-                    out.append(".*")
-            else:
-                out.append("[^/]*")
-                i += 1
+            fragment, i = _consume_glob_star(pattern, i)
+            out.append(fragment)
         elif ch == "?":
             out.append("[^/]")
             i += 1

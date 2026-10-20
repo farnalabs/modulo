@@ -36,7 +36,7 @@
       />
     </div>
     <p v-if="passError" class="text-sm text-destructive">{{ passError }}</p>
-    <p v-if="passSuccess" class="text-sm text-success">{{ passSuccess }}</p>
+    <p v-if="passSuccess" class="text-sm text-success-text">{{ passSuccess }}</p>
     <Button type="submit" :disabled="passSaving" class="border border-primary/30 w-full sm:w-auto" data-testid="change-password-submit">
       {{ passSaving ? $t('common.saving') : $t('views.MyProfileView.update_password') }}
     </Button>
