@@ -104,24 +104,35 @@ async def _seed_pipeline(
     queue_timeout_seconds: int | None = None,
 ) -> uuid.UUID:
     pipeline_id = uuid.uuid4()
+    # The test_migration_* suites seed a private database stalled at their own
+    # alembic revision, so ``pipelines.queue_timeout_seconds`` (0322) may not
+    # exist. Only name the column when the caller sets a value: at head the
+    # NULL default is equivalent, and on a pinned revision its omission is
+    # required. This is the same live-column discipline ``_seed_run`` applies
+    # for later-migration ``runs`` columns.
+    queue_timeout_column = "queue_timeout_seconds, " if queue_timeout_seconds is not None else ""
+    queue_timeout_value = ":qts, " if queue_timeout_seconds is not None else ""
+    params: dict[str, Any] = {
+        "id": str(pipeline_id),
+        "oid": str(org_id),
+        "name": name,
+        "uid": str(account_id),
+        "mcr": max_concurrent,
+    }
+    if queue_timeout_seconds is not None:
+        params["qts"] = queue_timeout_seconds
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
                 "INSERT INTO pipelines (id, organisation_id, name, account_id, "
                 "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "queue_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
-                "VALUES (:id, :oid, :name, :uid, :mcr, 30, 300, :qts, "
-                "'{}'::json, '[]'::json, 'manual_approval', 'org')"
+                + queue_timeout_column
+                + "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
+                "VALUES (:id, :oid, :name, :uid, :mcr, 30, 300, "
+                + queue_timeout_value
+                + "'{}'::json, '[]'::json, 'manual_approval', 'org')"
             ),
-            {
-                "id": str(pipeline_id),
-                "oid": str(org_id),
-                "name": name,
-                "uid": str(account_id),
-                "mcr": max_concurrent,
-                "qts": queue_timeout_seconds,
-            },
+            params,
         )
     return pipeline_id
 
