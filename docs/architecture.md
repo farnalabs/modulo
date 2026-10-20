@@ -449,26 +449,31 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   | Manual / MCP | Exempt — no backpressure check | A human explicitly asked for this run; capacity gates may still DEFER its dispatch, but they do not refuse it. |
 
   Invariant: **a pending run may wait indefinitely while its pipeline makes
-  progress; a pipeline making NO progress stops accepting new work.** Every
-  refusal is recorded: the webhook arm re-writes its `backpressure_skipped`
-  event in a fresh transaction after the main transaction unwinds (otherwise
-  the in-transaction write would roll back with the refusal), and all three
-  refusing funnels record the same `validation_result`, so an operator sees the
-  skip in `/api/v1/admin/trigger-events` and the per-trigger event log, and it
-  is counted in the capacity-outcome summary. The FAR-1344 wedge alert
-  evaluates the same predicate on every dispatcher-reconcile tick, pairing the
-  skip with a notification. Webhook replays bypass the guard (an intentional
-  re-fire must never be refused). The guard fails OPEN on a read error (admits,
-  with a warning) and is today shape-based: a slow-but-progressing pipeline can
-  still be refused until FAR-1355's progress-based detection replaces it.
+  progress; a pipeline making NO progress stops accepting new work.** A
+  delivery that IS admitted and then capacity-queued is not lost: it waits
+  indefinitely by default (FAR-1883), and a pipeline may bound that wait with
+  its nullable `queue_timeout_seconds` (anchored on the queued run's
+  `created_at`), whose expiry ENDS the run as a supersession (`rejected` /
+  `queue.expired`) - visible and filterable, but out of failure counts and
+  paging, with the queue-state alert as the escalation path whether or not a
+  timeout is configured. Every refusal is recorded: the webhook arm re-writes
+  its `backpressure_skipped` event in a fresh transaction after the main
+  transaction unwinds (otherwise the in-transaction write would roll back with
+  the refusal), and all three refusing funnels record the same
+  `validation_result`, so an operator sees the skip in
+  `/api/v1/admin/trigger-events` and the per-trigger event log, and it is
+  counted in the capacity-outcome summary. The FAR-1344 wedge alert evaluates
+  the same predicate on every dispatcher-reconcile tick, pairing the skip with
+  a notification. Webhook replays bypass the guard (an intentional re-fire must
+  never be refused). The guard fails OPEN on a read error (admits, with a
+  warning) and is today shape-based: a slow-but-progressing pipeline can still
+  be refused until FAR-1355's progress-based detection replaces it.
 - **Legacy stale-run sweep:** pending runs past the never-dispatched window
   (`SAQ_NEVER_DISPATCHED_WINDOW`) and legacy non-SAQ `running` rows with 5+
-  claims (`worker_lost`) are terminalised or re-dispatched as before.
-  Capacity-marked runs **wait indefinitely by default**; a pipeline may opt
-  into a bounded wait with `queue_timeout_seconds` (anchored on `created_at`),
-  whose expiry ENDS the run as a supersession (`rejected` / `queue.expired`) -
-  never a failure. One TTL per state class: never-dispatched and
-  enqueue-failed rows keep their own windows.
+  claims (`worker_lost`) are terminalised or re-dispatched as before. There is
+  no instance-wide queued TTL: one TTL per state class, so capacity-marked
+  rows are bounded only by the pipeline's `queue_timeout_seconds` (above),
+  while never-dispatched and enqueue-failed rows keep their own windows.
 
 #### Runner capacity gate (FAR-594 D8)
 
