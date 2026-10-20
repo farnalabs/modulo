@@ -1,0 +1,74 @@
+name: "Backup / restore + upgrade gate (nightly)"
+
+# FAR-19. Proves the self-hosted disaster-recovery path end to end against a
+# real Postgres: `alembic upgrade heads` from scratch -> seed -> `modulo
+# backup` (pg_dump) -> `modulo restore` into a fresh database -> `alembic
+# downgrade -1` -> `alembic upgrade heads`, asserting the seeded rows survive
+# every step. Driven entirely by scripts/verify_backup_restore.py; the
+# operator-facing counterpart is docs/operations/backup.md.
+#
+# Scheduled + on-demand, never per PR: the gate needs a Postgres server and the
+# Postgres client tools, and a full migration chain from scratch.
+#
+# This is NOT the bundled (native) install round trip - that is exercised by
+# native-release-smoke.yml against a published release artifact.
+
+on:
+  schedule:
+    - cron: "30 4 * * *" # 04:30 UTC daily
+  workflow_dispatch:
+
+concurrency:
+  # Per-workflow group (the repo's convention for standalone workflows, e.g.
+  # `bdd-${{ github.ref }}`): a manual dispatch must never cancel the nightly
+  # run mid-migration, and this gate must not queue behind - or cancel -
+  # ordinary CI on main.
+  group: backup-restore-nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backup-restore-gate:
+    name: Backup -> restore -> downgrade -> upgrade
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: modulo_test
+          POSTGRES_PASSWORD: modulo_test
+          POSTGRES_DB: modulo_test
+        ports:
+          - 5432:5432
+        # The job does not start until the server accepts connections, so the
+        # script never races the container.
+        options: >-
+          --health-cmd "pg_isready -U modulo_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install Postgres client tools
+        # `modulo backup` and `modulo restore` shell out to pg_dump / psql; a
+        # client older than the server is refused by pg_dump, which fails this
+        # step rather than producing a partial dump.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-16
+          pg_dump --version
+          psql --version
+      - name: Install backend dependencies
+        run: uv sync --frozen --project backend
+      - name: Run the backup / restore / upgrade gate
+        timeout-minutes: 20
+        env:
+          DATABASE_URL: postgresql+asyncpg://modulo_test:modulo_test@localhost:5432/modulo_test
+        run: uv run --project backend --no-sync python scripts/verify_backup_restore.py

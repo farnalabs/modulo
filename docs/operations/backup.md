@@ -153,6 +153,130 @@ ran to completion.
 
 See the feature's contract line in `docs/product-map/system/runtime.md`.
 
+## Upgrade Path: Dump Before Migrating
+
+A schema change is a migration event. Take a dump before running
+`alembic upgrade heads`, so a bad upgrade has a recovery point that does not
+depend on the migration itself. This section is the backup/restore half of the
+version-upgrade procedure in
+[`docs/upgrade-process.md`](../upgrade-process.md).
+
+All commands below run from `backend/`, where `alembic.ini` lives.
+
+### 1. Take the dump
+
+```bash
+cd /opt/modulo/backend
+uv run modulo backup --db-url "$DATABASE_URL" --output-dir /backups/pre-upgrade
+```
+
+That writes `database.sql` (a `pg_dump` of schema and data), the three
+LangGraph checkpoint JSON exports (`checkpoints.json`,
+`checkpoint_blobs.json`, `checkpoint_writes.json`),
+`credentials_references.json`, and a `backup-info.json` manifest recording the
+schema head and a SHA-256 checksum per file. `pg_dump` and `psql` must be on
+`PATH`, at the same major version as the server.
+
+### 2. Upgrade and check the result
+
+```bash
+uv run alembic upgrade heads
+uv run alembic current
+```
+
+`alembic current` prints the revision the database is recorded at, suffixed
+`(head)` when it matches the chain head. Use `heads` (plural) to match the
+single head the chain has today - `alembic heads` prints one revision.
+
+### 3. If the upgrade breaks: restore the dump
+
+Check the archive first, then restore it:
+
+```bash
+uv run modulo restore /backups/pre-upgrade --db-url "$DATABASE_URL" --dry-run
+uv run modulo restore /backups/pre-upgrade --db-url "$DATABASE_URL" --yes
+```
+
+`restore` verifies every file against the manifest's checksums before it
+touches the database; `--dry-run` performs those checks and stops. Because
+`database.sql` is a dump of the whole database, restoring it also restores the
+pre-upgrade `alembic_version` row, leaving the database recorded at the
+revision it was dumped from.
+
+### What `alembic downgrade -1` does, and what it does not
+
+`alembic downgrade -1` moves the schema back exactly one revision. The nightly
+gate runs it, then upgrades back to head, to prove the head migration's
+`downgrade()` executes against a real, populated database:
+
+```bash
+uv run alembic downgrade -1
+uv run alembic current        # the head's parent revision, not head
+uv run alembic upgrade heads  # back to head
+```
+
+Two things it does not do:
+
+- **It moves one revision, not "to the previous release".** A release can carry
+  many migrations; getting back before it takes as many steps as it added, and
+  reversing *data* changes is not possible.
+- **It does not restore data.** Anything an `upgrade()` removed or rewrote is
+  not reconstructed.
+
+The gate therefore only proves that the head migration's downgrade works. The
+recovery path for a bad upgrade is the dump, not the downgrade.
+
+### What the nightly gate proves
+
+`.github/workflows/backup-restore-nightly.yml` runs
+`scripts/verify_backup_restore.py` at 04:30 UTC daily and on demand. Against a
+throwaway Postgres 16 it:
+
+1. runs `alembic upgrade heads` from an empty database and asserts the recorded
+   revision is head;
+2. seeds an organisation, account, membership, pipeline, snapshot and run
+   through the ORM;
+3. creates the LangGraph checkpoint tables exactly as app startup does;
+4. runs `modulo backup` and asserts `database.sql`, `backup-info.json` and
+   `checkpoints.json` were produced;
+5. runs `modulo restore` into a second, empty database and asserts the seeded
+   rows are intact;
+6. runs `alembic downgrade -1` and asserts the recorded revision is the head's
+   parent - a downgrade that was skipped fails the gate rather than passing
+   silently;
+7. runs `alembic upgrade heads` and asserts the revision is back at head, with
+   the seeded rows still intact.
+
+A `downgrade()` that cannot run, a dump that cannot be restored, or data lost
+in either direction fails the job.
+
+### Run the gate by hand
+
+The script creates and drops its own scratch databases (`<db>_backup_src` and
+`<db>_restored`) on the server it is pointed at. It never modifies the database
+named in the URL.
+
+```bash
+docker run -d --rm --name modulo-dr-gate \
+  -e POSTGRES_USER=modulo_test -e POSTGRES_PASSWORD=modulo_test \
+  -e POSTGRES_DB=modulo_test -p 55555:5432 postgres:16-alpine
+
+export DATABASE_URL=postgresql+asyncpg://modulo_test:modulo_test@localhost:55555/modulo_test
+uv run --project backend python scripts/verify_backup_restore.py
+```
+
+`--database-url` overrides `$DATABASE_URL`. `--keep-databases` leaves the two
+scratch databases and the backup artefacts behind for inspection. If `pg_dump`
+or `psql` is missing from `PATH` the script exits non-zero naming the missing
+tool; if `SECRET_KEY` or `FERNET_KEY` is unset it prints a notice and generates
+a throwaway value for that run rather than requiring deployment secrets.
+
+To trigger the CI job manually:
+
+```bash
+gh workflow run backup-restore-nightly.yml
+```
+
 ## Full Restoration Walkthrough
 
 ```bash
