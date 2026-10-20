@@ -15,6 +15,7 @@ from collections.abc import AsyncGenerator, Generator
 from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -294,11 +295,44 @@ def _make_org() -> MagicMock:
     org = MagicMock()
     org.id = _ORG_ID
     org.daily_spend_limit = Decimal("10.00")
-    org.max_run_cost_cents = 500
-    org.spend_ceiling_cents = 10_000
-    org.org_cumulative_spend_cents = 2_500
     org.settings_json = {"cost_controls": {"currency": "EUR", "billing_period": "annual"}}
     return org
+
+
+def _cost_state(**kw: Any) -> MagicMock:
+    """A cost-state row mock (FAR-1833)."""
+    state = MagicMock()
+    state.max_run_cost_cents = kw.get("max_run_cost_cents")
+    state.spend_ceiling_cents = kw.get("spend_ceiling_cents")
+    state.org_cumulative_spend_cents = kw.get("org_cumulative_spend_cents", 0)
+    return state
+
+
+def _cost_state_store_cm(store: dict[str, Any]) -> ExitStack:
+    """Patch the cost-state CRUD (FAR-1833) so a route runs without a real DB.
+
+    ``store`` is an in-memory row: reads return it, upserts merge the named
+    columns into it, and the advisory lock is a no-op.
+    """
+    stack = ExitStack()
+
+    async def _get(session: Any, org_id: Any) -> MagicMock:
+        return _cost_state(**store)
+
+    async def _upsert(session: Any, org_id: Any, *, provided: dict[str, Any]) -> None:
+        store.update(provided)
+
+    stack.enter_context(patch(f"{_PREFIX}get_org_cost_state", new=AsyncMock(side_effect=_get)))
+    stack.enter_context(patch(f"{_PREFIX}upsert_org_cost_state", new=AsyncMock(side_effect=_upsert)))
+    stack.enter_context(patch(f"{_PREFIX}lock_org_cost_state", new=AsyncMock()))
+    return stack
+
+
+_DEFAULT_STORE: dict[str, Any] = {
+    "max_run_cost_cents": 500,
+    "spend_ceiling_cents": 10_000,
+    "org_cumulative_spend_cents": 2_500,
+}
 
 
 def test_update_cost_controls_applies_all_fields(client: tuple[TestClient, AsyncMock]) -> None:
@@ -306,6 +340,7 @@ def test_update_cost_controls_applies_all_fields(client: tuple[TestClient, Async
     org = _make_org()
     teams_result = MagicMock()
     teams_result.items = []
+    store = dict(_DEFAULT_STORE)
 
     async def _merge_patch(session, organisation_id, patch=None, delete_keys=None):
         settings = dict(org.settings_json or {})
@@ -318,6 +353,7 @@ def test_update_cost_controls_applies_all_fields(client: tuple[TestClient, Async
         stack.enter_context(patch(f"{_PREFIX}list_teams", new=AsyncMock(return_value=teams_result)))
         stack.enter_context(_rls_cm())
         stack.enter_context(patch(f"{_PREFIX}update_org_settings_patch", new=_merge_patch))
+        stack.enter_context(_cost_state_store_cm(store))
         resp = http.put(
             "/api/v1/admin/costs/controls",
             json={
@@ -336,6 +372,9 @@ def test_update_cost_controls_applies_all_fields(client: tuple[TestClient, Async
     assert body["budget"] == 25.5
     assert body["max_run_cost"] == 3.0
     assert body["spend_ceiling"] == 90.0
+    # FAR-1833: the ceilings are written to the cost-state store, not the org row.
+    assert store["max_run_cost_cents"] == 300
+    assert store["spend_ceiling_cents"] == 9000
     assert body["alert_thresholds"] == [50.0, 80.0]
     assert body["circuit_breaker_enabled"] is True
     assert body["currency"] == "GBP"
@@ -351,7 +390,9 @@ def test_update_cost_controls_no_settings_only_leaves_org_untouched() -> None:
     org.daily_spend_limit = None
     org.settings_json = None
     req = UpdateCostControlsRequest(budget=None)
-    assert _cost_controls_patch(org, req) is None
+    settings_patch, cost_state_columns = _cost_controls_patch(org, req)
+    assert settings_patch is None
+    assert not cost_state_columns
     assert org.settings_json is None
 
 
@@ -393,7 +434,8 @@ def test_get_spend_ceiling_assert_error_matrix(client: tuple[TestClient, AsyncMo
         method="get",
         url="/api/v1/admin/costs/ceiling",
         json_body=None,
-        patch_target="get_organisation",
+        # FAR-1833: the GET ceiling route reads the cost-state row, not the org row.
+        patch_target="get_org_cost_state",
         expected={(_PROG, 501), (_SQL, 503), (_RUNTIME, 500)},
     )
 
@@ -403,6 +445,7 @@ def test_get_spend_ceiling_computes_remaining(client: tuple[TestClient, AsyncMoc
     with ExitStack() as stack:
         stack.enter_context(patch(f"{_PREFIX}get_organisation", new=AsyncMock(return_value=_make_org())))
         stack.enter_context(_rls_cm())
+        stack.enter_context(_cost_state_store_cm(dict(_DEFAULT_STORE)))
         resp = http.get("/api/v1/admin/costs/ceiling")
 
     assert resp.status_code == 200, resp.text
@@ -438,15 +481,43 @@ def test_set_spend_ceiling_assert_error_matrix(client: tuple[TestClient, AsyncMo
 def test_set_spend_ceiling_partial_update_keeps_other_ceiling(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     org = _make_org()
+    store = dict(_DEFAULT_STORE)
     with ExitStack() as stack:
         stack.enter_context(patch(f"{_PREFIX}get_organisation", new=AsyncMock(return_value=org)))
         stack.enter_context(_rls_cm())
+        stack.enter_context(_cost_state_store_cm(store))
         resp = http.put("/api/v1/admin/costs/ceiling", json={"spend_ceiling": None})
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["spend_ceiling"] is None
     assert body["max_run_cost"] == 5.0
+    # FAR-1833: only the named column is written — the per-run ceiling survives.
+    assert store["spend_ceiling_cents"] is None
+    assert store["max_run_cost_cents"] == 500
+
+
+def test_set_spend_ceiling_empty_body_writes_nothing(client: tuple[TestClient, AsyncMock]) -> None:
+    """FAR-1833: a request naming neither ceiling is a read-back, not a write.
+
+    Both fields are absent (not explicit ``null``), so ``cost_state_columns`` is
+    empty and the route must skip the advisory lock + upsert while still
+    returning the org's current ceilings.
+    """
+    http, _session = client
+    org = _make_org()
+    store = dict(_DEFAULT_STORE)
+    with ExitStack() as stack:
+        stack.enter_context(patch(f"{_PREFIX}get_organisation", new=AsyncMock(return_value=org)))
+        stack.enter_context(_rls_cm())
+        stack.enter_context(_cost_state_store_cm(store))
+        resp = http.put("/api/v1/admin/costs/ceiling", json={})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["max_run_cost"] == 5.0
+    assert body["spend_ceiling"] == 100.0
+    assert store == dict(_DEFAULT_STORE)
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import base64
 import contextlib
 import json
 import time
+import urllib.parse
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
@@ -721,7 +722,7 @@ class TestOidcJsonResponseShapes:
         with patch("modulo.auth.sso.httpx.AsyncClient") as client_type:
             client_type.return_value.__aenter__.return_value = client
             with pytest.raises(ValueError, match="OIDC token response must be a JSON object"):
-                await _exchange_code("https://issuer.example/token", "client", "secret", "code", "callback")
+                await _exchange_code("https://issuer.example/token", "client", "secret", "code", "callback", "verifier")
 
     async def test_token_exchange_accepts_object_json(self) -> None:
         from modulo.auth.sso import _exchange_code
@@ -734,9 +735,40 @@ class TestOidcJsonResponseShapes:
 
         with patch("modulo.auth.sso.httpx.AsyncClient") as client_type:
             client_type.return_value.__aenter__.return_value = client
-            result = await _exchange_code("https://issuer.example/token", "client", "secret", "code", "callback")
+            result = await _exchange_code(
+                "https://issuer.example/token", "client", "secret", "code", "callback", "verifier"
+            )
 
         assert result == payload
+
+    async def test_token_exchange_presents_the_pkce_verifier(self) -> None:
+        """FAR-1982: the code exchange must POST ``code_verifier`` (RFC 7636 §4.5).
+
+        Regression: pre-fix the exchange posted only grant_type/code/redirect_uri/
+        client_id/client_secret, so the authorization code was not bound to the
+        client instance that began the flow.
+        """
+        from modulo.auth.sso import _exchange_code
+
+        response = MagicMock()
+        response.json.return_value = {"id_token": "header.payload.signature"}
+        client = AsyncMock()
+        client.post.return_value = response
+
+        with patch("modulo.auth.sso.httpx.AsyncClient") as client_type:
+            client_type.return_value.__aenter__.return_value = client
+            await _exchange_code(
+                "https://issuer.example/token",
+                "client",
+                "secret",
+                "the-code",
+                "callback",
+                "the-code-verifier",
+            )
+
+        posted = client.post.call_args.kwargs["data"]
+        assert posted["code"] == "the-code"
+        assert posted["code_verifier"] == "the-code-verifier"
 
 
 # ---------------------------------------------------------------------------
@@ -925,7 +957,7 @@ class TestOidcGetAuthorizeUrl:
                 "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
             }
 
-            url, raw_state = await oidc_get_authorize_url(
+            url, raw_state, _nonce, _code_verifier = await oidc_get_authorize_url(
                 "google", settings, "http://localhost/callback", session, session
             )
 
@@ -959,7 +991,7 @@ class TestOidcGetAuthorizeUrl:
                 "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
             }
 
-            url, _ = await oidc_get_authorize_url("google", settings, "http://localhost/cb", session, session)
+            url, *_ = await oidc_get_authorize_url("google", settings, "http://localhost/cb", session, session)
 
             assert "scope=openid+email+profile" in url
 
@@ -986,9 +1018,40 @@ class TestOidcGetAuthorizeUrl:
                 "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
             }
 
-            url, _ = await oidc_get_authorize_url("google", settings, "http://localhost/cb", session, session)
+            url, *_ = await oidc_get_authorize_url("google", settings, "http://localhost/cb", session, session)
 
             assert "scope=openid+email" in url
+
+    async def test_authorize_url_carries_nonce_and_s256_pkce_challenge(self) -> None:
+        """FAR-1982: the authorize request must bind the ID token and the code.
+
+        Regression: pre-fix the URL carried only client_id/response_type/scope/
+        redirect_uri/state — no ``nonce`` and no PKCE parameters — so a replayed
+        authorization response could not be bound to this request.
+        """
+        from modulo.auth.oauth import compute_pkce_challenge
+        from modulo.auth.sso import oidc_get_authorize_url
+
+        settings = _override()
+        session = _mock_session()
+        with patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc:
+            mock_disc.return_value = {
+                "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+            }
+            url, raw_state, nonce, code_verifier = await oidc_get_authorize_url(
+                "google", settings, "http://localhost/callback", session, session
+            )
+
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        assert params["nonce"] == [nonce]
+        assert params["code_challenge_method"] == ["S256"]
+        # The challenge is the S256 hash of the verifier the server keeps back.
+        assert params["code_challenge"] == [compute_pkce_challenge(code_verifier)]
+        # A nonce/verifier is minted per login, never reused from the state.
+        assert nonce
+        assert code_verifier
+        assert nonce != raw_state
+        assert 43 <= len(code_verifier) <= 128
 
 
 # ---------------------------------------------------------------------------
@@ -1048,6 +1111,8 @@ class TestOidcProcessCallback:
                 session,
                 session,
                 "http://localhost/callback",
+                expected_nonce="test-nonce",
+                code_verifier="test-verifier",
             )
 
             assert result["access_token"] == "at"
@@ -1063,7 +1128,14 @@ class TestOidcProcessCallback:
 
         with pytest.raises(ValueError, match="CSRF"):
             await oidc_process_callback(
-                "code", "tampered-state", settings, session, session, "http://localhost/callback"
+                "code",
+                "tampered-state",
+                settings,
+                session,
+                session,
+                "http://localhost/callback",
+                expected_nonce="test-nonce",
+                code_verifier="test-verifier",
             )
 
     async def test_raises_when_provider_not_found_after_state_check(self) -> None:
@@ -1074,7 +1146,16 @@ class TestOidcProcessCallback:
         signed = sign_state("ghost:state", settings.secret_key)
 
         with pytest.raises(ValueError, match="not found"):
-            await oidc_process_callback("code", signed, settings, session, session, "http://localhost/callback")
+            await oidc_process_callback(
+                "code",
+                signed,
+                settings,
+                session,
+                session,
+                "http://localhost/callback",
+                expected_nonce="test-nonce",
+                code_verifier="test-verifier",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1607,15 +1688,18 @@ class TestSamlRoutesExtended:
 
 class TestOidcCallbackEndpointExtended:
     def test_success_redirects_with_tokens(self, client: TestClient) -> None:
-        from modulo.api.routes.sso import _OIDC_LOGIN_STATE_COOKIE
+        from modulo.api.routes.sso import _OIDC_FLOW_COOKIE
         from modulo.auth.sso import sign_state
 
         settings = _override()
         raw_state = "state-xyz"
         signed = sign_state(f"google:{raw_state}", settings.secret_key)
-        # FAR-1979: the callback requires the login-time browser-binding cookie
-        # to match the state, so seed it as the login redirect would.
-        client.cookies.set(_OIDC_LOGIN_STATE_COOKIE, sign_state(raw_state, settings.secret_key))
+        # FAR-1982: the callback requires the login-time flow cookie to match the
+        # returned state, so seed it as the login redirect would.
+        client.cookies.set(
+            _OIDC_FLOW_COOKIE,
+            sign_state(f"{raw_state}:test-nonce:test-verifier", settings.secret_key),
+        )
 
         id_token = (
             base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
@@ -1688,7 +1772,7 @@ class TestOidcGetAuthorizeUrlDb:
             mock_disc.return_value = {
                 "authorization_endpoint": "https://example.auth0.com/authorize",
             }
-            url, _ = await oidc_get_authorize_url("auth0", settings, "http://localhost/cb", session, session)
+            url, *_ = await oidc_get_authorize_url("auth0", settings, "http://localhost/cb", session, session)
             assert "client_id=db-client-id" in url
             assert "example.auth0.com/authorize" in url
             assert "scope=openid+email" in url
@@ -1747,7 +1831,14 @@ class TestOidcProcessCallbackDb:
             }
 
             result = await oidc_process_callback(
-                "auth-code", signed, settings, session, session, "http://localhost/callback"
+                "auth-code",
+                signed,
+                settings,
+                session,
+                session,
+                "http://localhost/callback",
+                expected_nonce="test-nonce",
+                code_verifier="test-verifier",
             )
 
             assert result["access_token"] == "at-db"
@@ -1757,6 +1848,7 @@ class TestOidcProcessCallbackDb:
                 "db-client-secret",
                 "auth-code",
                 "http://localhost/callback",
+                "test-verifier",
             )
 
 
@@ -1910,7 +2002,14 @@ class TestSystemSessionProviderResolution:
             }
 
             await oidc_process_callback(
-                "auth-code", signed, settings, system_session, app_session, "http://localhost/callback"
+                "auth-code",
+                signed,
+                settings,
+                system_session,
+                app_session,
+                "http://localhost/callback",
+                expected_nonce="test-nonce",
+                code_verifier="test-verifier",
             )
 
         mock_set_rls.assert_awaited_once_with(app_session, org_id)
@@ -2003,7 +2102,16 @@ class TestOidcEndpointHostAllowlist:
             mock_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
             mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
 
-            result = await oidc_process_callback("code", signed, settings, session, session, "http://cb")
+            result = await oidc_process_callback(
+                "code",
+                signed,
+                settings,
+                session,
+                session,
+                "http://cb",
+                expected_nonce="test-nonce",
+                code_verifier="test-verifier",
+            )
 
         assert result["access_token"] == "at"
         mock_ex.assert_awaited_once()
@@ -2034,7 +2142,16 @@ class TestOidcEndpointHostAllowlist:
             patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
             pytest.raises(ValueError, match="Rejected OIDC token endpoint"),
         ):
-            await oidc_process_callback("code", signed, settings, session, session, "http://cb")
+            await oidc_process_callback(
+                "code",
+                signed,
+                settings,
+                session,
+                session,
+                "http://cb",
+                expected_nonce="test-nonce",
+                code_verifier="test-verifier",
+            )
 
         mock_ex.assert_not_called()
 
@@ -2072,7 +2189,16 @@ class TestOidcEndpointHostAllowlist:
             mock_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
             mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
 
-            result = await oidc_process_callback("code", signed, settings, session, session, "http://cb")
+            result = await oidc_process_callback(
+                "code",
+                signed,
+                settings,
+                session,
+                session,
+                "http://cb",
+                expected_nonce="test-nonce",
+                code_verifier="test-verifier",
+            )
 
         assert result["access_token"] == "at"
         mock_verify.assert_awaited_once()
@@ -2089,7 +2215,7 @@ class TestOidcEndpointHostAllowlist:
                 "authorization_endpoint": "https://oauth2.googleapis.com/authorize",
                 "issuer": self._ISSUER,
             }
-            url, _ = await oidc_get_authorize_url("google", settings, "http://cb", session, session)
+            url, *_ = await oidc_get_authorize_url("google", settings, "http://cb", session, session)
 
         assert url.startswith("https://oauth2.googleapis.com/authorize")
 
@@ -2126,10 +2252,21 @@ class TestOidcEndpointHostAllowlist:
             mock_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
             mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
 
-            result = await oidc_process_callback("code", signed, settings, session, session, "http://cb")
+            result = await oidc_process_callback(
+                "code",
+                signed,
+                settings,
+                session,
+                session,
+                "http://cb",
+                expected_nonce="test-nonce",
+                code_verifier="test-verifier",
+            )
 
         assert result["access_token"] == "at"
-        mock_ex.assert_awaited_once_with("https://issuer.example/token", "cid", "client-secret", "code", "http://cb")
+        mock_ex.assert_awaited_once_with(
+            "https://issuer.example/token", "cid", "client-secret", "code", "http://cb", "test-verifier"
+        )
         mock_verify.assert_awaited_once()
 
 
@@ -2251,7 +2388,14 @@ class TestOidcMultiHostIdp:
             mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
 
             result = await oidc_process_callback(
-                "auth-code", signed, settings, session, session, "http://localhost/callback"
+                "auth-code",
+                signed,
+                settings,
+                session,
+                session,
+                "http://localhost/callback",
+                expected_nonce="test-nonce",
+                code_verifier="test-verifier",
             )
 
             assert result["access_token"] == "at"
@@ -2274,7 +2418,14 @@ class TestOidcMultiHostIdp:
             }
             with pytest.raises(ValueError, match="Rejected OIDC token endpoint"):
                 await oidc_process_callback(
-                    "auth-code", signed, settings, session, session, "http://localhost/callback"
+                    "auth-code",
+                    signed,
+                    settings,
+                    session,
+                    session,
+                    "http://localhost/callback",
+                    expected_nonce="test-nonce",
+                    code_verifier="test-verifier",
                 )
             mock_ex.assert_not_awaited()  # client_secret never POSTed to the metadata host
 
@@ -2295,7 +2446,14 @@ class TestOidcMultiHostIdp:
             }
             with pytest.raises(ValueError, match="must use https:// scheme"):
                 await oidc_process_callback(
-                    "auth-code", signed, settings, session, session, "http://localhost/callback"
+                    "auth-code",
+                    signed,
+                    settings,
+                    session,
+                    session,
+                    "http://localhost/callback",
+                    expected_nonce="test-nonce",
+                    code_verifier="test-verifier",
                 )
             mock_ex.assert_not_awaited()
 

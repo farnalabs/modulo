@@ -139,6 +139,7 @@ from modulo.db.crud.hitl_review_config import (
     resolve_hitl_review_config,
     resolve_review_window_for_gate,
 )
+from modulo.db.crud.organisation_cost_state import get_org_cost_state
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import (
@@ -2333,11 +2334,13 @@ class PipelineExecutor:
     ) -> Run | None:
         """Halt a run BEFORE any billable step when the org budget is exhausted.
 
-        Reads the org's FAR-391 lifetime spend ceiling and its consumed total. If
-        the org is already at/over its ceiling (no remaining budget for ANY new
-        run), the run is terminalized as ``cost_ceiling_exceeded`` and returned so
-        ``execute()`` never spawns an LLM / E2B call. Returns ``None`` when the
-        run may proceed (no ceiling, budget remaining, or any read error).
+        Reads the org's FAR-391 lifetime spend ceiling and its consumed total
+        from the per-org cost-state row (``organisation_cost_state``; FAR-1833).
+        If the org is already at/over its ceiling (no remaining budget for ANY
+        new run), the run is terminalized as ``cost_ceiling_exceeded`` and
+        returned so ``execute()`` never spawns an LLM / E2B call. Returns
+        ``None`` when the run may proceed (no ceiling, budget remaining, or any
+        read error).
 
         FAIL-OPEN by design (mirrors ``_check_capacity``): a settings/DB read
         failure must NEVER block the run — the terminal ledger block in
@@ -2371,6 +2374,10 @@ class PipelineExecutor:
                 ).scalar_one_or_none()
                 if org is None:
                     return None
+                # FAR-1833: the ceiling/cumulative live on the per-org cost-state
+                # row; a missing row is the defaults (both ceilings unlimited,
+                # cumulative 0), not an error.
+                state = await get_org_cost_state(session, org_id)
                 # Pass a minimal 1-cent charge as the "next run" so the gate
                 # honours the documented at-ceiling / kill-switch semantics: with
                 # zero remaining budget (cumulative >= ceiling, or ceiling == 0)
@@ -2380,9 +2387,9 @@ class PipelineExecutor:
                 # exceed it) is halted. A genuinely non-empty remaining budget
                 # (>= 1 cent) still passes so the run can execute.
                 decision = evaluate_org_spend_ceiling(
-                    org_cumulative_spend_cents=org.org_cumulative_spend_cents or 0,
+                    org_cumulative_spend_cents=(state.org_cumulative_spend_cents or 0) if state is not None else 0,
                     additional_cents=1,
-                    spend_ceiling_cents=org.spend_ceiling_cents,
+                    spend_ceiling_cents=state.spend_ceiling_cents if state is not None else None,
                 )
                 if decision.allowed:
                     return None

@@ -649,19 +649,42 @@ def _usd_cents(amount: str) -> int:
 
 
 def _make_ceiling_org(ctx: dict[str, Any]) -> MagicMock:
-    """Build the org row the /ceiling routes read (integer-cents columns)."""
+    """Build the org row the /ceiling routes read (FAR-1833: existence only)."""
     org = MagicMock()
     org.id = _ORG_ID
-    org.max_run_cost_cents = ctx.get("max_run_cost_cents")
-    org.spend_ceiling_cents = ctx.get("spend_ceiling_cents")
-    org.org_cumulative_spend_cents = ctx.get("org_cumulative_spend_cents", 0)
     return org
+
+
+def _cost_state_row(store: dict[str, Any]) -> MagicMock:
+    """A cost-state row mock carrying the ceiling values (FAR-1833)."""
+    state = MagicMock()
+    state.max_run_cost_cents = store.get("max_run_cost_cents")
+    state.spend_ceiling_cents = store.get("spend_ceiling_cents")
+    state.org_cumulative_spend_cents = store.get("org_cumulative_spend_cents", 0)
+    return state
 
 
 def _get_ceiling_route(request: Any, ctx: dict[str, Any], client: Any, *, body: dict | None) -> None:
     org = _make_ceiling_org(ctx)
+    # FAR-1833: the ceilings live on the cost-state row; the /ceiling routes read
+    # and write it (a write under the cost advisory lock), not the org row.
+    store: dict[str, Any] = {
+        "max_run_cost_cents": ctx.get("max_run_cost_cents"),
+        "spend_ceiling_cents": ctx.get("spend_ceiling_cents"),
+        "org_cumulative_spend_cents": ctx.get("org_cumulative_spend_cents", 0),
+    }
+
+    async def _get(session: Any, org_id: Any) -> MagicMock:
+        return _cost_state_row(store)
+
+    async def _upsert(session: Any, org_id: Any, *, provided: dict[str, Any]) -> None:
+        store.update(provided)
+
     with (
         patch("modulo.api.routes.costs.get_organisation", new=AsyncMock(return_value=org)),
+        patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(side_effect=_get)),
+        patch("modulo.api.routes.costs.upsert_org_cost_state", new=AsyncMock(side_effect=_upsert)),
+        patch("modulo.api.routes.costs.lock_org_cost_state", new=AsyncMock()),
         patch("modulo.api.routes.costs.set_rls_org"),
     ):
         if body is None:
@@ -669,6 +692,7 @@ def _get_ceiling_route(request: Any, ctx: dict[str, Any], client: Any, *, body: 
         else:
             resp = client.put("/api/v1/admin/costs/ceiling", json=body)
     ctx["ceiling_org"] = org
+    ctx["ceiling_store"] = store
     _store_response(request, ctx, resp)
 
 
@@ -748,23 +772,27 @@ def response_spend_ceiling_is_null(request: Any) -> None:
 
 @then(parsers.parse("the response ceiling was stored as {cents:d} cents"))
 def response_ceiling_stored_cents(cents: int, ctx: dict[str, Any]) -> None:
-    org = ctx.get("ceiling_org")
-    assert org is not None, "no ceiling write was driven"
-    assert org.spend_ceiling_cents == cents, (
-        f"Expected spend_ceiling stored as {cents} cents, got {org.spend_ceiling_cents}"
+    store = ctx.get("ceiling_store")
+    assert store is not None, "no ceiling write was driven"
+    assert store["spend_ceiling_cents"] == cents, (
+        f"Expected spend_ceiling stored as {cents} cents, got {store['spend_ceiling_cents']}"
     )
 
 
 def _run_ledger_block(cost: str, ctx: dict[str, Any]) -> None:
     """Drive ``finalize._ledger_block`` with a mocked session (the established
-    cost-controller BDD pattern: real FAR-391 ceiling gate, mocked DB). The run
-    and org rows are stored in ``ctx`` for the ``Then`` assertions.
+    cost-controller BDD pattern: real FAR-391 ceiling gate, mocked DB).
+
+    FAR-1833: the gate reads the ceiling/cumulative from the cost-state row
+    (``get_org_cost_state``) and the accrual is the atomic
+    ``increment_org_cumulative_spend``; both are patched here.
     """
     import asyncio
     from datetime import date
 
     from modulo.core.cost_controller.finalize import _ledger_block
     from modulo.db.models.organisation import Organisation
+    from modulo.db.models.organisation_cost_state import OrganisationCostState
     from modulo.db.models.run import Run
 
     run = MagicMock(spec=Run)
@@ -779,11 +807,13 @@ def _run_ledger_block(cost: str, ctx: dict[str, Any]) -> None:
 
     org = MagicMock(spec=Organisation)
     org.id = _ORG_ID
-    org.max_run_cost_cents = ctx.get("max_run_cost_cents")
-    org.spend_ceiling_cents = ctx.get("spend_ceiling_cents")
-    org.org_cumulative_spend_cents = ctx.get("org_cumulative_spend_cents", 0)
 
-    def _execute(stmt):
+    state = MagicMock(spec=OrganisationCostState)
+    state.max_run_cost_cents = ctx.get("max_run_cost_cents")
+    state.spend_ceiling_cents = ctx.get("spend_ceiling_cents")
+    state.org_cumulative_spend_cents = ctx.get("org_cumulative_spend_cents", 0)
+
+    def _execute(stmt, *_args, **_kwargs):
         text = str(stmt)
         result = MagicMock()
         if "organisations" in text:
@@ -798,14 +828,20 @@ def _run_ledger_block(cost: str, ctx: dict[str, Any]) -> None:
     session.execute = AsyncMock(side_effect=_execute)
     session.flush = AsyncMock()
 
+    accrual = AsyncMock()
+
     loop = asyncio.new_event_loop()
     try:
         # Mirror the unit-test patch: the ledger write must SUCCEED against the
-        # mocked session so the org accrual actually rides (and commits with)
-        # the ledger savepoint — an unpatched ``check_and_record_spend`` raises
-        # against a mock and the accrual rolls back with it. The best-effort
-        # circuit-breaker check is likewise stubbed (it is out of scope here).
+        # mocked session so the accrual actually rides (and commits with) the
+        # ledger savepoint. The best-effort circuit-breaker check is likewise
+        # stubbed (it is out of scope here).
         with (
+            patch(
+                "modulo.core.cost_controller.finalize.get_org_cost_state",
+                new=AsyncMock(return_value=state),
+            ),
+            patch("modulo.core.cost_controller.finalize.increment_org_cumulative_spend", new=accrual),
             patch(
                 "modulo.core.cost_controller.finalize.check_and_record_spend",
                 new=AsyncMock(return_value=(True, None)),
@@ -831,6 +867,8 @@ def _run_ledger_block(cost: str, ctx: dict[str, Any]) -> None:
 
     ctx["ceiling_run"] = run
     ctx["ceiling_org"] = org
+    ctx["ceiling_state"] = state
+    ctx["ceiling_accrual"] = accrual
 
 
 @when(parsers.parse("a run with cost ${cost} is finalized"))
@@ -864,21 +902,25 @@ def org_cumulative_not_incremented(ctx: dict[str, Any]) -> None:
     run = ctx.get("ceiling_run")
     assert run is not None, "no ceiling enforcement run was driven"
     assert run.ledger_refused_at is not None, "run ledger must be refused"
-    org = ctx.get("ceiling_org")
-    before = ctx.get("org_cumulative_spend_cents", 0)
-    actual = org.org_cumulative_spend_cents
-    assert actual == before, f"Expected org cumulative unchanged at {before} cents, got {actual}"
+    accrual = ctx.get("ceiling_accrual")
+    assert accrual is not None, "no ceiling enforcement run was driven"
+    # The accrual rides the ledger savepoint, so a refused ledger never applies it.
+    assert accrual.await_count == 0, "the org accrual must not run on a refused ledger"
 
 
 @then(parsers.parse("the org cumulative spend is incremented by ${amount}"))
 def org_cumulative_incremented(amount: str, ctx: dict[str, Any]) -> None:
-    org = ctx.get("ceiling_org")
     run = ctx.get("ceiling_run")
     assert run is not None, "no ceiling enforcement run was driven"
     assert run.ledger_refused_at is None, "run ledger must be accepted to increment spend"
-    expected = ctx.get("org_cumulative_spend_cents", 0) + _usd_cents(amount)
-    actual = org.org_cumulative_spend_cents
-    assert actual == expected, f"Expected org cumulative {expected} cents, got {actual}"
+    accrual = ctx.get("ceiling_accrual")
+    assert accrual is not None, "no ceiling enforcement run was driven"
+    # FAR-1833: a single atomic increment of the run's cost, inside the ledger
+    # savepoint — applied exactly once per accepted ledger write.
+    accrual.assert_awaited_once()
+    assert accrual.await_args.kwargs["delta_cents"] == _usd_cents(amount), (
+        f"Expected one accrual of {_usd_cents(amount)} cents, got {accrual.await_args}"
+    )
 
 
 # ===========================================================================

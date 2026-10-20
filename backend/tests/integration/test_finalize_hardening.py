@@ -10,7 +10,7 @@ Two of the three finalisation-path fixes need a real database to observe:
      row-locking ``update_run_status`` (FAR-1642 item 1);
   3. the org accrual is committed IFF the ledger write succeeds — a contained
      ledger-write failure followed by a re-finalisation must NOT double-count
-     ``org_cumulative_spend_cents``.
+     ``organisation_cost_state.org_cumulative_spend_cents`` (FAR-1833).
 
 (Fix 2, the bounded whole-transaction 40P01/55P03 retry, is owned by the
 executor's transaction layer and is unit-tested in
@@ -55,16 +55,22 @@ async def _seed_org(db_engine: AsyncEngine, name: str) -> uuid.UUID:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO organisations (id, name, slug, settings_json, "
-                "spend_ceiling_cents, org_cumulative_spend_cents) "
-                "VALUES (:id, :name, :slug, '{}'::json, :ceiling, 0)",
+                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
             ),
             {
                 "id": str(org_id),
                 "name": name,
                 "slug": f"{name.lower()}-{org_id.hex[:8]}",
-                "ceiling": _SPEND_CEILING_CENTS,
             },
+        )
+        # FAR-1833: the ceiling/cumulative now live on the cost-state row.
+        await conn.execute(
+            text(
+                "INSERT INTO organisation_cost_state "
+                "(org_id, max_run_cost_cents, spend_ceiling_cents, org_cumulative_spend_cents) "
+                "VALUES (:id, NULL, :ceiling, 0)",
+            ),
+            {"id": str(org_id), "ceiling": _SPEND_CEILING_CENTS},
         )
     return org_id
 
@@ -164,7 +170,7 @@ async def _org_cumulative_cents(session: AsyncSession, org_id: uuid.UUID) -> int
     return int(
         (
             await session.execute(
-                text("SELECT org_cumulative_spend_cents FROM organisations WHERE id = :oid"),
+                text("SELECT org_cumulative_spend_cents FROM organisation_cost_state WHERE org_id = :oid"),
                 {"oid": str(org_id)},
             )
         ).scalar_one()

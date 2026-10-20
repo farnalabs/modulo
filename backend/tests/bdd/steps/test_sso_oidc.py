@@ -86,18 +86,20 @@ def _sign_state(provider_id: str, settings_override: Settings) -> str:
 
 
 def _browser_bound_state(provider_id: str, settings_override: Settings) -> tuple[str, dict[str, str]]:
-    """Return ``(signed_state, cookies)`` for the FAR-1979 browser binding.
+    """Return ``(signed_state, cookies)`` for the FAR-1982 flow binding.
 
-    The callback requires the login-time correlation cookie to match the
-    returned ``state``. A real browser receives that cookie from the login
-    redirect; these direct-callback steps carry it explicitly.
+    The callback requires the login-time correlation cookie to carry the raw
+    state of the returned ``state`` plus the per-request nonce and PKCE
+    verifier. A real browser receives that cookie from the login redirect;
+    these direct-callback steps install it explicitly.
     """
-    from modulo.api.routes.sso import _OIDC_LOGIN_STATE_COOKIE
+    from modulo.api.routes.sso import _OIDC_FLOW_COOKIE
     from modulo.auth.sso import sign_state
 
     raw_state = uuid.uuid4().hex
     state = sign_state(f"{provider_id}:{raw_state}", settings_override.secret_key)
-    return state, {_OIDC_LOGIN_STATE_COOKIE: sign_state(raw_state, settings_override.secret_key)}
+    cookie = sign_state(f"{raw_state}:bdd-nonce:bdd-verifier", settings_override.secret_key)
+    return state, {_OIDC_FLOW_COOKIE: cookie}
 
 
 @pytest.fixture
