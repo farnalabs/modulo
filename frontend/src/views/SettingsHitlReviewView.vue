@@ -56,11 +56,16 @@
     <!-- FAR-861: bulk action bar — visible when 1+ gates are selected. Shows
          selection count, bulk claim, bulk reject (with shared reason input),
          and per-gate outcome reporting. -->
-    <output
+    <div
       v-if="someSelected"
       data-testid="hitl-review-bulk-bar"
-      class="mb-4 block rounded-lg border border-primary/30 bg-primary/5 p-3"
+      class="mb-4 rounded-lg border border-primary/30 bg-primary/5 p-3"
     >
+      <!-- The live region carries only the selection status text; the action
+           bar is layout, not phrasing content, so it is a sibling. -->
+      <output class="sr-only" aria-live="polite">
+        {{ $t('views.SettingsHitlReviewView.bulk_selected', { count: selectedCount }) }}
+      </output>
       <span class="flex flex-wrap items-center gap-3">
         <span class="text-sm font-medium">
           {{ $t('views.SettingsHitlReviewView.bulk_selected', { count: selectedCount }) }}
@@ -126,7 +131,7 @@
           </button>
         </div>
       </div>
-    </output>
+    </div>
     <!-- FAR-861: the per-gate outcome report is deliberately OUTSIDE the bulk
          bar above. A successful bulk operation refetches the list and prunes
          the selection, so the bar unmounts; nested inside it the report would
@@ -764,8 +769,13 @@ async function bulkClaim() {
   bulkClaiming.value = true
   bulkOutcomes.value = null
   const selected = filteredGates.value.filter(g => selectedKeys.value.has(gateKey(g)))
-  const claimed = await Promise.all(selected.map(claimOne))
-  const outcomes = claimed.filter((outcome): outcome is BulkOutcome => outcome !== null)
+  // Sequential, not concurrent: a bulk claim writes a per-gate claim token and
+  // the server's claim/expiry bookkeeping must not race across gates.
+  const outcomes: BulkOutcome[] = []
+  for (const gate of selected) {
+    const outcome = await claimOne(gate)
+    if (outcome !== null) outcomes.push(outcome)
+  }
   bulkOutcomes.value = outcomes
   bulkClaiming.value = false
 
@@ -835,7 +845,12 @@ async function confirmBulkReject() {
   bulkOutcomes.value = null
   const selected = filteredGates.value.filter(g => selectedKeys.value.has(gateKey(g)))
   const reason = bulkRejectReason.value.trim() || t('hitl.gate.rejected_by_reviewer')
-  const outcomes = await Promise.all(selected.map(gate => rejectOne(gate, reason)))
+  // Sequential: each reject consumes its gate's claim token and must land in
+  // order, not race the other requests.
+  const outcomes: BulkOutcome[] = []
+  for (const gate of selected) {
+    outcomes.push(await rejectOne(gate, reason))
+  }
 
   bulkOutcomes.value = outcomes
   bulkRejecting.value = false

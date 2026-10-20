@@ -1273,6 +1273,61 @@ describe('SettingsHitlReviewView', () => {
     expect(outcomes.text()).toContain('Failed')
   })
 
+  it('bulk claim is sequential: only one claim request is in flight at a time', async () => {
+    const { api } = await import('../lib/api/client')
+    const gate1 = PENDING_GATE
+    const gate2 = { ...PENDING_GATE, run_id: '550e8400-e29b-41d4-a716-446655440002', review_id: 'deploy-gate-1' }
+    ;(api.GET as any).mockResolvedValue(gatesResponse([gate1, gate2]))
+
+    // Hold each claim request open until the test releases it, and record how
+    // many are concurrently in flight. A Promise.all implementation would
+    // start BOTH before either resolves (maxInFlight 2) — the regression this
+    // test pins.
+    let inFlight = 0
+    let maxInFlight = 0
+    const release: Array<() => void> = []
+    ;(api.POST as any).mockImplementation((url: string) => {
+      if (!url.endsWith('/claim')) {
+        return Promise.resolve({ data: { ok: true }, error: undefined })
+      }
+      inFlight += 1
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      return new Promise((resolve) => {
+        release.push(() => {
+          inFlight -= 1
+          resolve({ data: { claim_token: 'tok-seq', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
+        })
+      })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper!.find('[data-testid="hitl-review-select-all"]').setValue(true)
+    await nextTick()
+    await wrapper!.find('[data-testid="hitl-review-bulk-claim"]').trigger('click')
+    await nextTick()
+
+    // First request is still pending — the second must not have started.
+    expect(release).toHaveLength(1)
+    expect(maxInFlight).toBe(1)
+
+    release.shift()!()
+    await flushPromises()
+    expect(release).toHaveLength(1)
+    expect(maxInFlight).toBe(1)
+
+    release.shift()!()
+    await flushPromises()
+    await nextTick()
+    expect(maxInFlight).toBe(1)
+    const outcomes = wrapper!.find('[data-testid="hitl-review-bulk-outcomes"]')
+    expect(outcomes.exists()).toBe(true)
+  })
+
   it('bulk reject sends a shared reason to each selected claimed gate', async () => {
     const { api } = await import('../lib/api/client')
     const claimed = claimedGate({ claimed_by_me: true })
