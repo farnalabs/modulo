@@ -259,31 +259,33 @@ async function loadVersions(schemaId: string) {
   }
 }
 
-async function validateSchema(): Promise<boolean> {
-  validationErrors.value = []
+function collectLocalValidationErrors(): string[] {
   const errors: string[] = []
-
   if (!schemaName.value.trim()) errors.push(t('views.SchemaEditorView.schema_name_required'))
   if (!schemaVersion.value.trim()) errors.push(t('views.SchemaEditorView.schema_version_required'))
   if (fields.value.length === 0) errors.push(t('views.SchemaEditorView.at_least_one_field'))
+  return errors
+}
 
+function appendFieldValidationErrors(errors: string[]): void {
   const seen = new Set<string>()
   for (const field of fields.value) {
-    if (!field.name.trim()) {
+    const name = field.name.trim()
+    if (!name) {
       errors.push(t('views.SchemaEditorView.all_fields_must_have_name'))
       break
     }
-    if (seen.has(field.name.trim())) {
-      errors.push(`${t('views.SchemaEditorView.duplicate_field_name')} "${field.name.trim()}"`)
+    if (seen.has(name)) {
+      errors.push(`${t('views.SchemaEditorView.duplicate_field_name')} "${name}"`)
     }
-    seen.add(field.name.trim())
+    seen.add(name)
   }
+}
 
-  if (errors.length > 0) {
-    validationErrors.value = errors
-    return false
-  }
-
+// Ask the backend to validate the schema in the JSON preview, appending any
+// returned errors. Returns false only when the validation request itself
+// failed (the caller then aborts without surfacing backend errors).
+async function appendRemoteValidationErrors(errors: string[]): Promise<boolean> {
   try {
     const { data, error } = await api.POST('/api/v1/schemas/validate', {
       body: { definition: JSON.parse(jsonPreview.value) as Record<string, unknown> },
@@ -297,12 +299,102 @@ async function validateSchema(): Promise<boolean> {
   } catch (e) {
     console.warn('Failed to validate schema', e)
   }
+  return true
+}
+
+async function validateSchema(): Promise<boolean> {
+  validationErrors.value = []
+  const errors: string[] = collectLocalValidationErrors()
+  appendFieldValidationErrors(errors)
+
+  if (errors.length > 0) {
+    validationErrors.value = errors
+    return false
+  }
+
+  if (!(await appendRemoteValidationErrors(errors))) return false
 
   if (errors.length > 0) {
     validationErrors.value = errors
     return false
   }
   return true
+}
+
+function nextVersionNumber(): number {
+  return versions.value.length > 0
+    ? Math.max(...versions.value.map(v => v.version_number)) + 1
+    : 1
+}
+
+async function createSchemaWithVersion(definitionJson: Record<string, unknown>): Promise<void> {
+  const { data: schemaData, error: createErr } = await api.POST('/api/v1/schemas', {
+    body: {
+      name: schemaName.value.trim(),
+      description: schemaDescription.value.trim() || null,
+    },
+  })
+  if (createErr) {
+    saveError.value = `${t('views.SchemaEditorView.create_failed')} ${formatApiError(createErr)}`
+    return
+  }
+  if (!schemaData) return
+
+  track(ANALYTICS_EVENTS.SCHEMA_CREATED, { schema_id: schemaData.id })
+
+  const { error: versionErr } = await api.POST('/api/v1/schemas/{schema_id}/versions', {
+    params: { path: { schema_id: schemaData.id } },
+    body: {
+      version: schemaVersion.value.trim(),
+      version_number: 1,
+      definition_json: definitionJson,
+      published: true,
+    },
+  })
+  if (versionErr) {
+    saveError.value = t('views.SchemaEditorView.schema_created_version_failed')
+    return
+  }
+
+  saveSuccess.value = `${t('views.SchemaEditorView.schema_created')} "${schemaData.name}"`
+  await loadSchemas()
+  selectedSchemaId.value = schemaData.id
+  isNew.value = false
+}
+
+async function updateSchemaWithVersion(
+  schemaId: string,
+  definitionJson: Record<string, unknown>,
+): Promise<void> {
+  const { data: schemaData, error: updateErr } = await api.PATCH('/api/v1/schemas/{schema_id}', {
+    params: { path: { schema_id: schemaId } },
+    body: {
+      name: schemaName.value.trim(),
+      description: schemaDescription.value.trim() || null,
+    },
+  })
+  if (updateErr) {
+    saveError.value = `${t('views.SchemaEditorView.update_failed')} ${formatApiError(updateErr)}`
+    return
+  }
+
+  const { error: versionErr } = await api.POST('/api/v1/schemas/{schema_id}/versions', {
+    params: { path: { schema_id: schemaId } },
+    body: {
+      version: schemaVersion.value.trim(),
+      version_number: nextVersionNumber(),
+      definition_json: definitionJson,
+      published: true,
+    },
+  })
+  if (versionErr) {
+    saveError.value = t('views.SchemaEditorView.schema_updated_version_failed')
+    return
+  }
+
+  saveSuccess.value = `${t('views.SchemaEditorView.schema_updated')} "${schemaData?.name}"`
+  await loadSchemas()
+  await loadVersions(schemaId)
 }
 
 async function saveSchema() {
@@ -314,74 +406,12 @@ async function saveSchema() {
 
   saving.value = true
   try {
-    const definitionJson = JSON.parse(jsonPreview.value)
+    const definitionJson = JSON.parse(jsonPreview.value) as Record<string, unknown>
 
     if (isNew.value) {
-      const { data: schemaData, error: createErr } = await api.POST('/api/v1/schemas', {
-        body: {
-          name: schemaName.value.trim(),
-          description: schemaDescription.value.trim() || null,
-        },
-      })
-      if (createErr) {
-        saveError.value = `${t('views.SchemaEditorView.create_failed')} ${formatApiError(createErr)}`
-        return
-      }
-      if (!schemaData) return
-
-      track(ANALYTICS_EVENTS.SCHEMA_CREATED, { schema_id: schemaData.id })
-
-      const { error: versionErr } = await api.POST('/api/v1/schemas/{schema_id}/versions', {
-        params: { path: { schema_id: schemaData.id } },
-        body: {
-          version: schemaVersion.value.trim(),
-          version_number: 1,
-          definition_json: definitionJson,
-          published: true,
-        },
-      })
-      if (versionErr) {
-        saveError.value = t('views.SchemaEditorView.schema_created_version_failed')
-        return
-      }
-
-      saveSuccess.value = `${t('views.SchemaEditorView.schema_created')} "${schemaData.name}"`
-      await loadSchemas()
-      selectedSchemaId.value = schemaData.id
-      isNew.value = false
+      await createSchemaWithVersion(definitionJson)
     } else if (selectedSchemaId.value) {
-      const { data: schemaData, error: updateErr } = await api.PATCH('/api/v1/schemas/{schema_id}', {
-        params: { path: { schema_id: selectedSchemaId.value } },
-        body: {
-          name: schemaName.value.trim(),
-          description: schemaDescription.value.trim() || null,
-        },
-      })
-      if (updateErr) {
-        saveError.value = `${t('views.SchemaEditorView.update_failed')} ${formatApiError(updateErr)}`
-        return
-      }
-
-      const nextVersion = versions.value.length > 0
-        ? Math.max(...versions.value.map(v => v.version_number)) + 1
-        : 1
-      const { error: versionErr } = await api.POST('/api/v1/schemas/{schema_id}/versions', {
-        params: { path: { schema_id: selectedSchemaId.value } },
-        body: {
-          version: schemaVersion.value.trim(),
-          version_number: nextVersion,
-          definition_json: definitionJson,
-          published: true,
-        },
-      })
-      if (versionErr) {
-        saveError.value = t('views.SchemaEditorView.schema_updated_version_failed')
-        return
-      }
-
-      saveSuccess.value = `${t('views.SchemaEditorView.schema_updated')} "${schemaData?.name}"`
-      await loadSchemas()
-      await loadVersions(selectedSchemaId.value)
+      await updateSchemaWithVersion(selectedSchemaId.value, definitionJson)
     }
   } catch (e: unknown) {
     saveError.value = `${t('views.SchemaEditorView.save_failed')} ${formatApiError(e)}`
