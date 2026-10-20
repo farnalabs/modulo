@@ -652,16 +652,9 @@ class GitHubConnector(ConnectorBase):
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES + 1):
             try:
-                async with self._client() as client:
-                    r = await client.request(method, path, **kwargs)
-                    if r.status_code == 304:
-                        self._raise_not_modified()
-                    if self._should_retry_status(r.status_code, attempt):
-                        await asyncio.sleep(self._sleep_delay(r, attempt))
-                        continue
-                    r.raise_for_status()
-                    self._record_success()
-                    return r
+                response = await self._attempt_request(method, path, attempt, kwargs)
+                if response is not None:
+                    return response
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 if self._should_retry_status(exc.response.status_code, attempt):
@@ -676,6 +669,25 @@ class GitHubConnector(ConnectorBase):
                 self._raise_network_error(exc, message, error_code)
         self._record_failure()
         raise GitHubNetworkError("GitHub API request failed after retries") from last_exc
+
+    async def _attempt_request(
+        self,
+        method: str,
+        path: str,
+        attempt: int,
+        kwargs: dict[str, Any],
+    ) -> httpx.Response | None:
+        """Perform one request attempt; None means "retry after the sleep"."""
+        async with self._client() as client:
+            r = await client.request(method, path, **kwargs)
+            if r.status_code == 304:
+                self._raise_not_modified()
+            if self._should_retry_status(r.status_code, attempt):
+                await asyncio.sleep(self._sleep_delay(r, attempt))
+                return None
+            r.raise_for_status()
+            self._record_success()
+            return r
 
     def _network_error_kind(self, exc: Exception) -> tuple[str, str]:
         """Map a transport error to its ``(message, error_code)`` pair."""
