@@ -33,6 +33,23 @@ Against REAL Postgres (testcontainers, private database per test — the
   that the Postgres tests cannot reach; a further assertion pins the shared
   predicate constant referenced by both dialect branches and the backfill, so
   the untested branch cannot silently drift again.
+* the ROLE CEREMONY is covered in ``TestGuardedRoleCeremony``: the guarded
+  ``SET LOCAL ROLE modulo_migrate`` wrapper is exercised against real Postgres
+  (it activates the role, verifies it, and restores it), its no-op path (no
+  ``modulo_migrate``: a fresh dev/BDD database) is exercised against real
+  Postgres too, and ``upgrade``/``downgrade`` are driven over a recording
+  connection to prove the cross-org DML is actually issued INSIDE the block and
+  the downgrade's transient UPDATE grant is revoked after it.
+
+    NOT exercised here: an end-to-end alembic run connected as a
+    non-superuser, non-BYPASSRLS admin. The testcontainer's connection role is
+    the cluster superuser — which bypasses RLS regardless of the ceremony — and
+    every private database is created from it, so the policy can never refuse
+    the DML in this harness. The RLS behaviour itself (unguarded INSERT raises
+    "new row violates row-level security policy"; unguarded ``UPDATE ... FROM``
+    silently affects 0 rows; the guarded form succeeds) was demonstrated
+    out-of-band against PostgreSQL 16 with a NONSUPERUSER NOBYPASSRLS database
+    owner, and is recorded on the delivery ticket.
 """
 
 from __future__ import annotations
@@ -40,9 +57,11 @@ from __future__ import annotations
 import importlib.util
 import sqlite3
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 from urllib.parse import urlparse, urlunparse
 
 import pytest
@@ -50,6 +69,7 @@ import pytest_asyncio
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
+from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -480,3 +500,196 @@ class TestSharedRestorePredicate:
         assert predicate in module._RESTORE_SQL
         assert predicate in module._RESTORE_SQLITE_SQL
         assert predicate in module._BACKFILL_MISSING_SQL
+
+
+class _RecordingResult:
+    """Minimal stand-in for a SQLAlchemy ``Result`` (scalars + rowcount)."""
+
+    def __init__(
+        self,
+        *,
+        scalar_one: object = None,
+        scalar_one_or_none: object = None,
+        rowcount: int = 1,
+    ) -> None:
+        self._scalar_one = scalar_one
+        self._scalar_one_or_none = scalar_one_or_none
+        self.rowcount = rowcount
+
+    def scalar_one(self) -> object:
+        return self._scalar_one
+
+    def scalar_one_or_none(self) -> object:
+        return self._scalar_one_or_none
+
+
+class _RecordingBind:
+    """Fake ``op.get_bind()`` that records every statement the migration issues.
+
+    ``role_exists`` models both database shapes: ``True`` is a deployed database
+    (``modulo_migrate`` provisioned by bootstrap_role before alembic runs),
+    ``False`` a fresh dev/BDD database where the ceremony must no-op.
+    """
+
+    def __init__(self, *, role_exists: bool = True) -> None:
+        self.dialect = SimpleNamespace(name="postgresql")
+        self.sql: list[str] = []
+        self._role_exists = role_exists
+
+    def execute(self, statement: object, *_args: object, **_kwargs: object) -> _RecordingResult:
+        sql = str(statement)
+        self.sql.append(sql)
+        if "pg_roles" in sql:
+            return _RecordingResult(scalar_one_or_none=1 if self._role_exists else None)
+        if "current_user" in sql:
+            return _RecordingResult(scalar_one="modulo_migrate")
+        if "to_regclass" in sql:
+            return _RecordingResult(scalar_one_or_none="public.organisation_cost_state")
+        return _RecordingResult()
+
+    @contextmanager
+    def begin_nested(self) -> Iterator[None]:
+        yield
+
+
+class _RecordingOperations:
+    """Fake ``alembic.op`` for the Postgres branch (``get_bind`` only)."""
+
+    def __init__(self, bind: _RecordingBind) -> None:
+        self._bind = bind
+
+    def get_bind(self) -> _RecordingBind:
+        return self._bind
+
+
+def _index_of(statements: list[str], needle: str) -> int:
+    for index, sql in enumerate(statements):
+        if needle in sql:
+            return index
+    raise AssertionError(f"{needle!r} was never issued; statements were: {statements}")
+
+
+class TestGuardedRoleCeremony:
+    """The cross-org DML runs under ``modulo_migrate``, the table's owning role.
+
+    ``organisation_cost_state`` is ENABLE + FORCE RLS and the migration
+    connection may be a non-superuser admin (``DATABASE_ADMIN_URL`` is only
+    documented as "superuser or at minimum CREATEROLE + CREATEDB"), which cannot
+    write it and — worse — cannot see rows to restore from. The guarded
+    ``SET LOCAL ROLE`` is what makes both directions correct.
+
+    These tests pin the ceremony's MECHANISM, not the RLS policy itself: the
+    real-Postgres cases use the testcontainer's superuser connection (the only
+    one available here), where RLS never applies, so they prove the role is set,
+    verified and restored — while the policy's refusal of an unguarded admin and
+    the silent 0-row restore were demonstrated out-of-band (see the module
+    docstring).
+    """
+
+    async def test_activates_verifies_and_restores_the_owning_role(self, db_url: str, monkeypatch) -> None:
+        """Inside the block ``current_user`` IS the role; afterwards it is the admin.
+
+        The role name is swapped for a uniquely-named scratch role so the test
+        never depends on (or disturbs) a cluster-wide ``modulo_migrate`` another
+        fixture may have provisioned. A superuser may ``SET ROLE`` to any role,
+        so no membership grant is needed.
+        """
+        module = _load_migration()
+        scratch = f"m0324_probe_{uuid.uuid4().hex[:10]}"
+        monkeypatch.setattr(module, "_MIGRATE_ROLE", scratch)
+        monkeypatch.setattr(module, "_SET_LOCAL_ROLE_SQL", "SET LOCAL ROLE " + scratch)
+
+        engine = create_async_engine(db_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as conn:
+                admin = (await conn.execute(text("SELECT current_user"))).scalar_one()
+                await conn.execute(text(f'CREATE ROLE "{scratch}" NOSUPERUSER NOLOGIN BYPASSRLS'))
+                await conn.commit()
+            try:
+
+                def _exercise(conn: Connection) -> None:
+                    with module._dml_as_migrate_role(conn):
+                        assert conn.execute(text("SELECT current_user")).scalar_one() == scratch
+                    assert conn.execute(text("SELECT current_user")).scalar_one() == admin
+
+                async with engine.connect() as conn:
+                    await conn.run_sync(_exercise)
+            finally:
+                async with engine.connect() as conn:
+                    await conn.execute(text(f'DROP ROLE IF EXISTS "{scratch}"'))
+                    await conn.commit()
+        finally:
+            await engine.dispose()
+
+    async def test_no_op_when_the_owning_role_is_absent(self, db_url: str, monkeypatch) -> None:
+        """A database without the role runs the DML as the migration connection.
+
+        That is the fresh dev/BDD shape, where the migration connection owns the
+        schema and bypasses RLS itself, so the ceremony must neither fail nor
+        change the active role.
+        """
+        module = _load_migration()
+        absent = f"m0324_absent_{uuid.uuid4().hex[:10]}"
+        monkeypatch.setattr(module, "_MIGRATE_ROLE", absent)
+
+        engine = create_async_engine(db_url, poolclass=NullPool)
+        try:
+
+            def _exercise(conn: Connection) -> None:
+                admin = conn.execute(text("SELECT current_user")).scalar_one()
+                with module._dml_as_migrate_role(conn):
+                    assert conn.execute(text("SELECT current_user")).scalar_one() == admin
+                    assert conn.execute(text("SELECT 1")).scalar_one() == 1
+
+            async with engine.connect() as conn:
+                await conn.run_sync(_exercise)
+        finally:
+            await engine.dispose()
+
+    def test_upgrade_backfills_inside_the_set_local_role_block(self) -> None:
+        """The pre-drop INSERT is issued AFTER ``SET LOCAL ROLE``, before ``RESET ROLE``.
+
+        A refactor that "sets the role" but leaves the INSERT outside the block
+        would silently restore the RLS failure this ceremony exists to remove.
+        """
+        module = _load_migration()
+        bind = _RecordingBind(role_exists=True)
+        with patch.object(module, "op", _RecordingOperations(bind)):
+            module.upgrade()
+
+        assert (
+            _index_of(bind.sql, "SET LOCAL ROLE modulo_migrate")
+            < _index_of(bind.sql, "INSERT INTO organisation_cost_state")
+            < _index_of(bind.sql, "RESET ROLE")
+        )
+
+    def test_upgrade_runs_the_backfill_unwrapped_when_the_role_is_absent(self) -> None:
+        """No role -> the same INSERT, without a `SET LOCAL ROLE` around it."""
+        module = _load_migration()
+        bind = _RecordingBind(role_exists=False)
+        with patch.object(module, "op", _RecordingOperations(bind)):
+            module.upgrade()
+
+        insert_index = _index_of(bind.sql, "INSERT INTO organisation_cost_state")
+        assert _index_of(bind.sql, "SET search_path TO public") < insert_index
+        assert "SET LOCAL ROLE modulo_migrate" not in "\n".join(bind.sql)
+
+    def test_downgrade_restores_inside_the_block_and_revokes_the_transient_grant(self) -> None:
+        """GRANT -> SET LOCAL ROLE -> UPDATE -> RESET ROLE -> REVOKE, in that order.
+
+        ``modulo_migrate`` owns the cost-state table but not ``organisations``,
+        so the restore needs a transient column-level UPDATE grant. It must be
+        revoked (a permanent widening is not acceptable) and must exist before
+        the role switch, because only the owning connection can grant it.
+        """
+        module = _load_migration()
+        bind = _RecordingBind(role_exists=True)
+        with patch.object(module, "op", _RecordingOperations(bind)):
+            module.downgrade()
+
+        grant_index = _index_of(bind.sql, "GRANT UPDATE (")
+        set_index = _index_of(bind.sql, "SET LOCAL ROLE modulo_migrate")
+        update_index = _index_of(bind.sql, "UPDATE organisations o SET")
+        reset_index = _index_of(bind.sql, "RESET ROLE")
+        revoke_index = _index_of(bind.sql, "REVOKE UPDATE (")
+        assert grant_index < set_index < update_index < reset_index < revoke_index

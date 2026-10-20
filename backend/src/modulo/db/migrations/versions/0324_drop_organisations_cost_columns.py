@@ -65,16 +65,38 @@ organisations from their current column values BEFORE any column is dropped,
 so a rewind restores them from the surviving store like every other
 organisation (and keeps their pre-cutover values).
 
+ROLE CEREMONY for the cross-org DML (the 0115/0131/0134/0321 shape).
+``organisation_cost_state`` is ENABLE + FORCE RLS behind a
+``current_setting('app.organisation_id')`` policy, while the migration runs as
+whatever role ``DATABASE_ADMIN_URL`` names — documented as the "superuser (or
+at minimum CREATEROLE + CREATEDB)" admin, so a supported self-hosted deployment
+may run these migrations as a NON-BYPASSRLS role. Such a role cannot write the
+cost-state table at all (the pre-drop INSERT is refused with "new row violates
+row-level security policy") and cannot even restore it (the downgrade's
+``UPDATE ... FROM`` silently matches 0 rows because the cost-state read is
+policy-filtered, leaving the re-added columns at their defaults). Both
+statements therefore run under ``modulo_migrate`` — the table's owning,
+BYPASSRLS role — through :func:`_dml_as_migrate_role`: a guarded
+``SET LOCAL ROLE`` (transaction-scoped, verified against ``current_user``, then
+``RESET ROLE``) that is a clean no-op on a database without the role (fresh
+dev/BDD), exactly where the admin owns and bypasses the schema itself. The
+downgrade's restore additionally needs ``UPDATE`` on ``organisations``
+(``modulo_migrate`` owns the cost-state table but not ``organisations``), so it
+takes a column-level grant for the three restored columns and revokes it
+afterwards — no permanent privilege widening.
+
 SQLite parity (0322 pattern): SQLite has no ``ADD COLUMN IF NOT EXISTS`` /
 ``ADD CONSTRAINT`` / ``DROP COLUMN IF EXISTS``, so both directions branch to
-Alembic batch mode, which recreates the table from the model shape.
+Alembic batch mode, whose table recreate reflects the LIVE table (the shape
+being migrated), not the ORM model.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 
 import sqlalchemy as sa
 from alembic import op
@@ -92,6 +114,29 @@ depends_on: str | Sequence[str] | None = None
 
 _TABLE = "organisations"
 _COST_STATE_TABLE = "organisation_cost_state"
+
+#: The role that owns ``organisation_cost_state`` (0321 creates it under
+#: ``SET ROLE modulo_migrate``) and carries BYPASSRLS, so cross-org DML against
+#: the FORCE-RLS table is allowed. It does NOT own ``organisations``.
+_MIGRATE_ROLE = "modulo_migrate"
+
+#: Role-ceremony statements. Plain string concatenation of module constants —
+#: no f-string SQL (the migration-fstring-sql semgrep rule).
+_ROLE_EXISTS_SQL = "SELECT 1 FROM pg_roles WHERE rolname = :role"
+_CURRENT_USER_SQL = "SELECT current_user"
+_SET_LOCAL_ROLE_SQL = "SET LOCAL ROLE " + _MIGRATE_ROLE
+_RESET_ROLE_SQL = "RESET ROLE"
+
+#: The downgrade restores ``organisations`` from the cost-state table, but
+#: ``modulo_migrate`` owns the latter and NOT ``organisations`` (0321 grants it
+#: only SELECT/REFERENCES there). Grant the three restored columns for the
+#: duration of the restore and revoke them immediately afterwards, so the
+#: migration never leaves a widened privilege behind. Column-level because that
+#: is the entire surface the restore writes; GRANT/REVOKE are transactional, so
+#: a failure rolls the grant back with the rest of the migration.
+_RESTORE_COLUMN_LIST = "max_run_cost_cents, spend_ceiling_cents, org_cumulative_spend_cents"
+_GRANT_RESTORE_SQL = "GRANT UPDATE (" + _RESTORE_COLUMN_LIST + ") ON TABLE public.organisations TO " + _MIGRATE_ROLE
+_REVOKE_RESTORE_SQL = "REVOKE UPDATE (" + _RESTORE_COLUMN_LIST + ") ON TABLE public.organisations FROM " + _MIGRATE_ROLE
 
 #: The three retired per-org cost columns, in the order 0145 added them.
 _COST_COLUMNS: tuple[str, ...] = (
@@ -148,10 +193,16 @@ _COST_STATE_MATCH_PREDICATE = "s.org_id = o.id"
 #: lazily, so an organisation created after 0321 has none. A plain
 #: INSERT..SELECT on two rows-per-org tables: no ``ALTER``, so it takes no
 #: ACCESS EXCLUSIVE lock on ``organisations`` and cannot invert the lock order
-#: against the DDL below. The migration connection is the DDL/admin role
-#: (env.py selects ``DATABASE_ADMIN_URL``, provisioned BYPASSRLS), so the FORCE
-#: RLS policy on ``organisation_cost_state`` does not filter this cross-org
-#: insert.
+#: against the DDL below.
+#:
+#: ``organisation_cost_state`` is ENABLE + FORCE RLS, and the migration
+#: connection is whatever role ``DATABASE_ADMIN_URL`` names — the Helm chart
+#: documents that as "superuser (or at minimum CREATEROLE + CREATEDB)", so it
+#: may be a non-superuser that does NOT bypass RLS. Run this under
+#: ``modulo_migrate`` (the table's owning BYPASSRLS role) via
+#: :func:`_dml_as_migrate_role`; as a plain admin PostgreSQL refuses it with
+#: "new row violates row-level security policy for table
+#: organisation_cost_state".
 _BACKFILL_MISSING_SQL = (
     "INSERT INTO organisation_cost_state "  # noqa: S608  # nosec B608 - module constants only
     "(org_id, max_run_cost_cents, spend_ceiling_cents, org_cumulative_spend_cents) "
@@ -164,6 +215,11 @@ _BACKFILL_MISSING_SQL = (
 #: that HAVE a cost-state row (the upgrade's backfill guarantees every
 #: organisation that predates the drop does), so the rest keep the column
 #: defaults. See the module docstring for the precedence this encodes.
+#:
+#: The ``organisation_cost_state`` side of the join is RLS-protected, so this
+#: runs under ``modulo_migrate`` via :func:`_dml_as_migrate_role` — run as a
+#: non-BYPASSRLS admin it silently matches 0 rows and restores nothing (no
+#: error, which is exactly the failure this ceremony removes).
 _RESTORE_SQL = (
     "UPDATE organisations o SET "  # noqa: S608  # nosec B608 - module constants only
     "max_run_cost_cents = s.max_run_cost_cents, "
@@ -200,6 +256,63 @@ _DDL_RETRY_SLEEP_SECONDS = 1.0
 
 def _is_postgres(bind: sa.Connection) -> bool:
     return bool(bind.dialect.name == "postgresql")
+
+
+def _role_exists(bind: Connection, role: str) -> bool:
+    """True when the Postgres role exists (fresh dev/BDD databases have none)."""
+    return bind.execute(sa.text(_ROLE_EXISTS_SQL), {"role": role}).scalar_one_or_none() is not None
+
+
+@contextmanager
+def _dml_as_migrate_role(bind: Connection) -> Iterator[None]:
+    """Run the caller's cross-org DML under the cost-state table's owning role.
+
+    ``organisation_cost_state`` is ENABLE + FORCE RLS, and ``DATABASE_ADMIN_URL``
+    is only documented as "superuser (or at minimum CREATEROLE + CREATEDB)" — a
+    supported self-hosted deployment may therefore run migrations as a
+    non-BYPASSRLS role, for which the policy's
+    ``current_setting('app.organisation_id')`` is unset. As that admin the
+    pre-drop INSERT raises "new row violates row-level security policy" and the
+    downgrade's ``UPDATE ... FROM`` silently affects 0 rows.
+
+    ``modulo_migrate`` owns the table and carries BYPASSRLS, so this wraps the
+    DML in the repo's established ceremony (0115/0131/0134/0321): a
+    transaction-scoped ``SET LOCAL ROLE``, verified against ``current_user``
+    rather than assumed (a ``SET LOCAL`` outside a transaction block only warns
+    and changes nothing, so an unverified ceremony could silently degrade back
+    to the RLS-filtered admin), then ``RESET ROLE`` so the remaining statements
+    in the migration run as the original role again.
+
+    The body runs inside a SAVEPOINT: a failing statement rolls back to it, which
+    restores a usable transaction for the ``RESET ROLE`` in the ``finally`` (and
+    would otherwise mask the real error with "current transaction is aborted").
+
+    No ``modulo_migrate`` role (a fresh dev/BDD database) means the ceremony is
+    a clean no-op: the admin there owns the schema and bypasses RLS itself.
+    """
+    if not _role_exists(bind, _MIGRATE_ROLE):
+        _log.info(
+            "FAR-1902: role %s not present — running the cost-state DML as the migration connection",
+            _MIGRATE_ROLE,
+        )
+        yield
+        return
+
+    bind.execute(sa.text(_SET_LOCAL_ROLE_SQL))
+    active = bind.execute(sa.text(_CURRENT_USER_SQL)).scalar_one()
+    if active != _MIGRATE_ROLE:
+        raise RuntimeError(
+            "FAR-1902: SET LOCAL ROLE "
+            + _MIGRATE_ROLE
+            + " did not take effect (current_user is "
+            + repr(active)
+            + "); refusing to run the cost-state DML as an RLS-filtered role"
+        )
+    try:
+        with bind.begin_nested():
+            yield
+    finally:
+        bind.execute(sa.text(_RESET_ROLE_SQL))
 
 
 def _ddl_with_retry(bind: Connection, sql: str, *, description: str) -> None:
@@ -241,6 +354,31 @@ def _cost_state_table_exists(bind: Connection) -> bool:
     return (
         bind.execute(sa.text("SELECT to_regclass('public.organisation_cost_state')")).scalar_one_or_none() is not None
     )
+
+
+def _postgres_restore(bind: Connection) -> int:
+    """Restore the three columns from the cost-state table; return the rowcount.
+
+    Under ``modulo_migrate`` the restore reads the FORCE-RLS cost-state table
+    cross-org, which is what makes it see anything at all as a non-BYPASSRLS
+    admin (see :func:`_dml_as_migrate_role`). ``modulo_migrate`` owns the
+    cost-state table but NOT ``organisations``, so the three restored columns
+    are granted to it for the restore and revoked immediately afterwards — a
+    rollback or an exception drops the grant with the migration transaction, so
+    no privilege survives either way.
+
+    Without ``modulo_migrate`` (fresh dev/BDD) the plain UPDATE runs as the
+    migration connection, which owns the schema and bypasses RLS there.
+    """
+    if not _role_exists(bind, _MIGRATE_ROLE):
+        return bind.execute(sa.text(_RESTORE_SQL)).rowcount or 0
+
+    bind.execute(sa.text(_GRANT_RESTORE_SQL))
+    try:
+        with _dml_as_migrate_role(bind):
+            return bind.execute(sa.text(_RESTORE_SQL)).rowcount or 0
+    finally:
+        bind.execute(sa.text(_REVOKE_RESTORE_SQL))
 
 
 def _sqlite_check_constraints(bind: Connection, table: str) -> set[str]:
@@ -293,7 +431,10 @@ def upgrade() -> None:
     # organisations existing at its own run and the application creates the row
     # lazily, so an organisation created since then has none — and its
     # ``organisations`` values are the only copy this migration could destroy.
-    backfilled = bind.execute(sa.text(_BACKFILL_MISSING_SQL)).rowcount or 0
+    # Run it under the owning BYPASSRLS role: the table is FORCE-RLS, so the
+    # migration connection may be a non-superuser admin that cannot write it.
+    with _dml_as_migrate_role(bind):
+        backfilled = bind.execute(sa.text(_BACKFILL_MISSING_SQL)).rowcount or 0
     _log.info(
         "FAR-1902: backfilled %d organisation(s) with no cost-state row before the drop",
         backfilled,
@@ -363,7 +504,7 @@ def downgrade() -> None:
         description="ADD COLUMN organisations.org_cumulative_spend_cents",
     )
 
-    restored = bind.execute(sa.text(_RESTORE_SQL)).rowcount or 0
+    restored = _postgres_restore(bind)
     _log.info(
         "FAR-1902 downgrade: restored %d organisation(s)' cost columns from organisation_cost_state",
         restored,
