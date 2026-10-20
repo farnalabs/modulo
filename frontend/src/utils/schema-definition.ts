@@ -18,9 +18,28 @@ export function createField(key: number): SchemaField {
   }
 }
 
+// Explicit per-type conversion: a bare String(value) on an unknown is an
+// implicit coercion that yields "[object Object]" for anything unexpected.
+function stringifyDefaultValue(value: unknown): string {
+  switch (typeof value) {
+    case 'string':
+      return value
+    case 'number':
+    case 'bigint':
+      return value.toString()
+    case 'boolean':
+      return value ? 'true' : 'false'
+    case 'symbol':
+    case 'function':
+      return value.toString()
+    default:
+      return ''
+  }
+}
+
 function formatDefault(value: unknown): string {
   if (value === undefined) return ''
-  return typeof value === 'object' ? JSON.stringify(value) : String(value)
+  return typeof value === 'object' ? JSON.stringify(value) : stringifyDefaultValue(value)
 }
 
 export function coerceDefault(value: string, type: string): unknown {
