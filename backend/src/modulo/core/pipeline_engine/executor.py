@@ -121,6 +121,7 @@ from modulo.core.pipeline_engine.node_runner import (
     SupersededNodeError,
     _idempotency_gate_skipped_envelope,
     _marker_delivery_done_for_node,
+    merge_recovered_token_usage,
     set_conformance_ctx,
 )
 from modulo.core.pipeline_engine.output_filter import OutputRejectedError
@@ -5346,6 +5347,13 @@ class PipelineExecutor:
             error_code = "router.no_match"
             error_detail = _sanitize_detail(str(exc), limit=None)
         except (NodeCancelledError, SandboxNodeFailedError) as exc:
+            # FAR-1994: a sandbox failure that produced no parseable node output
+            # records ZERO token usage by default. node_runner recovers the
+            # agent's own opencode ``step_finish`` counters from the retained
+            # raw output and attaches them to the exception; fold them into the
+            # accumulator as the AGENT-REPORTED family so the terminal write
+            # stops reporting a false zero (a no-op when nothing was recovered).
+            node_token_usage = merge_recovered_token_usage(node_token_usage, exc)
             # FAR-592 (D6 F2): the Local-tier refusal is a DETERMINISTIC config
             # fault — the profile opt-in cannot change mid-run, so requeueing
             # it would burn the retry budget on a refusal that cannot succeed.
