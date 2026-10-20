@@ -477,6 +477,57 @@ def _is_executable_js_line(line: str) -> bool:
     return bool(stripped)
 
 
+def _triple_quote_at(line: str, index: int) -> str | None:
+    """Return the triple-quote delimiter starting at *index*, else ``None``."""
+    for quote in ('"""', "'''"):
+        if line.startswith(quote, index):
+            return quote
+    return None
+
+
+def _skip_short_string(line: str, start: int) -> int:
+    """Return the index just past the closing quote of a short string.
+
+    *start* points at the opening quote.  Escape sequences are honoured; an
+    unterminated string consumes the rest of the line.
+    """
+    quote = line[start]
+    i = start + 1
+    n = len(line)
+    while i < n:
+        if line[i] == "\\":
+            i += 2
+            continue
+        if line[i] == quote:
+            return i + 1
+        i += 1
+    return i
+
+
+def _scan_python_opener_char(
+    line: str,
+    index: int,
+) -> tuple[int, tuple[int, str] | None, bool]:
+    """Scan one token of *line* while searching for a multi-line opener.
+
+    Returns ``(next_index, opener, stop)`` where *opener* is ``(index, quote)``
+    when an unclosed triple quote starts at *index*, and *stop* is True when
+    the remainder of the line is a comment or string data.
+    """
+    char = line[index]
+    if char == "#":
+        return index, None, True
+    quote = _triple_quote_at(line, index)
+    if quote is not None:
+        close = line.find(quote, index + 3)
+        if close == -1:
+            return index, (index, quote), False
+        return close + 3, None, False
+    if char in ("'", '"'):
+        return _skip_short_string(line, index), None, False
+    return index + 1, None, False
+
+
 def _py_multiline_opener(line: str) -> tuple[int, str] | None:
     """Return ``(index, delimiter)`` for an unclosed triple-quote in *line*.
 
@@ -490,29 +541,45 @@ def _py_multiline_opener(line: str) -> tuple[int, str] | None:
     i = 0
     n = len(line)
     while i < n:
-        if line[i] == "#":
+        i, opener, stop = _scan_python_opener_char(line, i)
+        if opener is not None:
+            return opener
+        if stop:
             return None
-        if line.startswith("'''", i) or line.startswith('"""', i):
-            quote = line[i : i + 3]
-            close = line.find(quote, i + 3)
-            if close == -1:
-                return i, quote
-            i = close + 3
-            continue
-        if line[i] in ("'", '"'):
-            quote = line[i]
-            i += 1
-            while i < n:
-                if line[i] == "\\":
-                    i += 2
-                    continue
-                if line[i] == quote:
-                    i += 1
-                    break
-                i += 1
-            continue
-        i += 1
     return None
+
+
+def _adjust_python_depth(char: str, depth: int) -> int:
+    """Adjust bracket *depth* for a single non-string character."""
+    if char in "([{":
+        return depth + 1
+    if char in ")]}" and depth > 0:
+        return depth - 1
+    return depth
+
+
+def _scan_python_bracket_char(
+    line: str,
+    index: int,
+    depth: int,
+) -> tuple[int, int, bool]:
+    """Scan one token of *line*, updating bracket nesting *depth*.
+
+    Returns ``(next_index, depth, stop)`` where *stop* is True when the
+    remainder of the line is a comment or unclosed triple-quoted string.
+    """
+    char = line[index]
+    if char == "#":
+        return index, depth, True
+    quote = _triple_quote_at(line, index)
+    if quote is not None:
+        close = line.find(quote, index + 3)
+        if close == -1:
+            return index, depth, True
+        return close + 3, depth, False
+    if char in ("'", '"'):
+        return _skip_short_string(line, index), depth, False
+    return index + 1, _adjust_python_depth(char, depth), False
 
 
 def _scan_python_brackets(line: str, depth: int) -> int:
@@ -526,32 +593,9 @@ def _scan_python_brackets(line: str, depth: int) -> int:
     i = 0
     n = len(line)
     while i < n:
-        if line[i] == "#":
+        i, depth, stop = _scan_python_bracket_char(line, i, depth)
+        if stop:
             return depth
-        if line.startswith("'''", i) or line.startswith('"""', i):
-            quote = line[i : i + 3]
-            close = line.find(quote, i + 3)
-            if close == -1:
-                return depth
-            i = close + 3
-            continue
-        if line[i] in ("'", '"'):
-            quote = line[i]
-            i += 1
-            while i < n:
-                if line[i] == "\\":
-                    i += 2
-                    continue
-                if line[i] == quote:
-                    i += 1
-                    break
-                i += 1
-            continue
-        if line[i] in "([{":
-            depth += 1
-        elif line[i] in ")]}" and depth > 0:
-            depth -= 1
-        i += 1
     return depth
 
 
@@ -628,6 +672,37 @@ def _iter_executable_python_lines(
         yield line
 
 
+def _consume_js_block_comment_line(line: str) -> tuple[bool, str | None]:
+    """Consume one line while inside a ``/* ... */`` block comment.
+
+    Returns ``(still_in_block, executable_remainder)``.
+    """
+    end = line.find("*/")
+    if end == -1:
+        return True, None
+    rest = line[end + 2 :]
+    return False, (rest if _js_strip_line_comment(rest) else None)
+
+
+def _find_js_block_comment_start(line: str) -> int | None:
+    """Return the index of an unclosed ``/*`` on *line*, else ``None``."""
+    start = line.find("/*")
+    if start == -1 or line.find("*/", start + 2) != -1:
+        return None
+    return start
+
+
+def _js_line_output(line: str, in_block: bool) -> tuple[bool, str | None]:
+    """Return ``(next_in_block, executable_line_or_none)`` for one JS line."""
+    if in_block:
+        return _consume_js_block_comment_line(line)
+    start = _find_js_block_comment_start(line)
+    if start is not None:
+        remainder = _js_strip_line_comment(line[:start])
+        return True, (line if remainder else None)
+    return False, (line if _is_executable_js_line(line) else None)
+
+
 def _iter_executable_js_lines(lines: Iterable[str]) -> Iterator[str]:
     """Yield the added JS/TS *lines* that carry executable code.
 
@@ -637,23 +712,9 @@ def _iter_executable_js_lines(lines: Iterable[str]) -> Iterator[str]:
     """
     in_block = False
     for line in lines:
-        if in_block:
-            end = line.find("*/")
-            if end == -1:
-                continue
-            in_block = False
-            rest = line[end + 2 :]
-            if _js_strip_line_comment(rest):
-                yield rest
-            continue
-        start = line.find("/*")
-        if start != -1 and line.find("*/", start + 2) == -1:
-            in_block = True
-            if _js_strip_line_comment(line[:start]):
-                yield line
-            continue
-        if _is_executable_js_line(line):
-            yield line
+        in_block, output = _js_line_output(line, in_block)
+        if output is not None:
+            yield output
 
 
 def _safe_repo_path(value: str) -> str | None:
@@ -929,21 +990,35 @@ def _get_production_deletions(compare_branch: str, language: str) -> dict[str, i
     if result.returncode != 0 or not result.stdout:
         return {}
 
-    js_extensions = (".ts", ".tsx", ".js", ".jsx", ".vue")
+    return _count_deletions_in_diff(result.stdout, compare_branch)
+
+
+_JS_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".vue")
+
+
+def _count_file_deletions(
+    filepath: str,
+    chunk: list[str],
+    compare_branch: str,
+) -> int:
+    """Count executable production lines deleted from one file's diff chunk."""
+    if _safe_repo_path(filepath) is None or _is_excluded(filepath):
+        return 0
+    removed = [raw[1:] for raw in chunk if raw.startswith("-") and not raw.startswith("---")]
+    if not removed:
+        return 0
+    if filepath.endswith(".py"):
+        return _count_python_deleted_lines(chunk, _old_file_lines(compare_branch, filepath))
+    if filepath.endswith(_JS_EXTENSIONS):
+        return sum(1 for _ in _iter_executable_js_lines(removed))
+    return sum(1 for content in removed if content.strip())
+
+
+def _count_deletions_in_diff(diff_text: str, compare_branch: str) -> dict[str, int]:
+    """Return ``{filepath: executable_deleted_lines}`` for a diff text."""
     deletions: dict[str, int] = {}
-    for filepath, chunk in _split_diff_by_file(result.stdout):
-        safe_path = _safe_repo_path(filepath)
-        if safe_path is None or _is_excluded(filepath):
-            continue
-        removed = [raw[1:] for raw in chunk if raw.startswith("-") and not raw.startswith("---")]
-        if not removed:
-            continue
-        if filepath.endswith(".py"):
-            count = _count_python_deleted_lines(chunk, _old_file_lines(compare_branch, filepath))
-        elif filepath.endswith(js_extensions):
-            count = sum(1 for _ in _iter_executable_js_lines(removed))
-        else:
-            count = sum(1 for content in removed if content.strip())
+    for filepath, chunk in _split_diff_by_file(diff_text):
+        count = _count_file_deletions(filepath, chunk, compare_branch)
         if count:
             deletions[filepath] = count
     return deletions
@@ -1074,6 +1149,43 @@ def _parse_condition_coverage_attr(attr_value: str) -> tuple[int, int] | None:
     return int(m.group(2)), int(m.group(3))
 
 
+def _cobertura_line_condition_counts(line_el: ET.Element) -> tuple[int, int] | None:
+    """Return ``(covered, total)`` conditions for a branch line, else ``None``.
+
+    Prefers explicit ``<condition>`` children; falls back to the aggregated
+    ``condition-coverage`` attribute (e.g. ``"100% (2/2)"``).
+    """
+    if line_el.get("branch") != "true":
+        return None
+    conditions = line_el.findall(".//condition")
+    if conditions:
+        total = len(conditions)
+        covered = sum(1 for c in conditions if c.get("coverage") == "100%")
+        return covered, total
+    return _parse_condition_coverage_attr(line_el.get("condition-coverage", ""))
+
+
+def _parse_cobertura_line_branch(line_el: ET.Element) -> tuple[int, tuple[int, int]] | None:
+    """Return ``(line_number, (covered, total))`` for a branch line, else ``None``."""
+    counts = _cobertura_line_condition_counts(line_el)
+    if counts is None:
+        return None
+    return int(line_el.get("number", "0")), counts
+
+
+def _parse_cobertura_class(cls: ET.Element) -> tuple[str, dict[int, tuple[int, int]]] | None:
+    """Parse one Cobertura ``<class>`` into ``(filename, line_branches)``."""
+    lines_data: dict[int, tuple[int, int]] = {}
+    for line_el in cls.iter("line"):
+        parsed = _parse_cobertura_line_branch(line_el)
+        if parsed is not None:
+            line_no, counts = parsed
+            lines_data[line_no] = counts
+    if not lines_data:
+        return None
+    return cls.get("filename", ""), lines_data
+
+
 def _parse_cobertura_branches(report_path: Path) -> dict[str, dict[int, tuple[int, int]]]:
     """Parse Cobertura XML for per-line branch coverage.
 
@@ -1094,29 +1206,10 @@ def _parse_cobertura_branches(report_path: Path) -> dict[str, dict[int, tuple[in
         tree = ET.parse(str(report_path))  # noqa: S314 — internal trusted report
     except (ET.ParseError, OSError):
         return result
-    root = tree.getroot()
-    for cls in root.iter("class"):
-        filename = cls.get("filename", "")
-        lines_data: dict[int, tuple[int, int]] = {}
-        for line_el in cls.iter("line"):
-            if line_el.get("branch") != "true":
-                continue
-            line_no = int(line_el.get("number", "0"))
-            # Prefer explicit <condition> children when present.
-            conditions = line_el.findall(".//condition")
-            if conditions:
-                total = len(conditions)
-                covered = sum(1 for c in conditions if c.get("coverage") == "100%")
-            else:
-                # Fallback: parse the condition-coverage attribute
-                # (e.g. "100% (2/2)" or "50% (1/2)").
-                attr = line_el.get("condition-coverage", "")
-                parsed = _parse_condition_coverage_attr(attr)
-                if parsed is None:
-                    continue
-                covered, total = parsed
-            lines_data[line_no] = (covered, total)
-        if lines_data:
+    for cls in tree.getroot().iter("class"):
+        parsed_class = _parse_cobertura_class(cls)
+        if parsed_class is not None:
+            filename, lines_data = parsed_class
             result[filename] = lines_data
     return result
 
@@ -1152,20 +1245,27 @@ def _parse_lcov_branches(report_path: Path) -> dict[str, dict[int, tuple[int, in
         if raw.startswith("SF:"):
             current_file = raw[3:]
         elif raw.startswith("BRDA:"):
-            parts = raw[5:].split(",")
-            if len(parts) < 4:
-                continue
-            line_no = _parse_lcov_count(parts[0])
-            if line_no <= 0:
-                continue
-            taken_str = parts[3].strip()
-            if current_file not in result:
-                result[current_file] = {}
-            prev = result[current_file].get(line_no, (0, 0))
-            total = prev[1] + 1
-            covered = prev[0] + (1 if _parse_lcov_count(taken_str) > 0 else 0)
-            result[current_file][line_no] = (covered, total)
+            _apply_lcov_brda(result, current_file, raw)
     return result
+
+
+def _apply_lcov_brda(
+    result: dict[str, dict[int, tuple[int, int]]],
+    current_file: str,
+    raw: str,
+) -> None:
+    """Accumulate one ``BRDA`` record into *result* under *current_file*."""
+    parts = raw[5:].split(",")
+    if len(parts) < 4:
+        return
+    line_no = _parse_lcov_count(parts[0])
+    if line_no <= 0:
+        return
+    taken_str = parts[3].strip()
+    file_lines = result.setdefault(current_file, {})
+    prev_covered, prev_total = file_lines.get(line_no, (0, 0))
+    covered = prev_covered + (1 if _parse_lcov_count(taken_str) > 0 else 0)
+    file_lines[line_no] = (covered, prev_total + 1)
 
 
 def _parse_added_line_numbers(diff_text: str) -> set[int]:
@@ -1295,32 +1395,16 @@ def _compute_branch_coverage_from_raw(
 
     Returns ``(branch_covered, branch_total, branch_unmeasured)``.
     """
+    unmeasured_all = sum(changed_files.values())
     if report_path is None or not report_path.exists():
-        return 0, 0, sum(changed_files.values())
+        return 0, 0, unmeasured_all
 
     diff_range = f"{compare_branch}...HEAD"
     safe_range = _safe_repo_path(diff_range)
     if safe_range is None:
-        return 0, 0, sum(changed_files.values())
+        return 0, 0, unmeasured_all
 
-    added_lines: dict[str, set[int]] = {}
-    for filepath in changed_files:
-        safe_path = _safe_repo_path(filepath)
-        if safe_path is None:
-            continue
-        try:
-            result = subprocess.run(
-                ["git", "diff", "--unified=0", safe_range, "--", safe_path],
-                capture_output=True,
-                text=True,
-                check=False,
-                cwd=str(REPO_ROOT),
-            )
-            if result.returncode == 0 and result.stdout:
-                added_lines[filepath] = _parse_added_line_numbers(result.stdout)
-        except Exception:  # noqa: S112 — best-effort per-file parse; skip on any error
-            continue
-
+    added_lines = _collect_added_line_numbers(changed_files, safe_range)
     raw_branch_data = (
         _parse_cobertura_branches(report_path) if language == "Python" else _parse_lcov_branches(report_path)
     )
@@ -1329,22 +1413,68 @@ def _compute_branch_coverage_from_raw(
     branch_covered = 0
     branch_total = 0
     branch_unmeasured = 0
-
     for filepath, changed_count in changed_files.items():
-        file_added = added_lines.get(filepath, set())
-        file_branch = branch_data.get(filepath, {})
-
-        if file_branch:
-            for line_no, (covered, total) in file_branch.items():
-                if line_no in file_added:
-                    branch_covered += covered
-                    branch_total += total
-            measured_lines = {ln for ln in file_branch if ln in file_added}
-            branch_unmeasured += len(file_added - measured_lines)
-        else:
-            branch_unmeasured += len(file_added) if file_added else changed_count
+        covered, total, unmeasured = _file_branch_coverage(
+            added_lines.get(filepath, set()),
+            branch_data.get(filepath, {}),
+            changed_count,
+        )
+        branch_covered += covered
+        branch_total += total
+        branch_unmeasured += unmeasured
 
     return branch_covered, branch_total, branch_unmeasured
+
+
+def _file_added_line_numbers(safe_range: str, safe_path: str) -> set[int] | None:
+    """Return added line numbers for one file, or ``None`` when the diff fails."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--unified=0", safe_range, "--", safe_path],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=str(REPO_ROOT),
+        )
+    except Exception:  # best-effort per-file parse; skip on any error
+        return None
+    if result.returncode != 0 or not result.stdout:
+        return None
+    return _parse_added_line_numbers(result.stdout)
+
+
+def _collect_added_line_numbers(
+    changed_files: dict[str, int],
+    safe_range: str,
+) -> dict[str, set[int]]:
+    """Return ``{filepath: added_line_numbers}`` for every determinable file."""
+    added_lines: dict[str, set[int]] = {}
+    for filepath in changed_files:
+        safe_path = _safe_repo_path(filepath)
+        if safe_path is None:
+            continue
+        lines = _file_added_line_numbers(safe_range, safe_path)
+        if lines is not None:
+            added_lines[filepath] = lines
+    return added_lines
+
+
+def _file_branch_coverage(
+    file_added: set[int],
+    file_branch: dict[int, tuple[int, int]],
+    changed_count: int,
+) -> tuple[int, int, int]:
+    """Return ``(covered, total, unmeasured)`` branches for one changed file."""
+    if not file_branch:
+        return 0, 0, (len(file_added) if file_added else changed_count)
+    covered = 0
+    total = 0
+    for line_no, (line_covered, line_total) in file_branch.items():
+        if line_no in file_added:
+            covered += line_covered
+            total += line_total
+    measured_lines = {line_no for line_no in file_branch if line_no in file_added}
+    return covered, total, len(file_added - measured_lines)
 
 
 def _compute_project_wide_metrics_cobertura(report_path: Path) -> tuple[float, float | None] | None:
@@ -1372,51 +1502,59 @@ def _compute_project_wide_metrics_cobertura(report_path: Path) -> tuple[float, f
     except (ET.ParseError, OSError):
         return None
     root = tree.getroot()
-    total_lines = 0
-    covered_lines = 0
-    for line_el in root.iter("line"):
-        hits = int(line_el.get("hits", "0"))
-        total_lines += 1
-        if hits > 0:
-            covered_lines += 1
+    total_lines, covered_lines = _cobertura_line_totals(root)
     line_pct = (covered_lines / total_lines * 100.0) if total_lines else 0.0
 
     # --- Branch coverage: prefer root-level attributes (pre-aggregated) ---
-    branch_pct: float | None = None
-    branches_covered_attr = root.get("branches-covered")
-    branches_valid_attr = root.get("branches-valid")
-    if branches_covered_attr is not None and branches_valid_attr is not None:
-        bv = int(branches_valid_attr)
-        bc = int(branches_covered_attr)
-        if bv > 0:
-            branch_pct = (bc / bv) * 100.0
-        elif bc == 0 and bv == 0:
-            branch_pct = None  # no branches at all
-        else:
-            branch_pct = 0.0
-    else:
-        # Fallback: count from per-line data (condition-coverage attr or
-        # <condition> children — _parse_cobertura_branches handles both).
-        total_conditions = 0
-        covered_conditions = 0
-        for line_el in root.iter("line"):
-            if line_el.get("branch") != "true":
-                continue
-            # Try explicit <condition> children first.
-            conditions = line_el.findall(".//condition")
-            if conditions:
-                total_conditions += len(conditions)
-                covered_conditions += sum(1 for c in conditions if c.get("coverage") == "100%")
-            else:
-                # Parse condition-coverage attribute (e.g. "50% (1/2)").
-                attr = line_el.get("condition-coverage", "")
-                parsed = _parse_condition_coverage_attr(attr)
-                if parsed is not None:
-                    covered, total = parsed
-                    total_conditions += total
-                    covered_conditions += covered
-        branch_pct = (covered_conditions / total_conditions * 100.0) if total_conditions else None
+    attrs_present, branch_pct = _cobertura_branch_pct_from_root_attrs(root)
+    if not attrs_present:
+        branch_pct = _cobertura_branch_pct_from_lines(root)
     return line_pct, branch_pct
+
+
+def _cobertura_line_totals(root: ET.Element) -> tuple[int, int]:
+    """Return ``(total_lines, covered_lines)`` for a Cobertura root element."""
+    total_lines = 0
+    covered_lines = 0
+    for line_el in root.iter("line"):
+        total_lines += 1
+        if int(line_el.get("hits", "0")) > 0:
+            covered_lines += 1
+    return total_lines, covered_lines
+
+
+def _cobertura_branch_pct_from_root_attrs(root: ET.Element) -> tuple[bool, float | None]:
+    """Return ``(attrs_present, branch_pct)`` from root-level branch attributes.
+
+    *attrs_present* is False when either attribute is absent, so the caller
+    falls back to per-line data.  When both are present, a zero valid total
+    with zero covered denotes "no branches at all" (``None``).
+    """
+    covered_attr = root.get("branches-covered")
+    valid_attr = root.get("branches-valid")
+    if covered_attr is None or valid_attr is None:
+        return False, None
+    valid = int(valid_attr)
+    covered = int(covered_attr)
+    if valid > 0:
+        return True, (covered / valid) * 100.0
+    if covered == 0:
+        return True, None
+    return True, 0.0
+
+
+def _cobertura_branch_pct_from_lines(root: ET.Element) -> float | None:
+    """Compute branch coverage from per-line Cobertura data (fallback path)."""
+    total_conditions = 0
+    covered_conditions = 0
+    for line_el in root.iter("line"):
+        counts = _cobertura_line_condition_counts(line_el)
+        if counts is None:
+            continue
+        covered, total = counts
+        total_conditions += total
+        covered_conditions += covered
+    return (covered_conditions / total_conditions * 100.0) if total_conditions else None
 
 
 def _compute_project_wide_metrics_lcov(report_path: Path) -> tuple[float, float | None] | None:
@@ -1436,20 +1574,32 @@ def _compute_project_wide_metrics_lcov(report_path: Path) -> tuple[float, float 
     hit_branches = 0
     for raw in lines:
         if raw.startswith("DA:"):
-            parts = raw[3:].split(",")
-            if len(parts) >= 2:
-                total_lines += 1
-                if _parse_lcov_count(parts[1]) > 0:
-                    hit_lines += 1
+            total, hit = _lcov_da_counts(raw)
+            total_lines += total
+            hit_lines += hit
         elif raw.startswith("BRDA:"):
-            parts = raw[5:].split(",")
-            if len(parts) >= 4:
-                total_branches += 1
-                if _parse_lcov_count(parts[3].strip()) > 0:
-                    hit_branches += 1
+            total, hit = _lcov_brda_counts(raw)
+            total_branches += total
+            hit_branches += hit
     line_pct = (hit_lines / total_lines * 100.0) if total_lines else 0.0
     branch_pct = (hit_branches / total_branches * 100.0) if total_branches else None
     return line_pct, branch_pct
+
+
+def _lcov_da_counts(raw: str) -> tuple[int, int]:
+    """Return ``(1, hit)`` for one ``DA`` record, or ``(0, 0)`` if malformed."""
+    parts = raw[3:].split(",")
+    if len(parts) < 2:
+        return 0, 0
+    return 1, (1 if _parse_lcov_count(parts[1]) > 0 else 0)
+
+
+def _lcov_brda_counts(raw: str) -> tuple[int, int]:
+    """Return ``(1, hit)`` for one ``BRDA`` record, or ``(0, 0)`` if malformed."""
+    parts = raw[5:].split(",")
+    if len(parts) < 4:
+        return 0, 0
+    return 1, (1 if _parse_lcov_count(parts[3].strip()) > 0 else 0)
 
 
 @dataclass(frozen=True)
@@ -1512,34 +1662,37 @@ class GateResult:
             # measuring branches, so ``branch_passed`` is always None and there
             # is no branch status to surface here.
             return f"[{self.language}] PASS — tiny diff ({self.changed_lines} lines, ≤{TINY_DIFF_THRESHOLD} threshold)"
+        return self._line_part() + self._branch_part() + self._credit_note()
+
+    def _line_part(self) -> str:
         if self.unmeasured_lines > 0 and not self.passed:
-            line_part = (
+            return (
                 f"[{self.language}] FAIL — {self.actual_pct:.1f}% effective coverage, "
                 f"{self.unmeasured_lines} unmeasured line(s) at 0% < {self.threshold}%"
             )
-        elif self.passed:
+        if self.passed:
             pct = f"{self.actual_pct:.1f}%" if self.actual_pct is not None else "?"
-            line_part = f"[{self.language}] PASS — {pct} >= {self.threshold}%"
-        elif self.actual_pct is not None:
-            line_part = f"[{self.language}] FAIL — {self.actual_pct:.1f}% < {self.threshold}%"
-        else:
-            line_part = f"[{self.language}] FAIL — {self.skip_reason}"
+            return f"[{self.language}] PASS — {pct} >= {self.threshold}%"
+        if self.actual_pct is not None:
+            return f"[{self.language}] FAIL — {self.actual_pct:.1f}% < {self.threshold}%"
+        return f"[{self.language}] FAIL — {self.skip_reason}"
+
+    def _branch_part(self) -> str:
         if self.branch_passed is None:
-            branch_part = " (vacuous — no branch records on changed lines)"
-        elif self.branch_actual_pct is not None:
-            bpct = f"{self.branch_actual_pct:.1f}%"
-            if self.branch_passed:
-                branch_part = f" | branch {bpct} >= {self.branch_threshold}%"
-            else:
-                branch_part = f" | branch {bpct} < {self.branch_threshold}%"
-        else:
-            branch_part = ""
-        note = ""
+            return " (vacuous — no branch records on changed lines)"
+        if self.branch_actual_pct is None:
+            return ""
+        bpct = f"{self.branch_actual_pct:.1f}%"
+        if self.branch_passed:
+            return f" | branch {bpct} >= {self.branch_threshold}%"
+        return f" | branch {bpct} < {self.branch_threshold}%"
+
+    def _credit_note(self) -> str:
         if self.deleted_lines > 0 and self.changed_lines > 0:
             # Deletion-only results (changed_lines == 0) already carry the
             # rule in skip_reason; a mixed change gets the credit note here.
-            note = f" | {self.deleted_lines} deleted line(s) earn no coverage credit (FAR-1317)"
-        return line_part + branch_part + note
+            return f" | {self.deleted_lines} deleted line(s) earn no coverage credit (FAR-1317)"
+        return ""
 
 
 def _run_diff_cover(
@@ -2234,6 +2387,61 @@ def evaluate(
     )
 
 
+def _format_pct(value: float | None, missing: str) -> str:
+    """Format a percentage to one decimal, or *missing* when absent."""
+    if value is None:
+        return missing
+    return f"{value:.1f}%"
+
+
+def _summary_measured_cells(r: GateResult) -> tuple[str, str, str]:
+    """Return ``(status, line_pct, branch_pct)`` for a measured result row."""
+    bpct = _format_pct(r.branch_actual_pct, "—")
+    if r.passed:
+        status = "FAIL (branch)" if r.branch_passed is False else "PASS"
+        return status, _format_pct(r.actual_pct, "?"), bpct
+    return "FAIL", _format_pct(r.actual_pct, "N/A"), bpct
+
+
+def _summary_status_cells(r: GateResult) -> tuple[str, str, str]:
+    """Return ``(status, line_pct, branch_pct)`` for one summary table row."""
+    if r.deletion_only_approved:
+        # SKIP-as-PASS authorised by the PR's coverage: deletion-only-approved
+        # label.  Distinct status so the override is visible in the summary.
+        return "PASS (deletion-only approved)", "—", "—"
+    if r.no_added_lines_exempt:
+        # Nothing added to measure: the pass is explicit, never silent.
+        return "PASS (exempt — no added lines)", "—", "—"
+    if r.skipped:
+        return "SKIPPED", "—", "—"
+    if r.tiny_diff:
+        # Tiny diffs are line-only (branch is never measured); there is no
+        # branch status to display.  See ``GateResult.summary``.
+        return "PASS (tiny)", "—", "—"
+    return _summary_measured_cells(r)
+
+
+def _summary_row(r: GateResult) -> str:
+    """Render one Markdown table row for *r*."""
+    status, pct, bpct = _summary_status_cells(r)
+    bthr = f"{r.branch_threshold}%" if r.branch_threshold else "—"
+    return (
+        f"| {r.language} | {status} | {pct} | {r.threshold}% "
+        f"| {bpct} | {bthr} "
+        f"| {r.changed_lines} | {r.measured_lines} | {r.unmeasured_lines} |"
+    )
+
+
+def _emit_failure_annotation(r: GateResult) -> None:
+    """Emit the ``::error::`` annotation for one failing result, if any."""
+    if not r.skipped and not r.passed and not r.tiny_diff:
+        msg = f"[{r.language}] Coverage gate failed: {r.summary()}"
+        print(f"::error::{msg}")
+    elif r.branch_passed is False:
+        msg = f"[{r.language}] Branch coverage gate failed: {r.summary()}"
+        print(f"::error::{msg}")
+
+
 def _write_summary(results: list[GateResult]) -> None:
     """Write a GitHub step summary table and emit ::error:: annotations on failure."""
     summary_lines = [
@@ -2241,42 +2449,7 @@ def _write_summary(results: list[GateResult]) -> None:
         "| Language | Status | Line % | Line Thr | Branch % | Branch Thr | Changed Lines | Measured | Unmeasured |",
         "|----------|--------|--------|----------|----------|------------|---------------|----------|------------|",
     ]
-    for r in results:
-        if r.deletion_only_approved:
-            # SKIP-as-PASS authorised by the PR's coverage: deletion-only-approved
-            # label.  Distinct status so the override is visible in the summary.
-            status = "PASS (deletion-only approved)"
-            pct = "—"
-            bpct = "—"
-        elif r.no_added_lines_exempt:
-            # Nothing added to measure: the pass is explicit, never silent.
-            status = "PASS (exempt — no added lines)"
-            pct = "—"
-            bpct = "—"
-        elif r.skipped:
-            status = "SKIPPED"
-            pct = "—"
-            bpct = "—"
-        elif r.tiny_diff:
-            # Tiny diffs are line-only (branch is never measured); there is no
-            # branch status to display.  See ``GateResult.summary``.
-            status = "PASS (tiny)"
-            pct = "—"
-            bpct = "—"
-        elif r.passed:
-            status = "PASS" if (r.branch_passed is not False) else "FAIL (branch)"
-            pct = f"{r.actual_pct:.1f}%" if r.actual_pct is not None else "?"
-            bpct = f"{r.branch_actual_pct:.1f}%" if r.branch_actual_pct is not None else "—"
-        else:
-            status = "FAIL"
-            pct = f"{r.actual_pct:.1f}%" if r.actual_pct is not None else "N/A"
-            bpct = f"{r.branch_actual_pct:.1f}%" if r.branch_actual_pct is not None else "—"
-        bthr = f"{r.branch_threshold}%" if r.branch_threshold else "—"
-        summary_lines.append(
-            f"| {r.language} | {status} | {pct} | {r.threshold}% "
-            f"| {bpct} | {bthr} "
-            f"| {r.changed_lines} | {r.measured_lines} | {r.unmeasured_lines} |"
-        )
+    summary_lines.extend(_summary_row(r) for r in results)
 
     summary_lines.append("")
 
@@ -2288,12 +2461,7 @@ def _write_summary(results: list[GateResult]) -> None:
     print("\n".join(summary_lines))
 
     for r in results:
-        if not r.skipped and not r.passed and not r.tiny_diff:
-            msg = f"[{r.language}] Coverage gate failed: {r.summary()}"
-            print(f"::error::{msg}")
-        elif r.branch_passed is False:
-            msg = f"[{r.language}] Branch coverage gate failed: {r.summary()}"
-            print(f"::error::{msg}")
+        _emit_failure_annotation(r)
 
 
 @dataclass(frozen=True)
