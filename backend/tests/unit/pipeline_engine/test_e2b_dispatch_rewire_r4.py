@@ -493,9 +493,9 @@ def test_provider_errors_translate_onto_the_existing_taxonomy_without_reparentin
     translated = _translate_provider_dispatch_error(ProvisionTimeoutError("never ready"))
     assert isinstance(translated, SandboxQueueTimeoutError)
 
-    # Non-provider failures translate to themselves (identity, not a copy).
-    original = ValueError("nope")
-    assert _translate_provider_dispatch_error(original) is original
+    # Non-provider failures do NOT translate: the helper returns None so the
+    # caller re-raises/classifies the original exception untouched.
+    assert _translate_provider_dispatch_error(ValueError("nope")) is None
 
     # No re-parenting in EITHER direction (ADR 040: additive only).
     assert not issubclass(RateLimitedError, SandboxNodeFailedError)
@@ -1057,11 +1057,9 @@ def _resource_watchdog(handle: Any, *, cpu_cap: int = 50) -> Any:
         stall=MagicMock(),
         node_id="n-metrics",
         run_id="r-metrics",
-        watch_log_path=None,
-        watch_globs=[],
+        watch=nr._WatchdogWatchConfig(log_path=None, globs=[], percentage_delta=None),
         resource_limits={"cpu_usage_pct": cpu_cap},
         sandbox_mode="script",
-        stdout_percentage_delta=None,
         stream_broker=None,
         drained_chunks=[],
         wall_clock=nr._WatchdogWallClock(None, 0.0),
