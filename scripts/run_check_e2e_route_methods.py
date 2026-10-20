@@ -314,7 +314,10 @@ _QUERY_OPERATOR_RE = re.compile(r"(?<!\?)\?(?![.?])")
 #: chain of METHOD CALLS on that name (``queryParams.toString()``,
 #: ``search.get('page')``) or a literal default. A bare property read
 #: (``params.id``, ``filters.x``) is a path segment, not a query string.
-_QUERY_SUFFIX_CALL_TAIL_RE = re.compile(r"(?:\s*(?:\?\.|\.)\s*[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)\s*)+")
+#: One call per match; ``_is_query_suffix_call_tail`` applies it repeatedly.
+#: A single repeated group over these tokens backtracks catastrophically on
+#: whitespace-heavy input (python:S5852), so the repetition is a loop.
+_QUERY_SUFFIX_CALL_RE = re.compile(r"\s*(?:\?\.|\.)\s*[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)")
 _QUERY_SUFFIX_DEFAULT_RE = re.compile(r"\s*(?:\?\?|\|\|)\s*(?:''|\"\"|``)")
 #: A trailing TypeScript assertion (``as const``, ``as string``, ``satisfies X``).
 _TS_ASSERTION_RE = re.compile(r"(?:^|\s)(?:as|satisfies)\s+[^+\n]+$")
@@ -889,7 +892,26 @@ def _is_query_suffix(expression: str) -> bool:
     # it as a query dropped the segment, so
     # ``/api/v1/pipelines/${params.id}/graph`` matched the collection route and
     # reported the real route as stale.
-    return bool(_QUERY_SUFFIX_CALL_TAIL_RE.fullmatch(rest) or _QUERY_SUFFIX_DEFAULT_RE.fullmatch(rest))
+    return bool(_is_query_suffix_call_tail(rest) or _QUERY_SUFFIX_DEFAULT_RE.fullmatch(rest))
+
+
+def _is_query_suffix_call_tail(rest: str) -> bool:
+    """True when *rest* is one or more method calls on a query name.
+
+    Matched call-by-call rather than with one repeated regex group: the
+    ``(?:\\s*(?:\\?\\.|\\.)...\\s*)+`` form backtracks catastrophically on
+    whitespace-heavy input (python:S5852). Each iteration consumes one complete
+    call, so the scan is linear.
+    """
+    position = 0
+    matched = False
+    while True:
+        match = _QUERY_SUFFIX_CALL_RE.match(rest, position)
+        if match is None:
+            break
+        matched = True
+        position = match.end()
+    return matched and not rest[position:].strip()
 
 
 def _ternary_branches_are_query(expression: str) -> bool:

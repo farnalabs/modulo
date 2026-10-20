@@ -1514,7 +1514,12 @@ jobs:
           FERNET_KEY: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
           MODULO_CSRF_ENABLED: "false"
         run: |
-          uv sync --frozen
+          # NOSONAR githubactions:S8541: the backend lockfile pins source-archive
+          # deps (pytest-bdd has no wheel, ibm-cos-sdk is sdist-only), so
+          # `--no-build` hard-fails this sync on a cold uv cache. `--frozen`
+          # pins the exact revisions, so the builds are deterministic and
+          # trusted (no untrusted setup scripts execute).
+          uv sync --frozen  # NOSONAR
           uv run --no-build --no-sync python ../scripts/run_check_e2e_route_methods.py
 
   # Break-glass deploy gate = acceptance (b) of the break-glass admin recovery
