@@ -7619,13 +7619,6 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     # commit (FAR-162, P6'): the terminalizers write raw UPDATEs and never run
     # finalize_cost.
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
-    # FAR-1993: the mid-graph age gate's terminalized runs, whose DERIVED
-    # sandbox spend is attributed post-commit from their heartbeat liveness
-    # window (never from the age bound — see _heartbeat_liveness_seconds).
-    # A separate accumulator because only this terminalizer's rows carry a
-    # derived cost; it is unwound alongside terminalized_run_ids so a
-    # rolled-back org contributes no attribution.
-    age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
 
     redis_client = AsyncRedis.from_url(
         settings.redis_url,
@@ -7664,7 +7657,6 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                     redis_client=redis_client,
                     summary=summary,
                     terminalized_run_ids=terminalized_run_ids,
-                    age_gate_run_ids=age_gate_run_ids,
                     early_detect_minutes=early_detect_minutes,
                     stage=stage,
                 )
@@ -7772,6 +7764,23 @@ class _ReconcileContext:
     org_budget_seconds: int
 
 
+@dataclass(frozen=True)
+class _ReconcileOrgLimits:
+    """The optional per-org work bounds for one ``_reconcile_org`` pass.
+
+    Bundled so ``_reconcile_org`` stays under the S107 parameter ceiling while
+    keeping the row-pass bounds together and their defaults in one place.
+    ``terminalize_max`` bounds each terminalizer UPDATE (a big backlog drains
+    over later ticks); ``row_budget`` is the remainder of the tick's cumulative
+    row budget and ``early_detect_minutes`` the caller's early-detection
+    override. All three are per-pass knobs, never org state.
+    """
+
+    terminalize_max: int = _TERMINALIZE_UNLIMITED_ROWS
+    early_detect_minutes: int | None = None
+    row_budget: int | None = None
+
+
 async def _dispatcher_reconcile_body(
     *,
     _settings: Any,
@@ -7785,7 +7794,6 @@ async def _dispatcher_reconcile_body(
     redis_client: AsyncRedis,
     summary: dict[str, Any],
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
-    age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
     early_detect_minutes: int | None = None,
     stage: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -7804,12 +7812,16 @@ async def _dispatcher_reconcile_body(
     inner budget, and ``record_facts`` + the compensating sweeps are always
     reached.
 
-    ``age_gate_run_ids`` is the FAR-1993 mid-graph derived-cost accumulator; a
-    direct caller that omits it gets a fresh empty accumulator (only the
-    production ``dispatcher_reconcile`` path needs to observe it).
+    The FAR-1993 mid-graph derived-cost accumulator (``age_gate_run_ids``) is
+    created here: this body is its only producer AND its only consumer (via
+    ``_terminalize_run_facts``), so it needs no caller-supplied handle.
     """
-    if age_gate_run_ids is None:
-        age_gate_run_ids = []
+    # FAR-1993: only the mid-graph age gate's terminalized runs get a DERIVED
+    # sandbox cost, attributed post-commit from their heartbeat liveness
+    # window. A separate accumulator because only that terminalizer's rows
+    # carry a derived cost; it is unwound alongside ``terminalized_run_ids`` so
+    # a rolled-back org contributes no attribution.
+    age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
     # FAR-1525: the tick's working clock and time knobs. Captured at body
     # entry (the outer asyncio.timeout starts microseconds earlier —
     # immaterial here) so each org's slice can be clamped to the budget that
@@ -8045,9 +8057,11 @@ async def _attempt_reconcile_org(
                 summary=ctx.summary,
                 terminalized_run_ids=ctx.terminalized_run_ids,
                 age_gate_run_ids=ctx.age_gate_run_ids,
-                terminalize_max=ctx.terminalize_max,
-                early_detect_minutes=ctx.early_detect_minutes,
-                row_budget=row_budget,
+                limits=_ReconcileOrgLimits(
+                    terminalize_max=ctx.terminalize_max,
+                    early_detect_minutes=ctx.early_detect_minutes,
+                    row_budget=row_budget,
+                ),
                 stage=stage,
             )
     except TimeoutError:
@@ -8439,14 +8453,12 @@ async def _reconcile_org(
     summary: dict[str, Any],
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
     age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
-    terminalize_max: int = _TERMINALIZE_UNLIMITED_ROWS,
-    early_detect_minutes: int | None = None,
-    row_budget: int | None = None,
+    limits: _ReconcileOrgLimits = _ReconcileOrgLimits(),
     stage: dict[str, str] | None = None,
 ) -> int:
     """Run one org's reconcile pass (terminalizers + row select + per-row loop).
 
-    FAR-1425: ``row_budget`` is the remainder of the tick's cumulative
+    FAR-1425: ``limits.row_budget`` is the remainder of the tick's cumulative
     ``max_rows`` budget.  It is applied TWICE, because the budget is only
     meaningful if it can stop the work:
 
@@ -8462,8 +8474,9 @@ async def _reconcile_org(
     rows left; the overflow is counted in ``summary["rows_deferred"]`` (one
     entry for this org's capped scan) and drains on a later 60s tick.
 
-    ``row_budget=None`` (a direct caller such as a test that is exercising
-    one specific branch) means unbounded, exactly as before FAR-1425.
+    ``limits.row_budget=None`` (a direct caller such as a test that is
+    exercising one specific branch) means unbounded, exactly as before
+    FAR-1425.
 
     TIME: this pass is bounded by the CALLER (FAR-1525) — the reconcile body
     wraps the call in ``asyncio.timeout`` at
@@ -8556,6 +8569,9 @@ async def _reconcile_org(
         # (only the reconcile body consumes it).
         age_gate_run_ids = []
     age_gate_len_before = len(age_gate_run_ids)
+    terminalize_max = limits.terminalize_max
+    early_detect_minutes = limits.early_detect_minutes
+    row_budget = limits.row_budget
     async with factory() as session, session.begin():
         _mark("session-acquired")
         # FAR-1601: bound THIS org transaction's row-lock waits FIRST — the

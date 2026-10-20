@@ -38,6 +38,7 @@ from modulo.core.pipeline_engine.executor import RunRetryPolicyError
 from modulo.core.pipeline_engine.watchdog_retry import WatchdogRetryOutcome
 from modulo.core.pipeline_execution import (
     _fail_overdue_node,
+    _record_derived_deadline_cost,
     _sweep_org_stale_runs,
     _watchdog_retry_enabled_for_job,
     run_executor_with_watchdog,
@@ -341,6 +342,29 @@ async def test_deadline_kill_books_no_derived_cost_when_terminal_write_rejected(
         await exec_task
     fail.assert_awaited_once()
     derived.assert_not_awaited()
+
+
+async def test_record_derived_deadline_cost_rereises_cancelled_error() -> None:
+    """Worker shutdown is not ours to swallow.
+
+    ``_record_derived_deadline_cost`` is fail-open for ordinary failures, but a
+    ``CancelledError`` from the compensating write must propagate so the SAQ
+    job is actually cancelled rather than silently abandoned mid-write.
+    """
+    with (
+        patch(
+            "modulo.core.pipeline_execution.async_sessionmaker",
+            side_effect=asyncio.CancelledError(),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _record_derived_deadline_cost(
+            MagicMock(),
+            "run-1",
+            "org-1",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=300 / 3600.0,
+        )
 
 
 # ---------------------------------------------------------------------------

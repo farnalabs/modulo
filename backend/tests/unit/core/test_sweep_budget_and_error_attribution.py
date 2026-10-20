@@ -752,7 +752,7 @@ async def _run_org(rows: list[Any], row_budget: int | None) -> tuple[dict[str, A
             enqueue_failed_redispatched=0,
             summary=summary,
             terminalized_run_ids=[],
-            row_budget=row_budget,
+            limits=ch._ReconcileOrgLimits(row_budget=row_budget),
         )
     return summary, session, one_row
 
@@ -819,7 +819,7 @@ class TestSingleOrgRowBudget:
         captured: list[int] = []
 
         async def fake_reconcile_org(*args: Any, **kwargs: Any) -> int:
-            captured.append(int(kwargs["row_budget"]))
+            captured.append(int(kwargs["limits"].row_budget))
             summary["scanned"] += 7
             return 0
 
