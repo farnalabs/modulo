@@ -34,6 +34,7 @@ _CAPACITY_EVENTS = (
     "capacity_backpressure",
     "capacity_saturation",
     "capacity_recovered",
+    "capacity_redis_pressure",
 )
 
 _EXPECTED_LEVELS = {
@@ -43,6 +44,7 @@ _EXPECTED_LEVELS = {
     "capacity_backpressure": "warning",
     "capacity_saturation": "warning",
     "capacity_recovered": "info",
+    "capacity_redis_pressure": "warning",
 }
 
 _CONSTANT_NAMES = {
@@ -52,6 +54,7 @@ _CONSTANT_NAMES = {
     "capacity_backpressure": "EVENT_CAPACITY_BACKPRESSURE",
     "capacity_saturation": "EVENT_CAPACITY_SATURATION",
     "capacity_recovered": "EVENT_CAPACITY_RECOVERED",
+    "capacity_redis_pressure": "EVENT_CAPACITY_REDIS_PRESSURE",
 }
 
 
@@ -159,6 +162,14 @@ _PAYLOADS = {
     "capacity_recovered": {
         "subject_label": "nightly",
         "previous_level": "warning",
+    },
+    "capacity_redis_pressure": {
+        "used_memory_bytes": 900 * 1024 * 1024,
+        "maxmemory_bytes": 1024 * 1024 * 1024,
+        "used_memory_label": "900 MB",
+        "maxmemory_label": "1 GB",
+        "used_percent": 87.9,
+        "policy": "volatile-lru",
     },
 }
 
