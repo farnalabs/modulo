@@ -67,10 +67,18 @@ if (typeof (globalThis.CSS as { escape?: unknown }).escape !== 'function') {
 // the dialog and assert the dialog actually closed.
 const dialogPrototype = globalThis.HTMLDialogElement?.prototype
 if (dialogPrototype && typeof dialogPrototype.showModal !== 'function') {
+  // The element that had focus before the modal opened. Browsers restore focus
+  // to it when the dialog closes; jsdom needs that modelled explicitly or a
+  // focus-restore assertion would be testing nothing.
+  const returnFocus = new WeakMap<HTMLDialogElement, HTMLElement | null>()
+
   dialogPrototype.showModal = function (this: HTMLDialogElement): void {
     if (this.open) {
       throw new DOMException('The dialog is already open', 'InvalidStateError')
     }
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
+    returnFocus.set(this, previouslyFocused)
     this.setAttribute('open', '')
     const focusTarget =
       this.querySelector<HTMLElement>('[autofocus]') ??
@@ -83,7 +91,15 @@ if (dialogPrototype && typeof dialogPrototype.showModal !== 'function') {
   dialogPrototype.close = function (this: HTMLDialogElement): void {
     if (!this.open) return
     this.removeAttribute('open')
-    this.dispatchEvent(new Event('close'))
+    const restore = returnFocus.get(this)
+    returnFocus.delete(this)
+    // Browsers queue the `close` event rather than firing it synchronously
+    // from close(); model that so a handler that toggles render state cannot
+    // pass only because jsdom was synchronous.
+    queueMicrotask(() => {
+      this.dispatchEvent(new Event('close'))
+    })
+    if (restore?.isConnected) restore.focus()
   }
 }
 
