@@ -1926,6 +1926,45 @@ def test_documented_callee_with_a_non_api_target_is_not_unanalysed() -> None:
         assert bool(notes) is expects_note, source
 
 
+def test_object_property_callee_value_shape_is_never_a_hard_failure() -> None:
+    # FAR-1847: a property in an object/type literal is never a call, whatever
+    # its VALUE looks like. Only values that themselves STARTED a call were
+    # excluded, so a non-call value hard-failed valid TS:
+    # ``{ fetch: (url) => ... }`` and ``{ fetch: customFetch }`` exited 1 while
+    # ``{ fetch: vi.fn() }`` and ``{ fetch: async (url) => ... }`` did not.
+    for source in (
+        "const adapter = { fetch: (url: string) => Promise.resolve(url) }\n",
+        "const adapter = { fetch: customFetch }\n",
+        "const adapter = { fetch: async (url: string) => url }\n",
+        "type Client = { fetch: (url: string) => Promise<Response> }\n",
+    ):
+        notes: list[str] = []
+        unanalysed: list[str] = []
+
+        calls = _checker.extract_http_calls(source, FILENAME, notes, unanalysed)
+
+        assert not calls, source
+        assert not notes, source
+        assert not unanalysed, source
+
+
+def test_object_property_exclusion_does_not_swallow_a_destructuring_binding() -> None:
+    # The ``:`` alone cannot tell a property from a destructuring pattern. The
+    # binding captures the REAL callee, so it must stay a (unanalysed) candidate
+    # - excluding every ``key: value`` would hide a request made through it.
+    for source in (
+        "const { fetch: f } = globalThis\n",
+        "const { fetch: impl } = window\n",
+    ):
+        unanalysed: list[str] = []
+
+        calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+        assert not calls, source
+        assert len(unanalysed) == 1, source
+        assert unanalysed[0].startswith(f"{FILENAME}:1: unanalysed E2E HTTP call shape")
+
+
 def test_mid_path_glob_segment_normalises_to_a_parameter() -> None:
     # The docstring says a glob wildcard normalises to one path segment; a
     # single-``*`` segment used to return ``None``.
@@ -2131,7 +2170,25 @@ def test_regex_literal_escapes_and_character_classes_terminate() -> None:
     # ``\/`` is an escaped slash and a ``/`` inside ``[...]`` belongs to the
     # character class, so neither ends the regex early and leaks the rest of
     # the literal into the structural scan.
+    #
+    # Assert the MASKED OUTPUT directly. Asserting a later call is still found
+    # is vacuous here: the call sits on the NEXT line, so it survives even when
+    # the regex ends at the first ``/`` - deleting either the escape or the
+    # character-class branch left that assertion green. The exact mask changes
+    # if either branch is removed.
+    assert _checker.mask_non_code("/a\\/b[c/d]/") == " " * 11
+
+    masked = _checker.mask_non_code("/a\\/b[c/d]/\nnext()")
+
+    assert masked == " " * 11 + "\nnext()"
+
+    # A whole line keeps its routing: the regex is blanked, the code after it is
+    # untouched (not swallowed), and the stale call below is still reported.
     source = "const pattern = /a\\/b[c/d]/\nawait apiFetch(apiBase, token, 'PATCH', '/api/v1/pipelines/1/graph')\n"
+    first_line, second_line = _checker.mask_non_code(source).splitlines()
+
+    assert first_line == "const pattern = " + " " * 11
+    assert "await apiFetch(apiBase, token," in second_line
 
     calls = _calls(source)
 
@@ -2182,3 +2239,53 @@ def test_documented_limitation_renamed_page_fixture_root_is_not_enumerated() -> 
         assert not calls
         assert not notes
         assert not unanalysed
+
+
+def test_documented_limitation_wrapped_division_swallows_the_rest_of_the_file() -> None:
+    # KNOWN LIMITATION, see the module docstring's "Known limitations" section.
+    #
+    # A ``/`` that begins a line is treated as a regex delimiter, so wrapped
+    # division is masked as a regex. The apostrophe in the trailing comment then
+    # opens a string literal that blanks the code after it, so the stale call
+    # below produces no descriptor, no note and no unanalysed entry. This pins
+    # the CURRENT behaviour so it cannot drift silently; if a future change
+    # handles wrapped division, this test fails and the docstring must change
+    # with it.
+    source = (
+        "const ratio = total\n"
+        "  / 2 // don't scale\n"
+        "await apiFetch(apiBase, token, 'PATCH', '/api/v1/pipelines/1/graph')\n"
+    )
+    notes: list[str] = []
+    unanalysed: list[str] = []
+
+    calls = _checker.extract_http_calls(source, FILENAME, notes, unanalysed)
+
+    assert not calls
+    assert not notes
+    assert not unanalysed
+
+
+def test_documented_limitation_request_verb_through_a_chain_is_not_enumerated() -> None:
+    # KNOWN LIMITATION, see the module docstring's "Known limitations" section.
+    #
+    # A request verb reached through a member/optional chain on a receiver that
+    # is not one of the documented spellings (``page.request.``,
+    # ``context.request.``, ``page.context().request.`` or a bare ``request.``)
+    # is invisible: no descriptor, no note and no unanalysed entry. This pins
+    # the CURRENT behaviour so it cannot drift silently; if a future change
+    # starts enumerating these shapes, this test fails and the docstring must
+    # change with it.
+    for source in (
+        "await this.page.request.patch('/api/v1/pipelines/1/graph')\n",
+        "await page?.request.patch('/api/v1/pipelines/1/graph')\n",
+        "await page.context()?.request.patch('/api/v1/pipelines/1/graph')\n",
+    ):
+        notes: list[str] = []
+        unanalysed: list[str] = []
+
+        calls = _checker.extract_http_calls(source, FILENAME, notes, unanalysed)
+
+        assert not calls, source
+        assert not notes, source
+        assert not unanalysed, source

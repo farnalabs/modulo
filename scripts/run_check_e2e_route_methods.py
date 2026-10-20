@@ -107,15 +107,15 @@ is silent. The check therefore also enumerates CANDIDATE call OCCURRENCES for
 the syntactic families documented above and below, and requires each candidate
 it enumerates to be accounted for.
 
-What the ledger DOES check: it enumerates candidate occurrences for calls whose
-callee is spelled directly or reached through a member chain, a quoted bracket
-key, or an optional chain - ``apiFetch(``, ``fetch(``,
-``fetchWithTransientRetry(``, their property-qualified / bracket / optional-chain
-forms, the ``page.request`` / ``context.request`` / ``request`` verb calls
-(direct, bracket-accessed and optional-chain), alias captures made by the
-documented binding forms (``const f = window.fetch``, ``const call = apiFetch``,
-``const api = page.request``, ``const { fetch: f } = globalThis``,
-``const { get } = page.request``, a renamed ``request`` fixture), plus
+What the ledger DOES check: it enumerates candidate occurrences for the
+DOCUMENTED callee spellings - the bare forms and their property-qualified /
+bracket / optional-chain variants on the documented roots - ``apiFetch(``,
+``fetch(``, ``fetchWithTransientRetry(``, the ``page.request`` /
+``context.request`` / ``request`` verb calls (direct, bracket-accessed and
+optional-chain), alias captures made by the documented binding forms (``const f
+= window.fetch``, ``const call = apiFetch``, ``const api = page.request``,
+``const { fetch: f } = globalThis``, ``const { get } = page.request``, a renamed
+``request`` fixture), plus
 method-reference lines (``.request().method(``, ``request.method(``, and
 HTTP-method literals compared against a method expression: ``=== 'PATCH'``,
 ``!== 'GET'``, ``includes(...)``). Every candidate CALL occurrence enumerated
@@ -138,8 +138,13 @@ unaccounted - it names no route this checker can validate, but it is never
 dropped silently.
 A candidate is only excluded structurally when it is provably not a call (an
 ``apiFetch`` / ``fetchWithTransientRetry`` function declaration, an
-``import``/``export`` binding, or a ``typeof`` type reference / assignment
-target).
+``import``/``export`` binding, a ``typeof`` type reference / assignment target,
+a property in an object or type literal - ``{ fetch: vi.fn() }``,
+``{ fetch: customFetch }``, ``{ fetch: (url) => ... }`` - whose VALUE shape does
+not matter because a property never calls the callee, or an interface/type
+member signature such as ``interface Client { fetch(...) }``). A destructuring
+pattern is NOT excluded: it captures the real callee, so
+``const { fetch: f } = globalThis`` stays a candidate.
 
 What the ledger does NOT check: it is a syntactic scan, not a JavaScript
 interpreter. It does not resolve arbitrary runtime aliasing, dynamic property
@@ -199,6 +204,33 @@ adminPage.route(...)``, are likewise not recognised as the ``page`` root.
 Requests made only through such a renamed root produce no descriptor, no note
 and no violation. This limitation is not modelled here; the AST rewrite is
 tracked separately and pins it with a test.
+
+A ``/`` that begins a line is treated as opening a regex literal, which is
+wrong for a wrapped division. In::
+
+    const ratio = total
+      / 2 // don't scale
+
+JavaScript continues the previous expression as division, but the scanner has no
+parser and reads ``/ 2 /`` as a regex literal. The apostrophe in the trailing
+comment then opens a string literal and blanks the code after it, hiding every
+call below: no descriptor, no note, no violation. Do not rely on this guard for
+a file that contains wrapped division next to an apostrophe comment - write the
+division on one line. This limitation is pinned by a test.
+
+Request-verb calls reached through a member or optional chain on a receiver that
+is not one of the documented spellings are not enumerated at all:
+``this.page.request.patch(...)``, ``page?.request.patch(...)`` and
+``page.context()?.request.patch(...)`` produce no descriptor, no note and no
+violation. Only the spellings documented above are recognised - a verb directly
+after ``page.request.``, ``context.request.``, ``page.context().request.`` or a
+bare ``request.``, plus those same forms' bracket-accessed and ``request?.``
+optional-chain variants; a leading ``this.`` or a ``?.`` between the root and
+``request`` breaks the spelling, and the text scan does not try to see through
+it. (A context captured into a local, ``const api = page.request``, is still
+enumerated as a binding candidate, so its capture fails loudly until annotated;
+the chain forms above are not enumerated at all.) This limitation is pinned by a
+test.
 
 Exit codes: 0 clean, 1 stale descriptors or unanalysed call shapes (one line
 each, with file:line, the method, the path and the closest live route), 2
@@ -531,8 +563,11 @@ def _regex_starts_here(text: str, index: int) -> bool:
 
     A ``/`` after an operand is division (``a / b``, ``(a) / b``, ``/re/.test(x) / 2``);
     a ``/`` after an operator, an opening bracket, a comma, a colon or a keyword
-    such as ``return`` begins a regex literal. A ``/`` at the start of a line can
-    only be a regex or a comment - division never starts a line under ASI.
+    such as ``return`` begins a regex literal. A ``/`` at the start of a line is
+    ASSUMED to begin a regex or a comment: this scanner has no parser, so it
+    cannot tell that a wrapped division (``total`` on one line, ``/ 2`` on the
+    next) continues the previous expression. That assumption is a known
+    limitation - see the module docstring's ``Known limitations``.
     """
     cursor = index - 1
     while cursor >= 0 and text[cursor] in " \t\r":
@@ -1221,20 +1256,27 @@ def _is_non_call_property_or_type(masked: str, start: int, end: int) -> bool:
     """True when a ``fetch`` identifier here is clearly NOT a call.
 
     Two shapes read like a ``fetch`` call to the marker but bind nothing: an
-    object property whose value is another call (``{ fetch: vi.fn() }``) and a
-    type-member signature (``interface Client { fetch(...) }``). They carry no
-    route, so they are excluded structurally rather than reported.
+    object/type property whose value is ANY expression (``{ fetch: vi.fn() }``,
+    ``{ fetch: customFetch }``, ``{ fetch: (url) => ... }``, ``type Client = {
+    fetch: (url) => ... }``) and a type-member signature (``interface Client {
+    fetch(...) }``). They carry no route, so they are excluded structurally
+    rather than reported.
 
-    A destructured alias (``const { fetch: f } = globalThis``) is *not*
-    excluded: it captures the real ``fetch`` and is a genuine (unanalysed)
-    candidate. The ``:`` alone cannot distinguish the two, so only a property
-    value that itself starts a call is treated as a non-call position.
+    The VALUE shape does not matter: a property in an object or type literal
+    never calls the callee, so excluding only values that themselves start a
+    call made the checker reject valid TS such as
+    ``const adapter = { fetch: (url: string) => Promise.resolve(url) }``.
+
+    A destructuring pattern is *not* excluded: ``const { fetch: f } = globalThis``
+    and ``async ({ fetch: f }) => ...`` capture the real ``fetch`` and are
+    genuine (unanalysed) candidates. The ``:`` alone cannot distinguish the two,
+    so the enclosing brace decides - see :func:`_in_destructuring_pattern`.
     """
     index = end
     while index < len(masked) and masked[index] in " \t\r\n":
         index += 1
     if index < len(masked) and masked[index] == ":":
-        return bool(re.match(r"\s*[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*\(", masked[index + 1 :]))
+        return not _in_destructuring_pattern(masked, start)
     return _in_type_member_position(masked, start)
 
 
@@ -2117,6 +2159,94 @@ def _request_binding_offsets(masked: str) -> list[int]:
     return offsets
 
 
+def _enclosing_brace(masked: str, offset: int) -> tuple[int, int] | None:
+    """Return the ``(open, close)`` offsets of the brace enclosing *offset*.
+
+    Literals and comments are already blanked in *masked*, so brace counting
+    sees structure only. ``None`` when *offset* is not inside a brace.
+    """
+    depth = 0
+    opening = -1
+    index = offset - 1
+    while index >= 0:
+        char = masked[index]
+        if char == "}":
+            depth += 1
+        elif char == "{":
+            if depth == 0:
+                opening = index
+                break
+            depth -= 1
+        index -= 1
+    if opening < 0:
+        return None
+    depth = 0
+    for index in range(opening, len(masked)):
+        char = masked[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return opening, index
+    return None
+
+
+def _in_destructuring_parameter(masked: str, opening: int, offset: int) -> bool:
+    """True when the brace at *opening* starts a destructured PARAMETER.
+
+    ``async ({ fetch: f }) => ...`` and ``async (a, { fetch: f }) => ...`` bind
+    the real callee. A brace that follows a parameter NAME or a type annotation
+    (``function f(opts: { fetch: impl })``) is a type/value position, not a
+    pattern, so only a parameter that starts at the brace (or after a comma)
+    counts.
+    """
+    for pattern in (_ARROW_PARAM_LIST_RE, _FUNCTION_PARAM_LIST_RE):
+        for match in pattern.finditer(masked):
+            start, end = match.start(1), match.end(1)
+            if not (start <= offset < end):
+                continue
+            prefix = masked[start:opening].strip()
+            if not prefix or prefix.endswith(","):
+                return True
+    return False
+
+
+def _in_destructuring_pattern(masked: str, offset: int) -> bool:
+    """True when *offset* sits in a destructuring PATTERN (a binding).
+
+    An object/type-literal property binds nothing, but a destructuring pattern
+    captures the real callee: ``const { fetch: f } = globalThis``,
+    ``const { fetch: f }: Client = globalThis``, ``({ fetch: f } = globalThis)``
+    and a destructured parameter are genuine (unanalysed) candidates.
+
+    The enclosing brace is a pattern when it is introduced by a declaration
+    keyword, starts a parameter (see :func:`_in_destructuring_parameter`), or is
+    the left side of an assignment (``({ fetch: f } = ...)``). Anything else -
+    including a type annotation (``const t: { fetch: impl } = ...``) - is a
+    property in an object/type literal, whose value is never a call here.
+    """
+    braces = _enclosing_brace(masked, offset)
+    if braces is None:
+        return False
+    opening, closing = braces
+    before = masked[:opening].rstrip()
+    if re.search(r"(?:^|[^\w$])(?:const|let|var)$", before):
+        return True
+    if _in_destructuring_parameter(masked, opening, offset):
+        return True
+    after = closing + 1
+    while after < len(masked) and masked[after] in " \t\r\n":
+        after += 1
+    assigned = (
+        after < len(masked)
+        and masked[after] == "="
+        and not masked.startswith("=>", after)
+        and not masked.startswith("==", after)
+    )
+    return assigned and before.endswith("(")
+
+
 def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
     """Return ``(offset, line)`` for every HTTP-call CANDIDATE occurrence.
 
@@ -2212,9 +2342,12 @@ def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
     for match in _FETCH_RE.finditer(masked):
         if _is_function_declaration(masked, match.start()):
             continue
-        # A property key (``{ fetch: vi.fn() }``) or an interface member
-        # signature (``interface Client { fetch(...) }``) is not a call and
-        # binds nothing, so it is not a candidate occurrence.
+        # A property in an object/type literal (``{ fetch: vi.fn() }``,
+        # ``{ fetch: customFetch }``) or an interface member signature
+        # (``interface Client { fetch(...) }``) is not a call and binds
+        # nothing, so it is not a candidate. A DESTRUCTURING binding
+        # (``const { fetch: f } = globalThis``) is excluded from this test, so
+        # it stays a candidate occurrence.
         if _is_non_call_property_or_type(masked, match.start(), match.end()):
             continue
         # An ``import``/``export`` specifier is a BINDING, not a call: flagging
@@ -2350,8 +2483,10 @@ def _extract_fetch_like(
     for match in pattern.finditer(masked):
         if skip_declaration and _is_function_declaration(masked, match.start()):
             continue
-        # A property key (``{ fetch: vi.fn() }``) or an interface member
-        # signature (``interface Client { fetch(...) }``) is not a call.
+        # A property in an object/type literal (``{ fetch: vi.fn() }``,
+        # ``{ fetch: customFetch }``) or an interface member signature
+        # (``interface Client { fetch(...) }``) is not a call; a destructuring
+        # binding (``const { fetch: f } = globalThis``) is not excluded.
         if _is_non_call_property_or_type(masked, match.start(), match.end()):
             continue
         open_paren = _find_open_paren(masked, match.end())
