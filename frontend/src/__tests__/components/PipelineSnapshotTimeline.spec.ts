@@ -234,6 +234,21 @@ describe('PipelineSnapshotTimeline', () => {
     expect(wrapper.find('[data-testid="snapshot-timeline-unattributed-run-snap-3"]').exists()).toBe(true)
   })
 
+  it('opens the historic view for an individual run in the unattributed bucket (FAR-1895)', async () => {
+    // The unattributed bucket exists so the runs stay REACHABLE when the
+    // loaded window holds no version row. Clicking one must open it by id,
+    // exactly like the run annotations under a version row — otherwise the
+    // rows are listed but unusable.
+    const allRuns = [
+      makeSnapshot({ id: 'snap-3', snapshot_version: 3, created_kind: 'run', version_kind: 'run', tag: null }),
+      makeSnapshot({ id: 'snap-2', snapshot_version: 2, created_kind: 'run', version_kind: 'run', tag: null }),
+    ]
+    const wrapper = await flushMount(allRuns)
+    await wrapper.find('[data-testid="snapshot-timeline-unattributed-toggle"]').trigger('click')
+    await wrapper.find('[data-testid="snapshot-timeline-unattributed-run-snap-3"]').trigger('click')
+    expect(wrapper.emitted('view')).toEqual([['snap-3']])
+  })
+
   it('anchors on the resolved current version when the loaded window has no substantive row (FAR-1895)', async () => {
     // The window is all runs (a run streak longer than the page). The host
     // hands down the version it resolved with its starvation-proof query; the

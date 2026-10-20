@@ -875,6 +875,54 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
     wrapper.unmount()
   })
 
+  it('ignores a stale in-flight version-chip FAILURE so it cannot clobber a newer success (FAR-1895)', async () => {
+    // The catch arm carries its own token guard. A slow filtered request that
+    // REJECTS (its own deadline, say) after a newer request already resolved
+    // must be dropped: otherwise it would blank `currentVersionSnapshots` and
+    // surface a bogus "version unavailable" error over a perfectly good chip.
+    const wrapper = await mountEditor()
+    const vm = wrapper.vm as any
+    let rejectStale: (reason: unknown) => void = () => {}
+    let filteredCalls = 0
+    apiGetMock.mockImplementation((url: string, init?: any) => {
+      if (url.endsWith('/snapshots')) {
+        if (isVersionChipQuery(init)) {
+          filteredCalls += 1
+          if (filteredCalls === 1) {
+            return new Promise((_resolve, reject) => { rejectStale = reject })
+          }
+          return Promise.resolve({
+            data: {
+              items: [{ id: 'snap-newer', snapshot_version: 12, created_kind: 'edit', draft: false, tag: null }],
+            },
+            error: undefined,
+          })
+        }
+        return Promise.resolve(serveSnapshotPage(SNAPSHOT_LIST, init))
+      }
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: structuredClone(LIVE_GRAPH), error: undefined })
+      }
+      if (url.includes('/pipelines/{pipeline_id}')) {
+        return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    const stale = vm.loadCurrentVersionSnapshot()
+    const fresh = vm.loadCurrentVersionSnapshot()
+    await fresh
+    // The superseded request fails LAST, after the newer one has succeeded.
+    rejectStale(new Error('version chip deadline exceeded'))
+    await stale
+    await flushPromises()
+
+    // The newer result stands; the stale failure was discarded, not surfaced.
+    expect(wrapper.find('[data-testid="pipeline-editor-version-chip"]').text()).toBe('v12')
+    expect(wrapper.find('[data-testid="pipeline-editor-version-chip-error"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('survives a version-0 placeholder without collapsing the chip (FAR-1895, finding F)', async () => {
     // The client post-filters `snapshot_version > 0`, so a single-row page
     // whose only row is the v0 placeholder would consume the candidate and
@@ -933,6 +981,37 @@ describe('PipelineEditorView — historic version view (FAR-1812)', () => {
     const chip = wrapper.find('[data-testid="pipeline-editor-version-chip"]')
     expect(chip.exists()).toBe(true)
     expect(chip.text()).toBe('v5')
+    wrapper.unmount()
+  })
+
+  it('falls back to the catalog when the version query succeeds without an items list (FAR-1895)', async () => {
+    // A success envelope that carries no `items` array must coerce to an EMPTY
+    // candidate list, not throw: the chip then resolves through its documented
+    // catalog fallback. Without the coercion this auxiliary request would
+    // reject into the catch arm and blank the chip on a pipeline that plainly
+    // has a version.
+    const wrapper = await mountEditor({}, () => {
+      apiGetMock.mockImplementation((url: string, init?: any) => {
+        if (url.endsWith('/snapshots')) {
+          if (isVersionChipQuery(init)) return Promise.resolve({ data: {}, error: undefined })
+          return Promise.resolve(serveSnapshotPage(SNAPSHOT_LIST, init))
+        }
+        if (url.includes('/pipelines/{pipeline_id}/graph')) {
+          return Promise.resolve({ data: structuredClone(LIVE_GRAPH), error: undefined })
+        }
+        if (url.includes('/pipelines/{pipeline_id}')) {
+          return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+        }
+        return Promise.resolve({ data: { items: [] }, error: undefined })
+      })
+    })
+
+    // The chip is labelled from the loaded catalog (v9), not hidden.
+    const chip = wrapper.find('[data-testid="pipeline-editor-version-chip"]')
+    expect(chip.exists()).toBe(true)
+    expect(chip.text()).toBe('v9')
+    // An items-less SUCCESS is not a failure, so no degradation is surfaced.
+    expect(wrapper.find('[data-testid="pipeline-editor-version-chip-error"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
