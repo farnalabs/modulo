@@ -480,6 +480,19 @@ describe('AdminErrorsView', () => {
     wrapper.unmount()
   })
 
+  it('shows an error alert when the error-group fetch fails', async () => {
+    getMock.mockImplementation(async (path: string) => {
+      if (path === '/api/v1/errors') throw new Error('network down')
+      return { items: [], total: 0 }
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Failed to load error groups:')
+    wrapper.unmount()
+  })
+
   it('renders skeleton table rows while loading instead of an indeterminate spinner (STATE-3)', async () => {
     let resolveGroups: (value: unknown) => void = () => {}
     getMock.mockImplementation(() => new Promise(resolve => { resolveGroups = resolve }))

@@ -106,7 +106,7 @@
         <DataTable
           :columns="columns"
           :rows="groups"
-          @row-click="row => navigateToDetail(rowId(row))"
+          @row-click="row => navigateToDetail(errorGroupRowId(row))"
         >
           <template #cell-level_peak="{ value }">
             <span :class="levelBadgeClass(value as string)">
@@ -118,21 +118,21 @@
               <button
                 type="button"
                 class="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                :aria-label="isMessageExpanded(rowId(row)) ? $t('views.AdminErrorsView.collapse_message') : $t('views.AdminErrorsView.expand_message')"
-                :aria-expanded="isMessageExpanded(rowId(row))"
-                :data-testid="'admin-errors-expand-' + rowId(row)"
-                @click.stop="toggleMessage(rowId(row))"
+                :aria-label="isMessageExpanded(errorGroupRowId(row)) ? $t('views.AdminErrorsView.collapse_message') : $t('views.AdminErrorsView.expand_message')"
+                :aria-expanded="isMessageExpanded(errorGroupRowId(row))"
+                :data-testid="'admin-errors-expand-' + errorGroupRowId(row)"
+                @click.stop="toggleMessage(errorGroupRowId(row))"
                 @keydown.stop
               >
                 <ChevronRight
                   :size="14"
                   class="transition-transform"
-                  :class="isMessageExpanded(rowId(row)) ? 'rotate-90' : ''"
+                  :class="isMessageExpanded(errorGroupRowId(row)) ? 'rotate-90' : ''"
                   aria-hidden="true"
                 />
               </button>
               <span
-                v-if="isMessageExpanded(rowId(row))"
+                v-if="isMessageExpanded(errorGroupRowId(row))"
                 data-testid="admin-errors-message-full"
                 class="min-w-0 max-w-xs whitespace-normal break-words font-medium"
               >{{ value || $t('views.AdminErrorsView.no_message') }}</span>
@@ -144,10 +144,10 @@
             </div>
           </template>
           <template #cell-first_seen="{ value }">
-            <span class="whitespace-nowrap text-muted-foreground">{{ formatDate(value as string) }}</span>
+            <span class="whitespace-nowrap text-muted-foreground">{{ formatErrorDate(value as string) }}</span>
           </template>
           <template #cell-last_seen="{ value }">
-            <span class="whitespace-nowrap text-muted-foreground">{{ formatDate(value as string) }}</span>
+            <span class="whitespace-nowrap text-muted-foreground">{{ formatErrorDate(value as string) }}</span>
           </template>
           <template #cell-status="{ value }">
             <span :class="statusBadgeClass(value as string)">
@@ -155,7 +155,7 @@
             </span>
           </template>
           <template #cell-assignee="{ row }">
-            <span class="text-xs text-muted-foreground font-mono">{{ formatAssignee(row) }}</span>
+            <span class="text-xs text-muted-foreground font-mono">{{ formatErrorAssignee(row) }}</span>
           </template>
         </DataTable>
       </div>
@@ -212,8 +212,15 @@ import { useDataFetch } from '../composables/useDataFetch'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { shortId } from '../utils/format'
+import {
+  errorGroupRowId,
+  formatErrorAssignee,
+  formatErrorDate,
+  levelBadgeClass,
+  statusBadgeClass,
+} from '../utils/errorGroupPresentation'
 import { formatApiError } from "../lib/api/formatError"
-import { DataTable, type Column, type DataTableRow } from '../components/ui/data-table'
+import { DataTable, type Column } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronRight } from '@lucide/vue'
@@ -233,46 +240,35 @@ const columns = computed<Column[]>(() => [
   { key: 'assignee', label: t('views.AdminErrorsView.assignee') },
 ])
 
-const filterDefs = computed(() => [
-  {
-    key: 'level',
-    label: t('views.AdminErrorsView.level'),
-    options: [
-      { value: 'error', label: t('views.AdminErrorsView.level_error') },
-      { value: 'warning', label: t('views.AdminErrorsView.level_warning') },
-      { value: 'critical', label: t('views.AdminErrorsView.level_critical') },
-    ],
-  },
-  {
-    key: 'status',
-    label: t('views.AdminErrorsView.status'),
-    options: [
-      { value: 'new', label: t('views.AdminErrorsView.status_new') },
-      { value: 'acknowledged', label: t('views.AdminErrorsView.status_acknowledged') },
-      { value: 'resolved', label: t('views.AdminErrorsView.status_resolved') },
-      { value: 'archived', label: t('views.AdminErrorsView.status_archived') },
-    ],
-  },
-  {
-    key: 'source',
-    label: t('views.AdminErrorsView.source'),
-    options: [
-      { value: 'backend', label: t('views.AdminErrorsView.source_backend') },
-      { value: 'frontend', label: t('views.AdminErrorsView.source_frontend') },
-      { value: 'saq', label: t('views.AdminErrorsView.source_saq') },
-      { value: 'celery', label: t('views.AdminErrorsView.source_celery') },
-    ],
-  },
+type FilterDefinition = { key: string; label: string; options: Array<{ value: string; label: string }> }
+
+function buildFilter(key: string, labelKey: string, options: Array<[string, string]>): FilterDefinition {
+  return {
+    key,
+    label: t(labelKey),
+    options: options.map(([value, optionLabelKey]) => ({ value, label: t(optionLabelKey) })),
+  }
+}
+
+const filterDefs = computed<FilterDefinition[]>(() => [
+  buildFilter('level', 'views.AdminErrorsView.level', [
+    ['error', 'views.AdminErrorsView.level_error'],
+    ['warning', 'views.AdminErrorsView.level_warning'],
+    ['critical', 'views.AdminErrorsView.level_critical'],
+  ]),
+  buildFilter('status', 'views.AdminErrorsView.status', [
+    ['new', 'views.AdminErrorsView.status_new'],
+    ['acknowledged', 'views.AdminErrorsView.status_acknowledged'],
+    ['resolved', 'views.AdminErrorsView.status_resolved'],
+    ['archived', 'views.AdminErrorsView.status_archived'],
+  ]),
+  buildFilter('source', 'views.AdminErrorsView.source', [
+    ['backend', 'views.AdminErrorsView.source_backend'],
+    ['frontend', 'views.AdminErrorsView.source_frontend'],
+    ['saq', 'views.AdminErrorsView.source_saq'],
+    ['celery', 'views.AdminErrorsView.source_celery'],
+  ]),
 ])
-
-function rowId(row: DataTableRow): string {
-  return String(row.id ?? '')
-}
-
-function formatAssignee(row: DataTableRow): string {
-  const assignedTo = row.assigned_to
-  return typeof assignedTo === 'string' && assignedTo ? shortId(assignedTo) : '—'
-}
 
 // FAR-1547: the instance scope reads the SYSTEM_ORG_ID sentinel partition
 // (system admin only). The query param is the single source of truth so the
@@ -444,31 +440,6 @@ function navigateToDetail(id: string) {
     return
   }
   router.push(`/admin/errors/${id}`)
-}
-
-function levelBadgeClass(level: string): string {
-  if (level === 'critical') return 'badge badge-status-destructive'
-  if (level === 'warning') return 'badge badge-status-warning'
-  return 'badge badge-context-blue'
-}
-
-function statusBadgeClass(status: string): string {
-  if (status === 'new') return 'badge badge-status-destructive'
-  if (status === 'acknowledged') return 'badge badge-status-warning'
-  if (status === 'resolved') return 'badge badge-status-success'
-  if (status === 'archived') return 'badge badge-status-muted'
-  return 'badge'
-}
-
-function formatDate(dateStr: string): string {
-  if (!dateStr) return '—'
-  const d = new Date(dateStr)
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
 }
 
 /* onMounted handled by useDataFetch */
