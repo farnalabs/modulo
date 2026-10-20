@@ -11,6 +11,20 @@ name: "Review: Modulo Agent"
 # demoting reviewer runs to pending and starving the reviewer itself —
 # a self-amplifying outage that could not self-heal (2026-10-15, 5 h, 28+ PRs).
 # A dispatch failure now fails only THIS workflow's own run.
+#
+# Review is a QUALITY GATE INDEPENDENT OF CI COLOUR. Dispatch is driven by
+# product-CI COMPLETION, not by its conclusion: a red-CI PR still gets a
+# quality review, while the Branch Fixer fixes its checks concurrently. The
+# reviewer reports the failing checks in its review body and does not derive
+# its verdict from CI colour — a CI-mirroring CHANGES_REQUESTED is forbidden in
+# the reviewer prompt, so the two agents never double-report the same failure.
+# Only a CANCELLED product-CI run is skipped: that run was superseded, and the
+# newer run for the same head SHA owns the dispatch. ``timed_out`` and
+# ``action_required`` are failure conclusions and MUST dispatch.
+#
+# The reviewer still reviews the PR's CURRENT head SHA, resolved below — not
+# the exact tree the completed run validated — so it can be racing a
+# Branch-Fixer push made after that run.
 
 on:
   workflow_dispatch:
@@ -30,8 +44,9 @@ on:
         default: ''
         type: string
   # Drive the review from product-CI COMPLETION, decoupled from the CI run
-  # itself (FAR-1843 D1). Only a successful product-CI conclusion dispatches a
-  # review — a failed CI is the Branch Fixer's job, not the reviewer's.
+  # itself (FAR-1843 D1). Every conclusion except CANCELLED dispatches a review
+  # (see the job-level `if`): a red CI is the Branch Fixer's job to fix
+  # concurrently, not a reason to withhold the quality review.
   # workflow_run events fire from the default branch's copy of this file and
   # carry the triggering run's conclusion / head_sha / head_branch.
   workflow_run:
@@ -45,12 +60,18 @@ permissions:
 jobs:
   trigger-modulo-review:
     name: Trigger Modulo PR Review
-    # A workflow_run for a FAILED / CANCELLED product-CI run must not dispatch
-    # a review at all (the Branch Fixer owns red CI). This gate is safe to
-    # express at job level: workflow_run-triggered runs attach their check
-    # runs to the default-branch SHA, not to the PR head, so skipping this job
-    # never changes the PR's own check status.
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    # Only a CANCELLED product-CI run is skipped (it was superseded; the newer
+    # run for that head SHA owns the dispatch). Every other conclusion
+    # dispatches — success, failure, timed_out, action_required, neutral,
+    # stale, skipped — because review is a quality gate independent of CI
+    # colour, and red CI is owned concurrently by the Branch Fixer. `timed_out`
+    # and `action_required` are FAILURE conclusions and MUST dispatch.
+    # Expressing the gate by EXCLUSION is deliberate: an inclusion list would
+    # silently withhold the review from every conclusion it omits.
+    # This gate is safe to express at job level: workflow_run-triggered runs
+    # attach their check runs to the default-branch SHA, not to the PR head, so
+    # skipping this job never changes the PR's own check status.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion != 'cancelled'
     runs-on: ubicloud-standard-2
     steps:
       - name: Set PR details
@@ -324,9 +345,17 @@ jobs:
           # Intended behaviour change vs the removed ci.yml job (on the
           # record, deliberately — not an accident): that job ran under
           # always() with needs: covering every fallible job and therefore
-          # reviewed even a red-CI PR, whereas this gate reviews ONLY a green
-          # CI run. A failed CI is the Branch Fixer's job; the lifecycle
-          # watchdog re-drives anything genuinely missed.
+          # reviewed even a red-CI PR. This workflow now matches that by
+          # design — dispatch is independent of CI colour, so every conclusion
+          # except a cancelled (superseded) run dispatches and a red-CI PR is
+          # reviewed here while the Branch Fixer fixes its checks concurrently.
+          # The reviewer reports the failing checks in its body and does not
+          # derive its verdict from CI colour (a CI-mirroring
+          # CHANGES_REQUESTED is forbidden in the reviewer prompt), so the two
+          # agents do not double-report the same failure. Dedup, the superseded
+          # guard and the lifecycle watchdog still cover a genuinely missed or
+          # repeated review. The reviewer covers the PR's CURRENT head SHA, so
+          # it can be racing a Branch-Fixer push made after the completed run.
           if [ "${ACCEPTED}" != "true" ]; then
             echo "::error::Modulo PR Review webhook POST failed with HTTP ${HTTP_CODE} after 5 attempts - no pipeline run was created."
             exit 1

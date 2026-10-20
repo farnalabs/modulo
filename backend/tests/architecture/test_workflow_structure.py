@@ -14,6 +14,12 @@ invariants of the PR-reviewer / Branch-Fixer / merge-queue triangle:
   Fixer runs into the org sandbox cap, starving the reviewer itself
   (self-amplifying outage, 2026-10-15). Re-coupling the dispatch into
   ``ci.yml`` reintroduces that failure mode; this test fails if it returns.
+- **Reviewer dispatch is independent of CI colour** — the ``pr-review.yml`` job
+  gate must never require a ``success`` product-CI conclusion. Review is a
+  quality gate over the diff: a red-CI PR is reviewed while the Branch Fixer
+  fixes its checks concurrently, and the reviewer reports the failing checks in
+  its body instead of mirroring CI into a second CHANGES_REQUESTED. Only a
+  ``cancelled`` (superseded) run may be skipped.
 - **Merge-queue CI gate is product-CI-only** — every per-branch CI gate in
   ``merge-queue.yml`` must query only the product-CI workflow
   (``CI: Fast Validation``), never the review workflow, so a review-dispatch
@@ -162,6 +168,71 @@ def test_pr_review_yml_dispatches_on_product_ci_completion() -> None:
             violations.append(f"  pr-review.yml: workflow_run.types must include 'completed' (got {types!r})")
     assert not violations, "pr-review.yml no longer dispatches on product-CI completion (FAR-1843):\n" + "\n".join(
         violations
+    )
+
+
+# --- Reviewer dispatch is independent of CI colour --------------------------
+
+
+def _job_named(workflow: dict, name: str) -> dict:
+    """The job whose ``name:`` is ``name`` (jobs are keyed by id, not by name)."""
+    jobs = workflow.get("jobs") or {}
+    for job in jobs.values():
+        if isinstance(job, dict) and job.get("name") == name:
+            return job
+    raise AssertionError(f"no job named {name!r} — the job moved; update this test deliberately")
+
+
+def test_pr_review_dispatches_on_red_ci_too() -> None:
+    """The reviewer job gate must skip ONLY a cancelled product-CI run.
+
+    Review is a quality gate over the diff, independent of CI colour: a red-CI
+    PR is still reviewed, while the Branch Fixer fixes its checks concurrently
+    (the reviewer reports the failing checks in its body rather than mirroring
+    CI into a second CHANGES_REQUESTED). ``cancelled`` is the one conclusion
+    that must not dispatch — that run was superseded, and the newer run for the
+    same head SHA owns the dispatch. ``timed_out`` and ``action_required`` are
+    FAILURE conclusions and must dispatch.
+
+    A revert to ``== 'success'`` withholds every red-CI review again: a PR that
+    never goes green would never be quality-reviewed, and the gate re-couples
+    the reviewer to CI colour.
+    """
+    job = _job_named(_load_yaml(PR_REVIEW_YML), "Trigger Modulo PR Review")
+    condition = job.get("if")
+    assert isinstance(condition, str), (
+        "pr-review.yml: the 'Trigger Modulo PR Review' job has no scalar `if:` gate — "
+        "reviewer dispatch is no longer conditioned on the product-CI conclusion"
+    )
+    assert condition.strip(), (
+        "pr-review.yml: the 'Trigger Modulo PR Review' job has a blank `if:` gate — "
+        "the product-CI conclusion is no longer inspected"
+    )
+    code = condition.replace('"', "'")
+    violations: list[str] = []
+    if "workflow_run" not in code:
+        violations.append(
+            "  the job gate does not reference github.event.workflow_run — it no longer inspects the product-CI "
+            "conclusion, so a cancelled (superseded) run could dispatch a review"
+        )
+    if "conclusion ==" in code:
+        violations.append(
+            "  the job gate compares the conclusion for EQUALITY — an inclusion list silently withholds the review "
+            "from every conclusion it omits (timed_out, action_required, neutral, ...); exclude only 'cancelled'"
+        )
+    if "== 'success'" in code:
+        violations.append(
+            "  the job gate requires the 'success' conclusion — a red-CI PR is no longer reviewed; only 'cancelled' "
+            "may be excluded"
+        )
+    if "!= 'cancelled'" not in code:
+        violations.append(
+            "  the job gate does not exclude the 'cancelled' conclusion — a superseded product-CI run would "
+            "dispatch a review for a head SHA the newer run owns"
+        )
+    assert not violations, (
+        "pr-review.yml no longer dispatches the reviewer for a red (but completed) product-CI run:\n"
+        + "\n".join(violations)
     )
 
 
