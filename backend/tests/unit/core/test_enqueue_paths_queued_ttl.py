@@ -159,13 +159,20 @@ def _cron_row(expression: str) -> SimpleNamespace:
         # ``cadence + 3600s`` past the last fire, but the catch-up window is
         # ``min(48h, cadence * 3)`` — for every cadence below 1800s the hash
         # outlives the window, so the catch-up can NEVER re-fire the epoch.
+        # Every sample here is a UNIFORM cadence: the gap between consecutive
+        # fires is the same wherever the wall clock happens to be. Irregular
+        # expressions such as ``*/29`` (fires :00, :29, :58 - so :58 -> :00 is
+        # only 120s) or ``*/31`` (fires :00, :31 - so :00 -> :31 is 1860s but
+        # :31 -> :00 is 1740s) are NOT valid samples: ``_cron_cadence_seconds``
+        # derives the period from ``prev -> next`` around ``now``, so their
+        # verdict flips with the minute of the hour. The exact floor/ceiling
+        # edges are probed in seconds by
+        # ``test_repairable_boundaries_exact_seconds``.
         ("* * * * *", False),  # 60s  - window closes at 180s, hash dies at 3660s
         ("*/5 * * * *", False),  # 300s - window closes at 900s, hash dies at 3900s
         ("*/15 * * * *", False),  # 900s - window closes at 2700s, hash dies at 4500s
-        ("*/29 * * * *", False),  # 1740s - one step BELOW the derived floor
         # The derived floor/ceiling of the repairable interval (inclusive).
         ("*/30 * * * *", True),  # 1800s - floor: hash expiry lands exactly on the edge
-        ("*/31 * * * *", True),  # 1860s - one step ABOVE the floor
         ("0 * * * *", True),  # 3600s - hourly, well inside the window
         ("0 0 * * *", True),  # 86400s - daily, still inside the 48h bound
         ("0 0 * * 0", False),  # 604800s - weekly, beyond the 48h bound
@@ -175,9 +182,7 @@ def _cron_row(expression: str) -> SimpleNamespace:
         "every-minute-60s",
         "every-5-min-300s",
         "every-15-min-900s",
-        "29-min-below-floor",
         "30-min-at-floor",
-        "31-min-above-floor",
         "hourly-3600s",
         "daily-86400s",
         "weekly-604800s",
