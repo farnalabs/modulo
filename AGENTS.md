@@ -140,3 +140,14 @@ Rules:
 1. A status-code / response-body contract change is not complete until every BDD feature/steps and integration test that asserts the old contract is migrated in place — never deleted, disabled or gutted — and they are included in the same change.
 2. Any change to a route docstring/description must be followed by regenerating the committed `frontend/src/lib/api/schema.ts` in the SAME change, using the pinned generator (not the worktree-broken `pnpm run generate:api`), and the resulting diff must be limited to the intended text (report it if it is not).
 3. Never "fix" a schema-freshness hook by reverting accurate documentation to match a stale generated file — regenerate the file.
+
+### Rotating an HTTP verb in the E2E harness is not a find-and-replace (2026-10-20)
+
+`frontend/tests/e2e/setup/realstack-api.ts` takes the method as a string-literal argument (`apiFetch(base, token, 'PATCH', path)`), and `@regression` specs carry `route.request().method() === '<VERB>'` interceptor filters. Rotating a verb (`PATCH` → `PUT`) either fails the harness call or - worse - leaves the interceptor filter matching nothing, so the spec keeps passing while asserting a request that was never intercepted. Both are deploy-critical: `deploy.yml` runs `playwright test --grep "@regression"` against staging before promoting to production.
+
+The structural guard is CI job `e2e-route-methods-check` (pre-commit hook `check-e2e-route-methods`, `scripts/run_check_e2e_route_methods.py`). It fails on a stale descriptor or an API-shaped call it cannot analyse.
+
+Rules:
+
+1. Rotate a verb everywhere it appears - the harness call, the spec's interceptor filter and any mocked response - in the same change.
+2. When `e2e-route-methods-check` flags a shape, model it in the checker or annotate the call with `// e2e-route-check: ignore <reason>`; never suppress it without a reason.

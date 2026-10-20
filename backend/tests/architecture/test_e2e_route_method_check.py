@@ -1591,6 +1591,66 @@ def test_api_fetch_import_and_export_are_not_candidates() -> None:
     assert not unanalysed
 
 
+def test_import_renamed_callees_are_extracted_and_checked() -> None:
+    # Renaming an import does not change the callee: ``import { apiFetch as
+    # call }`` binds the same helper, so ``call(...)`` is the same HTTP call.
+    # The bare markers see no ``apiFetch``/``fetch`` identifier, so this shape
+    # used to pass with no descriptor, no note and no unanalysed entry.
+    for source, expected in (
+        (
+            "import { apiFetch as call } from './setup/realstack-api'\n"
+            "await call(apiBase, token, 'PATCH', '/api/v1/pipelines/1/graph')\n",
+            ("PATCH", "/api/v1/pipelines/1/graph"),
+        ),
+        (
+            "import { fetchWithTransientRetry as call } from './setup/realstack-api'\n"
+            "await call('/api/v1/pipelines/1/graph', { method: 'PATCH' })\n",
+            ("PATCH", "/api/v1/pipelines/1/graph"),
+        ),
+        (
+            "import { fetch as f } from './transport'\nawait f('/api/v1/pipelines/1', { method: 'POST' })\n",
+            ("POST", "/api/v1/pipelines/1"),
+        ),
+    ):
+        unanalysed: list[str] = []
+
+        calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+        assert [(call.method, call.path) for call in calls] == [expected]
+        assert not unanalysed
+        # Both live routes serve GET/PUT/DELETE, so the rotated verb is stale.
+        assert len(_checker.find_violations(calls, LIVE_ROUTES)) == 1
+
+
+def test_import_renamed_callee_live_route_is_clean() -> None:
+    # Extraction must not simply turn every aliased call into a violation: a
+    # live method through the same import alias stays clean.
+    unanalysed: list[str] = []
+    source = (
+        "import { apiFetch as call } from './setup/realstack-api'\n"
+        "await call(apiBase, token, 'PUT', '/api/v1/pipelines/1/graph')\n"
+    )
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert [(call.method, call.path) for call in calls] == [("PUT", "/api/v1/pipelines/1/graph")]
+    assert not unanalysed
+    assert not _checker.find_violations(calls, LIVE_ROUTES)
+
+
+def test_import_renamed_callee_value_read_is_unanalysed() -> None:
+    # Re-aliasing the local name (``const g = call``) takes the callee out of
+    # reach again; the read must surface rather than vanish.
+    unanalysed: list[str] = []
+    source = "import { apiFetch as call } from './setup/realstack-api'\nconst g = call\n"
+
+    calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
+
+    assert not calls
+    assert len(unanalysed) == 1
+    assert unanalysed[0].startswith(f"{FILENAME}:2: unanalysed E2E HTTP call shape")
+
+
 def test_request_context_alias_forms_are_unanalysed() -> None:
     # A captured APIRequestContext loses the ``page.request`` marker, so its
     # later ``api.patch(...)`` calls are invisible. The capture is flagged.

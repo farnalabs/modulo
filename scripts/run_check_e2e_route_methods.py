@@ -115,7 +115,10 @@ bracket / optional-chain variants on the documented roots - ``apiFetch(``,
 optional-chain), alias captures made by the documented binding forms (``const f
 = window.fetch``, ``const call = apiFetch``, ``const api = page.request``,
 ``const { fetch: f } = globalThis``, ``const { get } = page.request``, a renamed
-``request`` fixture), plus
+``request`` fixture), which includes a local name bound by an IMPORT specifier
+(``import { apiFetch as call }``, ``import { fetch as f }``) - a call through
+that local name is extracted like the bare spelling, since renaming an import
+does not change the callee; plus
 method-reference lines (``.request().method(``, ``request.method(``, and
 HTTP-method literals compared against a method expression: ``=== 'PATCH'``,
 ``!== 'GET'``, ``includes(...)``). Every candidate CALL occurrence enumerated
@@ -128,9 +131,10 @@ one of:
   line: ``// e2e-route-check: ignore <short reason>``.
 
 Accounting is per occurrence, not per line: a second, unmodelled call on a line
-that also carries a modelled call (``Promise.all([fetch(a), fetch(b, init)])``)
-is still a violation. An enumerated occurrence that cannot be analysed - one
-with no descriptor and no note - is a violation (exit 1) naming the line: a new
+that also carries a modelled call (``globalThis['fetch'](buildUrl(), init)``
+alongside ``fetch('/api/v1/pipelines')``) is still a violation. An enumerated
+occurrence that cannot be analysed - one with no descriptor and no note - is a
+violation (exit 1) naming the line: a new
 call shape within the documented families fails loudly instead of passing. A call whose target is not an API path, or an absolute external URL
 that provably names no Modulo route, is excluded explicitly or noted at most; it
 is never a hard failure. A method-reference line is reported as a note when
@@ -139,12 +143,14 @@ dropped silently.
 A candidate is only excluded structurally when it is provably not a call (an
 ``apiFetch`` / ``fetchWithTransientRetry`` function declaration, an
 ``import``/``export`` binding, a ``typeof`` type reference / assignment target,
-a property in an object or type literal - ``{ fetch: vi.fn() }``,
-``{ fetch: customFetch }``, ``{ fetch: (url) => ... }`` - whose VALUE shape does
-not matter because a property never calls the callee, or an interface/type
-member signature such as ``interface Client { fetch(...) }``). A destructuring
-pattern is NOT excluded: it captures the real callee, so
-``const { fetch: f } = globalThis`` stays a candidate.
+a property KEY in an object or type literal - ``{ fetch: vi.fn() }``,
+``{ fetch: customFetch }``, ``{ fetch: (url) => ... }`` - because a key is
+never a callee, or an interface/type member signature such as
+``interface Client { fetch(...) }``). A ``fetch`` identifier read inside a
+property's VALUE is a different occurrence and is still an alias capture, so
+``{ fetch: globalThis.fetch }`` and the shorthand ``{ fetch }`` remain
+candidates. A destructuring pattern is NOT excluded either: it captures the real
+callee, so ``const { fetch: f } = globalThis`` stays a candidate.
 
 What the ledger does NOT check: it is a syntactic scan, not a JavaScript
 interpreter. It does not resolve arbitrary runtime aliasing, dynamic property
@@ -1256,21 +1262,21 @@ def _is_non_call_property_or_type(masked: str, start: int, end: int) -> bool:
     """True when a ``fetch`` identifier here is clearly NOT a call.
 
     Two shapes read like a ``fetch`` call to the marker but bind nothing: an
-    object/type property whose value is ANY expression (``{ fetch: vi.fn() }``,
-    ``{ fetch: customFetch }``, ``{ fetch: (url) => ... }``, ``type Client = {
-    fetch: (url) => ... }``) and a type-member signature (``interface Client {
-    fetch(...) }``). They carry no route, so they are excluded structurally
-    rather than reported.
-
-    The VALUE shape does not matter: a property in an object or type literal
-    never calls the callee, so excluding only values that themselves start a
-    call made the checker reject valid TS such as
+    object/type property KEY (``{ fetch: vi.fn() }``, ``{ fetch: customFetch }``,
+    ``{ fetch: (url) => ... }``, ``type Client = { fetch: (url) => ... }``) and
+    a type-member signature (``interface Client { fetch(...) }``). A property
+    key is never a callee, so it is excluded structurally whatever the value
+    shape is - excluding only values that themselves start a call made the
+    checker reject valid TS such as
     ``const adapter = { fetch: (url: string) => Promise.resolve(url) }``.
 
-    A destructuring pattern is *not* excluded: ``const { fetch: f } = globalThis``
-    and ``async ({ fetch: f }) => ...`` capture the real ``fetch`` and are
-    genuine (unanalysed) candidates. The ``:`` alone cannot distinguish the two,
-    so the enclosing brace decides - see :func:`_in_destructuring_pattern`.
+    A ``fetch`` identifier read inside the property's VALUE is a different
+    occurrence and remains an alias capture, so ``{ fetch: globalThis.fetch }``
+    and the shorthand ``{ fetch }`` are candidates. A destructuring pattern is
+    *not* excluded either: ``const { fetch: f } = globalThis`` and
+    ``async ({ fetch: f }) => ...`` capture the real ``fetch`` and are genuine
+    (unanalysed) candidates. The ``:`` alone cannot distinguish the two, so the
+    enclosing brace decides - see :func:`_in_destructuring_pattern`.
     """
     index = end
     while index < len(masked) and masked[index] in " \t\r\n":
@@ -2058,6 +2064,41 @@ def _in_import_or_export_specifier(masked: str, offset: int) -> bool:
     return False
 
 
+#: Callee names whose IMPORT-renamed local binding still names that callee.
+_IMPORTED_CALLEE_NAMES = frozenset({"apiFetch", "fetchWithTransientRetry", "fetch"})
+_IMPORT_BINDING_RE = re.compile(r"\bimport\s+(?:type\s+)?\{(?P<names>[^{}]*)\}\s*from\b")
+
+
+def _imported_callee_aliases(masked: str) -> dict[str, str]:
+    """Map each LOCAL import alias back to the modelled callee it binds.
+
+    ``import { apiFetch as call } from './setup/realstack-api'`` binds ``call``
+    to the modelled helper. The import specifier itself is a binding, not a
+    call, but every later ``call(...)`` is the same HTTP call the bare spelling
+    would be - so it must be extracted (or, failing that, enumerated) rather
+    than silently passing. An alias identical to the imported name needs no
+    entry (the bare marker already covers it), and a ``type``-only import binds
+    nothing at runtime, so it is skipped.
+    """
+    aliases: dict[str, str] = {}
+    for match in _IMPORT_BINDING_RE.finditer(masked):
+        for entry in match.group("names").split(","):
+            text = entry.strip()
+            if not text or text.startswith("type "):
+                continue
+            parts = re.split(r"\s+as\s+", text)
+            imported = parts[0].strip()
+            local = parts[-1].strip()
+            if imported in _IMPORTED_CALLEE_NAMES and local != imported:
+                aliases[local] = imported
+    return aliases
+
+
+def _alias_callee_re(local: str) -> re.Pattern[str]:
+    """A call marker for an imported local alias (never a member access)."""
+    return re.compile(rf"(?<![\w$.]){re.escape(local)}\b")
+
+
 def _bracket_key_offsets(source: str, masked: str, keys: frozenset[str]) -> list[int]:
     """Return offsets of bracket indices whose ORIGINAL key is one of *keys*.
 
@@ -2252,8 +2293,8 @@ def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
 
     Enumerated with the SAME regexes the extractor uses, so the ledger counts
     each occurrence independently - an unmodelled call can no longer be
-    absorbed by a modelled call on the same line (the ``Promise.all([fetch(a),
-    fetch(b, init)])`` shape).
+    absorbed by a modelled call on the same line (``globalThis['fetch'](
+    buildUrl(), init)`` alongside a modelled ``fetch('/api/v1/pipelines')``).
 
     Deliberately broader than the extractor on the syntactic families that used
     to be silent ledger gaps:
@@ -2273,6 +2314,9 @@ def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
       (``async ({ request: api }) => api.get(...)``).
     * a destructured APIRequestContext verb
       (``const { get, post } = page.request``).
+    * a local name bound by an IMPORT specifier for a modelled callee
+      (``import { apiFetch as call }``, ``import { fetch as f }``). Extraction
+      resolves its calls, so only a value read of the alias is unanalysed.
 
     These families are enumerated because a miss in any of them is silent. The
     check does NOT resolve arbitrary runtime aliasing, dynamic property access
@@ -2372,6 +2416,27 @@ def _call_candidates(source: str, masked: str) -> list[tuple[int, int]]:
         # Only a real destructuring BINDING is a candidate. A plain object/type
         # property (``{ request: any }``) binds nothing and is not enumerated.
         add(offset)
+    for local, imported in _imported_callee_aliases(masked).items():
+        # An import-renamed callee (``import { fetch as f }``) makes every call
+        # through the local name a real HTTP call that the bare markers cannot
+        # see. The import specifier itself is a binding, so it is skipped; a
+        # call through the alias is extracted, and a value read is unanalysed.
+        for match in _alias_callee_re(local).finditer(masked):
+            if _in_import_or_export_specifier(masked, match.start()):
+                continue
+            if _is_non_call_property_or_type(masked, match.start(), match.end()):
+                continue
+            if _is_function_declaration(masked, match.start()):
+                continue
+            is_call = _find_open_paren(masked, match.end()) is not None
+            if imported == "fetchWithTransientRetry":
+                # The transport helper is only ever called directly; a value
+                # read is a different callee the checker cannot follow.
+                if is_call:
+                    add(match.start())
+                continue
+            if is_call or _is_fetch_value_reference(masked, match.start(), match.end()):
+                add(match.start())
     return occurrences
 
 
@@ -2575,25 +2640,22 @@ def _extract_fetch_like(
     return calls
 
 
-def extract_http_calls(
+def _extract_api_fetch_like(
     source: str,
+    masked: str,
     filename: str,
-    notes: list[str] | None = None,
-    unanalysed: list[str] | None = None,
+    notes: list[str],
+    accounted_offsets: set[int],
+    pattern: re.Pattern[str],
 ) -> list[HttpCall]:
-    """Extract every statically-readable E2E HTTP call descriptor from *source*.
+    """Extract ``apiFetch``-shaped calls (the helper and its import aliases).
 
-    *notes* (when given) collects explicit explanations for shapes the checker
-    cannot resolve safely, so a skip is visible rather than silent. *unanalysed*
-    (when given) collects coverage-ledger violations - candidate call
-    occurrences with no descriptor, note or suppression annotation.
+    The shape is positional - ``(base, token, method, path)`` - so an imported
+    local alias has exactly the same argument contract and is resolved
+    identically to the bare spelling.
     """
-    notes = notes if notes is not None else []
-    masked = mask_non_code(source)
     calls: list[HttpCall] = []
-    accounted_offsets: set[int] = set()
-
-    for match in _API_FETCH_RE.finditer(masked):
+    for match in pattern.finditer(masked):
         # A function DECLARATION (``export async function apiFetch<T>(...)``)
         # is the helper itself, not a call: its typed parameters are not a
         # method/path pair and must not be noted as an unresolved request.
@@ -2661,6 +2723,52 @@ def extract_http_calls(
             )
         )
         accounted_offsets.add(offset)
+    return calls
+
+
+def extract_http_calls(
+    source: str,
+    filename: str,
+    notes: list[str] | None = None,
+    unanalysed: list[str] | None = None,
+) -> list[HttpCall]:
+    """Extract every statically-readable E2E HTTP call descriptor from *source*.
+
+    *notes* (when given) collects explicit explanations for shapes the checker
+    cannot resolve safely, so a skip is visible rather than silent. *unanalysed*
+    (when given) collects coverage-ledger violations - candidate call
+    occurrences with no descriptor, note or suppression annotation.
+    """
+    notes = notes if notes is not None else []
+    masked = mask_non_code(source)
+    calls: list[HttpCall] = []
+    accounted_offsets: set[int] = set()
+
+    calls.extend(_extract_api_fetch_like(source, masked, filename, notes, accounted_offsets, _API_FETCH_RE))
+
+    # An import-renamed callee binds the same callable under a local name
+    # (``import { apiFetch as call }``). Its call sites are not visible to the
+    # bare markers, so they are extracted through the alias - a silent pass
+    # here would hide a rotated verb on a deploy-critical path.
+    for local, imported in _imported_callee_aliases(masked).items():
+        if imported == "apiFetch":
+            calls.extend(
+                _extract_api_fetch_like(source, masked, filename, notes, accounted_offsets, _alias_callee_re(local))
+            )
+        else:
+            calls.extend(
+                _extract_fetch_like(
+                    source,
+                    masked,
+                    filename,
+                    notes,
+                    accounted_offsets,
+                    _alias_callee_re(local),
+                    imported,
+                    skip_declaration=False,
+                    note_unresolved_always=imported == "fetchWithTransientRetry",
+                )
+            )
 
     calls.extend(
         _extract_fetch_like(
