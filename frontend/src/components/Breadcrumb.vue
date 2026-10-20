@@ -75,7 +75,7 @@ function resolveSegment(name: string): ResolvedSegment {
 
   if (manifestEntry) {
     const parentName = manifestEntry.parent
-      ? manifestByPath.get(manifestEntry.parent)?.name ?? undefined
+      ? manifestByPath.get(manifestEntry.parent)?.name
       : undefined
     return {
       segment: {

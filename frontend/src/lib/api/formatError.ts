@@ -121,22 +121,20 @@ function formatErrorObject(obj: Record<string, unknown>): string {
   return stringifyErrorObject(obj)
 }
 
-// Only primitives and functions reach this fallback (objects, Errors and
-// strings are handled above). Convert each explicitly by type so the result is
-// never the generic "[object Object]" coercion S6551 warns about.
 function stringifyPrimitiveError(err: unknown): string {
-  switch (typeof err) {
-    case 'number':
-    case 'bigint':
-      return err.toString()
-    case 'boolean':
-      return err ? 'true' : 'false'
-    case 'symbol':
-    case 'function':
-      return err.toString()
-    default:
-      return 'Unknown error'
+  // The caller has excluded strings, null/undefined/falsy values, Errors and
+  // objects, so only truthy primitives and functions reach here. Each defines
+  // its own toString(), so no implicit "[object Object]" coercion can occur.
+  if (
+    typeof err === 'number' ||
+    typeof err === 'bigint' ||
+    typeof err === 'symbol' ||
+    typeof err === 'function'
+  ) {
+    return err.toString()
   }
+  // Only a truthy boolean remains.
+  return 'true'
 }
 
 export function formatApiError(err: unknown): string {

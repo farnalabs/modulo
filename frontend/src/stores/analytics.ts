@@ -384,6 +384,10 @@ export function measureValue(
  * count (mirroring the backend's own duration weighting in bucket_rows).
  */
 type AggregateGroup = AnalyticsBucket & {
+  // Both counters are initialised to 0 and only ever incremented, so they are
+  // always present on a group (no nullish fallback needed when accumulating).
+  stall_count: number;
+  capacity_failure_count: number;
   durSum: number;
   durN: number;
   rateSum: number;
@@ -439,8 +443,8 @@ function accumulateBucket(group: AggregateGroup, bucket: AnalyticsBucket): void 
   }
   accumulateWeighted(group, bucket.avg_duration_ms, bucket.count, "durSum", "durN");
   accumulateWeighted(group, bucket.success_rate, bucket.count, "rateSum", "rateN");
-  group.stall_count = (group.stall_count ?? 0) + (bucket.stall_count ?? 0);
-  group.capacity_failure_count = (group.capacity_failure_count ?? 0) + (bucket.capacity_failure_count ?? 0);
+  group.stall_count += bucket.stall_count ?? 0;
+  group.capacity_failure_count += bucket.capacity_failure_count ?? 0;
   accumulateWeighted(
     group,
     bucket.avg_capacity_wait_ms,
@@ -465,8 +469,8 @@ function summarizeAggregateGroup(group: AggregateGroup): AnalyticsBucket {
     total_tokens: group.total_tokens,
     avg_duration_ms: group.durN > 0 ? group.durSum / group.durN : null,
     success_rate: group.rateN > 0 ? group.rateSum / group.rateN : null,
-    stall_count: group.stall_count ?? 0,
-    capacity_failure_count: group.capacity_failure_count ?? 0,
+    stall_count: group.stall_count,
+    capacity_failure_count: group.capacity_failure_count,
     avg_capacity_wait_ms: group.capWaitN > 0 ? roundOneDecimal(group.capWaitSum / group.capWaitN) : null,
     avg_queue_wait_ms: group.queueWaitN > 0 ? roundOneDecimal(group.queueWaitSum / group.queueWaitN) : null,
     avg_final_idle_ms: group.idleN > 0 ? roundOneDecimal(group.idleSum / group.idleN) : null,
