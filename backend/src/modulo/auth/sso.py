@@ -4,6 +4,7 @@ import base64
 import hmac
 import json
 import logging
+import secrets
 import time
 import urllib.parse
 import uuid
@@ -16,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.jwt import CLIENT_KIND_BROWSER, create_access_token, create_refresh_token
+from modulo.auth.oauth import compute_pkce_challenge
 from modulo.auth.oidc_verify import OidcVerifyError, verify_id_token
 from modulo.auth.saml_handler import ModuloSamlAuth, SamlAuthError
 from modulo.auth.secret_storage import decode_stored_secret
@@ -709,20 +711,39 @@ async def _resolve_oidc_provider(
     )
 
 
+# FAR-1982: an authorization request must be bound to the request that started
+# it. ``nonce`` binds the ID token to the request (verified in
+# ``verify_id_token``); the PKCE ``code_verifier``/``code_challenge`` pair binds
+# the authorization-code exchange to the client instance that began the flow.
+# Both are generated per-login and returned alongside the state so the route can
+# correlate them across the IdP round-trip.
+_OIDC_NONCE_BYTES = 32
+_PKCE_VERIFIER_BYTES = 64  # token_urlsafe(64) -> 86 chars, within RFC 7636's 43..128
+
+
+def _generate_pkce_verifier() -> str:
+    """Generate an RFC 7636 §4.1 code verifier (unreserved chars, 43-128 long)."""
+    return secrets.token_urlsafe(_PKCE_VERIFIER_BYTES)
+
+
 async def oidc_get_authorize_url(
     provider_id: str,
     settings: Settings,
     redirect_uri: str,
     system_session: AsyncSession | None,
     app_session: AsyncSession | None = None,
-) -> tuple[str, str]:
-    """Build the OIDC authorization URL and return (url, raw_state).
+) -> tuple[str, str, str, str]:
+    """Build the OIDC authorization URL and return (url, raw_state, nonce, code_verifier).
 
     Resolves IdP config from the sso_providers DB table first (preferred, since
     the admin UI writes there); falls back to env-var providers for backward
     compatibility. Provider resolution uses the system session (``modulo_system``
     role, instance-global) so multi-org deployments resolve the correct provider
     regardless of org; the app session is used only for the single-org fallback.
+
+    FAR-1982: also mints a per-login ``nonce`` (sent to the IdP and checked in
+    the returned ID token) and a PKCE ``code_verifier`` (whose S256 challenge is
+    sent to the IdP and whose verifier is presented at the token exchange).
     """
     client_id, _client_secret, discovery_url, scopes, _db_provider = await _resolve_oidc_provider(
         provider_id, system_session, app_session, settings
@@ -749,6 +770,11 @@ async def oidc_get_authorize_url(
 
     raw_state = str(uuid.uuid4())
     signed = sign_state(f"{provider_id}:{raw_state}", settings.secret_key)
+    # FAR-1982: per-login nonce (ID-token binding) and PKCE verifier (code
+    # exchange binding). Only the S256 challenge leaves this server; the
+    # verifier stays in the correlation cookie until the callback.
+    nonce = secrets.token_urlsafe(_OIDC_NONCE_BYTES)
+    code_verifier = _generate_pkce_verifier()
 
     if isinstance(scopes, list):
         scope = " ".join(scopes) if scopes else OIDC_DEFAULT_SCOPES
@@ -763,9 +789,12 @@ async def oidc_get_authorize_url(
             "scope": scope,
             "redirect_uri": redirect_uri,
             "state": signed,
+            "nonce": nonce,
+            "code_challenge": compute_pkce_challenge(code_verifier),
+            "code_challenge_method": "S256",
         }
     )
-    return f"{auth_endpoint}?{params}", raw_state
+    return f"{auth_endpoint}?{params}", raw_state, nonce, code_verifier
 
 
 async def oidc_process_callback(
@@ -775,6 +804,9 @@ async def oidc_process_callback(
     system_session: AsyncSession | None,
     app_session: AsyncSession | None,
     redirect_uri: str,
+    *,
+    expected_nonce: str,
+    code_verifier: str,
 ) -> dict[str, str]:
     """Exchange auth code for tokens, JIT provision account, return JWT pair.
 
@@ -782,6 +814,11 @@ async def oidc_process_callback(
     instance-global) so the correct provider is resolved across orgs. JIT
     provisioning writes via the app session, RLS-scoped to the resolved
     provider's org (or the first-org fallback for the env/single-org path).
+
+    FAR-1982: ``code_verifier`` is the PKCE verifier minted by the login leg
+    (proof the exchange is made by the client instance that started the flow)
+    and ``expected_nonce`` is the per-login nonce to require on the ID token.
+    Both are REQUIRED — a callback that cannot present them must not exchange.
     """
     state_data = verify_state(state, settings.secret_key)
     if not state_data:
@@ -823,6 +860,7 @@ async def oidc_process_callback(
             client_secret,
             code,
             redirect_uri,
+            code_verifier,
         )
     except httpx.HTTPError as exc:
         raise ValueError(f"Failed to exchange authorization code: {exc}") from None
@@ -841,7 +879,7 @@ async def oidc_process_callback(
     _enforce_oidc_endpoint_host(jwks_uri, discovery_url, issuer, "jwks")
 
     try:
-        claims = await verify_id_token(id_token, jwks_uri, client_id, issuer)
+        claims = await verify_id_token(id_token, jwks_uri, client_id, issuer, expected_nonce=expected_nonce)
     except OidcVerifyError as exc:
         raise ValueError(str(exc)) from None
 
@@ -988,12 +1026,16 @@ async def _exchange_code(
     client_secret: str,
     code: str,
     redirect_uri: str,
+    code_verifier: str,
 ) -> dict[str, object]:
     # Pinned client: the token endpoint is a remote-supplied URL. Pinning
     # validates + pins the connect so the ``client_secret`` in the POST body is
     # only ever disclosed to a validated, allowlisted host — never a hostile or
     # internal/metadata target. The caller enforces the host allowlist before
     # calling here.
+    #
+    # FAR-1982: ``code_verifier`` is presented here so the token endpoint binds
+    # the authorization code to this client instance (RFC 7636 §4.5).
     async with await pinned_async_client(token_endpoint) as client:
         resp = await client.post(
             token_endpoint,
@@ -1003,6 +1045,7 @@ async def _exchange_code(
                 "redirect_uri": redirect_uri,
                 "client_id": client_id,
                 "client_secret": client_secret,
+                "code_verifier": code_verifier,
             },
             headers={"Accept": "application/json"},
             timeout=httpx.Timeout(15.0, connect=5.0),
