@@ -89,7 +89,8 @@ class _MockSession:
     async def flush(self) -> None:
         return
 
-    async def get(self, model: Any, pk: Any) -> SimpleNamespace:
+    async def get(self, model: Any, pk: Any, with_for_update: bool = False) -> SimpleNamespace:
+        # ``with_for_update`` is accepted for the FAR-1914 router's locked re-read.
         return SimpleNamespace(
             max_concurrent_runs=5,
             status="running",
@@ -355,7 +356,7 @@ class TestNodelessChokepointTruthfulForNodeStartedRow:
         )
 
         class _SessionWithRun:
-            async def get(self, model: Any, pk: Any) -> Any:
+            async def get(self, model: Any, pk: Any, with_for_update: bool = False) -> Any:
                 return run
 
         summary = ch._dispatcher_summary()

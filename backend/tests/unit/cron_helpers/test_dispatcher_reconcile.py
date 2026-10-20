@@ -140,7 +140,8 @@ class _MockSession:
         raw-SQL terminalizers that follow)."""
         return
 
-    async def get(self, model: Any, pk: Any) -> SimpleNamespace:
+    async def get(self, model: Any, pk: Any, with_for_update: bool = False) -> SimpleNamespace:
+        # ``with_for_update`` is accepted for the FAR-1914 router's locked re-read.
         return SimpleNamespace(
             max_concurrent_runs=5,
             status="running",
@@ -1559,7 +1560,7 @@ class TestClaimedButNeverDispatchedCounter:
             async def __aexit__(self, *args: object) -> bool:
                 return False
 
-            async def get(self, model: Any, pk: Any) -> Any:
+            async def get(self, model: Any, pk: Any, with_for_update: bool = False) -> Any:
                 return run
 
         ingest = AsyncMock()
@@ -1584,7 +1585,7 @@ class _NoRunSession:
     def begin(self) -> _MockBegin:
         return self.begin_cm
 
-    async def get(self, model: Any, pk: Any) -> None:
+    async def get(self, model: Any, pk: Any, with_for_update: bool = False) -> None:
         return None
 
 

@@ -1094,8 +1094,10 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
     read as ``claimed_but_never_dispatched``. FAR-1803 adds
     ``node_started_executor_lost`` (node-started rows whose executor heartbeat
     is stale - the zero-node class that used to be invisible to every counter).
-    FAR-1914 adds ``nodeless_fresh_premise_deferred`` - the nodeless repair /
-    early-detect deferrals after a FRESH re-verify proved a node had started.
+    FAR-1914 adds ``nodeless_fresh_premise_deferred`` - the deferrals from the
+    full-window nodeless repair and the FAR-873 early-detect branch (FRESH
+    re-read), plus the age-bound nodeless router (locked ``FOR UPDATE``
+    re-read), after the re-verify proved a node had started.
     This is a ROUTINE signal (the scan snapshot legitimately races the
     executor's first-node dispatch), NOT a regression alarm; it is kept
     separate from ``node_started_deferred`` so that counter keeps its

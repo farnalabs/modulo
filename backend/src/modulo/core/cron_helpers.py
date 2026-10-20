@@ -606,9 +606,12 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     # one keeps its regression-alarm meaning. Read through .get() like every
     # other additive counter here.
     "node_started_deferred": 0,
-    # FAR-1914: rows the nodeless repair / early-detect re-verified as having
-    # STARTED a node (or left ``running``, or become unreadable -> fail
-    # closed) on a FRESH read after the scan selected them. This is a ROUTINE
+    # FAR-1914: rows a nodeless path re-verified as having STARTED a node (or
+    # left ``running``, or become unreadable -> fail closed) after the scan
+    # selected them. THREE producers: the full-window nodeless repair and the
+    # FAR-873 early-detect branch (both on a FRESH read), and the age-bound
+    # nodeless router ``_terminalize_aged_nodeless_zombies`` (on a locked
+    # ``FOR UPDATE`` re-read). This is a ROUTINE
     # production signal, NOT a regression alarm: the scan row is a snapshot
     # and the run's own executor legitimately dispatches its first node in the
     # SELECT→loop window (run e6131612 proves the race is real), so a non-zero
@@ -6700,6 +6703,35 @@ def _summarize_reconcile_error(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"[:200]
 
 
+def _locked_row_disproves_nodeless_premise(run: Any) -> bool:
+    """FAR-1914: does a row already locked ``FOR UPDATE`` fail the nodeless premise?
+
+    The locked-read twin of :func:`_fresh_row_is_node_started_or_gone`, used by
+    the age-bound router (:func:`_terminalize_aged_nodeless_zombies`) so the
+    premise check and the terminal write share ONE row lock. The caller has
+    already read ``run`` with ``session.get(Run, run_id,
+    with_for_update=True)``; whatever this function returns stays true until
+    that transaction commits, which is the guarantee the router's docstring
+    states.
+
+    Returns True when the row must NOT be terminal-failed as a
+    claimed-but-nodeless zombie: it is missing, has left ``running``, has
+    durably STARTED a node (``first_node_dispatched`` — FAR-1649: re-execution
+    is unsafe and "dispatched no node" is false), or carries node token usage.
+    """
+    if run is None:
+        # The row vanished (deleted / not visible under this org's RLS): there
+        # is nothing safe to repair.
+        return True
+    if getattr(run, "status", None) != "running":
+        # Left running between the scan and the locked read — the terminalizer
+        # decision no longer applies.
+        return True
+    if getattr(run, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:
+        return True
+    return getattr(run, "node_token_usage", None) is not None
+
+
 async def _terminalize_aged_nodeless_zombies(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -6735,16 +6767,21 @@ async def _terminalize_aged_nodeless_zombies(
     gate only closes the tail (runs whose repair the row loop never reached).
 
     FAR-1914: the SELECT returns a row SNAPSHOT, so each selected row is
-    re-verified on the FRESH row through
-    :func:`_fresh_row_is_node_started_or_gone` before the terminal write — the
-    same guard the nodeless row loop and the FAR-873 early-detect branch use. A
-    run whose executor dispatched its first node in the SELECT→write window is
-    DEFERRED (counted ``nodeless_fresh_premise_deferred``) rather than
-    terminal-failed on the stale "dispatched no node" premise.
+    re-read with ``SELECT ... FOR UPDATE`` and the zero-node premise is checked
+    on THAT LOCKED ENTITY before the terminal write. Because the lock is held
+    until this transaction commits, the row cannot change between the check and
+    :func:`_fail_nodeless_run`'s write — and because ``_fail_nodeless_run``
+    re-reads by primary key, it receives the same locked identity-mapped
+    instance rather than a second snapshot. A run whose executor dispatched its
+    first node in the SELECT→write window (or that left ``running``, or whose
+    locked row could not be read — fail closed) is DEFERRED (counted
+    ``nodeless_fresh_premise_deferred``) instead of terminal-failed on a
+    premise its current state disproves.
 
     Returns the ids actually routed to the chokepoint (empty when the tick found
     nothing, or when every selected row was deferred as no longer nodeless).
     """
+    from modulo.db.models.run import Run
     from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
 
     result = await session.execute(
@@ -6764,12 +6801,27 @@ async def _terminalize_aged_nodeless_zombies(
     for run_id in selected:
         # FAR-1914: the scan row is a SNAPSHOT — the run's own executor may
         # have dispatched its first node since the SELECT (run e6131612 was
-        # terminal-failed with dispatch_phase_elapsed=0.3s). Re-verify the
-        # zero-node premise on the FRESH row before the terminal write, exactly
-        # as the nodeless row loop and the FAR-873 early-detect branch do: a
-        # node-started row (or one that left ``running``) is deferred, never
-        # failed on a premise the fresh state has already disproved.
-        if await _fresh_row_is_node_started_or_gone(session, run_id):
+        # terminal-failed with dispatch_phase_elapsed=0.3s). Take the row lock
+        # BEFORE checking the premise, and check it on the locked ENTITY: the
+        # lock is held until this transaction commits, so no writer can move the
+        # row between this check and ``_fail_nodeless_run``'s terminal write
+        # (which re-reads the same identity-mapped instance by primary key).
+        # A locked read that fails is treated like any other unverifiable
+        # premise: fail CLOSED and defer (a started node may have side effects).
+        try:
+            locked = await session.get(Run, run_id, with_for_update=True)
+        except Exception:
+            _log.warning(
+                "dispatcher_reconcile.aged_nodeless_locked_read_failed run=%s org=%s "
+                "— could not re-verify the zero-node premise under the row lock; "
+                "held back (fail closed, FAR-1914)",
+                run_id,
+                org_id,
+                exc_info=True,
+            )
+            summary["nodeless_fresh_premise_deferred"] += 1
+            continue
+        if _locked_row_disproves_nodeless_premise(locked):
             # Its OWN counter — a routine fresh-premise race, NOT the row-level
             # belt's regression alarm (``node_started_deferred``).
             summary["nodeless_fresh_premise_deferred"] += 1
@@ -6781,8 +6833,9 @@ async def _terminalize_aged_nodeless_zombies(
                 org_id,
             )
             continue
-        # The chokepoint re-checks status='running' itself; inside this
-        # transaction the rows were selected running moments ago.
+        # The row is locked and still pre-node: ``_fail_nodeless_run``'s own
+        # status/phase/token checks read this same identity-mapped instance, so
+        # they cannot decline and the write cannot race another writer.
         await _fail_nodeless_run(session, run_id, org_id, summary)
         routed.append(run_id)
     if routed:
@@ -8591,9 +8644,12 @@ def _dispatcher_summary() -> dict[str, Any]:
         # fresh-premise deferrals to their OWN counter below, so a non-zero
         # value here is still the regression alarm it is documented to be.
         "node_started_deferred": 0,
-        # FAR-1914: rows the nodeless repair / early-detect deferred after a
-        # FRESH re-verify proved a node had started (or the row left running /
-        # became unreadable). A ROUTINE per-tick signal — the scan snapshot
+        # FAR-1914: rows a nodeless path deferred after a re-verify proved a
+        # node had started (or the row left running / became unreadable).
+        # THREE producers: the full-window nodeless repair and the FAR-873
+        # early-detect branch (FRESH read), and the age-bound nodeless router
+        # ``_terminalize_aged_nodeless_zombies`` (locked ``FOR UPDATE``
+        # re-read). A ROUTINE per-tick signal — the scan snapshot
         # legitimately races the executor's first-node dispatch (run
         # e6131612), so this is expected to be non-zero in production and must
         # NOT be read as the belt's regression alarm. Additive .get()

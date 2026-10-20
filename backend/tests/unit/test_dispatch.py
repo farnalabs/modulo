@@ -1321,7 +1321,8 @@ class _F6aMockSession:
         # router after it delegates to _fail_nodeless_run.
         return None
 
-    async def get(self, model: Any, pk: Any) -> SimpleNamespace:
+    async def get(self, model: Any, pk: Any, with_for_update: bool = False) -> SimpleNamespace:
+        # ``with_for_update`` is accepted for the FAR-1914 router's locked re-read.
         return SimpleNamespace(max_concurrent_runs=5)
 
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
