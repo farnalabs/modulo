@@ -39,7 +39,12 @@ Known residuals (accepted and recorded, not claimed closed):
   transaction can hold it and 55P03 is not practically reachable; the arm is an
   explicit, pinned exception
   (``test_library_materialise_arm_is_a_recorded_transitive_residual``) rather
-  than a conversion.
+  than a conversion, and the reachability premise itself is pinned mechanically
+  by ``test_library_import_inserts_the_map_before_the_first_c20_lock`` (drives
+  the materialise boundary with fakes) plus
+  ``test_lifecycle_map_create_flushes_inside_the_call_and_never_commits`` (pins
+  the flush/no-commit shape of ``create_lifecycle_map``) — both fail if the
+  path is reworked to lock a pre-existing row or to commit mid-materialise.
 * A NEW transitive helper that calls a row lock from a file not in
   ``_ROW_LOCK_FILES`` fails the repo-wide file-set assertion, so the inventory
   and this guard must be updated in the same change.
@@ -51,6 +56,7 @@ Known residuals (accepted and recorded, not claimed closed):
 from __future__ import annotations
 
 import ast
+import textwrap
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -206,7 +212,12 @@ _SSO_CALLBACK_FUNCTION = "_run_sso_callback_process"
 # ``_upsert_context_source``) — a route calls those wrappers, so they are the
 # route's direct sweep surface for C20/C22/C23.
 _SWEPT_HELPER_MODULES: dict[str, frozenset[str]] = {
-    "modulo.db.crud.account": frozenset({"_get_account_locked"}),
+    # The route-facing account wrappers, not ``_get_account_locked``: the
+    # private helper is only called from inside ``db/crud/account.py``, so
+    # listing it discovered nothing. ``update_account_preferences`` /
+    # ``set_hitl_email_preference`` are what ``api/routes/me.py`` and
+    # ``api/routes/in_app_notifications.py`` actually call.
+    "modulo.db.crud.account": frozenset({"update_account_preferences", "set_hitl_email_preference"}),
     "modulo.db.crud.agent": frozenset({"add_prompt_version", "rollback_prompt_version"}),
     "modulo.db.crud.agent_runner_binding": frozenset({"replace_agent_bindings"}),
     "modulo.db.crud.invitations": frozenset({"get_live_for_email", "get_valid_by_token_hash"}),
@@ -233,11 +244,14 @@ _KNOWN_SWEPT_CALLERS: frozenset[tuple[str, str]] = frozenset(
         ("api/routes/agents.py", "rollback_prompt"),
         ("api/routes/agents.py", "replace_bindings_endpoint"),
         ("api/routes/auth.py", "accept_invite"),
+        ("api/routes/in_app_notifications.py", "update_preferences"),
         ("api/routes/lifecycle_maps.py", "graduate_lifecycle_map_stage_endpoint"),
         ("api/routes/lifecycle_maps.py", "save_lifecycle_map_version_endpoint"),
         ("api/routes/lifecycle_maps.py", "update_lifecycle_map_endpoint"),
         ("api/routes/lifecycle_maps.py", "update_lifecycle_map_version_endpoint"),
         ("api/routes/me.py", "set_user_context_source"),
+        ("api/routes/me.py", "update_hitl_email_preferences"),
+        ("api/routes/me.py", "update_user_settings"),
         ("api/routes/parameter_schemas.py", "update_parameter_schema_endpoint"),
         ("api/routes/parameter_schemas.py", "update_parameter_set_endpoint"),
         ("api/routes/runs.py", "observe_run_node"),
@@ -396,12 +410,33 @@ def _imported_symbols(module: ast.Module) -> dict[str, tuple[str, str]]:
 
 
 def _imported_module_aliases(module: ast.Module) -> dict[str, str]:
-    """Local binding -> module path for ``import a.b.c [as x]``."""
+    """Local binding -> module path for every module-shaped import.
+
+    Three shapes bind a MODULE in the local namespace:
+
+    * ``import a.b.c`` binds the ROOT package (``a``), so ``a.b.c.f()`` is
+      root ``a`` + rest ``b.c``. Mapping ``a -> a`` (not ``a -> a.b.c``) is
+      what keeps the dotted receiver from being double-prefixed.
+    * ``import a.b.c as m`` binds ``m -> a.b.c``.
+    * ``from a.b import m`` (where ``a.b.m`` is a module) binds
+      ``m -> a.b.m``. Registering every imported name as a candidate is safe:
+      a resolved path only becomes a hit when it is EXACTLY a swept module AND
+      the attribute is a swept helper, so a plain symbol import never matches.
+    """
     aliases: dict[str, str] = {}
     for node in ast.walk(module):
         if isinstance(node, ast.Import):
             for name in node.names:
-                aliases[name.asname or name.name.split(".")[0]] = name.name
+                if name.asname:
+                    aliases[name.asname] = name.name
+                else:
+                    root = name.name.split(".")[0]
+                    aliases[root] = root
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for name in node.names:
+                if name.name == "*":
+                    continue
+                aliases[name.asname or name.name] = f"{node.module}.{name.name}"
     return aliases
 
 
@@ -420,10 +455,14 @@ def _resolve_attribute_owner(attribute: ast.Attribute, module_aliases: dict[str,
 def _swept_helper_calls(function: ast.AST, module: ast.Module) -> set[str]:
     """Swept helpers *function* calls DIRECTLY, resolved through the module's imports.
 
-    Three call shapes are resolved:
+    Every import shape that can put a swept helper in reach is resolved:
 
-    * ``from modulo.db.crud.X import helper [as y]`` → ``y(...)``;
-    * ``import modulo.db.crud.X [as m]`` → ``m.helper(...)`` / ``modulo.db.crud.X.helper(...)``;
+    * ``from X import helper [as y]`` → ``y(...)``;
+    * ``from X import module [as m]`` (a package-submodule import) →
+      ``m.helper(...)``;
+    * ``import X.module [as m]`` → ``m.helper(...)`` / the dotted receiver;
+    * ``import X.module`` (bare) → ``X.module.helper(...)``, without
+      double-prefixing the root package;
     * a METHOD call on a service instance (``service.set_org_default(...)``) —
       accepted when the attribute name is a swept helper AND the module imports
       from at least one swept module (the receiver's concrete type is not
@@ -650,6 +689,125 @@ def test_sso_callback_redirect_surface_is_an_explicit_55p03_exception() -> None:
     assert ("api/routes/sso.py", _SSO_CALLBACK_FUNCTION) not in _MAPPED_55P03_ROUTE_ARMS
 
 
+def test_swept_helper_resolver_handles_every_import_shape() -> None:
+    """The derived-caller resolver resolves every import shape routes actually use.
+
+    Four import shapes put a swept module's namespace in a route file's scope,
+    and every one appears in real route files today (``admin.py`` style-aliases
+    ``account_crud``, ``teams.py`` aliases ``_account_crud``, ``pipelines.py``
+    aliases ``_guardrail_config``, ``me.py`` uses plain ``from ... import``
+    names). A resolver that mishandles any shape silently holes the derived
+    caller set — a route calling a swept helper through that shape would pass
+    the guard without classifying 55P03. Each case below resolves against the
+    REAL swept sets (``_SWEPT_HELPER_MODULES``), with synthetic source.
+    """
+    # 1. `from X import helper` — the plain Name shape (me.py).
+    source = textwrap.dedent(
+        """
+        from modulo.db.crud.account import update_account_preferences
+
+        async def handler(session):
+            await update_account_preferences(session, account_id=uuid.UUID(int=0))
+        """
+    )
+    module = ast.parse(source)
+    function = _iter_functions(module)[0]
+    assert _swept_helper_calls(function, module) == {"modulo.db.crud.account.update_account_preferences"}
+
+    # 1b. Same shape with an alias binding (asname).
+    source = textwrap.dedent(
+        """
+        from modulo.db.crud.account import update_account_preferences as update_prefs
+
+        async def handler(session):
+            await update_prefs(session)
+        """
+    )
+    module = ast.parse(source)
+    function = _iter_functions(module)[0]
+    assert _swept_helper_calls(function, module) == {"modulo.db.crud.account.update_account_preferences"}
+
+    # 2. `from X import module as m` where X.module is itself a module.
+    source = textwrap.dedent(
+        """
+        from modulo.db.crud import account as account_module
+
+        async def handler(session):
+            await account_module.update_account_preferences(session)
+        """
+    )
+    module = ast.parse(source)
+    function = _iter_functions(module)[0]
+    assert _swept_helper_calls(function, module) == {"modulo.db.crud.account.update_account_preferences"}
+
+    # 3. `import X.y.z` bare — binds the ROOT package, so the dotted receiver
+    #    must NOT be double-prefixed (the historical resolver bug).
+    source = textwrap.dedent(
+        """
+        import modulo.db.crud.account
+
+        async def handler(session):
+            await modulo.db.crud.account.update_account_preferences(session)
+        """
+    )
+    module = ast.parse(source)
+    function = _iter_functions(module)[0]
+    assert _swept_helper_calls(function, module) == {"modulo.db.crud.account.update_account_preferences"}
+
+    # 3b. Same bare import: a call through the root alone (`modulo.helper()`)
+    #     resolves to owner "modulo", which is not a swept module — no hit.
+    source = textwrap.dedent(
+        """
+        import modulo.db.crud.account
+
+        async def handler(session):
+            await modulo.update_account_preferences(session)
+        """
+    )
+    module = ast.parse(source)
+    function = _iter_functions(module)[0]
+    assert not _swept_helper_calls(function, module)
+
+    # 4. `import X.y.z as alias` — pypi-style module alias (admin.py).
+    source = textwrap.dedent(
+        """
+        import modulo.db.crud.account as account_crud
+
+        async def handler(session):
+            await account_crud.update_account_preferences(session)
+        """
+    )
+    module = ast.parse(source)
+    function = _iter_functions(module)[0]
+    assert _swept_helper_calls(function, module) == {"modulo.db.crud.account.update_account_preferences"}
+
+    # Negatives: a non-swept attribute on a swept owner is not a hit, and an
+    # attribute call in a module that imports nothing swept is not a hit.
+    source = textwrap.dedent(
+        """
+        from modulo.db.crud import account as account_module
+
+        async def handler(session):
+            await account_module.unrelated_helper(session)
+        """
+    )
+    module = ast.parse(source)
+    function = _iter_functions(module)[0]
+    assert not _swept_helper_calls(function, module)
+
+    source = textwrap.dedent(
+        """
+        import other_service
+
+        async def handler(session):
+            await other_service.update_account_preferences(session)
+        """
+    )
+    module = ast.parse(source)
+    function = _iter_functions(module)[0]
+    assert not _swept_helper_calls(function, module)
+
+
 def test_every_direct_route_caller_of_a_swept_helper_classifies_55p03() -> None:
     """Derive the route callers of every swept helper and require a 55P03 mapping.
 
@@ -773,6 +931,133 @@ def test_library_materialise_arm_is_a_recorded_transitive_residual() -> None:
         "changed, re-record the residual"
     )
     assert (rel, function_name) in _MAPPING_EXCEPTION_REASONS
+
+
+async def test_library_import_inserts_the_map_before_the_first_c20_lock() -> None:
+    """Pin WHY the library materialise residual is accepted: same-transaction row.
+
+    ``create_lifecycle_map_from_primitive_endpoint`` reaches the bounded C20
+    (``save_map_version`` → ``get_lifecycle_map_for_update``) only through
+    ``materialize_map_from_primitive`` → ``_create_map_via_envelope``. The
+    residual's reachability premise is that the first C20 lock operates on a
+    lifecycle-map row INSERTED BY THE SAME REQUEST TRANSACTION — the import
+    replay creates version 1 (insert + ``session.flush()`` mints the id) and
+    only then saves versions 2..N against that id, inside the caller's
+    transaction. This test drives exactly that boundary with fakes: the
+    create call must precede every save call, and the first save must operate
+    on the id the create produced. If the materialise path is ever reworked to
+    lock a PRE-EXISTING map row, or to save versions before the create+flush,
+    this test fails and the residual must be re-recorded.
+    """
+    order: list[str] = []
+    created_ids: list[uuid.UUID] = []
+
+    async def fake_create(session: AsyncSession | None, **_kwargs: object) -> SimpleNamespace:
+        created = SimpleNamespace(id=uuid.uuid4(), version=1)
+        created_ids.append(created.id)
+        order.append("create")
+        return created
+
+    async def fake_save(
+        session: AsyncSession | None,
+        map_id: uuid.UUID,
+        stages: object = None,
+        edges: object = None,
+        notes: object = None,
+    ) -> SimpleNamespace:
+        order.append(f"save:{map_id}")
+        return SimpleNamespace(id=map_id)
+
+    import importlib
+
+    import_export = importlib.import_module("modulo.core.lifecycle_map.import_export")
+    two_versions = [
+        {"version": 1, "stages": [], "edges": [], "notes": ""},
+        {"version": 2, "stages": [], "edges": [], "notes": ""},
+    ]
+    primitive = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Import Pin",
+        description=None,
+        content_json={"export": {"format_version": "2", "name": "Import Pin", "versions": two_versions}},
+    )
+    with (
+        patch.object(import_export, "create_lifecycle_map", new=fake_create),
+        patch.object(import_export, "save_map_version", new=fake_save),
+        patch.object(import_export, "get_existing_lifecycle_map_names", new=AsyncMock(return_value=set())),
+    ):
+        await import_export.materialize_map_from_primitive(
+            None, org_id=uuid.uuid4(), account_id=uuid.uuid4(), primitive=primitive
+        )
+
+    # The route commits once at the end (get_db_session), so these calls are
+    # one request transaction: create+flush first, locks strictly after, and
+    # every lock is on THE id the flush minted — never a foreign row.
+    assert len(order) >= 2, "a two-version envelope expects one create followed by one save"
+    assert order[0] == "create", (
+        f"the version-1 insert must be the FIRST transaction action, got {order[0]!r} first — "
+        "a save before the create+flush cannot rely on the same-transaction premise"
+    )
+    assert len(created_ids) == 1, "the replay creates exactly one map inside the transaction"
+    save_actions = [action for action in order[1:] if action.startswith("save:")]
+    assert len(save_actions) == 1, f"a two-version envelope replays exactly one later version, got {len(save_actions)}"
+    assert save_actions[0] == f"save:{created_ids[0]}", (
+        f"the first C20 lock must target the row this transaction created ({created_ids[0]}), got {save_actions[0]!r}"
+    )
+
+
+def test_lifecycle_map_create_flushes_inside_the_call_and_never_commits() -> None:
+    """Pin the flush half of the same-transaction premise in service code.
+
+    ``materialize_map_from_primitive``'s version-1 create is
+    ``service.create_lifecycle_map``, whose return value already carries the
+    row id only because it runs ``await session.flush()`` before returning
+    (Postgres mints the id at flush). The transaction boundary stays in the
+    route's ``get_db_session`` — create must NOT commit. If a future change
+    moves that flush after the return (id not minted before callers can lock
+    the row) or commits inside the create (the row becomes visible/lockable by
+    OTHER transactions mid-materialise), the same-transaction premise in the
+    library residual breaks: this test fails and the residual must be
+    re-recorded.
+    """
+    function = _function_node(_parse("core/lifecycle_map/service.py"), "create_lifecycle_map")
+    top = [stmt for stmt in function.body if isinstance(stmt, ast.stmt)]
+    flush_positions = [index for index, stmt in enumerate(top) if _is_session_call(stmt, attr="flush")]
+    flush_count = len(flush_positions)
+    assert flush_count == 1, (
+        f"create_lifecycle_map must flush exactly once before it returns (minted id supplies"
+        f" save_map_version's lock target), found {flush_count}"
+    )
+    commit_positions = [index for index, stmt in enumerate(top) if _is_session_call(stmt, attr="commit")]
+    build_return = [index for index, stmt in enumerate(top) if isinstance(stmt, ast.Return)]
+    assert len(build_return) == 1, "create_lifecycle_map has a single return in its top-level body"
+    assert flush_positions, "create_lifecycle_map must flush before it returns"
+    assert flush_positions[0] < build_return[0], (
+        "create_lifecycle_map must flush BEFORE it returns so the id exists before any caller locks the row"
+    )
+    commit_count = len(commit_positions)
+    assert commit_count == 0, (
+        f"create_lifecycle_map must NOT commit: the map stays inside the caller's request "
+        f"transaction (get_db_session), found {commit_count} commit call(s)"
+    )
+
+
+def _is_session_call(stmt: ast.stmt, *, attr: str) -> bool:
+    """True when *stmt* is a top-level statement ``await session.<attr>(...)``."""
+    call: ast.Call | None = None
+    if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Await):
+        value = stmt.value.value
+        if isinstance(value, ast.Call):
+            call = value
+    if call is None:
+        return False
+    function = call.func
+    return (
+        isinstance(function, ast.Attribute)
+        and function.attr == attr
+        and isinstance(function.value, ast.Name)
+        and function.value.id == "session"
+    )
 
 
 def test_c5_c6_generic_fallback_is_bounded_by_the_shared_patch_caller() -> None:
