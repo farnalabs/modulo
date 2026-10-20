@@ -132,6 +132,7 @@ def _clone_snapshot(nodes: list[dict[str, Any]]) -> _CloneSourceSnapshot:
         lock_wait_timeout_seconds=300,
         node_timeout_seconds=300,
         hitl_review_window_seconds=None,
+        queue_timeout_seconds=None,
         run_context_defaults={},
         graph_nodes_json=nodes,
         default_autonomy_level="manual_approval",
