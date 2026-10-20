@@ -308,6 +308,44 @@ async def _apply_grants(conn: asyncpg.Connection) -> None:
         await conn.execute(statement)
 
 
+def _canonical_constraint_name(contype: str, definition: str) -> str | None:
+    """Return the canonical constraint name for a ``pg_constraint`` row."""
+    if contype == "p":
+        return "accounts_pkey"
+    if contype == "u" and "email" in definition:
+        return "accounts_email_key"
+    if contype == "c" and "auth_provider" in definition:
+        return "ck_accounts_auth_provider"
+    if contype == "c" and any(
+        token in definition for token in ("is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at")
+    ):
+        return "ck_accounts_break_glass_expiry"
+    return None
+
+
+def _collect_constraint_renames(rows: list[Any]) -> list[tuple[str, str]]:
+    """Return ``(current_name, canonical_name)`` pairs needing a rename."""
+    renames: list[tuple[str, str]] = []
+    for row in rows:
+        name: str = row["name"]
+        canonical = _canonical_constraint_name(row["contype"], row["definition"])
+        if canonical is not None and name != canonical:
+            renames.append((name, canonical))
+    return renames
+
+
+def _canonical_index_name(index_name: str) -> str | None:
+    """Return the canonical index name implied by *index_name*, if any."""
+    index_canonical = {
+        "accounts_new_pkey": "accounts_pkey",
+        "accounts_new_email_key": "accounts_email_key",
+    }
+    index_target = index_canonical.get(index_name)
+    if index_target is None and index_name.startswith("accounts_new_"):
+        index_target = "accounts_" + index_name[len("accounts_new_") :]
+    return index_target
+
+
 async def _rename_accounts_objects(conn: asyncpg.Connection) -> None:
     """Restore canonical constraint/index names on the rebuilt ``accounts`` table.
 
@@ -329,26 +367,7 @@ async def _rename_accounts_objects(conn: asyncpg.Connection) -> None:
         WHERE n.nspname = 'public' AND rel.relname = 'accounts'
         """
     )
-    constraint_renames: list[tuple[str, str]] = []
-    for row in rows:
-        name: str = row["name"]
-        contype: str = row["contype"]
-        definition: str = row["definition"]
-        if contype == "p":
-            canonical = "accounts_pkey"
-        elif contype == "u" and "email" in definition:
-            canonical = "accounts_email_key"
-        elif contype == "c" and "auth_provider" in definition:
-            canonical = "ck_accounts_auth_provider"
-        elif contype == "c" and any(
-            token in definition for token in ("is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at")
-        ):
-            canonical = "ck_accounts_break_glass_expiry"
-        else:
-            continue
-        if name != canonical:
-            constraint_renames.append((name, canonical))
-    for current, canonical in constraint_renames:
+    for current, canonical in _collect_constraint_renames(rows):
         await conn.execute(f"ALTER TABLE public.accounts RENAME CONSTRAINT {_q(current)} TO {_q(canonical)}")
 
     index_rows = await conn.fetch(
@@ -361,18 +380,11 @@ async def _rename_accounts_objects(conn: asyncpg.Connection) -> None:
         WHERE n.nspname = 'public' AND rel.relname = 'accounts'
         """
     )
-    index_canonical = {
-        "accounts_new_pkey": "accounts_pkey",
-        "accounts_new_email_key": "accounts_email_key",
-    }
     for row in index_rows:
         index_name: str = row["name"]
-        index_target = index_canonical.get(index_name)
-        if index_target is None and index_name.startswith("accounts_new_"):
-            index_target = "accounts_" + index_name[len("accounts_new_") :]
-        if index_target is None or index_target == index_name:
-            continue
-        await conn.execute(f"ALTER INDEX public.{_q(index_name)} RENAME TO {_q(index_target)}")
+        index_target = _canonical_index_name(index_name)
+        if index_target is not None and index_target != index_name:
+            await conn.execute(f"ALTER INDEX public.{_q(index_name)} RENAME TO {_q(index_target)}")
 
 
 async def _cmd_rebuild(conn: asyncpg.Connection, confirmed: bool = False) -> int:
@@ -421,55 +433,69 @@ async def _cmd_rebuild(conn: asyncpg.Connection, confirmed: bool = False) -> int
     return 0
 
 
+def _orphan_count_sql(child: str, fk_column: str) -> str:
+    """SQL counting child rows whose FK value has no matching account."""
+    return (
+        f"SELECT count(*) FROM {_q(child)} c "  # noqa: S608 - identifiers come from the hardcoded ACCOUNTS_FKS allowlist
+        f"LEFT JOIN public.accounts a ON a.id = c.{_q(fk_column)} "
+        f"WHERE c.{_q(fk_column)} IS NOT NULL AND a.id IS NULL"
+    )
+
+
+async def _add_one_fk(
+    conn: asyncpg.Connection,
+    child: str,
+    constraint: str,
+    fk_column: str,
+    on_delete: str,
+) -> tuple[str, str]:
+    """Add one FK if possible.
+
+    Returns ``(outcome, label)`` where *outcome* is one of ``added``,
+    ``already``, ``orphan`` or ``missing`` and *label* is the message to show.
+    """
+    label = f"{child}.{constraint}"
+    if on_delete not in _ON_DELETE_ACTIONS:
+        return "missing", f"{label}: unknown ON DELETE action {on_delete!r}"
+    if await _fk_exists(conn, child, constraint):
+        return "already", label
+    if await conn.fetchval("SELECT to_regclass($1)", f"public.{child}") is None:
+        return "missing", f"{label}: child table missing"
+    if not await conn.fetchval(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2",
+        child,
+        fk_column,
+    ):
+        return "missing", f"{label}: column {fk_column} missing"
+    # Orphan check - never auto-delete data; skip and report instead.
+    orphans = await conn.fetchval(_orphan_count_sql(child, fk_column))
+    if orphans:
+        return "orphan", f"{label}: {orphans} orphaned row(s) in {fk_column} - resolve before adding"
+    await conn.execute(
+        f"ALTER TABLE {_q(child)} ADD CONSTRAINT {_q(constraint)} "
+        f"FOREIGN KEY ({_q(fk_column)}) REFERENCES public.accounts (id) ON DELETE {on_delete}"
+    )
+    return "added", label
+
+
+def _print_fk_labels(prefix: str, names: list[str]) -> None:
+    """Print one indented FK label per name."""
+    for name in names:
+        print(f"{prefix}{name}")
+
+
 async def _cmd_add_fks(conn: asyncpg.Connection) -> int:
     """Add any missing FK from ACCOUNTS_FKS, skipping orphaned children."""
-    added: list[str] = []
-    already: list[str] = []
-    skipped_orphans: list[str] = []
-    skipped_missing: list[str] = []
+    buckets: dict[str, list[str]] = {"added": [], "already": [], "orphan": [], "missing": []}
     for child, constraint, fk_column, on_delete in ACCOUNTS_FKS:
-        if on_delete not in _ON_DELETE_ACTIONS:
-            skipped_missing.append(f"{child}.{constraint}: unknown ON DELETE action {on_delete!r}")
-            continue
-        if await _fk_exists(conn, child, constraint):
-            already.append(f"{child}.{constraint}")
-            continue
-        if await conn.fetchval("SELECT to_regclass($1)", f"public.{child}") is None:
-            skipped_missing.append(f"{child}.{constraint}: child table missing")
-            continue
-        if not await conn.fetchval(
-            "SELECT 1 FROM information_schema.columns "
-            "WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2",
-            child,
-            fk_column,
-        ):
-            skipped_missing.append(f"{child}.{constraint}: column {fk_column} missing")
-            continue
-        # Orphan check - never auto-delete data; skip and report instead.
-        orphan_sql = (
-            f"SELECT count(*) FROM {_q(child)} c "  # noqa: S608 - identifiers come from the hardcoded ACCOUNTS_FKS allowlist
-            f"LEFT JOIN public.accounts a ON a.id = c.{_q(fk_column)} "
-            f"WHERE c.{_q(fk_column)} IS NOT NULL AND a.id IS NULL"
-        )
-        orphans = await conn.fetchval(orphan_sql)
-        if orphans:
-            skipped_orphans.append(
-                f"{child}.{constraint}: {orphans} orphaned row(s) in {fk_column} - resolve before adding"
-            )
-            continue
-        await conn.execute(
-            f"ALTER TABLE {_q(child)} ADD CONSTRAINT {_q(constraint)} "
-            f"FOREIGN KEY ({_q(fk_column)}) REFERENCES public.accounts (id) ON DELETE {on_delete}"
-        )
-        added.append(f"{child}.{constraint}")
-    print(f"Added {len(added)} FK(s), {len(already)} already present.")
-    for name in added:
-        print(f"  + {name}")
-    for name in skipped_orphans:
-        print(f"  ! skipped (orphans): {name}")
-    for name in skipped_missing:
-        print(f"  ! skipped (missing/invalid): {name}")
-    if skipped_orphans or skipped_missing:
+        outcome, label = await _add_one_fk(conn, child, constraint, fk_column, on_delete)
+        buckets[outcome].append(label)
+    print(f"Added {len(buckets['added'])} FK(s), {len(buckets['already'])} already present.")
+    _print_fk_labels("  + ", buckets["added"])
+    _print_fk_labels("  ! skipped (orphans): ", buckets["orphan"])
+    _print_fk_labels("  ! skipped (missing/invalid): ", buckets["missing"])
+    if buckets["orphan"] or buckets["missing"]:
         print("RESULT: complete with skips - resolve the orphaned rows / missing objects manually.")
         return 1
     print("RESULT: all FKs present.")
