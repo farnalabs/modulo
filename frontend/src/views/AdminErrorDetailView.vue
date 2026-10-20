@@ -71,11 +71,11 @@
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div class="card p-4">
           <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminErrorDetailView.first_seen') }}</span>
-          <p class="mt-0.5 text-sm">{{ formatDate(group.first_seen) }}</p>
+          <p class="mt-0.5 text-sm">{{ formatErrorDate(group.first_seen) }}</p>
         </div>
         <div class="card p-4">
           <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminErrorDetailView.last_seen') }}</span>
-          <p class="mt-0.5 text-sm">{{ formatDate(group.last_seen) }}</p>
+          <p class="mt-0.5 text-sm">{{ formatErrorDate(group.last_seen) }}</p>
         </div>
       </div>
 
@@ -209,7 +209,7 @@
             >
               <div class="flex items-center justify-between">
                 <span :class="levelBadgeClass(evt.level)">{{ evt.level }}</span>
-                <span class="text-xs text-muted-foreground">{{ formatDate(evt.created_at) }}</span>
+                <span class="text-xs text-muted-foreground">{{ formatErrorDate(evt.created_at) }}</span>
               </div>
               <p class="mt-1 text-sm font-mono">{{ evt.message }}</p>
               <div class="mt-1 flex gap-3 text-xs text-muted-foreground">
@@ -269,6 +269,7 @@ import BackLink from '../components/BackLink.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
+import { formatErrorDate, levelBadgeClass, statusBadgeClass } from '../utils/errorGroupPresentation'
 import Select from '../components/shared/AppSelect.vue'
 
 const route = useRoute()
@@ -319,31 +320,6 @@ watch(() => groupData.value, (g) => {
 
 function goBack() {
   router.push(isInstanceScope ? { path: '/admin/errors', query: { scope: 'instance' } } : '/admin/errors')
-}
-
-function levelBadgeClass(level: string): string {
-  if (level === 'critical') return 'badge badge-status-destructive'
-  if (level === 'warning') return 'badge badge-status-warning'
-  return 'badge badge-context-blue'
-}
-
-function statusBadgeClass(status: string): string {
-  if (status === 'new') return 'badge badge-status-destructive'
-  if (status === 'acknowledged') return 'badge badge-status-warning'
-  if (status === 'resolved') return 'badge badge-status-success'
-  if (status === 'archived') return 'badge badge-status-muted'
-  return 'badge'
-}
-
-function formatDate(dateStr: string): string {
-  if (!dateStr) return '—'
-  const d = new Date(dateStr)
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
 }
 
 async function updateStatus(status: string) {

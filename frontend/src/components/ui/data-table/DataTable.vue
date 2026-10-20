@@ -95,7 +95,7 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
             :class="cn(
               'px-4 py-3 text-xs font-medium uppercase tracking-wider text-left',
               col.numeric && 'text-right tabular-nums',
-              col.sortable && 'cursor-pointer select-none hover:text-foreground',
+              col.sortable && 'cursor-pointer select-none hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               sortColumn === col.key ? 'text-foreground' : 'text-muted-foreground',
             )"
             :tabindex="col.sortable ? 0 : undefined"
@@ -128,7 +128,7 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
         <tr
           v-for="(row, index) in sortedRows"
           :key="index"
-          class="transition-colors hover:bg-muted/30"
+          class="transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           :tabindex="props.rowClickable ? 0 : undefined"
           @click="onRowClick(row)"
           @keydown="onRowKeydown($event, row)"

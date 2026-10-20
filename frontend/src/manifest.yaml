@@ -1551,11 +1551,26 @@ elements:
       - testid: scheduler-starvation
         type: element
         dynamic_testid: false
+      - testid: admin-errors-group-count
+        type: element
+        dynamic_testid: false
+      - testid: admin-errors-loading
+        type: element
+        dynamic_testid: false
       - testid: admin-errors-message-full
         type: element
         dynamic_testid: false
       - testid: admin-errors-message-truncated
         type: element
+        dynamic_testid: false
+      - testid: admin-errors-next-page
+        type: button
+        dynamic_testid: false
+      - testid: admin-errors-page-indicator
+        type: element
+        dynamic_testid: false
+      - testid: admin-errors-previous-page
+        type: button
         dynamic_testid: false
       - testid: admin-errors-reset
         type: button
