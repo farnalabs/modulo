@@ -157,18 +157,46 @@ See the feature's contract line in `docs/product-map/system/runtime.md`.
 
 A schema change is a migration event. Take a dump before running
 `alembic upgrade heads`, so a bad upgrade has a recovery point that does not
-depend on the migration itself. This section is the backup/restore half of the
-version-upgrade procedure in
-[`docs/upgrade-process.md`](../upgrade-process.md).
+depend on the migration itself.
 
-All commands below run from `backend/`, where `alembic.ini` lives.
+### Which tool, which artefact
+
+This page documents two backup tools. They produce different artefacts and are
+**not interchangeable in either direction**:
+
+| Tool | Produces | Restored by | Encrypted |
+|------|----------|-------------|-----------|
+| `scripts/backup.py` | one `modulo-backup-<org>-<timestamp>.tar.gz.enc` file | `scripts/restore.py --input` | Yes - AES-256-CBC (PBKDF2, 600K iterations) |
+| `modulo backup` | a **directory** holding `database.sql`, the three checkpoint JSON exports, `credentials_references.json` and `backup-info.json` | `modulo restore <directory>` | **No** - the directory is written unencrypted |
+
+`scripts/restore.py --input` reads only a `scripts/backup.py` archive, and
+`modulo restore` reads only a directory written by `modulo backup`. The
+version-upgrade procedure in
+[`docs/upgrade-process.md`](../upgrade-process.md) uses the `scripts/backup.py`
+/ `scripts/restore.py` pair - the encrypted archive - so that is the pair to
+use when following that procedure. The `modulo backup` / `modulo restore` pair
+described below is the in-product database-level dump; the AES-256-CBC claim in
+the Overview applies to `scripts/backup.py` only, so store a `modulo backup`
+directory on encrypted media if the archive itself must be encrypted.
+`scripts/backup-prune.py` prunes only `modulo-backup-*.tar.gz.enc` files, so it
+does NOT prune `modulo backup` directories - delete those yourself.
+
+The `modulo` and `alembic` commands in this section run from `backend/`, where
+`alembic.ini` and the `modulo` entry point live (step 1 changes into it).
 
 ### 1. Take the dump
 
 ```bash
 cd /opt/modulo/backend
-uv run modulo backup --db-url "$DATABASE_URL" --output-dir /backups/pre-upgrade
+uv run modulo backup --db-url "$DATABASE_URL" \
+  --output-dir "/backups/pre-upgrade-$(date +%Y%m%d-%H%M%S)"
 ```
+
+Give every dump its own directory. `--output-dir` creates the directory when it
+is missing but reuses it when it exists, and the files inside it are
+overwritten - so a fixed path silently replaces the previous recovery point.
+(Without `--output-dir`, `modulo backup` creates a fresh
+`./modulo-backup-<timestamp>-<rand>` directory in the current directory.)
 
 That writes `database.sql` (a `pg_dump` of schema and data), the three
 LangGraph checkpoint JSON exports (`checkpoints.json`,
@@ -190,11 +218,12 @@ single head the chain has today - `alembic heads` prints one revision.
 
 ### 3. If the upgrade breaks: restore the dump
 
-Check the archive first, then restore it:
+Check the archive first, then restore it (substituting the timestamped
+directory you dumped in step 1):
 
 ```bash
-uv run modulo restore /backups/pre-upgrade --db-url "$DATABASE_URL" --dry-run
-uv run modulo restore /backups/pre-upgrade --db-url "$DATABASE_URL" --yes
+uv run modulo restore /backups/pre-upgrade-<timestamp> --db-url "$DATABASE_URL" --dry-run
+uv run modulo restore /backups/pre-upgrade-<timestamp> --db-url "$DATABASE_URL" --yes
 ```
 
 `restore` verifies every file against the manifest's checksums before it
@@ -202,6 +231,23 @@ touches the database; `--dry-run` performs those checks and stops. Because
 `database.sql` is a dump of the whole database, restoring it also restores the
 pre-upgrade `alembic_version` row, leaving the database recorded at the
 revision it was dumped from.
+
+Note the two different versions in play. The manifest's `schema_versions` field
+records the **migration head of the code that wrote the backup** (`alembic`
+script heads), not the database's `alembic_version` row. The two differ whenever
+the dump is taken after deploying a new release but before
+`alembic upgrade heads` runs. `modulo restore` refuses an archive whose
+recorded versions are not a subset of the running code's heads - which, in a
+linear chain, means **the restore must run the same release that wrote the
+dump**:
+
+- dump and restore with the same release. In the steps above that is the new
+  release: the dump records the new release's head while the database inside it
+  is still at the old revision;
+- if the upgrade breaks, restore with the **new** binary first (that is what
+  step 3 does), and only then roll the code back if you still need to;
+- a dump taken by the **old** release before deploying can only be restored by
+  the old release, so roll the code back first and restore afterwards.
 
 ### What `alembic downgrade -1` does, and what it does not
 
@@ -236,15 +282,22 @@ throwaway Postgres 16 it:
    revision is head;
 2. seeds an organisation, account, membership, pipeline, snapshot and run
    through the ORM;
-3. creates the LangGraph checkpoint tables exactly as app startup does;
-4. runs `modulo backup` and asserts `database.sql`, `backup-info.json` and
-   `checkpoints.json` were produced;
+3. creates the LangGraph checkpoint tables exactly as app startup does and seeds
+   one row in each of `checkpoints`, `checkpoint_blobs` and `checkpoint_writes`,
+   so the checkpoint exports and restore path are not exercised on empty
+   tables;
+4. runs `modulo backup` and asserts all six artefacts were produced and that
+   `database.sql` is non-empty;
 5. runs `modulo restore` into a second, empty database and asserts the seeded
-   rows are intact;
-6. runs `alembic downgrade -1` and asserts the recorded revision is the head's
+   rows and all three checkpoint rows are intact;
+6. re-applies the promoted first-boot posture path with the real `modulo_app`
+   role and asserts `NOBYPASSRLS` plus the expected schema, table and column
+   grants (the posture is deliberately broken before the restore, so this
+   assertion cannot pass vacuously);
+7. runs `alembic downgrade -1` and asserts the recorded revision is the head's
    parent - a downgrade that was skipped fails the gate rather than passing
    silently;
-7. runs `alembic upgrade heads` and asserts the revision is back at head, with
+8. runs `alembic upgrade heads` and asserts the revision is back at head, with
    the seeded rows still intact.
 
 A `downgrade()` that cannot run, a dump that cannot be restored, or data lost
@@ -252,18 +305,36 @@ in either direction fails the job.
 
 ### Run the gate by hand
 
+Run the script from the **repo root** - it lives at
+`scripts/verify_backup_restore.py`, and `--project backend` resolves the backend
+package from there. Running it from `backend/` fails to find the script.
+
 The script creates and drops its own scratch databases (`<db>_backup_src` and
-`<db>_restored`) on the server it is pointed at. It never modifies the database
-named in the URL.
+`<db>_restored`) on the server it is pointed at, and leaves the database named
+in the URL untouched. It also **resets the runtime roles** the migration chain
+needs (`modulo_app`, `modulo_migrate`, `modulo_breakglass`) with `DROP ROLE` /
+`CREATE ROLE` and fixed passwords. Roles are **cluster-scoped, not
+database-scoped**, so on a shared server that rotates the role passwords of
+every deployment living on it. The script therefore refuses to start unless the
+URL's host is loopback/private AND its database name ends in a scratch suffix
+(`_test`, `_backup_src`, `_restored`, ...), or you pass `--allow-role-reset`,
+which accepts that consequence deliberately. Only ever point it at a dedicated
+throwaway server.
 
 ```bash
-docker run -d --rm --name modulo-dr-gate \
+NAME=modulo-dr-gate-$(date +%Y%m%d-%H%M%S)
+docker run -d --rm --name "$NAME" \
   -e POSTGRES_USER=modulo_test -e POSTGRES_PASSWORD=modulo_test \
-  -e POSTGRES_DB=modulo_test -p 55555:5432 postgres:16-alpine
+  -e POSTGRES_DB=modulo_test -p 0:5432 postgres:16-alpine
+PORT=$(docker port "$NAME" 5432/tcp | tail -1 | sed 's/.*://')
 
-export DATABASE_URL=postgresql+asyncpg://modulo_test:modulo_test@localhost:55555/modulo_test
+export DATABASE_URL=postgresql+asyncpg://modulo_test:modulo_test@localhost:$PORT/modulo_test
 uv run --project backend python scripts/verify_backup_restore.py
 ```
+
+Let Docker assign the host port and give the container a unique name: a fixed
+`--name` / `-p 55555:5432` pair collides with any concurrent run, and a killed
+run leaves both held.
 
 `--database-url` overrides `$DATABASE_URL`. `--keep-databases` leaves the two
 scratch databases and the backup artefacts behind for inspection. If `pg_dump`
