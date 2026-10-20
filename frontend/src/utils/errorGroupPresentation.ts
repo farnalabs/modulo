@@ -31,7 +31,10 @@ export function formatErrorDate(dateStr: string | null | undefined): string {
 
 /** Stable string id for an error-group table row, tolerant of a malformed payload. */
 export function errorGroupRowId(row: Record<string, unknown>): string {
-  return String(row.id ?? '')
+  const id = row.id
+  if (typeof id === 'string') return id
+  if (typeof id === 'number') return String(id)
+  return ''
 }
 
 /** Assignee column: shortened user id, or an em dash when unassigned. */

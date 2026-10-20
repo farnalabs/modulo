@@ -38,6 +38,7 @@ describe('error group presentation helpers', () => {
     expect(errorGroupRowId({ id: 7 })).toBe('7')
     expect(errorGroupRowId({})).toBe('')
     expect(errorGroupRowId({ id: null })).toBe('')
+    expect(errorGroupRowId({ id: { nested: true } })).toBe('')
   })
 
   it('shortens a string assignee and shows an em dash otherwise', () => {
