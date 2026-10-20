@@ -62,6 +62,41 @@ function buildManifestMaps() {
 
 const { byName: manifestByName, byPath: manifestByPath } = buildManifestMaps()
 
+interface ResolvedSegment {
+  segment: BreadcrumbSegment
+  nextName: string | undefined
+}
+
+// Resolve one breadcrumb hop: the manifest is authoritative when it knows the
+// route, otherwise fall back to the router's own meta chain.
+function resolveSegment(name: string): ResolvedSegment {
+  const isCurrent = name === route.name
+  const manifestEntry = manifestByName.get(name)
+
+  if (manifestEntry) {
+    const parentName = manifestEntry.parent
+      ? manifestByPath.get(manifestEntry.parent)?.name
+      : undefined
+    return {
+      segment: {
+        path: isCurrent ? route.path : manifestEntry.path,
+        label: manifestEntry.breadcrumb || name,
+      },
+      nextName: parentName,
+    }
+  }
+
+  const resolved = router.resolve({ name })
+  const resolvedMeta = resolved.meta as Record<string, unknown> | undefined
+  return {
+    segment: {
+      path: isCurrent ? route.path : resolved.path,
+      label: (resolvedMeta?.breadcrumb as string) || name,
+    },
+    nextName: resolvedMeta?.parent as string | undefined,
+  }
+}
+
 const segments = computed<BreadcrumbSegment[]>(() => {
   const meta = route.meta as Record<string, unknown> | undefined
   if (!meta?.breadcrumb) return []
@@ -72,29 +107,9 @@ const segments = computed<BreadcrumbSegment[]>(() => {
 
   while (currentName && !visited.has(currentName)) {
     visited.add(currentName)
-    const isCurrent = currentName === route.name
-    const manifestEntry = manifestByName.get(currentName)
-    const resolved = router.resolve({ name: currentName })
-
-    if (manifestEntry) {
-      chain.unshift({
-        path: isCurrent ? route.path : manifestEntry.path,
-        label: manifestEntry.breadcrumb || currentName,
-      })
-      if (manifestEntry.parent) {
-        const parentEntry = manifestByPath.get(manifestEntry.parent)
-        currentName = parentEntry?.name ?? undefined
-      } else {
-        currentName = undefined
-      }
-    } else {
-      const resolvedMeta = resolved.meta as Record<string, unknown> | undefined
-      chain.unshift({
-        path: isCurrent ? route.path : resolved.path,
-        label: (resolvedMeta?.breadcrumb as string) || currentName,
-      })
-      currentName = resolvedMeta?.parent as string | undefined
-    }
+    const { segment, nextName } = resolveSegment(currentName)
+    chain.unshift(segment)
+    currentName = nextName
   }
 
   return chain

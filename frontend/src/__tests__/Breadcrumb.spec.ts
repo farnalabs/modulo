@@ -108,6 +108,26 @@ vi.mock('@/manifest.yaml', () => ({
         required_permissions: null,
         feature_flag: null,
       },
+      '/orphan': {
+        name: 'orphan',
+        breadcrumb: 'Orphan',
+        parent: '/missing-parent',
+        testid: 'page-orphan',
+        required_roles: null,
+        required_tier: 'community',
+        required_permissions: null,
+        feature_flag: null,
+      },
+      '/no-label': {
+        name: 'no-label',
+        breadcrumb: '',
+        parent: null,
+        testid: 'page-no-label',
+        required_roles: null,
+        required_tier: 'community',
+        required_permissions: null,
+        feature_flag: null,
+      },
     },
   },
 }))
@@ -203,5 +223,49 @@ describe('Breadcrumb.vue', () => {
 
     expect(current.text()).toBe('Loop A')
     expect(links.map((l) => l.text())).toEqual(['Loop B'])
+  })
+
+  it('tolerates a manifest parent path that has no manifest entry', async () => {
+    mockRoute.path = '/orphan'
+    mockRoute.name = 'orphan'
+    mockRoute.meta = { breadcrumb: 'Orphan' }
+
+    const wrapper = await mountBreadcrumb()
+
+    expect(wrapper.findAll('.breadcrumb-link')).toHaveLength(0)
+    expect(wrapper.find('.breadcrumb-current').text()).toBe('Orphan')
+  })
+
+  it('falls back to the route name when a manifest breadcrumb label is empty', async () => {
+    mockRoute.path = '/no-label'
+    mockRoute.name = 'no-label'
+    mockRoute.meta = { breadcrumb: 'no-label' }
+
+    const wrapper = await mountBreadcrumb()
+
+    expect(wrapper.find('.breadcrumb-current').text()).toBe('no-label')
+  })
+
+  it('resolves a non-manifest parent chain through the router meta', async () => {
+    mockRoute.path = '/virtual/child'
+    mockRoute.name = 'virtual-child'
+    mockRoute.meta = { breadcrumb: 'Virtual Child' }
+
+    mockRouter.resolve.mockImplementation((opts: { name?: string }) => {
+      if (opts.name === 'virtual-child') {
+        return { path: '/virtual/child', meta: { breadcrumb: 'Virtual Child', parent: 'virtual-parent' } }
+      }
+      if (opts.name === 'virtual-parent') {
+        return { path: '/virtual', meta: { breadcrumb: undefined, parent: undefined } }
+      }
+      return { path: '/', meta: { breadcrumb: undefined, parent: undefined } }
+    })
+
+    const wrapper = await mountBreadcrumb()
+    const links = wrapper.findAll('.breadcrumb-link')
+
+    expect(links).toHaveLength(1)
+    expect(links[0].text()).toBe('virtual-parent')
+    expect(wrapper.find('.breadcrumb-current').text()).toBe('Virtual Child')
   })
 })

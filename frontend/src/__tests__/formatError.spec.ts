@@ -36,4 +36,19 @@ describe('formatError', () => {
   it('surfaces an Error message directly', () => {
     expect(formatApiError(new Error('boom message'))).toBe('boom message')
   })
+
+  it('stringifies truthy primitives and functions without object coercion', () => {
+    expect(formatApiError(42)).toBe('42')
+    expect(formatApiError(10n)).toBe('10')
+    expect(formatApiError(Symbol('sym'))).toBe('Symbol(sym)')
+    expect(formatApiError(true)).toBe('true')
+    expect(formatApiError(function namedFn() { return 1 })).toContain('namedFn')
+  })
+
+  it('returns Unknown error for falsy non-string values', () => {
+    expect(formatApiError(null)).toBe('Unknown error')
+    expect(formatApiError(undefined)).toBe('Unknown error')
+    expect(formatApiError(0)).toBe('Unknown error')
+    expect(formatApiError(false)).toBe('Unknown error')
+  })
 })

@@ -383,89 +383,112 @@ export function measureValue(
  * Counts/cost/tokens are summed; avg_duration_ms and success_rate are weighted by
  * count (mirroring the backend's own duration weighting in bucket_rows).
  */
-export function aggregateByKey(buckets: AnalyticsBucket[]): AnalyticsBucket[] {
-  const groups = new Map<
-    string,
-    AnalyticsBucket & {
-      durSum: number;
-      durN: number;
-      rateSum: number;
-      rateN: number;
-      capWaitSum: number;
-      capWaitN: number;
-      queueWaitSum: number;
-      queueWaitN: number;
-      idleSum: number;
-      idleN: number;
-    }
-  >();
-  for (const b of buckets) {
-    const groupKey = b.key ?? "";
-    let g = groups.get(groupKey);
-    if (!g) {
-      g = {
-        date: b.date,
-        key: b.key ?? null,
-        count: 0,
-        stall_count: 0,
-        capacity_failure_count: 0,
-        durSum: 0,
-        durN: 0,
-        rateSum: 0,
-        rateN: 0,
-        capWaitSum: 0,
-        capWaitN: 0,
-        queueWaitSum: 0,
-        queueWaitN: 0,
-        idleSum: 0,
-        idleN: 0,
-      };
-      groups.set(groupKey, g);
-    }
-    g.count += b.count;
-    if (typeof b.total_cost_usd === "number") {
-      g.total_cost_usd = (g.total_cost_usd ?? 0) + b.total_cost_usd;
-    }
-    if (typeof b.total_tokens === "number") {
-      g.total_tokens = (g.total_tokens ?? 0) + b.total_tokens;
-    }
-    if (typeof b.avg_duration_ms === "number" && b.count > 0) {
-      g.durSum += b.avg_duration_ms * b.count;
-      g.durN += b.count;
-    }
-    if (typeof b.success_rate === "number" && b.count > 0) {
-      g.rateSum += b.success_rate * b.count;
-      g.rateN += b.count;
-    }
-    g.stall_count = (g.stall_count ?? 0) + (b.stall_count ?? 0);
-    g.capacity_failure_count = (g.capacity_failure_count ?? 0) + (b.capacity_failure_count ?? 0);
-    if (typeof b.avg_capacity_wait_ms === "number" && (b.capacity_failure_count ?? 0) > 0) {
-      g.capWaitSum += b.avg_capacity_wait_ms * (b.capacity_failure_count ?? 0);
-      g.capWaitN += b.capacity_failure_count ?? 0;
-    }
-    if (typeof b.avg_queue_wait_ms === "number" && b.count > 0) {
-      g.queueWaitSum += b.avg_queue_wait_ms * b.count;
-      g.queueWaitN += b.count;
-    }
-    if (typeof b.avg_final_idle_ms === "number" && b.count > 0) {
-      g.idleSum += b.avg_final_idle_ms * b.count;
-      g.idleN += b.count;
-    }
+type AggregateGroup = AnalyticsBucket & {
+  // Both counters are initialised to 0 and only ever incremented, so they are
+  // always present on a group (no nullish fallback needed when accumulating).
+  stall_count: number;
+  capacity_failure_count: number;
+  durSum: number;
+  durN: number;
+  rateSum: number;
+  rateN: number;
+  capWaitSum: number;
+  capWaitN: number;
+  queueWaitSum: number;
+  queueWaitN: number;
+  idleSum: number;
+  idleN: number;
+};
+
+function createAggregateGroup(bucket: AnalyticsBucket): AggregateGroup {
+  return {
+    date: bucket.date,
+    key: bucket.key ?? null,
+    count: 0,
+    stall_count: 0,
+    capacity_failure_count: 0,
+    durSum: 0,
+    durN: 0,
+    rateSum: 0,
+    rateN: 0,
+    capWaitSum: 0,
+    capWaitN: 0,
+    queueWaitSum: 0,
+    queueWaitN: 0,
+    idleSum: 0,
+    idleN: 0,
+  };
+}
+
+/** Fold one bucket's weighted metric into the running sum and its weight. */
+function accumulateWeighted(
+  group: AggregateGroup,
+  value: number | null | undefined,
+  weight: number,
+  sumKey: "durSum" | "rateSum" | "capWaitSum" | "queueWaitSum" | "idleSum",
+  countKey: "durN" | "rateN" | "capWaitN" | "queueWaitN" | "idleN",
+): void {
+  if (typeof value !== "number" || weight <= 0) return;
+  group[sumKey] += value * weight;
+  group[countKey] += weight;
+}
+
+function accumulateBucket(group: AggregateGroup, bucket: AnalyticsBucket): void {
+  group.count += bucket.count;
+  if (typeof bucket.total_cost_usd === "number") {
+    group.total_cost_usd = (group.total_cost_usd ?? 0) + bucket.total_cost_usd;
   }
-  return [...groups.values()].map((g) => ({
-    date: g.date,
-    key: g.key,
-    count: g.count,
-    total_cost_usd: g.total_cost_usd,
-    total_tokens: g.total_tokens,
-    avg_duration_ms: g.durN > 0 ? g.durSum / g.durN : null,
-    success_rate: g.rateN > 0 ? g.rateSum / g.rateN : null,
-    stall_count: g.stall_count ?? 0,
-    capacity_failure_count: g.capacity_failure_count ?? 0,
-    avg_capacity_wait_ms: g.capWaitN > 0 ? Math.round((g.capWaitSum / g.capWaitN) * 10) / 10 : null,
-    avg_queue_wait_ms: g.queueWaitN > 0 ? Math.round((g.queueWaitSum / g.queueWaitN) * 10) / 10 : null,
-    avg_final_idle_ms: g.idleN > 0 ? Math.round((g.idleSum / g.idleN) * 10) / 10 : null,
-  }));
+  if (typeof bucket.total_tokens === "number") {
+    group.total_tokens = (group.total_tokens ?? 0) + bucket.total_tokens;
+  }
+  accumulateWeighted(group, bucket.avg_duration_ms, bucket.count, "durSum", "durN");
+  accumulateWeighted(group, bucket.success_rate, bucket.count, "rateSum", "rateN");
+  group.stall_count += bucket.stall_count ?? 0;
+  group.capacity_failure_count += bucket.capacity_failure_count ?? 0;
+  accumulateWeighted(
+    group,
+    bucket.avg_capacity_wait_ms,
+    bucket.capacity_failure_count ?? 0,
+    "capWaitSum",
+    "capWaitN",
+  );
+  accumulateWeighted(group, bucket.avg_queue_wait_ms, bucket.count, "queueWaitSum", "queueWaitN");
+  accumulateWeighted(group, bucket.avg_final_idle_ms, bucket.count, "idleSum", "idleN");
+}
+
+function roundOneDecimal(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function summarizeAggregateGroup(group: AggregateGroup): AnalyticsBucket {
+  return {
+    date: group.date,
+    key: group.key,
+    count: group.count,
+    total_cost_usd: group.total_cost_usd,
+    total_tokens: group.total_tokens,
+    avg_duration_ms: group.durN > 0 ? group.durSum / group.durN : null,
+    success_rate: group.rateN > 0 ? group.rateSum / group.rateN : null,
+    stall_count: group.stall_count,
+    capacity_failure_count: group.capacity_failure_count,
+    avg_capacity_wait_ms: group.capWaitN > 0 ? roundOneDecimal(group.capWaitSum / group.capWaitN) : null,
+    avg_queue_wait_ms: group.queueWaitN > 0 ? roundOneDecimal(group.queueWaitSum / group.queueWaitN) : null,
+    avg_final_idle_ms: group.idleN > 0 ? roundOneDecimal(group.idleSum / group.idleN) : null,
+  };
+}
+
+export function aggregateByKey(buckets: AnalyticsBucket[]): AnalyticsBucket[] {
+  const groups = new Map<string, AggregateGroup>();
+  for (const bucket of buckets) {
+    const groupKey = bucket.key ?? "";
+    let group = groups.get(groupKey);
+    if (!group) {
+      group = createAggregateGroup(bucket);
+      groups.set(groupKey, group);
+    }
+    accumulateBucket(group, bucket);
+  }
+  return [...groups.values()].map(summarizeAggregateGroup);
 }
 
 /** True when a series carries dimension keys (backend emits per-key buckets). */

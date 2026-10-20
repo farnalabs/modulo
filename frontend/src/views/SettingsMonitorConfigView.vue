@@ -187,24 +187,32 @@ function showFlash(msg: string, type: 'success' | 'error') {
   flashTimer = setTimeout(() => { flash.value = '' }, 4000)
 }
 
-function toMonitorConfig(): MonitorConfig {
+interface CollectedBackends {
+  activeKeys: string[]
+  perBackend: Record<string, Record<string, string>>
+}
+
+// Collect the enabled backends (and their non-empty settings) once — shared by
+// the form model and the API payload so the two can never drift apart.
+function collectEnabledBackends(): CollectedBackends {
   const activeKeys: string[] = []
   const perBackend: Record<string, Record<string, string>> = {}
   for (const b of backendForms) {
-    if (b.enabled) {
-      activeKeys.push(b.key)
-      if (b.key !== 'builtin') {
-        const cfg: Record<string, string> = {}
-        for (const f of b.fields) {
-          if (f.value) cfg[f.key] = f.value
-        }
-        if (Object.keys(cfg).length > 0) {
-          perBackend[b.key] = cfg
-        }
-      }
+    if (!b.enabled) continue
+    activeKeys.push(b.key)
+    if (b.key === 'builtin') continue
+    const cfg: Record<string, string> = {}
+    for (const f of b.fields) {
+      if (f.value) cfg[f.key] = f.value
     }
+    if (Object.keys(cfg).length > 0) perBackend[b.key] = cfg
   }
   if (activeKeys.length === 0) activeKeys.push('builtin')
+  return { activeKeys, perBackend }
+}
+
+function toMonitorConfig(): MonitorConfig {
+  const { activeKeys, perBackend } = collectEnabledBackends()
 
   return {
     monitorBackends: activeKeys,
@@ -221,24 +229,7 @@ function toMonitorConfig(): MonitorConfig {
 }
 
 function toApiPayload() {
-  const activeKeys: string[] = []
-  const perBackend: Record<string, Record<string, string>> = {}
-  for (const b of backendForms) {
-    if (b.enabled) {
-      const apiKey = b.key === 'datadog_rum' ? 'datadog_rum' : b.key
-      activeKeys.push(apiKey)
-      if (b.key !== 'builtin') {
-        const cfg: Record<string, string> = {}
-        for (const f of b.fields) {
-          if (f.value) cfg[f.key] = f.value
-        }
-        if (Object.keys(cfg).length > 0) {
-          perBackend[apiKey] = cfg
-        }
-      }
-    }
-  }
-  if (activeKeys.length === 0) activeKeys.push('builtin')
+  const { activeKeys, perBackend } = collectEnabledBackends()
   return { backends: activeKeys, ...perBackend }
 }
 

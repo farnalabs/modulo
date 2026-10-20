@@ -597,6 +597,36 @@ async function runVariants() {
   }
 }
 
+// Fetch one poll and fold the result into the variant's entry. Returns the
+// run's status, or null when the response carried no data (poll again).
+async function refreshRunEntry(runId: string, variantName: string): Promise<string | null> {
+  const { data } = await api.GET('/api/v1/runs/{run_id}', {
+    params: { path: { run_id: runId } },
+  })
+  if (!data) return null
+
+  const runResp = data as unknown as RunResponse
+  const existing = runEntries.value.get(variantName)
+  if (existing) {
+    runEntries.value.set(variantName, {
+      ...existing,
+      runStatus: runResp.status,
+      totalCostUsd: runResp.total_cost_usd == null ? null : Number(runResp.total_cost_usd),
+      tokenConsumption: runResp.token_consumption ?? null,
+    })
+  }
+  return runResp.status
+}
+
+async function handleTerminalStatus(runId: string, variantName: string, status: string): Promise<void> {
+  if (status === 'complete') {
+    await fetchRunIO(runId, variantName)
+    await fetchRunEvals(runId, variantName)
+  } else {
+    error.value = `${t('views.variantCompare.runFailedStatus')} ${status}`
+  }
+}
+
 async function pollRunStatus(runId: string, variantName: string) {
   let status = 'pending'
 
@@ -604,33 +634,13 @@ async function pollRunStatus(runId: string, variantName: string) {
     await delay(2000)
 
     try {
-      const { data } = await api.GET('/api/v1/runs/{run_id}', {
-        params: { path: { run_id: runId } },
-      })
+      const nextStatus = await refreshRunEntry(runId, variantName)
+      if (nextStatus === null) continue
 
-      if (data) {
-        const runResp = data as unknown as RunResponse
-        status = runResp.status
-
-        const existing = runEntries.value.get(variantName)
-        if (existing) {
-          runEntries.value.set(variantName, {
-            ...existing,
-            runStatus: status,
-            totalCostUsd: runResp.total_cost_usd == null ? null : Number(runResp.total_cost_usd),
-            tokenConsumption: runResp.token_consumption ?? null,
-          })
-        }
-
-        if (terminalStatuses.has(status)) {
-          if (status === 'complete') {
-            await fetchRunIO(runId, variantName)
-            await fetchRunEvals(runId, variantName)
-          } else {
-            error.value = `${t('views.variantCompare.runFailedStatus')} ${status}`
-          }
-          break
-        }
+      status = nextStatus
+      if (terminalStatuses.has(status)) {
+        await handleTerminalStatus(runId, variantName, status)
+        break
       }
     } catch (e) {
       error.value = `${t('views.variantCompare.runFailed')} ${formatApiError(e)}`

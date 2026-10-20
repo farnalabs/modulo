@@ -20,7 +20,13 @@ export function createField(key: number): SchemaField {
 
 function formatDefault(value: unknown): string {
   if (value === undefined) return ''
-  return typeof value === 'object' ? JSON.stringify(value) : String(value)
+  if (typeof value === 'object') return JSON.stringify(value)
+  if (typeof value === 'string') return value
+  if (typeof value === 'boolean') return value ? 'true' : 'false'
+  if (typeof value === 'function') return Function.prototype.toString.call(value)
+  // Only number | bigint | symbol remain - all primitives, so toString() gives
+  // their textual form and never falls back to Object's "[object Object]".
+  return (value as number | bigint | symbol).toString()
 }
 
 export function coerceDefault(value: string, type: string): unknown {

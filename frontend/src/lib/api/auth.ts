@@ -203,7 +203,7 @@ export function getAccessToken(): string | null {
 // non-httpOnly cookies — the CSRF double-submit cookie is exposed on purpose).
 function readCookie(name: string): string | null {
   const match = document.cookie.match(`^(?:.*; )?${name}=([^;]*).*$`)
-  if (!match || !match[1]) return null
+  if (!match?.[1]) return null
   try {
     return decodeURIComponent(match[1])
   } catch {

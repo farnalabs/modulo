@@ -53,10 +53,7 @@ export interface LoginPrefs {
 
 export function useLoginPrefs(): LoginPrefs {
   return {
-    getLastOrgSlug: () => {
-      const value = read(LAST_ORG_KEY)
-      return value && value.trim() ? value.trim() : null
-    },
+    getLastOrgSlug: () => read(LAST_ORG_KEY)?.trim() || null,
     setLastOrgSlug: (slug: string) => {
       const trimmed = slug.trim()
       if (trimmed) write(LAST_ORG_KEY, trimmed)
@@ -64,10 +61,7 @@ export function useLoginPrefs(): LoginPrefs {
     clearLastOrgSlug: () => {
       remove(LAST_ORG_KEY)
     },
-    getLastMethod: () => {
-      const value = read(LAST_METHOD_KEY)
-      return value && value.trim() ? value.trim() : null
-    },
+    getLastMethod: () => read(LAST_METHOD_KEY)?.trim() || null,
     setLastMethod: (method: string) => {
       const trimmed = method.trim()
       if (trimmed) write(LAST_METHOD_KEY, trimmed)
