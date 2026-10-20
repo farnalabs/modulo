@@ -7,13 +7,18 @@ path. Soft-delete filters and org scoping are enforced by the real schema.
 
 Criteria text lives in the internal chunk-3b spec (not in this public repo).
 
-Retirement note (FAR-1962): ``test_eval_definitions_table_shape_unchanged``
-formerly asserted the legacy ``eval_definitions`` table stayed shape-compatible
-with a frozen column set. Migration ``0324_purge_eval_definitions`` drops that
-table, so the test was retired rather than retargeted — see the note at its
-former location below, and
-``tests/integration/db/test_migration_0324_purge_eval_definitions.py`` for the
-migration's own coverage.
+Retirement note (FAR-1962): migration ``0324_purge_eval_definitions`` drops
+the legacy ``eval_definitions`` table, which retires two things in this module:
+
+* ``test_eval_definitions_table_shape_unchanged`` — its entire subject was that
+  table's shape, so it was retired rather than retargeted. See the note at its
+  former location below, and
+  ``tests/integration/db/test_migration_0324_purge_eval_definitions.py`` for
+  the migration's own coverage.
+* the "nothing was written to ``eval_definitions``" observation that used to
+  sit beside several live write-path assertions. Those tests keep every live
+  assertion (the ``evals`` row shape and the gate state); only the count
+  against the now-dropped table was removed, because it has no table to read.
 """
 
 import uuid
