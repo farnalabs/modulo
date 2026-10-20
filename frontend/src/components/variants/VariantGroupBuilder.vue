@@ -545,11 +545,17 @@ async function fetchPromptVersions(pipelineId: string) {
     const nodes = (data as unknown as { nodes?: Array<{ agent_id?: string | null }> })?.nodes ?? []
     const agentIds = [...new Set(nodes.map(n => n.agent_id).filter((a): a is string => Boolean(a)))]
 
-    const options: Array<{ value: string; label: string }> = []
-    for (const agentId of agentIds) {
-      const { data: prompts } = await api.GET('/api/v1/agents/{agent_id}/prompts', {
+    // Each agent's prompt versions are independent, so fetch them
+    // concurrently and fold the responses back in agent order — the option
+    // list stays in exactly the order the sequential loop produced.
+    const promptResponses = await Promise.all(
+      agentIds.map(agentId => api.GET('/api/v1/agents/{agent_id}/prompts', {
         params: { path: { agent_id: agentId } },
-      })
+      })),
+    )
+
+    const options: Array<{ value: string; label: string }> = []
+    for (const { data: prompts } of promptResponses) {
       const list = (prompts as unknown as Array<{ version: string }> | null) ?? []
       for (const p of list) {
         if (!options.some(o => o.value === p.version)) {
