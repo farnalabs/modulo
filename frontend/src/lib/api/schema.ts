@@ -1645,8 +1645,11 @@ export interface paths {
          * Oidc Callback
          * @description Handle the OIDC provider's callback (authorization code exchange).
          *
-         *     On success, redirects the browser to the frontend callback URL with
-         *     access and refresh tokens as query parameters.
+         *     On success, responds with a 307 redirect to the frontend callback URL. The
+         *     access token is carried in the URL fragment (``#access_token=...``); the
+         *     refresh token is never placed in the URL and is delivered only as the
+         *     httpOnly ``modulo_refresh`` cookie set on the same redirect, alongside the
+         *     ``XSRF-TOKEN`` double-submit CSRF cookie.
          */
         get: operations["oidc_callback_api_v1_auth_oidc__provider__callback_get"];
         put?: never;
