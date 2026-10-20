@@ -130,7 +130,7 @@
             <button type="button"
               data-testid="composite-save-as-cancel"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
-              @click="showSaveAsComposite = false"
+              @click="closeSaveAsDialog"
             >
               {{ $t('views.CompositeEditorView.cancel') }}
             </button>
@@ -208,15 +208,14 @@ const saving = ref(false)
 watch(
   showSaveAsComposite,
   (isOpen) => {
-    const dialog = saveAsDialogRef.value
-    if (isOpen) {
-      if (dialog && !dialog.open) dialog.showModal()
-    } else if (dialog?.open) {
-      dialog.close()
-    }
+    if (isOpen) openSaveAsDialog()
   },
   { immediate: true, flush: 'post' },
 )
+
+function openSaveAsDialog(): void {
+  saveAsDialogRef.value?.showModal()
+}
 
 function closeSaveAsDialog(): void {
   saveAsDialogRef.value?.close()
@@ -347,7 +346,7 @@ async function handleSaveAs() {
         })),
       },
     })
-    showSaveAsComposite.value = false
+    closeSaveAsDialog()
     router.push({ name: 'library' })
   } catch (e: unknown) {
     saveAsError.value = formatApiError(e)

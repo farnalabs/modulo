@@ -192,7 +192,7 @@
           <div class="flex justify-end gap-2">
             <button type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
-              @click="showCreateDialog = false"
+              @click="closeCreateDialog"
               data-testid="lifecycle-map-list-create-cancel"
             >
               {{ $t('views.LifecycleMapList.cancel') }}
@@ -302,15 +302,14 @@ const createError = ref<string | null>(null)
 watch(
   showCreateDialog,
   (isOpen) => {
-    const dialog = createDialogRef.value
-    if (isOpen) {
-      if (dialog && !dialog.open) dialog.showModal()
-    } else if (dialog?.open) {
-      dialog.close()
-    }
+    if (isOpen) openCreateDialog()
   },
   { immediate: true, flush: 'post' },
 )
+
+function openCreateDialog(): void {
+  createDialogRef.value?.showModal()
+}
 
 function closeCreateDialog(): void {
   createDialogRef.value?.close()
@@ -332,7 +331,7 @@ async function handleCreateConfirm(): Promise<void> {
         name: newName.value.trim(),
         description: newDescription.value.trim() || null,
     })
-    showCreateDialog.value = false
+    closeCreateDialog()
     if (data) router.push({ name: 'lifecycle-map-editor', params: { id: (data as LifecycleMapSummary).id } })
   } catch (e: unknown) {
     createError.value = formatApiError(e)

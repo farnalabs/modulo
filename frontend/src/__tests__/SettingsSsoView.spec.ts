@@ -730,6 +730,11 @@ describe('SettingsSsoView — row click opens edit (FAR-974 #2)', () => {
     await nextTick()
 
     expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
+
+    // The pointer path still works on the same native button.
+    await primary.trigger('click')
+    await nextTick()
+    expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
   })
 
   it('clicking the row itself still opens the edit form for mouse users', async () => {

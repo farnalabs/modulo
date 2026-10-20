@@ -393,6 +393,21 @@ describe('CompositeEditorView', () => {
     wrapper.unmount()
   })
 
+  it('open/close save-as dialog helpers are safe no-ops while the dialog is not rendered', async () => {
+    const wrapper = mountView()
+    await flush()
+    expect(wrapper.find('dialog').exists()).toBe(false)
+
+    const vm = wrapper.vm as unknown as {
+      openSaveAsDialog: () => void
+      closeSaveAsDialog: () => void
+    }
+    expect(() => vm.openSaveAsDialog()).not.toThrow()
+    expect(() => vm.closeSaveAsDialog()).not.toThrow()
+    expect(wrapper.find('dialog').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('save-as dialog renders a POST failure inline (role=alert) and stays open', async () => {
     // The saveAsError row only mounts when the dialog is open AND a save has
     // failed; handleSaveAs keeps the dialog open on error so the user can fix

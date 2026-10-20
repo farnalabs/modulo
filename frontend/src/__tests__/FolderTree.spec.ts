@@ -266,6 +266,11 @@ describe('FolderTree rendering and selection', () => {
     await button.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('select-folder')).toHaveLength(1)
     expect(wrapper.emitted('select-folder')![0]).toEqual(['f1'])
+
+    // The pointer path still works on the same native button.
+    await button.trigger('click')
+    expect(wrapper.emitted('select-folder')).toHaveLength(2)
+    expect(wrapper.emitted('select-folder')![1]).toEqual(['f1'])
   })
 
   it('highlights the selected folder', async () => {

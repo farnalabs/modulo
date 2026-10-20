@@ -692,6 +692,26 @@ describe('LifecycleMapList create dialog', () => {
     expect(wrapper.text()).toContain('Cancel')
   })
 
+  it('open/close dialog helpers are safe no-ops while the dialog is not rendered', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
+    const wrapper = mount(LifecycleMapList, {
+      global: {
+        plugins: [i18n],
+        stubs: { PageHeader: true, FilterBar: true, ErrorAlert: true, Button: true },
+      },
+    })
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      openCreateDialog: () => void
+      closeCreateDialog: () => void
+    }
+    expect(wrapper.find('dialog').exists()).toBe(false)
+    expect(() => vm.openCreateDialog()).not.toThrow()
+    expect(() => vm.closeCreateDialog()).not.toThrow()
+    expect(wrapper.find('dialog').exists()).toBe(false)
+  })
+
   it('closes create dialog when Cancel is clicked', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
     const wrapper = mount(LifecycleMapList, {
@@ -924,6 +944,10 @@ describe('LifecycleMapList card content', () => {
     expect((titleButton.element as HTMLButtonElement).disabled).toBe(false)
     await titleButton.trigger('keydown', { key: 'Enter' })
     expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
+
+    // The pointer path still works on the same native button.
+    await titleButton.trigger('click')
+    expect(routerPushMock).toHaveBeenCalledTimes(2)
   })
 
   it('clicking the card body still opens the map for mouse users', async () => {
