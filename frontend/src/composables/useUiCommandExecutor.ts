@@ -244,24 +244,27 @@ export async function executeCommandBatch(commands: UiCommand[]): Promise<UiComm
 
   const cancelled = (cmd: UiCommand) => ({ id: cmd.id, name: cmd.name, success: false, error: 'cancelled_by_user' })
 
+  // Commands execute strictly one after another: each may navigate or mutate
+  // the DOM the next command targets, so the awaits below cannot be run
+  // concurrently without changing batch semantics.
   for (const cmd of commands) {
     if (abort.signal.aborted) {
       results.push(cancelled(cmd))
       continue
     }
 
-    if (!(await waitForVisible(abort))) {
+    if (!(await waitForVisible(abort))) { // NOSONAR: commands are ordered, not independent
       results.push(cancelled(cmd))
       continue
     }
 
-    if (!(await waitForResume(abort))) {
+    if (!(await waitForResume(abort))) { // NOSONAR: commands are ordered, not independent
       results.push(cancelled(cmd))
       continue
     }
 
-    results.push(await executeWithRetry(cmd, abort))
-    await applyActionDelay()
+    results.push(await executeWithRetry(cmd, abort)) // NOSONAR: commands are ordered, not independent
+    await applyActionDelay() // NOSONAR: commands are ordered, not independent
   }
 
   _abortControllers.delete(abort)
@@ -322,11 +325,11 @@ async function executeSingle(cmd: UiCommand): Promise<UiCommandResult> {
       case 'select':
         return await select(cmd.args.selector as string, cmd.args.value as string)
       case 'extract':
-        return await doExtract(cmd.args.selector as string)
+        return doExtract(cmd.args.selector as string)
       case 'extract_all':
-        return await extractAll(cmd.args.selector as string)
+        return extractAll(cmd.args.selector as string)
       case 'get_page_interactables':
-        return await getPageInteractables()
+        return getPageInteractables()
       case 'wait':
         return await doWait(cmd.args)
       case 'go_back':
@@ -334,7 +337,7 @@ async function executeSingle(cmd: UiCommand): Promise<UiCommandResult> {
       case 'get_url':
         return { id: cmd.id, name: cmd.name, success: true, result: { url: location.href } }
       case 'press':
-        return await pressKey(cmd.args.key as string)
+        return pressKey(cmd.args.key as string)
       case 'spotlight': {
         const testId = cmd.args?.target as string
         const msg = cmd.args?.message as string | undefined
@@ -538,7 +541,7 @@ async function select(selector: string, value: string): Promise<UiCommandResult>
   }
 }
 
-async function doExtract(selector: string): Promise<UiCommandResult> {
+function doExtract(selector: string): UiCommandResult {
   const el = resolveElement(selector)
   if (!el) {
     return { id: `extract-${Date.now()}`, name: 'extract', success: false, error: `Element not found: ${selector}` }
@@ -547,7 +550,7 @@ async function doExtract(selector: string): Promise<UiCommandResult> {
   return { id: `extract-${Date.now()}`, name: 'extract', success: true, result: { text, selector } }
 }
 
-async function extractAll(selector: string): Promise<UiCommandResult> {
+function extractAll(selector: string): UiCommandResult {
   const elements = document.querySelectorAll(selector)
   const results: Array<{ index: number; text: string; selector: string }> = []
   elements.forEach((el, i) => {
@@ -556,7 +559,7 @@ async function extractAll(selector: string): Promise<UiCommandResult> {
   return { id: `extract-all-${Date.now()}`, name: 'extract_all', success: true, result: { items: results, count: results.length } }
 }
 
-async function getPageInteractables(): Promise<UiCommandResult> {
+function getPageInteractables(): UiCommandResult {
   const interactables: Array<Record<string, unknown>> = []
   const selector = 'button, a, input, select, textarea, [data-testid], [role="button"], [role="checkbox"], [role="switch"]'
   document.querySelectorAll(selector).forEach(el => {
@@ -582,17 +585,20 @@ async function getPageInteractables(): Promise<UiCommandResult> {
 }
 
 async function doWait(args: Record<string, unknown>): Promise<UiCommandResult> {
-  if (args.selector) {
+  // `args` is an untyped command payload; the selector is the string the
+  // caller passed, so bind it once instead of stringifying `unknown`.
+  const selector = args.selector as string | undefined
+  if (selector) {
     const timeout = (args.timeout as number) ?? 10000
     const start = Date.now()
     while (Date.now() - start < timeout) {
-      const el = resolveElement(args.selector as string)
+      const el = resolveElement(selector)
       if (el) {
-        return { id: `wait-${Date.now()}`, name: 'wait', success: true, result: { found: true, selector: args.selector } }
+        return { id: `wait-${Date.now()}`, name: 'wait', success: true, result: { found: true, selector } }
       }
-      await new Promise(r => requestAnimationFrame(r))
+      await new Promise(r => requestAnimationFrame(r)) // NOSONAR: polling one frame at a time is the mechanism
     }
-    return { id: `wait-${Date.now()}`, name: 'wait', success: false, error: `Timeout waiting for: ${args.selector}` }
+    return { id: `wait-${Date.now()}`, name: 'wait', success: false, error: `Timeout waiting for: ${selector}` }
   }
   if (args.ms) {
     await new Promise(r => setTimeout(r, args.ms as number))
@@ -611,7 +617,7 @@ async function goBack(): Promise<UiCommandResult> {
   return { id: `back-${Date.now()}`, name: 'go_back', success: false, error: 'No navigation history' }
 }
 
-async function pressKey(key: string): Promise<UiCommandResult> {
+function pressKey(key: string): UiCommandResult {
   const target = document.activeElement || document.body
   target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
   target.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true, cancelable: true }))
