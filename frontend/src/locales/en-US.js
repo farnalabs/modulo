@@ -2025,7 +2025,7 @@ export default {
       "cancelled_by_system": "Cancelled by the system",
       "cancelled_by_actor": "Cancelled by {actor}",
       "deadline_triage_title": "Node kill triage evidence",
-      "deadline_triage_help": "Captured before the sandbox attempt was cancelled (node-deadline watchdog, run cancel, or worker shutdown). Shown because no node output envelope was recorded for this attempt.",
+      "deadline_triage_help": "Why a run or a sandbox attempt was terminalised without a completion envelope (node-deadline watchdog, age bound, stranded pending, run cancel, or worker shutdown). A sandbox attempt entry may include its retained output and log tails; a run-level entry has no per-attempt tail.",
       "deadline_triage_delivery_done": "delivery observed before kill",
       "deadline_triage_log_tail": "Sandbox log tail",
       "deadline_triage_output_tail": "Agent output tail",

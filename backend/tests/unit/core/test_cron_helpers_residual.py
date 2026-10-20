@@ -104,7 +104,7 @@ class _MockSession:
     async def flush(self) -> None:
         return None
 
-    async def get(self, model: Any, key: Any) -> Any:
+    async def get(self, model: Any, key: Any, with_for_update: bool = False) -> Any:
         return None
 
 

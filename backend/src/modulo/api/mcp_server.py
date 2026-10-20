@@ -5128,6 +5128,7 @@ def _run_status_detail(run: Run, blobs: RunBlobs) -> dict[str, Any]:
         _clamp_node_token_usage_union,
         _deadline_triage_from_markers,
         _mask_output_value,
+        _run_attempt_count,
     )
 
     token_usage = _clamp_node_token_usage_union(run.node_token_usage or {})
@@ -5165,7 +5166,13 @@ def _run_status_detail(run: Run, blobs: RunBlobs) -> dict[str, Any]:
         )
     else:
         result["input_payload"] = None
-    result["deadline_triage"] = _deadline_triage_from_markers(getattr(blobs, "markers", None))
+    # FAR-1886 B1: the run's attempt counter is DATA on every entry — taken
+    # from the SAME run row the REST detail read uses, so the two surfaces'
+    # values cannot diverge.
+    result["deadline_triage"] = _deadline_triage_from_markers(
+        getattr(blobs, "markers", None),
+        run_attempt_count=_run_attempt_count(run),
+    )
     return result
 
 
@@ -5235,9 +5242,12 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
     description=(
         "Get current run status. Pass detail=true for a per-node breakdown, the "
         "masked run input_payload (the original run input, sensitive fields "
-        "redacted), and deadline_triage[] — the per-attempt sandbox envelopes "
+        "redacted), and deadline_triage[] — the retained triage envelopes "
         "(attempt_key, no_output_reason, sandbox_log_tail, raw_output_tail, "
-        "stdout_length) that explain why a node produced no output. The "
+        "stdout_length, run_attempt_count) that explain what the run's "
+        "terminaliser observed. Sandbox nodes carry a per-attempt output/log "
+        "tail; run-level entries (age gate, stranded pending, node-deadline "
+        "reaper, worker handoff) carry no per-attempt tail. The "
         "input_payload is size-bounded: strings over 8000 characters and "
         "collections beyond 500 total entries/items are truncated with a "
         "marker."

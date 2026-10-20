@@ -157,6 +157,26 @@ class TestRunStatusDetailParityFields:
         assert alpha["stderr_length"] == 0
         assert alpha["delivery_done"] is True
 
+    def test_deadline_triage_attempt_count_matches_rest(self) -> None:
+        """FAR-1886 B1: the MCP projection reads ``run_attempt_count`` from the
+        SAME run row REST uses, so the two surfaces cannot diverge; the
+        derived age metric is gone from both."""
+        from modulo.api.routes.runs import (
+            _deadline_triage_from_markers,
+            _run_attempt_count,
+        )
+
+        run = _run_row(node_attempt_count=3)
+        mcp_entries = _run_status_detail(run, _blobs(markers=_TRIAGE_MARKERS))["deadline_triage"]
+        rest_entries = _deadline_triage_from_markers(
+            _TRIAGE_MARKERS,
+            run_attempt_count=_run_attempt_count(run),
+        )
+
+        assert mcp_entries == rest_entries
+        assert [entry["run_attempt_count"] for entry in mcp_entries] == [3, 3]
+        assert all("last_output_age_seconds" not in entry for entry in mcp_entries)
+
     def test_deadline_triage_empty_list_when_no_markers(self) -> None:
         result = _run_status_detail(_run_row(), _blobs(markers=None))
 

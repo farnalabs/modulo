@@ -54,7 +54,7 @@ class _SessionWithRun:
     def __init__(self, run: SimpleNamespace) -> None:
         self._run = run
 
-    async def get(self, model: Any, pk: Any) -> Any:
+    async def get(self, model: Any, pk: Any, with_for_update: bool = False) -> Any:
         return self._run
 
 

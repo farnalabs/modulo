@@ -607,9 +607,12 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     # one keeps its regression-alarm meaning. Read through .get() like every
     # other additive counter here.
     "node_started_deferred": 0,
-    # FAR-1914: rows the nodeless repair / early-detect re-verified as having
-    # STARTED a node (or left ``running``, or become unreadable -> fail
-    # closed) on a FRESH read after the scan selected them. This is a ROUTINE
+    # FAR-1914: rows a nodeless path re-verified as having STARTED a node (or
+    # left ``running``, or become unreadable -> fail closed) after the scan
+    # selected them. THREE producers: the full-window nodeless repair and the
+    # FAR-873 early-detect branch (both on a FRESH read), and the age-bound
+    # nodeless router ``_terminalize_aged_nodeless_zombies`` (on a locked
+    # ``FOR UPDATE`` re-read). This is a ROUTINE
     # production signal, NOT a regression alarm: the scan row is a snapshot
     # and the run's own executor legitimately dispatches its first node in the
     # SELECT→loop window (run e6131612 proves the race is real), so a non-zero
@@ -5889,6 +5892,17 @@ async def _fail_node_deadline_run(
     )
     run.completed_at = now
     await session.flush()
+    # FAR-1886 B1: the reaper terminalises a run whose executor is gone, so
+    # there is no in-process attempt marker left to project. Persist the
+    # synthetic run-level entry (best-effort; the terminalisation above is
+    # already in this transaction).
+    await persist_terminal_triage_marker(
+        session,
+        run_id=run_id,
+        organisation_id=org_id,
+        error_code=_NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+        reason=_TERMINAL_TRIAGE_REASON_NODE_DEADLINE,
+    )
     summary["node_deadline_reaped"] += 1
     _log.error(
         "dispatcher_reconcile.node_deadline_reaped run=%s org=%s pipeline=%s trigger=%s "
@@ -5923,6 +5937,162 @@ async def _fail_node_deadline_run(
         },
     )
     return True
+
+
+# ---------------------------------------------------------------------------
+# FAR-1886 B1 — terminal-path triage markers.
+#
+# ``deadline_triage`` used to exist only for ``node.deadline_exceeded`` (the
+# sandbox cancellation-retention marker written by node_runner). The
+# run-level terminalisers — the age gate (``run.no_progress``) and the
+# graceful worker-shutdown handback (``harness.worker_lost``) — wrote no
+# marker at all, so their runs returned ``deadline_triage: []`` and "executor
+# died" was indistinguishable from "silent stall". These paths have no
+# sandbox attempt to retain (or the attempt's marker is gone with the dead
+# executor), so they persist ONE synthetic run-level entry carrying the same
+# envelope signature and an explicit ``no_output_reason``.
+#
+# The entry is a marker ROW in the dedicated attempt-keyed retention store
+# (never ``outputs_json`` / ``node_telemetry_json`` — the Agent Return
+# Contract columns). The key is deliberately UNPARSEABLE by the
+# ``run:<uuid>:node:<id>:<suffix>`` grammar so the row lands on the
+# ``__unknown__`` sentinel node id (evidence preserved, FAR-188); a parseable
+# key would squat a real node id.
+# ---------------------------------------------------------------------------
+_TERMINAL_TRIAGE_ATTEMPT_KEY_PREFIX = "terminal-triage:"
+# The reason is PASSED IN by each terminaliser and states only what that
+# terminaliser actually observed — never a cause inferred from a counter.
+# Whether node attempts were recorded is reported as DATA on the envelope
+# (``run_attempt_count``, read from ``runs.node_attempt_count``), not folded
+# into this text: "attempts > 0" proves an attempt started, not that an
+# executor was lost (a live-but-stalled executor is collected by the age
+# gate too).
+_TERMINAL_TRIAGE_REASON_AGE_BOUND = "no node progress within the age bound"
+_TERMINAL_TRIAGE_REASON_STRANDED_PENDING = "stranded pending run past the age bound"
+_TERMINAL_TRIAGE_REASON_NODE_DEADLINE = "node started, no terminal envelope before its deadline"
+_TERMINAL_TRIAGE_REASON_WORKER_LOST = "executor lost (worker handoff)"
+# Bounded like ``node_runner._RAW_OUTPUT_MARKER_PERSIST_TIMEOUT``: the run-row
+# lock taken below is client-bounded so a contended row can never stall the
+# caller's terminalisation transaction.
+_TERMINAL_TRIAGE_PERSIST_TIMEOUT = 5.0
+
+
+def _terminal_triage_attempt_key(run_id: uuid.UUID) -> str:
+    """The synthetic, grammar-unparseable attempt key for a run-level entry."""
+    return f"{_TERMINAL_TRIAGE_ATTEMPT_KEY_PREFIX}{run_id}"
+
+
+async def _write_terminal_triage_marker(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    error_code: str,
+    reason: str,
+) -> bool:
+    """The savepoint-scoped body of :func:`persist_terminal_triage_marker`.
+
+    EVERY read and the write live inside ONE savepoint. A DB-level read
+    failure (e.g. a serialisation error on the shared reconcile transaction)
+    aborts only the savepoint, never the caller's transaction — so the
+    terminalisations that transaction already wrote still commit.
+    """
+    from modulo.db.crud.run_node_outputs import read_run_markers, write_run_markers
+
+    async with session.begin_nested():
+        # Same serialisation contract as ``node_runner._write_raw_output_marker``:
+        # the run-row FOR UPDATE makes the markers read-merge-write atomic, so a
+        # concurrent writer's key is never dropped by ``write_run_markers``'
+        # delete-absent half.
+        run = (
+            await session.execute(
+                select(Run).where(Run.id == run_id, Run.organisation_id == organisation_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if run is None:
+            _log.warning(
+                "cron_helpers.terminal_triage_marker_skip_row_not_found",
+                extra={"run_id": str(run_id), "error_code": error_code},
+            )
+            return False
+        markers = dict(await read_run_markers(session, run_id=run_id, organisation_id=organisation_id) or {})
+        key = _terminal_triage_attempt_key(run_id)
+        markers[key] = {
+            "_modulo_marker": True,
+            "status": "failed",
+            "summary": f"Run terminalised by {error_code} — run-level triage evidence (FAR-1886)",
+            "raw_output": "",
+            "parse_error": "",
+            "pr_url": None,
+            "exit_code": -1,
+            "stdout_length": 0,
+            "stderr_length": 0,
+            "attempt_key": key,
+            "node_id": None,
+            "deadline_triage": True,
+            "no_output_reason": reason,
+            "sandbox_log_tail": "",
+        }
+        await write_run_markers(
+            session,
+            run_id=run_id,
+            organisation_id=organisation_id,
+            markers=markers,
+        )
+    return True
+
+
+async def persist_terminal_triage_marker(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    error_code: str,
+    reason: str,
+) -> bool:
+    """Persist a run-level triage marker for a terminalisation (FAR-1886 B1).
+
+    Used by the age gate (``run.no_progress``), the stranded-pending backstop
+    (``run.no_progress``), the FAR-1999 node-deadline reaper
+    (``node_deadline_exceeded``) and the ``harness.worker_lost`` terminal-fail
+    path — none of which has a prior sandbox attempt marker to project. The
+    marker carries the SAME ``deadline_triage``/``no_output_reason``/tail/stdout
+    envelope signature as the FAR-704 per-attempt marker, so the run-detail
+    projection needs no special case.
+
+    ``reason`` is REQUIRED and is the caller's own observation (see the
+    ``_TERMINAL_TRIAGE_REASON_*`` vocabulary). This helper never derives a
+    cause from a counter — ``run_attempt_count`` on the projected envelope is
+    the data that lets an operator judge, without claiming why.
+
+    Best-effort by design: observability must never break the repair that
+    already committed. The read-merge-write runs in its OWN savepoint and is
+    bounded by ``_TERMINAL_TRIAGE_PERSIST_TIMEOUT``. Returns ``True`` when
+    the marker was written.
+
+    Must be called with a bound, matching RLS organisation context (the
+    ``run_node_outputs`` write contract) inside an open transaction.
+    """
+    try:
+        return await asyncio.wait_for(
+            _write_terminal_triage_marker(
+                session,
+                run_id=run_id,
+                organisation_id=organisation_id,
+                error_code=error_code,
+                reason=reason,
+            ),
+            timeout=_TERMINAL_TRIAGE_PERSIST_TIMEOUT,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "cron_helpers.terminal_triage_marker_failed",
+            extra={"run_id": str(run_id), "error_code": error_code},
+            exc_info=True,
+        )
+        return False
 
 
 def _build_re_dispatch_predicate(
@@ -6701,6 +6871,72 @@ def _summarize_reconcile_error(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"[:200]
 
 
+async def _locked_row_disproves_nodeless_premise(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    run: Any,
+) -> bool:
+    """FAR-1914: does a row already locked ``FOR UPDATE`` fail the nodeless premise?
+
+    The locked-read twin of ``_ZERO_PROGRESS_SHAPE_SQL``, used by the age-bound
+    router (:func:`_terminalize_aged_nodeless_zombies`) so the premise check and
+    the terminal write share ONE row lock. The caller has already read ``run``
+    with ``session.get(Run, run_id, with_for_update=True)``; whatever this
+    function returns stays true until that transaction commits, which is the
+    guarantee the router's docstring states.
+
+    Every leg of the scan's zero-progress shape is re-checked — all FIVE:
+
+    1. ``status`` is still ``running`` (a row that left running is not this
+       gate's class);
+    2. ``dispatch_phase`` is NOT ``first_node_dispatched`` (FAR-1649: a durably
+       recorded start means re-execution is unsafe and "dispatched no node" is
+       false);
+    3. ``node_token_usage`` is NULL (a node consumed tokens);
+    4. ``node_attempt_count`` is 0. The attempt counter is committed BEFORE the
+       node runs, so it is the EARLIEST durable evidence that a node was
+       attempted — it catches a start whose best-effort ``dispatch_phase``
+       stamp was late or dropped (FAR-1714);
+    5. NO ``__final__`` output row and NO checkpoint row for the run — both
+       re-queried through the shared :func:`_final_row_absent_expr` /
+       :func:`_checkpoint_absent_expr` predicates (the definitions the
+       row-level nodeless predicate and the reconcile scan's labelled columns
+       use). A node that reported between the scan and the lock is caught here
+       even when both the phase and the attempt count look pre-node.
+
+    Returns True when the row must NOT be terminal-failed as a
+    claimed-but-nodeless zombie.
+    """
+    if run is None:
+        # The row vanished (deleted / not visible under this org's RLS): there
+        # is nothing safe to repair.
+        return True
+    if getattr(run, "status", None) != "running":
+        # Left running between the scan and the locked read — the terminalizer
+        # decision no longer applies.
+        return True
+    if getattr(run, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:
+        return True
+    if getattr(run, "node_token_usage", None) is not None:
+        return True
+    if int(getattr(run, "node_attempt_count", 0) or 0) != 0:
+        return True
+    from sqlalchemy import select as sa_select
+
+    from modulo.db.models.run import Run
+
+    flags = (
+        await session.execute(
+            sa_select(
+                _final_row_absent_expr().label("outputs_absent"),
+                _checkpoint_absent_expr().label("checkpoints_absent"),
+            ).where(Run.id == run_id)
+        )
+    ).one()
+    # Either leg being present disproves "zero progress": a node reported.
+    return bool(not flags.outputs_absent or not flags.checkpoints_absent)
+
+
 async def _terminalize_aged_nodeless_zombies(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -6734,8 +6970,26 @@ async def _terminalize_aged_nodeless_zombies(
     must stop burning its org's concurrency slot, so no further re-dispatch is
     attempted — the budget normally decides this at the nodeless window, this
     gate only closes the tail (runs whose repair the row loop never reached).
-    Returns the routed ids (empty when the tick found nothing).
+
+    FAR-1914: the SELECT returns a row SNAPSHOT, so each selected row is
+    re-read with ``SELECT ... FOR UPDATE`` and the FULL zero-progress shape is
+    re-checked on that locked row before the terminal write: still ``running``,
+    phase not ``first_node_dispatched``, ``node_token_usage`` NULL,
+    ``node_attempt_count`` 0 (the earliest durable "a node ran" evidence — the
+    phase stamp is best-effort and can be late/dropped, FAR-1714), and no
+    ``__final__`` output row and no checkpoint row (both re-queried against the
+    locked id). Because the lock is held until this transaction commits, the
+    row cannot change between the check and :func:`_fail_nodeless_run`'s write
+    — and because ``_fail_nodeless_run`` re-reads by primary key, it receives
+    the same locked identity-mapped instance rather than a second snapshot. A
+    run that fails ANY of those legs (or whose locked row could not be read —
+    fail closed) is DEFERRED (counted ``nodeless_fresh_premise_deferred``)
+    instead of terminal-failed on a premise its current state disproves.
+
+    Returns the ids actually routed to the chokepoint (empty when the tick found
+    nothing, or when every selected row was deferred as no longer nodeless).
     """
+    from modulo.db.models.run import Run
     from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
 
     result = await session.execute(
@@ -6750,11 +7004,50 @@ async def _terminalize_aged_nodeless_zombies(
             "max_rows": _terminalize_max_rows(max_rows),
         },
     )
-    routed: list[uuid.UUID] = [run_id for (run_id,) in result.all()]
-    for run_id in routed:
-        # The chokepoint re-checks status='running' itself; inside this
-        # transaction the rows were selected running moments ago.
+    selected: list[uuid.UUID] = [run_id for (run_id,) in result.all()]
+    routed: list[uuid.UUID] = []
+    for run_id in selected:
+        # FAR-1914: the scan row is a SNAPSHOT — the run's own executor may
+        # have dispatched its first node since the SELECT (run e6131612 was
+        # terminal-failed with dispatch_phase_elapsed=0.3s). Take the row lock
+        # BEFORE checking the premise, and check it on the locked ENTITY: the
+        # lock is held until this transaction commits, so no writer can move the
+        # row between this check and ``_fail_nodeless_run``'s terminal write
+        # (which re-reads the same identity-mapped instance by primary key).
+        # A locked read or premise query that fails is treated like any other
+        # unverifiable premise: fail CLOSED and defer (a started node may have
+        # side effects).
+        try:
+            locked = await session.get(Run, run_id, with_for_update=True)
+            premise_disproved = await _locked_row_disproves_nodeless_premise(session, run_id, locked)
+        except Exception:
+            _log.warning(
+                "dispatcher_reconcile.aged_nodeless_locked_premise_unreadable run=%s org=%s "
+                "— could not re-read and re-verify the zero-node premise under the row lock; "
+                "held back (fail closed, FAR-1914)",
+                run_id,
+                org_id,
+                exc_info=True,
+            )
+            summary["nodeless_fresh_premise_deferred"] += 1
+            continue
+        if premise_disproved:
+            # Its OWN counter — a routine fresh-premise race, NOT the row-level
+            # belt's regression alarm (``node_started_deferred``).
+            summary["nodeless_fresh_premise_deferred"] += 1
+            _log.warning(
+                "dispatcher_reconcile.aged_nodeless_fresh_premise_blocked run=%s org=%s "
+                "— a node started after the scan (or the row left running); "
+                "held back from the nodeless terminal-fail (FAR-1914)",
+                run_id,
+                org_id,
+            )
+            continue
+        # The row is locked and still pre-node: ``_fail_nodeless_run``'s own
+        # status/phase/token checks read this same identity-mapped instance, so
+        # they cannot decline and the write cannot race another writer.
         await _fail_nodeless_run(session, run_id, org_id, summary)
+        routed.append(run_id)
     if routed:
         # Make the ORM terminal writes visible to the raw-SQL terminalizers
         # that follow in this transaction instead of relying on autoflush.
@@ -6856,6 +7149,16 @@ async def _terminalize_mid_graph_wedges(
     )
     rows = result.all()
     for (run_id,) in rows:
+        # FAR-1886 B1: the age gate has no sandbox attempt marker to project,
+        # so persist the synthetic run-level triage entry (best-effort; the
+        # terminalisation above is already in this transaction).
+        await persist_terminal_triage_marker(
+            session,
+            run_id=run_id,
+            organisation_id=org_id,
+            error_code=_NO_PROGRESS_ERROR_CODE,
+            reason=_TERMINAL_TRIAGE_REASON_AGE_BOUND,
+        )
         _log.warning(
             "dispatcher_reconcile: age-bound wedge terminalized %s with no_progress (started > %d min ago)",
             run_id,
@@ -7024,6 +7327,17 @@ async def _terminalize_stranded_pending_runs(
     )
     rows = result.all()
     for (run_id,) in rows:
+        # FAR-1886 B1: a stranded pending row was never dispatched to an
+        # executor that could retain a per-attempt marker, so persist the
+        # synthetic run-level entry (best-effort; the terminalisation above is
+        # already in this transaction).
+        await persist_terminal_triage_marker(
+            session,
+            run_id=run_id,
+            organisation_id=org_id,
+            error_code=_NO_PROGRESS_ERROR_CODE,
+            reason=_TERMINAL_TRIAGE_REASON_STRANDED_PENDING,
+        )
         _log.warning(
             "dispatcher_reconcile: stranded foreign-dispatcher pending run terminalized %s "
             "(pending past the age bound %d min; no reclaim leg could recover it)",
@@ -8777,9 +9091,12 @@ def _dispatcher_summary() -> dict[str, Any]:
         # fresh-premise deferrals to their OWN counter below, so a non-zero
         # value here is still the regression alarm it is documented to be.
         "node_started_deferred": 0,
-        # FAR-1914: rows the nodeless repair / early-detect deferred after a
-        # FRESH re-verify proved a node had started (or the row left running /
-        # became unreadable). A ROUTINE per-tick signal — the scan snapshot
+        # FAR-1914: rows a nodeless path deferred after a re-verify proved a
+        # node had started (or the row left running / became unreadable).
+        # THREE producers: the full-window nodeless repair and the FAR-873
+        # early-detect branch (FRESH read), and the age-bound nodeless router
+        # ``_terminalize_aged_nodeless_zombies`` (locked ``FOR UPDATE``
+        # re-read). A ROUTINE per-tick signal — the scan snapshot
         # legitimately races the executor's first-node dispatch (run
         # e6131612), so this is expected to be non-zero in production and must
         # NOT be read as the belt's regression alarm. Additive .get()

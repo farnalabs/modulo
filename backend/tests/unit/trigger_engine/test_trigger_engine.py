@@ -1508,28 +1508,35 @@ async def test_handle_webhook_event_type_accepted_passes() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_matches_event_filters_helper() -> None:
-    """The helper accepts matching values and rejects every non-match shape."""
-    payload = {"review": {"state": "changes_requested"}, "action": "opened"}
+_EVENT_FILTER_PAYLOAD = {"review": {"state": "changes_requested"}, "action": "opened"}
 
-    # Matching value at a dotted path.
-    assert _matches_event_filters(payload, {"review.state": ["changes_requested", "commented"]})
-    # Non-matching value rejects.
-    assert not _matches_event_filters(payload, {"review.state": ["approved"]})
-    # Missing key rejects (no crash).
-    assert not _matches_event_filters(payload, {"review.author": ["octocat"]})
-    # Missing top-level key rejects (no crash).
-    assert not _matches_event_filters(payload, {"missing.key": ["x"]})
-    # Non-dict intermediate value rejects gracefully.
-    assert not _matches_event_filters(payload, {"review.state.value": ["x"]})
-    # Non-list allowlist rejects (fail closed — never substring-matches a string).
-    assert not _matches_event_filters(payload, {"review.state": "approved"})
-    # Non-dict event_filters rejects (fail closed).
-    assert not _matches_event_filters(payload, ["review.state"])
-    assert not _matches_event_filters(payload, "review.state")
-    # Every configured filter must match.
-    assert _matches_event_filters(payload, {"review.state": ["changes_requested"], "action": ["opened"]})
-    assert not _matches_event_filters(payload, {"review.state": ["changes_requested"], "action": ["closed"]})
+
+@pytest.mark.parametrize(
+    ("event_filters", "expected"),
+    [
+        pytest.param({"review.state": ["changes_requested", "commented"]}, True, id="matching-dotted-path"),
+        pytest.param({"review.state": ["approved"]}, False, id="non-matching-value"),
+        pytest.param({"review.author": ["octocat"]}, False, id="missing-nested-key"),
+        pytest.param({"missing.key": ["x"]}, False, id="missing-top-level-key"),
+        pytest.param({"review.state.value": ["x"]}, False, id="non-dict-intermediate-value"),
+        pytest.param({"review.state": "approved"}, False, id="non-list-allowlist-fails-closed"),
+        pytest.param(["review.state"], False, id="list-event-filters-fails-closed"),
+        pytest.param("review.state", False, id="string-event-filters-fails-closed"),
+        pytest.param(
+            {"review.state": ["changes_requested"], "action": ["opened"]},
+            True,
+            id="all-filters-match",
+        ),
+        pytest.param(
+            {"review.state": ["changes_requested"], "action": ["closed"]},
+            False,
+            id="any-filter-mismatch-rejects",
+        ),
+    ],
+)
+def test_matches_event_filters_helper(event_filters: Any, expected: bool) -> None:
+    """Matching values pass; every non-match shape fails closed."""
+    assert _matches_event_filters(_EVENT_FILTER_PAYLOAD, event_filters) is expected
 
 
 # TriggerEngine.handle_webhook — value-based event filtering

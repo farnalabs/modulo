@@ -1970,7 +1970,7 @@ class _MockSession:
         # router after it delegates to _fail_nodeless_run.
         return None
 
-    async def get(self, model: Any, pk: Any) -> SimpleNamespace:
+    async def get(self, model: Any, pk: Any, with_for_update: bool = False) -> SimpleNamespace:
         # Mirror of AsyncSession.get for _fail_nodeless_run (a routed
         # zero-progress run is re-read and status-checked there).
         return SimpleNamespace(
