@@ -69,9 +69,14 @@ def _begin_session() -> AsyncMock:
 def _make_session(org: Any) -> AsyncMock:
     session = AsyncMock()
 
-    def _execute(stmt: Any) -> MagicMock:
+    def _execute(stmt: Any, *_args: Any, **_kwargs: Any) -> MagicMock:
         result = MagicMock()
-        result.scalar_one_or_none = MagicMock(return_value=org if "organisations" in str(stmt).lower() else None)
+        lowered = str(stmt).lower()
+        # FAR-1833: the pre-gate reads the ceiling from the per-org cost-state
+        # row; the org row itself is only read for existence.
+        result.scalar_one_or_none = MagicMock(
+            return_value=org if ("organisation_cost_state" in lowered or "organisations" in lowered) else None
+        )
         return result
 
     session.execute = AsyncMock(side_effect=_execute)

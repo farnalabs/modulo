@@ -18,6 +18,7 @@ import pytest
 from modulo.core.cost_controller import finalize, org_auto_pause
 from modulo.core.cost_controller.finalize import _handle_limit_refused, _ledger_block
 from modulo.db.models.organisation import Organisation
+from modulo.db.models.organisation_cost_state import OrganisationCostState
 from modulo.db.models.run import Run
 
 
@@ -37,17 +38,11 @@ def _make_run() -> MagicMock:
 
 def _make_org(
     *,
-    max_run_cost_cents=None,
-    spend_ceiling_cents=None,
-    org_cumulative_spend_cents=0,
     circuit_breaker_enabled=True,
     triggers_paused=False,
 ) -> MagicMock:
     org = MagicMock(spec=Organisation)
     org.id = uuid.UUID("00000000-0000-0000-0000-000000000001")
-    org.max_run_cost_cents = max_run_cost_cents
-    org.spend_ceiling_cents = spend_ceiling_cents
-    org.org_cumulative_spend_cents = org_cumulative_spend_cents
     org.daily_spend_limit = None
     org.triggers_paused = triggers_paused
     org.triggers_paused_at = None
@@ -57,10 +52,19 @@ def _make_org(
     return org
 
 
-def _session_for(run: MagicMock, org: MagicMock) -> AsyncMock:
-    """A session whose execute returns the Run (FOR UPDATE) then the Org (FOR UPDATE)."""
+def _cost_state(*, max_run_cost_cents=None, spend_ceiling_cents=None, org_cumulative_spend_cents=0):
+    """Patch the FAR-1833 cost-state read the ceiling gate uses."""
+    state = MagicMock(spec=OrganisationCostState)
+    state.max_run_cost_cents = max_run_cost_cents
+    state.spend_ceiling_cents = spend_ceiling_cents
+    state.org_cumulative_spend_cents = org_cumulative_spend_cents
+    return patch("modulo.core.cost_controller.finalize.get_org_cost_state", new=AsyncMock(return_value=state))
 
-    def _execute(stmt):
+
+def _session_for(run: MagicMock, org: MagicMock) -> AsyncMock:
+    """A session whose execute returns the Run (FOR UPDATE) then the Org (plain read)."""
+
+    def _execute(stmt, *_args, **_kwargs):
         text = str(stmt)
         result = MagicMock()
         if "org_daily_run_counts" in text:
@@ -81,10 +85,13 @@ def _session_for(run: MagicMock, org: MagicMock) -> AsyncMock:
 
 async def test_org_ceiling_exceeded_with_toggle_on_auto_pauses() -> None:
     run = _make_run()
-    org = _make_org(spend_ceiling_cents=100, org_cumulative_spend_cents=100)  # $1.00 ceiling, consumed
+    org = _make_org()  # cost state patched below (FAR-1833)
     session = _session_for(run, org)
 
-    with patch.object(finalize, "_auto_pause_org_triggers", new=AsyncMock()) as auto_pause:
+    with (
+        _cost_state(spend_ceiling_cents=100, org_cumulative_spend_cents=100),
+        patch.object(finalize, "_auto_pause_org_triggers", new=AsyncMock()) as auto_pause,
+    ):
         await _ledger_block(
             session,
             run_id=run.id,
@@ -108,10 +115,11 @@ async def test_org_ceiling_exceeded_with_toggle_on_auto_pauses() -> None:
 async def test_toggle_off_ceiling_crossing_does_not_pause() -> None:
     """With the toggle off the REAL auto-pause gate is a strict no-op (no writes)."""
     run = _make_run()
-    org = _make_org(spend_ceiling_cents=100, org_cumulative_spend_cents=100, circuit_breaker_enabled=False)
+    org = _make_org(circuit_breaker_enabled=False)
     session = _session_for(run, org)
 
     with (
+        _cost_state(spend_ceiling_cents=100, org_cumulative_spend_cents=100),
         patch.object(org_auto_pause, "append_audit_event", new=AsyncMock()) as audit,
         patch.object(org_auto_pause, "_notify_admins", new=AsyncMock()) as notify,
     ):
@@ -136,10 +144,13 @@ async def test_toggle_off_ceiling_crossing_does_not_pause() -> None:
 
 async def test_run_ceiling_only_does_not_pause() -> None:
     run = _make_run()
-    org = _make_org(max_run_cost_cents=100, org_cumulative_spend_cents=0)  # per-run cap only
+    org = _make_org()  # per-run cap only (cost state patched below)
     session = _session_for(run, org)
 
-    with patch.object(finalize, "_auto_pause_org_triggers", new=AsyncMock()) as auto_pause:
+    with (
+        _cost_state(max_run_cost_cents=100, org_cumulative_spend_cents=0),
+        patch.object(finalize, "_auto_pause_org_triggers", new=AsyncMock()) as auto_pause,
+    ):
         await _ledger_block(
             session,
             run_id=run.id,
@@ -242,10 +253,13 @@ def _org_session(org: MagicMock | None, day_spend: Decimal | None) -> AsyncMock:
 async def test_org_ceiling_auto_pause_failure_is_fail_open() -> None:
     """A pause assist-failure on the ceiling path never fails the terminal write."""
     run = _make_run()
-    org = _make_org(spend_ceiling_cents=100, org_cumulative_spend_cents=100)
+    org = _make_org()
     session = _session_for(run, org)
 
-    with patch.object(finalize, "_auto_pause_org_triggers", new=AsyncMock(side_effect=RuntimeError("boom"))):
+    with (
+        _cost_state(spend_ceiling_cents=100, org_cumulative_spend_cents=100),
+        patch.object(finalize, "_auto_pause_org_triggers", new=AsyncMock(side_effect=RuntimeError("boom"))),
+    ):
         await _ledger_block(
             session,
             run_id=run.id,
@@ -264,10 +278,11 @@ async def test_org_ceiling_auto_pause_failure_is_fail_open() -> None:
 
 async def test_org_ceiling_auto_pause_cancellation_propagates() -> None:
     run = _make_run()
-    org = _make_org(spend_ceiling_cents=100, org_cumulative_spend_cents=100)
+    org = _make_org()
     session = _session_for(run, org)
 
     with (
+        _cost_state(spend_ceiling_cents=100, org_cumulative_spend_cents=100),
         patch.object(finalize, "_auto_pause_org_triggers", new=AsyncMock(side_effect=asyncio.CancelledError)),
         pytest.raises(asyncio.CancelledError),
     ):
@@ -292,6 +307,7 @@ async def test_ledger_block_limit_refused_routes_through_auto_pause() -> None:
     session = _session_for(run, org)
 
     with (
+        _cost_state(),
         patch.object(
             finalize,
             "_record_ledger_with_retry",
