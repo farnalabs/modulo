@@ -1,6 +1,9 @@
 <template>
   <div class="page-wide">
     <PageHeader :title="$t('views.SettingsHitlReviewView.title')" :subtitle="$t('views.SettingsHitlReviewView.subtitle')" />
+    <p class="mb-4 text-sm text-muted-foreground" data-testid="hitl-review-decider-note">
+      {{ $t('views.SettingsHitlReviewView.human_only_decider_note') }}
+    </p>
     <FilterBar
       :search="{ placeholder: $t('views.SettingsHitlReviewView.search_placeholder') }"
       :search-value="searchQuery"
@@ -162,7 +165,7 @@
       </button>
     </div>
     <div class="flex items-center gap-1 text-xs text-muted-foreground">
-      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       {{ $t('views.SettingsHitlReviewView.auto_refresh', { seconds: refreshCountdown }) }}
     </div>
     <!-- FAR-612: claim failures render at VIEW level so the immediate list
@@ -268,6 +271,7 @@
               fill="none"
               stroke="currentColor"
               stroke-width="2"
+              aria-hidden="true"
             >
               <path d="m9 18 6-6-6-6" />
             </svg>
