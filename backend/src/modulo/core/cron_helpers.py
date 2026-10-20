@@ -5924,6 +5924,107 @@ async def _fail_node_deadline_run(
     return True
 
 
+# ---------------------------------------------------------------------------
+# FAR-1886 B1 — terminal-path triage markers.
+#
+# ``deadline_triage`` used to exist only for ``node.deadline_exceeded`` (the
+# sandbox cancellation-retention marker written by node_runner). The
+# run-level terminalisers — the age gate (``run.no_progress``) and the
+# graceful worker-shutdown handback (``harness.worker_lost``) — wrote no
+# marker at all, so their runs returned ``deadline_triage: []`` and "executor
+# died" was indistinguishable from "silent stall". These paths have no
+# sandbox attempt to retain (or the attempt's marker is gone with the dead
+# executor), so they persist ONE synthetic run-level entry carrying the same
+# envelope signature and an explicit ``no_output_reason``.
+#
+# The entry is a marker ROW in the dedicated attempt-keyed retention store
+# (never ``outputs_json`` / ``node_telemetry_json`` — the Agent Return
+# Contract columns). The key is deliberately UNPARSEABLE by the
+# ``run:<uuid>:node:<id>:<suffix>`` grammar so the row lands on the
+# ``__unknown__`` sentinel node id (evidence preserved, FAR-188); a parseable
+# key would squat a real node id.
+# ---------------------------------------------------------------------------
+_TERMINAL_TRIAGE_ATTEMPT_KEY_PREFIX = "terminal-triage:"
+# The run-level reason vocabulary. "no attempts" = the row records zero node
+# attempts (nothing ever started); "executor lost" = at least one attempt
+# started and the process that owned it is gone, so no further output can
+# arrive. Both are row-derived facts, never an assumed cause.
+_TERMINAL_TRIAGE_NO_ATTEMPTS = "no attempts"
+_TERMINAL_TRIAGE_EXECUTOR_LOST = "executor lost"
+
+
+def _terminal_triage_attempt_key(run_id: uuid.UUID) -> str:
+    """The synthetic, grammar-unparseable attempt key for a run-level entry."""
+    return f"{_TERMINAL_TRIAGE_ATTEMPT_KEY_PREFIX}{run_id}"
+
+
+async def persist_terminal_triage_marker(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    error_code: str,
+) -> bool:
+    """Persist a run-level triage marker for a terminalisation (FAR-1886 B1).
+
+    Used by the age-gate ``run.no_progress`` terminaliser and the
+    ``harness.worker_lost`` terminal-fail path, neither of which has a prior
+    sandbox attempt marker to project. The marker carries the SAME
+    ``deadline_triage``/``no_output_reason``/tail/stdout envelope signature as
+    the FAR-704 per-attempt marker, so the run-detail projection needs no
+    special case.
+
+    Best-effort by design: observability must never break the repair that
+    already committed. The write runs in its OWN savepoint so a failure
+    aborts only the marker write, never the caller's terminalisation
+    transaction. Returns ``True`` when the marker was written.
+
+    Must be called with a bound, matching RLS organisation context (the
+    ``run_node_outputs`` write contract) inside an open transaction.
+    """
+    from modulo.db.crud.run_node_outputs import read_run_markers, write_run_markers
+
+    try:
+        run = await session.get(Run, run_id)
+        attempt_count = int(getattr(run, "node_attempt_count", 0) or 0) if run is not None else 0
+        reason = _TERMINAL_TRIAGE_EXECUTOR_LOST if attempt_count > 0 else _TERMINAL_TRIAGE_NO_ATTEMPTS
+        markers = dict(await read_run_markers(session, run_id=run_id, organisation_id=organisation_id) or {})
+        key = _terminal_triage_attempt_key(run_id)
+        markers[key] = {
+            "_modulo_marker": True,
+            "status": "failed",
+            "summary": f"Run terminalised by {error_code} — run-level triage evidence (FAR-1886)",
+            "raw_output": "",
+            "parse_error": "",
+            "pr_url": None,
+            "exit_code": -1,
+            "stdout_length": 0,
+            "stderr_length": 0,
+            "attempt_key": key,
+            "node_id": None,
+            "deadline_triage": True,
+            "no_output_reason": reason,
+            "sandbox_log_tail": "",
+        }
+        async with session.begin_nested():
+            await write_run_markers(
+                session,
+                run_id=run_id,
+                organisation_id=organisation_id,
+                markers=markers,
+            )
+        return True
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "cron_helpers.terminal_triage_marker_failed",
+            extra={"run_id": str(run_id), "error_code": error_code},
+            exc_info=True,
+        )
+        return False
+
+
 def _build_re_dispatch_predicate(
     *,
     reenqueue_window: int,
@@ -6845,6 +6946,15 @@ async def _terminalize_mid_graph_wedges(
     )
     rows = result.all()
     for (run_id,) in rows:
+        # FAR-1886 B1: the age gate has no sandbox attempt marker to project,
+        # so persist the synthetic run-level triage entry (best-effort; the
+        # terminalisation above is already in this transaction).
+        await persist_terminal_triage_marker(
+            session,
+            run_id=run_id,
+            organisation_id=org_id,
+            error_code=_NO_PROGRESS_ERROR_CODE,
+        )
         _log.warning(
             "dispatcher_reconcile: age-bound wedge terminalized %s with no_progress (started > %d min ago)",
             run_id,

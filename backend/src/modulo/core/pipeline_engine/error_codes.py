@@ -534,10 +534,11 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         retryable=False,
         alert_severity="warning",
         guidance=(
-            "A node did not complete within its configured timeout_seconds. "
-            "Distinct from the short setup-grace executor_stalled: the node "
-            "started executing but never finished (the idle-watchdog could not "
-            "catch a half-alive SSE stall)."
+            "A node did not complete within its configured timeout_seconds "
+            "(the node-deadline watchdog ended the dispatch). The cause is "
+            "not asserted here: deadline_triage carries the retained output "
+            "tail, and last_output_age_seconds distinguishes a productive "
+            "attempt that ran over budget from one that produced no output."
         ),
     ),
     _CODE_NODE_RUNAWAY: ErrorCodeSpec(

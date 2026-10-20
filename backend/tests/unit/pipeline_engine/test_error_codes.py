@@ -941,3 +941,20 @@ def test_match_known_fixes_never_raises_on_pathological_input():
             raise RuntimeError("boom")
 
     assert not match_known_fixes(Explodes())
+
+
+def test_node_deadline_guidance_states_the_observable_not_an_assumed_cause():
+    """FAR-1886 B2: the registry guidance must not assert WHY the node was
+    killed. Live triage (2026-10-20) showed deadlined nodes were often
+    productive and simply over budget, while the old text claimed a
+    "half-alive SSE stall" as fact. The guidance names the observable only
+    and points at the triage fields that carry the cause."""
+    spec = ERROR_CODE_REGISTRY["node.deadline_exceeded"]
+    assert "half-alive" not in spec.guidance
+    assert "timeout_seconds" in spec.guidance
+    assert "deadline_triage" in spec.guidance
+    assert "last_output_age_seconds" in spec.guidance
+    # The classification contract is unchanged.
+    assert spec.error_class == "node"
+    assert spec.retryable is False
+    assert spec.alert_severity == "warning"
