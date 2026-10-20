@@ -21,7 +21,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -30,6 +30,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.eval_engine.policy_gate import (
     validate_binding,
 )
+
+if TYPE_CHECKING:
+    from modulo.db.models.eval import Eval
 
 _log = logging.getLogger(__name__)
 
@@ -440,7 +443,7 @@ async def _persist_eval_row(
 
 
 def _apply_eval_update(
-    existing: Any,
+    existing: Eval,
     *,
     pipeline_id: uuid.UUID,
     node_id: uuid.UUID | None,
@@ -460,14 +463,14 @@ def _apply_eval_update(
     existing.name = name
     existing.eval_type = eval_type
     existing.config_json = config_json
-    existing.pass_threshold = pass_threshold
+    existing.pass_threshold = pass_threshold  # type: ignore[assignment]
     existing.suite_id = suite_id
     if eval_suite_id is not None:
         existing.eval_suite_id = eval_suite_id
 
 
 def _build_eval_row(
-    eval_model: Any,
+    eval_model: type[Eval],
     *,
     eval_id: uuid.UUID | None,
     org_id: uuid.UUID,
@@ -480,7 +483,7 @@ def _build_eval_row(
     pass_threshold: float | None,
     suite_id: str | None,
     eval_suite_id: uuid.UUID | None,
-) -> Any:
+) -> Eval:
     """Construct a new Eval row (version=1)."""
     fields: dict[str, Any] = {
         "organisation_id": org_id,

@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 from jwt import ExpiredSignatureError
 from jwt import InvalidTokenError as JWTError
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import Update, and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1240,7 +1240,7 @@ class HITLManager:
         decided_by: uuid.UUID | None,
         now: datetime,
         decision_payload: dict[str, Any] | None,
-    ) -> Any:
+    ) -> Update:
         """Build the guarded HitlClaim decision UPDATE."""
         return (
             update(HitlClaim)

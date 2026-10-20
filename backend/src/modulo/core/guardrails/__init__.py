@@ -60,7 +60,7 @@ import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -78,6 +78,9 @@ from modulo.core.guardrails.redaction_mode import (
     destroy_token,
     resolve_guardrail_destroy_pepper,
 )
+
+if TYPE_CHECKING:
+    from modulo.db.models.policy_gate import PolicyGate
 
 _log = logging.getLogger(__name__)
 
@@ -725,7 +728,7 @@ def evaluate_guardrails(
 def _record_gated_violation(
     eval_def: EvalDefinition,
     result: EvalResult,
-    gate_row: Any,
+    gate_row: PolicyGate,
     violations: list[tuple[EvalDefinition, EvalResult]],
 ) -> None:
     """Resolve one gate-owning violation and record the enforcement outcome."""

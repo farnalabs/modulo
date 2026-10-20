@@ -555,6 +555,7 @@ async def _generate_deliver_and_stamp(
         rls,
         report_id=report_id,
         org_id=org_id,
+        report_type=snapshot.report_type,
         schedule_type=snapshot.schedule_type,
         delivered_at=delivered_at,
     )
@@ -621,6 +622,7 @@ async def _stamp_terminal(
     *,
     report_id: uuid.UUID,
     org_id: uuid.UUID,
+    report_type: str,
     schedule_type: Any,
     delivered_at: datetime.datetime,
 ) -> None:
@@ -652,8 +654,9 @@ async def _stamp_terminal(
         # The send already happened. Retrying the whole fire would deliver
         # AGAIN — so log the terminal-stamp failure and report success.
         _log.exception(
-            "Report %s sent but its terminal stamp failed; not retrying the fire",
+            "Report %s (%s) sent but its terminal stamp failed; not retrying the fire",
             report_id,
+            report_type,
         )
 
 

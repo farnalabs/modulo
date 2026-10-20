@@ -24,8 +24,8 @@ import asyncio
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -1013,17 +1013,24 @@ async def stream_export_facts(
     rows_stmt = _build_scan_rows_stmt(conditions, needs_pipeline_join)
 
     try:
-        async for payload in _stream_scan_pages(
-            rows_stmt,
-            bind,
-            page_size=page_size,
-            factory=factory,
-            settings=settings,
-            org_id=org_id,
-            account_id=account_id,
-            org_role=org_role,
-        ):
-            yield payload
+        # ``aclosing`` (not a bare ``async for``) so an early ``aclose()`` of
+        # THIS generator — a client disconnect on the StreamingResponse —
+        # closes the delegated page generator synchronously instead of leaving
+        # it to the event loop's async-generator finalizer.
+        async with aclosing(
+            _stream_scan_pages(
+                rows_stmt,
+                bind,
+                page_size=page_size,
+                factory=factory,
+                settings=settings,
+                org_id=org_id,
+                account_id=account_id,
+                org_role=org_role,
+            )
+        ) as pages:
+            async for payload in pages:
+                yield payload
     except (AnalyticsError, asyncio.CancelledError):
         raise
     except Exception:
@@ -1055,7 +1062,7 @@ async def _stream_scan_pages(
     org_id: uuid.UUID,
     account_id: uuid.UUID | None,
     org_role: str | None,
-) -> AsyncIterator[dict[str, Any]]:
+) -> AsyncGenerator[dict[str, Any], None]:
     """Open one guarded session/transaction and stream every scan page.
 
     Maps the DB failure family onto the typed ``AnalyticsError`` contract
@@ -1064,10 +1071,15 @@ async def _stream_scan_pages(
     """
     page_bind = dict(bind)
     try:
-        async with _guarded_session(
-            factory, settings, org_id=org_id, account_id=account_id, org_role=org_role
-        ) as session:
-            async for payload in _stream_session_pages(session, rows_stmt, page_size, page_bind):
+        # Same close-timing contract one level down: the caller's ``aclose()``
+        # must reach ``_guarded_session.__aexit__`` (transaction end + pooled-
+        # connection return) synchronously, so the page generator is closed
+        # explicitly rather than abandoned.
+        async with (
+            _guarded_session(factory, settings, org_id=org_id, account_id=account_id, org_role=org_role) as session,
+            aclosing(_stream_session_pages(session, rows_stmt, page_size, page_bind)) as pages,
+        ):
+            async for payload in pages:
                 yield payload
     except asyncio.CancelledError:
         raise
@@ -1090,7 +1102,7 @@ async def _stream_session_pages(
     rows_stmt: sa.Select[Any],
     page_size: int,
     page_bind: dict[str, Any],
-) -> AsyncIterator[dict[str, Any]]:
+) -> AsyncGenerator[dict[str, Any], None]:
     """Yield serialized rows, keyset-paginating over the stable scan order."""
     page_stmt = rows_stmt
     while True:
