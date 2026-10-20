@@ -446,7 +446,7 @@ def _set_oidc_flow_cookie(
     )
 
 
-def _clear_oidc_flow_cookie(response: Response, settings: Settings) -> None:
+def _clear_oidc_flow_cookie(response: Response) -> None:
     """Expire the correlation cookie once the flow has completed."""
     response.set_cookie(
         key=_OIDC_FLOW_COOKIE,
@@ -576,7 +576,7 @@ async def oidc_callback(
     )
 
     response = _redirect_to_frontend(tokens, settings)
-    _clear_oidc_flow_cookie(response, settings)
+    _clear_oidc_flow_cookie(response)
     return response
 
 

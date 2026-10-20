@@ -547,6 +547,75 @@ async def test_oidc_callback_rejects_tampered_state_even_with_a_cookie() -> None
     process.assert_not_awaited()
 
 
+async def test_oidc_callback_rejects_flow_cookie_without_nonce_and_verifier_fields() -> None:
+    """A signed cookie carrying only the raw state lacks the binding secrets.
+
+    FAR-1982: the correlation cookie must carry ``raw_state:nonce:verifier``.
+    A validly-signed value that splits into the wrong number of fields (an old
+    pre-FAR-1982 cookie, or a malformed one) has no nonce/verifier to bind the
+    flow with, so the callback must fail closed before any token exchange.
+    """
+    settings = _make_settings()
+    fake = _AutobeginAwareSession()
+    request = _make_callback_request(raw_state="xyz", cookie_value=sign_state("xyz:only-nonce", _VALID_32))
+    process = AsyncMock()
+
+    with (
+        patch("modulo.api.routes.sso.oidc_process_callback", new=process),
+        pytest.raises(SsoCallbackError) as exc_info,
+    ):
+        await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert exc_info.value.code == "auth_failed"
+    process.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("cookie_payload", "missing_field"),
+    [
+        ("xyz::test-verifier", "nonce"),
+        ("xyz:test-nonce:", "code_verifier"),
+    ],
+)
+async def test_oidc_callback_rejects_flow_cookie_with_empty_binding_secret(
+    cookie_payload: str,
+    missing_field: str,
+) -> None:
+    """An empty nonce or PKCE verifier is not a usable binding — fail closed.
+
+    FAR-1982: an empty value would silently disable one half of the request
+    binding (a token with any nonce, or an exchange with no verifier), so the
+    callback must reject it before any token exchange.
+    """
+    settings = _make_settings()
+    fake = _AutobeginAwareSession()
+    request = _make_callback_request(raw_state="xyz", cookie_value=sign_state(cookie_payload, _VALID_32))
+    process = AsyncMock()
+
+    with (
+        patch("modulo.api.routes.sso.oidc_process_callback", new=process),
+        pytest.raises(SsoCallbackError) as exc_info,
+    ):
+        await oidc_callback(
+            provider="google",
+            request=request,
+            _=None,
+            settings=settings,
+            session=fake,
+            system_session=fake,
+        )
+
+    assert exc_info.value.code == "auth_failed", f"empty {missing_field} must fail closed"
+    process.assert_not_awaited()
+
+
 async def test_oidc_callback_clears_flow_cookie_on_success() -> None:
     """A completed flow must expire the correlation cookie."""
     settings = _make_settings()

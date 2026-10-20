@@ -75,6 +75,13 @@ _SECRET_KEY = "a" * 32
 _FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 _ALLOWLISTED_DOMAIN = "allowlisted.example.com"
+# FAR-1982: the login leg mints a nonce, sends it in the authorization request
+# and stores it in the browser-bound flow cookie. A real IdP echoes it into the
+# ID token's ``nonce`` claim, which the callback now verifies. The stub IdP runs
+# on the same contract: install this in the cookie (``_bind_browser``) and echo
+# it in the signed token (``_make_id_token``).
+_FLOW_NONCE = "integration-nonce"
+_FLOW_CODE_VERIFIER = "integration-verifier"
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +119,14 @@ def _pubkey_to_jwk(public_key: rsa.RSAPublicKey) -> dict[str, Any]:
     }
 
 
-def _make_id_token(*, sub: str, email: str, issuer: str, audience: str) -> str:
+def _make_id_token(
+    *,
+    sub: str,
+    email: str,
+    issuer: str,
+    audience: str,
+    nonce: str | None = None,
+) -> str:
     now = datetime.now(UTC)
     claims = {
         "sub": sub,
@@ -124,6 +138,10 @@ def _make_id_token(*, sub: str, email: str, issuer: str, audience: str) -> str:
         "iat": now,
         "exp": now + timedelta(hours=1),
     }
+    # FAR-1982: a real IdP echoes the request nonce into the ID token; the
+    # callback requires it to match the value carried in the flow cookie.
+    if nonce is not None:
+        claims["nonce"] = nonce
     pem_key = _IDP_KEYPAIR[0].private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
@@ -446,7 +464,7 @@ def _bind_browser(client: AsyncClient, provider_id: str) -> str:
     raw_state = str(uuid.uuid4())
     client.cookies.set(
         _OIDC_FLOW_COOKIE,
-        sign_state(f"{raw_state}:integration-nonce:integration-verifier", _SECRET_KEY),
+        sign_state(f"{raw_state}:{_FLOW_NONCE}:{_FLOW_CODE_VERIFIER}", _SECRET_KEY),
     )
     return sign_state(f"{provider_id}:{raw_state}", _SECRET_KEY)
 
@@ -541,7 +559,9 @@ async def test_oidc_callback_success_provisions_and_redirects_to_frontend_url(
     """Happy path: real callback → exchange, verify, JIT provision, redirect."""
     world = await _seed_provider(db_engine, allowed_domains=[_ALLOWLISTED_DOMAIN])
     email = f"good-{world.org_id.hex[:8]}@{_ALLOWLISTED_DOMAIN}"
-    id_token = _make_id_token(sub=world.client_id, email=email, issuer=world.issuer, audience=world.client_id)
+    id_token = _make_id_token(
+        sub=world.client_id, email=email, issuer=world.issuer, audience=world.client_id, nonce=_FLOW_NONCE
+    )
 
     client = await oidc_app()
     try:
@@ -594,6 +614,9 @@ async def test_oidc_callback_success_provisions_and_redirects_to_frontend_url(
     assert kwargs["data"]["code"] == "authorization-code-CB"
     assert kwargs["data"]["client_id"] == world.client_id
     assert kwargs["data"]["redirect_uri"] == _callback_url(world.provider_id)
+    # FAR-1982: the PKCE verifier minted at login and carried in the flow
+    # cookie is presented at the token exchange (RFC 7636 §4.5).
+    assert kwargs["data"]["code_verifier"] == _FLOW_CODE_VERIFIER
 
     # 4. The JIT provision landed in the real DB against the provider's org.
     account_id = await _get_account_id(db_engine, email)
@@ -610,7 +633,9 @@ async def test_oidc_callback_redirect_base_falls_back_to_public_url_when_fronten
     """MODULO_FRONTEND_URL empty → redirects to MODULO_PUBLIC_URL (same-origin)."""
     world = await _seed_provider(db_engine, allowed_domains=[_ALLOWLISTED_DOMAIN])
     email = f"fallback-{world.org_id.hex[:8]}@{_ALLOWLISTED_DOMAIN}"
-    id_token = _make_id_token(sub=world.client_id, email=email, issuer=world.issuer, audience=world.client_id)
+    id_token = _make_id_token(
+        sub=world.client_id, email=email, issuer=world.issuer, audience=world.client_id, nonce=_FLOW_NONCE
+    )
 
     client = await oidc_app(frontend_url="")
     try:
@@ -642,7 +667,13 @@ async def test_oidc_callback_join_gate_denial_is_clean_redirect_and_leaves_no_or
     """
     world = await _seed_provider(db_engine, allowed_domains=[_ALLOWLISTED_DOMAIN])
     denied_email = f"stranger-{world.org_id.hex[:8]}@notallowlisted.example.com"
-    id_token = _make_id_token(sub=world.client_id, email=denied_email, issuer=world.issuer, audience=world.client_id)
+    id_token = _make_id_token(
+        sub=world.client_id,
+        email=denied_email,
+        issuer=world.issuer,
+        audience=world.client_id,
+        nonce=_FLOW_NONCE,
+    )
 
     client = await oidc_app()
     try:
@@ -692,7 +723,13 @@ async def test_oidc_callback_consumes_pending_invitation_for_non_allowlisted_dom
         org_role="operator",
     )
 
-    id_token = _make_id_token(sub=world.client_id, email=invited_email, issuer=world.issuer, audience=world.client_id)
+    id_token = _make_id_token(
+        sub=world.client_id,
+        email=invited_email,
+        issuer=world.issuer,
+        audience=world.client_id,
+        nonce=_FLOW_NONCE,
+    )
 
     client = await oidc_app()
     try:
