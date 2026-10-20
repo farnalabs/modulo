@@ -162,6 +162,26 @@ def canonicalise_ref(kind: Any, ref: Any) -> str:
     return raw.lstrip("#").strip()
 
 
+def canonicalise_ref_pair(raw: Any) -> tuple[str, str] | None:
+    """Canonical ``(kind, ref)`` for one raw ``{"kind", "ref"}`` mapping, else None.
+
+    The single canonicalisation step a raw ref-entry consumer needs: a
+    non-dict, a missing/blank ``kind`` or ``ref``, or a value that fails
+    canonicalisation yields None, so the caller counts it as malformed instead
+    of raising.
+    """
+    if not isinstance(raw, dict):
+        return None
+    try:
+        # A missing ``kind``/``ref`` surfaces as ValueError from the
+        # canonicalisers, so it needs no separate guard here.
+        kind = canonicalise_kind(raw.get("kind"))
+        ref = canonicalise_ref(kind, raw.get("ref"))
+    except ValueError:
+        return None
+    return kind, ref
+
+
 def validate_ref_entry(
     entry: Any,
     *,
