@@ -644,6 +644,10 @@ describe('AdminOrgSettingsView', () => {
       expect.objectContaining({ body: { enabled: false } }),
     )
     expect(wrapper.find('[data-testid="org-mcp-authority-toggle"]').attributes('aria-checked')).toBe('false')
+    // Announced politely without the `status` role (Web:S6819): a long-lived
+    // region whose content updates, not an atomic status message.
+    expect(wrapper.find('[data-testid="org-mcp-authority-saved"]').attributes('aria-live')).toBe('polite')
+    expect(wrapper.find('[data-testid="org-mcp-authority-saved"]').attributes('role')).toBeUndefined()
     wrapper.unmount()
   })
 
@@ -664,6 +668,37 @@ describe('AdminOrgSettingsView', () => {
     const wrapper = await mountWindowView()
     expect(wrapper.find('[data-testid="org-mcp-authority-load-error"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="org-mcp-authority-retry"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('reports a load error carried in the response body and keeps retry available', async () => {
+    mcpAuthorityState.error = 'setting rejected'
+    const wrapper = await mountWindowView()
+    expect(wrapper.find('[data-testid="org-mcp-authority-load-error"]').text()).toContain('setting rejected')
+    expect(wrapper.find('[data-testid="org-mcp-authority-retry"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('defaults to enabled when the authority payload omits the flag', async () => {
+    // `enabled` is optional on the response; an older/partial payload must not
+    // render the toggle OFF (which would read as "credentials are refused").
+    mcpAuthorityState.data = {}
+    const wrapper = await mountWindowView()
+    expect(wrapper.find('[data-testid="org-mcp-authority-toggle"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.find('[data-testid="org-mcp-authority-status"]').text()).toContain('may decide a human-only gate')
+    wrapper.unmount()
+  })
+
+  it('shows an error and keeps the toggle on when the authority save throws', async () => {
+    const wrapper = await mountWindowView()
+    vi.mocked(api.PUT).mockRejectedValueOnce(new Error('network down'))
+
+    await wrapper.find('[data-testid="org-mcp-authority-toggle"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-mcp-authority-error"]').text()).toContain('network down')
+    })
+    expect(wrapper.find('[data-testid="org-mcp-authority-toggle"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.find('[data-testid="org-mcp-authority-saved"]').exists()).toBe(false)
     wrapper.unmount()
   })
 })

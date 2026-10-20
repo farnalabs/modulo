@@ -23,6 +23,7 @@ System admins keep the feature-flags page for the instance-wide view.
 from __future__ import annotations
 
 import logging
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -99,8 +100,8 @@ def _default_enabled() -> bool:
 @router.get("/mcp-human-linked-hitl-authority", response_model=McpAuthorityResponse)
 @handle_db_errors(_CODE_LIST_FAILED)
 async def get_org_mcp_authority(
-    current_user: TenantPrincipal = require_permission(_PERMISSION_MANAGE),
-    session: AsyncSession = Depends(get_db_session),
+    current_user: Annotated[TenantPrincipal, require_permission(_PERMISSION_MANAGE)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> McpAuthorityResponse | Response:
     """Read the caller's OWN org human-linked MCP HITL authority setting."""
     try:
@@ -144,8 +145,8 @@ async def get_org_mcp_authority(
 @handle_db_errors(_CODE_SET_FAILED)
 async def set_org_mcp_authority(
     req: McpAuthorityUpdateRequest,
-    current_user: TenantPrincipal = require_permission(_PERMISSION_MANAGE),
-    session: AsyncSession = Depends(get_db_session),
+    current_user: Annotated[TenantPrincipal, require_permission(_PERMISSION_MANAGE)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> McpAuthorityResponse | Response:
     """Set the caller's OWN org override for the human-linked MCP HITL authority.
 

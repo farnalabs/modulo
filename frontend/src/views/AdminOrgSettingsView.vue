@@ -150,7 +150,7 @@
         <p
           v-else-if="mcpAuthoritySaved"
           class="mt-2 text-sm text-success"
-          role="status"
+          aria-live="polite"
           data-testid="org-mcp-authority-saved"
         >{{ $t('views.AdminOrgSettingsView.mcp_authority_saved') }}</p>
       </template>

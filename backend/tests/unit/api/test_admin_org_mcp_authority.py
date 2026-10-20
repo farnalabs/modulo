@@ -19,7 +19,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
@@ -176,3 +178,102 @@ class TestOrgAdminWrite:
             resp = admin_client.get(_PATH)
 
         assert resp.status_code == 404
+
+
+class TestDefaultResolution:
+    def test_a_registered_flag_supplies_its_own_default(self, admin_client: TestClient) -> None:
+        """Once FAR-1957 registers the flag, the registry - not the fallback - decides.
+
+        The route's ``_default_enabled`` falls back to ON only while the flag is
+        unregistered; a registered flag that is currently inactive must be
+        reported as OFF, otherwise the read would contradict the registry the
+        gate enforcement consults.
+        """
+        org = SimpleNamespace(settings_json=None)
+        registry = MagicMock()
+        registry.get_flag.return_value = SimpleNamespace(currently_active=False)
+        with (
+            patch.object(route_module, "get_organisation", AsyncMock(return_value=org)),
+            patch.object(route_module, "get_registry", MagicMock(return_value=registry)),
+        ):
+            resp = admin_client.get(_PATH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"enabled": False, "overridden": False}
+        registry.get_flag.assert_called_once_with(MCP_HUMAN_LINKED_HITL_AUTHORITY_FLAG)
+
+
+def _programming_error() -> ProgrammingError:
+    return ProgrammingError("SELECT 1", {}, Exception("missing column"))
+
+
+class TestReadErrorArms:
+    """The read's local arms answer a typed status instead of a bare 500."""
+
+    def test_programming_error_answers_501(self, admin_client: TestClient) -> None:
+        with patch.object(route_module, "get_organisation", AsyncMock(side_effect=_programming_error())):
+            resp = admin_client.get(_PATH)
+
+        assert resp.status_code == 501
+        assert resp.json()["error"]["code"] == "NOT_IMPLEMENTED"
+
+    def test_database_error_answers_503(self, admin_client: TestClient) -> None:
+        with patch.object(route_module, "get_organisation", AsyncMock(side_effect=SQLAlchemyError("boom"))):
+            resp = admin_client.get(_PATH)
+
+        assert resp.status_code == 503
+        assert resp.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
+
+    def test_unexpected_error_answers_500(self, admin_client: TestClient) -> None:
+        with patch.object(route_module, "get_organisation", AsyncMock(side_effect=ValueError("boom"))):
+            resp = admin_client.get(_PATH)
+
+        assert resp.status_code == 500
+        assert resp.json()["error"]["code"] == "INTERNAL_ERROR"
+
+
+class TestWriteErrorArms:
+    """The write keeps the shared status mapping instead of collapsing to 500."""
+
+    def test_an_http_exception_from_the_patch_helper_propagates(self, admin_client: TestClient) -> None:
+        with patch.object(
+            route_module,
+            "apply_org_settings_patch_or_404",
+            AsyncMock(side_effect=HTTPException(status_code=404, detail="Organisation not found.")),
+        ):
+            resp = admin_client.put(_PATH, json={"enabled": False})
+
+        assert resp.status_code == 404
+
+    def test_programming_error_answers_501(self, admin_client: TestClient) -> None:
+        with patch.object(
+            route_module,
+            "apply_org_settings_patch_or_404",
+            AsyncMock(side_effect=_programming_error()),
+        ):
+            resp = admin_client.put(_PATH, json={"enabled": False})
+
+        assert resp.status_code == 501
+        assert resp.json()["error"]["code"] == "NOT_IMPLEMENTED"
+
+    def test_database_error_answers_503(self, admin_client: TestClient) -> None:
+        with patch.object(
+            route_module,
+            "apply_org_settings_patch_or_404",
+            AsyncMock(side_effect=SQLAlchemyError("boom")),
+        ):
+            resp = admin_client.put(_PATH, json={"enabled": False})
+
+        assert resp.status_code == 503
+        assert resp.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
+
+    def test_unexpected_error_answers_500(self, admin_client: TestClient) -> None:
+        with patch.object(
+            route_module,
+            "apply_org_settings_patch_or_404",
+            AsyncMock(side_effect=ValueError("boom")),
+        ):
+            resp = admin_client.put(_PATH, json={"enabled": False})
+
+        assert resp.status_code == 500
+        assert resp.json()["error"]["code"] == "INTERNAL_ERROR"
