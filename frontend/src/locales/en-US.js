@@ -4765,6 +4765,11 @@ export default {
       "dev_preview": "Dev Preview",
       "in_dev": "In Dev"
     },
+    "CommandPalette": {
+      "label": "Command palette",
+      "search_placeholder": "Search pages...",
+      "no_results": "No results found"
+    },
     "JsonViewer": {
       "copy": "Copy",
       "copied": "Copied",

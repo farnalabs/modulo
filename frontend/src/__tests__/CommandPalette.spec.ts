@@ -227,10 +227,23 @@ describe('CommandPalette', () => {
     trigger.remove()
   })
 
-  it('unmounts safely while the modal is open', async () => {
+  it('unmounts safely while the modal is open and a fresh mount still works', async () => {
     const wrapper = await openPalette()
     expect((document.querySelector('dialog') as HTMLDialogElement).open).toBe(true)
     expect(() => wrapper.unmount()).not.toThrow()
+    mounted.pop()
+
+    // A subsequent mount must be fully functional: neither the modal state nor
+    // the document-level keydown listener may leak from the unmounted instance.
+    const reopened = await openPalette()
+    const dialog = document.querySelector('dialog') as HTMLDialogElement
+    expect(dialog.open).toBe(true)
+    expect(dialog.contains(document.activeElement)).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+    expect(document.querySelector('dialog')).toBeNull()
+    reopened.unmount()
     mounted.pop()
   })
 })

@@ -4,8 +4,9 @@
       v-if="isOpen"
       ref="dialogRef"
       class="mx-auto mt-[15vh] w-full max-w-lg rounded-lg border bg-background p-0 text-foreground shadow-xl backdrop:bg-black/50"
-      aria-label="Command palette"
+      :aria-label="$t('components.CommandPalette.label')"
       @click="onBackdropClick"
+      @close="isOpen = false"
     >
       <div class="flex items-center gap-2 border-b px-4">
         <SvgIcon name="Search" class="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -14,7 +15,7 @@
           ref="inputRef"
           v-model="query"
           :aria-label="$t('components.AppLayout.search_pages')"
-          placeholder="Search pages..."
+          :placeholder="$t('components.CommandPalette.search_placeholder')"
           class="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           @keydown.down.prevent="selectedIndex = Math.min(selectedIndex + 1, filteredItems.length - 1)"
           @keydown.up.prevent="selectedIndex = Math.max(selectedIndex - 1, 0)"
@@ -26,7 +27,7 @@
           v-if="filteredItems.length === 0 && query.length > 0"
           class="px-3 py-8 text-center text-sm text-muted-foreground"
         >
-          No results found
+          {{ $t('components.CommandPalette.no_results') }}
         </div>
         <button type="button"
           v-for="(item, idx) in filteredItems"
