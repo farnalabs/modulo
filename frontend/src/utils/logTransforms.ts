@@ -16,7 +16,7 @@ export function prettyPrintLog(raw: string): { html: string; applied: boolean } 
   // Unescape literal backslash-n / backslash-t that appear in JSON-encoded output
   const hadEscapes = /\\[nrt]/.test(s)
   if (hadEscapes) {
-    s = s.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r')
+    s = s.replaceAll(/\\n/g, '\n').replaceAll(/\\t/g, '\t').replaceAll(/\\r/g, '\r')
   }
   // Try to parse as JSON and pretty-print
   let jsonFormatted = false
