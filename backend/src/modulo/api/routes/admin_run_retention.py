@@ -29,7 +29,12 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_UNEXPECTED_ERROR
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    prime_stream,
+    raise_session_contract_error,
+    reemit_primed_stream,
+)
 from modulo.api.dependencies import (
     get_db_session,
     require_feature,
@@ -52,6 +57,13 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin/run-retention", tags=["admin-run-retention"])
 
 _PERMISSION = "run_retention.manage"
+
+# FAR-1924: the terminating record that marks a run-retention export as
+# COMPLETE. NDJSON has no length prefix or total, so a stream that died after
+# the first item is otherwise indistinguishable from a short-but-complete one.
+# A consumer treating the downloaded file as a compliance artefact requires
+# this final line; its absence means the export was truncated. See ``export``.
+_COMPLETE_SENTINEL = '{"_complete":true}\n'
 
 
 class RetentionCandidate(BaseModel):
@@ -235,12 +247,14 @@ async def candidates(
     return CandidatesResponse(**result)
 
 
-# NOTE (FAR-1905): deliberately NOT wrapped in @handle_db_errors, unlike its
-# /candidates and /purge siblings. This route's only DB work runs inside the
-# ``_stream()`` async generator, which is consumed by the StreamingResponse
-# AFTER this handler has already returned — a route-level decorator wraps the
-# handler call and cannot catch an error raised while the body is being
-# streamed. Do not "fix" this by adding the decorator: it would be inert.
+# NOTE (FAR-1905 / FAR-1924): deliberately NOT wrapped in @handle_db_errors,
+# unlike its /candidates and /purge siblings. This route's only DB work runs
+# inside the ``_stream()`` async generator, which is consumed by the
+# StreamingResponse AFTER this handler has already returned — a route-level
+# decorator wraps the handler call and cannot catch an error raised while the
+# body is being streamed. Do not "fix" this by adding the decorator: it would
+# be inert. Instead the generator is PRIMED below (FAR-1924) so a start-up
+# failure surfaces as a real HTTP status before the response starts.
 @router.post("/export", dependencies=[require_feature("admin_run_retention")])
 async def export(
     req: ExportRequest,
@@ -270,8 +284,25 @@ async def export(
             ):
                 yield line
 
+    # FAR-1924: await the FIRST item BEFORE returning the StreamingResponse.
+    # The generator's DB work (RLS context + the first keyset page) would
+    # otherwise run after HTTP 200 has already been sent, so any start-up
+    # failure — a tenant/validation error, a missing migration
+    # (ProgrammingError) or a database error — produced a truncated 200 body
+    # with no error status and no completeness signal. ``prime_stream`` maps
+    # that error to a real HTTP status here (through the shared classifier, so
+    # every arm — 409/422/501/503/re-raise — matches a non-streaming endpoint),
+    # where the handler can still set the status code.
+    stream = _stream()
+    first = await prime_stream(stream, "admin_run_retention.export")
+
+    # FAR-1924 completeness signal, emitted ONLY when the DB iteration ran to
+    # exhaustion. Its absence means the export was truncated. Priming only
+    # covers failures at or before the first item; an error after the stream
+    # begins still truncates, so this sentinel is what lets a consumer detect
+    # that and refuse to treat a partial file as complete.
     return StreamingResponse(
-        _stream(),
+        reemit_primed_stream(stream, first, lambda line: line, trailer=_COMPLETE_SENTINEL),
         media_type="application/x-ndjson",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
