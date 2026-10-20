@@ -111,8 +111,13 @@ an eligible tier.
       `UNIQUE(organisation_id, event_id)` dedup (`ON CONFLICT DO NOTHING`), an
       `api_error` daily cap, and route-template sanitisation so raw paths never
       reach the table; it is best-effort (always 204) and consent-gated through the
-      shared `consent.is_org_consenting` predicate
+      shared `consent.is_org_consenting` predicate; the client's `event_id` is a
+      per-session prefix plus a monotonic counter, so its IDs stay unique across
+      page reloads and concurrent tabs (a bare counter restarting at 1 collided
+      with the earlier session's IDs under this dedup and was silently dropped)
       (`api/routes/metrics_ingest.py`,
+      `frontend/src/composables/useProductAnalytics.ts`,
+      `frontend/src/__tests__/composables/useProductAnalytics.spec.ts`,
       `tests/unit/product_analytics/test_metrics_ingest.py`,
       `tests/bdd/features/product_analytics/metrics_ingest.feature`)
 - [x] Staged frontend events are consumed and purged end to end (FAR-1717): the
@@ -181,6 +186,22 @@ intentional, not an open question:
   payload-dedup contract change on the vendor side, not taken in FAR-1717.
 
 ## QA History
+- 2026-10-19: **Improve Architecture product-map walk** - fixed MAJOR
+  (behaviour-adversarial / Lens 9 List B - *listed but vacuously covered*): the
+  frontend event-capture composable generated `event_id` from a module-scoped
+  counter that restarted at `1` on every page load (and was independent per
+  tab), while the ingest route dedups on `UNIQUE(organisation_id, event_id)`
+  with `ON CONFLICT DO NOTHING`. A reload therefore re-emitted IDs `1..N` that
+  had already been staged by the earlier session and the backend silently
+  discarded every one of them - analytics undercounted for the rest of the
+  dedup window, with a green suite because the tests asserted the counter
+  format rather than cross-session uniqueness. IDs are now a per-session prefix
+  (random UUID, falling back to CSPRNG bytes and only then to a
+  timestamp/random suffix) plus the monotonic counter,
+  so reloads and concurrent tabs cannot collide; the regression test
+  re-initialises the module and proves the new session's ID differs from the
+  first (`frontend/src/composables/useProductAnalytics.ts`,
+  `frontend/src/__tests__/composables/useProductAnalytics.spec.ts`).
 - 2026-10-12: **Improve Architecture product-map walk** - wired the partner
   `product_analytics_required` carve-out into the daily metrics dump (the dump
   half of the license-gating behaviour): `metrics_dump` now reads
