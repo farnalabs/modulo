@@ -33,6 +33,8 @@ from modulo.cli.backup import (
     cli,
 )
 
+_TEST_APP_DB_URL = "postgresql+asyncpg://modulo:pw@127.0.0.1:5432/modulo"
+
 # ── _resolve_url ──────────────────────────────────────────────────────────────
 
 
@@ -795,6 +797,38 @@ class TestRestoreCheckpointsSync:
         assert result == 2
         assert mock_cur.execute.call_count == 3  # 1 TRUNCATE + 2 INSERT
 
+    @patch("psycopg.connect")
+    def test_inserts_nullable_type_column(self, mock_connect: MagicMock) -> None:
+        """FAR-2022: ``checkpoints.type`` is nullable, so omitting it from the
+        INSERT silently dropped it on every restore. Pin the column AND the
+        parameter position so a re-break fails here.
+        """
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_connect.return_value.__enter__.return_value = mock_conn
+
+        checkpoints = [
+            {
+                "organisation_id": "00000000-0000-0000-0000-000000000001",
+                "thread_id": "t1",
+                "checkpoint_ns": "ns",
+                "checkpoint_id": "cp1",
+                "parent_checkpoint_id": None,
+                "type": "msgpack",
+                "checkpoint": {"key": "val"},
+                "metadata": {"src": "test"},
+            },
+        ]
+
+        result = _restore_checkpoints_sync("postgresql://localhost/db", checkpoints)
+
+        assert result == 1
+        sql, params = mock_cur.execute.call_args_list[1][0]
+        columns = [column.strip() for column in sql[sql.index("(") + 1 : sql.index(")")].split(",")]
+        assert "type" in columns
+        assert params[columns.index("type")] == "msgpack"
+
 
 # ── _restore_checkpoint_writes_sync ───────────────────────────────────────────
 
@@ -1049,6 +1083,7 @@ class TestBackupCli:
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.fernet_key = fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
         mock_get_db_version.return_value = "PostgreSQL 16.0"
         mock_get_schema_versions.return_value = ["rev123"]
         mock_export_blobs.return_value = []
@@ -1222,6 +1257,15 @@ class TestBackupCli:
 
 
 class TestRestoreCli:
+    @pytest.fixture(autouse=True)
+    def _stub_posture_step(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """These tests cover the restore phases BELOW the role-posture re-run.
+
+        The posture step needs a live cluster; its failure/success semantics are
+        covered in test_backup_restore_semantics.py.
+        """
+        monkeypatch.setattr("modulo.cli.backup._ensure_restore_posture", lambda *_args, **_kwargs: None)
+
     @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
     @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
     @patch("modulo.cli.backup._restore_checkpoints_sync")
@@ -1242,6 +1286,7 @@ class TestRestoreCli:
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.fernet_key = fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
         mock_restore_blobs.return_value = 5
         mock_restore_cp.return_value = 3
         mock_restore_cw.return_value = 7
@@ -1302,6 +1347,7 @@ class TestRestoreCli:
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.fernet_key = fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
         mock_restore_blobs.return_value = 0
         mock_re_encrypt.return_value = {}
 
@@ -1342,6 +1388,7 @@ class TestRestoreCli:
         new_fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         old_fernet_key = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         mock_settings.return_value.fernet_key = new_fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
         mock_restore_blobs.return_value = 0
         mock_restore_cp.return_value = 0
         mock_restore_cw.return_value = 0
@@ -1386,6 +1433,7 @@ class TestRestoreCli:
         new_fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         old_fernet_key = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         mock_settings.return_value.fernet_key = new_fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
         mock_restore_blobs.return_value = 0
         mock_restore_cp.return_value = 0
         mock_restore_cw.return_value = 0
@@ -1447,6 +1495,7 @@ class TestRestoreCli:
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.fernet_key = fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
         mock_restore_blobs.return_value = 0
         mock_restore_cp.return_value = 0
         mock_restore_cw.return_value = 0
@@ -1491,6 +1540,7 @@ class TestRestoreCli:
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.fernet_key = fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
         mock_restore_blobs.return_value = 0
         mock_restore_cp.return_value = 0
         mock_restore_cw.return_value = 0
@@ -1547,6 +1597,7 @@ class TestRestoreCli:
         new_fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         old_fernet_key = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         mock_settings.return_value.fernet_key = new_fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
         mock_restore_blobs.return_value = 0
         mock_restore_cp.return_value = 0
         mock_restore_cw.return_value = 0
@@ -1601,6 +1652,11 @@ class TestFileChecksum:
 
 
 class TestRestoreIntegrity:
+    @pytest.fixture(autouse=True)
+    def _stub_posture_step(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """These tests cover archive integrity, not the role-posture re-run."""
+        monkeypatch.setattr("modulo.cli.backup._ensure_restore_posture", lambda *_args, **_kwargs: None)
+
     @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
     @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
     @patch("modulo.cli.backup._restore_checkpoints_sync")
@@ -1621,6 +1677,7 @@ class TestRestoreIntegrity:
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.fernet_key = fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
         mock_restore_blobs.return_value = 0
         mock_restore_cp.return_value = 0
         mock_restore_cw.return_value = 0
@@ -1727,6 +1784,7 @@ class TestRestoreIntegrity:
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.fernet_key = fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
         mock_restore_blobs.return_value = 0
         mock_restore_cp.return_value = 0
         mock_restore_cw.return_value = 0
@@ -1768,6 +1826,7 @@ class TestRestoreIntegrity:
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.fernet_key = fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
 
         manifest = {
             "timestamp": "2024-01-01T00:00:00+00:00",
@@ -1806,6 +1865,7 @@ class TestRestoreIntegrity:
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.fernet_key = fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
 
         manifest = {
             "timestamp": "2024-01-01T00:00:00+00:00",
@@ -1859,6 +1919,7 @@ class TestRestoreIntegrity:
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.fernet_key = fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
 
         manifest = {
             "timestamp": "2024-01-01T00:00:00+00:00",
@@ -1895,6 +1956,7 @@ class TestRestoreIntegrity:
         new_fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         old_fernet_key = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         mock_settings.return_value.fernet_key = new_fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
 
         manifest = {
             "timestamp": "2024-01-01T00:00:00+00:00",
@@ -1934,6 +1996,7 @@ class TestRestoreIntegrity:
         new_fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         old_fernet_key = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         mock_settings.return_value.fernet_key = new_fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
 
         manifest = {
             "timestamp": "2024-01-01T00:00:00+00:00",
@@ -1981,6 +2044,7 @@ class TestRestoreIntegrity:
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.fernet_key = fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
 
         manifest = {
             "timestamp": "2024-01-01T00:00:00+00:00",
@@ -2015,6 +2079,7 @@ class TestRestoreIntegrity:
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.fernet_key = fernet_key
+        mock_settings.return_value.database_url = _TEST_APP_DB_URL
 
         manifest = {
             "timestamp": "2024-01-01T00:00:00+00:00",

@@ -433,14 +433,15 @@ def _restore_checkpoints_sync(raw_url: str, checkpoints: list[dict[str, Any]]) -
                 cur.execute(
                     "INSERT INTO checkpoints "
                     "(organisation_id, thread_id, checkpoint_ns, checkpoint_id, "
-                    " parent_checkpoint_id, checkpoint, metadata) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    " parent_checkpoint_id, type, checkpoint, metadata) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         org_uuid,
                         row.get("thread_id"),
                         row.get("checkpoint_ns"),
                         row.get("checkpoint_id"),
                         row.get("parent_checkpoint_id"),
+                        row.get("type"),
                         row.get("checkpoint"),
                         row.get("metadata"),
                     ),
@@ -1112,6 +1113,58 @@ def _check_archived_state_consistency(backup_dir: Path, manifest: dict[str, Any]
         )
 
 
+class RestorePostureError(click.ClickException):
+    """The restored cluster's role/grant posture could not be established.
+
+    A posture failure can leave ``modulo_app`` able to bypass RLS (or missing
+    the grants it needs), which is a tenant-isolation breach — so the restore
+    FAILS instead of reporting success. The data itself is already restored:
+    fix the reported check, then re-run the posture step with
+    ``uv run python -m modulo.db.bootstrap_role`` (with ``DATABASE_ADMIN_URL``
+    and ``DATABASE_URL`` set) before serving from the cluster.
+    """
+
+
+def _url_role(url: str) -> str:
+    """Return the role (URL user) of a Postgres URL, or '' when it has none."""
+    return urllib.parse.unquote(urllib.parse.urlsplit(url).username or "")
+
+
+_APP_URL_PREFIXES = ("postgresql+asyncpg://", "postgresql+psycopg://", "postgresql://", "postgres://")
+
+
+def _as_asyncpg_url(url: str) -> str:
+    """Normalise a Postgres URL to the ``postgresql+asyncpg://`` SQLAlchemy form."""
+    for prefix in _APP_URL_PREFIXES:
+        if url.startswith(prefix):
+            return "postgresql+asyncpg://" + url[len(prefix) :]
+    raise click.ClickException(
+        f"Cannot use {url!r} as the application connection URL — expected a postgresql:// URL. "
+        "Pass --app-db-url with the app role's Postgres URL."
+    )
+
+
+def _resolve_restore_app_url(settings: Any, app_db_url: str | None) -> str:
+    """Resolve the APP role URL independently of the restore target URL.
+
+    ``bootstrap_roles`` (and its ``main()``) take the application role from
+    ``DATABASE_URL``; ``--db-url`` / ``DATABASE_ADMIN_URL`` is the ADMIN
+    connection the restore writes through and is legitimately a different,
+    privileged role. Deriving the app URL from the target would configure the
+    ADMIN role as ``modulo_app`` and leave the real application role with
+    whatever posture the restored cluster carried — so the source is always
+    configuration (``--app-db-url``, else ``DATABASE_URL`` from settings) and
+    never the target URL.
+    """
+    source = app_db_url or settings.database_url
+    if not isinstance(source, str) or not source:
+        raise click.ClickException(
+            "Cannot resolve the application role for the restore: neither --app-db-url nor "
+            "DATABASE_URL is set. Pass --app-db-url with the app role's connection URL."
+        )
+    return _as_asyncpg_url(source)
+
+
 def _ensure_restore_posture(admin_url: str, app_url: str) -> None:
     """Re-run the promoted first-boot bootstrap/bootstrap_role ceremony.
 
@@ -1120,22 +1173,32 @@ def _ensure_restore_posture(admin_url: str, app_url: str) -> None:
     role/grant posture first boot would produce: modulo_app NOBYPASSRLS,
     modulo_system/modulo_breakglass BYPASSRLS, grants re-applied, and the
     accounts allow-list + role-posture assertions re-run (fatal inside that
-    path). Best-effort at the CLI layer — a failure is a loud warning, not a
-    half-restore; the API lifespan re-asserts the same posture.
+    path).
+
+    NOT best-effort: a failure raises :class:`RestorePostureError` so
+    ``modulo restore`` exits non-zero and names the failing check. A restored
+    cluster whose app role can still bypass RLS must never be reported as a
+    completed restore.
     """
     import asyncio
 
     from modulo.db.bootstrap_role import bootstrap_roles
 
+    app_role = _url_role(app_url) or "<unknown>"
+    click.echo(f"Re-applying role/grant posture for application role {app_role!r}...")
     try:
         asyncio.run(bootstrap_roles(admin_url, app_url))
-        click.echo("  Role posture re-verified via the promoted bootstrap path")
     except Exception as exc:
         _log.exception("restore_posture_verification_failed")
-        click.echo(
-            f"WARNING: role-posture verification FAILED ({exc}) — run bootstrap manually before serving.",
-            err=True,
-        )
+        raise RestorePostureError(
+            "Role-posture verification FAILED after the restore — the restored cluster must not "
+            f"serve traffic yet. Failing check: {type(exc).__name__}: {exc}. The application role "
+            f"{app_role!r} may still be able to bypass RLS or be missing its grants. Remediation: "
+            "fix the reported problem, then run 'uv run python -m modulo.db.bootstrap_role' (with "
+            "DATABASE_ADMIN_URL and DATABASE_URL set) to re-apply the posture before starting the "
+            "application."
+        ) from exc
+    click.echo("  Role posture re-verified via the promoted bootstrap path")
 
 
 def _collation_versions_same_family(stored: str, detected: str) -> bool:
@@ -1300,6 +1363,7 @@ class _RestoreOptions:
 
     backup_dir: Path
     db_url: str | None
+    app_db_url: str | None
     yes: bool
     previous_fernet_key: str | None
     dry_run: bool
@@ -1315,9 +1379,11 @@ def _run_restore(opts: _RestoreOptions) -> None:
     --dry-run preview short-circuit), the pre-restore safety dump, the
     database-cluster restore (SQL dump, checkpoint JSON exports, credential
     re-encryption, collation drift check), then launcher data-dir adoption
-    and the promoted bootstrap role-posture re-run. Any failure is logged,
-    echoed, and re-raised as a ClickException; a data-dir lock taken before
-    the phases is always released.
+    and the promoted bootstrap role-posture re-run. The app role is resolved
+    from configuration (``--app-db-url``, else ``DATABASE_URL``) — never from
+    the restore target URL — and a posture failure FAILS the restore. Any
+    failure is logged, echoed, and re-raised as a ClickException; a data-dir
+    lock taken before the phases is always released.
     """
     raw_url = _resolve_url(opts.db_url)
     settings = get_settings()
@@ -1348,10 +1414,15 @@ def _run_restore(opts: _RestoreOptions) -> None:
         _restore_data_dir(opts, manifest)
 
         admin_url = os.environ.get("DATABASE_ADMIN_URL") or raw_url
-        app_url = raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        app_url = _resolve_restore_app_url(settings, opts.app_db_url)
         _ensure_restore_posture(admin_url, app_url)
 
         click.echo("\nRestore complete.")
+    except click.ClickException:
+        # Already a user-facing failure (including RestorePostureError) with
+        # its own remediation message and non-zero exit — do not re-wrap it.
+        _log.exception("Restore failed")
+        raise
     except Exception as exc:
         _log.exception("Restore failed")
         click.echo(f"Restore failed: {exc}", err=True)
@@ -1751,6 +1822,14 @@ def backup(db_url: str | None, output_dir: Path | None, data_dir: Path | None, i
     default=None,
     help="Database URL override (default: from settings / DATABASE_URL env)",
 )
+@click.option(
+    "--app-db-url",
+    default=None,
+    help=(
+        "Connection URL of the APPLICATION role whose RLS posture and grants the restore "
+        "re-applies (default: DATABASE_URL from settings). Never derived from --db-url."
+    ),
+)
 @click.option("--yes", "-y", is_flag=True, default=False, help="Skip confirmation prompt")
 @click.option(
     "--previous-fernet-key",
@@ -1794,6 +1873,7 @@ def backup(db_url: str | None, output_dir: Path | None, data_dir: Path | None, i
 def restore(
     backup_dir: Path,
     db_url: str | None,
+    app_db_url: str | None,
     yes: bool,
     previous_fernet_key: str | None,
     dry_run: bool,
@@ -1810,9 +1890,13 @@ def restore(
     transaction, re-inserts checkpoint_blobs from the JSON export,
     re-encrypts credentials if the FERNET_KEY has changed, re-ADOPTS the
     launcher artefacts only after the database restore SUCCEEDS, re-runs the
-    promoted bootstrap role-posture check, and checks collation-version drift
-    (incompatible families REFUSE the restore; same-family drift warns and
-    proceeds). With --dry-run, validates integrity and previews every step
+    promoted bootstrap role-posture check for the APPLICATION role — resolved
+    from ``--app-db-url`` or ``DATABASE_URL``, never from ``--db-url`` — and
+    checks collation-version drift. A role-posture failure FAILS the restore
+    (non-zero exit naming the check), because a restored cluster whose app
+    role can still bypass RLS must not be reported as complete. Incompatible
+    collation families REFUSE the restore; same-family drift warns and
+    proceeds. With --dry-run, validates integrity and previews every step
     without touching the database. Against a launcher data dir, takes the
     exclusive lock (a still running launcher refuses with its holder PID).
     """
@@ -1820,6 +1904,7 @@ def restore(
         _RestoreOptions(
             backup_dir=backup_dir,
             db_url=db_url,
+            app_db_url=app_db_url,
             yes=yes,
             previous_fernet_key=previous_fernet_key,
             dry_run=dry_run,

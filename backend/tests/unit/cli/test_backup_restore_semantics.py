@@ -17,7 +17,8 @@ import json
 import os
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import urlsplit
 
 import click
 import pytest
@@ -26,8 +27,10 @@ from click.testing import CliRunner
 import modulo.cli.backup as backup_mod
 from modulo.cli.backup import (
     MANIFEST_VERSION,
+    RestorePostureError,
     _fernet_key_hash,
     _record_last_backup,
+    _restore_checkpoints_sync,
     cli,
 )
 from modulo.launcher.state import LauncherState, load_state, save_state
@@ -506,6 +509,125 @@ def test_restore_reruns_promoted_posture_bootstrap(tmp_path: Path) -> None:
     assert app_url.startswith("postgresql+asyncpg://")
     assert admin_url.startswith("postgresql://")
     assert admin_url
+
+
+def test_restore_resolves_app_role_from_configuration_not_db_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FAR-2021: the app role comes from DATABASE_URL, never from --db-url.
+
+    A restore run through the ADMIN URL must not configure the admin role as
+    the application role — assert the RESOLVED roles, not that a call happened.
+    """
+    monkeypatch.delenv("DATABASE_ADMIN_URL", raising=False)
+    archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
+    posture_mock = MagicMock()
+    with contextlib.ExitStack() as stack:
+        _enter_restore_patches(stack, lock=MagicMock())
+        stack.enter_context(patch("modulo.cli.backup._ensure_restore_posture", posture_mock))
+        args = [
+            "restore",
+            str(archive),
+            "--yes",
+            "--db-url",
+            "postgresql://modulo_admin:adminpw@127.0.0.1:5432/modulo",
+        ]
+        result = CliRunner().invoke(cli, args)
+    assert result.exit_code == 0, result.output
+    admin_url, app_url = posture_mock.call_args[0]
+    # settings.database_url in this suite is postgresql+asyncpg://modulo:pw@...
+    assert urlsplit(app_url).username == "modulo"
+    assert urlsplit(admin_url).username == "modulo_admin"
+    assert app_url.startswith("postgresql+asyncpg://")
+
+
+def test_restore_app_db_url_option_overrides_configuration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-2021: --app-db-url is the explicit override for a different app role."""
+    monkeypatch.delenv("DATABASE_ADMIN_URL", raising=False)
+    archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
+    posture_mock = MagicMock()
+    with contextlib.ExitStack() as stack:
+        _enter_restore_patches(stack, lock=MagicMock())
+        stack.enter_context(patch("modulo.cli.backup._ensure_restore_posture", posture_mock))
+        args = [
+            "restore",
+            str(archive),
+            "--yes",
+            "--db-url",
+            "postgresql://modulo_admin:adminpw@127.0.0.1:5432/modulo",
+            "--app-db-url",
+            "postgresql://modulo_app:apppw@127.0.0.1:5432/modulo",
+        ]
+        result = CliRunner().invoke(cli, args)
+    assert result.exit_code == 0, result.output
+    _admin_url, app_url = posture_mock.call_args[0]
+    assert urlsplit(app_url).username == "modulo_app"
+
+
+def test_restore_fails_when_posture_verification_fails(tmp_path: Path) -> None:
+    """FAR-2021: a posture failure FAILS the restore (non-zero) and names the check."""
+    archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
+    failure = RestorePostureError(
+        "Role-posture verification FAILED after the restore. Failing check: RuntimeError: modulo_app can bypass RLS."
+    )
+    with contextlib.ExitStack() as stack:
+        _enter_restore_patches(stack, lock=MagicMock())
+        stack.enter_context(patch("modulo.cli.backup._ensure_restore_posture", side_effect=failure))
+        result = CliRunner().invoke(cli, ["restore", str(archive), "--yes"])
+    assert result.exit_code != 0
+    assert "modulo_app can bypass RLS" in result.output
+    assert "Restore complete" not in result.output
+
+
+def test_ensure_restore_posture_raises_typed_error_naming_the_check() -> None:
+    """FAR-2021: the posture helper itself raises, naming the failing check."""
+    failing = AsyncMock(side_effect=RuntimeError("modulo_app has BYPASSRLS"))
+    with patch("modulo.db.bootstrap_role.bootstrap_roles", failing), pytest.raises(RestorePostureError) as excinfo:
+        backup_mod._ensure_restore_posture(
+            "postgresql://modulo_admin:adminpw@127.0.0.1:5432/modulo",
+            "postgresql+asyncpg://modulo_app:apppw@127.0.0.1:5432/modulo",
+        )
+    assert "RuntimeError" in excinfo.value.message
+    assert "modulo_app has BYPASSRLS" in excinfo.value.message
+    assert "modulo_app" in excinfo.value.message
+
+
+def test_restore_carries_nullable_checkpoint_type_through_json_export(tmp_path: Path) -> None:
+    """FAR-2022: a non-null ``checkpoints.type`` survives the JSON restore.
+
+    ``type`` is nullable, so dropping it from the INSERT raised nothing and
+    silently lost the value on every restore.
+    """
+    archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
+    records = [
+        {
+            "organisation_id": "00000000-0000-0000-0000-000000000001",
+            "thread_id": "t1",
+            "checkpoint_ns": "ns",
+            "checkpoint_id": "cp1",
+            "parent_checkpoint_id": None,
+            "type": "msgpack",
+            "checkpoint": {"key": "val"},
+            "metadata": {"src": "test"},
+        }
+    ]
+    (archive / "checkpoints.json").write_text(json.dumps(records), encoding="utf-8")
+
+    cursor = MagicMock()
+    conn = MagicMock()
+    conn.__enter__.return_value = conn
+    conn.cursor.return_value.__enter__.return_value = cursor
+    with patch("modulo.cli.backup.psycopg.connect", return_value=conn):
+        restored = _restore_checkpoints_sync(
+            "postgresql://localhost/db",
+            json.loads((archive / "checkpoints.json").read_text(encoding="utf-8")),
+        )
+
+    assert restored == 1
+    sql, params = cursor.execute.call_args_list[1][0]
+    columns = [column.strip() for column in sql[sql.index("(") + 1 : sql.index(")")].split(",")]
+    assert "type" in columns
+    assert params[columns.index("type")] == "msgpack"
 
 
 #    QA gate fixes: directory modes, identity round-trip, restore safety

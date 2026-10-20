@@ -201,3 +201,27 @@ uv run scripts/restore.py --input backup.tar.gz.enc --data-only
 If restoring to a new environment, update `FERNET_KEY` and `SECRET_KEY` in
 the application `.env` file. All existing encrypted data (connector
 credentials, audit chains) will be re-encrypted on first access.
+
+## `modulo restore`: database roles and posture
+
+`modulo restore <backup-dir>` finishes by re-running the same first-boot role
+bootstrap the application runs, so the restored cluster ends up with the
+posture the application expects: the app role cannot bypass RLS, the system and
+break-glass roles can, and every grant is re-applied.
+
+- **Which role is the app role?** It is resolved from configuration, never from
+  the restore target: `--app-db-url` if given, otherwise `DATABASE_URL` from
+  settings. `--db-url` (and `DATABASE_ADMIN_URL`) is the privileged connection
+  the restore itself writes through; using it as the app role would configure
+  the admin role and leave the real app role untouched.
+- **A posture failure fails the restore.** If the bootstrap raises, `modulo
+  restore` exits non-zero and names the failing check. The data is already
+  restored at that point, but the cluster must not serve traffic until the
+  posture is fixed: correct the reported problem, then run
+  `uv run python -m modulo.db.bootstrap_role` (with `DATABASE_ADMIN_URL` and
+  `DATABASE_URL` set) before starting the application.
+- **A restore into a cluster that uses a different app role** needs
+  `--app-db-url` pointing at that role's connection URL.
+
+`scripts/restore.py` (the encrypted-archive tool documented above) does not
+perform this step; it applies the archive only.
