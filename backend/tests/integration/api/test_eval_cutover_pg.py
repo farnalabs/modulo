@@ -471,18 +471,41 @@ async def test_guardrail_config_reapply_upserts_with_version_snapshot(
 
 async def test_eval_definitions_table_shape_unchanged(db_engine: AsyncEngine) -> None:
     """Criterion 14 - reflect ``eval_definitions`` from the migrated schema
-    and compare against the ORM model's column set (chunk 1's inspect
-    assertion carried forward)."""
-    from sqlalchemy import inspect
+    and compare against its frozen column set.
 
-    from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionModel
+    The legacy ORM entity was deleted (FAR-1961); the table itself must stay
+    byte-for-byte shape-compatible until a later slice drops it, so the
+    expected columns are frozen here rather than read from a model.
+    """
+    from sqlalchemy import inspect
 
     def _reflect(sync_conn):
         return sorted(c["name"] for c in inspect(sync_conn).get_columns("eval_definitions"))
 
     async with db_engine.connect() as conn:
         columns = await conn.run_sync(_reflect)
-    expected = sorted(col.name for col in EvalDefinitionModel.__table__.columns)
+    expected = sorted(
+        [
+            "account_id",
+            "config_json",
+            "created_at",
+            "deleted_at",
+            "deleted_by",
+            "eval_suite_id",
+            "eval_type",
+            "failure_behaviour",
+            "id",
+            "name",
+            "node_id",
+            "organisation_id",
+            "pass_threshold",
+            "pipeline_id",
+            "pre_version_raw",
+            "suite_id",
+            "updated_at",
+            "version",
+        ]
+    )
     assert columns == expected
 
 

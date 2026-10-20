@@ -2,7 +2,6 @@
 
 import asyncio
 import datetime
-import hashlib
 import uuid
 from decimal import Decimal
 from typing import Any
@@ -16,7 +15,6 @@ from modulo.core.trigger_engine.polling import (
     _count_active_runs,
     _daily_spend_limit_reached,
     _fire_polling_trigger,
-    _log_poll_event,
     _set_rls_org,
     _update_next_fire,
     _update_next_fire_no_last,
@@ -446,7 +444,7 @@ class TestDailySpendLimit:
 
         with (
             patch("modulo.db.crud.run.create_run") as mock_cr,
-            patch("modulo.core.trigger_engine.polling._log_poll_event", new_callable=AsyncMock),
+            patch("modulo.core.cron_helpers._log_poll_event", new_callable=AsyncMock),
         ):
             result = await _fire_polling_trigger(
                 trigger_id=_TRIGGER_ID,
@@ -633,27 +631,6 @@ class TestPollingLogging:
         create_run_fn, _ = mock_create_run
         create_run_fn.assert_awaited_once()
         assert create_run_fn.call_args.kwargs["snapshot_id"] == uuid.UUID(int=0)
-
-    async def test_poll_event_has_meaningful_hash(self) -> None:
-        """_log_poll_event should compute a hash based on trigger id + result."""
-        session = AsyncMock()
-        session.add = MagicMock()
-        session.flush = AsyncMock()
-
-        trigger = MagicMock()
-        trigger.id = uuid.uuid4()
-        org_id = uuid.uuid4()
-
-        event = await _log_poll_event(
-            session,
-            trigger=trigger,
-            org_id=org_id,
-            result="condition_met",
-        )
-
-        expected_hash = hashlib.sha256(f"polling:{trigger.id}:condition_met".encode()).hexdigest()
-        assert event.raw_payload_hash == expected_hash
-        assert event.raw_payload_hash != hashlib.sha256(b"polling").hexdigest()
 
 
 # ---------------------------------------------------------------------------

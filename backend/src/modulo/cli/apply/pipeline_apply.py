@@ -345,6 +345,10 @@ def _create_payload(
         # stdout_retention_config — omission means null (inherit
         # org/instance default).
         "hitl_review_window_seconds": entity.hitl_review_window_seconds,
+        # FAR-1883: capacity-queue timeout — unconditional like its HITL
+        # sibling, so an explicit null (never expire, the default) writes
+        # through and the drift hash compares it.
+        "queue_timeout_seconds": entity.queue_timeout_seconds,
         "max_autonomy_level": entity.max_autonomy_level,
         "business_owner_id": business_owner_id,
         "reliability_owner_id": reliability_owner_id,
@@ -388,6 +392,10 @@ def _patch_payload(
         # stdout_retention_config, so the declared null must be able to CLEAR
         # a UI/API-set per-pipeline override (PipelineUpdate accepts null).
         "hitl_review_window_seconds": entity.hitl_review_window_seconds,
+        # FAR-1883: managed unconditionally like its HITL sibling — the
+        # declared value (or explicit null) must be able to set AND clear the
+        # per-pipeline capacity-queue timeout.
+        "queue_timeout_seconds": entity.queue_timeout_seconds,
         "business_owner_id": business_owner_id,
         "reliability_owner_id": reliability_owner_id,
     }
@@ -499,8 +507,23 @@ def _apply_one_pipeline(
     # persisted. The CLI never writes gate rows directly; the graph replace is
     # the single write surface (removal is by omission, which the server
     # translates into a soft-delete — never a hard-delete).
-    for change in policy_gate_changes(graph, current_graph):
-        report.setdefault("gate_changes", []).append({"pipeline": entity.name, **change})
+    #
+    # FAR-1973: the ``graph is not None`` guard is belt-and-braces and is INERT
+    # for every production input — a graphless entity never dispatches a graph
+    # write, so it must not diff a possibly-populated current side either.
+    # Today ``current_graph`` is always ``_EMPTY_GRAPH`` whenever ``graph`` is
+    # None because executor.py only fetches a stored graph for pipelines whose
+    # config declares one (``declared_names = {e.name for e in
+    # config.entities.pipelines if e.graph is not None}``), and
+    # ``policy_gate_changes(None, _EMPTY_GRAPH)`` yields nothing. This guard
+    # re-establishes that invariant locally at the function boundary — it does
+    # not verify the upstream fetch, it just refuses to diff when the entity
+    # declares no graph — because ``apply_pipelines`` is exported public API,
+    # so a future caller handing in a populated current graph with no desired
+    # graph cannot invent a spurious "gate removed" report.
+    if graph is not None:
+        for change in policy_gate_changes(graph, current_graph):
+            report.setdefault("gate_changes", []).append({"pipeline": entity.name, **change})
     # FAR-1530: converge a declared run_enabled (only ever false) by POSTing
     # the dedicated /pause route AFTER the field PATCH — pause is idempotent
     # server-side (first cause owns the reason), so this is safe when the

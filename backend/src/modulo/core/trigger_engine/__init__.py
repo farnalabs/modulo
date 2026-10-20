@@ -76,6 +76,7 @@ from modulo.core.release_channels import (
 )
 from modulo.core.run_admission import (
     coalesce_enabled,
+    count_trigger_slot_occupancy,
     derive_ci_failure_coalesce_key,
     derive_webhook_coalesce_key,
     evaluate_backpressure,
@@ -86,7 +87,7 @@ from modulo.db.crud.pipeline_snapshot_versioning import (
 from modulo.db.crud.run import WorkItemRefsRequiredError, coalesce_pending_run, create_run
 from modulo.db.lifecycle_refs import _RESERVED_INPUT_PAYLOAD_KEYS
 from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
+from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
@@ -270,10 +271,6 @@ _CI_FAILURE_COALESCE_WINDOW_SECONDS = 3600  # 1 hour
 # and would mute same-head re-failures for far too long.
 _CI_FAILURE_COALESCE_WINDOW_MAX_SECONDS = 7 * 24 * 60 * 60  # 7 days
 _REPLAY_WINDOW_SECONDS = 300  # ±300s for X-Modulo-Timestamp
-# Active (non-terminal) run statuses — single-sourced from the canonical set
-# in db.models.run (the never-entered ``waiting_for_lock`` sub-state was
-# excised in migration 0074/0075).
-_ACTIVE_STATUSES = ACTIVE_RUN_STATUSES
 
 
 # ---------------------------------------------------------------------------
@@ -685,10 +682,12 @@ class TriggerEngine:
             #
             # Accepted trade-offs (documented FAR-1034):
             #   * If the first fixer run for (pr, headSha) terminates WITHOUT
-            #     pushing a fix commit (crash/exhausted/no-fix), a same-head CI
+            #     pushing a fix commit (crash/exhausted/no-fix), a same-head
             #     re-fire within the window is deliberately suppressed. A NEW
-            #     commit always launches a fresh run, and the manual
-            #     branch-fixer.yml dispatch (no headSha) is never suppressed.
+            #     commit always launches a fresh run. branch-fixer.yml now
+            #     resolves and sends the PR's head SHA too, so its repeat
+            #     dispatches coalesce; a human bypasses that with the
+            #     `force: true` input, which omits headSha deliberately.
             #   * ci.yml's notify-main-failure sends headSha=github.sha, so a
             #     manually re-dispatched main CI run failing at the SAME sha
             #     within the window is suppressed — same broken commit, same
@@ -1236,14 +1235,18 @@ class TriggerEngine:
         return trigger
 
     async def _count_active_runs(self, session: AsyncSession, trigger_id: uuid.UUID) -> int:
-        result = await session.execute(
-            select(func.count()).where(
-                Run.trigger_id == trigger_id,
-                Run.status.in_(_ACTIVE_STATUSES),
-                Run.cancellation_requested.is_(False),
-            )
-        )
-        return int(result.scalar_one() or 0)
+        """Count the runs occupying this trigger's concurrency slots.
+
+        FAR-1999: a ``pending`` run counts only while it is inside the
+        create→dispatch grace window. A run that has been accepted but is
+        still queued (or capacity-deferred) is not executing and must not
+        hold a slot for the whole time it waits — the observed failure mode
+        was a single pending run occupying one of eight slots for ~50 minutes
+        with no live dispatch. Delegates to the shared
+        :func:`modulo.core.run_admission.count_trigger_slot_occupancy`, so
+        every trigger lane shares one implementation of the grace semantics.
+        """
+        return await count_trigger_slot_occupancy(session, trigger_id)
 
     async def _store_raw_payload(
         self,

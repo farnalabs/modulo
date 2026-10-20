@@ -55,6 +55,7 @@ from modulo.api.routes.admin_housekeeping import router as admin_housekeeping_ro
 from modulo.api.routes.admin_license import router as admin_license_router
 from modulo.api.routes.admin_monitor_config import router as admin_monitor_config_router
 from modulo.api.routes.admin_notifications import router as admin_notifications_router
+from modulo.api.routes.admin_org_mcp_authority import router as admin_org_mcp_authority_router
 from modulo.api.routes.admin_orgs import router as admin_orgs_router
 from modulo.api.routes.admin_rate_limits import router as admin_rate_limits_router
 from modulo.api.routes.admin_rotation import router as admin_rotation_router
@@ -841,6 +842,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     _configure_license_and_otel(settings)
     _discover_plugins(settings)
+    _configure_capacity_platform_probe(settings)
 
     logger.info("startup.starting")
     await _run_boot_guards_and_seeds(settings)
@@ -884,6 +886,33 @@ def _configure_license_and_otel(settings: Settings) -> None:
         service_name=settings.modulo_otel_service_name,
         telemetry_enabled=is_telemetry_enabled(),
     )
+
+
+def _configure_capacity_platform_probe(settings: Settings) -> None:
+    """Install the provider/platform DB-capacity probe (FAR-1992).
+
+    The probe lets a deployment whose DB volume is not mountable into the app
+    (Fly: separate app/DB machines) auto-detect capacity instead of pinning
+    ``DB_CAPACITY_BYTES``. Built by the infra/provider layer
+    (``modulo.core.capacity_providers``) and injected into the DB layer through
+    its port, so ``modulo.db`` never imports ``modulo.core``.
+
+    Fail-open end to end: a build/install failure (or an unconfigured provider)
+    leaves the port UNSET, which keeps the FAR-1882 behaviour - filesystem probe,
+    then ``none`` (inert) - and can never block startup.
+    """
+    try:
+        from modulo.core.capacity_providers import build_platform_capacity_probe
+        from modulo.db.capacity import set_platform_capacity_probe
+
+        probe = build_platform_capacity_probe(settings)
+        set_platform_capacity_probe(probe)
+        if probe is not None:
+            logger.info("startup.capacity_platform_probe_installed", extra={"provider": probe.name})
+        else:
+            logger.info("startup.no_capacity_platform_probe")
+    except Exception:
+        logger.warning("startup.capacity_platform_probe_failed", exc_info=True)
 
 
 def _discover_plugins(settings: Settings) -> None:
@@ -1268,6 +1297,7 @@ app.include_router(admin_tiers_router)
 app.include_router(admin_triggers_router)
 app.include_router(admin_housekeeping_router)
 app.include_router(admin_capacity_router)
+app.include_router(admin_org_mcp_authority_router)
 app.include_router(auth_router)
 app.include_router(sso_router)
 app.include_router(org_login_router)

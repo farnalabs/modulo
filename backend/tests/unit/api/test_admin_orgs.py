@@ -673,22 +673,22 @@ class TestResolveAuditPrincipal:
             is_system_admin=True,
         )
 
-    async def test_path_org_param_wins_over_the_claim(self) -> None:
+    def test_path_org_param_wins_over_the_claim(self) -> None:
         path_org = uuid4()
-        resolved = await resolve_audit_principal(
+        resolved = resolve_audit_principal(
             self._request({"org_id": str(path_org)}),
             self._system_admin(organisation_id=ORG_ID, org_role="admin"),
         )
         assert resolved.organisation_id == path_org
 
-    async def test_invalid_path_org_falls_back_to_the_claim(self) -> None:
-        resolved = await resolve_audit_principal(
+    def test_invalid_path_org_falls_back_to_the_claim(self) -> None:
+        resolved = resolve_audit_principal(
             self._request({"org_id": "not-a-uuid"}),
             self._system_admin(organisation_id=ORG_ID, org_role="admin"),
         )
         assert resolved.organisation_id == ORG_ID
 
-    async def test_no_org_anywhere_attributes_the_event_to_the_instance_partition(self) -> None:
+    def test_no_org_anywhere_attributes_the_event_to_the_instance_partition(self) -> None:
         """No organisation in the path or the claim: SYSTEM_ORG_ID, never a refusal.
 
         Was ``test_no_org_anywhere_raises_403`` — it pinned the 403 that made
@@ -698,7 +698,7 @@ class TestResolveAuditPrincipal:
         nothing. The wrapper only names the organisation the event is written
         against; access stays with the route's gate.
         """
-        resolved = await resolve_audit_principal(
+        resolved = resolve_audit_principal(
             self._request({}),
             self._system_admin(organisation_id=None, org_role=None),
         )

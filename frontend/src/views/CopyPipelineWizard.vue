@@ -16,7 +16,7 @@
         >
           <div
             class="flex items-center justify-center w-8 h-8 rounded-full text-sm font-medium transition-colors"
-            :class="step === i + 1 ? 'bg-primary text-primary-foreground' : step > i + 1 ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'"
+            :class="step === i + 1 ? 'bg-primary text-primary-foreground' : step > i + 1 ? 'bg-success/20 text-success-text' : 'bg-muted text-muted-foreground'"
             data-testid="copy-wizard-step-indicator"
           >
             <Check v-if="step > i + 1" :size="14" aria-hidden="true" />
@@ -230,22 +230,22 @@
               <h3 class="text-sm font-medium text-foreground mb-2">{{ $t('views.CopyPipelineWizard.copy_options') }}</h3>
               <ul class="space-y-1.5 text-sm">
                 <li class="flex items-center gap-2">
-                  <Check v-if="copyScope === 'all'" :size="14" aria-hidden="true" class="text-success" />
+                  <Check v-if="copyScope === 'all'" :size="14" aria-hidden="true" class="text-success-text" />
                   <X v-else :size="14" aria-hidden="true" class="text-muted-foreground" />
                   <span :class="copyScope === 'all' ? 'text-foreground' : 'text-muted-foreground'">{{ copyScope === 'all' ? $t('views.CopyPipelineWizard.all_nodes_will_be_copied') : $t('views.CopyPipelineWizard.selected_nodes_only') }}</span>
                 </li>
                 <li class="flex items-center gap-2">
-                  <Check v-if="keepEvalConfigs" :size="14" aria-hidden="true" class="text-success" />
+                  <Check v-if="keepEvalConfigs" :size="14" aria-hidden="true" class="text-success-text" />
                   <X v-else :size="14" aria-hidden="true" class="text-muted-foreground" />
                   <span :class="keepEvalConfigs ? 'text-foreground' : 'text-muted-foreground'">{{ keepEvalConfigs ? $t('views.CopyPipelineWizard.eval_configurations_preserved') : $t('views.CopyPipelineWizard.eval_configurations_excluded') }}</span>
                 </li>
                 <li class="flex items-center gap-2">
-                  <Check v-if="keepTriggers" :size="14" aria-hidden="true" class="text-success" />
+                  <Check v-if="keepTriggers" :size="14" aria-hidden="true" class="text-success-text" />
                   <X v-else :size="14" aria-hidden="true" class="text-muted-foreground" />
                   <span :class="keepTriggers ? 'text-foreground' : 'text-muted-foreground'">{{ keepTriggers ? $t('views.CopyPipelineWizard.triggers_preserved') : $t('views.CopyPipelineWizard.triggers_excluded') }}</span>
                 </li>
                 <li class="flex items-center gap-2">
-                  <Check v-if="shareConnectors" :size="14" aria-hidden="true" class="text-success" />
+                  <Check v-if="shareConnectors" :size="14" aria-hidden="true" class="text-success-text" />
                   <X v-else :size="14" aria-hidden="true" class="text-muted-foreground" />
                   <span :class="shareConnectors ? 'text-foreground' : 'text-muted-foreground'">{{ shareConnectors ? $t('views.CopyPipelineWizard.connector_bindings_shared') : $t('views.CopyPipelineWizard.connector_bindings_unbound') }}</span>
                 </li>
@@ -303,7 +303,7 @@
 
           <div v-else-if="progressStep === 'complete'" class="text-center py-8">
             <div class="w-12 h-12 rounded-full bg-success/20 flex items-center justify-center mx-auto mb-4">
-              <Check :size="24" aria-hidden="true" class="text-success" />
+              <Check :size="24" aria-hidden="true" class="text-success-text" />
             </div>
             <p class="text-lg font-medium text-foreground mb-1">{{ $t('views.CopyPipelineWizard.pipeline_copied') }}</p>
             <p class="text-sm text-muted-foreground mb-6">{{ $t('views.CopyPipelineWizard.is_ready_for_adaptation', { name: result?.name || '—' }) }}</p>

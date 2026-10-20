@@ -56,27 +56,22 @@ Gate semantics (fail-closed):
   Fail-closed so a broken pipeline never silently disables the gate.
   Use ``--allow-missing-reports`` for local runs where you may not have
   every report.
-- **No changed production lines** → SKIP, exit 0.  A test-only or docs-only
-  diff has no production files once the exclusions are applied.  A diff that
-  only adds comments, docstrings, or blank lines also skips — only
-  executable changed lines enter the coverage denominator (FAR-962).
-  "No changed production lines" means no executable production line was
-  added *and none was removed*: a diff whose only production change is a
-  DELETION does not skip (see "Deletions earn no coverage credit" below,
-  FAR-1317).
-- **Deletion-only production change** → FAIL, exit 1 (FAR-1317).  When
-  executable production lines are removed and none added, the gate fails
-  with a dedicated reason instead of skipping into a pass.  The gate cannot
-  tell a justified deletion from a load-bearing one, so it fails closed and
-  routes the change to review.
-- **Reviewer-approved deletion-only change** → SKIP-as-PASS, exit 0.  A
-  deletion-only diff is authorised only by an explicit, human-applied opt-in:
-  the PR's ``coverage: deletion-only-approved`` label, which the CI job
-  forwards as ``--allow-deletion-only-approved``.  This preserves the
-  fail-closed default (a bare deletion-only diff still FAILs) while letting a
-  reviewer accept a purely subtractive change (e.g. retiring a plan-feature
-  gate) without inventing coverage for code that no longer exists.  The
-  label is the authorisation — never pass the flag without it.
+- **No executable production lines added** → PASS with an explicit
+  exemption, exit 0.  A diff that adds no executable production line has
+  nothing for the changed-lines gate to measure: test-only, docs-only,
+  comment/docstring-only, and deletion-only diffs all take this path.  The
+  summary states the exemption verbatim (never a silent pass), so a reviewer
+  can see that coverage was not evaluated and why.  Only executable changed
+  lines enter the coverage denominator (FAR-962).
+- **Undeterminable added-line set** → FAIL, exit 1.  When ``git diff``
+  cannot establish which executable production lines the diff adds, the gate
+  fails closed: an unknown diff shape is never exempted by default.
+- **Reviewer-approved deletion-only change** → PASS rendered as an explicit
+  reviewer authorisation.  The PR's ``coverage: deletion-only-approved``
+  label (forwarded as ``--allow-deletion-only-approved``) does not change the
+  exit code — a deletion-only diff already passes under the no-added-lines
+  exemption — but it renders the pass distinctly so the human approval is an
+  auditable part of the summary.
 - **Changed production lines, but no coverage data for them** → FAIL,
   exit 1.  If production lines changed but diff-cover cannot match them to
   the coverage report (the report does not contain those files at all), every
@@ -127,15 +122,21 @@ was only restored by independent review on PR #1029.)
 
 - Deleted lines never enter the numerator or the denominator (FAR-962);
   they confer no credit.
-- A **deletion-only** production change FAILS with a dedicated reason
-  rather than skipping into a pass under the "no changed production
-  lines" rule.  The gate cannot distinguish a justified deletion from a
-  load-bearing one, so it fails closed and the change goes to review.
-  The one exception is an explicit reviewer opt-in: when the PR carries
-  the ``coverage: deletion-only-approved`` label (forwarded to this script
-  as ``--allow-deletion-only-approved``), a deletion-only diff is
-  authorised and skips into a pass.  A bare deletion-only diff still
-  FAILs — the override is never implicit.
+- A **deletion-only** production change PASSES under the no-added-lines
+  exemption (see "Gate semantics" above): it adds nothing to measure, and
+  failing it made every genuinely subtractive change structurally
+  impassable — the only way to clear the gate was to write tests for lines
+  the author never wrote.  Deletions still earn no credit (they never enter
+  the numerator or denominator) and the exemption is printed in the summary
+  rather than being silent.  A reviewer can apply the PR's
+  ``coverage: deletion-only-approved`` label to render the pass as an
+  explicit human approval instead.
+- Trade-off retained from the original rule: FAR-1317 made delete-to-green
+  fail closed after a Branch Fixer commit on PR #1022 deleted the
+  load-bearing ``expires_at IS NULL`` branch "to bring the changed-lines
+  coverage gate to 100%".  The gate no longer fails such a diff; reviewing
+  the deletion itself is a code-review responsibility, not a coverage-gate
+  one.
 - When a change **mixes deletions with additions**, the added lines alone
   must clear the real threshold: the ≤10-line tiny-diff exemption is
   withheld for any diff that removes executable production lines, so
@@ -724,7 +725,7 @@ def _count_python_added_lines(diff_text: str, filepath: str) -> int:
     return total
 
 
-def _count_added_lines(diff_range: str, filepath: str) -> int:
+def _count_added_lines(diff_range: str, filepath: str) -> int | None:
     """Count executable non-blank lines added to *filepath* within *diff_range*.
 
     Both arguments are regex fullmatch-bounded before they reach
@@ -734,11 +735,18 @@ def _count_added_lines(diff_range: str, filepath: str) -> int:
     counted.  Comments, docstrings, blank lines, and bracket/string
     continuation lines are excluded so they do not inflate the coverage
     denominator (FAR-962).
+
+    Returns ``None`` when the count cannot be established — an unsafe
+    path/range, a failed ``git diff`` invocation, or a non-zero exit.  The
+    caller MUST treat ``None`` as a gate failure: an undeterminable diff is
+    never the same thing as a diff that adds zero executable lines, and
+    conflating the two would let a broken ``git`` invocation exempt a diff
+    that actually adds uncovered code (fail closed).
     """
     safe_range = _safe_repo_path(diff_range)
     safe_path = _safe_repo_path(filepath)
     if safe_range is None or safe_path is None:
-        return 0
+        return None
     try:
         result = subprocess.run(
             ["git", "diff", _DIFF_FILTER, safe_range, "--", safe_path],
@@ -748,9 +756,9 @@ def _count_added_lines(diff_range: str, filepath: str) -> int:
             cwd=str(REPO_ROOT),
         )
     except Exception:
-        return 0
+        return None
     if result.returncode != 0:
-        return 0
+        return None
 
     # Determine language from extension for executable-line filtering.
     is_python = filepath.endswith(".py")
@@ -886,11 +894,12 @@ def _get_production_deletions(compare_branch: str, language: str) -> dict[str, i
 
     Counts executable lines REMOVED from non-excluded production files within
     ``<compare_branch>...HEAD`` (FAR-1317).  Deletions earn no coverage
-    credit, but the gate must see them to (a) refuse to let a deletion-only
-    change SKIP into a pass and (b) withhold the tiny-diff exemption from a
-    change that removes production code.  Only deletions of *executable*
-    lines count: removing comments, docstrings, or blank lines is not a
-    production deletion and still skips.
+    credit, but the gate must see them to (a) report a deletion-only diff as
+    an explicit no-added-lines exemption (or as a reviewer-authorised pass
+    when the approval flag is set) and (b) withhold the tiny-diff exemption
+    from a change that removes production code.  Only deletions of
+    *executable* lines count: removing comments, docstrings, or blank lines is
+    not a production deletion and does not withhold the tiny-diff exemption.
 
     Excluded paths (tests, migrations, scripts, generated code) are filtered
     with the same :func:`_is_excluded` rule as the added-line counter, so a
@@ -940,7 +949,7 @@ def _get_production_deletions(compare_branch: str, language: str) -> dict[str, i
     return deletions
 
 
-def _get_changed_production_files(compare_branch: str, language: str) -> dict[str, int]:
+def _get_changed_production_files(compare_branch: str, language: str) -> dict[str, int] | None:
     """Return {filepath: executable_line_count} for changed production files.
 
     Diffs ``<compare_branch>...HEAD`` (three-dot / merge-base, matching
@@ -948,19 +957,25 @@ def _get_changed_production_files(compare_branch: str, language: str) -> dict[st
     file.  Non-executable lines (comments, docstrings, blank lines) are
     excluded so they do not inflate the coverage denominator (FAR-962).
     Deleted lines are excluded by ``--diff-filter=ACM``.
-    Files matching the exclusion patterns are skipped.  Returns an empty
-    dict when the range is invalid or the diff fails.
+    Files matching the exclusion patterns are skipped.
+
+    Returns ``None`` — not an empty dict — when the added-line set cannot be
+    determined: an unsupported language, an invalid compare branch, a failed
+    ``git diff`` invocation, a non-zero exit, or a per-file count that cannot
+    be established.  ``evaluate`` fails closed on ``None`` so a broken diff
+    can never be mistaken for a diff that adds zero executable lines and be
+    silently exempted from the coverage gate.
     """
     pathspecs = _EXTENSIONS.get(language)
     if not pathspecs:
-        return {}
+        return None
     try:
         diff_range = _diff_range(compare_branch)
     except ValueError:
-        return {}
+        return None
     safe_range = _safe_repo_path(diff_range)
     if safe_range is None:
-        return {}
+        return None
     try:
         result = subprocess.run(
             ["git", "diff", _DIFF_FILTER, "--name-only", safe_range, "--", *pathspecs],
@@ -970,9 +985,9 @@ def _get_changed_production_files(compare_branch: str, language: str) -> dict[st
             cwd=str(REPO_ROOT),
         )
     except Exception:
-        return {}
+        return None
     if result.returncode != 0:
-        return {}
+        return None
 
     files: dict[str, int] = {}
     for line in result.stdout.strip().splitlines():
@@ -980,6 +995,10 @@ def _get_changed_production_files(compare_branch: str, language: str) -> dict[st
         if not filepath or _is_excluded(filepath):
             continue
         count = _count_added_lines(diff_range, filepath)
+        if count is None:
+            # One file's count being undeterminable makes the whole set
+            # unknown — never under-count it to zero (fail closed).
+            return None
         if count > 0:
             files[filepath] = count
     return files
@@ -1460,15 +1479,22 @@ class GateResult:
     branch_threshold: int = 0
     # Executable production lines removed by this diff (FAR-1317).  Deletions
     # earn no coverage credit: this never enters the numerator or the
-    # denominator.  It is diagnostic (summary note) and drives two decisions
-    # in ``evaluate``: a deletion-only diff FAILs instead of skipping, and the
-    # tiny-diff exemption is withheld when it is non-zero.
+    # denominator.  It is diagnostic (summary note) and withholds the
+    # tiny-diff exemption when non-zero in a mixed change.  A deletion-only
+    # diff no longer fails: it is exempt because it adds nothing to measure
+    # (see ``no_added_lines_exempt``).
     deleted_lines: int = 0
+    # True when the diff adds no executable production lines at all, so the
+    # changed-lines coverage gate has nothing to measure.  The result is a
+    # PASS rendered with an explicit exemption in the summary — never a
+    # silent pass.  Distinct from ``skipped`` (which also covers missing
+    # reports and other not-evaluated cases) so the exemption is auditable.
+    no_added_lines_exempt: bool = False
     # True when a deletion-only diff was explicitly authorised by a reviewer
     # (the PR's ``coverage: deletion-only-approved`` label, forwarded as
-    # ``--allow-deletion-only-approved``).  Such a result is a SKIP-as-PASS:
-    # it never carries a FAIL, but it is rendered distinctly so the override
-    # is visible in the summary as an audit trail.
+    # ``--allow-deletion-only-approved``).  A deletion-only diff already
+    # passes under ``no_added_lines_exempt``; this flag preserves the
+    # distinct reviewer-authorised rendering as an audit trail.
     deletion_only_approved: bool = False
 
     def summary(self) -> str:
@@ -1477,6 +1503,8 @@ class GateResult:
                 f"[{self.language}] PASS — deletion-only change authorised by reviewer "
                 f"({self.deleted_lines} deleted line(s); coverage: deletion-only-approved)"
             )
+        if self.no_added_lines_exempt:
+            return f"[{self.language}] PASS — coverage gate exempt: {self.skip_reason}"
         if self.skipped:
             return f"[{self.language}] SKIPPED — {self.skip_reason}"
         if self.tiny_diff:
@@ -1871,14 +1899,21 @@ def _empty_diff_gate(
     deleted_lines: int,
     allow_deletion_only: bool,
 ) -> GateResult:
-    """Gate result when the diff adds no executable production lines (FAR-1317).
+    """Gate result when the diff adds no executable production lines.
 
-    A deletion-only production change FAILs instead of skipping into a pass —
-    the gate cannot tell a justified deletion from a load-bearing one, so it
-    fails closed.  A diff with neither additions nor deletions (test-only,
-    docs-only, or comment-only) is a skip.  When *allow_deletion_only* is set
-    (the reviewer applied the ``coverage: deletion-only-approved`` label), a
-    deletion-only diff is authorised and skips as a pass instead of failing.
+    A diff that adds nothing executable has nothing for the changed-lines
+    gate to measure — a test/docs/comment-only change, or a purely
+    subtractive (deletion-only) change.  It PASSES with an explicit
+    exemption in the summary rather than failing: failing a deletion-only
+    change made every genuinely subtractive PR structurally impassable, and
+    the only way to clear it was to write tests for lines that were never
+    written (coverage theatre).  Deletions still earn no coverage credit —
+    they never enter the numerator or the denominator.
+
+    When *allow_deletion_only* is set (the reviewer applied the
+    ``coverage: deletion-only-approved`` label), a deletion-only diff is
+    rendered distinctly as a reviewer-authorised pass; the exit code is
+    already 0 either way.
     """
     if deleted_lines > 0:
         if allow_deletion_only:
@@ -1899,26 +1934,32 @@ def _empty_diff_gate(
             )
         return GateResult(
             language=language,
-            skipped=False,
+            skipped=True,
             skip_reason=(
-                f"deletion-only production change: {deleted_lines} executable line(s) in "
-                f"{len(deleted_files)} file(s) removed and none added — deletions earn no "
-                "coverage credit and cannot pass the gate (FAR-1317)"
+                f"no executable production lines added ({deleted_lines} executable line(s) "
+                f"in {len(deleted_files)} file(s) removed and none added) — there is nothing "
+                "for the changed-lines coverage gate to measure (FAR-1317: deletions earn no "
+                "coverage credit)"
             ),
-            passed=False,
+            passed=True,
             actual_pct=None,
             threshold=fail_under,
             changed_lines=0,
             deleted_lines=deleted_lines,
+            no_added_lines_exempt=True,
         )
     return GateResult(
         language=language,
         skipped=True,
-        skip_reason="no changed production lines in this diff",
+        skip_reason=(
+            "no executable production lines added or removed in this diff — there is "
+            "nothing for the changed-lines coverage gate to measure"
+        ),
         passed=True,
         actual_pct=None,
         threshold=fail_under,
         changed_lines=0,
+        no_added_lines_exempt=True,
     )
 
 
@@ -2037,9 +2078,11 @@ def evaluate(
     When True (local convenience), a missing report is a skip.
 
     When *allow_deletion_only* is True, a deletion-only production diff is
-    authorised and skips as a pass (the reviewer applied the PR's
-    ``coverage: deletion-only-approved`` label).  It has no effect on any
-    other outcome — a bare deletion-only diff still FAILs.
+    rendered as an explicit reviewer-authorised pass (the reviewer applied
+    the PR's ``coverage: deletion-only-approved`` label).  The exit code is
+    0 either way — a deletion-only diff already passes under the
+    no-added-lines exemption — and the flag has no effect on any other
+    outcome, so it can never rescue a mixed change that adds uncovered lines.
 
     The gate detects unmeasured files by comparing the executable changed
     production lines (from ``git diff``, excluding comments/docstrings/blanks)
@@ -2048,19 +2091,43 @@ def evaluate(
     come from the same production-only file set.
 
     Deletions (FAR-1317): executable production lines removed by the diff
-    are counted separately (never credited) and drive two decisions — a
-    deletion-only diff FAILs instead of skipping into a pass, and the
-    tiny-diff exemption is withheld when any production line was removed.
+    are counted separately (never credited).  A deletion-only diff — and any
+    other diff that adds no executable production line — PASSES under an
+    explicit no-added-lines exemption rather than failing; a mixed change is
+    scored on its added lines alone and the tiny-diff exemption is withheld
+    when production lines were removed.
+
+    Fail-closed: if the added-line set cannot be determined (git diff failed
+    or returned non-zero), the language FAILS rather than being exempted as
+    if the diff added nothing.
     """
     # --- Get changed production files and count executable added lines ---
     changed_files = _get_changed_production_files(compare_branch, language)
-    changed_lines = sum(changed_files.values())
 
     # --- Count deleted executable production lines (FAR-1317) ---
     deleted_files = _get_production_deletions(compare_branch, language)
     deleted_lines = sum(deleted_files.values())
 
-    # --- No added production lines: a deletion-only change FAILs (never SKIPs) ---
+    # --- Undeterminable added-line set: FAIL closed, never exempt ---
+    if changed_files is None:
+        return GateResult(
+            language=language,
+            skipped=False,
+            skip_reason=(
+                "could not determine the executable production lines this diff adds "
+                "(git diff failed or returned non-zero) — failing closed rather than "
+                "treating an unknown diff as adding no lines"
+            ),
+            passed=False,
+            actual_pct=None,
+            threshold=fail_under,
+            changed_lines=0,
+            deleted_lines=deleted_lines,
+        )
+
+    changed_lines = sum(changed_files.values())
+
+    # --- No added production lines: PASS with an explicit exemption ---
     if changed_lines == 0:
         return _empty_diff_gate(language, fail_under, deleted_files, deleted_lines, allow_deletion_only)
 
@@ -2179,6 +2246,11 @@ def _write_summary(results: list[GateResult]) -> None:
             # SKIP-as-PASS authorised by the PR's coverage: deletion-only-approved
             # label.  Distinct status so the override is visible in the summary.
             status = "PASS (deletion-only approved)"
+            pct = "—"
+            bpct = "—"
+        elif r.no_added_lines_exempt:
+            # Nothing added to measure: the pass is explicit, never silent.
+            status = "PASS (exempt — no added lines)"
             pct = "—"
             bpct = "—"
         elif r.skipped:
@@ -2317,10 +2389,11 @@ def _parse_args(argv: list[str]) -> Args:
         action="store_true",
         default=False,
         help=(
-            "Authorise a deletion-only production diff to skip as a pass instead of "
-            "failing closed (FAR-1317). CI sets this ONLY when the PR carries the "
-            "reviewer-applied 'coverage: deletion-only-approved' label; it is the "
-            "explicit human authorisation for a purely subtractive change."
+            "Render a deletion-only production diff as a reviewer-authorised pass (FAR-1317). "
+            "CI sets this ONLY when the PR carries the reviewer-applied "
+            "'coverage: deletion-only-approved' label. It no longer changes the exit code — a "
+            "deletion-only diff already passes under the no-added-lines exemption — but it "
+            "keeps the human approval visible in the summary."
         ),
     )
     parsed = parser.parse_args(argv)

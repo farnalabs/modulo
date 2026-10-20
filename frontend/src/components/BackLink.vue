@@ -27,7 +27,7 @@ defineProps<{
 }
 
 .back-link:hover {
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text));
 }
 
 .back-arrow {

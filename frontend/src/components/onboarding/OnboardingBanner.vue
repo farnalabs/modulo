@@ -20,7 +20,7 @@
             :stroke-dashoffset="dashOffset"
           />
         </svg>
-        <span class="absolute inset-0 flex items-center justify-center text-xs font-semibold text-primary">
+        <span class="absolute inset-0 flex items-center justify-center text-xs font-semibold text-primary-text">
           {{ Math.round(store.progressPct) }}%
         </span>
       </div>
@@ -55,7 +55,7 @@
             :data-testid="`onboarding-action-${action.id}`"
           >
             <div class="flex h-6 w-6 shrink-0 items-center justify-center">
-              <svg v-if="action.completed" class="h-5 w-5 text-success" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <svg v-if="action.completed" class="h-5 w-5 text-success-text" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <circle cx="12" cy="12" r="10" />
                 <path d="m9 12 2 2 4-4" />
               </svg>
@@ -97,7 +97,7 @@
             Dismiss
           </button>
           <button type="button"
-            class="text-xs text-primary hover:underline"
+            class="text-xs text-primary-text hover:underline"
             @click="handleSeed"
             data-testid="onboarding-seed-examples"
           >

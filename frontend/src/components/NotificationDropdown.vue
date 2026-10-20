@@ -23,7 +23,7 @@
         <button
           type="button"
           data-testid="notification-mark-all-read"
-          class="rounded px-2 py-1 text-xs font-medium text-primary hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+          class="rounded px-2 py-1 text-xs font-medium text-primary-text hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="store.unreadCount === 0 || dismissingAll"
           @click="onDismissAll"
         >
@@ -78,7 +78,7 @@
         <button
           type="button"
           data-testid="notification-dropdown-retry"
-          class="mt-2 rounded px-2 py-1 text-xs font-medium text-primary hover:bg-muted"
+          class="mt-2 rounded px-2 py-1 text-xs font-medium text-primary-text hover:bg-muted"
           @click="store.fetchRecent()"
         >
           {{ $t("components.NotificationDropdown.retry") }}
@@ -121,7 +121,7 @@
         <router-link
           to="/notifications"
           data-testid="notification-dropdown-view-all"
-          class="text-xs font-medium text-primary hover:underline"
+          class="text-xs font-medium text-primary-text hover:underline"
           @click="$emit('close')"
         >
           {{ $t("components.NotificationDropdown.view_all") }}

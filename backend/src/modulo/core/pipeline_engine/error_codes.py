@@ -170,6 +170,23 @@ KNOWN_FIXES: tuple[KnownFix, ...] = (
         ),
         link="https://github.com/farnalabs/modulo/blob/main/docs/agent-config.md",
     ),
+    KnownFix(
+        fix_id="model_insufficient_funds",
+        signature="insufficient account funds",
+        title="Model provider account has insufficient funds (HTTP 402)",
+        body=(
+            'The model provider refused the request with HTTP 402 "Insufficient '
+            'account funds" — the provider account balance is exhausted, so every '
+            "run that calls it fails and a retry re-hits the same wall. Top up the "
+            "model provider's account balance (or point the agent at a backend with "
+            "credit), then re-run. This is a billing fault, not a transient gateway "
+            "error, so raising retries or node timeouts will not help."
+        ),
+        # No ``link``: the curated docs this KB points at (docs/agent-config.md)
+        # do not cover provider billing or credential top-up, and a link to an
+        # unrelated page would be worse than none. The actionable instruction
+        # lives in the body above.
+    ),
 )
 
 
@@ -560,6 +577,23 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity=None,
         guidance="Superseded by a newer run.",
     ),
+    # FAR-1883: a capacity-queued run whose PIPELINE set a ``queue_timeout`` and
+    # whose created_at ("time queued") passed that window. This is a
+    # SUPERSESSION, not a failure: the run is ENDED (status ``rejected``)
+    # before it ever started, so it is visible and filterable and gets its own
+    # analytics bucket, but it must never enter failure counts/thresholds or
+    # page anyone. Deliberately distinct from ``capacity.timeout`` (the retired
+    # 120-minute terminal-FAIL): reusing that code's meaning would collapse a
+    # supersession into a failure. The queue-state alert (FAR-1343/FAR-1344)
+    # is the escalation path and fires whether or not a timeout is configured.
+    "queue.expired": ErrorCodeSpec(
+        error_class="run",
+        retryable=False,
+        alert_severity=None,
+        guidance=(
+            "Waited in the capacity queue past this pipeline's queue_timeout; the run was superseded before it started."
+        ),
+    ),
     # FAR-1329: the dispatcher_reconcile AGE gate (``_terminalize_mid_graph_wedges``)
     # writes the raw ``no_progress`` spelling — registered (and aliased below) in
     # the same change that started writing it, so it never resolves through the
@@ -676,6 +710,21 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="The model backend rate-limited the request (detected from retained stdout).",
     ),
+    # A billing fault is a hard blocker, not a transient one: the provider
+    # answers HTTP 402 "Insufficient account funds" and EVERY retry hits the
+    # same wall (each one burns a sandbox dispatch).  Non-retryable and
+    # critical, like ``model_disabled`` — both are credential/billing faults
+    # that only an operator can clear.  Distinct from ``model.rate_limited``
+    # (a quota that recovers on its own) and ``model.provider_timeout``.
+    "model.insufficient_funds": ErrorCodeSpec(
+        error_class="model",
+        retryable=False,
+        alert_severity="critical",
+        guidance=(
+            "The model provider refused the request for lack of funds (HTTP 402) — "
+            "top up the provider account balance, then re-run; retrying cannot succeed."
+        ),
+    ),
     # --- capacity codes --------------------------------------------------
     _CODE_CAPACITY_ORG: ErrorCodeSpec(
         error_class="capacity",
@@ -695,11 +744,17 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity=None,
         guidance="Claim capacity exhausted.",
     ),
+    # HISTORICAL ONLY (FAR-1883): the stale-run sweep no longer writes
+    # ``capacity_timeout`` - capacity-queued runs wait indefinitely unless the
+    # pipeline opts into ``queue_timeout_seconds``, whose expiry writes the
+    # distinct ``queue.expired`` supersession code below. Retained so a
+    # pre-FAR-1883 row still resolves to its own class instead of
+    # ``harness.unknown``.
     "capacity.timeout": ErrorCodeSpec(
         error_class="capacity",
         retryable=True,
         alert_severity=None,
-        guidance="Capacity wait timed out.",
+        guidance="Capacity wait timed out (historical; superseded by queue.expired).",
     ),
     # --- hitl codes --------------------------------------------------------
     # FAR-648: the dispatcher_reconcile expired-HITL-gate terminalizer writes
@@ -939,6 +994,10 @@ LEGACY_ALIASES: dict[str, str] = {
     "model_provider_timeout": "model.provider_timeout",
     "model_connection": "model.connection",
     "model_rate_limited": "model.rate_limited",
+    # Sibling snake_case spelling for the HTTP 402 billing code, so the model
+    # family canonicalizes uniformly through ``map_legacy_code`` /
+    # ``expand_code_variants`` (a filter on either spelling resolves it).
+    "model_insufficient_funds": "model.insufficient_funds",
 }
 
 
@@ -1150,10 +1209,10 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     # the value-based connector redaction was not applied.
     re.compile(r"lin_api_[A-Za-z0-9]{20,}"),
     re.compile(r"(?:DD-API-KEY|DD-APPLICATION-KEY)[\s:=]+[0-9A-Fa-f]{32}"),
-    re.compile(r"(?i)n8n[\s_-]*(?:api[\s_-]*)?(?:key|token)[\s:=]+[A-Za-z0-9]{20,}"),
+    re.compile(r"(?i)n8n[\s_-]*(?:api[\s_-]*)?(?:key|token)[\s:=]+[A-Z0-9]{20,}"),
     re.compile(r"u\+[0-9A-Fa-f]{20,}"),
     re.compile(r"xapp-[A-Za-z0-9-]{10,}"),
-    re.compile(r"(?i)sentry[_-]?(?:auth[_-]?token|token|dsn)[\s:=]+[A-Za-z0-9]{32,}"),
+    re.compile(r"(?i)sentry[_-]?(?:auth[_-]?token|token|dsn)[\s:=]+[A-Z0-9]{32,}"),
 )
 
 # Hard control characters (NUL, bell, vertical tab, form feed, C0 except

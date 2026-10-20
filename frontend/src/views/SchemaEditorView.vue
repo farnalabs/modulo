@@ -62,7 +62,7 @@
           -->
           <ErrorAlert v-if="saveError" :message="saveError" :retryable="false" />
 
-          <div v-if="saveSuccess" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success">
+          <div v-if="saveSuccess" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success-text">
             {{ saveSuccess }}
           </div>
 

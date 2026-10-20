@@ -949,40 +949,49 @@ class TestStaleRunRecoverySweep:
 
         assert result["never_dispatched_swept"] == 0
         assert result["worker_lost_swept"] == 0
-        assert result["capacity_timeout_swept"] == 0
+        assert result["queue_expired_swept"] == 0
         assert result["saq_zero_progress_swept"] == 0
         assert result["stranded_capacity_redispatched"] == 0
-        # Per-org: org enumeration + set_config + the four UPDATE branches +
-        # the FAR-1715 zero-progress branch (its own set_config + UPDATE).
+        # Per-org: org enumeration + set_config + the four UPDATE branches
+        # (never-dispatched / queue-expired / stranded / worker-lost) + the
+        # FAR-1715 zero-progress branch (its own set_config + UPDATE).
         assert len(statements) == 8
         joined = " ".join(statements)
         assert "never_dispatched" in joined
         assert "RETURNING id, organisation_id" in joined
         assert "org_capacity_limited" in joined
         assert "pipeline_capacity" in joined
-        assert "capacity_timeout" in joined
+        assert "queue.expired" in joined
         assert "worker_lost" in joined
         assert ":nd_window" in joined
         assert ":redispatch_ttl" in joined
-        assert ":fail_ttl" in joined
-        assert ":ttl" in joined
+        assert "queue_timeout_seconds" in joined
         assert ":wl_window" in joined
+        # FAR-1883: there is NO instance-wide queued TTL any more - the queue
+        # expiry reads the per-pipeline ``queue_timeout_seconds``, so no
+        # ``:fail_ttl`` / ``:ttl`` bind exists.
+        assert ":fail_ttl" not in joined
+        assert ":ttl" not in joined
         # FAR-1623: the never-dispatched branch must not match a run the
         # heartbeat-stale reset already claimed (claim_count >= 1) nor a run
         # carrying the reset's heartbeat_stale marker. Pin the guards to the
-        # NEVER-DISPATCHED statement specifically — the capacity-timeout
-        # branch also contains "claim_count = 0", so asserting against the
-        # join would pass even if this guard were dropped.
+        # NEVER-DISPATCHED statement specifically — the stranded branch also
+        # carries the capacity markers, so asserting against the join would
+        # pass even if this guard were dropped.
         never_stmts = [s for s in statements if "error_code = 'never_dispatched'" in s]
         assert len(never_stmts) == 1
         never_stmt = never_stmts[0]
         assert "claim_count = 0" in never_stmt
         assert "error_code IS DISTINCT FROM 'heartbeat_stale'" in never_stmt
-        # The guards must not have landed on the capacity-timeout branch
-        # instead: that branch must NOT carry the heartbeat_stale exclusion.
-        capacity_stmts = [s for s in statements if "error_code = 'capacity_timeout'" in s]
-        assert len(capacity_stmts) == 1
-        assert "error_code IS DISTINCT FROM 'heartbeat_stale'" not in capacity_stmts[0]
+        # The guards must not have landed on the queue-expiry branch instead:
+        # that branch must NOT carry the heartbeat_stale exclusion.
+        expired_stmts = [s for s in statements if "error_code = 'queue.expired'" in s]
+        assert len(expired_stmts) == 1
+        assert "error_code IS DISTINCT FROM 'heartbeat_stale'" not in expired_stmts[0]
+        # It is a supersession, never a failure: the expiry must not write the
+        # ``failed`` status.
+        assert "status = 'failed'" not in expired_stmts[0]
+        assert "status = 'rejected'" in expired_stmts[0]
 
     async def test_explicit_windows_override_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         params_seen: list[dict[str, object]] = []
@@ -1035,13 +1044,16 @@ class TestStaleRunRecoverySweep:
 
         assert result["never_dispatched_swept"] == 1
         assert result["worker_lost_swept"] == 1
-        assert result["capacity_timeout_swept"] == 1
-        # params: [0]=enumeration, [1]=set_config, [2]=nd_window, [3]=redispatch,
-        # [4]=capacity, [5]=wl.
+        assert result["queue_expired_swept"] == 1
+        # params: [0]=enumeration, [1]=set_config, [2]=nd_window,
+        # [3]=queue-expiry, [4]=stranded, [5]=wl.
         assert params_seen[2]["nd_window"] == 300
-        assert params_seen[3]["redispatch_ttl"] == pe._STRANDED_REDISPATCH_TTL_MINUTES
-        assert params_seen[3]["fail_ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
-        assert params_seen[4]["ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
+        assert params_seen[3]["detail"] == ("Waited in the capacity queue past the pipeline's queue_timeout.")
+        # FAR-1883: the stranded branch no longer bounds its window with a
+        # global fail_ttl - only the per-pipeline queue_timeout can end a
+        # capacity-queued run.
+        assert "fail_ttl" not in params_seen[4]
+        assert params_seen[4]["redispatch_ttl"] == pe._STRANDED_REDISPATCH_TTL_MINUTES
         assert params_seen[5]["wl_window"] == 900
 
     async def test_stranded_capacity_blocked_run_is_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1095,7 +1107,7 @@ class TestStaleRunRecoverySweep:
             result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
 
         assert result["stranded_capacity_redispatched"] == 1
-        assert result["capacity_timeout_swept"] == 0
+        assert result["queue_expired_swept"] == 0
         assert result["redispatch_outcomes"] == {"enqueued": 1}
         redispatch_mock.assert_awaited_once_with(run_id, org_id)
 
@@ -1145,18 +1157,23 @@ class TestStaleRunRecoverySweep:
         assert result["stranded_capacity_redispatched"] == 0
         redispatch_mock.assert_not_awaited()
 
-    async def test_capacity_timeout_eligible_run_is_not_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A run already past the 120-min fail TTL must fail, never be resurrected."""
+    async def test_queue_expiry_run_is_not_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-1883: a capacity-queued run past its pipeline's queue_timeout is
+        ended as a supersession (``rejected`` / ``queue.expired``) by the
+        expiry branch and must never be re-dispatched by the stranded branch
+        in the same tick."""
         redispatch_mock = AsyncMock()
-        params_seen: list[dict[str, object]] = []
+        expired_run = uuid.uuid4()
+        org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
+        statements: list[str] = []
 
         class _AsyncResult:
-            rowcount = 0
+            def __init__(self, rowcount: int = 0, rows: list[Any] | None = None) -> None:
+                self.rowcount = rowcount
+                self._rows = rows or []
 
             def all(self) -> list[Any]:
-                return [org_row] if self._is_org else []
-
-        org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
+                return self._rows
 
         class _AsyncConn:
             # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
@@ -1175,10 +1192,16 @@ class TestStaleRunRecoverySweep:
                 return self
 
             async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
-                params_seen.append(params or {})
-                r = _AsyncResult()
-                r._is_org = "SELECT id FROM organisations" in str(stmt)
-                return r
+                s = str(stmt)
+                statements.append(s)
+                if "SELECT id FROM organisations" in s:
+                    return _AsyncResult(rows=[org_row])
+                # Only the queue-expiry branch matches a row: the expired run
+                # is status='rejected' by the time the stranded branch runs, so
+                # the stranded branch must return nothing for it.
+                if "error_code = 'queue.expired'" in s:
+                    return _AsyncResult(rowcount=1, rows=[(expired_run,)])
+                return _AsyncResult()
 
         class _AsyncEngine:
             def connect(self) -> _AsyncConn:
@@ -1188,20 +1211,22 @@ class TestStaleRunRecoverySweep:
         with patch.object(pe, "_re_dispatch_capacity_blocked", new=redispatch_mock):
             result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
 
+        assert result["queue_expired_swept"] == 1
         assert result["stranded_capacity_redispatched"] == 0
-        assert result["capacity_timeout_swept"] == 0
-        # The stranded branch bounds its window with the same fail_ttl as the
-        # capacity_timeout branch so the two never overlap.
-        assert params_seen[3]["fail_ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
         redispatch_mock.assert_not_awaited()
+        # The expiry runs BEFORE the stranded refresh, so the row it just
+        # rejected can never be re-selected (and re-dispatched) in the tick.
+        expiry_at = next(i for i, s in enumerate(statements) if "error_code = 'queue.expired'" in s)
+        stranded_at = next(i for i, s in enumerate(statements) if "SET heartbeat_at = now()" in s)
+        assert expiry_at < stranded_at
 
     async def test_terminalised_runs_record_facts(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-162 (P6'): every run terminalised by the sweep gets a
-        compensating daily fact — never_dispatched / capacity_timeout /
+        compensating daily fact — never_dispatched / queue.expired /
         worker_lost runs must be visible in the analytics failure/stall
         dimensions (the raw UPDATEs never run finalize_cost)."""
         never_run = uuid.uuid4()
-        cap_run = uuid.uuid4()
+        expired_run = uuid.uuid4()
         lost_run = uuid.uuid4()
         org_id = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
         records: list[tuple[Any, str, str]] = []
@@ -1238,8 +1263,8 @@ class TestStaleRunRecoverySweep:
                     return _AsyncResult()
                 if "never_dispatched" in s:
                     return _AsyncResult(rowcount=1, rows=[(never_run,)])
-                if "capacity_timeout" in s:
-                    return _AsyncResult(rowcount=1, rows=[(cap_run,)])
+                if "queue.expired" in s:
+                    return _AsyncResult(rowcount=1, rows=[(expired_run,)])
                 if "worker_lost" in s:
                     return _AsyncResult(rowcount=1, rows=[(lost_run,)])
                 return _AsyncResult()
@@ -1259,9 +1284,9 @@ class TestStaleRunRecoverySweep:
             result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
 
         assert result["never_dispatched_swept"] == 1
-        assert result["capacity_timeout_swept"] == 1
+        assert result["queue_expired_swept"] == 1
         assert result["worker_lost_swept"] == 1
-        assert sorted(r[1] for r in records) == sorted(str(r) for r in (never_run, cap_run, lost_run))
+        assert sorted(r[1] for r in records) == sorted(str(r) for r in (never_run, expired_run, lost_run))
         assert all(r[2] == str(org_id) for r in records)
 
     async def test_sweep_facts_write_failure_is_fail_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1373,9 +1398,9 @@ class TestStaleRunRecoverySweep:
             await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
 
         # params: [0]=enumeration, [1]=set_config, [2]=never_dispatched,
-        # [3]=stranded, [4]=capacity_timeout, [5]=worker_lost.
+        # [3]=queue_expired, [4]=stranded, [5]=worker_lost.
         assert params_seen[2]["detail"] == "Run was not dispatched within the stale threshold."
-        assert params_seen[4]["detail"] == "Waited in capacity queue past the TTL."
+        assert params_seen[3]["detail"] == ("Waited in the capacity queue past the pipeline's queue_timeout.")
         assert params_seen[5]["detail"] == "Worker lost heartbeat for this run."
 
     async def test_returns_error_dict_on_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:

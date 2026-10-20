@@ -199,7 +199,7 @@ const hasDetails = computed(
       <button
         type="button"
         data-testid="hitl-briefing-toggle"
-        class="mt-2 inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
+        class="mt-2 inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-xs font-medium text-primary-text hover:bg-primary/10"
         :aria-expanded="showDetails ? 'true' : 'false'"
         @click="showDetails = !showDetails"
       >

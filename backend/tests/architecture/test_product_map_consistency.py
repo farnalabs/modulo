@@ -479,6 +479,10 @@ OWNED_PAGES = {
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
+    "/admin/evidence-redaction": (
+        "frontend/src/views/AdminEvidenceRedactionView.vue",
+        "frontend/src/components/shared/ErrorAlert.vue",
+    ),
     "/admin/errors": (
         "frontend/src/views/AdminErrorsView.vue",
         "frontend/src/components/shared/FilterBar.vue",

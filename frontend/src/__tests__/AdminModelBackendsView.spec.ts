@@ -50,6 +50,7 @@ function mountView() {
     global: {
       stubs: {
         LoadingSpinner: true,
+        TableSkeleton: true,
         FeatureGate: { template: '<div><slot /></div>' },
       },
     },
@@ -72,6 +73,18 @@ beforeEach(() => {
 })
 
 describe('AdminModelBackendsView — list', () => {
+  it('shows the table skeleton while the initial GET is in flight', async () => {
+    mockGet.mockReturnValue(new Promise(() => {}))
+    const wrapper = mountView()
+    await nextTick()
+
+    const skeleton = wrapper.find('table-skeleton-stub')
+    expect(skeleton.exists()).toBe(true)
+    expect(skeleton.attributes('data-testid')).toBe('admin-model-backends-loading')
+    expect(skeleton.attributes('columns')).toBe('7')
+    wrapper.unmount()
+  })
+
   it('renders backends with provider, model id, credentials state and visibility', async () => {
     mockBackendsGet([
       backend('mb-1', { has_credentials: true }),
@@ -331,6 +344,35 @@ describe('AdminModelBackendsView — preset picker', () => {
 
     const vm = wrapper.vm as unknown as { formData: { default_params: string } }
     expect(vm.formData.default_params).toBe('')
+  })
+
+  it('renders an inline error when the presets GET fails and Retry re-fetches them', async () => {
+    let presetCalls = 0
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/model-backends') return { data: { items: [backend('mb-1')] }, error: undefined }
+      if (url === '/api/v1/model-backends/presets') {
+        presetCalls++
+        if (presetCalls === 1) return { data: undefined, error: { detail: 'presets down' } }
+        return { data: { items: [preset('openai')] }, error: undefined }
+      }
+      return { data: undefined, error: { detail: `unrouted: ${url}` } }
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openAddForm(wrapper)
+
+    const alert = wrapper.find('[data-testid="admin-model-backends-presets-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('presets down')
+
+    await alert.find('[data-testid="error-alert-retry"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(presetCalls).toBe(2)
+    expect(wrapper.find('[data-testid="admin-model-backends-presets-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="admin-model-backends-preset-openai"]').exists()).toBe(true)
   })
 
   it('shows preset description and docs link after selection', async () => {

@@ -886,9 +886,8 @@ async def connector_health_endpoint(
             # logs the full traceback + connector id rather than a bare
             # warning, matching the sibling ``ConnectorDecryptError`` arm.
             logger.exception(
-                "connectors.connector_health_endpoint.denied connector_id=%s: %s",
+                "connectors.connector_health_endpoint.denied connector_id=%s",
                 connector_id,
-                exc,
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

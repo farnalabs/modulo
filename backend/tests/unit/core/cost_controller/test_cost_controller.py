@@ -291,6 +291,33 @@ class TestCheckAndRecordSpend:
         assert org_refused.run_count == 0
         mock_session.flush.assert_awaited_once()
 
+    async def test_declared_only_run_zero_cost_approved_at_saturated_limit(self, mock_session: AsyncMock) -> None:
+        """FAR-1780: a run whose ONLY cost is the agent's declared
+        ``self_reported`` component bills 0 (the breakdown total is
+        billable-only) — at an EXACTLY-saturated limit (other runs already at
+        the limit, refinement rejected by the sum predicate), a declared-only
+        run approves because its ``cost_usd`` is 0."""
+        org_saturated = _make_daily_count_row(run_count=0, total_spend_usd=Decimal(0))
+        mock_session.execute = self._mock_execute(
+            self._scalar_one(Decimal(100)),  # org limit
+            self._scalar_one(Decimal(100)),  # created-at SUM already AT the limit
+        )
+        with patch("modulo.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_saturated)):
+            approved, reason = await check_and_record_spend(
+                mock_session,
+                org_id=_ORG_ID,
+                cost_usd=Decimal("0.000000"),
+                team_id=None,
+                run_id=uuid.uuid4(),
+                run_date=_TODAY,
+            )
+
+        assert approved is True
+        assert reason is None
+        assert org_saturated.run_count == 1
+        assert org_saturated.total_spend_usd == Decimal("0.000000")
+        assert org_saturated.refused_spend_usd is None or org_saturated.refused_spend_usd == Decimal(0)
+
     async def test_approves_with_team_under_both_limits(self, mock_session: AsyncMock) -> None:
         org_count = _make_daily_count_row(run_count=1, total_spend_usd=Decimal(30))
         team_count = _make_daily_count_row(team_id=_TEAM_ID, run_count=0, total_spend_usd=Decimal(10))

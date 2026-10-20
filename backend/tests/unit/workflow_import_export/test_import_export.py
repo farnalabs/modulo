@@ -43,6 +43,7 @@ import yaml
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 import modulo.core.workflow_import_export as mod
+from modulo.core.pipeline_engine.git_content import GitContentRefError
 from modulo.core.workflow_import_export import (
     _get_existing_names,
     _get_latest_published_version,
@@ -775,6 +776,8 @@ def _pipeline_fakes() -> dict[str, Any]:
         owner_team_id=uuid.uuid4(),
         account_id=_ACCOUNT_ID,
         visibility="org",
+        # FAR-1883: a bounded capacity-queue timeout must survive export.
+        queue_timeout_seconds=3600,
     )
     agent = SimpleNamespace(
         id=agent_id,
@@ -852,6 +855,7 @@ async def test_export_pipeline_bundle_builds_portable_zip(monkeypatch: pytest.Mo
     assert bundle["format_version"] == "1"
     assert bundle["pipeline"]["name"] == "My Pipeline"
     assert bundle["pipeline"]["node_timeout_seconds"] == 600
+    assert bundle["pipeline"]["queue_timeout_seconds"] == 3600
     assert bundle["pipeline"]["retry_policy"] == {"on": ["failure"], "max_retries": 2}
     assert "owner_team_id" not in bundle["pipeline"]
     assert bundle["pipeline"]["visibility"] == "org"
@@ -1065,6 +1069,47 @@ async def test_export_pipeline_bundle_carries_name_based_runner_bindings(monkeyp
     assert bundle["model_backends"] == [
         {"id": str(fakes["backend"].id), "name": "MB", "provider": "openai", "model_id": "gpt-4o"}
     ]
+
+
+async def test_export_pipeline_bundle_omits_binding_with_invisible_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A binding whose backend row is not visible is omitted with a warning,
+    never silently exported with a dangling backend name."""
+    fakes = _pipeline_fakes()
+    binding_row = SimpleNamespace(
+        model_backend_id=uuid.uuid4(),
+        target_env_var="OPENCODE_API_KEY",
+        source_field="api_key",
+    )
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    warning = Mock()
+    monkeypatch.setattr(mod.logger, "warning", warning)
+    session = AsyncMock()
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = fakes["pipeline"]
+    agents_result = MagicMock()
+    agents_result.scalars.return_value = [fakes["agent"]]
+    bindings_result = MagicMock()
+    bindings_result.scalars.return_value = [binding_row]
+    schemas_result = MagicMock()
+    schemas_result.scalars.return_value = [fakes["schema"]]
+    backends_result = MagicMock()
+    backends_result.scalars.return_value = []
+    edges_result = MagicMock()
+    edges_result.scalars.return_value = [fakes["edge"]]
+    session.execute = AsyncMock(
+        side_effect=[pipeline_result, agents_result, bindings_result, schemas_result, backends_result, edges_result]
+    )
+    session.get = AsyncMock(return_value=None)
+
+    data = await export_pipeline_bundle(session, fakes["pipeline"].id)
+    bundle = extract_bundle_json_from_zip(data)
+
+    assert "model_backend_bindings" not in bundle["agents"][0]
+    assert not bundle["model_backends"]
+    warning.assert_called_once()
+    assert "invisible model backend" in warning.call_args.args[0]
 
 
 # ---------------------------------------------------------------------------
@@ -1562,6 +1607,284 @@ async def test_materialize_rejects_unknown_owner_team() -> None:
         await materialize_import(_FakeSession(result), _ORG_ID, _ACCOUNT_ID, bundle, owner_team_id=uuid.uuid4())
 
 
+async def test_materialize_syncs_node_agent_commands_into_bound_agent_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-2008: bundle import is a graph writer and honours the FAR-488a sync.
+
+    The bundle carries an Agent whose ``agent_commands`` differ from the
+    commands on the graph node bound to it. Import must (a) materialise the
+    Agent row with the bundle's commands and (b) then sync the NODE's commands
+    over it in the same transaction, before the graph is persisted — because a
+    non-NULL Agent-row command wins at run-snapshot time
+    (``_apply_agent_fields``). Without the sync the created row keeps the
+    bundle's stale command and every imported run would execute it while the
+    graph claimed the node's command (the FAR-488 divergence).
+
+    Fails on the pre-FAR-2008 code: the sync call did not exist and
+    ``_base_agent_args`` dropped ``agent_commands`` entirely.
+    """
+    created = _patch_crud(monkeypatch)
+    export_agent_id = uuid.uuid4()
+    bundle_command = "opencode run -- bundle"
+    node_command = "opencode run -- node"
+    # The Agent row the importer just created, standing in for the real ORM row
+    # the sync re-reads by id: it carries the bundle's command, so the node's
+    # differing command is a real change the sync must write.
+    created_agent = SimpleNamespace(id=uuid.uuid4(), agent_commands=[bundle_command])
+    created["agent"].return_value = created_agent
+    agent_row_result = MagicMock()
+    agent_row_result.scalars.return_value = [created_agent]
+    bundle = _make_bundle(
+        pipeline={
+            "name": "Imported",
+            "description": "d",
+            "graph_nodes_json": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "agent_id": str(export_agent_id),
+                    "agent_commands": [node_command],
+                }
+            ],
+            "retry_policy": {},
+            "node_timeout_seconds": 900,
+            "run_context_defaults": {},
+        },
+        agents=[
+            {
+                "id": str(export_agent_id),
+                "name": "Agent A",
+                "prompt_template": "pt",
+                "agent_commands": [bundle_command],
+            }
+        ],
+    )
+
+    audit = AsyncMock()
+    monkeypatch.setattr(mod, "append_audit_event", audit)
+
+    await materialize_import(_FakeSession(agent_row_result), _ORG_ID, _ACCOUNT_ID, bundle)
+
+    assert created["agent"].await_args.kwargs["agent_commands"] == [bundle_command]
+    assert created_agent.agent_commands == [node_command]
+    # FAR-2008: import is the untrusted-input writer, so the sync that rewrites
+    # a created Agent row leaves a durable audit event naming the changed row.
+    audit.assert_awaited_once()
+    audit_kwargs = audit.await_args.kwargs
+    assert audit_kwargs["event_type"] == "pipeline.agent_commands_synced"
+    assert audit_kwargs["actor_user_id"] == _ACCOUNT_ID
+    assert audit_kwargs["resource_type"] == "pipeline"
+    assert audit_kwargs["payload_json"] == {
+        "agent_count": 1,
+        "agent_ids": [str(created_agent.id)],
+    }
+
+
+async def test_materialize_never_syncs_a_pre_existing_agent_the_bundle_does_not_declare(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-2008 trust boundary: a crafted bundle node may name an EXISTING
+    organisation Agent that the bundle does not declare.
+
+    ``_rewire_graph_nodes`` only rewrites ids present in ``agent_id_map``; an
+    unknown id is left verbatim. Passing every node to the org-scoped sync
+    would therefore let the bundle overwrite that pre-existing Agent row and
+    silently change unrelated pipelines. Only nodes bound to an Agent CREATED
+    by this import may be synced.
+    """
+    created = _patch_crud(monkeypatch)
+    sync_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr(mod, "sync_agent_row_commands", sync_mock)
+    existing_agent_id = uuid.uuid4()
+    bundle = _make_bundle(
+        pipeline={
+            "name": "Imported",
+            "description": "d",
+            "graph_nodes_json": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "agent_id": str(existing_agent_id),
+                    "agent_commands": ["hijack the existing agent"],
+                }
+            ],
+            "retry_policy": {},
+            "node_timeout_seconds": 900,
+            "run_context_defaults": {},
+        },
+        agents=[],
+    )
+
+    await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
+
+    created["agent"].assert_not_awaited()
+    sync_mock.assert_awaited_once()
+    assert not sync_mock.await_args.kwargs["nodes"]
+
+
+async def test_materialize_drops_malformed_agent_commands_with_a_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-2008: a bundle is untrusted input, so ``agent_commands`` is accepted
+    only as a non-empty list of non-empty strings. A mixed-type list is
+    dropped with a disclosed warning — never silently coerced into the JSONB
+    column (a malformed row would be materialised over bound nodes)."""
+    created = _patch_crud(monkeypatch)
+    bundle = _make_bundle(
+        agents=[
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Malformed Agent",
+                "prompt_template": "pt",
+                "agent_commands": ["opencode run -- ok", 3],
+            }
+        ],
+    )
+
+    result = await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
+
+    assert created["agent"].await_args.kwargs["agent_commands"] is None
+    assert any("malformed agent_commands" in warning for warning in result["warnings"])
+
+
+async def test_materialize_strips_malformed_node_agent_commands_before_the_sync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-2008: a node's malformed ``agent_commands`` never reaches the Agent row.
+
+    A bundle bypasses the typed node model, so the shared sync sees the raw
+    node dict. The sync now accepts only a clean ``list[str]`` and skips a
+    mixed list such as ``["ok", 3]`` entirely — but the imported GRAPH would
+    still carry the malformed value, claiming a command the row does not hold.
+    Import must strip the key from the node and disclose why.
+
+    Fails on the pre-fix code in two ways: the node keeps ``["ok", 3]``, and the
+    sync writes that non-str list into the just-created Agent row (which then
+    breaks ``AgentResponse`` validation for every ``GET /api/v1/agents``).
+    """
+    created = _patch_crud(monkeypatch)
+    export_agent_id = uuid.uuid4()
+    node_id = uuid.uuid4()
+    bundle_command = "opencode run -- bundle"
+    # The Agent row the importer just created; the sync re-reads it by id.
+    created_agent = SimpleNamespace(id=uuid.uuid4(), agent_commands=[bundle_command])
+    created["agent"].return_value = created_agent
+    agent_row_result = MagicMock()
+    agent_row_result.scalars.return_value = [created_agent]
+    audit = AsyncMock()
+    monkeypatch.setattr(mod, "append_audit_event", audit)
+    bundle = _make_bundle(
+        pipeline={
+            "name": "Imported",
+            "description": "d",
+            "graph_nodes_json": [
+                {
+                    "id": str(node_id),
+                    "agent_id": str(export_agent_id),
+                    "agent_commands": ["ok", 3],
+                }
+            ],
+            "retry_policy": {},
+            "node_timeout_seconds": 900,
+            "run_context_defaults": {},
+        },
+        agents=[
+            {
+                "id": str(export_agent_id),
+                "name": "Agent A",
+                "prompt_template": "pt",
+                "agent_commands": [bundle_command],
+            }
+        ],
+    )
+
+    result = await materialize_import(_FakeSession(agent_row_result), _ORG_ID, _ACCOUNT_ID, bundle)
+
+    imported_nodes = created["pipeline"].return_value.graph_nodes_json
+    assert len(imported_nodes) == 1
+    assert "agent_commands" not in imported_nodes[0]
+    # The sync skipped the malformed node, so the created row keeps the
+    # bundle's declared command instead of the node's non-str list.
+    assert created_agent.agent_commands == [bundle_command]
+    # Nothing was synced, so no attribution event was written either.
+    audit.assert_not_awaited()
+    warning = next(w for w in result["warnings"] if "malformed agent_commands" in w)
+    assert str(node_id) in warning
+    assert "Imported" in warning
+
+
+def test_strip_malformed_node_agent_commands_ignores_non_dict_nodes() -> None:
+    """FAR-2008: the strip helper tolerates non-dict entries in the raw node array.
+
+    ``graph_nodes_json`` is untrusted bundle JSON, so the array can contain a
+    scalar as well as a mapping. The helper must skip those entries instead of
+    dereferencing them (a ``TypeError`` here would fail the whole import), keep
+    a clean node's ``agent_commands`` intact, strip a malformed value from a
+    node bound to an Agent this import created, leave a node bound to a
+    pre-existing Agent untouched, and disclose exactly the one malformed node.
+    """
+    created_agent_id = str(uuid.uuid4())
+    foreign_agent_id = str(uuid.uuid4())
+    clean_node = {
+        "id": "clean",
+        "agent_id": created_agent_id,
+        "agent_commands": ["opencode run -- ok"],
+    }
+    malformed_node = {
+        "id": "malformed",
+        "agent_id": created_agent_id,
+        "agent_commands": ["ok", 3],
+    }
+    foreign_node = {
+        "id": "foreign",
+        "agent_id": foreign_agent_id,
+        "agent_commands": ["ok", 3],
+    }
+    graph_nodes: list[Any] = [None, "not-a-node", clean_node, malformed_node, foreign_node]
+    warnings: list[str] = []
+
+    mod._strip_malformed_node_agent_commands(graph_nodes, {created_agent_id}, "Imported", warnings)
+
+    # Non-dict entries are ignored in place - neither dropped nor dereferenced.
+    assert graph_nodes[0] is None
+    assert graph_nodes[1] == "not-a-node"
+    assert len(graph_nodes) == 5
+    # A clean value survives so the shared sync can still materialise it.
+    assert clean_node["agent_commands"] == ["opencode run -- ok"]
+    # The malformed value is stripped, and disclosed exactly once.
+    assert "agent_commands" not in malformed_node
+    assert warnings == [
+        "Node 'malformed' in imported pipeline 'Imported' declares malformed "
+        "agent_commands (expected a list of strings with at least one non-empty string). "
+        "The node commands will be omitted."
+    ]
+    # Trust boundary: a node bound to a pre-existing Agent is never rewritten.
+    assert foreign_node["agent_commands"] == ["ok", 3]
+
+
+async def test_materialize_rejects_unpinned_git_ref_in_bundled_agent_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-2008/FAR-220: importing ``agent_commands`` does not open a pin-gate
+    bypass — a bundle whose Agent commands carry an unpinned ``git+`` ref is
+    rejected before the Agent row is created, exactly like the Agent save
+    paths and the node-level sync."""
+    _patch_crud(monkeypatch)
+    unpinned = "git+https://github.com/example/repo.git@main#prompts/x.md"
+    bundle = _make_bundle(
+        agents=[
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Agent A",
+                "prompt_template": "pt",
+                "agent_commands": [unpinned],
+            }
+        ],
+    )
+
+    with pytest.raises(GitContentRefError, match="agent_commands git content ref was rejected"):
+        await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
+
+
 async def test_materialize_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     created = _patch_crud(monkeypatch)
     export_schema_id = uuid.uuid4()
@@ -1576,6 +1899,7 @@ async def test_materialize_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
             "retry_policy": {"on": ["failure"], "max_retries": 2},
             "node_timeout_seconds": 900,
             "run_context_defaults": {"foo": "bar"},
+            "queue_timeout_seconds": 3600,
         },
         agents=[
             {
@@ -1620,6 +1944,7 @@ async def test_materialize_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert created["agent"].await_args.kwargs["name"] == "Agent A"
     assert created["pipeline"].await_args.kwargs["name"] == "Imported"
     assert created["pipeline"].await_args.kwargs["node_timeout_seconds"] == 900
+    assert created["pipeline"].await_args.kwargs["queue_timeout_seconds"] == 3600
     assert created["pipeline"].await_args.kwargs["owner_team_id"] is None
     assert created["pipeline"].await_args.kwargs["visibility"] == "org"
     assert created["prim"].await_args.kwargs["slug"] == "imported"
@@ -1631,6 +1956,19 @@ async def test_materialize_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
         }
     ]
     assert created["pipeline"].return_value.retry_policy == {"on": ["failure"], "max_retries": 2}
+
+
+async def test_materialize_absent_queue_timeout_imports_as_null(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1883: a bundle with no ``queue_timeout_seconds`` key (every bundle
+    exported before the column existed) imports as NULL — the shipped
+    "never expire" default — never a spurious bounded timeout.
+
+    Proves the bare ``.get`` (not ``or ...``) semantics: the key's absence and
+    an explicit null map to the same None."""
+    created = _patch_crud(monkeypatch)
+    bundle = _make_bundle()
+    await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
+    assert created["pipeline"].await_args.kwargs["queue_timeout_seconds"] is None
 
 
 async def test_materialize_warns_on_schemaless_manual_node(monkeypatch: pytest.MonkeyPatch) -> None:

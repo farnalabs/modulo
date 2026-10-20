@@ -43,7 +43,7 @@
           <div class="flex items-start justify-between gap-4">
             <div class="min-w-0 flex-1 space-y-3">
               <div class="flex flex-wrap items-center gap-2">
-                <span class="inline-block rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                <span class="inline-block rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary-text">
                   {{ p.pipeline_name || $t('views.EvalProposalsQueueView.unnamed_pipeline') }}
                 </span>
                 <span
@@ -98,7 +98,7 @@
           <div
             v-if="actionMessages[p.id]"
             class="mt-3 text-sm"
-            :class="actionMessages[p.id].type === 'error' ? 'text-destructive' : 'text-success'"
+            :class="actionMessages[p.id].type === 'error' ? 'text-destructive' : 'text-success-text'"
             :role="actionMessages[p.id].type === 'error' ? 'alert' : 'status'"
             :aria-live="actionMessages[p.id].type === 'error' ? 'assertive' : 'polite'"
           >
@@ -343,7 +343,7 @@ function statusBadgeClass(status: string): string {
     pending: 'bg-pending/10 text-pending',
     routing: 'bg-warning/10 text-warning-text',
     correcting: 'bg-purple-100 text-purple-700',
-    resolved: 'bg-success/10 text-success',
+    resolved: 'bg-success/10 text-success-text',
     escalated: 'bg-destructive/10 text-destructive-text',
     dismissed: 'bg-muted text-muted-foreground',
   }

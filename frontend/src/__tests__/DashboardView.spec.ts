@@ -399,7 +399,7 @@ describe('DashboardView', () => {
     const deltaSpan = wrapper.find('[data-testid="dashboard-token-spend"] span.text-xs.font-medium')
     expect(deltaSpan.exists()).toBe(true)
     expect(deltaSpan.classes()).toContain('text-destructive')
-    expect(deltaSpan.classes()).not.toContain('text-success')
+    expect(deltaSpan.classes()).not.toContain('text-success-text')
   })
 
   it('renders the token-spend delta span success when spend went down (cost metric: lower spend is good)', async () => {
@@ -410,7 +410,7 @@ describe('DashboardView', () => {
     await flushPromises()
     const deltaSpan = wrapper.find('[data-testid="dashboard-token-spend"] span.text-xs.font-medium')
     expect(deltaSpan.exists()).toBe(true)
-    expect(deltaSpan.classes()).toContain('text-success')
+    expect(deltaSpan.classes()).toContain('text-success-text')
     expect(deltaSpan.classes()).not.toContain('text-destructive')
   })
 
@@ -423,7 +423,7 @@ describe('DashboardView', () => {
     const deltaSpan = wrapper.find('[data-testid="dashboard-token-spend"] span.text-xs.font-medium')
     expect(deltaSpan.exists()).toBe(true)
     expect(deltaSpan.classes()).toContain('text-muted-foreground')
-    expect(deltaSpan.classes()).not.toContain('text-success')
+    expect(deltaSpan.classes()).not.toContain('text-success-text')
     expect(deltaSpan.classes()).not.toContain('text-destructive')
   })
 
@@ -706,14 +706,14 @@ describe('DashboardView', () => {
     const deltaSpan = pipelinesCard.find('span.inline-flex')
     expect(deltaSpan.exists()).toBe(true)
     expect(deltaSpan.classes()).toContain('text-muted-foreground')
-    expect(deltaSpan.classes()).not.toContain('text-success')
+    expect(deltaSpan.classes()).not.toContain('text-success-text')
     expect(deltaSpan.classes()).not.toContain('text-destructive')
     // Meanwhile, Total Runs (second card) should still get success colour for a positive delta
     const totalRunsCard = statCards[1]
     expect(totalRunsCard.props('label')).toBe('Total Runs')
     const totalRunsDelta = totalRunsCard.find('span.inline-flex')
     expect(totalRunsDelta.exists()).toBe(true)
-    expect(totalRunsDelta.classes()).toContain('text-success')
+    expect(totalRunsDelta.classes()).toContain('text-success-text')
     expect(totalRunsDelta.classes()).not.toContain('text-muted-foreground')
   })
 })
@@ -786,7 +786,7 @@ describe('StatCard delta arrow', () => {
     expect(wrapper.text()).toContain('66.7%')
     const deltaSpan = wrapper.find('span.inline-flex')
     expect(deltaSpan.classes()).toContain('text-destructive')
-    expect(deltaSpan.classes()).not.toContain('text-success')
+    expect(deltaSpan.classes()).not.toContain('text-success-text')
   })
 
   it('inverted keeps the arrow raw but flags a negative delta as success', () => {
@@ -803,7 +803,7 @@ describe('StatCard delta arrow', () => {
     expect(wrapper.text()).toContain('-2')
     expect(wrapper.text()).toContain('40.0%')
     const deltaSpan = wrapper.find('span.inline-flex')
-    expect(deltaSpan.classes()).toContain('text-success')
+    expect(deltaSpan.classes()).toContain('text-success-text')
     expect(deltaSpan.classes()).not.toContain('text-destructive')
   })
 
@@ -896,7 +896,7 @@ describe('StatCard delta arrow', () => {
     expect(wrapper.text()).toContain('33.3%')
     const deltaSpan = wrapper.find('span.inline-flex')
     expect(deltaSpan.classes()).toContain('text-muted-foreground')
-    expect(deltaSpan.classes()).not.toContain('text-success')
+    expect(deltaSpan.classes()).not.toContain('text-success-text')
     expect(deltaSpan.classes()).not.toContain('text-destructive')
   })
 
@@ -913,7 +913,7 @@ describe('StatCard delta arrow', () => {
     expect(wrapper.text()).toContain('33.3%')
     const deltaSpan = wrapper.find('span.inline-flex')
     expect(deltaSpan.classes()).toContain('text-muted-foreground')
-    expect(deltaSpan.classes()).not.toContain('text-success')
+    expect(deltaSpan.classes()).not.toContain('text-success-text')
     expect(deltaSpan.classes()).not.toContain('text-destructive')
   })
 
@@ -926,7 +926,7 @@ describe('StatCard delta arrow', () => {
       },
     })
     const deltaSpan = wrapper.find('span.inline-flex')
-    expect(deltaSpan.classes()).toContain('text-success')
+    expect(deltaSpan.classes()).toContain('text-success-text')
     expect(deltaSpan.classes()).not.toContain('text-muted-foreground')
   })
 

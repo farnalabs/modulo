@@ -125,7 +125,7 @@
                 v-if="isDispatchedRun((row as RunListItem).execution_origin)"
                 :data-testid="`runs-list-dispatched-${row.run_id}`"
                 :title="$t('common.execution_origin.dispatched_hint')"
-                class="inline-flex items-center rounded-full bg-cyan-500/10 px-2 py-0.5 text-xs font-medium text-cyan-600 dark:bg-cyan-900 dark:text-cyan-300"
+                class="inline-flex items-center rounded-full bg-cyan-500/10 px-2 py-0.5 text-xs font-medium text-cyan-700 dark:bg-cyan-900 dark:text-cyan-300"
               >{{ $t('common.execution_origin.dispatched') }}</span>
             </div>
           </template>

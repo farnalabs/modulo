@@ -54,7 +54,7 @@
         <span
           v-for="type in selectedTypes"
           :key="type"
-          class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
+          class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary-text"
         >
           {{ typeLabel(type) }}
           <button

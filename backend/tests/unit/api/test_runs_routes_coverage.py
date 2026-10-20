@@ -28,6 +28,12 @@ from modulo.api.main import app
 from modulo.api.routes import runs as runs_module
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.core.pipeline_engine.recovery import (
+    ConcurrentRecoveryError,
+    NodeAlreadyCompletedError,
+    NodeNotFoundInGraphError,
+    RecoveryNotAllowedError,
+)
 from modulo.core.rate_limiter import TokenBucketRegistry
 from modulo.db.crud.run_node_outputs import RunBlobs
 from modulo.settings import Settings, get_settings
@@ -564,6 +570,23 @@ def _enter_all(patches: list) -> object:
     ],
 )
 def test_recover_node_error_mapping(exc: Exception, expected: int) -> None:
+    with _fresh_client() as http, _enter_all(_recover_patches(exc)):
+        resp = http.post(f"/api/v1/runs/{_RUN_ID}/nodes/n1/recover", json={"input_data": None})
+
+    assert resp.status_code == expected, resp.text
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (RecoveryNotAllowedError(_RUN_ID, "complete"), 409),
+        (NodeNotFoundInGraphError(_RUN_ID, "n1"), 404),
+        (NodeAlreadyCompletedError(_RUN_ID, "n1"), 409),
+        (ConcurrentRecoveryError(_RUN_ID), 409),
+    ],
+)
+def test_recover_node_typed_domain_error_mapping(exc: Exception, expected: int) -> None:
+    """Each typed recovery failure maps to its HTTP contract (409/404/409/409)."""
     with _fresh_client() as http, _enter_all(_recover_patches(exc)):
         resp = http.post(f"/api/v1/runs/{_RUN_ID}/nodes/n1/recover", json={"input_data": None})
 
@@ -1236,3 +1259,82 @@ def test_get_run_artifact_resolves_synthetic_full_attempt_key_stderr(client) -> 
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}:full:12345/artifacts/stderr")
     assert resp.status_code == 200, resp.text
     assert resp.content == b"full stderr transcript"
+
+
+# ── extracted helpers: inline log lengths, artifact DB error, telemetry pointer ──
+
+
+def test_inline_log_lengths_for_dict_envelope() -> None:
+    """A dict envelope contributes both inline lengths; a missing key is zero."""
+    assert runs_module._inline_log_lengths({"agent_stdout": "abc"}) == (3, 0)
+    assert runs_module._inline_log_lengths({"agent_stdout": "", "agent_stderr": "de"}) == (0, 2)
+
+
+def test_inline_log_lengths_for_unsupported_value() -> None:
+    """A non-dict, non-str value contributes nothing."""
+    assert runs_module._inline_log_lengths(123) == (0, 0)
+
+
+def test_inline_log_lengths_for_bare_string() -> None:
+    """A bare string counts as stdout only."""
+    assert runs_module._inline_log_lengths("abc") == (3, 0)
+
+
+def test_telemetry_log_lengths_prefers_stored_lengths() -> None:
+    """Stored pre-truncation lengths win, including the explicit zero case."""
+    assert runs_module._telemetry_log_lengths({"stdout_length": 5, "stderr_length": 7}) == (5, 7)
+    assert runs_module._telemetry_log_lengths({"stdout_length": 0, "stderr_length": 0}) == (0, 0)
+
+
+def test_telemetry_log_lengths_falls_back_to_inline_content() -> None:
+    """Without length keys the inline content length is used, and null counts zero."""
+    assert runs_module._telemetry_log_lengths({"agent_stdout": "abc", "agent_stderr": "de"}) == (3, 2)
+    assert runs_module._telemetry_log_lengths({"agent_stdout": None, "agent_stderr": None}) == (0, 0)
+    assert runs_module._telemetry_log_lengths({}) == (0, 0)
+
+
+def test_resolve_recovery_stamp_rejects_pending_hitl_gate() -> None:
+    """An undecided HITL gate review is a 422, never a recovery stamp."""
+    from fastapi import HTTPException
+
+    session = AsyncMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = ["hitl_review_1"]
+    session.execute = AsyncMock(return_value=result)
+    principal = TenantPrincipal(
+        username="admin@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(runs_module._resolve_recovery_stamp(session, principal, _RUN_ID, "node-a"))
+
+    assert excinfo.value.status_code == 422
+
+
+def test_get_run_artifact_db_error_maps_to_503() -> None:
+    """A transient SQLAlchemyError reading the attempt row maps to 503."""
+    with (
+        _fresh_client(begin_exc=_SQL) as http,
+        patch("modulo.core.artifacts.store.get_store", return_value=MagicMock()),
+    ):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/n1/attempts/attempt-1/artifacts/stdout")
+
+    assert resp.status_code == 503, resp.text
+
+
+def test_telemetry_artifact_pointer_returns_none_for_unknown_stream() -> None:
+    """Only stdout/stderr have a telemetry pointer; any other stream resolves None."""
+    result = asyncio.run(
+        runs_module._telemetry_artifact_pointer(
+            "bogus",
+            AsyncMock(),
+            MagicMock(),
+            _RUN_ID,
+            "node-a",
+        )
+    )
+
+    assert result is None

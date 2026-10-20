@@ -34,6 +34,7 @@ from modulo.core.pipeline_engine.node_runner import (
     ScriptInvalidOutputError,
     SupersededNodeError,
     _SandboxWatchdog,
+    _WatchdogWatchConfig,
     make_connector_fn,
     make_sandbox_agent_fn,
 )
@@ -277,7 +278,7 @@ async def test_read_log_tail_via_provider_resolves_e2b_override(monkeypatch: pyt
             tails.append(b'{"other": 1}')
             return tails[-1]
 
-    async def _fake_builder(api_key: str):
+    def _fake_builder(api_key: str):
         captured.append(api_key)
         return _FakeProvider()
 
@@ -2397,11 +2398,13 @@ def _watchdog(
         stall=stall,
         node_id="n1",
         run_id=_RUN_ID,
-        watch_log_path=watch_log_path,
-        watch_globs=watch_globs or [],
+        watch=_WatchdogWatchConfig(
+            log_path=watch_log_path,
+            globs=watch_globs or [],
+            percentage_delta=stdout_ratio,
+        ),
         resource_limits=resource_limits,
         sandbox_mode=sandbox_mode,
-        stdout_percentage_delta=stdout_ratio,
         stream_broker=None,
         drained_chunks=[],
         wall_clock=nr._WatchdogWallClock(wallclock_budget_seconds, time.monotonic()),

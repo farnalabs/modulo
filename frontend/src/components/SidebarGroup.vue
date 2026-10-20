@@ -80,7 +80,7 @@ defineEmits<{
 }
 
 .sidebar-group-header--active {
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text));
 }
 
 .sidebar-group-header--active .sidebar-group-label {

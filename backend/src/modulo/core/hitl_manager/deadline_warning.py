@@ -414,47 +414,75 @@ async def _notify_entries(
     never suppresses the webhook leg, and vice versa.
     """
     webhook_subscribed = await _org_has_webhook_subscriber(notifier, org_id)
-    notified: list[dict[str, Any]] = []
     recipient_cache: dict[uuid.UUID, list[str]] = {}
-    for entry in entries:
-        pipeline_id: uuid.UUID = entry["pipeline_id"]
-        recipients = recipient_cache.get(pipeline_id)
-        if recipients is None:
-            try:
-                recipients = await _resolve_recipients(factory, org_id, pipeline_id)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                # Skip the whole entry: without resolved recipients we cannot
-                # know whether the email channel is live, and claiming the
-                # marker now could burn it with the email leg never sent.
-                # The next tick inside the band retries both channels.
-                _log.exception(
-                    "hitl.deadline_warning.recipient_resolution_failed",
-                    extra={"org_id": str(org_id), "run_id": str(entry["run_id"])},
-                )
-                continue
-            recipient_cache[pipeline_id] = recipients
+    return [
+        entry
+        for entry in entries
+        if await _notify_one_entry(
+            factory,
+            org_id,
+            entry,
+            webhook_subscribed=webhook_subscribed,
+            recipient_cache=recipient_cache,
+            redis_client=redis_client,
+            notifier=notifier,
+        )
+    ]
 
-        if not recipients and not webhook_subscribed:
-            _log.info(
-                "hitl.deadline_warning.no_recipients",
-                extra={"org_id": str(org_id), "run_id": str(entry["run_id"]), "pipeline_id": str(pipeline_id)},
+
+async def _notify_one_entry(
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+    entry: dict[str, Any],
+    *,
+    webhook_subscribed: bool,
+    recipient_cache: dict[uuid.UUID, list[str]],
+    redis_client: Any | None,
+    notifier: Any | None,
+) -> bool:
+    """Notify one approaching entry; True when at least one leg delivered.
+
+    Returns ``False`` (skip this entry, keep the other entries) when the
+    recipients cannot be resolved, when no channel can deliver, or when the
+    once-only marker was already claimed. Recipients are cached per pipeline so
+    a resolution runs at most once per tick.
+    """
+    pipeline_id: uuid.UUID = entry["pipeline_id"]
+    recipients = recipient_cache.get(pipeline_id)
+    if recipients is None:
+        try:
+            recipients = await _resolve_recipients(factory, org_id, pipeline_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Skip the whole entry: without resolved recipients we cannot
+            # know whether the email channel is live, and claiming the
+            # marker now could burn it with the email leg never sent.
+            # The next tick inside the band retries both channels.
+            _log.exception(
+                "hitl.deadline_warning.recipient_resolution_failed",
+                extra={"org_id": str(org_id), "run_id": str(entry["run_id"])},
             )
-            continue
+            return False
+        recipient_cache[pipeline_id] = recipients
 
-        if not await _claim_deadline_warning(redis_client, entry["claim_id"]):
-            _log.debug(
-                "hitl.deadline_warning.already_notified",
-                extra={"org_id": str(org_id), "claim_id": str(entry["claim_id"])},
-            )
-            continue
+    if not recipients and not webhook_subscribed:
+        _log.info(
+            "hitl.deadline_warning.no_recipients",
+            extra={"org_id": str(org_id), "run_id": str(entry["run_id"]), "pipeline_id": str(pipeline_id)},
+        )
+        return False
 
-        email_sent = await _send_deadline_email(recipients, entry, org_id)
-        webhook_sent = await _dispatch_deadline_event(notifier, org_id, entry)
-        if email_sent or webhook_sent:
-            notified.append(entry)
-    return notified
+    if not await _claim_deadline_warning(redis_client, entry["claim_id"]):
+        _log.debug(
+            "hitl.deadline_warning.already_notified",
+            extra={"org_id": str(org_id), "claim_id": str(entry["claim_id"])},
+        )
+        return False
+
+    email_sent = await _send_deadline_email(recipients, entry, org_id)
+    webhook_sent = await _dispatch_deadline_event(notifier, org_id, entry)
+    return email_sent or webhook_sent
 
 
 async def _send_deadline_email(recipients: list[str], entry: dict[str, Any], org_id: uuid.UUID) -> bool:
@@ -594,7 +622,7 @@ def _claim_in_memory(claim_id: uuid.UUID) -> bool:
         return False
     if len(_MEMORY_CLAIMS) >= _MEMORY_CLAIM_MAX:
         cutoff = now - _DEADLINE_NOTIFY_TTL_SECONDS
-        for stale_id, stamped in list(_MEMORY_CLAIMS.items()):
+        for stale_id, stamped in tuple(_MEMORY_CLAIMS.items()):
             if stamped < cutoff:
                 del _MEMORY_CLAIMS[stale_id]
     _MEMORY_CLAIMS[claim_id] = now

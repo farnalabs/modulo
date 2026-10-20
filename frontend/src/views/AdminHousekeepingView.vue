@@ -53,6 +53,20 @@
       />
 
       <div v-else>
+        <!--
+          FAR-1977: when ANY category's scanner failed, the scan is INCOMPLETE.
+          Without this the page could read as a clean scan (0 candidates) even
+          though one or more scanners never completed.
+        -->
+        <div
+          v-if="failedCategoryCount > 0"
+          role="alert"
+          class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive-text"
+        >
+          <p class="font-medium">{{ $t('views.AdminHousekeepingView.scan_incomplete_title') }}</p>
+          <p class="mt-1">{{ $t('views.AdminHousekeepingView.scan_incomplete_description', failedCategoryCount) }}</p>
+        </div>
+
         <div class="mb-4 flex items-center gap-4 rounded-lg border bg-card p-3 shadow-sm">
           <label class="flex items-center gap-2 text-sm">
             <input
@@ -89,6 +103,7 @@
               :aria-label="cat.label"
               :checked="categorySelected(cat.category)"
               :indeterminate.prop="categoryPartial(cat.category)"
+              :disabled="isFailed(cat)"
               data-testid="hk-category-checkbox"
               @change="toggleCategory(cat.category)"
             />
@@ -96,10 +111,35 @@
               <h3 class="font-semibold">{{ cat.label }}</h3>
               <p class="text-xs text-muted-foreground">{{ cat.description }}</p>
             </div>
-            <span class="text-sm text-muted-foreground">{{ $t('views.AdminHousekeepingView.item_count', cat.count) }}</span>
+            <span
+              v-if="isFailed(cat)"
+              class="rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive-text"
+            >
+              {{ $t('views.AdminHousekeepingView.scan_failed_badge') }}
+            </span>
+            <span v-else class="text-sm text-muted-foreground">{{ $t('views.AdminHousekeepingView.item_count', cat.count) }}</span>
           </div>
 
-          <div v-if="cat.candidates.length === 0" class="px-4 py-3 text-sm text-muted-foreground">
+          <!--
+            FAR-1977: a scanner that RAISED returns status="failed" with an empty
+            candidate list. That must never render as the clean "No candidates
+            found." state — a failed scan's results are UNKNOWN, not empty.
+          -->
+          <div
+            v-if="isFailed(cat)"
+            role="alert"
+            class="px-4 py-3"
+          >
+            <div class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive-text">
+              <p class="font-medium">{{ $t('views.AdminHousekeepingView.scan_failed_title') }}</p>
+              <p class="mt-1">{{ $t('views.AdminHousekeepingView.scan_failed_reason', { reason: failureReason(cat) }) }}</p>
+              <p v-if="failureException(cat)" class="mt-1">
+                {{ $t('views.AdminHousekeepingView.scan_failed_exception', { exception: failureException(cat) }) }}
+              </p>
+            </div>
+          </div>
+
+          <div v-else-if="cat.candidates.length === 0" class="px-4 py-3 text-sm text-muted-foreground">
             {{ $t('views.AdminHousekeepingView.no_candidates') }}
           </div>
 
@@ -144,7 +184,10 @@
               {{ $t('views.AdminHousekeepingView.checkpoint_retention_description') }}
             </p>
           </div>
-          <span class="text-sm text-muted-foreground">
+          <span v-if="checkpointCategoryFailed" class="text-sm font-medium text-destructive-text">
+            {{ $t('views.AdminHousekeepingView.scan_failed_badge') }}
+          </span>
+          <span v-else class="text-sm text-muted-foreground">
             {{ $t('views.AdminHousekeepingView.checkpoint_reclaimable', { count: checkpointCandidateCount }) }}
           </span>
         </div>
@@ -214,6 +257,7 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useApi } from '../composables/useApi'
+import type { components } from '../lib/api/schema'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
@@ -221,26 +265,12 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
-interface CandidateItem {
-  id: string
-  name: string
-  detail: string
-  created_at: string | null
-  entity_type: string
-}
-
-interface HousekeepingCategory {
-  category: string
-  label: string
-  description: string
-  candidates: CandidateItem[]
-  count: number
-}
-
-interface HousekeepingScanResponse {
-  categories: HousekeepingCategory[]
-  total_count: number
-}
+// FAR-1977: derive the wire types from the generated OpenAPI schema rather
+// than hand-declaring them. A local duplicate silently drifted from the
+// contract (it lacked the new `status`/`error` fields, so a FAILED scanner
+// rendered identically to a genuinely clean category).
+type HousekeepingCategory = components['schemas']['HousekeepingCategory']
+type HousekeepingScanResponse = components['schemas']['HousekeepingScanResponse']
 
 interface CleanupItem {
   id: string
@@ -278,6 +308,22 @@ const ckptError = ref<string | null>(null)
 // The Checkpoint Retention category is a bulk age-based action, not a
 // per-candidate delete — exclude it from the generic select/cleanup flow.
 const NON_GENERIC_CATEGORIES = new Set(['checkpoint_retention'])
+
+// FAR-1977: `status` is the ONLY thing that distinguishes "ran, found nothing"
+// from "scanner raised". A failed category may be selected/deleted as if empty
+// so selection is disabled for it, its card renders an alert rather than the
+// clean empty state, and the page-level banner marks the scan incomplete.
+function isFailed(cat: HousekeepingCategory): boolean {
+  return cat.status === 'failed'
+}
+
+function failureReason(cat: HousekeepingCategory): string {
+  return cat.error?.reason ?? t('views.AdminHousekeepingView.scan_failed_unknown_reason')
+}
+
+function failureException(cat: HousekeepingCategory): string | null {
+  return cat.error?.exception ?? null
+}
 
 function formatDate(iso: string): string {
   const d = new Date(iso)
@@ -319,10 +365,23 @@ const allCandidates = computed<{ id: string; category: string; entity_type: stri
   return result
 })
 
+const checkpointCategory = computed<HousekeepingCategory | null>(() => {
+  return categories.value.find(c => c.category === 'checkpoint_retention') ?? null
+})
+
+const checkpointCategoryFailed = computed(() => {
+  const cat = checkpointCategory.value
+  return cat !== null && isFailed(cat)
+})
+
 const checkpointCandidateCount = computed(() => {
-  const cat = categories.value.find(c => c.category === 'checkpoint_retention')
+  const cat = checkpointCategory.value
   return cat ? cat.count : 0
 })
+
+// A scan is incomplete if ANY category's scanner raised. Surfaced at page level
+// so a failed category can never be read as an all-clean scan.
+const failedCategoryCount = computed(() => categories.value.filter(isFailed).length)
 
 async function doCheckpointPurge() {
   ckptPurgeLoading.value = true

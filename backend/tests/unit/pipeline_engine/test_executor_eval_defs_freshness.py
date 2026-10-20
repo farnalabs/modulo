@@ -629,7 +629,7 @@ async def test_check_policy_gate_pin_raises_when_run_vanishes_after_terminalize(
     with (
         patch(
             "modulo.core.pipeline_engine.executor._verify_policy_gate_pin_fingerprint",
-            AsyncMock(return_value=(True, "mismatch")),
+            MagicMock(return_value=(True, "mismatch")),
         ),
         patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.get_run", AsyncMock(return_value=None)),

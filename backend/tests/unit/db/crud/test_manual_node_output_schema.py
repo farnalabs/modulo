@@ -124,7 +124,7 @@ class TestWiringThroughReplacePipelineGraph:
     """The guard is actually called by replace_pipeline_graph, not just the helper."""
 
     @patch("modulo.db.crud.pipeline.enforce_guardrail_binding_strip", new_callable=AsyncMock)
-    @patch("modulo.db.crud.pipeline.apply_gated_edge_diff", new_callable=AsyncMock)
+    @patch("modulo.db.crud.pipeline.apply_gated_edge_diff", new_callable=MagicMock)
     @patch("modulo.db.crud.pipeline.resolve_effective_privilege", new_callable=AsyncMock)
     async def test_replace_pipeline_graph_rejects_schemaless_manual_node(
         self,

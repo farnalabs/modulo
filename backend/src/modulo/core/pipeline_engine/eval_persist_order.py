@@ -59,9 +59,9 @@ class EvalDefDTO:
     was rejected during backfill).
 
     Attribute names are identical to the previous Pydantic ``EvalDefinition``
-    alias so that existing tests (which construct ``EvalDefinition`` ORM
-    instances or Pydantic DTOs as the DTO) continue to work by duck-typing —
-    the engine and helpers only read attributes by name.
+    alias so that existing tests (which pass Pydantic DTOs or duck-typed
+    objects as the DTO) continue to work — the engine and helpers only read
+    attributes by name.
 
     PolicyGate metadata (FAR-1102 chunk 4): when a PolicyGate is present for
     this eval, ``policy_gate_id``, ``policy_gate_version``, and

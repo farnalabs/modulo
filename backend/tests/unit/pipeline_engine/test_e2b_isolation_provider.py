@@ -161,8 +161,8 @@ async def _completed_no_output_sandbox(sandbox_id: str) -> MagicMock:
     return sandbox
 
 
-def _patch_isolation_builder(monkeypatch: pytest.MonkeyPatch, provider: Any) -> AsyncMock:
-    builder = AsyncMock(return_value=provider)
+def _patch_isolation_builder(monkeypatch: pytest.MonkeyPatch, provider: Any) -> MagicMock:
+    builder = MagicMock(return_value=provider)
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_isolation_provider",
         builder,
@@ -206,7 +206,7 @@ async def test_isolation_routes_through_provider_apply_isolation(monkeypatch: py
     ):
         await fn(_run_state())
 
-    builder.assert_awaited_once()
+    builder.assert_called_once()
     legacy.assert_not_awaited()
     assert len(fake.calls) == 1
     ref, spec, policy = fake.calls[0]
@@ -244,7 +244,7 @@ async def test_provider_predicate_still_gates_no_policy_no_invocation(
     ):
         await fn(_run_state())
 
-    builder.assert_not_awaited()
+    builder.assert_not_called()
     legacy.assert_not_awaited()
 
 
@@ -290,7 +290,7 @@ async def test_provider_capability_refusal_maps_to_terminal_named_code(
 # ---------------------------------------------------------------------------
 
 
-async def test_build_isolation_provider_constructs_real_e2b_provider(
+def test_build_isolation_provider_constructs_real_e2b_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The real builder body runs (delegating to the R1 hub seam) and
@@ -303,28 +303,28 @@ async def test_build_isolation_provider_constructs_real_e2b_provider(
     from tests.unit._e2b_sandbox_bridge import original_seam
 
     monkeypatch.setattr(node_runner_module, "_build_log_tail_provider", original_seam("_build_log_tail_provider"))
-    provider = await _build_isolation_provider("test-key")
+    provider = _build_isolation_provider("test-key")
     assert isinstance(provider, E2BRuntimeProvider)
 
 
-async def test_build_isolation_provider_returns_none_when_hub_init_fails(
+def test_build_isolation_provider_returns_none_when_hub_init_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from modulo.core.runtime_provider.hub import RuntimeProviderHub
     from tests.unit._e2b_sandbox_bridge import original_seam
 
-    async def _boom(self: RuntimeProviderHub, config: dict[str, Any]) -> None:
+    def _boom(self: RuntimeProviderHub, config: dict[str, Any]) -> None:
         raise RuntimeError("hub exploded")
 
     monkeypatch.setattr(RuntimeProviderHub, "initialise", _boom)
     monkeypatch.setattr(node_runner_module, "_build_log_tail_provider", original_seam("_build_log_tail_provider"))
-    assert await _build_isolation_provider("test-key") is None
+    assert _build_isolation_provider("test-key") is None
 
 
 async def test_helper_fails_closed_without_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
-    builder = AsyncMock(side_effect=AssertionError("must not build a provider without a key"))
+    builder = MagicMock(side_effect=AssertionError("must not build a provider without a key"))
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_isolation_provider", builder)
 
     with pytest.raises(SandboxTierRefusedError, match="MODULO_E2B_API_KEY"):
@@ -337,12 +337,12 @@ async def test_helper_fails_closed_without_key(monkeypatch: pytest.MonkeyPatch) 
             egress_policy=None,
             egress_allowlist=None,
         )
-    builder.assert_not_awaited()
+    builder.assert_not_called()
 
 
 async def test_helper_fails_closed_on_invalid_sandbox_id(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("E2B_API_KEY", "test-key")
-    builder = AsyncMock(side_effect=AssertionError("must not build a provider without a sandbox id"))
+    builder = MagicMock(side_effect=AssertionError("must not build a provider without a sandbox id"))
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_isolation_provider", builder)
 
     with pytest.raises(SandboxTierRefusedError, match="sandbox id"):
@@ -365,7 +365,7 @@ async def test_helper_fails_closed_on_invalid_sandbox_id(monkeypatch: pytest.Mon
             egress_policy=None,
             egress_allowlist=None,
         )
-    builder.assert_not_awaited()
+    builder.assert_not_called()
 
 
 async def test_helper_fails_closed_when_provider_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -520,7 +520,7 @@ async def test_sentinel_only_node_gets_no_guard_at_all(monkeypatch: pytest.Monke
     ):
         await fn(_run_state())
 
-    builder.assert_not_awaited()
+    builder.assert_not_called()
     legacy.assert_not_awaited()
     assert not fake.calls
 
@@ -544,7 +544,7 @@ async def test_flagged_node_routes_isolation_with_the_typed_flag(monkeypatch: py
     ):
         await fn(_run_state())
 
-    builder.assert_awaited_once()
+    builder.assert_called_once()
     legacy.assert_not_awaited()
     assert len(fake.calls) == 1
     _, spec, policy = fake.calls[0]

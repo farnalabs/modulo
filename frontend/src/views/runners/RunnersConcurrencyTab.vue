@@ -32,7 +32,7 @@
           </div>
 
           <p v-if="saveError" class="mt-2 text-xs text-destructive">{{ saveError }}</p>
-          <p v-if="saveSuccess" class="mt-2 text-xs text-success">{{ $t('views.RunnersConcurrencyTab.limit_updated') }}</p>
+          <p v-if="saveSuccess" class="mt-2 text-xs text-success-text">{{ $t('views.RunnersConcurrencyTab.limit_updated') }}</p>
 
           <div class="mt-4 rounded-lg border border-input bg-muted/30 p-3" data-testid="runner-concurrency-effective">
             <p class="text-xs font-medium">
@@ -142,7 +142,7 @@ const preflightDetail = computed(() => {
 
 const preflightClass = computed(() => {
   const state = preflight.value?.state ?? 'unknown'
-  if (state === 'ok') return 'border-success/40 bg-success/10 text-success'
+  if (state === 'ok') return 'border-success/40 bg-success/10 text-success-text'
   if (state === 'uncapped' || state === 'unknown') return 'border-border bg-muted/40 text-muted-foreground'
   return 'border-warning/40 bg-warning/10 text-warning-text'
 })

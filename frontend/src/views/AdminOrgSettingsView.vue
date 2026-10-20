@@ -23,7 +23,7 @@
         <p class="text-sm text-destructive" role="alert" data-testid="org-hitl-review-window-load-error">{{ hitlWindowLoadError }}</p>
         <button
           type="button"
-          class="text-sm font-medium text-primary underline underline-offset-2 hover:no-underline"
+          class="text-sm font-medium text-primary-text underline underline-offset-2 hover:no-underline"
           data-testid="org-hitl-review-window-retry"
           @click="loadHitlReviewWindow"
         >
@@ -89,7 +89,7 @@
         >{{ hitlWindowError }}</p>
         <p
           v-else-if="hitlWindowSaved"
-          class="mt-2 text-sm text-success"
+          class="mt-2 text-sm text-success-text"
           role="status"
           data-testid="org-hitl-review-window-saved"
         >{{ $t('views.AdminOrgSettingsView.hitl_review_window_saved') }}</p>
@@ -97,6 +97,62 @@
         <div class="mt-4 rounded-lg border border-input bg-muted/30 p-3" data-testid="org-hitl-review-window-status">
           <p class="text-xs font-medium">{{ hitlWindowStatus }}</p>
         </div>
+      </template>
+    </SectionCard>
+
+    <!-- Human-linked MCP authority (FAR-1972 / ADR 063 step 1): community-tier
+         and org-level governance, so like the HITL review window it renders
+         OUTSIDE the team-tier FeatureGate — an org admin on any plan can
+         tighten how their own org's human-only gates may be decided. -->
+    <SectionCard
+      :title="$t('views.AdminOrgSettingsView.mcp_authority_title')"
+      :description="$t('views.AdminOrgSettingsView.mcp_authority_description')"
+    >
+      <div v-if="mcpAuthorityLoading" class="flex items-center gap-2">
+        <div class="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        <span class="text-sm text-muted-foreground">{{ $t('views.AdminOrgSettingsView.mcp_authority_loading') }}</span>
+      </div>
+
+      <div v-else-if="mcpAuthorityLoadError" class="space-y-2">
+        <p class="text-sm text-destructive" role="alert" data-testid="org-mcp-authority-load-error">{{ mcpAuthorityLoadError }}</p>
+        <button
+          type="button"
+          class="text-sm font-medium text-primary underline underline-offset-2 hover:no-underline"
+          data-testid="org-mcp-authority-retry"
+          @click="loadMcpAuthority"
+        >
+          {{ $t('views.AdminOrgSettingsView.mcp_authority_retry') }}
+        </button>
+      </div>
+
+      <template v-else>
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <p class="text-sm font-medium">{{ $t('views.AdminOrgSettingsView.mcp_authority_toggle') }}</p>
+            <p class="text-xs text-muted-foreground" data-testid="org-mcp-authority-status">{{ mcpAuthorityStatus }}</p>
+          </div>
+          <ToggleSwitch
+            :checked="mcpAuthorityEnabled"
+            :disabled="mcpAuthoritySaving"
+            :toggling="mcpAuthoritySaving"
+            :label="$t('views.AdminOrgSettingsView.mcp_authority_toggle')"
+            data-testid="org-mcp-authority-toggle"
+            @toggle="toggleMcpAuthority"
+          />
+        </div>
+        <p class="mt-3 text-xs text-muted-foreground">{{ $t('views.AdminOrgSettingsView.mcp_authority_hint') }}</p>
+        <p
+          v-if="mcpAuthorityError"
+          class="mt-2 text-sm text-destructive"
+          role="alert"
+          data-testid="org-mcp-authority-error"
+        >{{ mcpAuthorityError }}</p>
+        <p
+          v-else-if="mcpAuthoritySaved"
+          class="mt-2 text-sm text-success"
+          aria-live="polite"
+          data-testid="org-mcp-authority-saved"
+        >{{ $t('views.AdminOrgSettingsView.mcp_authority_saved') }}</p>
       </template>
     </SectionCard>
 
@@ -159,7 +215,7 @@
           <span class="text-sm text-destructive">Export failed: {{ exportError }}</span>
           <button
             type="button"
-            class="text-sm font-medium text-primary underline underline-offset-2 hover:no-underline"
+            class="text-sm font-medium text-primary-text underline underline-offset-2 hover:no-underline"
             @click="startExport"
           >
             Retry
@@ -180,7 +236,7 @@
           </button>
           <button
             type="button"
-            class="text-sm font-medium text-primary underline underline-offset-2 hover:no-underline"
+            class="text-sm font-medium text-primary-text underline underline-offset-2 hover:no-underline"
             @click="resetExport"
           >
             Export again
@@ -512,6 +568,66 @@ async function saveHitlReviewWindow() {
   }
 }
 
+const mcpAuthorityEnabled = ref(true)
+const mcpAuthorityLoading = ref(true)
+const mcpAuthoritySaving = ref(false)
+const mcpAuthorityLoadError = ref<string | null>(null)
+const mcpAuthorityError = ref<string | null>(null)
+const mcpAuthoritySaved = ref(false)
+
+const mcpAuthorityStatus = computed(() =>
+  mcpAuthorityEnabled.value
+    ? t('views.AdminOrgSettingsView.mcp_authority_status_enabled')
+    : t('views.AdminOrgSettingsView.mcp_authority_status_disabled'),
+)
+
+async function loadMcpAuthority() {
+  mcpAuthorityLoading.value = true
+  mcpAuthorityLoadError.value = null
+  try {
+    const resp = await api.GET('/api/v1/admin/org/mcp-human-linked-hitl-authority')
+    if (resp.error) {
+      mcpAuthorityLoadError.value = t('views.AdminOrgSettingsView.mcp_authority_load_failed', {
+        error: formatApiError(resp.error),
+      })
+      return
+    }
+    const data = resp.data as { enabled?: boolean } | undefined
+    mcpAuthorityEnabled.value = data?.enabled ?? true
+  } catch (e: unknown) {
+    mcpAuthorityLoadError.value = t('views.AdminOrgSettingsView.mcp_authority_load_failed', {
+      error: formatApiError(e),
+    })
+  } finally {
+    mcpAuthorityLoading.value = false
+  }
+}
+
+async function toggleMcpAuthority(next: boolean) {
+  mcpAuthoritySaving.value = true
+  mcpAuthorityError.value = null
+  mcpAuthoritySaved.value = false
+  try {
+    const resp = await api.PUT('/api/v1/admin/org/mcp-human-linked-hitl-authority', {
+      body: { enabled: next },
+    })
+    if (resp.error) {
+      mcpAuthorityError.value = t('views.AdminOrgSettingsView.mcp_authority_save_failed', {
+        error: formatApiError(resp.error),
+      })
+    } else {
+      mcpAuthorityEnabled.value = next
+      mcpAuthoritySaved.value = true
+    }
+  } catch (e: unknown) {
+    mcpAuthorityError.value = t('views.AdminOrgSettingsView.mcp_authority_save_failed', {
+      error: formatApiError(e),
+    })
+  } finally {
+    mcpAuthoritySaving.value = false
+  }
+}
+
 function formatDate(dateStr: string): string {
   if (!dateStr) return 'N/A'
   const d = new Date(dateStr)
@@ -579,4 +695,5 @@ async function confirmDelete() {
 planStore.fetchPlan()
 loadCommunityObjects()
 loadHitlReviewWindow()
+loadMcpAuthority()
 </script>

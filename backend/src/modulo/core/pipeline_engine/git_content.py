@@ -768,11 +768,13 @@ def validate_agent_git_content_values(
 
     Shared, non-HTTP validation called by every Agent write path: the REST
     save paths (``routes/agents.py`` -> HTTP 422), the MCP ``create_agent``
-    tool (-> tool error dict), the graph-PUT Agent-command sync in
-    ``routes/pipelines.py`` (``_sync_agent_row_commands``, which validates
-    each incoming ``agent_commands`` list before writing the row — surfaced
-    as HTTP 422 by the graph save/patch/update endpoints), and prompt
-    rollback (``db/crud/agent.py`` ``rollback_prompt_version``, which
+    tool (-> tool error dict), the Agent-command sync in
+    ``modulo.core.agent_command_sync`` (``sync_agent_row_commands``, used by
+    the graph save/patch/update endpoints, the MCP full-graph writer, snapshot
+    rollback and bundle import — it validates each incoming ``agent_commands``
+    list before writing the row; the REST graph endpoints surface the typed
+    error as HTTP 422), and prompt rollback (``db/crud/agent.py``
+    ``rollback_prompt_version``, which
     re-validates the restored template so a legacy history entry cannot
     re-poison a clean row — the typed error propagates to the route, which
     maps it to HTTP 422). An ``Agent`` row carries the same content fields

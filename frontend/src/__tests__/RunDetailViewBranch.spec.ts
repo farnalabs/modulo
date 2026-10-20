@@ -255,6 +255,21 @@ describe('RunDetailView — branch coverage sweep', () => {
     expect(link.exists()).toBe(false)
   })
 
+  it('returns null PR URL when the slash in the ref comes after the hash', async () => {
+    const wrapper = await mountWith(
+      baseRun({ work_item_refs: [{ kind: 'github_pr', ref: 'farnalabs#123/modulo' }] }),
+    )
+    expect(wrapper.find('[data-testid="run-detail-pr-link-0"]').exists()).toBe(false)
+  })
+
+  it('returns null PR URL for a non-PR kind whose ref is not an explicit owner/repo#id', async () => {
+    const wrapper = await mountWith(
+      baseRun({ work_item_refs: [{ kind: 'github_issue', ref: '123' }] }),
+      { input_payload: { repository: { full_name: 'org/repo' }, pull_request: { number: 123, title: 'PR Title' } } },
+    )
+    expect(wrapper.find('[data-testid="run-detail-pr-link-0"]').exists()).toBe(false)
+  })
+
   // -- getPrUrl: fallback to payload context --
   it('falls back to payload context for github_pr with numeric ref', async () => {
     const wrapper = await mountWith(

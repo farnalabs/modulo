@@ -913,6 +913,15 @@ async def _enqueue_suite_run_execution(suite_run_id: str, org_id: str) -> str | 
     ``Run`` and checks pipeline/org capacity) does not apply. The job key is
     deterministic so SAQ dedupe never double-runs a suite, and a re-fire uses a
     fresh suite_run anyway (each fire is a distinct SuiteRun row).
+
+    FAR-2002: this enqueue deliberately does NOT apply the status-gated queued
+    TTL. A SuiteRun is created ``pending`` and its execution job is the ONLY
+    thing that advances it — nothing reconciles a stranded ``pending`` SuiteRun
+    (``_fail_suite_run_on_enqueue_error`` covers an enqueue EXCEPTION, not a
+    hash that later expires), so a queued TTL here would terminalise nothing and
+    silently lose the run forever. The job hash therefore stays unbounded while
+    queued (the deployment's ``maxmemory`` bound and the capacity alert are the
+    backstop) and SAQ's finish-origin ``ttl`` still bounds it once it completes.
     """
     from saq.queue.redis import RedisQueue
 
@@ -2316,6 +2325,10 @@ async def _startup_event_bus_hook(_ctx: dict[str, Any]) -> None:
        publishes reach other processes.
     3. Spawn the connect+subscribe loop as a background task with backoff —
        workers subscribe but NEVER relay (the web process owns the pump).
+    4. (FAR-1992) install the provider/platform DB-capacity probe so
+       WORKER-created runs (cron/polling triggers run in this process) can
+       auto-detect capacity exactly as the API process does. Installed BEFORE
+       the Redis steps below, which can ``return`` early when Redis is absent.
 
     LAZY and FAIL-OPEN end to end: every step is try/except log-and-continue.
     A Redis blip at boot must NEVER crash the worker (``policy="always"``
@@ -2342,6 +2355,21 @@ async def _startup_event_bus_hook(_ctx: dict[str, Any]) -> None:
         raise
     except Exception:
         _log.exception("saq_worker.event_listeners_register_failed")
+
+    # FAR-1992: the capacity hard-stop gate runs in create_run, which this
+    # process also drives (cron/polling triggers create runs). Install the
+    # provider/platform probe here too, BEFORE the Redis steps below (either of
+    # which can return early). Fail-open: an unconfigured/failed probe leaves
+    # the port unset and the chain falls through to "none" (inert).
+    try:
+        from modulo.core.capacity_providers import build_platform_capacity_probe
+        from modulo.db.capacity import set_platform_capacity_probe
+
+        set_platform_capacity_probe(build_platform_capacity_probe(get_settings()))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("saq_worker.capacity_platform_probe_failed", exc_info=True)
 
     settings = get_settings()
     if not settings.redis_url:

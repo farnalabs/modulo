@@ -66,6 +66,8 @@ from modulo.util import validate_workspace_network
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError, ScriptInvalidOutputError
+
 
 _log = logging.getLogger(__name__)
 
@@ -282,6 +284,75 @@ def validate_persistence_for_provider(profile: Any) -> None:
         )
 
 
+async def _assert_team_scope_backstop(
+    session_factory: Callable[..., Any] | None,
+    org_uuid: Any,
+    pipeline_id: Any,
+    profile: Any,
+) -> None:
+    """FAR-1598 team-scope backstop: refuse a cross-team private profile.
+
+    The owner-team read is skipped unless the profile is team-private — the
+    shared predicate can only return False for an org-visible one, so the
+    org/NULL path issues no extra query.
+    """
+    if (getattr(profile, "visibility", None) or "org") != "team":
+        return
+    _assert_profile_team_scope_for_dispatch(
+        profile,
+        pipeline_owner_team_id=await _pipeline_owner_team_for_dispatch(session_factory, org_uuid, pipeline_id),
+    )
+
+
+def _assert_bundled_runner_image_provisionable(profile: Any) -> None:
+    """Fail loud when a runner_docker profile still carries the placeholder digest."""
+    if not is_placeholder_bundled_runner_image_ref(getattr(profile, "image_ref", None)):
+        return
+    raise SandboxDispatchUnboundError(
+        f"Environment profile '{getattr(profile, 'name', profile)}' is bound to the Bundled "
+        "Runner (runner_docker) but its image_ref still carries the release-advanced placeholder "
+        "digest (sha256:0000…0000) and cannot provision a workspace. This is a known GA follow-up: "
+        "the GHCR publish job bumps the pinned digest. See "
+        "docs/security/bundled-runner-operator-guide.md. Re-bind the pipeline to a provisionable "
+        "profile, or wait for the digest to land."
+    )
+
+
+def _assert_kubernetes_image_ref(profile: Any) -> None:
+    """Fail loud when a kubernetes profile declares no workspace pod image."""
+    if (getattr(profile, "image_ref", None) or "").strip():
+        return
+    raise SandboxDispatchUnboundError(
+        f"Environment profile '{getattr(profile, 'name', profile)}' is bound to the "
+        "Kubernetes provider but declares no image_ref; the Kubernetes tier requires the "
+        "workspace pod image (an E2B template_id is not a container image), so set the "
+        "profile's image_ref to a runner container image before dispatching."
+    )
+
+
+def _build_dispatch_hub_provider(profile: Any) -> tuple[Any, Any]:
+    """Build a fresh hub (concurrency-wired) and resolve *profile* to a provider.
+
+    A provider/resolve failure surfaces as the typed
+    :class:`SandboxDispatchUnboundError` (never a bare provider error).
+    """
+    try:
+        from modulo.core.runtime_config.key_bridge import override_int_or
+        from modulo.settings import get_settings
+
+        settings = get_settings()
+        # FAR-1135: MODULO_MAX_LOCAL_CONCURRENCY is hot-reloadable.
+        concurrency = override_int_or(
+            "MODULO_MAX_LOCAL_CONCURRENCY",
+            int(getattr(settings, "modulo_max_local_concurrency", 2) or 2),
+        )
+        hub = build_hub(max_local_concurrency=concurrency)
+        provider = hub.resolve(profile)
+    except ProviderNotConfiguredError as exc:
+        raise SandboxDispatchUnboundError(str(exc)) from exc
+    return hub, provider
+
+
 async def resolve_sandbox_dispatch_route(
     session_factory: Callable[..., Any] | None,
     org_id_raw: Any,
@@ -329,11 +400,7 @@ async def resolve_sandbox_dispatch_route(
     # team-private — the shared predicate can only return False for an
     # org-visible one, so the org/NULL path issues no extra query and behaves
     # exactly as before.
-    if (getattr(profile, "visibility", None) or "org") == "team":
-        _assert_profile_team_scope_for_dispatch(
-            profile,
-            pipeline_owner_team_id=await _pipeline_owner_team_for_dispatch(session_factory, org_uuid, pipeline_id),
-        )
+    await _assert_team_scope_backstop(session_factory, org_uuid, pipeline_id, profile)
     provider_type = (getattr(profile, "provider_type", "") or "").strip().lower()
     if provider_type in ("local", "local_docker"):
         raise SandboxDispatchUnboundError(
@@ -353,30 +420,8 @@ async def resolve_sandbox_dispatch_route(
         # opaque pull error. This is a known GA follow-up (the GHCR publish job
         # bumps the real digest); surface it explicitly rather than silently
         # breaking the dispatch. See docs/security/bundled-runner-operator-guide.md.
-        _image_ref = getattr(profile, "image_ref", None)
-        if is_placeholder_bundled_runner_image_ref(_image_ref):
-            raise SandboxDispatchUnboundError(
-                f"Environment profile '{getattr(profile, 'name', profile)}' is bound to the Bundled "
-                "Runner (runner_docker) but its image_ref still carries the release-advanced placeholder "
-                "digest (sha256:0000…0000) and cannot provision a workspace. This is a known GA follow-up: "
-                "the GHCR publish job bumps the pinned digest. See "
-                "docs/security/bundled-runner-operator-guide.md. Re-bind the pipeline to a provisionable "
-                "profile, or wait for the digest to land."
-            )
-        try:
-            from modulo.core.runtime_config.key_bridge import override_int_or
-            from modulo.settings import get_settings
-
-            settings = get_settings()
-            # FAR-1135: MODULO_MAX_LOCAL_CONCURRENCY is hot-reloadable.
-            concurrency = override_int_or(
-                "MODULO_MAX_LOCAL_CONCURRENCY",
-                int(getattr(settings, "modulo_max_local_concurrency", 2) or 2),
-            )
-            hub = build_hub(max_local_concurrency=concurrency)
-            provider = hub.resolve(profile)
-        except ProviderNotConfiguredError as exc:
-            raise SandboxDispatchUnboundError(str(exc)) from exc
+        _assert_bundled_runner_image_provisionable(profile)
+        hub, provider = _build_dispatch_hub_provider(profile)
         return RunnerDispatchRoute(
             provider_type="runner_docker",
             profile=profile,
@@ -406,30 +451,11 @@ async def resolve_sandbox_dispatch_route(
         # BEFORE building the hub (mirroring the runner_docker
         # placeholder-digest check above), so the operator is told to set the
         # profile's image_ref rather than discovering it from a stuck pod.
-        if not (getattr(profile, "image_ref", None) or "").strip():
-            raise SandboxDispatchUnboundError(
-                f"Environment profile '{getattr(profile, 'name', profile)}' is bound to the "
-                "Kubernetes provider but declares no image_ref; the Kubernetes tier requires the "
-                "workspace pod image (an E2B template_id is not a container image), so set the "
-                "profile's image_ref to a runner container image before dispatching."
-            )
+        _assert_kubernetes_image_ref(profile)
         # The returned provider + hub are consumed by ``node_runner``: the
         # provider becomes the dispatch's provider (one client per dispatch)
         # and the hub is aclosed in the dispatch's finally.
-        try:
-            from modulo.core.runtime_config.key_bridge import override_int_or
-            from modulo.settings import get_settings
-
-            settings = get_settings()
-            # FAR-1135: MODULO_MAX_LOCAL_CONCURRENCY is hot-reloadable.
-            concurrency = override_int_or(
-                "MODULO_MAX_LOCAL_CONCURRENCY",
-                int(getattr(settings, "modulo_max_local_concurrency", 2) or 2),
-            )
-            hub = build_hub(max_local_concurrency=concurrency)
-            provider = hub.resolve(profile)
-        except ProviderNotConfiguredError as exc:
-            raise SandboxDispatchUnboundError(str(exc)) from exc
+        hub, provider = _build_dispatch_hub_provider(profile)
         return RunnerDispatchRoute(
             provider_type="kubernetes",
             profile=profile,
@@ -691,42 +717,30 @@ async def _consume_stream(
     collected: list[tuple[str, str]] = []
     throttle_state: dict[str, Any] = {"buf": [], "last_ts": 0.0}
 
-    async def _pump() -> None:
-        try:
-            async for chunk in exec_process.chunks:
-                data = chunk.data or ""
-                if data:
-                    _publish_stream_chunk(
-                        stream_broker,
-                        node_id=node_id,
-                        chunk=data,
-                        stream=chunk.stream,
-                        throttle_state=throttle_state,
-                    )
-                await queue.put((chunk.stream, data))
-        finally:
-            await queue.put(None)
-
-    pump_task = asyncio.create_task(_pump())
+    pump_task = asyncio.create_task(
+        _pump_exec_to_queue(
+            exec_process,
+            queue,
+            stream_broker=stream_broker,
+            node_id=node_id,
+            throttle_state=throttle_state,
+        )
+    )
     deadline = time.monotonic() + sandbox_timeout
     last_progress = time.monotonic()
     timed_out = False
     stalled = False
     try:
         while True:
-            now = time.monotonic()
-            if now >= deadline:
+            kind, item = await _next_stream_item(
+                queue, deadline=deadline, last_progress=last_progress, stall_timeout=stall_timeout
+            )
+            if kind == "timeout":
                 timed_out = True
                 break
-            stall_target = last_progress + stall_timeout
-            wait = min(deadline, stall_target) - now
-            if wait <= 0:
+            if kind == "stall":
                 stalled = True
                 break
-            try:
-                item = await asyncio.wait_for(queue.get(), timeout=max(wait, 0.05))
-            except TimeoutError:
-                continue
             if item is None:
                 break
             collected.append(item)
@@ -736,26 +750,89 @@ async def _consume_stream(
                 if touch_heartbeat:
                     stall_detector.touch("heartbeat")
     finally:
-        if timed_out or stalled:
-            try:
-                await asyncio.wait_for(exec_process.kill(), timeout=30)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("runner_dispatch.exec_kill_failed", extra={"node_id": node_id})
-        pump_task.cancel()
-        try:
-            await asyncio.wait_for(asyncio.wait([pump_task], timeout=5.0), timeout=5.5)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.info("runner_dispatch.pump_join_failed", extra={"node_id": node_id}, exc_info=True)
+        await _finalize_stream_consume(exec_process, pump_task, node_id=node_id, kill=timed_out or stalled)
     if exec_process.error:
         _log.info(
             "runner_dispatch.exec_stream_error",
             extra={"node_id": node_id, "error": exec_process.error[:200]},
         )
     return collected, timed_out, stalled
+
+
+async def _pump_exec_to_queue(
+    exec_process: ExecProcess,
+    queue: asyncio.Queue[tuple[str, str] | None],
+    *,
+    stream_broker: Any | None,
+    node_id: str,
+    throttle_state: dict[str, Any],
+) -> None:
+    """Pump exec chunks into the queue (publishing to the broker), then None."""
+    try:
+        async for chunk in exec_process.chunks:
+            data = chunk.data or ""
+            if data:
+                _publish_stream_chunk(
+                    stream_broker,
+                    node_id=node_id,
+                    chunk=data,
+                    stream=chunk.stream,
+                    throttle_state=throttle_state,
+                )
+            await queue.put((chunk.stream, data))
+    finally:
+        await queue.put(None)
+
+
+async def _next_stream_item(
+    queue: asyncio.Queue[tuple[str, str] | None],
+    *,
+    deadline: float,
+    last_progress: float,
+    stall_timeout: float,
+) -> tuple[str, tuple[str, str] | None]:
+    """Wait for the next queued chunk within the deadline/stall window.
+
+    Returns ``("item", chunk)`` (chunk ``None`` is the stream-end sentinel),
+    ``("timeout", None)`` when the total deadline passed, or
+    ``("stall", None)`` when no output arrived within ``stall_timeout``.
+    """
+    while True:
+        now = time.monotonic()
+        if now >= deadline:
+            return "timeout", None
+        wait = min(deadline, last_progress + stall_timeout) - now
+        if wait <= 0:
+            return "stall", None
+        try:
+            item = await asyncio.wait_for(queue.get(), timeout=max(wait, 0.05))
+        except TimeoutError:
+            continue
+        return "item", item
+
+
+async def _finalize_stream_consume(
+    exec_process: ExecProcess,
+    pump_task: asyncio.Task[None],
+    *,
+    node_id: str,
+    kill: bool,
+) -> None:
+    """Kill the exec (when timed out/stalled), cancel the pump and join it."""
+    if kill:
+        try:
+            await asyncio.wait_for(exec_process.kill(), timeout=30)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("runner_dispatch.exec_kill_failed", extra={"node_id": node_id})
+    pump_task.cancel()
+    try:
+        await asyncio.wait_for(asyncio.wait([pump_task], timeout=5.0), timeout=5.5)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.info("runner_dispatch.pump_join_failed", extra={"node_id": node_id}, exc_info=True)
 
 
 def _run_broker_for(run_id: str) -> Any:
@@ -925,7 +1002,7 @@ async def _check_idempotency_gate(
     return None
 
 
-async def _render_agent_template(
+def _render_agent_template(
     *,
     sandbox_mode: str,
     agent_command: str,
@@ -1015,23 +1092,29 @@ class _ProvisionResult:
     provider_ref: str
 
 
+@dataclass(frozen=True)
+class _ProvisionRequest:
+    """Inputs to ``_provision_workspace`` (grouped to keep the call short)."""
+
+    state: dict[str, Any]
+    org_id: str
+    run_id: str
+    node_id: str
+    route: RunnerDispatchRoute
+    org_uuid: uuid.UUID | None
+    run_uuid: uuid.UUID | None
+    sandbox_mode: str
+    context_files: dict[str, str]
+    input_json: str
+    raw_input: Any
+    rendered_prompt: str
+    node_egress_policy: str | None = None
+    node_egress_allowlist: list[dict[str, str | int]] | None = None
+
+
 async def _provision_workspace(
-    *,
     session_factory: Callable[..., Any] | None,
-    state: dict[str, Any],
-    org_id: str,
-    run_id: str,
-    node_id: str,
-    route: RunnerDispatchRoute,
-    org_uuid: uuid.UUID | None,
-    run_uuid: uuid.UUID | None,
-    sandbox_mode: str,
-    context_files: dict[str, str],
-    input_json: str,
-    raw_input: Any,
-    rendered_prompt: str,
-    node_egress_policy: str | None = None,
-    node_egress_allowlist: list[dict[str, str | int]] | None = None,
+    request: _ProvisionRequest,
 ) -> _ProvisionResult:
     """Acquire the dispatch marker, provision a workspace, and write context/input files.
 
@@ -1047,59 +1130,62 @@ async def _provision_workspace(
 
     attempt_key = await _sandbox_acquire_dispatch_marker(
         session_factory=session_factory,
-        claim_lease=state.get("_claim_lease"),
-        org_id=org_id,
-        run_id=run_id,
-        node_id=node_id,
-        provider=route.provider_type,
+        claim_lease=request.state.get("_claim_lease"),
+        org_id=request.org_id,
+        run_id=request.run_id,
+        node_id=request.node_id,
+        provider=request.route.provider_type,
     )
     if attempt_key is None:
         raise SupersededNodeError(
             "Bundled Runner dispatch marker denied — run superseded or not running; workspace not created"
         )
 
-    profile = route.profile
-    provider = route.provider
+    profile = request.route.profile
+    provider = request.route.provider
     if profile is None or provider is None:
         raise RuntimeError("Bundled Runner route resolved without a profile/provider")
     spec = _workspace_spec_for_dispatch(
         profile,
-        org_id=org_uuid,
-        run_id=run_id,
-        node_id=node_id,
-        run_uuid=run_uuid,
-        node_egress_policy=node_egress_policy,
-        node_egress_allowlist=node_egress_allowlist,
+        org_id=request.org_uuid,
+        run_id=request.run_id,
+        node_id=request.node_id,
+        run_uuid=request.run_uuid,
+        node_egress_policy=request.node_egress_policy,
+        node_egress_allowlist=request.node_egress_allowlist,
     )
     provider_ref = await provider.create_workspace(spec)
     _emit_script_span_event(
         "script.provisioned",
-        {"sandbox_id": provider_ref, "provider": "runner_docker", "mode": sandbox_mode},
+        {"sandbox_id": provider_ref, "provider": "runner_docker", "mode": request.sandbox_mode},
     )
     await _sandbox_store_dispatch_marker_sandbox(
         provider_ref,
         session_factory=session_factory,
-        claim_lease=state.get("_claim_lease"),
-        org_id=org_id,
-        run_id=run_id,
+        claim_lease=request.state.get("_claim_lease"),
+        org_id=request.org_id,
+        run_id=request.run_id,
         attempt_key=attempt_key,
-        provider=route.provider_type,
+        provider=request.route.provider_type,
     )
 
-    for raw_path, raw_content in context_files.items():
+    for raw_path, raw_content in request.context_files.items():
         write_path = raw_path.removesuffix(".b64") if raw_path.endswith(".b64") else raw_path
         write_content = base64.b64decode(raw_content).decode() if raw_path.endswith(".b64") else raw_content
         await _write_file_via_exec(provider, provider_ref, write_path, write_content)
-    if sandbox_mode == "script":
-        await _write_file_via_exec(provider, provider_ref, _INPUT_JSON_PATH, input_json)
+    if request.sandbox_mode == "script":
+        await _write_file_via_exec(provider, provider_ref, _INPUT_JSON_PATH, request.input_json)
     else:
-        safe_input = input_json
-        if len(input_json) > 10240:
+        safe_input = request.input_json
+        if len(request.input_json) > 10240:
             safe_input = json.dumps(
-                {"_truncated": True, "_key_count": len(raw_input) if isinstance(raw_input, dict) else 0}
+                {
+                    "_truncated": True,
+                    "_key_count": len(request.raw_input) if isinstance(request.raw_input, dict) else 0,
+                }
             )
         await _write_file_via_exec(provider, provider_ref, _INPUT_JSON_PATH, safe_input)
-        await _write_file_via_exec(provider, provider_ref, _PROMPT_PATH, rendered_prompt)
+        await _write_file_via_exec(provider, provider_ref, _PROMPT_PATH, request.rendered_prompt)
 
     return _ProvisionResult(attempt_key=attempt_key, provider_ref=provider_ref)
 
@@ -1260,25 +1346,99 @@ def _classify_exec_result(
     return exit_code
 
 
-async def _read_and_validate_output(
-    *,
-    provider: Any,
-    provider_ref: str,
-    session_factory: Callable[..., Any] | None,
-    run_id: str,
-    org_id: str,
-    node_id: str,
-    attempt_key: str,
-    agent_stdout_raw: str,
-    agent_stderr_raw: str,
-    delivery_sentinel: str | None,
-    stdout_cap: int,
-    exit_code: int,
-    sandbox_mode: str,
-    script_lease_claimed: bool,
-    output_schema_json: Any,
-    schema_validator_mode: str = "lenient",
-) -> Any:
+@dataclass(frozen=True)
+class _OutputReadRequest:
+    """Inputs to ``_read_and_validate_output`` (grouped to keep the call short)."""
+
+    provider: Any
+    provider_ref: str
+    session_factory: Callable[..., Any] | None
+    run_id: str
+    org_id: str
+    node_id: str
+    attempt_key: str
+    agent_stdout_raw: str
+    agent_stderr_raw: str
+    delivery_sentinel: str | None
+    stdout_cap: int
+    exit_code: int
+    sandbox_mode: str
+    script_lease_claimed: bool
+    output_schema_json: Any
+    schema_validator_mode: str = "lenient"
+
+
+def _output_parse_error(raw_output_str: str, output_json: Any) -> str:
+    """Human-readable reason the output.json payload could not be used."""
+    if raw_output_str and not isinstance(output_json, dict) and output_json is not None:
+        return f"output.json parsed to non-dict type {type(output_json).__name__}"
+    if raw_output_str:
+        return "output.json is not valid JSON"
+    return "output.json is empty or JSON null"
+
+
+def _no_output_error(
+    node_id: str, sandbox_mode: str, script_lease_claimed: bool
+) -> SandboxNodeFailedError | ScriptInvalidOutputError:
+    """The typed error for a genuinely-empty output.json (script vs runner).
+
+    The return annotation names the two CONCRETE exception types rather than
+    bare ``Exception`` so the raise site is typed (Sonar S112) and callers can
+    narrow on the specific failure.
+    """
+    from modulo.core.pipeline_engine.node_runner import (
+        SandboxNodeFailedError,
+        ScriptInvalidOutputError,
+    )
+
+    if sandbox_mode == "script" and script_lease_claimed:
+        return ScriptInvalidOutputError(_no_output_message(node_id))
+    return SandboxNodeFailedError(_no_output_message(node_id), node_id=node_id)
+
+
+async def _handle_schema_validation_failure(
+    request: _OutputReadRequest, raw_output_str: str, schema_exc: ValueError
+) -> None:
+    """Retain the marker and raise the typed failure for a schema violation."""
+    from modulo.core.pipeline_engine.node_runner import (
+        SandboxNodeFailedError,
+        ScriptInvalidOutputError,
+        _RawOutputMarkerRequest,
+        _retain_raw_output_marker,
+    )
+
+    _log.exception(
+        "sandbox_agent.runner.schema_validation_failed",
+        extra={"node_id": request.node_id},
+    )
+    if request.sandbox_mode == "script" and request.script_lease_claimed:
+        raise ScriptInvalidOutputError(
+            f"Script-mode output failed schema validation for node {request.node_id!r}: {schema_exc}"
+        ) from None
+    await _retain_raw_output_marker(
+        request.session_factory,
+        _RawOutputMarkerRequest(
+            run_id=request.run_id,
+            org_id_raw=request.org_id,
+            node_id=request.node_id,
+            attempt_key=request.attempt_key,
+            summary=("Bundled Runner agent output failed declared output schema validation — raw output retained"),
+            source=_combine_raw_outputs(raw_output_str, request.agent_stdout_raw),
+            parse_error=str(schema_exc),
+            exit_code=request.exit_code,
+            stdout_length=len(request.agent_stdout_raw),
+            stderr_length=len(request.agent_stderr_raw),
+            delivery_sentinel=request.delivery_sentinel,
+            max_artifact_bytes=request.stdout_cap,
+        ),
+    )
+    raise SandboxNodeFailedError(
+        _schema_failure_message(node_id=request.node_id, schema_exc=str(schema_exc)),
+        node_id=request.node_id,
+    ) from None
+
+
+async def _read_and_validate_output(request: _OutputReadRequest) -> Any:
     """Read output.json from the workspace, parse it, and validate against schema.
 
     Returns the parsed output dict (or a non-dict parseable value).  Raises
@@ -1286,14 +1446,13 @@ async def _read_and_validate_output(
     failure.  Retains raw-output markers on every error path.
     """
     from modulo.core.pipeline_engine.node_runner import (
-        SandboxNodeFailedError,
         ScriptFailedError,
-        ScriptInvalidOutputError,
+        _RawOutputMarkerRequest,
         _retain_raw_output_marker,
         _validate_against_schema,
     )
 
-    raw_output_str = await _read_file_via_exec(provider, provider_ref, _OUTPUT_JSON_PATH)
+    raw_output_str = await _read_file_via_exec(request.provider, request.provider_ref, _OUTPUT_JSON_PATH)
     output_json: Any = None
     if raw_output_str:
         try:
@@ -1302,68 +1461,39 @@ async def _read_and_validate_output(
             output_json = None
 
     if output_json is None or not isinstance(output_json, dict):
-        if raw_output_str and not isinstance(output_json, dict) and output_json is not None:
-            parse_error = f"output.json parsed to non-dict type {type(output_json).__name__}"
-        elif raw_output_str:
-            parse_error = "output.json is not valid JSON"
-        else:
-            parse_error = "output.json is empty or JSON null"
+        parse_error = _output_parse_error(raw_output_str, output_json)
         await _retain_raw_output_marker(
-            session_factory,
-            run_id=run_id,
-            org_id_raw=org_id,
-            node_id=node_id,
-            attempt_key=attempt_key,
-            summary="Bundled Runner agent produced no parseable output.json — raw output retained",
-            source=_combine_raw_outputs(raw_output_str, agent_stdout_raw),
-            parse_error=parse_error,
-            exit_code=exit_code,
-            stdout_length=len(agent_stdout_raw),
-            stderr_length=len(agent_stderr_raw),
-            delivery_sentinel=delivery_sentinel,
-            max_artifact_bytes=stdout_cap,
+            request.session_factory,
+            _RawOutputMarkerRequest(
+                run_id=request.run_id,
+                org_id_raw=request.org_id,
+                node_id=request.node_id,
+                attempt_key=request.attempt_key,
+                summary="Bundled Runner agent produced no parseable output.json — raw output retained",
+                source=_combine_raw_outputs(raw_output_str, request.agent_stdout_raw),
+                parse_error=parse_error,
+                exit_code=request.exit_code,
+                stdout_length=len(request.agent_stdout_raw),
+                stderr_length=len(request.agent_stderr_raw),
+                delivery_sentinel=request.delivery_sentinel,
+                max_artifact_bytes=request.stdout_cap,
+            ),
         )
         if output_json is None:
-            if sandbox_mode == "script" and script_lease_claimed:
-                raise ScriptInvalidOutputError(_no_output_message(node_id))
-            raise SandboxNodeFailedError(_no_output_message(node_id), node_id=node_id)
+            raise _no_output_error(request.node_id, request.sandbox_mode, request.script_lease_claimed)
 
-    if sandbox_mode == "script" and exit_code != 0:
-        raise ScriptFailedError(f"Script-mode Bundled Runner exited with code {exit_code} (post-claim, terminal)")
+    if request.sandbox_mode == "script" and request.exit_code != 0:
+        raise ScriptFailedError(
+            f"Script-mode Bundled Runner exited with code {request.exit_code} (post-claim, terminal)"
+        )
 
-    if isinstance(output_schema_json, dict) and isinstance(output_json, dict):
+    if isinstance(request.output_schema_json, dict) and isinstance(output_json, dict):
         try:
             # FAR-899: honour the operator-toggled schema validator mode
             # (resolved by _sandbox_agent_impl and threaded through the config).
-            _validate_against_schema(output_json, output_schema_json, mode=schema_validator_mode)
+            _validate_against_schema(output_json, request.output_schema_json, mode=request.schema_validator_mode)
         except ValueError as schema_exc:
-            _log.exception(
-                "sandbox_agent.runner.schema_validation_failed",
-                extra={"node_id": node_id},
-            )
-            if sandbox_mode == "script" and script_lease_claimed:
-                raise ScriptInvalidOutputError(
-                    f"Script-mode output failed schema validation for node {node_id!r}: {schema_exc}"
-                ) from None
-            await _retain_raw_output_marker(
-                session_factory,
-                run_id=run_id,
-                org_id_raw=org_id,
-                node_id=node_id,
-                attempt_key=attempt_key,
-                summary=("Bundled Runner agent output failed declared output schema validation — raw output retained"),
-                source=_combine_raw_outputs(raw_output_str, agent_stdout_raw),
-                parse_error=str(schema_exc),
-                exit_code=exit_code,
-                stdout_length=len(agent_stdout_raw),
-                stderr_length=len(agent_stderr_raw),
-                delivery_sentinel=delivery_sentinel,
-                max_artifact_bytes=stdout_cap,
-            )
-            raise SandboxNodeFailedError(
-                _schema_failure_message(node_id=node_id, schema_exc=str(schema_exc)),
-                node_id=node_id,
-            ) from None
+            await _handle_schema_validation_failure(request, raw_output_str, schema_exc)
 
     return output_json
 
@@ -1454,32 +1584,197 @@ async def _maybe_retain_delivery_sentinel(
     stdout_cap: int,
 ) -> None:
     """Best-effort retention of the delivery-sentinel idempotency marker."""
-    from modulo.core.pipeline_engine.node_runner import _retain_raw_output_marker
+    from modulo.core.pipeline_engine.node_runner import _RawOutputMarkerRequest, _retain_raw_output_marker
 
     if not (delivery_sentinel and _source_contains_sentinel(agent_stdout_raw, delivery_sentinel)):
         return
     try:
         await _retain_raw_output_marker(
             session_factory,
-            run_id=run_id,
-            org_id_raw=org_id,
-            node_id=node_id,
-            attempt_key=attempt_key,
-            summary="Bundled Runner completed with delivery sentinel observed (idempotency gate)",
-            source=agent_stdout_raw,
-            parse_error="",
-            exit_code=exit_code,
-            stdout_length=stdout_len,
-            stderr_length=stderr_len,
-            delivery_sentinel=delivery_sentinel,
-            status=status,
-            max_artifact_bytes=stdout_cap,
+            _RawOutputMarkerRequest(
+                run_id=run_id,
+                org_id_raw=org_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+                summary="Bundled Runner completed with delivery sentinel observed (idempotency gate)",
+                source=agent_stdout_raw,
+                parse_error="",
+                exit_code=exit_code,
+                stdout_length=stdout_len,
+                stderr_length=stderr_len,
+                delivery_sentinel=delivery_sentinel,
+                status=status,
+                max_artifact_bytes=stdout_cap,
+            ),
         )
     except Exception:
         _log.exception(
             "sandbox_agent.runner.delivery_marker_persist_failed",
             extra={"node_id": node_id},
         )
+
+
+async def _resolve_effective_stdout_cap(config: Any, node_def: dict[str, Any], *, node_id: str) -> int:
+    """Resolve the node's effective stdout/stderr retention cap (FAR-792 / FAR-811).
+
+    The org-level hard ceiling (``system_config.sandbox_stdout_retention_max_bytes``)
+    is read and applied here too, so the "no node can exceed the org ceiling"
+    invariant holds on the Bundled Runner path exactly as on the E2B path; a
+    clamp is logged.
+    """
+    from modulo.core.pipeline_engine.node_runner import _read_org_stdout_retention_ceiling
+
+    org_stdout_ceiling = await _read_org_stdout_retention_ceiling(config.session_factory)
+    pipeline_ret_cfg = getattr(config, "pipeline_stdout_retention_config", None)
+    stdout_cap_unclamped = _resolve_stdout_cap(node_def, pipeline_default=pipeline_ret_cfg)
+    stdout_cap = _resolve_stdout_cap(node_def, org_ceiling=org_stdout_ceiling, pipeline_default=pipeline_ret_cfg)
+    if org_stdout_ceiling is not None and stdout_cap < stdout_cap_unclamped:
+        _log.warning(
+            "sandbox_agent.runner.stdout_cap_clamped_by_org_ceiling",
+            extra={
+                "node_id": node_id,
+                "cap_without_ceiling": stdout_cap_unclamped,
+                "org_ceiling": org_stdout_ceiling,
+                "effective_cap": stdout_cap,
+            },
+        )
+    return stdout_cap
+
+
+def _runner_retention_artifacts(
+    *,
+    node_id: str,
+    run_id: str,
+    org_id: str,
+    attempt_key: str,
+    agent_stdout_raw: str,
+    agent_stderr_raw: str,
+    stdout_cap: int,
+) -> tuple[str, str, int, int, bool, dict[str, Any] | None, dict[str, Any] | None]:
+    """Redact+truncate the streams and persist the over-cap side-car artifacts.
+
+    Returns ``(agent_stdout, agent_stderr, stdout_len, stderr_len,
+    stdout_truncated, stdout_artifact, stderr_artifact)``. FAR-792/811/879:
+    redaction happens BEFORE truncation (credential-scrubbing sees the full
+    stream); the full redacted transcripts are persisted best-effort when they
+    exceed the inline cap.
+    """
+    from modulo.core.pipeline_engine.node_runner import (
+        _persist_full_stderr_artifact,
+        _persist_full_stdout_artifact,
+        _redact_raw_output,
+    )
+
+    agent_stdout = _redact_raw_output(agent_stdout_raw)[:stdout_cap]
+    agent_stderr = _redact_raw_output(agent_stderr_raw)[:stdout_cap]
+    stdout_len = len(agent_stdout_raw)
+    stderr_len = len(agent_stderr_raw)
+    stdout_truncated = stdout_len > stdout_cap
+    if stdout_truncated or stderr_len > stdout_cap:
+        _log.warning(
+            "sandbox_agent.stdout_stderr_truncated",
+            extra={
+                "node_id": node_id,
+                "run_id": run_id,
+                "retention_cap_bytes": stdout_cap,
+                "stderr_truncated": stderr_len > stdout_cap,
+                "stdout_length": stdout_len,
+                "stderr_length": stderr_len,
+            },
+        )
+    stdout_artifact: dict[str, Any] | None = None
+    if stdout_truncated:
+        stdout_artifact = _persist_full_stdout_artifact(
+            org_id=org_id,
+            run_id=run_id,
+            node_id=node_id,
+            attempt_key=attempt_key,
+            node_cap=stdout_cap,
+            redacted_stdout=_redact_raw_output(agent_stdout_raw),
+        )
+    stderr_artifact: dict[str, Any] | None = None
+    if stderr_len > stdout_cap:
+        stderr_artifact = _persist_full_stderr_artifact(
+            org_id=org_id,
+            run_id=run_id,
+            node_id=node_id,
+            attempt_key=attempt_key,
+            node_cap=stdout_cap,
+            redacted_stderr=_redact_raw_output(agent_stderr_raw),
+        )
+    return agent_stdout, agent_stderr, stdout_len, stderr_len, stdout_truncated, stdout_artifact, stderr_artifact
+
+
+async def _harvest_gh_claim_receipt(
+    provider: Any, provider_ref: str, run_id: str
+) -> tuple[bool | None, asyncio.CancelledError | None]:
+    """Bounded, cancellation-safe harvest of the one-PR guard receipt (FAR-1315).
+
+    Returns ``(receipt, cancellation)``. The probe task is always
+    awaited-or-cancelled (never left running against a container the teardown
+    destroys); a cancellation is RECORDED, not re-raised here, so teardown still
+    runs and the dispatch re-raises it afterwards.
+    """
+    if provider is None or not provider_ref:
+        return None, None
+    from modulo.core.pipeline_engine.sandbox_policy import harvest_gh_pr_claim_bounded
+
+    async def _claim_receipt_exec(command: list[str]) -> Any:
+        return await provider.exec_command(provider_ref, command, cmd_timeout=15)
+
+    try:
+        receipt = await harvest_gh_pr_claim_bounded(_claim_receipt_exec, run_scope=run_id)
+        return receipt, None
+    except asyncio.CancelledError as cancel_exc:  # NOSONAR S7497
+        return None, cancel_exc
+    except Exception:
+        return None, None
+
+
+async def _settle_single_pr_guard(
+    *,
+    armed: bool,
+    provider: Any,
+    provider_ref: str,
+    run_id: str,
+    node_id: str,
+    agent_stdout_raw: str,
+    agent_stderr_raw: str,
+    pr_url: str,
+    output_json: Any,
+    install_status: str | None,
+) -> asyncio.CancelledError | None:
+    """Settle this node's run-scoped one-PR guard slot (FAR-1315), exception-safe.
+
+    Returns a cancellation to re-raise AFTER teardown (or ``None``). Runs BEFORE
+    ``_teardown_and_clear`` so the shim's success receipt can still be harvested.
+    """
+    if not armed:
+        return None
+    from modulo.core.pipeline_engine.sandbox_policy import settle_run_pr_guard
+
+    cancelled: asyncio.CancelledError | None = None
+    try:
+        claim_receipt, cancelled = await _harvest_gh_claim_receipt(provider, provider_ref, run_id)
+        settle_run_pr_guard(
+            run_id,
+            node_id,
+            agent_stdout_raw,
+            agent_stderr_raw,
+            pr_url=pr_url or (output_json.get("pr_url") if isinstance(output_json, dict) else None),
+            claim_receipt=claim_receipt,
+            # FAR-1315 (MAJOR 2b): only a LIVE install makes a definitive
+            # receipt=False mean "confirmed no create".
+            guard_install_status=install_status,
+        )
+    except asyncio.CancelledError as cancel_exc:  # NOSONAR S7497
+        # Defence in depth: settle itself is synchronous, but never let a
+        # cancellation skip ``_teardown_and_clear``.
+        if cancelled is None:
+            cancelled = cancel_exc
+    except Exception:
+        _log.debug("runner_dispatch.gh_guard_settle_failed", exc_info=True)
+    return cancelled
 
 
 async def run_bundled_runner_node(
@@ -1507,10 +1802,6 @@ async def run_bundled_runner_node(
         _compute_sandbox_cost,
         _configure_stall_detector,
         _emit_script_span_event,
-        _persist_full_stderr_artifact,
-        _persist_full_stdout_artifact,
-        _read_org_stdout_retention_ceiling,
-        _redact_raw_output,
         _run_identity_strs,
         _SandboxNodeOutput,
     )
@@ -1596,7 +1887,7 @@ async def run_bundled_runner_node(
         scoped_run_context = filter_run_context_scope(
             run_context, (node_def.get("capability_scope") or {}).get("context_scope")
         )
-        template_result = await _render_agent_template(
+        template_result = _render_agent_template(
             sandbox_mode=sandbox_mode,
             agent_command=agent_command,
             agent_prompt_template=agent_prompt_template,
@@ -1615,21 +1906,23 @@ async def run_bundled_runner_node(
 
         # DB-atomic dispatch fence (same fenced WHERE as the E2B path).
         provision = await _provision_workspace(
-            session_factory=session_factory,
-            state=state,
-            org_id=org_id,
-            run_id=run_id,
-            node_id=node_id,
-            route=route,
-            org_uuid=org_uuid,
-            run_uuid=run_uuid,
-            sandbox_mode=sandbox_mode,
-            context_files=context_files,
-            input_json=input_json,
-            raw_input=raw_input,
-            rendered_prompt=rendered_prompt,
-            node_egress_policy=node_def.get("egress_policy"),
-            node_egress_allowlist=node_def.get("egress_allowlist"),
+            session_factory,
+            _ProvisionRequest(
+                state=state,
+                org_id=org_id,
+                run_id=run_id,
+                node_id=node_id,
+                route=route,
+                org_uuid=org_uuid,
+                run_uuid=run_uuid,
+                sandbox_mode=sandbox_mode,
+                context_files=context_files,
+                input_json=input_json,
+                raw_input=raw_input,
+                rendered_prompt=rendered_prompt,
+                node_egress_policy=node_def.get("egress_policy"),
+                node_egress_allowlist=node_def.get("egress_allowlist"),
+            ),
         )
         attempt_key = provision.attempt_key
         dispatch_marker_set = True
@@ -1647,41 +1940,13 @@ async def run_bundled_runner_node(
         # (silent absence on a non-E2B tier is exactly the gap this closes).
         if node_def.get("single_pr_per_run") is True:
             _single_pr_guard_armed = True
-            from modulo.core.pipeline_engine.sandbox_policy import install_gh_pr_guard_via_exec
-
-            async def _guard_exec(command: list[str]) -> Any:
-                return await provider.exec_command(provider_ref, command, cmd_timeout=30)
-
-            _guard_install = await install_gh_pr_guard_via_exec(
-                _guard_exec,
-                run_scope=run_id,
-                guard_owner=node_id,
+            _gh_guard_install_status = await _install_single_pr_guard(
+                provider,
+                provider_ref,
+                run_id=run_id,
+                node_id=node_id,
+                provider_type=route.provider_type,
             )
-            _gh_guard_install_status = _guard_install.status
-            if _guard_install.status in ("absent", "failed"):
-                _log.warning(
-                    "runner_dispatch.gh_pr_guard_unavailable: tier=%s status=%s node=%s run=%s detail=%s",
-                    route.provider_type,
-                    _guard_install.status,
-                    node_id,
-                    run_id,
-                    (_guard_install.detail or "no detail")[:300],
-                )
-            elif _guard_install.status == "pre_planted":
-                _log.warning(
-                    "runner_dispatch.gh_guard_run_claim_denied: tier=%s node=%s run=%s - "
-                    "pre-planted refusal, this node cannot create a PR (FAR-1315)",
-                    route.provider_type,
-                    node_id,
-                    run_id,
-                )
-            else:
-                _log.info(
-                    "runner_dispatch.gh_pr_guard_installed: tier=%s node=%s run=%s",
-                    route.provider_type,
-                    node_id,
-                    run_id,
-                )
 
         sandbox_envs, script_lease_claimed = await _resolve_sandbox_envs_with_script_setup(
             node_def=node_def,
@@ -1757,24 +2022,10 @@ async def run_bundled_runner_node(
         elapsed = time.monotonic() - start_time
         # FAR-792 + FAR-811: resolve the node's effective stdout/stderr retention
         # cap early so both the envelope artifacts AND the raw-output retention
-        # markers honour it (E2B parity). The org-level hard ceiling
-        # (system_config.sandbox_stdout_retention_max_bytes) is read and applied
-        # here too, so the "no node can exceed the org ceiling" invariant holds
-        # on the Bundled Runner path exactly as on the E2B path.
-        org_stdout_ceiling = await _read_org_stdout_retention_ceiling(config.session_factory)
-        _pipeline_ret_cfg = getattr(config, "pipeline_stdout_retention_config", None)
-        stdout_cap_unclamped = _resolve_stdout_cap(node_def, pipeline_default=_pipeline_ret_cfg)
-        stdout_cap = _resolve_stdout_cap(node_def, org_ceiling=org_stdout_ceiling, pipeline_default=_pipeline_ret_cfg)
-        if org_stdout_ceiling is not None and stdout_cap < stdout_cap_unclamped:
-            _log.warning(
-                "sandbox_agent.runner.stdout_cap_clamped_by_org_ceiling",
-                extra={
-                    "node_id": node_id,
-                    "cap_without_ceiling": stdout_cap_unclamped,
-                    "org_ceiling": org_stdout_ceiling,
-                    "effective_cap": stdout_cap,
-                },
-            )
+        # markers honour it (E2B parity). The org-level hard ceiling is read and
+        # applied inside the helper, so the "no node can exceed the org ceiling"
+        # invariant holds here exactly as on the E2B path.
+        stdout_cap = await _resolve_effective_stdout_cap(config, node_def, node_id=node_id)
 
         # Stream error / engine-proxy drop / no exit code: RETRYABLE — never
         # a fabricated zero-exit completion (D4 acceptance criteria).
@@ -1790,73 +2041,46 @@ async def run_bundled_runner_node(
         )
 
         output_json = await _read_and_validate_output(
-            provider=provider,
-            provider_ref=provider_ref,
-            session_factory=session_factory,
+            _OutputReadRequest(
+                provider=provider,
+                provider_ref=provider_ref,
+                session_factory=session_factory,
+                run_id=run_id,
+                org_id=org_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+                agent_stdout_raw=agent_stdout_raw,
+                agent_stderr_raw=agent_stderr_raw,
+                delivery_sentinel=delivery_sentinel,
+                stdout_cap=stdout_cap,
+                exit_code=exit_code,
+                sandbox_mode=sandbox_mode,
+                script_lease_claimed=script_lease_claimed,
+                output_schema_json=output_schema_json,
+                schema_validator_mode=schema_validator_mode,
+            )
+        )
+
+        # FAR-792 / FAR-811 / FAR-879: redact BEFORE truncation, slice to the
+        # effective cap, and persist the full over-cap transcripts to the
+        # artifact store (side-car pointer) — extracted verbatim.
+        (
+            agent_stdout,
+            agent_stderr,
+            stdout_len,
+            stderr_len,
+            stdout_truncated,
+            _stdout_artifact,
+            _stderr_artifact,
+        ) = _runner_retention_artifacts(
+            node_id=node_id,
             run_id=run_id,
             org_id=org_id,
-            node_id=node_id,
             attempt_key=attempt_key,
             agent_stdout_raw=agent_stdout_raw,
             agent_stderr_raw=agent_stderr_raw,
-            delivery_sentinel=delivery_sentinel,
             stdout_cap=stdout_cap,
-            exit_code=exit_code,
-            sandbox_mode=sandbox_mode,
-            script_lease_claimed=script_lease_claimed,
-            output_schema_json=output_schema_json,
-            schema_validator_mode=schema_validator_mode,
         )
-
-        # FAR-792: redact BEFORE truncation so credential-scrubbing sees the
-        # full stream, then slice to the node's effective retention cap.
-        agent_stdout = _redact_raw_output(agent_stdout_raw)[:stdout_cap]
-        agent_stderr = _redact_raw_output(agent_stderr_raw)[:stdout_cap]
-        stdout_len = len(agent_stdout_raw)
-        stderr_len = len(agent_stderr_raw)
-        stdout_truncated = stdout_len > stdout_cap
-        if stdout_truncated or stderr_len > stdout_cap:
-            _log.warning(
-                "sandbox_agent.stdout_stderr_truncated",
-                extra={
-                    "node_id": node_id,
-                    "run_id": run_id,
-                    "retention_cap_bytes": stdout_cap,
-                    "stderr_truncated": stderr_len > stdout_cap,
-                    "stdout_length": stdout_len,
-                    "stderr_length": stderr_len,
-                },
-            )
-
-        # FAR-811 parity with the E2B path: over-cap redacted stdout is retained
-        # IN FULL in the artifact store with an envelope pointer (stdout_artifact)
-        # instead of only the truncated head.  Best-effort: a store failure keeps
-        # today's inline (truncated) behaviour with no pointer key.  Redaction
-        # happened ABOVE (order unchanged) — the stored bytes are the redacted text.
-        _stdout_artifact: dict[str, Any] | None = None
-        if stdout_truncated:
-            _stdout_artifact = _persist_full_stdout_artifact(
-                org_id=org_id,
-                run_id=run_id,
-                node_id=node_id,
-                attempt_key=attempt_key,
-                node_cap=stdout_cap,
-                redacted_stdout=_redact_raw_output(agent_stdout_raw),
-            )
-
-        # FAR-879: stderr parity — persist the full redacted stderr transcript
-        # to the artifact store when it exceeds the inline retention cap.
-        _stderr_artifact: dict[str, Any] | None = None
-        stderr_truncated = stderr_len > stdout_cap
-        if stderr_truncated:
-            _stderr_artifact = _persist_full_stderr_artifact(
-                org_id=org_id,
-                run_id=run_id,
-                node_id=node_id,
-                attempt_key=attempt_key,
-                node_cap=stdout_cap,
-                redacted_stderr=_redact_raw_output(agent_stderr_raw),
-            )
 
         cost = _compute_sandbox_cost(elapsed, output_json)
         result = _shape_result(
@@ -1936,60 +2160,18 @@ async def run_bundled_runner_node(
         # workspace, stale dispatch marker, stranded hold). The bounded
         # harvest records the cancellation instead, teardown runs
         # UNCONDITIONALLY, and the cancellation is re-raised at the end.
-        _gh_settle_cancelled: asyncio.CancelledError | None = None
-        if _single_pr_guard_armed:
-            try:
-                from modulo.core.pipeline_engine.sandbox_policy import (
-                    harvest_gh_pr_claim_bounded,
-                    settle_run_pr_guard,
-                )
-
-                _claim_receipt: bool | None = None
-                _harvest_provider = provider
-                _harvest_ref = provider_ref
-                if _harvest_provider is not None and _harvest_ref:
-
-                    async def _claim_receipt_exec(command: list[str]) -> Any:
-                        return await _harvest_provider.exec_command(_harvest_ref, command, cmd_timeout=15)
-
-                    try:
-                        # Bounded AND cancellation-safe: the probe task is
-                        # always awaited-or-cancelled (never left running
-                        # against a container the teardown below destroys),
-                        # and a cancellation is recorded rather than allowed
-                        # to unwind past the teardown.
-                        _claim_receipt = await harvest_gh_pr_claim_bounded(
-                            _claim_receipt_exec,
-                            run_scope=run_id,
-                            timeout=20.0,
-                        )
-                    # Cancellation is RECORDED, not re-raised here: the dispatch
-                    # re-raises it only after ``_teardown_and_clear`` below runs
-                    # (FAR-1315 re-gate MAJOR 1).
-                    except asyncio.CancelledError as _cancel_exc:  # NOSONAR S7497
-                        _claim_receipt = None
-                        _gh_settle_cancelled = _cancel_exc
-                    except Exception:
-                        _claim_receipt = None
-                _output_json = output_json
-                settle_run_pr_guard(
-                    run_id,
-                    node_id,
-                    agent_stdout_raw,
-                    agent_stderr_raw,
-                    pr_url=pr_url or (_output_json.get("pr_url") if isinstance(_output_json, dict) else None),
-                    claim_receipt=_claim_receipt,
-                    # FAR-1315 (MAJOR 2b): only a LIVE install makes a
-                    # definitive receipt=False mean "confirmed no create".
-                    guard_install_status=_gh_guard_install_status,
-                )
-            except asyncio.CancelledError as _cancel_exc:  # NOSONAR S7497
-                # Defence in depth: settle itself is synchronous, but never
-                # let a cancellation skip ``_teardown_and_clear`` below.
-                if _gh_settle_cancelled is None:
-                    _gh_settle_cancelled = _cancel_exc
-            except Exception:
-                _log.debug("runner_dispatch.gh_guard_settle_failed", exc_info=True)
+        _gh_settle_cancelled = await _settle_single_pr_guard(
+            armed=_single_pr_guard_armed,
+            provider=provider,
+            provider_ref=provider_ref,
+            run_id=run_id,
+            node_id=node_id,
+            agent_stdout_raw=agent_stdout_raw,
+            agent_stderr_raw=agent_stderr_raw,
+            pr_url=pr_url,
+            output_json=output_json,
+            install_status=_gh_guard_install_status,
+        )
         await _teardown_and_clear(
             route=route,
             session_factory=session_factory,
@@ -2003,6 +2185,55 @@ async def run_bundled_runner_node(
         # cancellation that landed during the receipt harvest.
         if _gh_settle_cancelled is not None:
             raise _gh_settle_cancelled
+
+
+async def _install_single_pr_guard(
+    provider: Any, provider_ref: str, *, run_id: str, node_id: str, provider_type: str
+) -> str | None:
+    """Install the run-scoped one-PR ``gh`` guard on the Bundled Runner tier.
+
+    FAR-1315: the engine's sandbox-policy step is E2B-only, so a flagged bundled
+    node installs the SAME run-scoped shim here through the provider's exec
+    primitive. Returns the install status (``installed`` / ``pre_planted`` /
+    ``absent`` / ``failed``) for the finally's settle, and logs the outcome
+    LOUDLY naming the tier.
+    """
+    from modulo.core.pipeline_engine.sandbox_policy import install_gh_pr_guard_via_exec
+
+    async def _guard_exec(command: list[str]) -> Any:
+        return await provider.exec_command(provider_ref, command, cmd_timeout=30)
+
+    guard_install = await install_gh_pr_guard_via_exec(
+        _guard_exec,
+        run_scope=run_id,
+        guard_owner=node_id,
+    )
+    status = guard_install.status
+    if status in ("absent", "failed"):
+        _log.warning(
+            "runner_dispatch.gh_pr_guard_unavailable: tier=%s status=%s node=%s run=%s detail=%s",
+            provider_type,
+            status,
+            node_id,
+            run_id,
+            (guard_install.detail or "no detail")[:300],
+        )
+    elif status == "pre_planted":
+        _log.warning(
+            "runner_dispatch.gh_guard_run_claim_denied: tier=%s node=%s run=%s - "
+            "pre-planted refusal, this node cannot create a PR (FAR-1315)",
+            provider_type,
+            node_id,
+            run_id,
+        )
+    else:
+        _log.info(
+            "runner_dispatch.gh_pr_guard_installed: tier=%s node=%s run=%s",
+            provider_type,
+            node_id,
+            run_id,
+        )
+    return status
 
 
 async def _maybe_start_loop_bridge(

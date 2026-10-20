@@ -359,6 +359,33 @@ class Settings(BaseSettings):
     # alone misses. Only consulted when the app and the database share a
     # filesystem. Env var: DB_CAPACITY_PATH.
     db_capacity_path: str = Field("/var/lib/modulo/db-volume")
+    # Provider/platform capacity probe (FAR-1992) - for deployments whose DB
+    # volume is NOT mountable into the app (Fly: the app and the Postgres machine
+    # are separate apps). Participates in the "auto" source chain AFTER the
+    # filesystem probe; when it resolves, `source` is reported as "platform" (an
+    # auto source, not a user-facing DB_CAPACITY_SOURCE value). One of:
+    #   "auto"  - build the provider probe when its config is complete; no-op
+    #             (returns None) when it is not, so the chain falls through.
+    #   "fly"   - same as "auto" today (Fly is the only provider); explicit.
+    #   "none"  - never build a platform probe (chain behaves as pre-FAR-1992).
+    # An unrecognised value disables the probe (with a warning) rather than
+    # guessing a provider. Env var: DB_CAPACITY_PLATFORM_PROVIDER.
+    db_capacity_platform_provider: str = Field("auto")
+    # Fly provider: the Fly APP whose volume holds the Postgres data directory
+    # (e.g. `modulo-app-db`), read via `GET /v1/apps/{app}/volumes`. Required for
+    # the Fly probe - without it (or without the token below) the probe is not
+    # built and the chain falls through to "none". Env var: DB_CAPACITY_FLY_APP.
+    db_capacity_fly_app: str = Field("")
+    # Fly provider: restrict the probe to this volume NAME (or id). Empty means
+    # "use the app's single volume"; if the app exposes zero or multiple volumes
+    # the probe resolves nothing rather than guessing. Env var:
+    # DB_CAPACITY_FLY_VOLUME.
+    db_capacity_fly_volume: str = Field("")
+    # Fly provider: API token (a Fly org/APP token with read access to the DB
+    # app's volumes) presented as `Authorization: Bearer`. Required for the Fly
+    # probe; set it as a secret, never inline. Env var:
+    # DB_CAPACITY_FLY_API_TOKEN.
+    db_capacity_fly_api_token: str = Field(default="", repr=False)
     # Operator bypass for the 98% hard-stop (e.g. a deliberate migration that
     # must write at/over the limit). Does NOT disable the monitor. Env var:
     # DB_CAPACITY_BYPASS=1.
@@ -811,25 +838,14 @@ class Settings(BaseSettings):
     dispatcher_reconcile_org_budget_seconds: int = Field(
         default=30, alias="DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS", ge=1, le=119
     )
-    # FAR-705: per-run capacity-retry budget for the stale-run sweep's
-    # capacity_timeout TTL terminalisation. capacity.* is a RETRYABLE registry
-    # class (all four capacity codes carry retryable=True), so a capacity-
-    # blocked run that exhausted its TTL is re-dispatched (kept pending; the
-    # 60s dispatcher_reconcile capacity branch re-dispatches it when capacity
-    # frees) instead of being dropped, while within budget. claim_count
-    # counts ALL claims (not just capacity cycles). REAL semantics of the
-    # terminalisation past the TTL: a NEVER-CLAIMED run (claim_count = 0 -
-    # the dominant capacity path is dispatch-time deferral WITHOUT a claim)
-    # terminal-fails AT the TTL exactly as it did before this budget existed
-    # (the stranded-refresh loop restamps its heartbeat while inside the TTL
-    # window, so a heartbeat-age test alone would double the wait to ~2xTTL);
-    # a CLAIMED run terminal-fails when claim_count exceeds this budget, or
-    # (backstop) when its last claim heartbeat is itself older than the TTL.
-    # The budget grace therefore only keeps a CLAIMED row pending while it
-    # shows a claim heartbeat within the TTL window - which also covers a
-    # budget set at/above SAQ_RUN_CLAIM_CAP (claims are refused at
-    # claim_count >= the cap, making the budget gate unsatisfiable; the
-    # heartbeat backstop restores termination). No schema change.
+    # RETIRED NO-OP (FAR-1883): this was the FAR-705 per-run capacity-retry
+    # budget for the stale-run sweep's ``capacity_timeout`` TTL
+    # terminalisation. The instance-wide queued TTL was removed - a
+    # capacity-queued run now waits indefinitely unless the pipeline sets
+    # ``queue_timeout_seconds`` (whose expiry is a supersession, not a fail) -
+    # so nothing reads this value any more. The field is retained only so an
+    # existing deployment's ``SAQ_CAPACITY_RETRY_BUDGET`` setting is accepted
+    # rather than ignored with a validation error; it has NO effect.
     saq_capacity_retry_budget: int = Field(default=3, alias="SAQ_CAPACITY_RETRY_BUDGET", ge=0, le=20)
     # SAQ worker DB pool size (per worker; Postgres budget — F4).
     # Default 30. The pool MUST stay >= SAQ_WORKER_CONCURRENCY + reserve (5):

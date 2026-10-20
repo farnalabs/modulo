@@ -83,7 +83,19 @@ _NUMERIC_STRING_RE = r"^\s*[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?\s
 # The HAVING keeps only components with at least one parseable-or-absent
 # amount — a malformed amount DROPPED the entry in the retired path (no bucket
 # row), while a null/missing amount KEPT it as a 0 row; a plain GROUP BY would
-# have materialised a 0.000000 row for the malformed case.
+# have materialised a 0.000000 row for the malformed case. BILLABLE FILTER
+# (FAR-1780, the parity delta vs the retired reference): a breakdown entry
+# carrying the JSON-boolean-true-marker inverse — ``billable: false`` (the
+# self_reported agent-declared component) — is EXCLUDED from the per-entry
+# lateral sum, because the in-process total now excludes non-billable
+# entries (``build_cost_breakdown`` sums billable amounts only): the buckets
+# must otherwise keep summing declared money the run is not billed for, and
+# the org/team buckets would drift above the billed components.
+# ``org_total``/``components_by_team`` derive from these buckets.
+# The filter applies PER ENTRY (inside the lateral expansion) — entries
+# WITHOUT a ``billable`` key (every pre-FAR-1780 breakdown) and any
+# non-boolean billable value default to billable, matching
+# ``entry.get("billable", True)`` in the Python aggregator.
 _SQL_COST_COMPONENT_BUCKETS = r"""
 SELECT
     r.owner_team_id AS team_id,
@@ -115,6 +127,7 @@ FROM (
 CROSS JOIN LATERAL jsonb_array_elements(r.cost_breakdown::jsonb) AS elem
 WHERE jsonb_typeof(elem->'component') = 'string'
   AND elem->>'component' <> ''
+  AND elem->'billable' IS DISTINCT FROM 'false'::jsonb
 GROUP BY r.owner_team_id, elem->>'component'
 HAVING SUM(
     CASE
@@ -167,7 +180,17 @@ GROUP BY r.pipeline_id
 # ``_SQL_COST_COMPONENT_BUCKETS`` rule, so a clamped run's unusable breakdown
 # never feeds the export. The amount CASE mirrors the bucket parse; the
 # ``runs`` count is DISTINCT per run (a run contributes to each of its
-# self_reported components). Grouping is by ``component`` ONLY (the stable
+# self_reported components). FAR-1780: the export applies the SAME per-entry
+# BILLABLE FILTER as ``_SQL_COST_COMPONENT_BUCKETS`` — a breakdown entry
+# carrying the JSON-boolean ``billable: false`` (the agent's declared,
+# unbilled self_reported report) is EXCLUDED from the summed amounts, because
+# the run total sums billable entries only (``build_cost_breakdown``):
+# summing the declared report here would drift the CSV's ``total_spend_usd``
+# above the billed components the buckets and the enforcer now agree on.
+# Entries WITHOUT a ``billable`` key (every pre-FAR-1780 breakdown) and any
+# null / non-boolean value default to billable, matching
+# ``entry.get("billable", True)`` in the in-process aggregator. Grouping is
+# by ``component`` ONLY (the stable
 # slug that becomes ``entity_id`` in the export) — NOT ``(component,
 # display_name)``: a component whose ``display_name`` changes mid-window would
 # otherwise yield two CSV rows sharing one ``entity_id`` and double-count for
@@ -207,6 +230,7 @@ CROSS JOIN LATERAL jsonb_array_elements(r.cost_breakdown::jsonb) AS elem
 WHERE elem->>'source' = 'self_reported'
   AND jsonb_typeof(elem->'component') = 'string'
   AND elem->>'component' <> ''
+  AND elem->'billable' IS DISTINCT FROM 'false'::jsonb
 GROUP BY elem->>'component'
 """
 
@@ -878,7 +902,10 @@ async def get_cost_export_rows(
       ``cost_breakdown`` (the component is the org's named model/LLM spend
       source; ``source = 'self_reported'`` entries consume the node-reported
       ``model_cost_usd``). Each row is one cost component, named by its
-      ``display_name`` fallback.
+      ``display_name`` fallback. Non-billable entries (the JSON-boolean
+      ``billable: false`` the agent's declared self_reported report carries)
+      are EXCLUDED from the summed amounts — the same per-entry filter as the
+      cost buckets — so the CSV reports billed spend only.
 
     Returns rows with keys ``entity_id``, ``entity_name``, ``total_spend_usd``
     (float), ``total_runs`` (int). Unknown groupings raise ``ValueError``.

@@ -820,12 +820,24 @@ class _FormRequest:
 
 
 async def test_sso_arms_guard_session_contract() -> None:
+    from modulo.api.routes.sso import _OIDC_FLOW_COOKIE
+    from modulo.auth.sso import sign_state
+
+    settings = _settings()
+    raw_state = "arm-state"
+    # FAR-1982: the callback validates the flow cookie BEFORE any session work,
+    # so supply a validly signed state AND the matching cookie to reach the
+    # session-contract guard this test exists to exercise.
+    callback_request = SimpleNamespace(
+        query_params={"code": "c", "state": sign_state(f"p:{raw_state}", settings.secret_key)},
+        cookies={_OIDC_FLOW_COOKIE: sign_state(f"{raw_state}:nonce:verifier", settings.secret_key)},
+    )
     await _assert_500(
         sso.oidc_callback(
             provider="p",
-            request=SimpleNamespace(query_params={"code": "c", "state": "s"}),
+            request=callback_request,
             _=None,
-            settings=_settings(),
+            settings=settings,
             session=_RaisingSession(),
             system_session=_RaisingSession(),
         )

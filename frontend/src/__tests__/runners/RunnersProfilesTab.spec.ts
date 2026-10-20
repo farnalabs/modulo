@@ -363,4 +363,57 @@ describe('RunnersProfilesTab', () => {
     await nextTick()
     expect(wrapper.text()).toContain('delete forbidden')
   })
+
+  it('surfaces an unresolvable placeholder-digest image with actionable copy', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useEnvironmentProfilesStore()
+    store.$patch({ profiles: [BUNDLED_PROFILE] as never })
+    const status = makeStatus({ placeholder_digest: true, available: false })
+    const wrapper = mount(RunnersProfilesTab, { props: { status, reloadStatus } })
+    await nextTick()
+    await flushPromises()
+
+    const note = wrapper.find('[data-testid="runner-profile-image-unresolvable"]')
+    expect(note.exists()).toBe(true)
+    expect(note.element.tagName).toBe('OUTPUT')
+    expect(note.text()).toContain('Image cannot be resolved')
+    expect(note.text()).toContain('Edit')
+  })
+
+  it('reports an unresolvable health badge, not a green healthy one, for a placeholder digest', async () => {
+    // FAR-1779 F5: the backend excludes the placeholder ref from image
+    // inspection and reports health_state='healthy', but a green "healthy"
+    // badge above the resolution note is the more persuasive signal — the
+    // badge must agree with the note.
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useEnvironmentProfilesStore()
+    store.$patch({ profiles: [BUNDLED_PROFILE] as never })
+    const status = makeStatus({ placeholder_digest: true, available: false })
+    const wrapper = mount(RunnersProfilesTab, { props: { status, reloadStatus } })
+    await nextTick()
+    await flushPromises()
+
+    const badge = wrapper.find('[data-testid="runner-profile-health-p-bundled"]')
+    expect(badge.text()).toBe('image unresolvable')
+    expect(badge.classes()).toContain('text-warning-text')
+    expect(badge.classes()).not.toContain('text-success')
+  })
+
+  it('surfaces the pull-remediation hint when the image is not pulled', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useEnvironmentProfilesStore()
+    store.$patch({ profiles: [BUNDLED_PROFILE] as never })
+    const status = makeStatus({ health_state: 'image_not_pulled', available: false })
+    const wrapper = mount(RunnersProfilesTab, { props: { status, reloadStatus } })
+    await nextTick()
+    await flushPromises()
+
+    const hint = wrapper.find('[data-testid="runner-profile-image-pull-hint"]')
+    expect(hint.exists()).toBe(true)
+    expect(hint.element.tagName).toBe('OUTPUT')
+    expect(hint.text()).toContain('not pulled on the runner machine')
+  })
 })

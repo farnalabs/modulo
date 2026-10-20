@@ -1,6 +1,7 @@
 import { computed, reactive, readonly } from 'vue'
 import type { Ref } from 'vue'
 import type { AnalyticsEventType } from './productAnalyticsEvents'
+import { randomId } from '../lib/randomId'
 
 /**
  * Product analytics event capture composable (FAR-358).
@@ -20,9 +21,12 @@ import type { AnalyticsEventType } from './productAnalyticsEvents'
  * `productAnalyticsEvents.ts`.
  *
  * No PII is captured: no names, emails, user IDs, IPs, URLs, query strings.
- * `event_id` is deterministic counter-based (not random UUID). The backend
- * ingest model declares `event_id: str`, so the counter is serialised as a
- * string to satisfy the contract without relying on Pydantic coercion.
+ * `event_id` is a per-session prefix plus a monotonic counter, serialised as a
+ * string. A bare counter is not unique: the backend dedups on
+ * (organisation_id, event_id), so a counter restarting at 1 on every page load
+ * (or in a second tab) made every later session's events collide with the
+ * first and be silently dropped. The prefix keeps IDs unique across sessions
+ * without a random UUID per event.
  * API failures are logged to console.warn, never thrown.
  */
 
@@ -40,6 +44,7 @@ interface AnalyticsEvent {
 const _buffer = reactive<AnalyticsEvent[]>([])
 let _flushTimer: ReturnType<typeof setInterval> | null = null
 let _eventIdCounter = 0
+const _sessionPrefix = randomId()
 let _consentFn: (() => boolean) | null = null
 let _visibilityHandler: (() => void) | null = null
 
@@ -106,7 +111,7 @@ export function useProductAnalytics(): {
 
     _eventIdCounter++
     const event: AnalyticsEvent = {
-      event_id: `${_eventIdCounter}`,
+      event_id: `${_sessionPrefix}-${_eventIdCounter}`,
       event_type: eventType,
       recorded_at: new Date().toISOString(),
     }
