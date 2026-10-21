@@ -2508,7 +2508,7 @@ class TestEvalDefinitionTools(_AdminContext):
         eval_def = MagicMock()
         eval_def.eval_type = "model_judge"
         eval_def.failure_behaviour = "warn"
-        eval_def.config_json = {}
+        eval_def.config_json = _typed_judge_config()
         eval_def.version = 1
         session = _mock_session()
         session.execute.return_value = _make_execute_result(scalar_one_or_none=eval_def)

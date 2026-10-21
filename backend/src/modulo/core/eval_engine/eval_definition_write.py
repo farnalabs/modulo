@@ -175,16 +175,17 @@ async def _enforce_judge_config_write(
     if existing_eval_id is not None:
         from modulo.db.models.eval import Eval
 
-        row = (
+        existing_row = (
             await session.execute(
-                select(Eval.config_json, Eval.eval_type).where(
+                select(Eval).where(
                     Eval.id == existing_eval_id,
                     Eval.organisation_id == org_id,
                 )
             )
-        ).first()
-        if row is not None:
-            stored_config, stored_eval_type = row[0], row[1]
+        ).scalar_one_or_none()
+        if existing_row is not None:
+            stored_config = existing_row.config_json
+            stored_eval_type = existing_row.eval_type
 
     # Run for a write that lands ``model_judge`` AND for one leaving a frozen
     # legacy judge (changing its type away would otherwise discard the config
