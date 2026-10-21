@@ -2,11 +2,15 @@
 
 Drives the PRODUCTION entry points against real Postgres (testcontainers):
 
-* Criterion 16 — a post-cutover-authored Eval (a row in ``evals`` that never
-  existed in ``eval_definitions``) runs end-to-end through the real
-  ``PipelineExecutor``: the post-node eval engine reads it from the new
-  tables, and the persisted ``eval_results`` row's ``eval_id`` resolves
-  against ``evals`` and NOT against ``eval_definitions``.
+* Criterion 16 — a post-cutover-authored Eval (a row in ``evals``) runs
+  end-to-end through the real ``PipelineExecutor``: the post-node eval engine
+  reads it from the live tables, and the persisted ``eval_results`` row's
+  ``eval_id`` resolves against ``evals``.
+
+  FAR-1962 note: this test used to prove the cutover negatively as well, by
+  asserting the eval had no twin in the legacy ``eval_definitions`` table.
+  Migration ``0324_purge_eval_definitions`` drops that table, so the negative
+  half no longer has a subject and the test pins the positive fact only.
 
 * Criterion 17 (retired in chunk 5c, FAR-1105): the suite-aggregate blocking
   mechanism (``_check_eval_suites``) has been deleted.
@@ -179,12 +183,14 @@ async def test_post_node_eval_persists_via_evals_cutover(
     app_engine: AsyncEngine,
     migrated_db_url: str,
 ) -> None:
-    """An Eval authored ONLY in ``evals`` (+ PolicyGate) drives a real run's
+    """An Eval authored in ``evals`` (+ PolicyGate) drives a real run's
     post-node eval: the run completes and the persisted eval_results row's
-    eval_id resolves against ``evals`` and NOT against ``eval_definitions``.
+    eval_id resolves against the live ``evals`` row.
 
-    ``eval_definitions`` is deliberately left EMPTY — the only way a result
-    row can exist is that the executor read the new tables.
+    Nothing else is seeded, so a result row can only exist if the executor
+    read the live tables. (The former negative assertion against the legacy
+    ``eval_definitions`` table was retired with the table itself — migration
+    ``0324_purge_eval_definitions``, FAR-1962.)
     """
     from modulo.core.pipeline_engine.executor import PipelineExecutor
     from modulo.settings import get_settings
@@ -256,8 +262,7 @@ async def test_post_node_eval_persists_via_evals_cutover(
             await conn.execute(
                 text(
                     "SELECT er.eval_id, er.passed, "
-                    "(EXISTS (SELECT 1 FROM evals e WHERE e.id = er.eval_id)) AS in_evals, "
-                    "(EXISTS (SELECT 1 FROM eval_definitions d WHERE d.id = er.eval_id)) AS in_legacy "
+                    "(EXISTS (SELECT 1 FROM evals e WHERE e.id = er.eval_id)) AS in_evals "
                     "FROM eval_results er WHERE er.run_id = :rid"
                 ),
                 {"rid": str(run_id)},
@@ -265,7 +270,6 @@ async def test_post_node_eval_persists_via_evals_cutover(
         ).fetchall()
 
     assert len(rows) == 1, f"expected exactly one post-node eval result, got {len(rows)}"
-    stored_eval_id, _passed, in_evals, in_legacy = rows[0]
+    stored_eval_id, _passed, in_evals = rows[0]
     assert stored_eval_id == eval_id, f"result must reference the evals-row eval {eval_id}, got {stored_eval_id}"
     assert in_evals is True, "persisted eval_id must resolve against evals (the cutover read path)"
-    assert in_legacy is False, "persisted eval_id must NOT exist in eval_definitions (table is empty)"
