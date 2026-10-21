@@ -1794,3 +1794,65 @@ def test_receive_webhook_trigger_busy_unresolvable_returns_429(client: TestClien
     assert "retry" in resp.json()["detail"].lower()
     assert resp.headers.get("Retry-After") == "5"
     record.assert_awaited_once()
+
+
+def test_receive_webhook_snapshot_creation_failure_returns_500(client: TestClient) -> None:
+    """A None snapshot is a hard 500: the delivery cannot proceed without one."""
+    with patch(
+        "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+            json={"event": "test"},
+            headers={"X-Modulo-Timestamp": str(int(time.time()))},
+        )
+
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == "Failed to create pipeline snapshot for webhook trigger"
+
+
+def test_receive_webhook_inactive_trigger_skips_pause_precheck() -> None:
+    """An inactive trigger is not run through the org-wide pause pre-check."""
+    mock_session = _make_mock_session()
+    system_session = make_system_session_mock(trigger_org_id=_ORG_ID, trigger_active=False)
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_system_db_session] = override_system_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as engine,
+            patch(
+                "modulo.api.routes.webhooks.dispatch_run",
+                new_callable=AsyncMock,
+                return_value=("enqueued", "job-id"),
+            ),
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock) as resume,
+        ):
+            engine.return_value = (_make_mock_run(), None, {})
+            resp = TestClient(app).post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                json={"event": "test"},
+                headers={"X-Modulo-Timestamp": str(int(time.time()))},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 202
+    resume.assert_not_awaited()

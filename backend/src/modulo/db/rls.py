@@ -12,6 +12,7 @@ into every SELECT/UPDATE/DELETE automatically.
 import asyncio
 import logging
 import uuid
+from typing import Any
 
 from sqlalchemy import event, text
 from sqlalchemy.exc import InvalidRequestError
@@ -332,6 +333,64 @@ def register_rls_reset_hook(engine: AsyncEngine) -> None:
             )
 
 
+def _operation_label(execute_state: ORMExecuteState) -> str:
+    """Human label for the statement kind in the missing-context debug log."""
+    if execute_state.is_select:
+        return "select/update/delete"
+    if execute_state.is_update:
+        return "update/delete"
+    return "delete"
+
+
+def _log_missing_org_context(execute_state: ORMExecuteState) -> None:
+    """Debug-log a scoped statement executed with no org context set."""
+    if not (execute_state.is_select or execute_state.is_update or execute_state.is_delete):
+        return
+    _log.debug(
+        "_inject_tenant_filter: no org_id in session.info for %s on %s",
+        _operation_label(execute_state),
+        execute_state.statement,
+    )
+
+
+def _apply_entity_tenant_filter(stmt: Any, entity: Any, org_id: Any) -> tuple[Any, bool]:
+    """Add the tenant predicate for one entity; return (statement, applied)."""
+    if entity is None or entity is object:
+        return stmt, False
+    if not hasattr(entity, _TENANT_COLUMN):
+        return stmt, False
+    return stmt.where(getattr(entity, _TENANT_COLUMN) == org_id), True
+
+
+def _inject_from_column_descriptions(
+    stmt: Any,
+    org_id: Any,
+) -> tuple[Any, bool]:
+    """Inject for every entity exposed via ``column_descriptions`` (SELECTs)."""
+    if not hasattr(stmt, "column_descriptions"):
+        return stmt, False
+    injected = False
+    for desc in stmt.column_descriptions:
+        stmt, applied = _apply_entity_tenant_filter(stmt, desc.get("entity"), org_id)
+        injected = injected or applied
+    return stmt, injected
+
+
+def _inject_from_mapper_classes(
+    stmt: Any,
+    execute_state: ORMExecuteState,
+    org_id: Any,
+) -> tuple[Any, bool]:
+    """Inject for every entity exposed via ``all_mapper_classes`` (UPDATE/DELETE)."""
+    if not (hasattr(execute_state, "all_mapper_classes") and execute_state.all_mapper_classes):
+        return stmt, False
+    injected = False
+    for mapper in execute_state.all_mapper_classes:
+        stmt, applied = _apply_entity_tenant_filter(stmt, mapper.class_, org_id)
+        injected = injected or applied
+    return stmt, injected
+
+
 def _inject_tenant_filter(execute_state: ORMExecuteState) -> None:
     """ORM execute listener that injects ``WHERE organisation_id = :oid``.
 
@@ -341,41 +400,20 @@ def _inject_tenant_filter(execute_state: ORMExecuteState) -> None:
     """
     org_id = execute_state.session.info.get(_TENANT_KEY)
     if org_id is None:
-        if execute_state.is_select or execute_state.is_update or execute_state.is_delete:
-            _log.debug(
-                "_inject_tenant_filter: no org_id in session.info for %s on %s",
-                "select/update/delete"
-                if execute_state.is_select
-                else "update/delete"
-                if execute_state.is_update
-                else "delete",
-                execute_state.statement,
-            )
+        _log_missing_org_context(execute_state)
         return
 
     if not (execute_state.is_select or execute_state.is_update or execute_state.is_delete):
         return
 
     stmt = execute_state.statement
-    injected = False
 
     # SELECT / bulk operations expose entities via column_descriptions.
-    if hasattr(stmt, "column_descriptions"):
-        for desc in stmt.column_descriptions:
-            entity = desc.get("entity")
-            if entity is None or entity is object:
-                continue
-            if hasattr(entity, _TENANT_COLUMN):
-                stmt = stmt.where(getattr(entity, _TENANT_COLUMN) == org_id)  # type: ignore[attr-defined,union-attr]
-                injected = True
+    stmt, injected = _inject_from_column_descriptions(stmt, org_id)
 
     # ORM UPDATE/DELETE expose entities via all_mapper_classes.
-    if not injected and hasattr(execute_state, "all_mapper_classes") and execute_state.all_mapper_classes:
-        for mapper in execute_state.all_mapper_classes:
-            entity = mapper.class_
-            if hasattr(entity, _TENANT_COLUMN):
-                stmt = stmt.where(getattr(entity, _TENANT_COLUMN) == org_id)  # type: ignore[attr-defined]
-                injected = True
+    if not injected:
+        stmt, injected = _inject_from_mapper_classes(stmt, execute_state, org_id)
 
     if injected:
         execute_state.statement = stmt
