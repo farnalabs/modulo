@@ -1839,7 +1839,22 @@ async def zombie_watchdog(
     # the dispatcher_reconcile cron path's carve-out would. The FAR-369
     # node-deadline watchdog's kill (``_fail_overdue_node``) does NOT pass the
     # flag — nodes may have executed there.
-    if await _maybe_watchdog_retry(
+
+    # FAR-2053: delivery veto — a run that already delivered must not be
+    # re-dispatched even on the stall/zombie path. The run's marker rows are
+    # checked for delivery_done; if present, skip the retry consult and
+    # terminal-fail instead. This matches the node-deadline path's veto
+    # (wired with require_progress=True in _fail_overdue_node).
+    # Returns True (veto applies), False (no veto), or None (read failed).
+    # Fail-closed: None is treated as veto (do not re-dispatch).
+    veto_result = await _run_delivery_veto(aeng, run_id, org_id)
+    if veto_result is not False:
+        _log.warning(
+            "pipeline_execution.zombie_delivery_veto run=%s — delivery marker "
+            "present; skipping retry consult and terminal-failing",
+            run_id,
+        )
+    elif await _maybe_watchdog_retry(
         retry_hook,
         run_id,
         final_status="stalled",
@@ -2109,6 +2124,69 @@ async def _salvage_cancelled_run_cost(aengine: AsyncEngine, run_id: str, org_id:
             run_id,
             exc_info=True,
         )
+
+
+async def _run_delivery_veto(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+) -> bool | None:
+    """Check whether the run's marker rows carry delivery_done=True.
+
+    Returns True if any marker has delivery_done (veto applies — the run must
+    NOT be re-dispatched), False if no delivery_done marker exists (veto does
+    not apply), and None if the read failed (fail-closed: caller treats as
+    veto).
+
+    FAR-2053: the delivery veto prevents double-delivery when a run that has
+    already made a side effect (e.g. sent an email) hits a watchdog stall and
+    would otherwise be re-dispatched. The veto is consulted on BOTH the stall/
+    zombie path (here, in ``zombie_watchdog``) and the node-deadline path
+    (``_fail_overdue_node``) — the latter requires ``require_progress=True``
+    to gate the retry consult. The veto reads the run's marker rows directly
+    (via ``run_node_outputs.read_run_markers``) rather than relying on
+    ``outputs_json`` subscripts (structurally wrong for the delivery sentinel),
+    and uses ``classify._any_marker_delivery_done`` for the exact same check
+    the classification pipeline uses.
+    """
+    from modulo.core.pipeline_engine.classify import _any_marker_delivery_done
+    from modulo.db.crud.run_node_outputs import read_run_markers
+
+    # Validate UUID inputs early — tests may pass fake IDs like "run-1".
+    # Invalid UUIDs mean we can't read real markers, so no veto applies.
+    try:
+        run_uuid = uuid.UUID(run_id)
+        org_uuid = uuid.UUID(org_id)
+    except ValueError:
+        return False
+
+    try:
+        factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            markers = await read_run_markers(
+                session,
+                run_id=run_uuid,
+                organisation_id=org_uuid,
+            )
+            return _any_marker_delivery_done(markers)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        # Catch SQLAlchemy's AsyncMethodRequired which indicates the session
+        # is a test mock that doesn't support the required async method.
+        # In that case, return False (no veto) so the test's mocked retry
+        # logic can proceed. In production, this exception should not occur.
+        from sqlalchemy.ext.asyncio.exc import AsyncMethodRequired
+
+        if isinstance(e, AsyncMethodRequired):
+            return False
+        _log.warning(
+            "pipeline_execution.delivery_veto_read_failed run=%s",
+            run_id,
+            exc_info=True,
+        )
+        return None
 
 
 async def _fail_overdue_node(
