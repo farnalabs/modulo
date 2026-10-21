@@ -498,6 +498,18 @@ _OPENAI_COMPATIBLE_BACKENDS: dict[str, str | None] = {
     "vllm": "http://localhost:8000/v1",
 }
 
+# FAR-2046: the single source of truth for which providers can consume an
+# operator-supplied custom endpoint (``creds.base_url``). The API rejects a
+# base_url for any provider outside this set, so a stored endpoint is never
+# silently ignored and a health check never probes the wrong host.
+BASE_URL_CAPABLE_PROVIDERS: frozenset[str] = frozenset(_OPENAI_COMPATIBLE_BACKENDS) | {"openai"}
+
+
+def supports_custom_base_url(provider: str) -> bool:
+    """Return True when ``provider`` honours an operator-supplied endpoint."""
+    return provider in BASE_URL_CAPABLE_PROVIDERS
+
+
 # FIX 3 (FAR-898): providers routed through OpenAICompatibleBackend that do
 # NOT support OpenAI-style ``response_format`` json_schema.  These providers
 # either 400 or silently strip the ``response_format`` field, so their
@@ -612,9 +624,7 @@ def _build_backend(
     # below. For a provider with its own endpoint semantics (azure_endpoint,
     # watsonx url, bedrock/vertexai, non-OpenAI-compatible adapters) the stored
     # value cannot be applied — make that loud rather than silently ignoring it.
-    if _credential_base_url(creds, default_params) is not None and (
-        provider not in _OPENAI_COMPATIBLE_BACKENDS and provider != "openai"
-    ):
+    if _credential_base_url(creds, default_params) is not None and not supports_custom_base_url(provider):
         logger.warning("Ignoring custom base_url for provider %r: its endpoint is not configurable this way", provider)
     if provider == "bedrock":
         if "aws_access_key_id" not in creds:
