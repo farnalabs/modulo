@@ -251,10 +251,11 @@ Evidence: `.semgrep/`; `.pre-commit-config.yaml`; `.github/workflows/ci.yml`.
 
 **Q: Do you have a penetration test report?**
 
-A: The repository ships a penetration-test plan and scope document. Farnalabs
-does not currently hold an independently executed third-party penetration test
-report for the product, so do not answer yes to that question - supply the plan
-and state that no external report exists.
+A: The repository ships a penetration-test plan and scope document; no
+third-party penetration-test report is shipped in the repository. Do not
+answer yes to a "do you have an external penetration test report" question
+unless the operator can actually produce the report - state that a plan exists
+and that no external report is attached to the product.
 
 Evidence: `docs/security/penetration-test-plan.md`.
 
@@ -273,12 +274,14 @@ Evidence: `docs/security/incident-response-playbook.md`;
 **Q: How would a security incident in the product be disclosed to us?**
 
 A: Modulo has no phone-home channel, so a self-hosted deployment cannot push a
-security advisory to the customer. Advisories are published in the release
-notes / repository; the customer must subscribe. This is a real limitation of
-the self-hosted model and should be answered as such rather than promising a
-notification channel that does not exist.
+security advisory to the customer. Security-relevant fixes are recorded in
+`CHANGELOG.md` and the GitHub Release for each version; the customer must watch
+releases (or track the repository) to learn about them. This is a real
+limitation of the self-hosted model and should be answered as such rather
+than promising a notification channel that does not exist.
 
-Evidence: `docs/release-process.md`; `docs/upgrade-process.md`.
+Evidence: `CHANGELOG.md`; `docs/release-process.md`;
+`docs/upgrade-process.md`.
 
 **Q: How are serious incidents reported under the EU AI Act?**
 
