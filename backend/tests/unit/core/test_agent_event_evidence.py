@@ -168,6 +168,41 @@ class TestCostCoercionErrors:
 
         assert tokens == {}
 
+    def test_huge_exponent_cost_degrades_instead_of_raising_decimal_overflow(self) -> None:
+        """FAR-1914 round-3 M2: the shared parser must never raise.
+
+        ``Decimal("1E+999999999")`` is FINITE, so it passes an ``is_finite``
+        check and then raises ``decimal.Overflow`` on the running sum — a
+        perfectly valid string an agent-controlled stream can carry. It must be
+        rejected per event (like any other implausible cost), not propagated:
+        the caller is on the terminal path and a raise would replace its typed
+        ``SandboxNodeFailedError`` and drop the salvage.
+        """
+        raw = json.dumps(
+            {
+                "type": "step_finish",
+                "part": {"cost": "1E+999999999", "tokens": {"total": 7}},
+            }
+        )
+
+        tokens, cost = parse_step_finish_evidence(raw)
+
+        # The valid token counter still survives; only the cost is rejected.
+        assert tokens == {"total": 7}
+        assert cost is None
+
+    def test_implausibly_large_cost_is_rejected_but_a_plausible_sibling_sums(self) -> None:
+        raw = "\n".join(
+            [
+                _event(cost=999_999_999.0),
+                _event(cost=0.002),
+            ]
+        )
+
+        _, cost = parse_step_finish_evidence(raw)
+
+        assert cost == Decimal("0.002")
+
 
 class TestHeartbeatLivenessSeconds:
     def test_missing_stamps_return_none(self) -> None:

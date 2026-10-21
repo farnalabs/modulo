@@ -32,6 +32,7 @@ import pytest
 
 from modulo.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
+    _BoundedFinalDrain,
     _marker_delivery_done_for_node,
     _persist_raw_output_marker,
     _RawOutputMarkerRequest,
@@ -348,6 +349,38 @@ async def test_missing_output_json_falls_back_to_captured_stdout():
     assert "OSError" in marker["parse_error"]
     # The stdout carried the raw content (here the fallback source).
     assert "agent stdout" in marker["raw_output"]
+
+
+async def test_huge_exponent_step_cost_keeps_the_typed_node_failure():
+    """FAR-1914 round-3 M2 (prove-the-fix): the shared step-finish parser is on
+    the failure path, so a hostile/agent-reported cost must not replace the
+    typed ``SandboxNodeFailedError`` with ``decimal.Overflow``.
+
+    ``"1E+999999999"`` is a FINITE ``Decimal``; before the bound it passed the
+    ``is_finite`` check and raised when summed, so this raise site surfaced a
+    decimal error instead of the retryable node failure — and the cost salvage
+    read never ran.
+    """
+    huge_cost_event = '{"type": "step_finish", "part": {"cost": "1E+999999999", "tokens": {"total": 7}}}'
+    sandbox = _make_sandbox_mock()
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "broken", '
+        return huge_cost_event
+
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    row = _FakeRunRow()
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["status"] == "failed"
 
 
 async def test_persist_failure_never_blocks_the_raise():
@@ -971,6 +1004,55 @@ async def test_cancelled_node_capture_of_delivery_sentinel_flushed_during_the_gr
     assert marker.get("delivery_done") is True
     assert marker["pr_url"] == _PR_777
     assert len(reads) >= 2
+
+
+async def test_bounded_final_drain_never_overlaps_a_slow_first_drain():
+    """FAR-1914 round-3 M3 (prove-the-fix): a drain that outlives its
+    ``wait_for`` is not restarted by the grace look.
+
+    The old cancel path wrapped a SHIELDED drain in ``wait_for``; on a slow
+    read the wait expired while the drain kept running, and the post-cancel
+    grace started a SECOND drain over the same ``_drain_offset`` — appending
+    the same bytes (and their ``step_finish`` costs) twice. The sequencer must
+    join the in-flight task instead: one drain call, one append.
+    """
+    started = asyncio.Event()
+    release = asyncio.Event()
+    appended: list[str] = []
+    calls = 0
+    concurrent = 0
+    max_concurrent = 0
+
+    async def _drain() -> None:
+        nonlocal calls, concurrent, max_concurrent
+        calls += 1
+        concurrent += 1
+        max_concurrent = max(max_concurrent, concurrent)
+        started.set()
+        await release.wait()
+        appended.append("chunk")
+        concurrent -= 1
+
+    sequencer = _BoundedFinalDrain(_drain, timeout=0.01)
+
+    first = asyncio.create_task(sequencer.run_once())
+    await started.wait()
+    # The first bounded wait has expired; the shielded drain is STILL running.
+    await asyncio.sleep(0.02)
+    second = asyncio.create_task(sequencer.run_once())
+    await asyncio.sleep(0.02)
+    # No second drain was started while the first is in flight.
+    assert calls == 1
+    assert max_concurrent == 1
+
+    release.set()
+    # Join the surviving task (the second look may have timed out already).
+    await sequencer.run_once()
+    await first
+    await second
+
+    assert calls == 1
+    assert appended == ["chunk"]
 
 
 async def test_cancelled_during_provisioning_reraises_cleanly():

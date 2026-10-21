@@ -291,6 +291,10 @@ async def test_deadline_kill_books_derived_cost_after_successful_terminal_write(
     assert derived.await_args.args[1] == "run-1"
     assert derived.await_args.args[2] == "org-1"
     assert derived.await_args.kwargs["derived_sandbox_wall_hours"] == 300 / 3600.0
+    # Round-3 M1: the killed node travels so finalize can scope the sandbox
+    # proof to THIS node (a run-scoped marker for another node must not license
+    # crediting this node's deadline).
+    assert derived.await_args.kwargs["killed_node_id"] == "n1"
     assert "n1" in derived.await_args.kwargs["error_detail"]
     assert "300s" in derived.await_args.kwargs["error_detail"]
 
@@ -365,6 +369,7 @@ async def test_record_derived_deadline_cost_rereises_cancelled_error() -> None:
             "org-1",
             error_detail="node 'n1' exceeded its deadline",
             derived_sandbox_wall_hours=300 / 3600.0,
+            killed_node_id="n1",
         )
 
 
@@ -421,6 +426,7 @@ async def test_record_derived_deadline_cost_bounds_the_row_lock_before_finalize(
             str(uuid.uuid4()),
             error_detail="node 'n1' exceeded its deadline",
             derived_sandbox_wall_hours=300 / 3600.0,
+            killed_node_id="n1",
         )
 
     assert order == ["bound", "finalize"]

@@ -371,10 +371,12 @@ def _deadline_triage_from_markers(
     the run stopped. Both the REST and MCP detail surfaces pass it, so their
     entry shapes stay identical.
 
-    Round-2 minor 3: ``pr_url`` is projected too. It is retained on the marker
-    as NON-GATING evidence (a PR opened seconds before the kill), so an
-    operator can see what the attempt produced without the url ever arming the
-    idempotency gate — ``delivery_done`` remains the sentinel-only field.
+    Round-2 minor 3: ``pr_url`` is projected too. It is NON-GATING evidence:
+    a PR URL observed in the retained tail (heuristic; not anchored to
+    ``gh pr create`` — the marker's ``_extract_pr_url`` takes the first
+    URL-shaped token it finds, which may be a quoted/listed URL). It never
+    arms the idempotency gate — ``delivery_done`` remains the sentinel-only
+    field — and it is never used as a delivery or cost gate.
     """
     if not isinstance(markers, dict):
         return []
@@ -395,6 +397,10 @@ def _deadline_triage_from_markers(
                 "stdout_length": marker.get("stdout_length"),
                 "stderr_length": marker.get("stderr_length"),
                 "delivery_done": marker.get("delivery_done") is True,
+                # Heuristic, non-gating: the first PR URL observed in the
+                # retained tail — NOT proof this attempt ran `gh pr create`
+                # (a quoted/list URL matches too). Never consulted for
+                # delivery, retry, or cost decisions.
                 "pr_url": marker.get("pr_url"),
                 "run_attempt_count": run_attempt_count,
             }
@@ -1124,9 +1130,10 @@ class RunResponse(BaseModel):
     # node envelope reached the Agent Return Contract columns. Empty list
     # when the run has no such marker; None on a failed read.
     #
-    # Round-2 minor 3: entries also carry ``pr_url`` — retained as NON-GATING
-    # evidence (``delivery_done`` stays sentinel-only, so a url can never
-    # suppress a retry).
+    # Round-2 minor 3: entries also carry ``pr_url`` — a PR URL observed in the
+    # retained tail (heuristic; not anchored to ``gh pr create``) and
+    # NON-GATING evidence (``delivery_done`` stays sentinel-only, so a url can
+    # never suppress a retry or license a cost).
     #
     # FAR-1886 B1: entries also carry ``run_attempt_count`` (the run's
     # ``runs.node_attempt_count``, read from the run row), and every

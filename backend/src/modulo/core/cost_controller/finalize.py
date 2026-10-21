@@ -3067,9 +3067,20 @@ async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, or
     (``cost_components_partial_spend_lost``) is reserved for the terminal paths
     that really cannot attribute anything. The salvage lives in
     :func:`salvage_cancelled_run_cost`, which the executor wrapper calls AFTER
-    the cancelled executor task has settled and its marker is persisted. If
-    that executor never settles (the job is dead), no cost is attributed —
-    nothing is fabricated.
+    the cancelled executor task has settled and its marker is persisted.
+
+    TWO SETTLED OUTCOMES INTENTIONALLY SKIP THAT SALVAGE (round-3 M6), so a
+    $0 cancelled run is explainable rather than silent:
+
+    * a genuine worker-shutdown cancellation — ``_resolve_cancel_outcome``
+      re-raises ``CancelledError`` so SAQ retries the job, and the wrapper
+      never reaches the post-settle salvage call (it logs
+      ``pipeline_execution.cancel_cost_salvage_skipped`` on that branch);
+    * a generic executor failure — ``_handle_executor_failure`` terminal-fails
+      the run with a raw status write that carries no cost, and that path does
+      not call this salvage either.
+
+    No cost is fabricated in either case.
 
     Both stored output columns are re-fed (FAR-125 P1b): the reassembled
     outputs as the segment and the reassembled telemetry as the split signal
@@ -3262,8 +3273,8 @@ def _salvage_from_markers(markers: dict[str, Any] | None) -> _SalvagedAttemptEvi
     )
 
 
-def _has_sandbox_attempt_evidence(markers: dict[str, Any] | None) -> bool:
-    """True when the run retains proof a SANDBOX attempt actually ran.
+def _has_sandbox_attempt_evidence(markers: dict[str, Any] | None, *, node_id: str | None = None) -> bool:
+    """True when the run retains proof the relevant SANDBOX attempt actually ran.
 
     FAR-1914 M3 / round-2 A: the derived sandbox line is BILLABLE, so it may
     only be written when the run proves a sandbox attempt existed. A generic
@@ -3281,11 +3292,21 @@ def _has_sandbox_attempt_evidence(markers: dict[str, Any] | None) -> bool:
     worker-lost terminalisers) is EXCLUDED: it cannot prove the node that ran
     was a sandbox node, and its four output-shaped fields are empty
     placeholders, not a retained tail.
+
+    *node_id* (FAR-1914 round-3 M1) scopes the proof to the node the credited
+    duration belongs to. The node-deadline watchdog credits the KILLED node's
+    configured timeout, so it must name that node: a run-scoped YES from some
+    other node's earlier marker would bill the killed connector/HTTP/agent
+    node as if it had been a sandbox. Age-gate and cancel salvage pass no
+    ``node_id`` — their duration is the run's own liveness window, so a
+    per-attempt sandbox marker ANYWHERE in the run is the right proof.
     """
     if not isinstance(markers, dict):
         return False
     for marker in markers.values():
         if not isinstance(marker, dict):
+            continue
+        if node_id is not None and marker.get("node_id") != node_id:
             continue
         if _marker_proves_sandbox_attempt(marker):
             return True
@@ -3412,7 +3433,8 @@ async def _write_derived_deadline_terminal(
     of a non-sandbox node, or an age gate over a pipeline that never dispatched
     a sandbox node, leaves no per-attempt sandbox marker and must not be billed
     sandbox time. A duration WITHOUT the proof is withheld with a log rather
-    than silently dropped.
+    than silently dropped. (Round-3 M1: the deadline caller scopes that verdict
+    to the KILLED node; the age gate/cancel callers keep it run-scoped.)
 
     Round-2 minor 2: this writer runs on an ALREADY-terminated run, so the
     recorded ``completed_at`` is PRESERVED. ``update_run_status`` re-stamps it
@@ -3564,6 +3586,7 @@ async def _finalize_failed_run(
     error_detail: str,
     derived_sandbox_wall_hours: float | None,
     derived_from: str,
+    killed_node_id: str | None = None,
 ) -> None:
     """Body of :func:`finalize_failed_run` (fail-open envelope lives there)."""
     run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
@@ -3580,8 +3603,11 @@ async def _finalize_failed_run(
         # Round-2 B: the derived sandbox line is billable, so it rides only on
         # a retained SANDBOX attempt marker — not on the duration alone. A
         # non-sandbox node killed at its deadline (or an age-gated pipeline
-        # with no sandbox node) has no such marker.
-        sandbox_evidence = _has_sandbox_attempt_evidence(stored_blobs.markers)
+        # with no sandbox node) has no such marker. Round-3 M1: when the
+        # caller names the killed node (the deadline watchdog), the marker must
+        # belong to THAT node; an age-gate/cancel caller leaves it None because
+        # its duration is the run's own liveness window (run-scoped proof).
+        sandbox_evidence = _has_sandbox_attempt_evidence(stored_blobs.markers, node_id=killed_node_id)
         has_derived_duration = (
             derived_sandbox_wall_hours is not None
             and math.isfinite(derived_sandbox_wall_hours)
@@ -3632,6 +3658,7 @@ async def finalize_failed_run(
     error_detail: str,
     derived_sandbox_wall_hours: float | None = None,
     derived_from: str = "node_deadline_watchdog",
+    killed_node_id: str | None = None,
 ) -> None:
     """Finalise a run already terminalised ``failed`` by a raw writer (FAR-1993).
 
@@ -3662,6 +3689,14 @@ async def finalize_failed_run(
     sandbox attempt, so it writes no sandbox line; the salvaged agent cost (if
     any) is still recorded.
 
+    Round-3 M1: *killed_node_id* (the node-deadline watchdog's killed node)
+    scopes that proof to the node whose configured deadline supplied the
+    duration. A sandbox marker for a DIFFERENT node is not evidence this node
+    ran in a sandbox: without the scope, an earlier sandbox node's marker let
+    the kill of a later connector/HTTP/agent node credit the killed node's
+    timeout as sandbox spend. The age gate and cancel salvage omit it (their
+    duration is the run's liveness window, so run-scoped evidence is correct).
+
     FAIL-OPEN: this is a compensating write on a path that has already
     terminalised the run, so ordinary failures log and are swallowed.
     ``asyncio.CancelledError`` is re-raised (worker shutdown is not ours to
@@ -3679,6 +3714,7 @@ async def finalize_failed_run(
             error_detail=error_detail,
             derived_sandbox_wall_hours=derived_sandbox_wall_hours,
             derived_from=derived_from,
+            killed_node_id=killed_node_id,
         )
     except asyncio.CancelledError:
         raise

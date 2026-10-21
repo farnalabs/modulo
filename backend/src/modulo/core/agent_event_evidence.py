@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 import math
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 from typing import Any
 
 from modulo.core.cost_controller.breakdown.params import coerce_reported_token
@@ -52,13 +52,25 @@ _STEP_FINISH_CACHE_PAIRS: tuple[tuple[str, str], ...] = (("read", "cache_read"),
 #: Only keys an event actually carried are returned.
 _STEP_FINISH_TOKEN_KEYS: tuple[str, ...] = ("input", "output", "total", "cache_read", "cache_write")
 
+#: Upper bound for ONE step's reported cost. Real opencode ``step_finish``
+#: costs are fractions of a cent; a million dollars for a single model step is
+#: already absurd, so any value above this is treated as an implausible report
+#: (agent-controlled input) rather than spend. It also keeps the running total
+#: far below ``decimal``'s ``Emax``: a string like ``"1E+999999999"`` is a
+#: *finite* Decimal, so it passes ``is_finite()`` and then raises
+#: ``decimal.Overflow`` on the FIRST addition — turning a documented
+#: "never raises" reader into an exception on the terminal/failure path.
+_MAX_PLAUSIBLE_STEP_COST = Decimal(1000000)
+
 
 def _coerce_step_cost(value: Any) -> Decimal | None:
     """A plausible non-negative finite per-step cost, or ``None``.
 
-    A present-but-unusable value (bool, non-numeric, negative, NaN/Inf) is
-    REJECTED, never coerced to zero — a bad report must stay distinguishable
-    from a genuine zero.
+    A present-but-unusable value (bool, non-numeric, negative, NaN/Inf, or an
+    exponent so large it would overflow the running sum) is REJECTED, never
+    coerced to zero — a bad report must stay distinguishable from a genuine
+    zero. Bounded here, at the single entry point, so the caller's
+    ``cost_total +=`` can never raise (FAR-1914 round-3 M2).
     """
     if isinstance(value, bool):
         return None
@@ -66,7 +78,7 @@ def _coerce_step_cost(value: Any) -> Decimal | None:
         parsed = Decimal(str(value))
     except (TypeError, ValueError, ArithmeticError):
         return None
-    if not parsed.is_finite() or parsed < 0:
+    if not parsed.is_finite() or parsed < 0 or parsed > _MAX_PLAUSIBLE_STEP_COST:
         return None
     return parsed
 
@@ -119,7 +131,11 @@ def parse_step_finish_evidence(raw: str | None) -> tuple[dict[str, int], Decimal
     BOUNDED and fail-open: one linear pass, line by line; non-JSON lines, other
     event types and invalid counters/costs are skipped; ANY failure degrades to
     ``({}, None)`` — this never raises and never changes the caller's failure
-    semantics.
+    semantics. FAR-1914 round-3 M2: "invalid cost" includes a finite but
+    implausibly large value (``"1E+999999999"``) whose addition would raise
+    ``decimal.Overflow``; it is rejected per event so a hostile/agent-reported
+    stream cannot replace a typed ``SandboxNodeFailedError`` with a decimal
+    exception and drop the salvage read.
     """
     if not isinstance(raw, str) or not raw:
         return {}, None
@@ -141,7 +157,14 @@ def parse_step_finish_evidence(raw: str | None) -> tuple[dict[str, int], Decimal
                 _accumulate_counters(totals, seen, cache, _STEP_FINISH_CACHE_PAIRS)
         step_cost = _coerce_step_cost(part.get("cost"))
         if step_cost is not None:
-            cost_total += step_cost
+            try:
+                cost_total += step_cost
+            except DecimalException:
+                # Belt-and-braces for the documented never-raises contract: a
+                # bounded per-step cost cannot overflow in practice, but a
+                # shared parser must degrade to "no usable cost", never replace
+                # the caller's typed failure with a decimal exception.
+                continue
             found_cost = True
     token_usage = {key: totals[key] for key in _STEP_FINISH_TOKEN_KEYS if key in seen} if found_event else {}
     return token_usage, (cost_total if found_cost else None)

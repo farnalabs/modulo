@@ -2703,6 +2703,47 @@ async def test_finalize_failed_run_withholds_sandbox_cost_without_sandbox_eviden
     assert any("cost_finalize.derived_sandbox_cost_withheld" in line for line in logged)
 
 
+async def test_finalize_failed_run_withholds_sandbox_cost_when_the_marker_is_for_another_node() -> None:
+    """Round-3 M1 (prove-the-fix): run-scoped evidence cannot license a
+    node-scoped deadline duration.
+
+    The run retains a sandbox marker for node ``n1``, but the deadline watchdog
+    killed node ``n2`` (a connector/HTTP/agent node). Crediting ``n2``'s
+    configured timeout because SOME sandbox node ran earlier would bill a
+    non-sandbox node as sandbox spend. With ``killed_node_id`` the marker must
+    belong to the killed node, so no sandbox line is written.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    run.completed_at = datetime(2026, 10, 20, 11, 0, tzinfo=UTC)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    # A real per-attempt SANDBOX marker — but for node n1, not the killed n2.
+    markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(cost=None, node_id="n1")}
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")) as mock_rate,
+        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n2' exceeded its deadline",
+            derived_sandbox_wall_hours=0.5,
+            killed_node_id="n2",
+        )
+
+    mock_rate.assert_not_called()
+    mock_urs.assert_not_awaited()
+    logged = [str(c) for c in mock_log.warning.call_args_list]
+    assert any("cost_finalize.derived_sandbox_cost_withheld" in line for line in logged)
+
+
 async def test_finalize_failed_run_still_attributes_sandbox_cost_with_attempt_marker() -> None:
     """Round-2 B: the gate keeps the legitimate sandbox line (no regression).
 
@@ -2734,6 +2775,9 @@ async def test_finalize_failed_run_still_attributes_sandbox_cost_with_attempt_ma
             error_detail="node 'n1' exceeded its deadline",
             derived_sandbox_wall_hours=0.5,
             derived_from="node_deadline_watchdog",
+            # Round-3 M1 positive control: the marker belongs to the killed
+            # node, so the node-scoped proof still licenses the sandbox line.
+            killed_node_id="n1",
         )
 
     breakdown = mock_urs.await_args.kwargs["cost_breakdown"]

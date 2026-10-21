@@ -1985,6 +1985,7 @@ async def _record_derived_deadline_cost(
     *,
     error_detail: str,
     derived_sandbox_wall_hours: float,
+    killed_node_id: str,
 ) -> None:
     """Book the DERIVED sandbox cost for a node-deadline-killed run (FAR-1993).
 
@@ -1998,6 +1999,11 @@ async def _record_derived_deadline_cost(
     (``_timeout``) — a DERIVED value, not agent-reported telemetry. The watchdog
     fired because the node ran to its deadline, so the node really did occupy
     the sandbox for approximately that long.
+
+    Round-3 M1: *killed_node_id* travels with the duration so finalize can
+    require a sandbox-attempt marker for THAT node. A run-scoped marker (some
+    earlier sandbox node) must not license crediting the killed
+    connector/HTTP/agent node's timeout as sandbox spend.
 
     Called only AFTER ``fail_run_terminal`` returned ``True``: the terminal
     write actually landed, so this is a compensating write on an already-failed
@@ -2027,6 +2033,7 @@ async def _record_derived_deadline_cost(
                 error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
                 error_detail=error_detail,
                 derived_sandbox_wall_hours=derived_sandbox_wall_hours,
+                killed_node_id=killed_node_id,
             )
     except asyncio.CancelledError:
         raise
@@ -2055,6 +2062,21 @@ async def _salvage_cancelled_run_cost(aengine: AsyncEngine, run_id: str, org_id:
     its successor and a re-dispatched run is ``pending`` — all delegated to
     finalize's own unloadable-status guard, so this is the one benign call-site
     gate on top.
+
+    TWO PATHS NEVER REACH THIS CALL (round-3 M6) — both leave a $0 cancelled
+    run by design, with no fabricated spend:
+
+    * a genuine WORKER-SHUTDOWN cancellation — ``_resolve_cancel_outcome``
+      re-raises ``CancelledError`` so SAQ retries the job, and the wrapper
+      returns before the post-settle salvage. It emits
+      ``pipeline_execution.cancel_cost_salvage_skipped`` so the $0 outcome is
+      explainable;
+    * a GENERIC EXECUTOR FAILURE — ``_handle_executor_failure`` writes the
+      terminal ``failed`` status via a raw writer with no cost columns and does
+      not call this salvage.
+
+    :func:`modulo.core.cost_controller.finalize.finalize_cancelled_run` names
+    the same two skip points on the request-path side.
 
     Fail-open: any failure logs and is swallowed so the already-terminal
     cancelled run is never turned into a raised error. ``asyncio.CancelledError``
@@ -2183,6 +2205,7 @@ async def _fail_overdue_node(
             org_id,
             error_detail=error_detail,
             derived_sandbox_wall_hours=_timeout / 3600.0,
+            killed_node_id=node_id,
         )
 
 
@@ -2941,6 +2964,15 @@ async def _resolve_cancel_outcome(
             rid,
         )
     else:
+        # FAR-1914 round-3 M6: a genuine worker-shutdown cancellation re-raises
+        # so SAQ retries the job — which means the post-settle cost salvage is
+        # skipped. Say so, so a $0 cancelled run is explainable rather than
+        # looking like the salvage silently failed.
+        _log.warning(
+            "pipeline_execution.cancel_cost_salvage_skipped run=%s reason=worker_shutdown "
+            "— post-settle marker salvage is not reached; no cost fabricated",
+            rid,
+        )
         raise asyncio.CancelledError
 
 

@@ -2279,6 +2279,87 @@ def _uncancel_current_task() -> None:
         task.uncancel()
 
 
+class _BoundedFinalDrain:
+    """Serialise the post-cancel final drains so a slow drain is never doubled.
+
+    FAR-1914 round-3 M3: the cancel path wraps a SHIELDED
+    ``drain_sandbox_log`` in ``wait_for(...)``. When the read is slow the outer
+    wait expires while the shielded drain keeps running; the post-cancel grace
+    look then started a SECOND drain over the same ``_drain_offset``, so the
+    same bytes — and their ``step_finish`` costs — were appended twice (once
+    per drain) before the offset advanced. This holder keeps the in-flight task
+    and, on the next look, awaits THAT task (bounded) instead of starting a
+    second one — so at most one drain is ever in flight. Once it has finished,
+    a later look starts a fresh drain (the grace second look still catches
+    content flushed after the cancellation).
+    """
+
+    def __init__(
+        self,
+        drain: Callable[[], Awaitable[None]],
+        *,
+        timeout: float,
+        log_context: dict[str, Any] | None = None,
+    ) -> None:
+        self._drain = drain
+        self._timeout = timeout
+        self._log_context = log_context or {}
+        self._inflight: asyncio.Future[None] | None = None
+        #: True only while ``run_once`` is awaiting the task, so a task failure
+        #: is logged exactly once (by the awaiter) and a LATE failure (after a
+        #: timed-out wait, when nothing is awaiting) is logged by the callback.
+        self._awaiting = False
+
+    async def run_once(self) -> None:
+        """Run (or join) the bounded final drain once."""
+        if self._inflight is None or self._inflight.done():
+            self._inflight = asyncio.ensure_future(self._drain())
+            # Retrieve a late failure even when no later look awaits the task:
+            # an unretrieved task exception logs a spurious traceback at GC.
+            self._inflight.add_done_callback(self._log_late_failure)
+        task = self._inflight
+        self._awaiting = True
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=self._timeout)
+        # Nested cancellation here is deliberate — idempotency-gate cleanup must
+        # not re-raise early or the delivery-done marker is skipped (FAR-228
+        # fix); the original cancellation re-raises.
+        except asyncio.CancelledError:  # NOSONAR
+            _uncancel_current_task()
+        except TimeoutError:
+            # The drain is still alive (shielded); it will run to completion in
+            # the background and the next look joins it instead of duplicating
+            # the read. Loud, so a persistently slow drain is visible.
+            if task.done() and not task.cancelled() and task.exception() is not None:
+                # It failed on the timeout boundary — surface the real error
+                # (the done callback saw _awaiting=True and stayed silent).
+                _log.error(
+                    "sandbox_agent.cancel_retention_drain_failed",
+                    extra=self._log_context,
+                    exc_info=task.exception(),
+                )
+            else:
+                _log.warning("sandbox_agent.cancel_retention_drain_timed_out", extra=self._log_context)
+        except Exception:
+            # The drain itself failed. Logged HERE (the callback stays silent
+            # while awaited) so the failure is never swallowed.
+            _log.error("sandbox_agent.cancel_retention_drain_failed", extra=self._log_context, exc_info=True)
+        finally:
+            self._awaiting = False
+
+    def _log_late_failure(self, task: asyncio.Future[None]) -> None:
+        """Retrieve (and log) an in-flight drain's failure, never silently."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None and not self._awaiting:
+            _log.error(
+                "sandbox_agent.cancel_retention_drain_failed",
+                extra=self._log_context,
+                exc_info=exc,
+            )
+
+
 def _source_contains_delivery_sentinel(text: Any, sentinel: str | None) -> bool:
     """True when *text* contains *sentinel* as a FULL LINE (FAR-228).
 
@@ -12745,24 +12826,17 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # persist a delivery_done marker when the sentinel is a full-line
         # match in the drained tail.
         if _drain_fn is not None and sandbox is not None:
+            # FAR-1914 round-3 M3: ONE sequencer for both looks. A slow
+            # shielded drain must never be re-started by the grace look (that
+            # duplicated bytes and their step_finish costs on the same
+            # _drain_offset); the second look joins the in-flight task instead.
+            _final_drain = _BoundedFinalDrain(
+                _drain_fn,
+                timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT,
+                log_context={"node_id": node_id, "run_id": run_id},
+            )
 
-            async def _final_drain_once() -> None:
-                try:
-                    await asyncio.wait_for(
-                        asyncio.shield(_drain_fn()), timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT
-                    )
-                # Nested cancellation here is deliberate — idempotency-gate
-                # cleanup must not re-raise early or the delivery-done marker is
-                # skipped (FAR-228 fix); the original cancellation re-raises.
-                except asyncio.CancelledError:  # NOSONAR
-                    _uncancel_current_task()
-                except Exception:
-                    _log.exception(
-                        "sandbox_agent.cancel_retention_drain_failed",
-                        extra={"node_id": node_id, "run_id": run_id},
-                    )
-
-            await _final_drain_once()
+            await _final_drain.run_once()
             # FAR-1914 B2: one bounded second look. A delivered-then-killed run
             # can flush its `gh pr create` line just after the cancellation
             # lands; without this grace the marker is built from a tail that
@@ -12772,7 +12846,9 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     await asyncio.sleep(_CANCEL_DELIVERY_GRACE_SECONDS)
                 except asyncio.CancelledError:  # NOSONAR
                     _uncancel_current_task()
-                await _final_drain_once()
+                # Join the in-flight drain (or start a fresh look once it has
+                # completed) — never a second concurrent drain.
+                await _final_drain.run_once()
         # FAR-704: retain cancellation TRIAGE evidence whenever a sandbox
         # existed. The absolute node-deadline watchdog (pipeline_execution)
         # cancels this dispatch before output.json is ever read, so no node
