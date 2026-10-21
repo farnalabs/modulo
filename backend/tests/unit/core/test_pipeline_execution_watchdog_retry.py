@@ -369,6 +369,86 @@ async def test_record_derived_deadline_cost_rereises_cancelled_error() -> None:
 
 
 # ---------------------------------------------------------------------------
+# FAR-1914 round-2 C — the compensating cost writers bound the row lock FIRST
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _acm(obj: Any):
+    yield obj
+
+
+def _begin_bound_session() -> AsyncMock:
+    """Session double whose ``begin()`` is an async context manager."""
+    session = AsyncMock()
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    return session
+
+
+def _session_factory(session: AsyncMock) -> MagicMock:
+    return MagicMock(side_effect=lambda: _acm(session))
+
+
+async def test_record_derived_deadline_cost_bounds_the_row_lock_before_finalize() -> None:
+    """Round-2 C (prove-the-fix): bound the hot ``runs`` row lock first.
+
+    The finalizing write takes ``update_run_status``'s ``SELECT ... FOR
+    UPDATE``. Without the entry-point ``set_mutation_row_lock_timeout`` the
+    wait is unbounded on a contended row. Order is asserted so a bound placed
+    AFTER the lock cannot pass.
+    """
+    order: list[str] = []
+    session = _begin_bound_session()
+
+    async def _bound(_session: Any) -> None:
+        order.append("bound")
+
+    async def _finalize(*_a: Any, **_k: Any) -> None:
+        order.append("finalize")
+
+    with (
+        patch("modulo.core.pipeline_execution.async_sessionmaker", return_value=_session_factory(session)),
+        patch("modulo.core.pipeline_execution.set_rls_org", new=AsyncMock()),
+        patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=_bound),
+        patch("modulo.core.cost_controller.finalize.finalize_failed_run", new=_finalize),
+    ):
+        await _record_derived_deadline_cost(
+            MagicMock(),
+            str(uuid.uuid4()),
+            str(uuid.uuid4()),
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=300 / 3600.0,
+        )
+
+    assert order == ["bound", "finalize"]
+
+
+async def test_salvage_cancelled_run_cost_bounds_the_row_lock_before_salvage() -> None:
+    """Round-2 C: the post-settle salvage bounds the row lock first too."""
+    order: list[str] = []
+    session = _begin_bound_session()
+
+    async def _bound(_session: Any) -> None:
+        order.append("bound")
+
+    async def _salvage(*_a: Any, **_k: Any) -> None:
+        order.append("salvage")
+
+    with (
+        patch("modulo.core.pipeline_execution.async_sessionmaker", return_value=_session_factory(session)),
+        patch("modulo.core.pipeline_execution.set_rls_org", new=AsyncMock()),
+        patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=_bound),
+        patch("modulo.core.cost_controller.finalize.salvage_cancelled_run_cost", new=_salvage),
+    ):
+        await _salvage_cancelled_run_cost(MagicMock(), str(uuid.uuid4()), str(uuid.uuid4()))
+
+    assert order == ["bound", "salvage"]
+
+
+# ---------------------------------------------------------------------------
 # FAR-1463 — a watchdog FIRING is recorded whether it re-dispatches or
 # terminal-fails (the re-dispatch path otherwise leaves no fingerprint)
 # ---------------------------------------------------------------------------

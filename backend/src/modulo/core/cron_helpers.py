@@ -7831,6 +7831,12 @@ async def _attribute_age_gate_derived_cost(run_id: uuid.UUID, org_id: uuid.UUID)
     and cannot be faithfully rebuilt here). A row whose code is no longer
     ``no_progress`` (a later writer relabelled it) is skipped.
 
+    Round-2 B: the age gate itself is NOT sandbox proof — it writes only the
+    run-level synthetic triage marker (``node_id: None``). The derived sandbox
+    line is therefore credited only when the run also retains a per-attempt
+    sandbox marker; a pipeline that never dispatched a sandbox node is not
+    billed sandbox time.
+
     FAIL-OPEN PER RUN: this is a compensating write on a path that has already
     terminalised the run, so an ordinary failure is logged and swallowed so the
     remaining runs in the batch are still attributed and the tick never aborts.
@@ -7839,9 +7845,15 @@ async def _attribute_age_gate_derived_cost(run_id: uuid.UUID, org_id: uuid.UUID)
     """
     try:
         from modulo.core.cost_controller.finalize import finalize_failed_run
+        from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
         from modulo.db.models.run import Run
 
         async with _open_factory()() as session, session.begin():
+            # FAR-1313: the attributed write takes the hot ``runs`` row lock
+            # (``update_run_status`` via finalize) — bound it FIRST, before any
+            # lock, so a contended row is a bounded 55P03, not an unbounded
+            # wait on the reconcile tick.
+            await set_mutation_row_lock_timeout(session)
             await _set_rls_org(session, org_id)
             row = (
                 await session.execute(

@@ -370,6 +370,11 @@ def _deadline_triage_from_markers(
     loaded. It is DATA, never a cause: an attempt proves one started, not why
     the run stopped. Both the REST and MCP detail surfaces pass it, so their
     entry shapes stay identical.
+
+    Round-2 minor 3: ``pr_url`` is projected too. It is retained on the marker
+    as NON-GATING evidence (a PR opened seconds before the kill), so an
+    operator can see what the attempt produced without the url ever arming the
+    idempotency gate — ``delivery_done`` remains the sentinel-only field.
     """
     if not isinstance(markers, dict):
         return []
@@ -390,6 +395,7 @@ def _deadline_triage_from_markers(
                 "stdout_length": marker.get("stdout_length"),
                 "stderr_length": marker.get("stderr_length"),
                 "delivery_done": marker.get("delivery_done") is True,
+                "pr_url": marker.get("pr_url"),
                 "run_attempt_count": run_attempt_count,
             }
         )
@@ -1117,6 +1123,10 @@ class RunResponse(BaseModel):
     # node_deadline_exceeded) is triageable from the run page even though no
     # node envelope reached the Agent Return Contract columns. Empty list
     # when the run has no such marker; None on a failed read.
+    #
+    # Round-2 minor 3: entries also carry ``pr_url`` — retained as NON-GATING
+    # evidence (``delivery_done`` stays sentinel-only, so a url can never
+    # suppress a retry).
     #
     # FAR-1886 B1: entries also carry ``run_attempt_count`` (the run's
     # ``runs.node_attempt_count``, read from the run row), and every
@@ -2030,12 +2040,13 @@ async def _cancel_run(session: AsyncSession, principal: TenantPrincipal, run_id:
     cancelled class (awaiting_human/claimed/hitl_parked) runs NO finalize (§4.2).
     A STREAMED running run cancelled cross-process is routed through
     finalize_cancelled_run, re-reading the STORED cumulative sets; a
-    NEVER-PAUSED in-flight run has none on THIS request path, so it logs
-    ``cost_components_partial_spend_lost`` here — but its docket is NOT
-    forfeited: after the executor settles (it observes the cancellation on its
-    next heartbeat), ``pipeline_execution._salvage_cancelled_run_cost`` reads
-    the executor's persisted attempt marker and attributes marker-provable
-    spend (FAR-1914 C2).
+    NEVER-PAUSED in-flight run has none on THIS request path, so it records
+    the normal ``cost_components.cancel_salvage_deferred`` diagnostic here —
+    but its docket is NOT forfeited: after the executor settles (it observes
+    the cancellation on its next heartbeat),
+    ``pipeline_execution._salvage_cancelled_run_cost`` reads the executor's
+    persisted attempt marker and attributes marker-provable spend (FAR-1914
+    C2).
 
     FAR-1610 lock bound: this is a REQUEST path on the hot ``runs`` row, and the
     FIRST lock in the caller's transaction is ``request_cancellation``'s

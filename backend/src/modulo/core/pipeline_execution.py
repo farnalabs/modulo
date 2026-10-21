@@ -2007,12 +2007,18 @@ async def _record_derived_deadline_cost(
     Fail-open: any failure logs and is swallowed so a completed terminal
     failure is never turned into a raised error. ``asyncio.CancelledError`` is
     re-raised (worker shutdown is not ours to swallow).
+
+    FAR-1313 lock bound: the FINALIZING write takes the hot ``runs`` row lock
+    (``update_run_status``) inside this transaction, so the transaction-scoped
+    ``set_mutation_row_lock_timeout`` is issued FIRST, before any lock.
     """
     from modulo.core.cost_controller.finalize import finalize_failed_run
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 
     try:
         factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
         async with factory() as session, session.begin():
+            await set_mutation_row_lock_timeout(session)
             await set_rls_org(session, uuid.UUID(org_id))
             await finalize_failed_run(
                 session,
@@ -2053,12 +2059,20 @@ async def _salvage_cancelled_run_cost(aengine: AsyncEngine, run_id: str, org_id:
     Fail-open: any failure logs and is swallowed so the already-terminal
     cancelled run is never turned into a raised error. ``asyncio.CancelledError``
     is re-raised (worker shutdown is not ours to swallow).
+
+    FAR-1313 lock bound: the salvage write takes the hot ``runs`` row lock
+    (``update_run_status``) inside this transaction, so the transaction-scoped
+    ``set_mutation_row_lock_timeout`` is issued FIRST, before any lock — a
+    contended row then surfaces as a bounded 55P03 rather than an unbounded
+    wall-clock wait on a shutdown path.
     """
     from modulo.core.cost_controller.finalize import salvage_cancelled_run_cost
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 
     try:
         factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
         async with factory() as session, session.begin():
+            await set_mutation_row_lock_timeout(session)
             await set_rls_org(session, uuid.UUID(org_id))
             await salvage_cancelled_run_cost(
                 session,

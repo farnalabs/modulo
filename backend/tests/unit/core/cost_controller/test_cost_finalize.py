@@ -803,6 +803,16 @@ def test_token_cost_server_measured() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _sandbox_attempt_markers() -> dict[str, Any]:
+    """One retained per-attempt SANDBOX marker — the billable-cost gate's proof.
+
+    Defined as a callable (not a module constant) because ``_step_finish_marker``
+    is declared further down this module: Python resolves the name at call
+    time, so test bodies can use this regardless of position.
+    """
+    return {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(cost=None)}
+
+
 def _make_run(**kw: Any) -> MagicMock:
     run = MagicMock()
     run.id = kw.get("id", uuid.uuid4())
@@ -1014,16 +1024,26 @@ async def test_finalize_cost_sandbox_reported_tokens_populate_run_counters() -> 
 # ---------------------------------------------------------------------------
 
 
-async def test_finalize_cancelled_run_never_paused_forfeits_accrued_cost() -> None:
-    """A never-paused in-flight run cancelled cross-process has NO stored sets;
-    its accrued cost is forfeited and only the partial_spend_lost log fires."""
+async def test_finalize_cancelled_run_never_paused_defers_salvage_not_forfeits() -> None:
+    """A never-paused in-flight run cancelled cross-process has NO stored sets.
+
+    Round-2 minor 1: this is a NORMAL deferral, not a forfeiture — the request
+    path cannot see the executor's marker yet, so it records
+    ``cost_components.cancel_salvage_deferred`` and leaves the attribution to
+    the post-settle salvage. The forfeiture diagnostic
+    (``cost_components_partial_spend_lost``) is reserved for a terminal path
+    that genuinely cannot attribute anything, so a real forfeiture stays
+    distinguishable in the log stream.
+    """
     run = _make_run(node_token_usage=None, outputs_json=None)
     session = AsyncMock()
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with patch("modulo.core.cost_controller.finalize._log") as mock_log:
         await finalize_cancelled_run(session, run_id=run.id, org_id=_ORG_ID)
-    logged = [str(c) for c in mock_log.warning.call_args_list]
-    assert any("cost_components_partial_spend_lost" in line for line in logged)
+    logged = [str(c) for c in mock_log.info.call_args_list]
+    assert any("cost_components.cancel_salvage_deferred" in line for line in logged)
+    warned = [str(c) for c in mock_log.warning.call_args_list]
+    assert not any("cost_components_partial_spend_lost" in line for line in warned)
 
 
 async def test_finalize_cancelled_run_streamed_with_prior_pause_finalizes() -> None:
@@ -1087,7 +1107,7 @@ async def test_finalize_failed_run_derived_hours_book_run_level_cost() -> None:
     with (
         patch(
             "modulo.core.cost_controller.finalize.read_run_blobs",
-            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=_sandbox_attempt_markers())),
         ),
         patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
         patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
@@ -1235,7 +1255,7 @@ async def test_finalize_failed_run_threads_supplied_derived_from() -> None:
     with (
         patch(
             "modulo.core.cost_controller.finalize.read_run_blobs",
-            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=_sandbox_attempt_markers())),
         ),
         patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
         patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
@@ -1282,7 +1302,7 @@ async def test_finalize_failed_run_clamps_derived_cost_to_the_column_cap() -> No
     with (
         patch(
             "modulo.core.cost_controller.finalize.read_run_blobs",
-            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=_sandbox_attempt_markers())),
         ),
         patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
         patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
@@ -1313,7 +1333,7 @@ async def test_finalize_failed_run_without_started_at_writes_no_ledger_row() -> 
     with (
         patch(
             "modulo.core.cost_controller.finalize.read_run_blobs",
-            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=_sandbox_attempt_markers())),
         ),
         patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
         patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
@@ -1340,7 +1360,7 @@ async def test_finalize_failed_run_rereises_cancelled_from_the_ledger_block() ->
     with (
         patch(
             "modulo.core.cost_controller.finalize.read_run_blobs",
-            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=_sandbox_attempt_markers())),
         ),
         patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
         patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
@@ -1368,7 +1388,7 @@ async def test_finalize_failed_run_rereises_lock_abort_from_the_ledger_block() -
     with (
         patch(
             "modulo.core.cost_controller.finalize.read_run_blobs",
-            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=_sandbox_attempt_markers())),
         ),
         patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
         patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
@@ -1397,7 +1417,7 @@ async def test_finalize_failed_run_swallows_non_lock_ledger_error() -> None:
     with (
         patch(
             "modulo.core.cost_controller.finalize.read_run_blobs",
-            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=_sandbox_attempt_markers())),
         ),
         patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
         patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
@@ -2343,9 +2363,9 @@ async def test_finalize_cost_run_not_found() -> None:
 
 def _step_finish_marker(
     *,
-    cost: float = 0.000478,
+    cost: float | None = 0.000478,
     total_tokens: int = 78_000,
-    node_id: str = "n1",
+    node_id: str | None = "n1",
     pr_url: str | None = None,
     delivery_done: bool = False,
     raw_output: str | None = None,
@@ -2356,14 +2376,20 @@ def _step_finish_marker(
     sandbox left behind: a ``step_finish`` event carrying the agent's own
     ``tokens`` and ``cost`` NESTED under ``part`` — the shape the shipped CLI
     emits and the ONLY shape the shared leaf parser reads (FAR-1914 M2).
+
+    MODELLED, not captured: no real retained-marker blob is checked into the
+    repo, so this fixture is built from the CLI's documented emitted shape and
+    the incident's marker fields. ``node_id=None`` reproduces a run-level
+    synthetic triage marker (FAR-1886 B1).
     """
-    event = {
+    event: dict[str, Any] = {
         "type": "step_finish",
         "part": {
-            "cost": cost,
             "tokens": {"total": total_tokens, "input": total_tokens - 10_000, "output": 10_000},
         },
     }
+    if cost is not None:
+        event["part"]["cost"] = cost
     return {
         "_modulo_marker": True,
         "status": "failed",
@@ -2380,6 +2406,48 @@ def _step_finish_marker(
         "deadline_triage": True,
         "no_output_reason": "cancelled before a terminal node envelope",
         "sandbox_log_tail": "",
+    }
+
+
+def _run_level_triage_marker() -> dict[str, Any]:
+    """A synthetic RUN-LEVEL triage marker (FAR-1886 B1): no node identity.
+
+    The age gate / stranded-pending / worker-lost terminalisers write this
+    shape. Its four output fields are empty placeholders, so it can never
+    prove a SANDBOX attempt ran.
+    """
+    return {
+        "_modulo_marker": True,
+        "status": "failed",
+        "summary": "Run terminalised by run.no_progress — run-level triage evidence (FAR-1886)",
+        "raw_output": "",
+        "parse_error": "",
+        "pr_url": None,
+        "exit_code": -1,
+        "stdout_length": 0,
+        "stderr_length": 0,
+        "attempt_key": "terminal-triage:00000000-0000-0000-0000-000000000002",
+        "node_id": None,
+        "deadline_triage": True,
+        "no_output_reason": "no node progress within the age bound",
+        "sandbox_log_tail": "",
+    }
+
+
+def _connector_delivered_marker() -> dict[str, Any]:
+    """A connector idempotency delivery marker (no sandbox output at all).
+
+    ``node_runner._mark_connector_write_delivered`` writes exactly this shape:
+    ``_modulo_marker`` + a node id + ``delivery_done`` — and none of the
+    sandbox output fields. It must never be read as sandbox-attempt proof.
+    """
+    return {
+        "_modulo_marker": True,
+        "status": "completed",
+        "summary": "connector write delivered (delivery_done)",
+        "node_id": "c1",
+        "attempt_key": "connector:c1",
+        "delivery_done": True,
     }
 
 
@@ -2472,6 +2540,54 @@ def test_salvage_from_markers_without_evidence_has_none() -> None:
     assert salvage.node_ids == ("n1",)
 
 
+def test_salvage_from_markers_tokens_only_has_no_evidence() -> None:
+    """Round-2 minor 4: token counters alone are NOT salvage evidence.
+
+    FAR-1914 M4 deliberately does not collect tokens (they are collect-and-
+    drop), so a ``step_finish`` stream carrying tokens but no usable ``cost``
+    proves no attributable spend. The node id still travels as identity
+    evidence.
+    """
+    markers = {"attempt-1": _step_finish_marker(cost=None)}
+
+    salvage = _salvage_from_markers(markers)
+
+    assert salvage.agent_cost_usd is None
+    assert salvage.delivery_done is False
+    assert salvage.has_evidence is False
+    assert salvage.node_ids == ("n1",)
+
+
+async def test_salvage_cancelled_run_cost_does_not_write_for_tokens_only_markers() -> None:
+    """Round-2 minor 4: a tokens-only settled marker writes NOTHING.
+
+    The run has a proven liveness window AND sandbox-attempt evidence, so it
+    would be tempting to bill the sandbox line — but there is no attributable
+    agent spend and the salvage exists to compensate MARKER-PROVABLE spend.
+    ``has_evidence is False`` short-circuits before the writer.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    run.status = "cancelled"
+    run.started_at = datetime(2026, 10, 20, 10, 0, tzinfo=UTC)
+    run.completed_at = datetime(2026, 10, 20, 11, 0, tzinfo=UTC)
+    run.heartbeat_at = run.completed_at
+    run.total_cost_usd = None
+    run.cost_breakdown = None
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(cost=None)}
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+    ):
+        await salvage_cancelled_run_cost(session, run_id=run.id, org_id=_ORG_ID)
+
+    mock_urs.assert_not_awaited()
+
+
 def test_salvage_from_markers_ignores_top_level_only_event_shapes() -> None:
     """FAR-1914 M2: the parser reads the ``part``-nested shape ONLY.
 
@@ -2543,6 +2659,89 @@ async def test_finalize_failed_run_marker_without_cost_evidence_keeps_one_entry(
     assert breakdown[0]["component"] == "sandbox_infra"
 
 
+@pytest.mark.parametrize(
+    "derived_from",
+    ["node_deadline_watchdog", "reconcile_age_gate_heartbeat"],
+)
+async def test_finalize_failed_run_withholds_sandbox_cost_without_sandbox_evidence(derived_from: str) -> None:
+    """Round-2 B (prove-the-fix): a proven duration is not a sandbox proof.
+
+    Both derived paths — the in-process node-deadline watchdog and the
+    reconcile age gate — bill ``sandbox_infra * window`` for ANY run. A
+    non-sandbox node killed at its deadline (or a pipeline that never
+    dispatched a sandbox node) leaves only the run-level synthetic triage
+    marker, so the sandbox line must be withheld. Without the gate both paths
+    price and write a sandbox line.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    run.completed_at = datetime(2026, 10, 20, 11, 0, tzinfo=UTC)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    markers = {"terminal-triage:00000000-0000-0000-0000-000000000002": _run_level_triage_marker()}
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")) as mock_rate,
+        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=0.5,
+            derived_from=derived_from,
+        )
+
+    mock_rate.assert_not_called()
+    mock_urs.assert_not_awaited()
+    logged = [str(c) for c in mock_log.warning.call_args_list]
+    assert any("cost_finalize.derived_sandbox_cost_withheld" in line for line in logged)
+
+
+async def test_finalize_failed_run_still_attributes_sandbox_cost_with_attempt_marker() -> None:
+    """Round-2 B: the gate keeps the legitimate sandbox line (no regression).
+
+    A retained per-attempt sandbox marker (node identity + triage signature)
+    is the proof the derived duration needs, so the sandbox line is still
+    written with its provenance label.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    run.completed_at = datetime(2026, 10, 20, 11, 0, tzinfo=UTC)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    # Tokens only (no agent-reported cost): the ONLY entry is the sandbox line.
+    markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(cost=None)}
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+    ):
+        await finalize_failed_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="node_deadline_exceeded",
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=0.5,
+            derived_from="node_deadline_watchdog",
+        )
+
+    breakdown = mock_urs.await_args.kwargs["cost_breakdown"]
+    assert [entry["component"] for entry in breakdown] == ["sandbox_infra"]
+    assert breakdown[0]["basis"]["derived_from"] == "node_deadline_watchdog"
+    assert mock_urs.await_args.kwargs["total_cost_usd"] == Decimal("0.065")
+
+
 async def test_finalize_cancelled_run_does_not_salvage_on_the_request_path() -> None:
     """FAR-1914 C2: the API/MCP cancel REQUEST never attributes the cost.
 
@@ -2576,16 +2775,22 @@ async def test_finalize_cancelled_run_does_not_salvage_on_the_request_path() -> 
 
     mock_urs.assert_not_awaited()
     mock_block.assert_not_awaited()
-    logged = [str(c) for c in mock_log.warning.call_args_list]
-    assert any("cost_components_partial_spend_lost" in line for line in logged)
+    # Round-2 minor 1: a normal cancel DEFERS the salvage — it must not emit
+    # the forfeiture diagnostic (that one is reserved for terminal paths that
+    # genuinely cannot attribute anything).
+    logged_info = [str(c) for c in mock_log.info.call_args_list]
+    assert any("cost_components.cancel_salvage_deferred" in line for line in logged_info)
+    logged_warnings = [str(c) for c in mock_log.warning.call_args_list]
+    assert not any("cost_components_partial_spend_lost" in line for line in logged_warnings)
 
 
 async def test_finalize_cancelled_run_without_marker_evidence_forfeits() -> None:
     """A cancelled run with no stored sets keeps the pre-existing path.
 
     No stored sets means no proof of attributed work on the request path — the
-    run is not given a fabricated cost, and the partial-spend diagnostic still
-    fires.
+    run is not given a fabricated cost, and the DEFERRAL diagnostic still
+    fires (never the forfeiture one: the executor's post-settle salvage owns
+    the marker-provable spend).
     """
     run = _make_run(node_token_usage=None, outputs_json=None)
     session = AsyncMock()
@@ -2601,8 +2806,10 @@ async def test_finalize_cancelled_run_without_marker_evidence_forfeits() -> None
         await finalize_cancelled_run(session, run_id=run.id, org_id=_ORG_ID)
 
     mock_urs.assert_not_awaited()
-    logged = [str(c) for c in mock_log.warning.call_args_list]
-    assert any("cost_components_partial_spend_lost" in line for line in logged)
+    logged_info = [str(c) for c in mock_log.info.call_args_list]
+    assert any("cost_components.cancel_salvage_deferred" in line for line in logged_info)
+    logged_warnings = [str(c) for c in mock_log.warning.call_args_list]
+    assert not any("cost_components_partial_spend_lost" in line for line in logged_warnings)
 
 
 async def test_salvage_cancelled_run_cost_attributes_settled_marker_spend() -> None:
@@ -2671,7 +2878,7 @@ async def test_salvage_cancelled_run_cost_skips_when_status_is_not_cancelled() -
     mock_urs.assert_not_awaited()
 
 
-async def test_salvage_cancelled_run_cost_skips_with_zero_total_and_no_breakdown_not_set() -> None:
+async def test_salvage_cancelled_run_cost_attributes_a_zero_total_empty_segment_run() -> None:
     """An EMPTY-SEGMENT cancelled run ($0 total, no breakdown) IS salvageable.
 
     The pre-FAR-1914 "$0" outcome (finalised as a zero-total empty segment) is
@@ -2784,16 +2991,160 @@ async def test_salvage_cancelled_run_cost_attributes_cost_without_a_liveness_pro
 
 
 def test_salvage_sandbox_line_never_attributed_without_an_attempt_marker() -> None:
-    """FAR-1914 M3: wall-clock money needs sandbox-attempt proof.
+    """FAR-1914 M3 + round-2 A: wall-clock money needs SANDBOX-attempt proof.
 
     The derived sandbox line is BILLABLE; it may only ride a run that proves a
-    sandbox actually existed (a retained marker). A run with only non-marker
-    persisted state has no such proof and must not be billed wall-clock time.
+    sandbox actually existed (a retained per-attempt marker naming a node).
+    A generic ``_modulo_marker`` — e.g. a connector idempotency marker — and a
+    run-level synthetic triage marker (``node_id: None``) are NOT that proof.
     """
+    # A per-attempt sandbox marker: node identity + the triage signature.
     assert _has_sandbox_attempt_evidence({"a": _step_finish_marker(), "b": {"other": "shape"}}) is True
-    assert _has_sandbox_attempt_evidence({"a": {"deadline_triage": True}}) is True
+    # Sandbox output fields are sufficient even without the triage flag.
+    assert (
+        _has_sandbox_attempt_evidence(
+            {
+                "a": {
+                    "node_id": "n1",
+                    "raw_output": "",
+                    "stdout_length": 0,
+                    "sandbox_log_tail": "",
+                    "no_output_reason": "no parseable output",
+                }
+            }
+        )
+        is True
+    )
+    # Round-2 A: a connector delivery marker carries ``_modulo_marker`` and a
+    # node id but NO sandbox output — it must not bill sandbox time.
+    assert _has_sandbox_attempt_evidence({"a": _connector_delivered_marker()}) is False
+    # Round-2 B: a run-level synthetic triage marker has no node identity.
+    assert _has_sandbox_attempt_evidence({"a": _run_level_triage_marker()}) is False
+    assert _has_sandbox_attempt_evidence({"a": {"deadline_triage": True}}) is False
     assert _has_sandbox_attempt_evidence({"a": {"node_id": "n1"}}) is False
     assert _has_sandbox_attempt_evidence(None) is False
+
+
+async def test_salvage_cancelled_run_cost_does_not_bill_a_connector_only_run() -> None:
+    """Round-2 A (prove-the-fix): a cancelled CONNECTOR-only run is not billed.
+
+    ``_mark_connector_write_delivered`` writes ``_modulo_marker: True`` +
+    ``delivery_done: True`` and no sandbox output. The pre-fix
+    ``_has_sandbox_attempt_evidence`` accepted that flag as sandbox proof, so
+    a cancelled connector-only run was billed E2B sandbox time for its whole
+    heartbeat window. With the sandbox-specific gate the run has evidence to
+    salvage (the delivery fact) but no sandbox proof, so no sandbox line — and
+    with no agent-reported cost there is nothing to write at all.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    run.status = "cancelled"
+    run.started_at = datetime(2026, 10, 20, 10, 0, tzinfo=UTC)
+    run.completed_at = datetime(2026, 10, 20, 11, 0, tzinfo=UTC)
+    run.heartbeat_at = run.completed_at
+    run.total_cost_usd = None
+    run.cost_breakdown = None
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    markers = {"connector:c1": _connector_delivered_marker()}
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")) as mock_rate,
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+    ):
+        await salvage_cancelled_run_cost(session, run_id=run.id, org_id=_ORG_ID)
+
+    # No sandbox line was even priced, and no terminal write happened.
+    mock_rate.assert_not_called()
+    mock_urs.assert_not_awaited()
+
+
+async def test_salvage_cancelled_run_cost_bounds_the_row_lock_first() -> None:
+    """Round-2 C (prove-the-fix): the salvage issues the lock bound FIRST.
+
+    The salvage's terminal write takes the hot ``runs`` row lock inside the
+    caller's transaction. Without the entry-point bound the wait is unbounded;
+    this asserts the bound is issued on the session before the row read.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    run.status = "cancelled"
+    run.started_at = datetime(2026, 10, 20, 10, 0, tzinfo=UTC)
+    run.completed_at = datetime(2026, 10, 20, 11, 0, tzinfo=UTC)
+    run.heartbeat_at = run.completed_at
+    run.total_cost_usd = None
+    run.cost_breakdown = None
+    order: list[str] = []
+    session = AsyncMock()
+
+    async def _execute(*_args: Any, **_kwargs: Any) -> MagicMock:
+        order.append("select")
+        return MagicMock(scalar_one_or_none=MagicMock(return_value=run))
+
+    async def _bound(_session: Any) -> None:
+        order.append("bound")
+
+    session.execute = AsyncMock(side_effect=_execute)
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.set_mutation_row_lock_timeout",
+            new=AsyncMock(side_effect=_bound),
+        ),
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+    ):
+        await salvage_cancelled_run_cost(session, run_id=run.id, org_id=_ORG_ID)
+
+    # The bound runs before the first statement the salvage issues.
+    assert order[0] == "bound"
+    assert "select" in order
+
+
+async def test_salvage_cancelled_run_cost_preserves_the_recorded_terminal_time() -> None:
+    """Round-2 minor 2 (prove-the-fix): salvage never re-stamps ``completed_at``.
+
+    ``update_run_status`` stamps ``completed_at = now()`` for every terminal
+    status. The salvage runs on an ALREADY-cancelled run, so that would move
+    the terminal time forward (and inflate the recorded duration). The writer
+    restores the recorded value; the double below simulates the re-stamp.
+    """
+    recorded = datetime(2026, 10, 20, 11, 0, tzinfo=UTC)
+    run = _make_run(node_token_usage=None, outputs_json=None)
+    run.status = "cancelled"
+    run.started_at = datetime(2026, 10, 20, 10, 0, tzinfo=UTC)
+    run.completed_at = recorded
+    run.heartbeat_at = recorded
+    run.total_cost_usd = None
+    run.cost_breakdown = None
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+
+    async def _restamping_update(*_args: Any, **_kwargs: Any) -> Any:
+        # Mirrors ``_apply_run_claim_fields`` on a terminal write.
+        run.completed_at = datetime(2026, 10, 20, 12, 30, tzinfo=UTC)
+        return run
+
+    markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker()}
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
+        ),
+        patch(
+            "modulo.core.cost_controller.finalize.update_run_status",
+            new=AsyncMock(side_effect=_restamping_update),
+        ),
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+    ):
+        await salvage_cancelled_run_cost(session, run_id=run.id, org_id=_ORG_ID)
+
+    assert run.completed_at == recorded
 
 
 def test_attributed_cost_present_run_shapes() -> None:
