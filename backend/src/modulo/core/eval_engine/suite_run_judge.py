@@ -112,16 +112,13 @@ def build_suite_run_model_judge_callable(hub: ModelBackendHub) -> ModelJudgeCall
     built judge per backend id so a suite with N cases x M definitions does not
     rebuild the sync->async bridge on every call.
 
-    A MISSING ``model_backend_id`` fails THAT eval closed
-    (``{"passed": False, "score": 0.0, "detail": ...}``) with a clear
-    configuration message. A MALFORMED id is delegated to
-    :func:`~modulo.core.pipeline_engine.llm_judge.build_model_judge_callable`,
-    which already fails closed with its own malformed-id detail. An ABSENT id (a
-    VALID UUID that the hub does not know - deleted, deactivated, or another
-    org's backend) is caught here and fails THAT eval closed too. None raises:
-    raising out of the per-case loop would abort every sibling eval and
-    terminalise the whole run, when the intended contract is a single failed
-    eval with the rest still running.
+    A MISSING or malformed ``model_backend_id``, and an id the hub does not
+    know (a VALID UUID for a deleted, deactivated, or another org's backend),
+    raise :class:`~modulo.core.eval_engine.typed_judge.JudgeExecutionError` with
+    ``judge.configuration``. The engine turns that into
+    ``outcome=error``/NULL score for THAT definition — no verdict, never a
+    ``passed=False, score=0.0`` verdict — and the remaining definitions and
+    cases still run. ADR 066 D6/D13.
     """
     from modulo.core.pipeline_engine.llm_judge import build_model_judge_callable
 
