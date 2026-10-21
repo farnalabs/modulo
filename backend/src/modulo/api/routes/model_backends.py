@@ -1258,6 +1258,7 @@ async def _update_backend_tx(
             and req.default_params is not None
             and not base_url_supplied
             and not legacy_supplied
+            and supports_custom_base_url(existing.provider)
         )
         endpoint_update = base_url_supplied or legacy_supplied or preserve_legacy
 
@@ -1283,9 +1284,14 @@ async def _update_backend_tx(
                     else None
                 )
             else:
-                # Preserve + migrate the already-stored legacy value; it was
-                # validated when written, so it is not re-gated by the new flag.
-                requested_base_url = existing_legacy
+                # Preserve + migrate the legacy value, re-validating it so an
+                # untouched plain-HTTP legacy endpoint still needs the explicit
+                # opt-in before it is written to the credential JSON.
+                requested_base_url = (
+                    _validate_base_url(existing_legacy, allow_insecure_http=bool(req.allow_insecure_http))
+                    if existing_legacy is not None
+                    else None
+                )
             if requested_base_url is not None and not supports_custom_base_url(existing.provider):
                 raise _base_url_error(
                     f"Provider {existing.provider!r} does not support a custom base_url",

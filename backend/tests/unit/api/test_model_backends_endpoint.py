@@ -1802,6 +1802,37 @@ def test_update_replacing_default_params_preserves_a_legacy_endpoint(client: Tes
     assert stub.set_calls == [(str(_BACKEND_ID), json.dumps({"api_key": "sk-legacy", "base_url": _LEGACY_BASE_URL}))]
 
 
+def test_update_drops_an_unusable_legacy_endpoint_on_an_incapable_provider(client: TestClient) -> None:
+    """azure_openai/anthropic never consumed the legacy value; an edit must not 422."""
+    backend = _make_backend(credentials_ciphertext=Fernet(_FERNET_KEY.encode()).encrypt(b"sk-legacy"))
+    backend.provider = "anthropic"
+    backend.default_params = {"base_url": _LEGACY_BASE_URL, "temperature": 0.1}
+    captured: dict[str, object] = {}
+
+    async def fake_update(session: object, backend_id: object, updates: dict[str, object]) -> MagicMock:
+        captured["updates"] = updates
+        if "default_params" in updates:
+            backend.default_params = updates["default_params"]
+        return backend
+
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.update_model_backend", new=fake_update),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"default_params": {"temperature": 0.5}},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["base_url"] is None
+    updates = captured["updates"]
+    assert isinstance(updates, dict)
+    assert "base_url" not in updates["default_params"]
+
+
 def test_update_null_base_url_clears_credential_and_legacy_locations(client: TestClient) -> None:
     legacy_backend = _make_backend()
     legacy_backend.default_params = {"base_url": _LEGACY_BASE_URL}
