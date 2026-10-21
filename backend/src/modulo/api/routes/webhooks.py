@@ -812,7 +812,7 @@ async def _write_receive_paused_event(
         org_id=org_id,
         raw_body=raw_body,
         trigger_type="webhook",
-        log_scope="webhooks.receive_webhook",
+        log_scope=_CODE_WEBHOOKS_RECEIVE_WEBHOOK,
     )
 
 
@@ -1506,7 +1506,7 @@ async def receive_webhook(
             exc,
             trigger_id=trigger_id,
             state=state,
-            event_prefix="webhooks.receive_webhook",
+            event_prefix=_CODE_WEBHOOKS_RECEIVE_WEBHOOK,
             log_label="receive_webhook",
             code=_CODE_WEBHOOKS_RECEIVE_WEBHOOK,
             db_detail="transient database error; webhook delivery failed closed",
