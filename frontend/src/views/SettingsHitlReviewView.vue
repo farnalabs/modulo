@@ -773,7 +773,7 @@ async function bulkClaim() {
   // the server's claim/expiry bookkeeping must not race across gates.
   const outcomes: BulkOutcome[] = []
   for (const gate of selected) {
-    const outcome = await claimOne(gate)
+    const outcome = await claimOne(gate) // NOSONAR: sequential by design - each claim mutates shared review state; the previous non-sequential version issued a concurrent burst
     if (outcome !== null) outcomes.push(outcome)
   }
   bulkOutcomes.value = outcomes
@@ -849,7 +849,7 @@ async function confirmBulkReject() {
   // order, not race the other requests.
   const outcomes: BulkOutcome[] = []
   for (const gate of selected) {
-    outcomes.push(await rejectOne(gate, reason))
+    outcomes.push(await rejectOne(gate, reason)) // NOSONAR: sequential by design - each reject consumes its gate's claim token in order; the previous non-sequential version issued a concurrent burst
   }
 
   bulkOutcomes.value = outcomes

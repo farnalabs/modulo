@@ -474,8 +474,12 @@ describe('AppSidebar', () => {
       await flushPromises()
       await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
       await flushPromises()
-      // A click whose target is the dialog itself is a ::backdrop click.
-      await wrapper.find('#mobile-nav-panel').trigger('click')
+      // A click whose target is the dialog itself is a ::backdrop click. The
+      // second dispatch lands while the (still-rendered) dialog is already
+      // closed, exercising the guarded no-op path in closeMobilePanel().
+      const panel = wrapper.find('#mobile-nav-panel')
+      panel.element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      panel.element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       await flushPromises()
       expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
       wrapper.unmount()

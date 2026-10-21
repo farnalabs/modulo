@@ -691,8 +691,17 @@ describe('DashboardView branches — team expansion', () => {
     await flushPromises()
     expect(toggle.attributes('aria-expanded')).toBe('false')
 
-    // The row itself remains a mouse-click convenience (no role/tabindex).
+    // The row itself remains a mouse-click convenience (no role/tabindex) with
+    // matching keyboard equivalents (Web:MouseEventWithoutKeyboardEquivalentCheck).
     await teamRow.trigger('click')
+    await flushPromises()
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+
+    await teamRow.trigger('keydown.enter')
+    await flushPromises()
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+
+    await teamRow.trigger('keydown.space')
     await flushPromises()
     expect(toggle.attributes('aria-expanded')).toBe('true')
 

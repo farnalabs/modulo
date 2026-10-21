@@ -189,6 +189,20 @@ describe('CommandPalette', () => {
     expect(document.querySelector('input[placeholder="Search pages..."]')).toBeNull()
   })
 
+  it('syncs its open state when the native dialog fires close', async () => {
+    await openPalette()
+    const dialog = document.querySelector('dialog') as HTMLDialogElement
+    expect(dialog).not.toBeNull()
+
+    // A browser closes a modal dialog itself (native Escape, a method="dialog"
+    // form) and then fires `close`. The binding must clear isOpen so the
+    // palette unmounts instead of leaving a rendered-but-closed dialog behind.
+    dialog.dispatchEvent(new Event('close'))
+    await nextTick()
+
+    expect(document.querySelector('dialog')).toBeNull()
+  })
+
   it('does not close when the click originates inside the dialog', async () => {
     await openPalette()
     const input = paletteInput()

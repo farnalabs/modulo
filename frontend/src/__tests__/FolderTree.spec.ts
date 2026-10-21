@@ -263,11 +263,18 @@ describe('FolderTree rendering and selection', () => {
     // In the natural tab order: no tabindex override, not disabled.
     expect(button.attributes('tabindex')).toBeUndefined()
     expect((button.element as HTMLButtonElement).disabled).toBe(false)
-    // A native button's Enter/Space activation produces a click — no bespoke
-    // keydown handler is needed (or present) to re-implement it.
+    // A native button's Enter/Space activation produces a click, so the button
+    // needs no bespoke keydown handler.
     await button.trigger('click')
     expect(wrapper.emitted('select-folder')).toHaveLength(1)
     expect(wrapper.emitted('select-folder')![0]).toEqual(['f1'])
+
+    // The row mirrors its mouse-click convenience with keyboard equivalents
+    // (Web:MouseEventWithoutKeyboardEquivalentCheck).
+    await item.trigger('keydown.enter')
+    expect(wrapper.emitted('select-folder')![1]).toEqual(['f1'])
+    await item.trigger('keydown.space')
+    expect(wrapper.emitted('select-folder')![2]).toEqual(['f1'])
   })
 
   it('highlights the selected folder', async () => {

@@ -1100,9 +1100,18 @@ describe('LifecycleMapList card content', () => {
     expect(titleButton.exists()).toBe(true)
     expect(titleButton.attributes('tabindex')).toBeUndefined()
     expect((titleButton.element as HTMLButtonElement).disabled).toBe(false)
-    // A native button's Enter/Space activation produces a click; there is no
-    // bespoke keydown handler re-implementing it.
+    // A native button's Enter/Space activation produces a click; the card's
+    // own keyboard equivalents mirror its mouse-click convenience
+    // (Web:MouseEventWithoutKeyboardEquivalentCheck).
     await titleButton.trigger('click')
+    expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
+
+    routerPushMock.mockClear()
+    await card.trigger('keydown.enter')
+    expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
+
+    routerPushMock.mockClear()
+    await card.trigger('keydown.space')
     expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
   })
 
