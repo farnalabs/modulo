@@ -7,6 +7,8 @@
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       class="mx-auto mb-4 text-muted-foreground/40"
+      aria-hidden="true"
+      focusable="false"
     >
       <path d="M16,16 L22.9,20 L22.9,28 L16,32 L9.1,28 L9.1,20 Z" stroke="currentColor" stroke-width="1.5" />
       <path d="M32,16 L38.9,20 L38.9,28 L32,32 L25.1,28 L25.1,20 Z" stroke="currentColor" stroke-width="1.5" />
