@@ -1802,6 +1802,25 @@ def test_update_replacing_default_params_preserves_a_legacy_endpoint(client: Tes
     assert stub.set_calls == [(str(_BACKEND_ID), json.dumps({"api_key": "sk-legacy", "base_url": _LEGACY_BASE_URL}))]
 
 
+def test_update_rejects_migrating_a_plain_http_legacy_endpoint_without_opt_in(client: TestClient) -> None:
+    """The migration path re-validates the legacy value instead of copying it blindly."""
+    backend = _make_backend(credentials_ciphertext=Fernet(_FERNET_KEY.encode()).encrypt(b"sk-legacy"))
+    backend.default_params = {"base_url": "http://legacy.internal.example/v1", "temperature": 0.1}
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"default_params": {"temperature": 0.5}},
+        )
+    assert resp.status_code == 422
+    assert "allow_insecure_http" in str(resp.json()["detail"])
+    update_mock.assert_not_awaited()
+
+
 def test_update_drops_an_unusable_legacy_endpoint_on_an_incapable_provider(client: TestClient) -> None:
     """azure_openai/anthropic never consumed the legacy value; an edit must not 422."""
     backend = _make_backend(credentials_ciphertext=Fernet(_FERNET_KEY.encode()).encrypt(b"sk-legacy"))
