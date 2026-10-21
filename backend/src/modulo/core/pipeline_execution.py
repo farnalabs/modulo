@@ -62,6 +62,7 @@ from modulo.core.dispatch_phases import (
     PHASE_SPEND_CHECK,
     PHASE_STREAMING,
 )
+from modulo.core.pipeline_engine.classify import _any_marker_delivery_done
 from modulo.db.crud.run import get_run
 from modulo.db.models.run import ACTIVE_RUN_STATUSES
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
@@ -1832,6 +1833,25 @@ async def zombie_watchdog(
     exec_task.cancel()
     if stall_requested is not None:
         stall_requested.set()
+
+    # FAR-2053: delivery veto — if any marker has delivery_done=True,
+    # the side effect already happened; re-dispatch risks double delivery.
+    # Check BEFORE the retry hook so a delivered-then-stalled run is
+    # terminal-failed, not re-dispatched.
+    if await _run_delivery_veto(aeng, run_id, org_id):
+        _log.warning(
+            "zombie_watchdog.delivery_veto run=%s — delivery already done, terminal-failing instead of retry",
+            run_id,
+        )
+        await fail_run_terminal(
+            aeng,
+            run_id,
+            org_id,
+            error_code=EXECUTOR_STALLED_ERROR_CODE,
+            error_detail="delivery veto: run already delivered",
+        )
+        return
+
     # FAR-1088: this kill fires ONLY pre-first-progress (the watchdog waits for
     # ``first_progress`` above and only reaches here on timeout), so the run
     # executed ZERO nodes by construction — pass ``zero_node=True`` so a
@@ -3003,6 +3023,44 @@ async def _cancel_and_await_tasks(
         heartbeat_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await heartbeat_task
+
+
+async def _run_delivery_veto(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+) -> bool:
+    """Check if the run has any marker with delivery_done=True.
+
+    If True, the run must NOT be re-dispatched (delivery already happened).
+    Fail-closed: DB read failure -> True (block re-dispatch).
+    """
+    try:
+        run_uuid = uuid.UUID(run_id)
+    except (ValueError, AttributeError):
+        # Invalid UUID format (e.g. test fake IDs like "run-1") -> no veto
+        return False
+
+    try:
+        async with aeng.connect() as c:
+            await c.execute(
+                text(_SQL_SET_ORG_ID),
+                {"val": org_id},
+            )
+            result = await c.execute(
+                text("SELECT raw_output_markers FROM runs WHERE id=:rid"),
+                {"rid": run_uuid},
+            )
+            row = result.first()
+            if not row or not row[0]:
+                return False
+            return _any_marker_delivery_done(row[0])
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        # Fail-closed: DB read failure -> treat as veto present
+        _log.warning("delivery_veto.read_failed run=%s org=%s err=%s", run_id, org_id, e)
+        return True
 
 
 async def _resolve_result_status(
