@@ -273,9 +273,17 @@ class TestRowValidationRejectsDishonesty:
     def test_accepts_a_valid_row(self) -> None:
         assert validate_mapping_rows((_row(),)) is None
 
+    def test_rejects_a_row_with_an_empty_id(self) -> None:
+        with pytest.raises(MappingPackError, match="empty id"):
+            validate_mapping_rows((_row(id=""),))
+
     def test_rejects_a_duplicate_row_id(self) -> None:
         with pytest.raises(MappingPackError, match="duplicate mapping row id"):
             validate_mapping_rows((_row(), _row()))
+
+    def test_rejects_unknown_framework(self) -> None:
+        with pytest.raises(MappingPackError, match="unknown framework"):
+            validate_mapping_rows((_row(framework="nist-800-53"),))
 
     def test_rejects_a_missing_responsibility(self) -> None:
         with pytest.raises(MappingPackError, match="responsibility"):
@@ -339,6 +347,45 @@ class TestFrameworkValidation:
             "iso_42001": _framework("iso_42001", rows),
         }
         with pytest.raises(MappingPackError, match="pack frameworks must be exactly"):
+            validate_frameworks(frameworks)
+
+    def test_rejects_a_framework_whose_key_disagrees_with_its_declared_id(self) -> None:
+        frameworks = {
+            "soc2": _framework("iso_42001", (_row(),)),
+            "iso_42001": _framework("iso_42001", (_row(id="iso-1", framework="iso_42001"),)),
+            "eu_ai_act": _framework(
+                "eu_ai_act",
+                (_row(id="eu-1", framework="eu_ai_act", coverage=COVERAGE_GAP),),
+            ),
+        }
+
+        with pytest.raises(MappingPackError, match="does not match its declared id"):
+            validate_frameworks(frameworks)
+
+    def test_rejects_a_framework_with_no_mapping_rows(self) -> None:
+        frameworks = {
+            "soc2": _framework("soc2", ()),
+            "iso_42001": _framework("iso_42001", (_row(id="iso-1", framework="iso_42001"),)),
+            "eu_ai_act": _framework(
+                "eu_ai_act",
+                (_row(id="eu-1", framework="eu_ai_act", coverage=COVERAGE_GAP),),
+            ),
+        }
+
+        with pytest.raises(MappingPackError, match="has no mapping rows"):
+            validate_frameworks(frameworks)
+
+    def test_rejects_a_row_filed_under_the_wrong_framework(self) -> None:
+        frameworks = {
+            "soc2": _framework("soc2", (_row(id="misplaced", framework="iso_42001"),)),
+            "iso_42001": _framework("iso_42001", (_row(id="iso-1", framework="iso_42001"),)),
+            "eu_ai_act": _framework(
+                "eu_ai_act",
+                (_row(id="eu-1", framework="eu_ai_act", coverage=COVERAGE_GAP),),
+            ),
+        }
+
+        with pytest.raises(MappingPackError, match="is filed under"):
             validate_frameworks(frameworks)
 
     def test_rejects_a_framework_that_claims_everything(self) -> None:
@@ -631,6 +678,72 @@ class TestBuildPackEnforcesHonesty:
         install_documents(documents)
 
         with pytest.raises(MappingPackError, match="missing required clauses"):
+            pack_module._build_pack()
+
+
+class TestBuildPackRejectsAMalformedDocumentSet:
+    """The loader's structural rejections, each pinned through the real loader.
+
+    A malformed shipped file must break the surface that serves it (the pack is
+    an audit artefact, so a silently empty or half-loaded pack is the worst
+    outcome). Each test mutates exactly one field of a valid document set, so
+    the rejection is attributable to that mutation.
+    """
+
+    def test_rejects_a_pack_metadata_entry_that_is_not_a_mapping(self, install_documents) -> None:
+        documents = _pack_documents()
+        documents["pack.yaml"]["frameworks"] = ["soc2.yaml"]
+        install_documents(documents)
+
+        with pytest.raises(MappingPackError, match="expected a mapping"):
+            pack_module._build_pack()
+
+    def test_rejects_an_invalid_pack_version(self, install_documents) -> None:
+        documents = _pack_documents()
+        documents["pack.yaml"]["pack_version"] = "1.0"
+        install_documents(documents)
+
+        with pytest.raises(MappingPackError, match=r"MAJOR\.MINOR\.PATCH"):
+            pack_module._build_pack()
+
+    def test_rejects_pack_metadata_that_lists_no_frameworks(self, install_documents) -> None:
+        documents = _pack_documents()
+        documents["pack.yaml"]["frameworks"] = []
+        install_documents(documents)
+
+        with pytest.raises(MappingPackError, match="at least one framework"):
+            pack_module._build_pack()
+
+    def test_rejects_a_framework_entry_without_a_string_id_and_file(self, install_documents) -> None:
+        documents = _pack_documents()
+        documents["pack.yaml"]["frameworks"][0]["id"] = 7
+        install_documents(documents)
+
+        with pytest.raises(MappingPackError, match="needs string 'id' and 'file'"):
+            pack_module._build_pack()
+
+    def test_rejects_a_duplicate_framework_entry(self, install_documents) -> None:
+        documents = _pack_documents()
+        documents["pack.yaml"]["frameworks"].append({"id": "soc2", "file": "soc2.yaml"})
+        install_documents(documents)
+
+        with pytest.raises(MappingPackError, match="duplicate framework 'soc2'"):
+            pack_module._build_pack()
+
+    def test_rejects_a_framework_document_declaring_the_wrong_framework(self, install_documents) -> None:
+        documents = _pack_documents()
+        documents["soc2.yaml"]["framework"] = "iso_42001"
+        install_documents(documents)
+
+        with pytest.raises(MappingPackError, match="'framework' must equal 'soc2'"):
+            pack_module._build_pack()
+
+    def test_rejects_a_framework_document_with_no_rows(self, install_documents) -> None:
+        documents = _pack_documents()
+        documents["soc2.yaml"]["rows"] = []
+        install_documents(documents)
+
+        with pytest.raises(MappingPackError, match="'rows' must be a non-empty list"):
             pack_module._build_pack()
 
 

@@ -187,64 +187,93 @@ def _require_non_empty(value: str, field: str, row_id: str) -> None:
         raise MappingPackError(f"mapping row {row_id!r}: {field} must be a non-empty string")
 
 
+#: Row fields that must carry a non-empty statement. ``responsibility`` is
+#: checked again for a minimum length in :func:`_require_responsibility_statement`
+#: - non-empty is not the same as honest.
+_REQUIRED_ROW_TEXT_FIELDS: Final[tuple[str, ...]] = (
+    "clause",
+    "clause_intent",
+    "modulo_control",
+    "customer_location",
+    "responsibility",
+)
+
+
+def _require_unique_row_id(row: MappingRow, seen_ids: set[str]) -> None:
+    """Reject an empty or repeated row id, registering the id when it is new."""
+    if not row.id.strip():
+        raise MappingPackError("mapping row with an empty id")
+    if row.id in seen_ids:
+        raise MappingPackError(f"duplicate mapping row id {row.id!r}")
+    seen_ids.add(row.id)
+
+
+def _require_row_text_fields(row: MappingRow) -> None:
+    """Every statement field must be non-empty."""
+    for field in _REQUIRED_ROW_TEXT_FIELDS:
+        _require_non_empty(getattr(row, field), field, row.id)
+
+
+def _require_row_vocabulary(row: MappingRow) -> None:
+    """Framework, artefact type, coverage and provenance must come from the vocabularies."""
+    if row.framework not in FRAMEWORK_IDS:
+        raise MappingPackError(f"mapping row {row.id!r}: unknown framework {row.framework!r}")
+    if row.artifact_type not in ARTIFACT_TYPES:
+        raise MappingPackError(f"mapping row {row.id!r}: unknown artefact type {row.artifact_type!r}")
+    if row.coverage not in COVERAGE_VALUES:
+        raise MappingPackError(f"mapping row {row.id!r}: unknown coverage attribution {row.coverage!r}")
+    if row.provenance not in PROVENANCE_VALUES:
+        raise MappingPackError(f"mapping row {row.id!r}: unknown provenance tag {row.provenance!r}")
+
+
+def _require_responsibility_statement(row: MappingRow) -> None:
+    """A one-word placeholder must not satisfy the honesty requirement."""
+    if len(row.responsibility.strip()) < _MIN_RESPONSIBILITY_LENGTH:
+        raise MappingPackError(
+            f"mapping row {row.id!r}: responsibility must state, in a sentence, what "
+            "remains the customer's responsibility"
+        )
+
+
+def _require_row_honesty(row: MappingRow) -> None:
+    """Reject the attributions that would let the pack overclaim."""
+    # A row Modulo claims to SATISFY can never rest on material only the
+    # customer holds - that would present a customer control as ours.
+    if row.coverage == COVERAGE_SATISFIED and row.provenance == PROVENANCE_CUSTOMER_SUPPLIED:
+        raise MappingPackError(
+            f"mapping row {row.id!r}: a 'satisfied' row cannot be evidenced by customer-supplied material"
+        )
+    # A customer-responsibility row's evidence is, by definition, the
+    # customer's own record - never an observed Modulo artefact.
+    if row.coverage == COVERAGE_CUSTOMER_RESPONSIBILITY and row.provenance != PROVENANCE_CUSTOMER_SUPPLIED:
+        raise MappingPackError(
+            f"mapping row {row.id!r}: a 'customer-responsibility' row must be tagged 'customer-supplied'"
+        )
+    # Material the instance does not produce cannot evidence something
+    # Modulo claims to satisfy or support.
+    if not ARTIFACT_TYPES[row.artifact_type].indexed and row.coverage in {COVERAGE_SATISFIED, COVERAGE_SUPPORTED}:
+        raise MappingPackError(
+            f"mapping row {row.id!r}: artefact type {row.artifact_type!r} is not produced "
+            "by the instance, so it cannot evidence a satisfied/supported claim"
+        )
+
+
 def validate_mapping_rows(rows: tuple[MappingRow, ...]) -> None:
     """Validate the pack's cross-row invariants, raising :class:`MappingPackError`.
 
     These are the honesty rules - not formatting. Each one exists because
-    violating it would let the pack overclaim.
+    violating it would let the pack overclaim. The rules live in the helpers
+    above so each one stays independently readable and testable; the order of
+    the checks is the order a reader needs (identity, completeness, vocabulary,
+    then the honesty rules that depend on all three).
     """
     seen_ids: set[str] = set()
     for row in rows:
-        if not row.id.strip():
-            raise MappingPackError("mapping row with an empty id")
-        if row.id in seen_ids:
-            raise MappingPackError(f"duplicate mapping row id {row.id!r}")
-        seen_ids.add(row.id)
-
-        for field in (
-            "clause",
-            "clause_intent",
-            "modulo_control",
-            "customer_location",
-            "responsibility",
-        ):
-            _require_non_empty(getattr(row, field), field, row.id)
-
-        if row.framework not in FRAMEWORK_IDS:
-            raise MappingPackError(f"mapping row {row.id!r}: unknown framework {row.framework!r}")
-        if row.artifact_type not in ARTIFACT_TYPES:
-            raise MappingPackError(f"mapping row {row.id!r}: unknown artefact type {row.artifact_type!r}")
-        if row.coverage not in COVERAGE_VALUES:
-            raise MappingPackError(f"mapping row {row.id!r}: unknown coverage attribution {row.coverage!r}")
-        if row.provenance not in PROVENANCE_VALUES:
-            raise MappingPackError(f"mapping row {row.id!r}: unknown provenance tag {row.provenance!r}")
-
-        if len(row.responsibility.strip()) < _MIN_RESPONSIBILITY_LENGTH:
-            raise MappingPackError(
-                f"mapping row {row.id!r}: responsibility must state, in a sentence, what "
-                "remains the customer's responsibility"
-            )
-
-        # A row Modulo claims to SATISFY can never rest on material only the
-        # customer holds - that would present a customer control as ours.
-        if row.coverage == COVERAGE_SATISFIED and row.provenance == PROVENANCE_CUSTOMER_SUPPLIED:
-            raise MappingPackError(
-                f"mapping row {row.id!r}: a 'satisfied' row cannot be evidenced by customer-supplied material"
-            )
-        # A customer-responsibility row's evidence is, by definition, the
-        # customer's own record - never an observed Modulo artefact.
-        if row.coverage == COVERAGE_CUSTOMER_RESPONSIBILITY and row.provenance != PROVENANCE_CUSTOMER_SUPPLIED:
-            raise MappingPackError(
-                f"mapping row {row.id!r}: a 'customer-responsibility' row must be tagged 'customer-supplied'"
-            )
-
-        # Material the instance does not produce cannot evidence something
-        # Modulo claims to satisfy or support.
-        if not ARTIFACT_TYPES[row.artifact_type].indexed and row.coverage in {COVERAGE_SATISFIED, COVERAGE_SUPPORTED}:
-            raise MappingPackError(
-                f"mapping row {row.id!r}: artefact type {row.artifact_type!r} is not produced "
-                "by the instance, so it cannot evidence a satisfied/supported claim"
-            )
+        _require_unique_row_id(row, seen_ids)
+        _require_row_text_fields(row)
+        _require_row_vocabulary(row)
+        _require_responsibility_statement(row)
+        _require_row_honesty(row)
 
 
 def validate_frameworks(frameworks: dict[str, Framework]) -> None:

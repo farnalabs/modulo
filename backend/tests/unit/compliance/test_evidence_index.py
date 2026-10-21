@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import event
@@ -35,6 +35,7 @@ from modulo.compliance.artifacts import (
     ARTIFACT_TYPES,
     INDEXED_ARTIFACT_TYPES,
     PROVENANCE_CUSTOMER_SUPPLIED,
+    PROVENANCE_OBSERVED,
 )
 from modulo.compliance.evidence_index import (
     AUTONOMY_DEMOTION_EVENT,
@@ -42,6 +43,7 @@ from modulo.compliance.evidence_index import (
     STATUS_ABSENT,
     STATUS_CUSTOMER_SUPPLIED,
     STATUS_PRESENT,
+    ArtifactEntry,
     EvidenceIndex,
     EvidenceIndexIncompleteError,
     build_evidence_index,
@@ -778,8 +780,126 @@ class TestCollectorQueryScoping:
         assert "no audit events" not in (entry.absence_reason or "")
         assert "chain head" in (entry.absence_reason or "")
 
+    async def test_chain_head_without_a_last_event_id_names_only_the_head(self, session: AsyncSession) -> None:
+        """``last_event_id`` is nullable (``ondelete=SET NULL``); the entry must not
+        emit a bogus ``audit-chain-last-event:None`` identifier when it is unset.
+        """
+        org_id = await _make_org(session, "head-without-event")
+        await _make_audit_event(session, org_id, event_type="pipeline_created", created_at=_BASE_TIME)
+        session.add(
+            AuditChainHead(
+                id=uuid.uuid4(),
+                organisation_id=org_id,
+                last_event_hash="b" * 64,
+                last_event_id=None,
+                event_count=1,
+            )
+        )
+        await session.commit()
+
+        index = await build_evidence_index(session, org_id)
+        entry = _by_type(index)[ARTIFACT_AUDIT_CHAIN]
+
+        assert entry.status == STATUS_PRESENT
+        assert entry.identifiers == ("audit-chain-head:" + "b" * 64,)
+
+    async def test_a_collector_set_that_drifts_from_the_vocabulary_fails_loudly(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A collector added/removed/renamed without updating the vocabulary is a bug.
+
+        Serving the index anyway would leave a silent hole in the audit
+        inventory, which is the one thing the index exists to prevent.
+        """
+        org_id = await _make_org(session, "vocabulary-drift")
+        await session.commit()
+        monkeypatch.setattr(
+            evidence_index_module,
+            "_collect_build_identity",
+            evidence_index_module._collect_release_sbom,
+        )
+
+        with pytest.raises(RuntimeError, match="does not match the indexed vocabulary"):
+            await build_evidence_index(session, org_id)
+
 
 class TestArtefactVocabulary:
     def test_every_indexed_type_has_a_description(self) -> None:
         for artifact_type in INDEXED_ARTIFACT_TYPES:
             assert ARTIFACT_TYPES[artifact_type].description
+
+
+class TestArtifactEntryEnforcesItsOwnShape:
+    """The entry model is the last line of defence for the index's claims.
+
+    A collector that gets the status/provenance/identifier relationship wrong
+    must fail loudly at construction rather than emit an entry an auditor would
+    misread (``present`` with nothing named, ``absent`` with no reason, an
+    artefact keyed to no mapping row at all).
+    """
+
+    @staticmethod
+    def _kwargs() -> dict:
+        return {
+            "artifact_type": ARTIFACT_AUDIT_CHAIN,
+            "status": STATUS_PRESENT,
+            "provenance": PROVENANCE_OBSERVED,
+            "description": "the organisation's hash-chained audit trail",
+            "location": "GET /api/v1/admin/audit",
+            "identifiers": ("audit-chain-head:abc",),
+            "record_count": 1,
+            "detail": {},
+            "mapping_row_ids": ("soc2-1",),
+        }
+
+    def test_accepts_a_well_formed_present_entry(self) -> None:
+        entry = ArtifactEntry.model_validate(self._kwargs())
+
+        assert entry.status == STATUS_PRESENT
+        assert entry.identifiers == ("audit-chain-head:abc",)
+
+    def test_rejects_an_unknown_status(self) -> None:
+        with pytest.raises(ValueError, match="invalid artefact status"):
+            ArtifactEntry.model_validate({**self._kwargs(), "status": "probably-fine"})
+
+    def test_rejects_an_unknown_provenance(self) -> None:
+        with pytest.raises(ValueError, match="invalid artefact provenance"):
+            ArtifactEntry.model_validate({**self._kwargs(), "provenance": "trust-me"})
+
+    def test_rejects_an_entry_keyed_to_no_mapping_row(self) -> None:
+        with pytest.raises(ValueError, match="not keyed to any mapping row"):
+            ArtifactEntry.model_validate({**self._kwargs(), "mapping_row_ids": ()})
+
+    def test_rejects_a_present_entry_that_names_no_identifier(self) -> None:
+        with pytest.raises(ValueError, match="present but names no identifier"):
+            ArtifactEntry.model_validate({**self._kwargs(), "identifiers": ()})
+
+    def test_rejects_an_absent_entry_that_states_no_reason(self) -> None:
+        with pytest.raises(ValueError, match="absent but states no reason"):
+            ArtifactEntry.model_validate(
+                {
+                    **self._kwargs(),
+                    "status": STATUS_ABSENT,
+                    "identifiers": (),
+                    "absence_reason": "   ",
+                }
+            )
+
+
+class TestTimestampRendering:
+    """Timestamps are rendered deterministically, including SQLite's naive ones."""
+
+    def test_none_renders_as_none(self) -> None:
+        assert evidence_index_module._iso(None) is None
+
+    def test_a_naive_timestamp_is_normalised_to_utc(self) -> None:
+        # A bare `.isoformat()` would emit no offset at all, which an auditor
+        # tool would read as the wrong moment.
+        assert evidence_index_module._iso(datetime(2026, 1, 15, 9, 0, 0)) == "2026-01-15T09:00:00+00:00"
+
+    def test_an_aware_timestamp_keeps_its_own_offset(self) -> None:
+        # Only naive values (SQLite) are coerced; a value that already carries
+        # an offset must not be rewritten to UTC, which would misdate it.
+        aware = datetime(2026, 1, 15, 9, 0, 0, tzinfo=timezone(timedelta(hours=2)))
+
+        assert evidence_index_module._iso(aware) == "2026-01-15T09:00:00+02:00"
