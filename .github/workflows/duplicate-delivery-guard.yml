@@ -1,0 +1,76 @@
+# duplicate-delivery-guard - flag two OPEN pull requests that claim the same
+# Linear ticket, before both are driven at the merge queue.
+#
+# Why this exists (2026-10-20, FAR-1883): PR #2017 and PR #2029 both carried
+# `FAR-1883` in their titles. #2029's branch was cut from #2017's head, so its
+# diff re-carried the whole feature (44 files) including the same Alembic
+# migration. When `main` independently took that migration's numeric prefix the
+# merge queue saw two heads, aborted the entire batch, and ten approved PRs
+# waited ~4 hours. Nothing was lost - the detection was simply hours too late.
+# Full record: docs/operations/far-1883-duplicate-delivery.md
+#
+# ADVISORY BY DESIGN - a collision WARNS, it never fails this job. The cost of
+# the incident was one pull request wedging everything; a guard with a
+# false-positive path must not be able to reproduce that, or two legitimately
+# stacked PRs would block the very merges this protects. The durable signal is
+# a PR comment naming both PRs plus the `duplicate-delivery` label.
+# scripts/check_duplicate_delivery.py exits 2 only when it cannot list the
+# repo's open PRs at all, so a broken guard is loud rather than silently green.
+#
+# `pull_request`, never `pull_request_target`: this only reads the repo's own
+# open PR titles and posts a comment, and on a public repo no workflow should
+# hold a write-capable token while running untrusted PR code. The guard script
+# is checked out from the BASE commit, not the PR head, so a pull request
+# cannot edit the guard that inspects it.
+name: "Duplicate delivery guard"
+
+on:
+  pull_request:
+    types: [opened, edited, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: duplicate-delivery-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  duplicate-delivery:
+    name: duplicate-delivery-guard
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 5
+    steps:
+      - name: Check out the base commit (trusted copy of the guard)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Compare this PR's ticket against other open PRs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # The guard lives on the base branch, so the one PR that introduces it
+          # (and any PR open while it merges) finds nothing to run. Say so out
+          # loud rather than failing: a bootstrap gap must never look like a
+          # clean pass or like a blocked PR.
+          GUARD="scripts/check_duplicate_delivery.py"
+          if [ ! -f "$GUARD" ]; then
+            echo "::warning::duplicate-delivery guard is not on the base commit (${BASE_REF} at ${BASE_SHA}) yet - skipping this PR. This is expected while the guard itself is still an open PR."
+            exit 0
+          fi
+          python3 "$GUARD" \
+            --repo "$REPO" \
+            --number "$PR_NUMBER" \
+            --title "$PR_TITLE" \
+            --base "$BASE_REF"
