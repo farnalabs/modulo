@@ -230,7 +230,7 @@ Runs on-save (via the REST API's `PUT /{pipeline_id}/graph` endpoint) and pre-ru
 
 **HITL gate configuration**
 
-These checks cover both edge-level `hitl_review_config` and node-level `hitl_config`. The description check is save-time only; the rest also run pre-run.
+These checks cover both edge-level `hitl_review_config` and node-level `hitl_config`. Most are save-time only: the description, `subject_path`, `response_contract` and `on_reject` checks run when the graph is saved and do not re-run when a pipeline is triggered. Only the `HITL_EVAL_CONDITION_*` checks also run pre-run, as part of the topology pass.
 
 | Code | Severity | Rule |
 |---|---|---|
