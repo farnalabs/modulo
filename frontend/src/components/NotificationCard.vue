@@ -40,22 +40,12 @@
         :class="hitlAffordanceClass"
         aria-live="polite"
       >
-        <svg
+        <Info
           v-if="isHitlActionable"
-          xmlns="http://www.w3.org/2000/svg"
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
+          :size="14"
           class="shrink-0 text-muted-foreground"
           aria-hidden="true"
-        >
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="12" y1="8" x2="12" y2="12"/>
-          <line x1="12" y1="16" x2="12.01" y2="16"/>
-        </svg>
+        />
         <span>{{ hitlAffordance }}</span>
       </output>
 
@@ -63,6 +53,7 @@
         <router-link
           v-if="notification.action_url"
           :to="notification.action_url"
+          data-testid="notification-action-link"
           class="text-xs font-medium text-primary-text hover:underline"
         >
           {{ isHitlAwaiting ? $t('components.NotificationCard.awaiting_hitl_view_run') : $t('components.NotificationCard.view') }}
@@ -75,6 +66,7 @@
     <div class="notification-actions absolute right-2 top-2 gap-1">
       <button
         type="button"
+        data-testid="notification-review-later"
         class="rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
         :aria-label="$t('components.NotificationCard.review_later')"
         @click="$emit('review-later', notification.id)"
@@ -83,6 +75,7 @@
       </button>
       <button
         type="button"
+        data-testid="notification-dismiss"
         class="rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-destructive transition-colors"
         :aria-expanded="showDismiss"
         :aria-label="$t('components.NotificationCard.dismiss_this_notification')"
@@ -108,6 +101,7 @@ import type { NotificationResponse } from "../lib/api/notifications";
 import { dismissNotification } from "../lib/api/notifications";
 import DismissDialog from "./DismissDialog.vue";
 import { formatRelativeTime } from "../lib/formatDate";
+import { Info } from "@lucide/vue";
 import { runStatusLabel, cancelReasonLabel } from "../utils/runUtils";
 
 const props = defineProps<{
@@ -211,7 +205,7 @@ async function onDismiss(scope: "self" | "scope") {
     showDismiss.value = false;
     emit("dismissed", props.notification.id);
   } catch (e: unknown) {
-    dismissError.value = e instanceof Error ? e.message : "Failed to dismiss notification";
+    dismissError.value = e instanceof Error ? e.message : t("components.NotificationCard.failed_to_dismiss_notification");
   }
 }
 </script>
