@@ -299,6 +299,59 @@ async def get_composite_template_endpoint(
     return _mask_template_response(template)
 
 
+def _build_composite_updates(req: CompositeTemplateUpdate) -> dict[str, Any]:
+    """Serialise the PATCH payload, preserving parameter-port dicts."""
+    updates: dict[str, Any] = {}
+    for k, v in req.model_dump(exclude_unset=True).items():
+        if k == "parameter_ports_json" and v is not None:
+            updates[k] = [p.model_dump() if isinstance(p, BaseModel) else p for p in v]
+        else:
+            updates[k] = v
+    return updates
+
+
+async def _resolve_incoming_graph_masks(
+    session: AsyncSession,
+    template_id: uuid.UUID,
+    updates: dict[str, Any],
+) -> None:
+    """Resolve masked-node echoes against the stored template (FAR-1181/1374).
+
+    FAR-1181 + FAR-1374: a PATCH round-tripping the masked GET must not persist
+    mask literals over the template's stored node values (resolve echoes
+    against the current template first), and a sentinel the resolve cannot map
+    to a stored value is refused 422 rather than silently dropping the key.
+    """
+    incoming_graph = updates.get("sub_pipeline_graph_json")
+    if not isinstance(incoming_graph, dict) or not isinstance(incoming_graph.get("nodes"), list):
+        return
+    current = await get_composite_template(session, template_id)
+    if current is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
+    current_graph = current.sub_pipeline_graph_json
+    stored_nodes: list[dict[str, Any]] = []
+    if isinstance(current_graph, dict) and isinstance(current_graph.get("nodes"), list):
+        stored_nodes = [n for n in current_graph["nodes"] if isinstance(n, dict)]
+    incoming_graph["nodes"] = resolve_and_reject_mask_sentinels(
+        list(incoming_graph["nodes"]),
+        stored_nodes,
+    )
+
+
+async def _persist_composite_update(
+    session: AsyncSession,
+    *,
+    template_id: uuid.UUID,
+    updates: dict[str, Any],
+    principal: TenantPrincipal,
+) -> Any:
+    """Apply the PATCH inside the org-scoped transaction."""
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await _resolve_incoming_graph_masks(session, template_id, updates)
+        return await update_composite_template(session, template_id, updates)
+
+
 @router.patch(
     "/{template_id}",
     dependencies=[
@@ -312,34 +365,14 @@ async def update_composite_template_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_PERM_PIPELINE_UPDATE),
 ) -> CompositeTemplateResponse:
-    updates: dict[str, Any] = {}
-    for k, v in req.model_dump(exclude_unset=True).items():
-        if k == "parameter_ports_json" and v is not None:
-            updates[k] = [p.model_dump() if isinstance(p, BaseModel) else p for p in v]
-        else:
-            updates[k] = v
+    updates = _build_composite_updates(req)
     try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            # FAR-1181 + FAR-1374: a PATCH round-tripping the masked GET must
-            # not persist mask literals over the template's stored node values
-            # (resolve echoes against the current template first), and a
-            # sentinel the resolve cannot map to a stored value is refused 422
-            # rather than silently dropping the key.
-            incoming_graph = updates.get("sub_pipeline_graph_json")
-            if isinstance(incoming_graph, dict) and isinstance(incoming_graph.get("nodes"), list):
-                current = await get_composite_template(session, template_id)
-                if current is None:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
-                current_graph = current.sub_pipeline_graph_json
-                stored_nodes: list[dict[str, Any]] = []
-                if isinstance(current_graph, dict) and isinstance(current_graph.get("nodes"), list):
-                    stored_nodes = [n for n in current_graph["nodes"] if isinstance(n, dict)]
-                incoming_graph["nodes"] = resolve_and_reject_mask_sentinels(
-                    list(incoming_graph["nodes"]),
-                    stored_nodes,
-                )
-            template = await update_composite_template(session, template_id, updates)
+        template = await _persist_composite_update(
+            session,
+            template_id=template_id,
+            updates=updates,
+            principal=principal,
+        )
     except ProgrammingError:
         logger.exception(_CODE_UPDATE_COMPOSITE_TEMPLATE_ENDPOINT)
         raise HTTPException(

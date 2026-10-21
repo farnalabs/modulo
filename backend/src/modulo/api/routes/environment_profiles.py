@@ -713,6 +713,37 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
     )
 
 
+def _sandbox_failure_event(exc: Exception) -> str | None:
+    """The SSE 'failed' event for a classified sandbox failure, else None."""
+    from modulo.core.pipeline_engine.sandbox_errors import (  # nosemgrep: inline-import-route-files
+        SandboxTierRefusedError,
+    )
+
+    if isinstance(exc, SandboxTierRefusedError):
+        return _sse_event("failed", str(exc))
+    return None
+
+
+async def _cleanup_failed_sandbox(provider: RuntimeProvider, provider_ref: str) -> None:
+    """Best-effort teardown of a sandbox whose test failed mid-stream."""
+    try:
+        await provider.destroy_workspace(provider_ref)
+    except HTTPException:
+        raise
+    except Exception:
+        _log.warning("Failed to clean up sandbox %s after error", provider_ref)
+
+
+async def _close_runtime_hub(hub: RuntimeProviderHub | None) -> None:
+    """Release provider-owned clients (ADR 029 per-provision disposal)."""
+    if hub is None:
+        return
+    try:
+        await hub.aclose()
+    except Exception:
+        _log.warning("Failed to close runtime provider hub after sandbox test", exc_info=True)
+
+
 async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str]:
     """Stream sandbox lifecycle events as SSE."""
     provider_ref: str | None = None
@@ -756,30 +787,18 @@ async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str
     except HTTPException:
         raise
     except Exception as exc:
-        from modulo.core.pipeline_engine.sandbox_errors import (  # nosemgrep: inline-import-route-files
-            SandboxTierRefusedError,
-        )
-
-        if isinstance(exc, SandboxTierRefusedError):
-            yield _sse_event("failed", str(exc))
+        failure_event = _sandbox_failure_event(exc)
+        if failure_event is not None:
+            yield failure_event
             return
         _log.exception("Sandbox test failed for profile %s", profile.id)
         yield _sse_event("failed", "Test failed — check server logs for details")
         if provider_ref and provider is not None:
-            try:
-                await provider.destroy_workspace(provider_ref)
-            except HTTPException:
-                raise
-            except Exception:
-                _log.warning("Failed to clean up sandbox %s after error", provider_ref)
+            await _cleanup_failed_sandbox(provider, provider_ref)
     finally:
         # Per-provision disposal (ADR 029): release provider-owned clients
         # explicitly instead of leaving them to GC.
-        if hub is not None:
-            try:
-                await hub.aclose()
-            except Exception:
-                _log.warning("Failed to close runtime provider hub after sandbox test", exc_info=True)
+        await _close_runtime_hub(hub)
 
 
 @router.post("/{profile_id}/test")

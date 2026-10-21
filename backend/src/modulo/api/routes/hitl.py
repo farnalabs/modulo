@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import Any, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -811,6 +812,75 @@ async def claim_review(
     )
 
 
+async def _prepare_hitl_decision(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    review_id: str,
+    *,
+    answer: dict[str, Any] | None,
+    validate_answer: bool,
+    require_answer: bool,
+    enforce_human_only: bool,
+    audit_action: str,
+    call_kwargs: dict[str, Any],
+) -> dict[str, Any] | None:
+    """In-transaction answer validation, payload injection and human-only gate."""
+    if validate_answer:
+        answer = await _validate_choice_answer(
+            session,
+            run_id,
+            review_id,
+            principal.organisation_id,
+            answer,
+            require_answer=require_answer,
+        )
+        payload = call_kwargs.get("decision_payload")
+        if answer is not None and isinstance(payload, dict):
+            payload["answer"] = answer
+    if enforce_human_only:
+        await _enforce_human_only_gate(session, principal, run_id, review_id, audit_action)
+    return answer
+
+
+async def _invoke_hitl_manager(
+    mgr: Any,
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    review_id: str,
+    mgr_method: str,
+    answer: dict[str, Any] | None,
+    call_kwargs: dict[str, Any],
+) -> Any:
+    """Call the manager's decision method, mapping domain errors to HTTP."""
+    try:
+        # FAR-860: forward the answer to the manager for audit enrichment.
+        manager_kwargs = dict(call_kwargs)
+        if answer is not None:
+            manager_kwargs["answer"] = answer
+        return await getattr(mgr, mgr_method)(
+            session,
+            run_id=run_id,
+            review_id=review_id,
+            org_id=principal.organisation_id,
+            actor_id=principal.account_id,
+            **manager_kwargs,
+        )
+    except GateNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except GateAlreadyDecidedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ClaimTokenInvalidError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ClaimTokenExpiredError as exc:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+    except NotTeamMemberError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except DecisionPayloadError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+
+
 async def _run_hitl_manager(
     session: AsyncSession,
     principal: TenantPrincipal,
@@ -870,45 +940,28 @@ async def _run_hitl_manager(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            if validate_answer:
-                answer = await _validate_choice_answer(
-                    session,
-                    run_id,
-                    review_id,
-                    principal.organisation_id,
-                    answer,
-                    require_answer=require_answer,
-                )
-                payload = call_kwargs.get("decision_payload")
-                if answer is not None and isinstance(payload, dict):
-                    payload["answer"] = answer
-            if enforce_human_only:
-                await _enforce_human_only_gate(session, principal, run_id, review_id, audit_action)
-            try:
-                # FAR-860: forward the answer to the manager for audit enrichment.
-                manager_kwargs = dict(call_kwargs)
-                if answer is not None:
-                    manager_kwargs["answer"] = answer
-                return await getattr(mgr, mgr_method)(
-                    session,
-                    run_id=run_id,
-                    review_id=review_id,
-                    org_id=principal.organisation_id,
-                    actor_id=principal.account_id,
-                    **manager_kwargs,
-                )
-            except GateNotFoundError as exc:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-            except GateAlreadyDecidedError as exc:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-            except ClaimTokenInvalidError as exc:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-            except ClaimTokenExpiredError as exc:
-                raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
-            except NotTeamMemberError as exc:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-            except DecisionPayloadError as exc:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+            answer = await _prepare_hitl_decision(
+                session,
+                principal,
+                run_id,
+                review_id,
+                answer=answer,
+                validate_answer=validate_answer,
+                require_answer=require_answer,
+                enforce_human_only=enforce_human_only,
+                audit_action=audit_action,
+                call_kwargs=call_kwargs,
+            )
+            return await _invoke_hitl_manager(
+                mgr,
+                session,
+                principal,
+                run_id,
+                review_id,
+                mgr_method,
+                answer,
+                call_kwargs,
+            )
     except HumanOnlyDenied as exc:
         # FAR-634: the decision transaction rolled back on the raise — emit
         # the denial audit event in a FRESH session (failure-isolated) so the
@@ -1350,6 +1403,107 @@ async def submit_manual_output(
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class _PendingRunData:
+    """The pending-run read model, resolved inside one RLS transaction."""
+
+    gates: list[HitlClaim]
+    pipeline_name: str | None
+    review_label_map: dict[str, str]
+    review_description_map: dict[str, str | None]
+    claimant_names: dict[uuid.UUID, str]
+
+
+async def _load_pending_pipeline_name(session: AsyncSession, gates: list[HitlClaim]) -> str | None:
+    """The pipeline name for the first pending gate, or None."""
+    if not gates:
+        return None
+    pipeline = await session.get(Pipeline, gates[0].pipeline_id)
+    return pipeline.name if pipeline else None
+
+
+def _gate_description(gate: HitlClaim, config: dict[str, Any] | None) -> str | None:
+    """One gate's description (context-first precedence)."""
+    return resolve_review_description(
+        gate.context_json if isinstance(gate.context_json, dict) else None,
+        config,
+    )
+
+
+async def _describe_gates_from_snapshot(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run: Run,
+    gates: list[HitlClaim],
+) -> tuple[dict[str, str], dict[str, str | None]]:
+    """Snapshot-derived label + description maps (empty when unavailable)."""
+    if not run.snapshot_id:
+        return {}, {}
+    snap_result = await session.execute(
+        select(PipelineSnapshot).where(
+            PipelineSnapshot.id == run.snapshot_id,
+            PipelineSnapshot.organisation_id == principal.organisation_id,
+        )
+    )
+    snapshot = snap_result.scalar_one_or_none()
+    if snapshot is None or not isinstance(snapshot.graph_json, dict):
+        return {}, {}
+    review_label_map = _build_review_label_map(snapshot.graph_json)
+    # FAR-688 unified precedence: the fire-time captured description (the
+    # claim's context) wins; the snapshot config's description is the fallback
+    # — the SAME rule the org-level endpoints apply via
+    # ``resolve_review_descriptions``.
+    review_config_map = snapshot_review_config_map(snapshot.graph_json)
+    review_description_map = {g.review_id: _gate_description(g, review_config_map.get(g.review_id)) for g in gates}
+    return review_label_map, review_description_map
+
+
+async def _load_pending_run_data(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+) -> _PendingRunData:
+    """Resolve the run's pending gates and their render maps."""
+    # Defence-in-depth org predicate (FAR-328): RLS is the backstop, the
+    # explicit filter makes cross-tenant access impossible even if RLS
+    # were misconfigured.
+    run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+    result = await session.execute(
+        select(HitlClaim).where(
+            HitlClaim.run_id == run_id,
+            HitlClaim.organisation_id == principal.organisation_id,
+            HitlClaim.decision.is_(None),
+        )
+    )
+    gates = list(result.scalars())
+
+    pipeline_name = await _load_pending_pipeline_name(session, gates)
+    review_label_map, review_description_map = await _describe_gates_from_snapshot(session, principal, run, gates)
+
+    if not review_description_map and gates:
+        # FAR-688: when the snapshot is unavailable (no snapshot_id, retention
+        # pruned the row, or a non-dict graph) the context-first pass above
+        # never ran — resolve from the claim row's captured briefing ALONE
+        # (context-first, no snapshot fallback) so this surface agrees with the
+        # org-level ``resolve_review_descriptions`` resolver instead of muting
+        # a description the capture carries.
+        review_description_map = {g.review_id: _gate_description(g, None) for g in gates}
+
+    # FAR-691: batched claimant display names + the caller-owns-claim stamp,
+    # resolved inside the same transaction/RLS context.
+    claimant_names = await _load_claimant_name_map(session, gates)
+    return _PendingRunData(
+        gates=gates,
+        pipeline_name=pipeline_name,
+        review_label_map=review_label_map,
+        review_description_map=review_description_map,
+        claimant_names=claimant_names,
+    )
+
+
 @router.get(
     "/runs/{run_id}/hitl/pending",
 )
@@ -1364,71 +1518,7 @@ async def list_run_pending_reviews(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            # Defence-in-depth org predicate (FAR-328): RLS is the backstop, the
-            # explicit filter makes cross-tenant access impossible even if RLS
-            # were misconfigured.
-            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
-            if run is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
-
-            result = await session.execute(
-                select(HitlClaim).where(
-                    HitlClaim.run_id == run_id,
-                    HitlClaim.organisation_id == principal.organisation_id,
-                    HitlClaim.decision.is_(None),
-                )
-            )
-            gates = list(result.scalars())
-
-            pipeline_name: str | None = None
-            if gates:
-                pipeline = await session.get(Pipeline, gates[0].pipeline_id)
-                pipeline_name = pipeline.name if pipeline else None
-
-            review_label_map: dict[str, str] = {}
-            review_description_map: dict[str, str | None] = {}
-            if run is not None and run.snapshot_id:
-                snap_result = await session.execute(
-                    select(PipelineSnapshot).where(
-                        PipelineSnapshot.id == run.snapshot_id,
-                        PipelineSnapshot.organisation_id == principal.organisation_id,
-                    )
-                )
-                snapshot = snap_result.scalar_one_or_none()
-                if snapshot is not None and isinstance(snapshot.graph_json, dict):
-                    review_label_map = _build_review_label_map(snapshot.graph_json)
-                    # FAR-688 unified precedence: the fire-time captured
-                    # description (the claim's context) wins; the snapshot
-                    # config's description is the fallback — the SAME rule
-                    # the org-level endpoints apply via
-                    # ``resolve_review_descriptions``.
-                    review_config_map = snapshot_review_config_map(snapshot.graph_json)
-                    review_description_map = {
-                        g.review_id: resolve_review_description(
-                            g.context_json if isinstance(g.context_json, dict) else None,
-                            review_config_map.get(g.review_id),
-                        )
-                        for g in gates
-                    }
-
-            if not review_description_map and gates:
-                # FAR-688: when the snapshot is unavailable (no snapshot_id,
-                # retention pruned the row, or a non-dict graph) the
-                # context-first pass above never ran — resolve from the claim
-                # row's captured briefing ALONE (context-first, no snapshot
-                # fallback) so this surface agrees with the org-level
-                # ``resolve_review_descriptions`` resolver instead of muting a
-                # description the capture carries.
-                review_description_map = {
-                    g.review_id: resolve_review_description(
-                        g.context_json if isinstance(g.context_json, dict) else None, None
-                    )
-                    for g in gates
-                }
-
-            # FAR-691: batched claimant display names + the caller-owns-claim
-            # stamp, resolved inside the same transaction/RLS context.
-            claimant_names = await _load_claimant_name_map(session, gates)
+            data = await _load_pending_run_data(session, principal, run_id)
     except ProgrammingError as exc:
         logger.exception(_CODE_HITL_LIST_RUN_PENDING_REVIEWS)
         raise HTTPException(
@@ -1457,13 +1547,13 @@ async def list_run_pending_reviews(
         reviews=[
             _review_to_response(
                 g,
-                pipeline_name=pipeline_name,
-                label=review_label_map.get(g.review_id),
-                description=review_description_map.get(g.review_id),
-                claimed_by_name=claimant_names.get(g.account_id) if g.account_id is not None else None,
+                pipeline_name=data.pipeline_name,
+                label=data.review_label_map.get(g.review_id),
+                description=data.review_description_map.get(g.review_id),
+                claimed_by_name=data.claimant_names.get(g.account_id) if g.account_id is not None else None,
                 claimed_by_me=g.account_id == principal.account_id,
             )
-            for g in gates
+            for g in data.gates
         ]
     )
 
