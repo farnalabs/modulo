@@ -13,6 +13,9 @@ from modulo.core.graph_validator import GraphValidator, ValidationResult
 from modulo.core.graph_validator.mask_sentinel import MASK_SENTINEL_ISSUE_CODE
 from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
 from tests.unit.graph_validator._helpers import codes_of as _codes
+from tests.unit.graph_validator._helpers import (
+    session_returning as _session_with_templates,
+)
 
 
 def _template(sub_graph: dict[str, Any] | None = None) -> MagicMock:
@@ -25,16 +28,6 @@ def _template(sub_graph: dict[str, Any] | None = None) -> MagicMock:
 
 def _node(nid: str, composite_ref: uuid.UUID) -> dict[str, Any]:
     return {"id": nid, "node_type": "composite", "composite_ref": str(composite_ref)}
-
-
-def _session_with_templates(rows: list[MagicMock]) -> AsyncMock:
-    session = AsyncMock()
-    scalars = MagicMock()
-    scalars.all.return_value = rows
-    exc = MagicMock()
-    exc.scalars.return_value = scalars
-    session.execute = AsyncMock(return_value=exc)
-    return session
 
 
 async def _run(graph_json: dict[str, Any], session: AsyncMock) -> ValidationResult:

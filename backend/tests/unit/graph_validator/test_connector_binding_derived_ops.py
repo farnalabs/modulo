@@ -11,12 +11,15 @@ adds a read leg, and which node shapes are never checked at all.
 import logging
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from modulo.connectors.base import connector_binding_required_acl_operations
 from modulo.core.graph_validator import GraphValidator, ValidationResult
+from tests.unit.graph_validator._helpers import (
+    session_returning as _session_returning,
+)
 
 
 def _snapshot(
@@ -29,17 +32,6 @@ def _snapshot(
     snap.connector_bindings_json = connector_bindings or []
     snap.model_backend_pins_json = []
     return snap
-
-
-def _session_returning(rows: list[Any]) -> AsyncMock:
-    """Mock session whose execute() returns the given rows via .scalars().all()."""
-    session = AsyncMock()
-    scalars_result = MagicMock()
-    scalars_result.all.return_value = rows
-    execute_result = MagicMock()
-    execute_result.scalars.return_value = scalars_result
-    session.execute = AsyncMock(return_value=execute_result)
-    return session
 
 
 def _connector_instance(
