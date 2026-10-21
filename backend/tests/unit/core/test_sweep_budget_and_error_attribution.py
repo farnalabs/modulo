@@ -28,14 +28,17 @@ match, the tick records a truthful ``status='timeout'`` marker naming the
 org, and the loop CONTINUES to the remaining orgs, ``record_facts`` and the
 compensating sweeps.
 
-FAR-1643: The 30s per-org cut in prod turned out to be time spent PROCESSING
-ROWS (``during stage=reconcile_org:<id>/row_loop:13/15`` at ~2s/row), not a
+FAR-1643: The 30s per-org cut in prod was LOCALISED to time spent PROCESSING
+ROWS (``during stage=reconcile_org:<id>/row_loop:13/15``), not a
 pool/connect/statement/lock wait — so a cut there rolled back every row and
 terminalizer the pass had already repaired and raised a readiness alert. The
-per-row loop is now deadline-aware: it stops starting rows with
-``_RECONCILE_ROW_DEFER_MARGIN_SECONDS`` of the slice left, counts the
-unprocessed rows in ``rows_deferred`` and returns normally so the processed
-prefix COMMITS. The caller's ``asyncio.timeout`` stays as the hard backstop.
+per-row loop is now deadline-aware: it stops starting rows with an ADAPTIVE
+margin (``min(5s, max(0.25s, slice / 2))`` — a flat 5s margin would be a dead
+zone on a 1-5s slice) of the slice left, counts the unprocessed rows in the
+DISTINCT ``row_loop_time_deferred`` counter (never the FAR-1425 cap marker
+``rows_deferred``) and returns normally so the processed prefix COMMITS. The
+caller's ``asyncio.timeout`` stays as the hard backstop, and the per-row cost
+is instrumented as ``row_loop_slowest_row_ms``.
 """
 
 from __future__ import annotations
@@ -43,6 +46,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import time
 import uuid
 from datetime import UTC, datetime
@@ -699,6 +703,14 @@ class _BudgetSession:
     def __init__(self, rows: list[Any]) -> None:
         self.rows = rows
         self.statements: list[Any] = []
+        # FAR-1643: the row-loop deferral must return NORMALLY so the work it
+        # did COMMITS. ``_reconcile_org`` enters ``async with factory() as
+        # session, session.begin():`` — both context managers are this same
+        # double — so a clean ``__aexit__`` pair (no exception) is the commit
+        # path, and an explicit ``rollback()`` is the disowned path.
+        self.clean_exits = 0
+        self.exited_with_exception = False
+        self.rolled_back = False
 
     def get_bind(self) -> MagicMock:
         """PostgreSQL bind — ``_reconcile_org``'s FAR-1601 lock bound and
@@ -716,8 +728,16 @@ class _BudgetSession:
     async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *_exc: object) -> bool:
+    async def __aexit__(self, exc_type: object, *_exc: object) -> bool:
+        if exc_type is None:
+            self.clean_exits += 1
+        else:
+            self.exited_with_exception = True
         return False
+
+    async def rollback(self) -> None:
+        """The explicit disown path taken on a swallowed read failure."""
+        self.rolled_back = True
 
     def begin(self) -> Self:
         return self
@@ -748,19 +768,38 @@ async def _run_org(
     row_budget: int | None,
     *,
     org_deadline_monotonic: float | None = None,
+    row_defer_margin_seconds: float | None = None,
+    org_slice_seconds: float | None = None,
+    time_monotonic: Any | None = None,
 ) -> tuple[dict[str, Any], _BudgetSession, Any]:
     """Drive the REAL ``_reconcile_org`` with *row_budget* applied.
 
     ``org_deadline_monotonic`` is forwarded verbatim so the FAR-1643 row-loop
-    deferral can be exercised without a wall-clock sleep.
+    deferral can be exercised without a wall-clock sleep. When
+    *row_defer_margin_seconds* is given it is forwarded too (the production
+    caller derives it adaptively from its slice); omitted, the module default
+    applies.
+
+    ``time_monotonic`` optionally replaces ``cron_helpers.time`` with a
+    controllable clock — a zero-arg callable returning successive values —
+    so a test can drive the loop across its deferral boundary deterministically
+    without sleeping. Only ``monotonic`` is needed by ``_reconcile_org``.
     """
     session = _BudgetSession(rows)
     summary: dict[str, Any] = {"scanned": 0}
-    with (
-        patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-        patch.object(ch, "_BATCH_TERMINALIZER_SPECS", ()),
-        patch.object(ch, "_reconcile_one_row", new_callable=AsyncMock, return_value=0) as one_row,
-    ):
+    kwargs: dict[str, Any] = {}
+    if row_defer_margin_seconds is not None:
+        kwargs["row_defer_margin_seconds"] = row_defer_margin_seconds
+    if org_slice_seconds is not None:
+        kwargs["org_slice_seconds"] = org_slice_seconds
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch.object(ch, "_set_rls_org", new_callable=AsyncMock))
+        stack.enter_context(patch.object(ch, "_BATCH_TERMINALIZER_SPECS", ()))
+        one_row = stack.enter_context(patch.object(ch, "_reconcile_one_row", new_callable=AsyncMock, return_value=0))
+        if time_monotonic is not None:
+            fake_time = MagicMock()
+            fake_time.monotonic.side_effect = time_monotonic
+            stack.enter_context(patch.object(ch, "time", fake_time))
         await ch._reconcile_org(
             factory=MagicMock(return_value=session),
             q=MagicMock(),
@@ -773,6 +812,7 @@ async def _run_org(
             terminalized_run_ids=[],
             limits=ch._ReconcileOrgLimits(row_budget=row_budget),
             org_deadline_monotonic=org_deadline_monotonic,
+            **kwargs,
         )
     return summary, session, one_row
 
@@ -1097,12 +1137,14 @@ async def _drive_attempt_reconcile_org(
     org_slice_seconds: float,
     summary: dict[str, Any],
     enqueue_failed_redispatched: int,
+    row_side_effect: Any = _slow_row,
 ) -> tuple[int | None, Any]:
     """Drive the REAL ``_attempt_reconcile_org`` (the per-org slice wrapper).
 
     Returns the outcome plus the recording ``_reconcile_one_row`` double, so a
     caller-level test can assert both the bounded-failure contract and whether
-    a row was started at all.
+    a row was started at all. *row_side_effect* defaults to a row that
+    outlives any granted slice; pass a fast row to exercise the healthy case.
     """
     session = _BudgetSession(rows)
     ctx = ch._ReconcileContext(
@@ -1123,7 +1165,7 @@ async def _drive_attempt_reconcile_org(
     with (
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
         patch.object(ch, "_BATCH_TERMINALIZER_SPECS", ()),
-        patch.object(ch, "_reconcile_one_row", new_callable=AsyncMock, side_effect=_slow_row) as one_row,
+        patch.object(ch, "_reconcile_one_row", new_callable=AsyncMock, side_effect=row_side_effect) as one_row,
     ):
         outcome = await ch._attempt_reconcile_org(
             ctx=ctx,
@@ -1136,8 +1178,27 @@ async def _drive_attempt_reconcile_org(
     return outcome, one_row
 
 
+class _SequenceClock:
+    """Deterministic ``time.monotonic`` substitute for the FAR-1643 row loop.
+
+    Returns the next value from *values*, then repeats the last one — so the
+    loop can cross its deferral boundary at a chosen row without a wall-clock
+    sleep, and an unanticipated extra call never raises ``StopIteration``
+    (which would surface as a confusing failure instead of a clear assertion).
+    """
+
+    def __init__(self, values: list[float]) -> None:
+        self._values = list(values)
+        self._last = self._values[-1]
+
+    def __call__(self) -> float:
+        if self._values:
+            self._last = self._values.pop(0)
+        return self._last
+
+
 class TestRowLoopTimeDeferral:
-    """FAR-1643: prod attributed the 30s per-org cut to ROW PROCESSING —
+    """FAR-1643: prod LOCALISED the 30s per-org cut to ROW PROCESSING —
     ``status=timeout ... during stage=reconcile_org:<id>/row_loop:13/15`` with
     every pool/connect/statement/lock counter at 0. The loop now stops
     STARTING rows with a margin to spare, so the processed prefix COMMITS
@@ -1145,9 +1206,10 @@ class TestRowLoopTimeDeferral:
 
     @pytest.mark.asyncio
     async def test_deadline_inside_the_margin_starts_no_row_and_defers_all(self) -> None:
-        """A deadline already inside ``_RECONCILE_ROW_DEFER_MARGIN_SECONDS``
-        processes nothing, counts every unprocessed row, and RETURNS CLEANLY
-        (no raise — the caller's hard bound never has to fire)."""
+        """A deadline already inside the deferral margin processes nothing,
+        counts every unprocessed row in the DISTINCT time-deferral counter
+        (leaving the FAR-1425 ``rows_deferred`` cap marker untouched), and
+        RETURNS CLEANLY (no raise — the caller's hard bound never fires)."""
         rows = [object() for _ in range(5)]
         summary, _session, one_row = await _run_org(
             rows,
@@ -1157,12 +1219,13 @@ class TestRowLoopTimeDeferral:
 
         assert one_row.await_count == 0
         assert summary["scanned"] == 0
-        assert summary["rows_deferred"] == len(rows)
+        assert summary["row_loop_time_deferred"] == len(rows)
+        assert summary.get("rows_deferred", 0) == 0
 
     @pytest.mark.asyncio
     async def test_far_future_deadline_processes_every_row(self) -> None:
         """Control: an ample deadline is not a tripwire — every row runs and
-        the time-deferral contributes nothing to ``rows_deferred``."""
+        the time-deferral contributes nothing to either deferral counter."""
         rows = [object() for _ in range(4)]
         summary, _session, one_row = await _run_org(
             rows,
@@ -1172,7 +1235,59 @@ class TestRowLoopTimeDeferral:
 
         assert one_row.await_count == 4
         assert summary["scanned"] == 4
+        assert summary.get("row_loop_time_deferred", 0) == 0
         assert summary.get("rows_deferred", 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_partial_prefix_commits_the_processed_rows_and_defers_the_rest(self) -> None:
+        """A row loop that crosses its deferral boundary MID-SCAN must keep
+        what it did: the processed prefix is a stable count, the unprocessed
+        suffix is counted in ``row_loop_time_deferred``, exactly the prefix
+        rows were passed to the per-row repair, and the transaction exits
+        CLEANLY (commits) rather than being disowned.
+
+        The clock sequence is exact: row-loop start at 1000.0, then per row a
+        deferral check, a row start and a row end. Row 0 costs 0.7s and row 1
+        costs 0.2s, so ``row_loop_slowest_row_ms`` is 700.0; row 2's check
+        (1006.0) is inside the 5s margin of the 1010.0 deadline and defers
+        rows 2, 3 and 4.
+        """
+        rows = [object() for _ in range(5)]
+        clock = _SequenceClock(
+            [
+                1000.0,  # row-loop start
+                1000.1,  # row 0 deferral check
+                1000.2,  # row 0 start
+                1000.9,  # row 0 end (0.7s)
+                1000.95,  # row 1 deferral check
+                1001.0,  # row 1 start
+                1001.2,  # row 1 end (0.2s)
+                1006.0,  # row 2 deferral check — inside the 5s margin
+            ]
+        )
+        summary, session, one_row = await _run_org(
+            rows,
+            row_budget=None,
+            org_deadline_monotonic=1010.0,
+            row_defer_margin_seconds=5.0,
+            time_monotonic=clock,
+        )
+
+        # The prefix is exactly what the loop processed, no more, no less.
+        assert summary["scanned"] == 2
+        assert one_row.await_count == 2
+        assert [call.args[4] for call in one_row.await_args_list] == rows[:2]
+        # The suffix is counted in the DISTINCT time-deferral counter.
+        assert summary["row_loop_time_deferred"] == len(rows) - 2
+        assert summary.get("rows_deferred", 0) == 0
+        # Per-row instrumentation identifies the slow row (3.5x the other)
+        # instead of assuming a uniform per-row cost.
+        assert summary["row_loop_slowest_row_ms"] == 700.0
+        # The processed prefix COMMITS: both context-manager exits are clean
+        # and the failure path never disowned the transaction.
+        assert session.clean_exits == 2
+        assert not session.exited_with_exception
+        assert not session.rolled_back
 
     @pytest.mark.asyncio
     async def test_per_org_slice_defers_rows_instead_of_timing_out(self) -> None:
@@ -1195,6 +1310,72 @@ class TestRowLoopTimeDeferral:
         assert summary["org_timeouts"] == 0
         assert summary["status"] == "ok"
         # Every unprocessed row is counted, visible rather than silently lost.
-        assert summary["rows_deferred"] == len(rows)
+        assert summary["row_loop_time_deferred"] == len(rows)
+        assert summary.get("rows_deferred", 0) == 0
         # The slow row was never started — that is what avoided the cut.
         assert one_row.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_short_slice_gets_an_adaptive_margin_so_a_row_can_start(self) -> None:
+        """DEAD ZONE: ``dispatcher_reconcile_org_budget_seconds`` allows
+        ``ge=1``, so a 1s slice is reachable (config or the tick-tail clamp).
+        A flat 5s margin would already be spent before the loop began, so
+        EVERY row would defer forever while the tick reported ``ok``. The
+        adaptive margin (``slice / 2`` = 0.5s here) leaves room for a row, so
+        a fast row actually runs instead of the org silently making no
+        progress."""
+        summary = ch._dispatcher_summary()
+        rows = [object() for _ in range(3)]
+
+        async def fast_row(*_args: Any, **_kwargs: Any) -> int:
+            return 0
+
+        outcome, one_row = await _drive_attempt_reconcile_org(
+            rows=rows,
+            org_slice_seconds=1.0,
+            summary=summary,
+            enqueue_failed_redispatched=0,
+            row_side_effect=fast_row,
+        )
+
+        assert outcome == 0
+        assert one_row.await_count == len(rows)
+        assert summary["scanned"] == len(rows)
+        assert summary["row_loop_time_deferred"] == 0
+        assert summary["org_timeouts"] == 0
+        assert summary["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_deferral_warns_with_the_attribution_fields(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The deferral is a WARNING carrying the operator's attribution —
+        org, deferred/processed counts, elapsed, slowest row, slice and the
+        adaptive margin — because the tick deliberately stays ``ok``: the
+        distinct counter plus this line IS the visibility."""
+        caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
+        rows = [object() for _ in range(4)]
+        clock = _SequenceClock(
+            [
+                2000.0,  # row-loop start
+                2000.1,  # row 0 deferral check
+                2000.2,  # row 0 start
+                2000.7,  # row 0 end (0.5s)
+                2003.0,  # row 1 deferral check — inside the 5s margin of the 2007.0 deadline
+            ]
+        )
+        summary, _session, one_row = await _run_org(
+            rows,
+            row_budget=None,
+            org_deadline_monotonic=2007.0,
+            row_defer_margin_seconds=5.0,
+            org_slice_seconds=25.0,
+            time_monotonic=clock,
+        )
+
+        assert one_row.await_count == 1
+        assert summary["row_loop_time_deferred"] == 3
+        line = next(r.getMessage() for r in caplog.records if "row_loop_time_deferred" in r.getMessage())
+        assert "deferred_rows=3" in line
+        assert "rows_processed=1" in line
+        assert "slowest_row_seconds=0.50" in line
+        assert "org_slice_seconds=25.00" in line
+        assert "row_defer_margin_seconds=5.00" in line
