@@ -3448,3 +3448,42 @@ def test_get_run_status_includes_deadline_triage(client: TestClient) -> None:
 
     assert resp.status_code == 200
     assert resp.json()["deadline_triage"] == entries
+
+
+def test_get_run_status_surfaces_the_node_deadline_known_fix(client: TestClient) -> None:
+    """A deadline-killed run explains itself on the run page (composed path).
+
+    ``error_detail`` is the EXACT string ``_fail_overdue_node`` records, and
+    ``deadline_triage`` is empty — the observed shape (no terminal node
+    envelope, nothing to project). Before the ``node_deadline_exceeded``
+    KnownFix existed the detail matched NO entry: the older
+    ``session_interrupted_no_output`` entry mentions the node timeout in its
+    body, but ``match_known_fixes`` scans ``error_detail`` for the SIGNATURE
+    ("session interrupted"), which a deadline kill never records. The
+    operator therefore saw a failed run with no fix guidance.
+    """
+    detail = (
+        "Node 'agent-1' did not complete within its configured timeout_seconds "
+        "(3300s) — node-deadline watchdog ended the dispatch. The cause is "
+        "not asserted here; retained deadline_triage evidence is conditional, not "
+        "guaranteed."
+    )
+    run = _make_run(status="failed", error_code="node_deadline_exceeded", error_detail=detail)
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch(
+            "modulo.api.routes.runs._do_get_deadline_triage",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    # The code is canonicalized for presentation, and the fix is carried on
+    # the same response the run page renders.
+    assert body["error_code"] == "node.deadline_exceeded"
+    assert [fix["fix_id"] for fix in body["known_fixes"]] == ["node_deadline_exceeded"]
+    assert body["known_fixes"][0]["body"]
