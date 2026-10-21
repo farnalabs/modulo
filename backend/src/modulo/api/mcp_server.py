@@ -2120,20 +2120,22 @@ def _tool_lock_timeout_error(exc: SQLAlchemyError, log_key: str) -> dict[str, An
     return _tool_error(_MSG_LOCK_TIMEOUT, code="lock_timeout")
 
 
-def _tool_sqlalchemy_error(exc: SQLAlchemyError, tool: str, log_key: str) -> dict[str, Any]:
-    """Map an ``SQLAlchemyError`` raised by a bounded tool body to a payload.
+def _tool_sqlalchemy_error(exc: SQLAlchemyError, log_key: str) -> dict[str, Any]:
+    """Map a non-contract ``SQLAlchemyError`` from a bounded MCP tool to a payload.
 
     Shared by the two arms whose CRUD helper a request path now bounds
-    (FAR-1825), so the classifier ladder lives in ONE place: the shared
-    session-contract payload first, then the branchable ``lock_timeout``
-    (55P03) conflict, then the ``database_unavailable`` outage fallback.
-    Behaviour is identical to the inline arms it replaces.
+    (FAR-1825). Those arms run the FAR-1482 session-contract guard as their
+    FIRST statement and log the failure themselves: both are arm-level
+    obligations the architecture guards check (``test_api_db_error_guard`` /
+    ``test_no_silent_db_swallow``), so they must live IN the arm rather than
+    behind a helper the static scanner cannot see through. This helper
+    therefore carries only the FAR-1825 branch — a bounded row-lock wait that
+    timed out (SQLSTATE 55P03) is a retry-now ``lock_timeout`` conflict, not
+    the ``database_unavailable`` outage fallback. Every other error keeps the
+    pre-FAR-1825 ``database_unavailable`` payload.
     """
-    if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
-        return contract_error
     if (lock_timeout_error := _tool_lock_timeout_error(exc, log_key)) is not None:
         return lock_timeout_error
-    _log_tool_failure(tool)
     return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
 
 
@@ -11554,8 +11556,13 @@ async def update_parameter_schema(
         _log_tool_failure("update_parameter_schema")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError as exc:
+        # FAR-1482: a session-contract violation is a programming bug, never a
+        # database outage — classify it before the FAR-1825 lock/outage ladder.
+        if (contract_error := _tool_session_contract_error(exc, _CODE_MCP_UPDATE_PARAMETER_SCHEMA)) is not None:
+            return contract_error
+        _log_tool_failure("update_parameter_schema")
         # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict.
-        return _tool_sqlalchemy_error(exc, "update_parameter_schema", _CODE_MCP_UPDATE_PARAMETER_SCHEMA)
+        return _tool_sqlalchemy_error(exc, _CODE_MCP_UPDATE_PARAMETER_SCHEMA)
     except Exception as exc:
         _log_tool_failure("update_parameter_schema")
         return _tool_exception_error("Failed to update parameter schema", exc, _CODE_MCP_UPDATE_PARAMETER_SCHEMA)
@@ -11971,8 +11978,13 @@ async def update_parameter_set(
         _log_tool_failure("update_parameter_set")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError as exc:
+        # FAR-1482: a session-contract violation is a programming bug, never a
+        # database outage — classify it before the FAR-1825 lock/outage ladder.
+        if (contract_error := _tool_session_contract_error(exc, _CODE_MCP_UPDATE_PARAMETER_SET)) is not None:
+            return contract_error
+        _log_tool_failure("update_parameter_set")
         # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict.
-        return _tool_sqlalchemy_error(exc, "update_parameter_set", _CODE_MCP_UPDATE_PARAMETER_SET)
+        return _tool_sqlalchemy_error(exc, _CODE_MCP_UPDATE_PARAMETER_SET)
     except Exception as exc:
         _log_tool_failure("update_parameter_set")
         return _tool_exception_error("Failed to update parameter set", exc, _CODE_MCP_UPDATE_PARAMETER_SET)
