@@ -472,6 +472,210 @@ class RunnerDispatchSlot:
     marker_set: bool
 
 
+async def _apply_capacity_lock_timeout(session: AsyncSession, lock_timeout_ms: int) -> None:
+    """Bound this transaction's row-lock waits before its first lock (FAR-1601)."""
+    await session.execute(
+        text("SELECT set_config('lock_timeout', :val, true)"),
+        {"val": f"{lock_timeout_ms}ms"},
+    )
+
+
+async def _lock_dispatch_run_row(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: str,
+    claim_token: str,
+) -> Any | None:
+    """Claim-token-fenced ``FOR UPDATE`` on the run's own row; None = fenced."""
+    return (
+        await session.execute(
+            text(
+                "SELECT claim_count FROM runs "
+                "WHERE id = :rid AND organisation_id = :oid "
+                "AND claim_token = :tok AND status = 'running' "
+                "FOR UPDATE"
+            ),
+            {"rid": run_id, "oid": str(org_id), "tok": claim_token},
+        )
+    ).fetchone()
+
+
+def _parse_run_uuid(run_id: str) -> uuid.UUID | None:
+    """Parse the run id for the own-marker exclusion; None on a non-UUID id."""
+    try:
+        return uuid.UUID(str(run_id))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _acquire_capacity_advisory_lock(session: AsyncSession, org_id: uuid.UUID) -> None:
+    """Per-org advisory lock — reserved-prefix derivation."""
+    k1, k2 = runner_capacity_lock_keys(org_id)
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(:k1, :k2)"),
+        {"k1": k1, "k2": k2},
+    )
+
+
+def _reject_at_capacity(
+    decision: RunnerCapacityDecision,
+    *,
+    provider: str,
+    run_id: str,
+    org_id: uuid.UUID,
+    node_id: str,
+) -> None:
+    """Raise the retryable denial when the tier-scoped cap is reached."""
+    if decision.cap is None or decision.active < decision.cap:
+        return
+    # The Docker-tier default (absent key) gates ONLY host-resource
+    # dispatches: the skip condition mirrors the count scope — any provider
+    # NOT counted into the host-resource bucket (e2b, and unknown future
+    # tiers) is neither counted into that bucket nor denied by it. Legacy
+    # tier-less dispatchers normalise to Docker above and stay gated.
+    docker_default_skips_gate = decision.host_resource_only and provider not in HOST_RESOURCE_PROVIDERS
+    if docker_default_skips_gate:
+        return
+    _log.warning(
+        "runner.capacity.denied",
+        extra={
+            "run_id": run_id,
+            "org_id": str(org_id),
+            "node_id": node_id,
+            "active": decision.active,
+            "cap": decision.cap,
+            "host_resource_only": decision.host_resource_only,
+        },
+    )
+    raise RunnerCapacityDeniedError(
+        f"Runner dispatch denied: org {org_id} at capacity ({decision.active}/{decision.cap} active runner dispatches)"
+    )
+
+
+async def _write_dispatch_reservation(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: str,
+    claim_token: str,
+    attempt_key: str,
+    provider: str,
+    via_provider: bool | None,
+) -> bool:
+    """Fenced marker UPDATE; False when the claim rotated mid-transaction."""
+    marker_result = await session.execute(
+        text(
+            "UPDATE runs SET sandbox_dispatch_state = :marker "
+            "WHERE id = :rid AND organisation_id = :oid "
+            "AND claim_token = :tok AND status = 'running' "
+            "RETURNING id"
+        ),
+        {
+            "rid": run_id,
+            "oid": str(org_id),
+            "tok": claim_token,
+            "marker": build_dispatch_marker(attempt_key, provider, via_provider=via_provider),
+        },
+    )
+    return marker_result.fetchone() is not None
+
+
+async def _reserve_runner_dispatch_slot(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: str,
+    claim_token: str,
+    node_id: str,
+    provider: str,
+    via_provider: bool | None,
+    lock_timeout_ms: int,
+    flag_on: bool,
+) -> RunnerDispatchSlot:
+    """The gate body, run INSIDE the caller's transaction (uniform lock order)."""
+    await _apply_capacity_lock_timeout(session, lock_timeout_ms)
+    row = await _lock_dispatch_run_row(session, org_id=org_id, run_id=run_id, claim_token=claim_token)
+    if row is None:
+        return RunnerDispatchSlot("fenced", None, False)
+    attempt_key = f"run:{run_id}:node:{node_id}:{int(row[0])}"
+    # The count excludes the run's OWN marker. A non-UUID run_id can never
+    # match a runs.id (the own-row SELECT above would have fenced first), so
+    # a parse failure degrades to no-exclusion rather than failing the gate.
+    run_uuid = _parse_run_uuid(run_id)
+    if flag_on:
+        await _acquire_capacity_advisory_lock(session, org_id)
+    # The SINGLE decision path for both flag states: the count body owns the
+    # flag-dependent population (flag-off = the pre-D8 ACTIVE_RUN_STATUSES
+    # population, no advisory lock — the pre-D8 racy check-then-act count
+    # semantics exactly; only the row-lock bound above is unconditional,
+    # FAR-1601).
+    decision = await resolve_runner_capacity_decision(session, org_id, exclude_run_id=run_uuid)
+    _reject_at_capacity(
+        decision,
+        provider=provider,
+        run_id=run_id,
+        org_id=org_id,
+        node_id=node_id,
+    )
+    # The UPDATE re-checks the same fenced WHERE; a zero-row result (the
+    # claim rotated mid-transaction — unreachable in production under the
+    # FOR UPDATE row lock, defensive for non-transactional fakes) = fenced.
+    reserved = await _write_dispatch_reservation(
+        session,
+        org_id=org_id,
+        run_id=run_id,
+        claim_token=claim_token,
+        attempt_key=attempt_key,
+        provider=provider,
+        via_provider=via_provider,
+    )
+    if not reserved:
+        return RunnerDispatchSlot("fenced", None, False)
+    return RunnerDispatchSlot("acquired", attempt_key, True)
+
+
+def _handle_capacity_gate_error(
+    exc: Exception,
+    *,
+    lock_timeout_ms: int,
+    run_id: str,
+    org_id: uuid.UUID,
+    node_id: str,
+) -> RunnerDispatchSlot:
+    """Translate a DB failure: retryable denial on 55P03/40P01, else fail open."""
+    sqlstate = sqlstate_of(exc)
+    if sqlstate == "55P03":
+        # lock_not_available — what SET LOCAL lock_timeout actually raises.
+        # Designed degradation: retryable denial + the distinct event the
+        # on-call dashboard keys on.
+        _log.warning(
+            "runner.capacity.lock_degraded",
+            extra={"run_id": run_id, "org_id": str(org_id), "node_id": node_id},
+            exc_info=True,
+        )
+        raise RunnerCapacityDeniedError(
+            f"Runner capacity lock degraded (lock_timeout={lock_timeout_ms}ms) for org {org_id}"
+        ) from exc
+    if sqlstate == "40P01":
+        # Deadlock — expected impossible under the uniform row→advisory
+        # ordering; a separate alarm, not the routine degradation path.
+        _log.error(
+            "runner.capacity.deadlock_degraded",
+            extra={"run_id": run_id, "org_id": str(org_id), "node_id": node_id},
+            exc_info=True,
+        )
+        raise RunnerCapacityDeniedError(f"Runner capacity gate deadlocked for org {org_id}") from exc
+    # Every other DB error fails OPEN (matching the pre-D8 behaviour) — the
+    # caller still writes the marker best-effort in its own tx.
+    _log.warning(
+        "runner.capacity.gate_error",
+        extra={"run_id": run_id, "org_id": str(org_id), "node_id": node_id},
+        exc_info=True,
+    )
+    return RunnerDispatchSlot("fail_open", None, False)
+
+
 async def acquire_runner_dispatch_slot(
     session_factory: Any,
     *,
@@ -532,139 +736,30 @@ async def acquire_runner_dispatch_slot(
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
             # FAR-1601: bound this transaction's row-lock waits BEFORE its
-            # first lock, UNCONDITIONALLY. The own-row ``FOR UPDATE`` below
-            # runs in BOTH flag states, but this ``set_config`` used to sit
-            # inside ``if flag_on:`` — with ``runner_capacity_gate_enabled``
-            # OFF the hot ``runs`` row lock waited with no ceiling at all (the
-            # FAR-1524 O11 class: a silent wait past the Fly HAProxy
-            # 30-minute session window, which is what got prod connections
-            # culled mid-operation). ``set_config`` takes no lock, so it
-            # cannot disturb the uniform row→advisory ordering; only the
-            # ADVISORY lock below stays flag-gated.
-            await session.execute(
-                text("SELECT set_config('lock_timeout', :val, true)"),
-                {"val": f"{lock_timeout_ms}ms"},
+            # first lock, UNCONDITIONALLY (see _reserve_runner_dispatch_slot).
+            return await _reserve_runner_dispatch_slot(
+                session,
+                org_id=org_id,
+                run_id=run_id,
+                claim_token=claim_token,
+                node_id=node_id,
+                provider=provider,
+                via_provider=via_provider,
+                lock_timeout_ms=lock_timeout_ms,
+                flag_on=flag_on,
             )
-            # (2) own-row lock FIRST — claim-token-fenced, status-guarded.
-            row = (
-                await session.execute(
-                    text(
-                        "SELECT claim_count FROM runs "
-                        "WHERE id = :rid AND organisation_id = :oid "
-                        "AND claim_token = :tok AND status = 'running' "
-                        "FOR UPDATE"
-                    ),
-                    {"rid": run_id, "oid": str(org_id), "tok": claim_token},
-                )
-            ).fetchone()
-            if row is None:
-                return RunnerDispatchSlot("fenced", None, False)
-            attempt_key = f"run:{run_id}:node:{node_id}:{int(row[0])}"
-            # The count excludes the run's OWN marker. A non-UUID run_id can
-            # never match a runs.id (the own-row SELECT above would have
-            # fenced first), so a parse failure degrades to no-exclusion
-            # rather than failing the gate.
-            try:
-                run_uuid: uuid.UUID | None = uuid.UUID(str(run_id))
-            except (TypeError, ValueError):
-                run_uuid = None
-            if flag_on:
-                # (3) per-org advisory lock — reserved-prefix derivation.
-                k1, k2 = runner_capacity_lock_keys(org_id)
-                await session.execute(
-                    text("SELECT pg_advisory_xact_lock(:k1, :k2)"),
-                    {"k1": k1, "k2": k2},
-                )
-            # (4) lock-free count + tier-scoped cap (own marker excluded —
-            # a re-dispatch of a run still carrying a fence-carrying stale
-            # marker cannot self-block). The SINGLE decision path for both
-            # flag states: the count body owns the flag-dependent population
-            # (flag-off = the pre-D8 ACTIVE_RUN_STATUSES population, no
-            # advisory lock — the pre-D8 racy check-then-act count semantics
-            # exactly; only the row-lock bound above is unconditional,
-            # FAR-1601).
-            decision = await resolve_runner_capacity_decision(session, org_id, exclude_run_id=run_uuid)
-            if decision.cap is not None and decision.active >= decision.cap:
-                # The Docker-tier default (absent key) gates ONLY host-resource
-                # dispatches: the skip condition mirrors the count scope — any
-                # provider NOT counted into the host-resource bucket (e2b, and
-                # unknown future tiers) is neither counted into that bucket nor
-                # denied by it. Legacy tier-less dispatchers normalise to
-                # Docker above and stay gated.
-                docker_default_skips_gate = decision.host_resource_only and provider not in HOST_RESOURCE_PROVIDERS
-                if not docker_default_skips_gate:
-                    _log.warning(
-                        "runner.capacity.denied",
-                        extra={
-                            "run_id": run_id,
-                            "org_id": str(org_id),
-                            "node_id": node_id,
-                            "active": decision.active,
-                            "cap": decision.cap,
-                            "host_resource_only": decision.host_resource_only,
-                        },
-                    )
-                    raise RunnerCapacityDeniedError(
-                        f"Runner dispatch denied: org {org_id} at capacity "
-                        f"({decision.active}/{decision.cap} active runner dispatches)"
-                    )
-            # (5) fenced marker UPDATE — commit persists the reservation. The
-            # UPDATE re-checks the same fenced WHERE; a zero-row result (the
-            # claim rotated mid-transaction — unreachable in production under
-            # the FOR UPDATE row lock, defensive for non-transactional fakes)
-            # means fenced.
-            marker_result = await session.execute(
-                text(
-                    "UPDATE runs SET sandbox_dispatch_state = :marker "
-                    "WHERE id = :rid AND organisation_id = :oid "
-                    "AND claim_token = :tok AND status = 'running' "
-                    "RETURNING id"
-                ),
-                {
-                    "rid": run_id,
-                    "oid": str(org_id),
-                    "tok": claim_token,
-                    "marker": build_dispatch_marker(attempt_key, provider, via_provider=via_provider),
-                },
-            )
-            if marker_result.fetchone() is None:
-                return RunnerDispatchSlot("fenced", None, False)
-        return RunnerDispatchSlot("acquired", attempt_key, True)
     except RunnerCapacityDeniedError:
         raise
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        sqlstate = sqlstate_of(exc)
-        if sqlstate == "55P03":
-            # lock_not_available — what SET LOCAL lock_timeout actually raises.
-            # Designed degradation: retryable denial + the distinct event the
-            # on-call dashboard keys on.
-            _log.warning(
-                "runner.capacity.lock_degraded",
-                extra={"run_id": run_id, "org_id": str(org_id), "node_id": node_id},
-                exc_info=True,
-            )
-            raise RunnerCapacityDeniedError(
-                f"Runner capacity lock degraded (lock_timeout={lock_timeout_ms}ms) for org {org_id}"
-            ) from exc
-        if sqlstate == "40P01":
-            # Deadlock — expected impossible under the uniform row→advisory
-            # ordering; a separate alarm, not the routine degradation path.
-            _log.error(
-                "runner.capacity.deadlock_degraded",
-                extra={"run_id": run_id, "org_id": str(org_id), "node_id": node_id},
-                exc_info=True,
-            )
-            raise RunnerCapacityDeniedError(f"Runner capacity gate deadlocked for org {org_id}") from exc
-        # Every other DB error fails OPEN (matching the pre-D8 behaviour) —
-        # the caller still writes the marker best-effort in its own tx.
-        _log.warning(
-            "runner.capacity.gate_error",
-            extra={"run_id": run_id, "org_id": str(org_id), "node_id": node_id},
-            exc_info=True,
+        return _handle_capacity_gate_error(
+            exc,
+            lock_timeout_ms=lock_timeout_ms,
+            run_id=run_id,
+            org_id=org_id,
+            node_id=node_id,
         )
-        return RunnerDispatchSlot("fail_open", None, False)
 
 
 async def mark_runner_dispatch_cleared_at_hitl(
