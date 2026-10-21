@@ -2,7 +2,7 @@ import asyncio
 import logging
 import uuid
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -33,6 +33,7 @@ from modulo.core.email_service import (
     send_email,
 )
 from modulo.db.crud.organisation import get_organisation, update_org_settings_patch
+from modulo.db.models.organisation import Organisation
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
@@ -237,19 +238,8 @@ async def admin_update_email_settings(
     )
 
 
-@router.post(
-    "/{org_id}/email-settings/test",
-    status_code=status.HTTP_200_OK,
-    dependencies=[require_feature("email_config")],
-)
-@handle_db_errors("admin.email.admin_test_email_settings")
-async def admin_test_email_settings(
-    org_id: uuid.UUID,
-    req: TestEmailRequest,
-    _: AuthenticatedPrincipal = require_target_org_role("org.email.manage", "admin"),  # type: ignore[assignment]
-    session: AsyncSession = Depends(get_db_session),
-    settings: Settings = Depends(get_settings),
-) -> dict[str, Any]:
+async def _load_org_for_test_email(session: AsyncSession, org_id: uuid.UUID) -> Organisation:
+    """Load the target org for a test-send, mapping DB failures to HTTP."""
     try:
         async with session.begin():
             org = await get_organisation(session, org_id)
@@ -276,25 +266,30 @@ async def admin_test_email_settings(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
-
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
+    return org
 
+
+def _validated_test_email_config(org: Organisation, req: TestEmailRequest) -> dict[str, Any]:
+    """Validate the recipient + SMTP host, returning the org's email config."""
     if not _is_valid_recipient(req.to):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Invalid test email recipient. Provide a single email address such as admin@example.com.",
         )
-
     cfg = org.settings_json or {}
     email_cfg = cfg.get("email", {})
-    smtp_host = email_cfg.get("smtp_host", "")
-    if not smtp_host:
+    if not email_cfg.get("smtp_host", ""):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="SMTP is not configured. Save email settings before testing.",
         )
+    return cast("dict[str, Any]", email_cfg)
 
+
+async def _require_test_send_slot(org_id: uuid.UUID) -> None:
+    """Enforce the per-org test-send budget, failing OPEN on limiter errors."""
     try:
         retry_after = await test_send_limiter.acquire(org_id)
     except asyncio.CancelledError:
@@ -311,8 +306,16 @@ async def admin_test_email_settings(
             headers={"Retry-After": str(retry_after)},
         )
 
+
+async def _build_test_email_settings(
+    session: AsyncSession,
+    email_cfg: dict[str, Any],
+    settings: Settings,
+    org_id: uuid.UUID,
+) -> Any:
+    """Build the temp SMTP settings object, decrypting its password in-session."""
     temp_settings = type("TempSettings", (), {})()
-    temp_settings.smtp_host = smtp_host
+    temp_settings.smtp_host = email_cfg.get("smtp_host", "")
     temp_settings.smtp_port = email_cfg.get("smtp_port", 587)
     temp_settings.smtp_username = email_cfg.get("smtp_username", "")
     try:
@@ -328,12 +331,16 @@ async def admin_test_email_settings(
         ) from None
     temp_settings.email_from = email_cfg.get("email_from", "")
     temp_settings.smtp_timeout = email_cfg.get("smtp_timeout", 30)
+    return temp_settings
 
+
+async def _send_test_email(temp_settings: Any, recipient: str) -> dict[str, Any]:
+    """Send the test email and map every send outcome to a response dict."""
     try:
         success = await asyncio.to_thread(
             send_email,
             temp_settings,
-            [req.to],
+            [recipient],
             "Modulo Test Email",
             "<html><body><h1>Test Email</h1><p>If you receive this, your SMTP configuration"
             " is working.</p></body></html>",
@@ -349,3 +356,23 @@ async def admin_test_email_settings(
     except Exception:
         logger.exception(_CODE_ADMIN_EMAIL_ADMIN_TEST)
         return {"ok": False, "message": "Unexpected error while sending the test email"}
+
+
+@router.post(
+    "/{org_id}/email-settings/test",
+    status_code=status.HTTP_200_OK,
+    dependencies=[require_feature("email_config")],
+)
+@handle_db_errors("admin.email.admin_test_email_settings")
+async def admin_test_email_settings(
+    org_id: uuid.UUID,
+    req: TestEmailRequest,
+    _: AuthenticatedPrincipal = require_target_org_role("org.email.manage", "admin"),  # type: ignore[assignment]
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    org = await _load_org_for_test_email(session, org_id)
+    email_cfg = _validated_test_email_config(org, req)
+    await _require_test_send_slot(org_id)
+    temp_settings = await _build_test_email_settings(session, email_cfg, settings, org_id)
+    return await _send_test_email(temp_settings, req.to)
