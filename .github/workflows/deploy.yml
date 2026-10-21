@@ -728,10 +728,20 @@ jobs:
     if: always() && needs.deploy-throttle.outputs.should_deploy == 'true' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
     runs-on: ubicloud-standard-2
     steps:
+      # A minimal checkout provides scripts/dispatch_with_retry.sh — the
+      # shared webhook-dispatch policy below. persist-credentials: false
+      # keeps the checkout credential-light.
+      - name: Check out the dispatch script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
       - name: Dispatch Branch Fixer webhook
         env:
-          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
-          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          DISPATCH_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_LABEL: "Modulo Branch Fixer"
           BRANCH: main
           PR_NUMBER: "0"
           HEAD_SHA: ${{ github.sha }}
@@ -780,7 +790,6 @@ jobs:
           # instead of composing its own.
           FEEDBACK="Deploy pipeline failed on main at ${{ github.sha }}. Failed stage(s): ${FAILED_STAGES}. The Branch Fixer should create a fix branch from main, diagnose the failure, fix it, and raise a PR."
 
-          TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
             --argjson prNumber "${PR_NUMBER}" \
@@ -789,38 +798,14 @@ jobs:
             --arg headSha "${HEAD_SHA}" \
             --arg fingerprint "${FINGERPRINT}" \
             '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo, headSha: $headSha, fingerprint: $fingerprint}')
-          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
 
-          # Retry with exponential backoff on transient 429/5xx (mirrors
-          # branch-fixer.yml). Unlike branch-fixer.yml this job FAILS if the
-          # webhook is never accepted - a deploy failure must not be silently
-          # swallowed.
-          DISPATCHED="false"
-          for i in 1 2 3 4 5; do
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "${BODY}")
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-            if [ "$HTTP_CODE" = "202" ]; then
-              echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-              DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) - retrying in ${DELAY}s"
-              sleep "$DELAY"
-            else
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
-              break
-            fi
-          done
-          if [ "$DISPATCHED" != "true" ]; then
-            echo "::error::Branch Fixer webhook dispatch failed - deploy failure was not handed to the autonomous fix loop."
-            exit 1
-          fi
+          # One shared retry policy (scripts/dispatch_with_retry.sh): the
+          # old inline ladder duplicated branch-fixer.yml's five-attempt loop
+          # with no attempt cap, no wall-clock budget and no Retry-After
+          # honouring. The script exits 1 on an undelivered dispatch (its own
+          # class-named ::error:: + run summary), which preserves this job's
+          # contract that a lost deploy failure is loud, never swallowed.
+          DISPATCH_BODY="${BODY}" bash scripts/dispatch_with_retry.sh
 
   notify-staging-e2e-failure:
     name: Trigger Branch Fixer on staging E2E failure
@@ -843,10 +828,20 @@ jobs:
     if: always() && (needs.staging-e2e.result == 'failure' || needs.staging-e2e.result == 'cancelled')
     runs-on: ubicloud-standard-2
     steps:
+      # A minimal checkout provides scripts/dispatch_with_retry.sh — the
+      # shared webhook-dispatch policy below. persist-credentials: false
+      # keeps the checkout credential-light.
+      - name: Check out the dispatch script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
       - name: Dispatch Branch Fixer webhook
         env:
-          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
-          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          DISPATCH_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_LABEL: "Modulo Branch Fixer"
           BRANCH: main
           PR_NUMBER: "0"
           HEAD_SHA: ${{ github.sha }}
@@ -857,7 +852,6 @@ jobs:
           # headSha + fingerprint: see notify-deploy-failure (FAR-1034
           # coalesce/dedupe convention) — same failure, same fingerprint.
           FINGERPRINT="Deploy: Staging + Prod|${PRIMARY_STAGE}|${HEAD_SHA}"
-          TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
             --argjson prNumber "${PR_NUMBER}" \
@@ -866,34 +860,14 @@ jobs:
             --arg headSha "${HEAD_SHA}" \
             --arg fingerprint "${FINGERPRINT}" \
             '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo, headSha: $headSha, fingerprint: $fingerprint}')
-          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
 
-          DISPATCHED="false"
-          for i in 1 2 3 4 5; do
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "${BODY}")
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-            if [ "$HTTP_CODE" = "202" ]; then
-              echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-              DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) - retrying in ${DELAY}s"
-              sleep "$DELAY"
-            else
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
-              break
-            fi
-          done
-          if [ "$DISPATCHED" != "true" ]; then
-            echo "::error::Branch Fixer webhook dispatch failed - staging E2E failure was not handed to the autonomous fix loop."
-            exit 1
-          fi
+          # One shared retry policy (scripts/dispatch_with_retry.sh): the
+          # old inline ladder duplicated branch-fixer.yml's five-attempt loop
+          # with no attempt cap, no wall-clock budget and no Retry-After
+          # honouring. The script exits 1 on an undelivered dispatch (its own
+          # class-named ::error:: + run summary), which preserves this job's
+          # contract that a lost deploy failure is loud, never swallowed.
+          DISPATCH_BODY="${BODY}" bash scripts/dispatch_with_retry.sh
 
   notify-prod-smoke-failure:
     name: Trigger Branch Fixer on prod smoke failure
@@ -907,10 +881,20 @@ jobs:
     if: always() && (needs.prod-smoke.result == 'failure' || needs.prod-smoke.result == 'cancelled')
     runs-on: ubicloud-standard-2
     steps:
+      # A minimal checkout provides scripts/dispatch_with_retry.sh — the
+      # shared webhook-dispatch policy below. persist-credentials: false
+      # keeps the checkout credential-light.
+      - name: Check out the dispatch script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
       - name: Dispatch Branch Fixer webhook
         env:
-          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
-          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          DISPATCH_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_LABEL: "Modulo Branch Fixer"
           BRANCH: main
           PR_NUMBER: "0"
           HEAD_SHA: ${{ github.sha }}
@@ -921,7 +905,6 @@ jobs:
           # headSha + fingerprint: see notify-deploy-failure (FAR-1034
           # coalesce/dedupe convention) — same failure, same fingerprint.
           FINGERPRINT="Deploy: Staging + Prod|${PRIMARY_STAGE}|${HEAD_SHA}"
-          TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
             --argjson prNumber "${PR_NUMBER}" \
@@ -930,34 +913,14 @@ jobs:
             --arg headSha "${HEAD_SHA}" \
             --arg fingerprint "${FINGERPRINT}" \
             '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo, headSha: $headSha, fingerprint: $fingerprint}')
-          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
 
-          DISPATCHED="false"
-          for i in 1 2 3 4 5; do
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "${BODY}")
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-            if [ "$HTTP_CODE" = "202" ]; then
-              echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-              DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) - retrying in ${DELAY}s"
-              sleep "$DELAY"
-            else
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
-              break
-            fi
-          done
-          if [ "$DISPATCHED" != "true" ]; then
-            echo "::error::Branch Fixer webhook dispatch failed - prod smoke failure was not handed to the autonomous fix loop."
-            exit 1
-          fi
+          # One shared retry policy (scripts/dispatch_with_retry.sh): the
+          # old inline ladder duplicated branch-fixer.yml's five-attempt loop
+          # with no attempt cap, no wall-clock budget and no Retry-After
+          # honouring. The script exits 1 on an undelivered dispatch (its own
+          # class-named ::error:: + run summary), which preserves this job's
+          # contract that a lost deploy failure is loud, never swallowed.
+          DISPATCH_BODY="${BODY}" bash scripts/dispatch_with_retry.sh
 
   notify-deploy-staging-failure:
     name: Signal infra failure on staging deploy
@@ -979,10 +942,20 @@ jobs:
     if: always() && (needs.deploy-staging.result == 'failure' || needs.deploy-staging.result == 'cancelled')
     runs-on: ubicloud-standard-2
     steps:
+      # A minimal checkout provides scripts/dispatch_with_retry.sh — the
+      # shared webhook-dispatch policy below. persist-credentials: false
+      # keeps the checkout credential-light.
+      - name: Check out the dispatch script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
       - name: Dispatch Branch Fixer webhook (triage)
         env:
-          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
-          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          DISPATCH_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_LABEL: "Modulo Branch Fixer"
           BRANCH: main
           PR_NUMBER: "0"
           HEAD_SHA: ${{ github.sha }}
@@ -993,7 +966,6 @@ jobs:
           # headSha + fingerprint: see notify-deploy-failure (FAR-1034
           # coalesce/dedupe convention) — same failure, same fingerprint.
           FINGERPRINT="Deploy: Staging + Prod|${PRIMARY_STAGE}|${HEAD_SHA}"
-          TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
             --argjson prNumber "${PR_NUMBER}" \
@@ -1002,34 +974,14 @@ jobs:
             --arg headSha "${HEAD_SHA}" \
             --arg fingerprint "${FINGERPRINT}" \
             '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo, headSha: $headSha, fingerprint: $fingerprint}')
-          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
 
-          DISPATCHED="false"
-          for i in 1 2 3 4 5; do
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "${BODY}")
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-            if [ "$HTTP_CODE" = "202" ]; then
-              echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-              DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) - retrying in ${DELAY}s"
-              sleep "$DELAY"
-            else
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
-              break
-            fi
-          done
-          if [ "$DISPATCHED" != "true" ]; then
-            echo "::error::Branch Fixer webhook dispatch failed - staging infra failure was not signalled."
-            exit 1
-          fi
+          # One shared retry policy (scripts/dispatch_with_retry.sh): the
+          # old inline ladder duplicated branch-fixer.yml's five-attempt loop
+          # with no attempt cap, no wall-clock budget and no Retry-After
+          # honouring. The script exits 1 on an undelivered dispatch (its own
+          # class-named ::error:: + run summary), which preserves this job's
+          # contract that a lost deploy failure is loud, never swallowed.
+          DISPATCH_BODY="${BODY}" bash scripts/dispatch_with_retry.sh
 
   deploy-staging:
     name: Deploy to staging
@@ -3278,10 +3230,20 @@ jobs:
     if: always() && (needs.deploy-production.result == 'failure' || needs.deploy-production.result == 'cancelled')
     runs-on: ubicloud-standard-2
     steps:
+      # A minimal checkout provides scripts/dispatch_with_retry.sh — the
+      # shared webhook-dispatch policy below. persist-credentials: false
+      # keeps the checkout credential-light.
+      - name: Check out the dispatch script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
       - name: Dispatch Branch Fixer webhook (triage)
         env:
-          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
-          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          DISPATCH_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_LABEL: "Modulo Branch Fixer"
           BRANCH: main
           PR_NUMBER: "0"
           HEAD_SHA: ${{ github.sha }}
@@ -3292,7 +3254,6 @@ jobs:
           # headSha + fingerprint: see notify-deploy-failure (FAR-1034
           # coalesce/dedupe convention) — same failure, same fingerprint.
           FINGERPRINT="Deploy: Staging + Prod|${PRIMARY_STAGE}|${HEAD_SHA}"
-          TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
             --argjson prNumber "${PR_NUMBER}" \
@@ -3301,34 +3262,14 @@ jobs:
             --arg headSha "${HEAD_SHA}" \
             --arg fingerprint "${FINGERPRINT}" \
             '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo, headSha: $headSha, fingerprint: $fingerprint}')
-          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
 
-          DISPATCHED="false"
-          for i in 1 2 3 4 5; do
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "${BODY}")
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-            if [ "$HTTP_CODE" = "202" ]; then
-              echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-              DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) - retrying in ${DELAY}s"
-              sleep "$DELAY"
-            else
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
-              break
-            fi
-          done
-          if [ "$DISPATCHED" != "true" ]; then
-            echo "::error::Branch Fixer webhook dispatch failed - production infra failure was not signalled."
-            exit 1
-          fi
+          # One shared retry policy (scripts/dispatch_with_retry.sh): the
+          # old inline ladder duplicated branch-fixer.yml's five-attempt loop
+          # with no attempt cap, no wall-clock budget and no Retry-After
+          # honouring. The script exits 1 on an undelivered dispatch (its own
+          # class-named ::error:: + run summary), which preserves this job's
+          # contract that a lost deploy failure is loud, never swallowed.
+          DISPATCH_BODY="${BODY}" bash scripts/dispatch_with_retry.sh
 
   prod-smoke:
     name: Prod smoke tests
