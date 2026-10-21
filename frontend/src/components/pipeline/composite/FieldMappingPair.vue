@@ -82,7 +82,7 @@ function removeMapping(sourceKey: string) {
 <template>
   <div class="space-y-3">
     <div v-if="isPassthrough" class="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
-      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-emerald-400">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-emerald-400" aria-hidden="true" focusable="false">
         <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
       </svg>
       <span class="text-xs font-medium text-emerald-400">{{ $t('components.pipeline.composite.FieldMappingPair.passthrough') }}</span>
@@ -111,16 +111,17 @@ function removeMapping(sourceKey: string) {
           class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/30 px-3 py-1.5 text-sm"
         >
           <span class="min-w-0 flex-1 truncate font-mono text-xs text-foreground">{{ source }}</span>
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground" aria-hidden="true" focusable="false">
             <path d="M5 12h14" />
             <path d="m12 5 7 7-7 7" />
           </svg>
           <span class="min-w-0 flex-1 truncate font-mono text-xs text-foreground">{{ target }}</span>
           <button type="button"
             class="ml-1 shrink-0 rounded p-0.5 text-muted-foreground hover:text-destructive"
+            :aria-label="$t('common.remove')"
             @click="removeMapping(source)"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
               <path d="M18 6 6 18" />
               <path d="m6 6 12 12" />
             </svg>
