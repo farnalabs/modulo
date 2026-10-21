@@ -30,8 +30,10 @@ Evidence: `README.md`; `docs/architecture.md`; `docs/core-principles.md`
 
 **Q: Where does our data live?**
 
-A: In the customer's own database and object storage, on infrastructure the
-customer controls. Modulo does not replicate customer data to Farnalabs.
+A: In the customer's own PostgreSQL database, on infrastructure the customer
+controls. Modulo does not replicate customer data to Farnalabs. (Modulo has no
+object-storage integration; there is no bucket to configure or to place
+evidence in.)
 
 Evidence: `docs/architecture.md` (Self-hosted constraint);
 `docs/operations/network-egress.md` (default zero egress).
@@ -124,32 +126,47 @@ Evidence: `docs/security/secret-management.md`; `.semgrep/credential_in_state.py
 
 **Q: How do users authenticate?**
 
-A: Local accounts, OIDC, SAML 2.0, or scoped API keys. SCIM is available for
-provisioning and deprovisioning.
+A: Local accounts, OIDC, SAML 2.0, or scoped API keys. SCIM 2.0 is available for
+provisioning and deprovisioning. Two conditions apply: SSO (OIDC/SAML) and SCIM
+are **Team-tier** features - an unlicensed Community install answers HTTP 402 -
+and SCIM additionally requires `MODULO_SCIM_TOKEN` to be configured, answering
+"SCIM is not configured - set MODULO_SCIM_TOKEN" otherwise.
 
 Evidence: `docs/product-map/auth/oidc-integration.md`;
 `docs/product-map/auth/saml-integration.md`;
 `docs/product-map/auth/scim-provisioning.md`; `docs/architecture.md`
-("Authentication & Authorization").
+("Authentication & Authorization"); the `sso` and `scim` feature flags in
+`backend/src/modulo/core/feature_flags.py`; `backend/src/modulo/auth/scim_auth.py`.
 
 **Q: How is authorisation enforced?**
 
-A: A central permission registry maps every REST and MCP operation to a
-minimum organisation role (viewer, runner, operator, admin) plus team RBAC. An
+A: A central permission registry maps every authenticated REST route and every
+MCP tool to a minimum organisation role (viewer, runner, operator, admin). An
 unknown or misspelt permission key fails closed at import. Tenant isolation is
-enforced by PostgreSQL row-level security keyed to the principal's
-organisation.
+enforced by PostgreSQL row-level security keyed to the principal's organisation.
+
+Two scoping notes. First, the pre-authentication entry points (local login,
+OIDC/SAML callback and metadata) and `GET /api/v1/deployment` run before a
+principal exists, so they deliberately carry no permission key. Second, team
+RBAC is a **Team-tier** feature (`team_rbac`); the four-level organisation role
+hierarchy and row-level security themselves are always active.
 
 Evidence: `backend/src/modulo/auth/permissions.py`; `docs/architecture.md`
 ("Row-Level Security").
 
 **Q: Do you support least-privilege API keys?**
 
-A: Yes. Org API keys are role-scoped (`operator` or `runner`) and may be
-restricted to an explicit permission grant set instead of the full role bundle.
+A: Yes. Org API keys are always role-scoped (`operator` or `runner`), which is
+the default least-privilege control. An explicit per-key permission grant set -
+narrower than the role bundle - is available but sits behind the
+`api_key_grants` feature flag, which is **default-OFF** on every tier; if the
+customer has not enabled it, answer with the role-scoped answer, not the
+grant-set one.
 
 Evidence: `docs/architecture.md` ("API keys"); `modulo_create_api_key` /
-`GET /api/v1/api-keys`; `backend/src/modulo/auth/permissions.py`.
+`GET /api/v1/api-keys`; `backend/src/modulo/auth/permissions.py`; the
+`api_key_grants` entry in `DEFAULT_OFF_FLAGS` in
+`backend/src/modulo/core/feature_flags.py`.
 
 **Q: What happens if an administrator account is lost?**
 
@@ -174,9 +191,16 @@ Evidence: `docs/product-map/auth/oidc-integration.md`;
 
 A: Pipeline changes are versioned and every run executes against an immutable
 snapshot (frozen graph, models, prompts, schemas, guardrails and policy gates)
-recorded on the run. Human-in-the-loop gates block execution until a decision
-is recorded, and a gate marked `human_only` cannot be decided by any machine
-credential over REST or MCP.
+recorded on the run. At the `manual_approval` autonomy level a human-in-the-loop
+gate halts the run until a decision is recorded; a gate marked `human_only`
+(the default for every gate) rejects API keys and programmatic tokens over REST
+and MCP. Two conditions must be stated with that answer. (1) A browser session
+may decide a `human_only` gate, and so may a consent-derived, human-linked OAuth
+credential over MCP while the org-wide `mcp_human_linked_hitl_authority` flag is
+on - which is the default on every tier; `deliver_manual` stays browser-only.
+(2) The halt depends on the pipeline's autonomy level: `notify_on_complete`
+auto-approves the gate at run time and `fully_autonomous` skips it entirely, so
+only `manual_approval` pipelines produce a human decision.
 
 Evidence: `docs/product-map/pipelines/snapshot-versioning.md`;
 `docs/product-map/hitl/hitl-gates.md`;
@@ -205,11 +229,15 @@ events at `GET /api/v1/admin/audit`.
 **Q: How do we know what actually happened in a run?**
 
 A: A hash-chained, append-only audit trail records every governance-relevant
-action with actor, resource, payload and outcome, and the chain can be verified
-and exported as an offline-verifiable, Ed25519-signed evidence pack.
+action with actor, resource, payload and outcome. The chain can be verified in
+place on every tier (`GET /api/v1/admin/audit/verify`, which checks up to 10,000
+events per call and reports `truncated` when it stops short). Exporting it as an
+offline-verifiable, Ed25519-signed evidence pack is conditional: it needs the
+Team-tier `audit_viewer` feature and a configured `MODULO_EVIDENCE_SIGNING_KEY`.
 
 Evidence: `docs/offline-verifiable-evidence.md`;
-`GET /api/v1/admin/audit/verify`; `GET /api/v1/admin/audit/evidence-pack`.
+`GET /api/v1/admin/audit/verify`; `GET /api/v1/admin/audit/evidence-pack`;
+`backend/src/modulo/api/routes/audit.py`.
 
 **Q: How does this map to our compliance framework?**
 
@@ -286,11 +314,15 @@ Evidence: `CHANGELOG.md`; `docs/release-process.md`;
 **Q: How are serious incidents reported under the EU AI Act?**
 
 A: Modulo does not detect or report serious incidents as the Act defines them.
-This is an explicit gap in the control-mapping pack and remains the customer's
-obligation as provider/deployer.
+The control-mapping pack marks this `customer-responsibility` - the obligation
+as provider/deployer stays entirely with the customer. The shipped
+incident-response playbook includes incident-communication and post-mortem
+templates, which support writing the report; they are documentation, not a
+detection or reporting capability.
 
 Evidence: `docs/security/compliance-control-mapping.md` (EU AI Act Article 73
-row, coverage `gap`).
+row, coverage `customer-responsibility`);
+`docs/security/incident-response-playbook.md`.
 
 ## 8. Subprocessors and third parties
 
@@ -317,27 +349,35 @@ Evidence: `.github/workflows/release.yml`; `.github/workflows/ci.yml`.
 
 **Q: How long is run data retained?**
 
-A: Run retention and evidence retention are configurable by the operator
-through admin settings; the audit trail is append-only and is not automatically
-purged. The customer must set retention to the period their own policy (or the
-EU AI Act's six-month minimum for logs) requires.
+A: Two distinct settings, with two different conditions - do not answer them as
+one. Run retention (`GET /api/v1/admin/run-retention/candidates`,
+`POST /api/v1/admin/run-retention/purge`) requires the **Team-tier**
+`admin_run_retention` feature and answers HTTP 402 without it. Evidence
+retention (`GET`/`PUT /api/v1/admin/evidence-retention`,
+`POST /api/v1/admin/evidence-retention/purge`) is admin-permission only and not
+plan-gated, so it is available on every tier. The audit trail itself is
+append-only and is not automatically purged. The customer must configure
+retention to the period their own policy (or the EU AI Act's six-month minimum
+for logs) requires.
 
-Evidence: `docs/deployment-security.md` (§6.3 Log Retention);
-`GET /api/v1/admin/run-retention/candidates` and
-`POST /api/v1/admin/run-retention/purge`;
-`GET` / `PUT /api/v1/admin/evidence-retention` and
-`POST /api/v1/admin/evidence-retention/purge`.
+Evidence: `docs/deployment-security.md` (�6.3 Log Retention);
+`backend/src/modulo/api/routes/admin_run_retention.py` (the
+`admin_run_retention` feature dependency);
+`backend/src/modulo/api/routes/admin_evidence_retention.py`.
 
 **Q: Can we delete our data?**
 
 A: Yes - runs and evidence can be purged under the configured retention
-controls, and an organisation can be deleted through the admin surface. Audit
-events are append-only by design; their integrity is what makes the audit trail
-evidence, so a request to delete audit events needs a documented exception
-rather than a silent purge.
+controls, and an organisation can be deleted through the admin surface. Run
+purge is the Team-tier `admin_run_retention` feature; evidence purge is
+admin-permission only. Audit events are append-only by design; their integrity
+is what makes the audit trail evidence, so a request to delete audit events
+needs a documented exception rather than a silent purge.
 
 Evidence: `docs/architecture.md` ("Audit Logger");
-`.github/workflows` retention jobs; `backend/src/modulo/core/audit_logger/append_only.py`.
+`POST /api/v1/admin/run-retention/purge` and
+`POST /api/v1/admin/evidence-retention/purge` (the admin routes, not a CI job);
+`backend/src/modulo/core/audit_logger/append_only.py`.
 
 ## 10. Backup and restore
 
@@ -360,9 +400,13 @@ Evidence: `docs/operations/backup.md`;
 
 **Q: What happens if the database is behind the code?**
 
-A: The runtime refuses to start against a database that is not at the migration
-head rather than serving on an inconsistent schema; migrations are applied by a
-single release step.
+A: The runtime applies migrations itself at boot: the release step runs
+`alembic upgrade heads` once before machines roll out, and each process runs the
+same upgrade (idempotent, behind a Postgres advisory lock) with a bounded retry
+loop. If the schema cannot be brought to head, boot fails and the process does
+not serve on an inconsistent schema. The outcome is that a behind-the-code
+database gets migrated rather than silently served - not that the runtime
+refuses to start whenever it is behind.
 
 Evidence: `docs/upgrade-process.md`; `docs/operations/backup.md`.
 

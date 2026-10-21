@@ -21,6 +21,12 @@ Design rules (each is a requirement, not a preference):
   silently change what was asserted for a past audit period.
 * **No cross-tenant reads.** Every query filters on ``organisation_id``; the
   organisation is always the caller's principal's organisation.
+* **The human-oversight count uses the product's own rule.** Whether a gate is
+  ``human_only`` is resolved through
+  :func:`modulo.db.crud.hitl_review_config.human_only_effective` - the single
+  source of truth for the fail-safe default (FAR-609). Re-implementing the rule
+  here would under-report human oversight, because an omitted ``human_only``
+  key means TRUE, not FALSE.
 """
 
 from __future__ import annotations
@@ -50,6 +56,7 @@ from modulo.compliance.artifacts import (
 )
 from modulo.compliance.pack import MappingPack, load_mapping_pack
 from modulo.core.audit_logger import get_chain_head
+from modulo.db.crud.hitl_review_config import human_only_effective
 from modulo.db.models.audit_event import AuditEvent
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.hitl_claim import HitlClaim
@@ -80,16 +87,26 @@ AUTONOMY_EVENT_TYPES: Final[tuple[str, ...]] = (
 )
 
 #: Bounded sample of identifiers returned per artefact entry. The index is an
-#: auditable inventory, not a bulk export - counts are always exact, the sample
-#: is capped so one very large organisation cannot force an unbounded response.
+#: auditable inventory, not a bulk export - the SAMPLE is capped so one very
+#: large organisation cannot force an unbounded response. Row counts come from
+#: aggregate queries and are exact; the HITL human-only breakdown is the one
+#: exception, because it is derived from a bounded scan and flags itself as a
+#: lower bound when that scan truncates.
 _SAMPLE_LIMIT: Final[int] = 20
 
 #: Bounded scan of decided HITL rows used to count human-only approvals. The
 #: gate config is JSON, and the count is computed in Python so the query works
 #: identically on Postgres and SQLite. If an organisation has more decided gates
-#: than this, the entry says so in its detail rather than reporting a silent
-#: undercount.
+#: than this, the entry reports the count as a LOWER BOUND
+#: (``human_only_counts_are_lower_bounds``) rather than as an exact figure.
 _HITL_SCAN_LIMIT: Final[int] = 10000
+
+#: The decision vocabulary's approval outcomes (``ck_hitl_claims_decision`` in
+#: ``db/models/hitl_claim.py``). ``deliver_manual`` supplies the output a human
+#: wrote in place of the agent's, so it is an approval of the gate; counting only
+#: ``approved`` would under-report human oversight. ``rejected`` is not an
+#: approval.
+APPROVAL_DECISIONS: Final[frozenset[str]] = frozenset({"approved", "deliver_manual"})
 
 
 class EvidenceIndexIncompleteError(RuntimeError):
@@ -242,13 +259,29 @@ async def _collect_audit_chain(
         )
     ).one()
     event_count = int(stats[0] or 0)
-    if head is None or event_count == 0:
+    if event_count == 0:
+        # No events at all: the instance genuinely holds nothing to evidence.
         return _absent(
             pack=pack,
             artifact_type=ARTIFACT_AUDIT_CHAIN,
             location=location,
             reason="this instance holds no audit events for the organisation yet",
             detail={"event_count": event_count},
+        )
+    if head is None:
+        # Events exist but no chain head does. That is NOT "no events yet" -
+        # saying so next to a positive event_count would be a provably false
+        # reason, and it is a materially different finding: the trail exists but
+        # its integrity cannot be evidenced.
+        return _absent(
+            pack=pack,
+            artifact_type=ARTIFACT_AUDIT_CHAIN,
+            location=location,
+            reason=(
+                "audit events exist for the organisation but no audit chain head is recorded, "
+                "so chain integrity cannot be evidenced"
+            ),
+            detail={"event_count": event_count, "chain_head_present": False},
         )
 
     identifiers = [f"audit-chain-head:{head.last_event_hash}"]
@@ -276,10 +309,17 @@ async def _collect_run_snapshots(
     pack: MappingPack,
 ) -> ArtifactEntry:
     location = "GET /api/v1/pipelines/{pipeline_id}/snapshots and the snapshot_id on GET /api/v1/runs/{run_id}"
+    # Both legs are filtered here too: a run row can reference a snapshot id,
+    # and the join makes the snapshot side reachable independently of the run.
     snapshot_count = int(
         (
             await session.execute(
-                select(func.count(func.distinct(Run.snapshot_id))).where(Run.organisation_id == organisation_id)
+                select(func.count(func.distinct(Run.snapshot_id)))
+                .join(PipelineSnapshot, PipelineSnapshot.id == Run.snapshot_id)
+                .where(
+                    Run.organisation_id == organisation_id,
+                    PipelineSnapshot.organisation_id == organisation_id,
+                )
             )
         ).scalar_one()
         or 0
@@ -301,7 +341,13 @@ async def _collect_run_snapshots(
                 PipelineSnapshot.created_at,
             )
             .join(Run, Run.snapshot_id == PipelineSnapshot.id)
-            .where(Run.organisation_id == organisation_id)
+            # Both legs are filtered: the module's contract is that EVERY query
+            # carries an organisation_id predicate, and the join makes the
+            # snapshot side reachable independently of the run side.
+            .where(
+                Run.organisation_id == organisation_id,
+                PipelineSnapshot.organisation_id == organisation_id,
+            )
             .distinct()
             .order_by(PipelineSnapshot.created_at.desc())
             .limit(_SAMPLE_LIMIT)
@@ -363,20 +409,27 @@ async def _collect_hitl_decisions(
                 HitlClaim.organisation_id == organisation_id,
                 HitlClaim.decision.is_not(None),
             )
-            .order_by(HitlClaim.decision_at.desc())
+            # ``nulls_last`` is explicit: Postgres sorts NULLs FIRST under
+            # ``DESC``, which would put undated rows at the head of the scan,
+            # report ``latest_decision_at`` as None and fill the truncated
+            # window with rows that carry no decision time at all.
+            .order_by(HitlClaim.decision_at.desc().nulls_last())
             .limit(_HITL_SCAN_LIMIT)
         )
     ).all()
     human_only_approved = 0
     human_only_total = 0
     for row in decided_rows:
-        gate_config = row[4] if isinstance(row[4], dict) else {}
-        if gate_config.get("human_only") is not True:
+        # Single-source the fail-safe default (FAR-609): an omitted, null or
+        # non-dict ``human_only`` means TRUE, so a legacy/raw-JSON gate is
+        # counted as human oversight, never skipped.
+        if not human_only_effective(row[4]):
             continue
         human_only_total += 1
-        if row[1] == "approved":
+        if row[1] in APPROVAL_DECISIONS:
             human_only_approved += 1
 
+    truncated = total > _HITL_SCAN_LIMIT
     latest = decided_rows[0][2] if decided_rows else None
     identifiers = [f"hitl-decision:{row[0]}" for row in decided_rows[:_SAMPLE_LIMIT]]
     return _present(
@@ -387,9 +440,15 @@ async def _collect_hitl_decisions(
         record_count=total,
         detail={
             "decisions_by_outcome": counts,
-            "human_only_decisions": human_only_total,
-            "human_only_approvals": human_only_approved,
-            "human_only_scan_truncated": total > _HITL_SCAN_LIMIT,
+            # Both counts are derived from the bounded scan, so when the scan
+            # truncated they are lower bounds on the true figures. The flag
+            # states which they are; they are never presented as exact when
+            # they are not.
+            "human_only_gate_decisions": human_only_total,
+            "human_only_gate_approvals": human_only_approved,
+            "human_only_scan_truncated": truncated,
+            "human_only_counts_are_lower_bounds": truncated,
+            "human_only_approval_outcomes": sorted(APPROVAL_DECISIONS),
             "latest_decision_at": _iso(latest),
         },
     )

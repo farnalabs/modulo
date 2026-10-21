@@ -6713,8 +6713,15 @@ export interface paths {
          * Get Evidence Index Endpoint
          * @description Return this organisation's compliance evidence index.
          *
-         *     Every artefact the shipping mapping pack maps to a framework clause is
-         *     listed. An artefact type with no records is returned with
+         *     The response lists one entry per artefact TYPE THE INSTANCE PRODUCES - the
+         *     audit chain, run snapshots, HITL decisions, eval results, autonomy changes,
+         *     the release SBOM and the build identity. It does not list every artefact the
+         *     pack maps: rows resting on ``customer_records`` (policies, risk assessments,
+         *     internal-audit reports, incident and restore-test records) are the
+         *     customer's own evidence, produced outside Modulo, and appear only as
+         *     ``mapping_row_ids`` on the entries that do exist.
+         *
+         *     An indexed artefact type with no records is returned with
          *     ``status: absent`` and a reason, and is named in
          *     ``missing_artifact_types`` so the caller can see the index is incomplete -
          *     it is never silently dropped. ``pack_version`` and ``pack_content_hash``

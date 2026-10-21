@@ -9,8 +9,11 @@ SOC 2 clause).
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
+import modulo.compliance.pack as pack_module
 from modulo.compliance.artifacts import (
     COVERAGE_CUSTOMER_RESPONSIBILITY,
     COVERAGE_GAP,
@@ -48,22 +51,22 @@ _REQUIRED_ROW_TEXT_FIELDS = (
 #: same change - that is the point of pinning it.
 _EXPECTED_COVERAGE: dict[str, dict[str, int]] = {
     "soc2": {
-        COVERAGE_SATISFIED: 5,
-        COVERAGE_SUPPORTED: 7,
+        COVERAGE_SATISFIED: 3,
+        COVERAGE_SUPPORTED: 9,
         COVERAGE_CUSTOMER_RESPONSIBILITY: 4,
         COVERAGE_GAP: 0,
     },
     "iso_42001": {
-        COVERAGE_SATISFIED: 2,
-        COVERAGE_SUPPORTED: 6,
+        COVERAGE_SATISFIED: 1,
+        COVERAGE_SUPPORTED: 7,
         COVERAGE_CUSTOMER_RESPONSIBILITY: 2,
         COVERAGE_GAP: 0,
     },
     "eu_ai_act": {
         COVERAGE_SATISFIED: 1,
         COVERAGE_SUPPORTED: 4,
-        COVERAGE_CUSTOMER_RESPONSIBILITY: 3,
-        COVERAGE_GAP: 1,
+        COVERAGE_CUSTOMER_RESPONSIBILITY: 4,
+        COVERAGE_GAP: 0,
     },
 }
 
@@ -179,12 +182,29 @@ class TestShippedPackContent:
         total_satisfied = sum(counts[COVERAGE_SATISFIED] for counts in pack.coverage_counts().values())
         assert total_satisfied < total_rows
 
-    def test_pack_contains_a_genuine_gap(self) -> None:
+    def test_every_framework_names_a_capability_modulo_does_not_provide(self) -> None:
+        """The pack must not read as universally satisfied.
+
+        A `gap` row is specifically "neither Modulo nor the shipped
+        documentation provides the capability". Zero gap rows is a legitimate
+        outcome when the shipped documentation does cover a clause (EU AI Act
+        Article 73 ships incident-report templates, so it is
+        `customer-responsibility`, not `gap`); what must never happen is a
+        framework that claims every clause as met.
+        """
         pack = load_mapping_pack()
 
-        gaps = [row.id for row in pack.rows if row.coverage == COVERAGE_GAP]
-
-        assert gaps, "the pack must name at least one capability Modulo does not provide"
+        unqualified = [
+            framework_id
+            for framework_id, framework in pack.frameworks.items()
+            if not any(row.coverage in NON_SELF_COVERAGE_VALUES for row in framework.rows)
+        ]
+        assert not unqualified, unqualified
+        # A gap row must still be genuinely uncovered where one exists - none
+        # of them may rest on customer-supplied material presented as ours.
+        for row in pack.rows:
+            if row.coverage == COVERAGE_GAP:
+                assert row.provenance == PROVENANCE_CUSTOMER_SUPPLIED
 
     def test_satisfied_rows_never_rest_on_customer_material(self) -> None:
         pack = load_mapping_pack()
@@ -418,3 +438,217 @@ class TestFrameworkValidation:
         }
         with pytest.raises(MappingPackError, match="does not map these indexed artefact types"):
             validate_frameworks(frameworks)
+
+
+# ---------------------------------------------------------------------------
+# Load path: the honesty rules must actually be WIRED INTO _build_pack
+# ---------------------------------------------------------------------------
+#
+# The tests above call ``validate_mapping_rows`` / ``validate_frameworks``
+# directly, so deleting those calls from ``_build_pack`` would leave the suite
+# green while a dishonest pack loaded happily. These tests drive documents
+# through the real loader instead.
+
+
+def _raw_row(
+    row_id: str,
+    clause: str,
+    *,
+    artifact_type: str,
+    coverage: str,
+    provenance: str,
+) -> dict[str, Any]:
+    return {
+        "id": row_id,
+        "clause": clause,
+        "clause_intent": "The clause intent is stated in a sentence.",
+        "modulo_control": "Modulo records the fact and produces the evidence.",
+        "artifact_type": artifact_type,
+        "customer_location": "GET /api/v1/admin/audit",
+        "coverage": coverage,
+        "provenance": provenance,
+        "responsibility": "The customer is responsible for the remaining control.",
+    }
+
+
+def _pack_documents() -> dict[str, dict[str, Any]]:
+    """A complete, minimal, VALID pack expressed as the raw YAML documents.
+
+    Valid by construction (each framework names at least one row Modulo does not
+    satisfy, every SOC 2 required clause is present, every indexed artefact type
+    is referenced) so a test can mutate exactly one field and attribute the
+    resulting rejection to that mutation rather than to a broken fixture.
+    """
+    indexed = list(INDEXED_ARTIFACT_TYPES)
+    soc2_rows = [
+        _raw_row(
+            "soc2-customer",
+            min(SOC2_REQUIRED_CLAUSES),
+            artifact_type="customer_records",
+            coverage=COVERAGE_CUSTOMER_RESPONSIBILITY,
+            provenance=PROVENANCE_CUSTOMER_SUPPLIED,
+        )
+    ]
+    soc2_rows.extend(
+        _raw_row(
+            f"soc2-{index}",
+            clause,
+            artifact_type=indexed[index % len(indexed)],
+            coverage=COVERAGE_SUPPORTED,
+            provenance=PROVENANCE_OBSERVED,
+        )
+        for index, clause in enumerate(sorted(SOC2_REQUIRED_CLAUSES)[1:])
+    )
+    iso_rows = [
+        _raw_row(
+            "iso-customer",
+            "8.2",
+            artifact_type="customer_records",
+            coverage=COVERAGE_CUSTOMER_RESPONSIBILITY,
+            provenance=PROVENANCE_CUSTOMER_SUPPLIED,
+        ),
+        _raw_row(
+            "iso-1",
+            "8.1",
+            artifact_type="run_snapshot",
+            coverage=COVERAGE_SUPPORTED,
+            provenance=PROVENANCE_OBSERVED,
+        ),
+    ]
+    eu_rows = [
+        _raw_row(
+            "eu-customer",
+            "Article 9",
+            artifact_type="customer_records",
+            coverage=COVERAGE_CUSTOMER_RESPONSIBILITY,
+            provenance=PROVENANCE_CUSTOMER_SUPPLIED,
+        ),
+        _raw_row(
+            "eu-1",
+            "Article 12",
+            artifact_type="audit_chain",
+            coverage=COVERAGE_SUPPORTED,
+            provenance=PROVENANCE_OBSERVED,
+        ),
+    ]
+    return {
+        "pack.yaml": {
+            "pack_version": "1.0.0",
+            "published_at": "2026-10-21",
+            "title": "Test pack",
+            "honesty_note": "This pack claims nothing it cannot evidence.",
+            "frameworks": [
+                {"id": "soc2", "file": "soc2.yaml"},
+                {"id": "iso_42001", "file": "iso-42001.yaml"},
+                {"id": "eu_ai_act", "file": "eu-ai-act.yaml"},
+            ],
+        },
+        "soc2.yaml": {
+            "framework": "soc2",
+            "name": "SOC 2",
+            "source": "AICPA Trust Services Criteria.",
+            "scope_note": "SOC 2 audits the customer's system, not Modulo.",
+            "rows": soc2_rows,
+        },
+        "iso-42001.yaml": {
+            "framework": "iso_42001",
+            "name": "ISO/IEC 42001",
+            "source": "ISO/IEC 42001:2023.",
+            "scope_note": "Modulo is a control inside the customer's AIMS.",
+            "rows": iso_rows,
+        },
+        "eu-ai-act.yaml": {
+            "framework": "eu_ai_act",
+            "name": "EU AI Act",
+            "source": "Regulation (EU) 2024/1689.",
+            "scope_note": "Obligations fall on the provider and deployer.",
+            "rows": eu_rows,
+        },
+    }
+
+
+@pytest.fixture
+def install_documents(monkeypatch: pytest.MonkeyPatch):
+    """Route ``pack._read_yaml`` at an in-memory document set."""
+
+    def _install(documents: dict[str, dict[str, Any]]) -> None:
+        monkeypatch.setattr(pack_module, "_read_yaml", lambda filename: documents[filename])
+
+    return _install
+
+
+class TestBuildPackEnforcesHonesty:
+    def test_accepts_the_control_document_set(self, install_documents) -> None:
+        """Control: the fixture itself is valid, so the rejects below are causal."""
+        install_documents(_pack_documents())
+
+        pack = pack_module._build_pack()
+
+        assert pack.framework_ids() == FRAMEWORK_IDS
+
+    def test_build_pack_rejects_a_satisfied_row_resting_on_customer_material(self, install_documents) -> None:
+        documents = _pack_documents()
+        dishonest = documents["soc2.yaml"]["rows"][1]
+        dishonest["coverage"] = COVERAGE_SATISFIED
+        dishonest["provenance"] = PROVENANCE_CUSTOMER_SUPPLIED
+        install_documents(documents)
+
+        with pytest.raises(MappingPackError, match="cannot be evidenced by customer-supplied"):
+            pack_module._build_pack()
+
+    def test_build_pack_rejects_a_framework_that_claims_everything(self, install_documents) -> None:
+        documents = _pack_documents()
+        documents["eu-ai-act.yaml"]["rows"][0]["coverage"] = COVERAGE_SUPPORTED
+        documents["eu-ai-act.yaml"]["rows"][0]["artifact_type"] = "audit_chain"
+        documents["eu-ai-act.yaml"]["rows"][0]["provenance"] = PROVENANCE_OBSERVED
+        install_documents(documents)
+
+        with pytest.raises(MappingPackError, match="claims every clause as met"):
+            pack_module._build_pack()
+
+    def test_build_pack_rejects_a_dropped_soc2_clause(self, install_documents) -> None:
+        documents = _pack_documents()
+        documents["soc2.yaml"]["rows"] = documents["soc2.yaml"]["rows"][:1]
+        install_documents(documents)
+
+        with pytest.raises(MappingPackError, match="missing required clauses"):
+            pack_module._build_pack()
+
+
+class TestLimitationFieldsMustBeStated:
+    """A YAML null used to become the literal 'None'; omission became ''."""
+
+    @pytest.mark.parametrize("field", ["source", "scope_note"])
+    def test_rejects_a_null_framework_limitation_field(self, install_documents, field: str) -> None:
+        documents = _pack_documents()
+        documents["soc2.yaml"][field] = None
+        install_documents(documents)
+
+        with pytest.raises(MappingPackError, match=field):
+            pack_module._build_pack()
+
+    @pytest.mark.parametrize("field", ["source", "scope_note"])
+    def test_rejects_an_omitted_framework_limitation_field(self, install_documents, field: str) -> None:
+        documents = _pack_documents()
+        del documents["soc2.yaml"][field]
+        install_documents(documents)
+
+        with pytest.raises(MappingPackError, match=field):
+            pack_module._build_pack()
+
+    @pytest.mark.parametrize("field", ["title", "published_at", "honesty_note"])
+    def test_rejects_a_null_pack_limitation_field(self, install_documents, field: str) -> None:
+        documents = _pack_documents()
+        documents["pack.yaml"][field] = None
+        install_documents(documents)
+
+        with pytest.raises(MappingPackError, match=field):
+            pack_module._build_pack()
+
+    def test_rejects_a_pack_with_no_honesty_note_at_all(self, install_documents) -> None:
+        documents = _pack_documents()
+        del documents["pack.yaml"]["honesty_note"]
+        install_documents(documents)
+
+        with pytest.raises(MappingPackError, match="honesty_note"):
+            pack_module._build_pack()

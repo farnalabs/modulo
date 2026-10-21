@@ -17,13 +17,16 @@ from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from modulo.api.dependencies import get_db_session
 from modulo.api.main import app
 from modulo.api.routes.compliance import (
     _CODE_EVIDENCE_INDEX_READ,
     get_evidence_index_endpoint,
 )
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PERMISSIONS, PermissionConfigurationError, resolve_required
 from modulo.compliance.artifacts import INDEXED_ARTIFACT_TYPES
@@ -252,3 +255,67 @@ class TestEndpointBehaviour:
         assert restored.pack_content_hash == index.pack_content_hash
         assert restored.organisation_id == str(org_id)
         assert tuple(entry.artifact_type for entry in restored.artifacts) == INDEXED_ARTIFACT_TYPES
+
+
+class TestRequestLevelAuthorisation:
+    """Drive the real HTTP route, not the handler.
+
+    Every behaviour test above calls ``get_evidence_index_endpoint`` directly,
+    which bypasses ``require_permission`` entirely - so none of them could fail
+    if the permission gate were removed or downgraded. These go through the app
+    with only the credential and session dependencies overridden.
+    """
+
+    @pytest.fixture
+    def client_for(self, session: AsyncSession):
+        def _make(role: str, org_id: uuid.UUID, account_id: uuid.UUID) -> AsyncClient:
+            principal = TenantPrincipal(
+                username=f"{role}@compliance.example",
+                organisation_id=org_id,
+                account_id=account_id,
+                org_role=role,
+            )
+
+            async def _principal() -> TenantPrincipal:
+                return principal
+
+            app.dependency_overrides[get_current_tenant_user] = _principal
+            app.dependency_overrides[get_db_session] = lambda: session
+            return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+        yield _make
+        app.dependency_overrides.clear()
+
+    async def test_a_viewer_is_forbidden(self, client_for, session: AsyncSession) -> None:
+        org_id, account_id = await _seed_minimal_org(session)
+        client = client_for("viewer", org_id, account_id)
+
+        async with client:
+            response = await client.get(_ROUTE_PATH)
+
+        assert response.status_code == 403
+        # The denial must come from THIS key's gate, not from some unrelated
+        # failure that happens to answer 403.
+        assert _CODE_EVIDENCE_INDEX_READ in response.text
+
+    async def test_an_operator_is_forbidden(self, client_for, session: AsyncSession) -> None:
+        """The key is admin-only - one step below admin must still be denied."""
+        org_id, account_id = await _seed_minimal_org(session)
+        client = client_for("operator", org_id, account_id)
+
+        async with client:
+            response = await client.get(_ROUTE_PATH)
+
+        assert response.status_code == 403
+
+    async def test_an_admin_succeeds(self, client_for, session: AsyncSession) -> None:
+        org_id, account_id = await _seed_minimal_org(session)
+        client = client_for("admin", org_id, account_id)
+
+        async with client:
+            response = await client.get(_ROUTE_PATH)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["organisation_id"] == str(org_id)
+        assert body["pack_version"] == load_mapping_pack().pack_version

@@ -91,8 +91,11 @@ ARTIFACT_TYPES: Final[dict[str, ArtifactTypeSpec]] = {
     ARTIFACT_AUDIT_CHAIN: ArtifactTypeSpec(
         artifact_type=ARTIFACT_AUDIT_CHAIN,
         description=(
-            "The organisation's hash-chained, append-only audit trail, including the "
-            "offline-verifiable evidence pack export."
+            "The organisation's hash-chained, append-only audit trail. A ``present`` "
+            "status means the trail exists in this instance; it does NOT assert that "
+            "the offline-verifiable evidence pack export is available here, which "
+            "additionally needs the Team-tier audit_viewer feature and a configured "
+            "MODULO_EVIDENCE_SIGNING_KEY."
         ),
         indexed=True,
         instance_observable=True,
@@ -111,8 +114,14 @@ ARTIFACT_TYPES: Final[dict[str, ArtifactTypeSpec]] = {
     ARTIFACT_HITL_DECISION: ArtifactTypeSpec(
         artifact_type=ARTIFACT_HITL_DECISION,
         description=(
-            "Recorded human-in-the-loop decisions, including approvals on gates marked "
-            "human_only (which a machine credential cannot decide)."
+            "Recorded human-in-the-loop decisions. Gates marked human_only (the "
+            "fail-safe default) reject API keys and programmatic tokens over REST and "
+            "MCP; a browser session may decide them, and so may a consent-derived, "
+            "human-linked OAuth credential over MCP while the default-on "
+            "mcp_human_linked_hitl_authority flag is enabled. deliver_manual stays "
+            "browser-only. A gate is only reached at all when the pipeline's autonomy "
+            "level is manual_approval - notify_on_complete auto-approves it and "
+            "fully_autonomous skips it."
         ),
         indexed=True,
         instance_observable=True,

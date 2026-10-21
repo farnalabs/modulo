@@ -11,6 +11,9 @@ Honesty is enforced structurally at load time (see :func:`validate_mapping_rows`
 * ``satisfied`` rows can never be evidenced by customer-supplied material;
 * ``customer-responsibility`` rows must be tagged ``customer-supplied``;
 * every row states what remains the customer's responsibility;
+* every framework states its ``source`` and ``scope_note``, and the pack states
+  its ``title``, ``published_at`` and ``honesty_note`` - none may be omitted or
+  YAML ``null``, because those fields carry the pack's limitations;
 * every framework contains at least one row Modulo does not itself satisfy;
 * the SOC 2 minimum clause set (CC6, CC7, CC8) is present.
 
@@ -302,6 +305,23 @@ def _as_mapping(value: Any, context: str) -> dict[str, Any]:
     return value
 
 
+def _required_text(document: dict[str, Any], key: str, context: str) -> str:
+    """Read a required non-empty string field, rejecting ``null`` and omission.
+
+    A YAML ``null`` used to be coerced by ``str()`` into the literal ``"None"``,
+    and an omitted key into ``""`` - both of which silently drop a documented
+    limitation from an artefact an auditor relies on. Neither is acceptable
+    here, so both fail the load.
+    """
+    value = document.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise MappingPackError(
+            f"{context}: {key!r} must be a non-empty string; a YAML null or an omitted "
+            "key drops a limitation the pack must state"
+        )
+    return value.strip()
+
+
 def _build_pack() -> MappingPack:
     metadata = _as_mapping(_read_yaml(_PACK_METADATA_FILE), f"{_MAPPINGS_PACKAGE}/{_PACK_METADATA_FILE}")
 
@@ -338,22 +358,29 @@ def _build_pack() -> MappingPack:
         )
         all_rows.extend(rows)
 
+        framework_context = f"{_MAPPINGS_PACKAGE}/{filename}"
         frameworks[framework_id] = Framework(
             id=framework_id,
-            name=str(document.get("name", "")),
-            source=str(document.get("source", "")),
-            scope_note=str(document.get("scope_note", "")),
+            name=_required_text(document, "name", framework_context),
+            # source and scope_note carry the framework's stated boundary and
+            # provenance; an omitted or null one must not degrade into
+            # "None"/"".
+            source=_required_text(document, "source", framework_context),
+            scope_note=_required_text(document, "scope_note", framework_context),
             rows=rows,
         )
 
     validate_mapping_rows(tuple(all_rows))
     validate_frameworks(frameworks)
 
+    metadata_context = f"{_MAPPINGS_PACKAGE}/{_PACK_METADATA_FILE}"
     return MappingPack(
         pack_version=pack_version,
-        published_at=str(metadata.get("published_at", "")),
-        title=str(metadata.get("title", "")),
-        honesty_note=str(metadata.get("honesty_note", "")),
+        published_at=_required_text(metadata, "published_at", metadata_context),
+        title=_required_text(metadata, "title", metadata_context),
+        # The honesty note is the pack's own statement of what it does NOT
+        # claim. An empty one is the single most dangerous omission here.
+        honesty_note=_required_text(metadata, "honesty_note", metadata_context),
         frameworks=frameworks,
     )
 

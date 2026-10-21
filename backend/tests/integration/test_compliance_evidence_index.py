@@ -190,7 +190,8 @@ async def test_seeded_org_index_includes_every_mapped_artefact_type(
     assert entries[ARTIFACT_RUN_SNAPSHOT].record_count == 1
     assert entries[ARTIFACT_RUN_SNAPSHOT].identifiers == (f"pipeline-snapshot:{seeded['snapshot_id']}@v1",)
     assert entries[ARTIFACT_HITL_DECISION].record_count == 4
-    assert entries[ARTIFACT_HITL_DECISION].detail["human_only_approvals"] == 2
+    assert entries[ARTIFACT_HITL_DECISION].detail["human_only_gate_decisions"] == 3
+    assert entries[ARTIFACT_HITL_DECISION].detail["human_only_gate_approvals"] == 2
     assert entries[ARTIFACT_EVAL_RESULT].record_count == 3
     assert entries[ARTIFACT_EVAL_RESULT].detail["passed"] == 2
     assert entries[ARTIFACT_EVAL_RESULT].detail["failed"] == 1

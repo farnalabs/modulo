@@ -20,6 +20,7 @@ from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.compliance import evidence_index as evidence_index_module
@@ -46,6 +47,7 @@ from modulo.compliance.evidence_index import (
     build_evidence_index,
 )
 from modulo.compliance.pack import load_mapping_pack
+from modulo.db.crud.hitl_review_config import human_only_effective
 from modulo.db.models.account import Account
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.base import Base
@@ -168,6 +170,11 @@ async def _make_run(
     return run_id
 
 
+#: Sentinel distinguishing "no gate config at all" (a NULL ``gate_config_json``,
+#: which is still human-only under the fail-safe default) from ``{}``.
+_NO_GATE_CONFIG: object = object()
+
+
 async def _make_hitl(
     session: AsyncSession,
     *,
@@ -177,8 +184,8 @@ async def _make_hitl(
     account_id: uuid.UUID,
     review_id: str,
     decision: str,
-    human_only: bool,
-    decided_at: datetime,
+    gate_config: dict | object | None = _NO_GATE_CONFIG,
+    decided_at: datetime | None,
 ) -> uuid.UUID:
     claim_id = uuid.uuid4()
     session.add(
@@ -192,7 +199,7 @@ async def _make_hitl(
             decision=decision,
             decision_at=decided_at,
             decided_by=account_id,
-            gate_config_json={"human_only": human_only},
+            gate_config_json=None if gate_config is _NO_GATE_CONFIG else gate_config,
         )
     )
     await session.flush()
@@ -279,7 +286,7 @@ async def _seed_full_org(session: AsyncSession, slug: str = "acme") -> dict[str,
         account_id=account_id,
         review_id="review-human-approve",
         decision="approved",
-        human_only=True,
+        gate_config={"human_only": True},
         decided_at=_BASE_TIME + timedelta(hours=1),
     )
     await _make_hitl(
@@ -290,7 +297,7 @@ async def _seed_full_org(session: AsyncSession, slug: str = "acme") -> dict[str,
         account_id=account_id,
         review_id="review-human-approve-2",
         decision="approved",
-        human_only=True,
+        gate_config={"human_only": True},
         decided_at=_BASE_TIME + timedelta(hours=2),
     )
     await _make_hitl(
@@ -301,7 +308,7 @@ async def _seed_full_org(session: AsyncSession, slug: str = "acme") -> dict[str,
         account_id=account_id,
         review_id="review-human-reject",
         decision="rejected",
-        human_only=True,
+        gate_config={"human_only": True},
         decided_at=_BASE_TIME + timedelta(hours=3),
     )
     await _make_hitl(
@@ -312,7 +319,7 @@ async def _seed_full_org(session: AsyncSession, slug: str = "acme") -> dict[str,
         account_id=account_id,
         review_id="review-machine-approve",
         decision="approved",
-        human_only=False,
+        gate_config={"human_only": False},
         decided_at=_BASE_TIME + timedelta(hours=4),
     )
 
@@ -444,10 +451,11 @@ class TestSeededOrganisation:
         entry = _by_type(index)[ARTIFACT_HITL_DECISION]
 
         assert entry.record_count == 4
-        assert entry.detail["human_only_decisions"] == 3
-        assert entry.detail["human_only_approvals"] == 2
+        assert entry.detail["human_only_gate_decisions"] == 3
+        assert entry.detail["human_only_gate_approvals"] == 2
         assert entry.detail["decisions_by_outcome"] == {"approved": 3, "rejected": 1}
         assert entry.detail["human_only_scan_truncated"] is False
+        assert entry.detail["human_only_counts_are_lower_bounds"] is False
 
     async def test_eval_entry_reports_pass_and_fail_counts(self, session: AsyncSession) -> None:
         seeded = await _seed_full_org(session)
@@ -578,6 +586,197 @@ class TestTenantIsolation:
             and entry.artifact_type not in {ARTIFACT_RELEASE_SBOM, ARTIFACT_BUILD_IDENTITY}
         }
         assert not org_scoped_presence
+
+
+class TestHumanOnlyCountingMatchesTheProductRule:
+    """The index must not re-implement the ``human_only`` fail-safe default.
+
+    Every pre-existing fixture seeded ``{"human_only": True}``, which is exactly
+    why treating a missing/``null`` key as NOT human-only was invisible: the
+    index silently under-reported human oversight for every legacy or raw-JSON
+    gate. These cases are the ones that distinguish the two rules.
+    """
+
+    #: The config shapes a real instance holds. ``None`` is a NULL
+    #: ``gate_config_json``; ``{"note": ...}`` is a gate that omits the key.
+    CONFIGS: tuple[object, ...] = (
+        None,
+        {"human_only": None},
+        {},
+        {"note": "a legacy gate with no human_only key"},
+        {"human_only": True},
+        {"human_only": False},
+    )
+
+    async def _seed_one_per_config(self, session: AsyncSession) -> dict[str, uuid.UUID]:
+        seeded = await _seed_full_org(session, slug="rule")
+        for index, config in enumerate(self.CONFIGS):
+            await _make_hitl(
+                session,
+                org_id=seeded["org_id"],
+                run_id=seeded["run_id"],
+                pipeline_id=seeded["pipeline_id"],
+                account_id=seeded["account_id"],
+                review_id=f"review-config-{index}",
+                decision="approved",
+                gate_config=config,
+                decided_at=_BASE_TIME + timedelta(hours=10 + index),
+            )
+        await session.commit()
+        return seeded
+
+    def test_the_fixture_configs_span_both_outcomes(self) -> None:
+        """Guard: if the product rule changed, this matrix would stop discriminating."""
+        outcomes = {human_only_effective(config) for config in self.CONFIGS}  # type: ignore[arg-type]
+
+        assert outcomes == {True, False}
+
+    async def test_human_only_counts_match_the_product_rule_for_every_config(self, session: AsyncSession) -> None:
+        seeded = await self._seed_one_per_config(session)
+        expected_human_only = sum(1 for config in self.CONFIGS if human_only_effective(config))  # type: ignore[arg-type]
+
+        index = await build_evidence_index(session, seeded["org_id"])
+        entry = _by_type(index)[ARTIFACT_HITL_DECISION]
+
+        # 5 of the 6 shapes are human-only under the fail-safe default; only an
+        # explicit ``false`` opts out.
+        assert expected_human_only == 5
+        # ``_seed_full_org`` contributes three human-only decisions (two
+        # approved, one rejected) plus one machine-decidable approval.
+        seeded_human_only, seeded_approvals = 3, 2
+        assert entry.detail["human_only_gate_decisions"] == seeded_human_only + expected_human_only
+        # All six new decisions are approvals, so each human-only one counts.
+        assert entry.detail["human_only_gate_approvals"] == seeded_approvals + expected_human_only
+        assert entry.record_count == 4 + len(self.CONFIGS)
+
+    async def test_deliver_manual_counts_as_an_approval(self, session: AsyncSession) -> None:
+        seeded = await _seed_full_org(session, slug="deliver-manual")
+        await _make_hitl(
+            session,
+            org_id=seeded["org_id"],
+            run_id=seeded["run_id"],
+            pipeline_id=seeded["pipeline_id"],
+            account_id=seeded["account_id"],
+            review_id="review-deliver-manual",
+            decision="deliver_manual",
+            gate_config={"human_only": True},
+            decided_at=_BASE_TIME + timedelta(hours=11),
+        )
+        await session.commit()
+
+        index = await build_evidence_index(session, seeded["org_id"])
+        entry = _by_type(index)[ARTIFACT_HITL_DECISION]
+
+        assert entry.detail["human_only_gate_decisions"] == 4
+        # The seeded org has two ``approved`` human-only decisions; the
+        # deliver_manual one is the third approval, not a fourth non-approval.
+        assert entry.detail["human_only_gate_approvals"] == 3
+        assert entry.detail["human_only_approval_outcomes"] == ["approved", "deliver_manual"]
+
+
+class TestHitlScanCorrectness:
+    async def test_truncated_scan_reports_lower_bounds(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(evidence_index_module, "_HITL_SCAN_LIMIT", 2)
+        seeded = await _seed_full_org(session, slug="truncated")
+        await session.commit()
+
+        index = await build_evidence_index(session, seeded["org_id"])
+        entry = _by_type(index)[ARTIFACT_HITL_DECISION]
+
+        assert entry.detail["human_only_scan_truncated"] is True
+        # The counts are derived from the 2-row window, so they must not be
+        # presented as exact.
+        assert entry.detail["human_only_counts_are_lower_bounds"] is True
+        assert entry.detail["human_only_gate_decisions"] <= 2
+
+    async def test_hitl_scan_orders_null_decision_times_last(self, session: AsyncSession) -> None:
+        """Postgres sorts NULLs FIRST under DESC; the scan must pin them last.
+
+        A NULL-at-the-head scan reports ``latest_decision_at: None`` and fills a
+        truncated window with undated rows. SQLite already sorts NULLs last, so
+        the ordering is pinned by inspecting the emitted SQL rather than by a
+        result that would pass either way.
+        """
+        seeded = await _seed_full_org(session, slug="null-order")
+        await _make_hitl(
+            session,
+            org_id=seeded["org_id"],
+            run_id=seeded["run_id"],
+            pipeline_id=seeded["pipeline_id"],
+            account_id=seeded["account_id"],
+            review_id="review-undated",
+            decision="approved",
+            gate_config={"human_only": True},
+            decided_at=None,
+        )
+        await session.commit()
+
+        statements: list[str] = []
+
+        def _capture(conn: object, cursor: object, statement: str, *args: object) -> None:
+            statements.append(statement)
+
+        bind = session.get_bind()
+        sync_engine = getattr(bind, "sync_engine", bind)
+        event.listen(sync_engine, "before_cursor_execute", _capture)
+        try:
+            index = await build_evidence_index(session, seeded["org_id"])
+        finally:
+            event.remove(sync_engine, "before_cursor_execute", _capture)
+
+        hitl_scans = [sql for sql in statements if "hitl_claims" in sql and "ORDER BY" in sql]
+
+        assert hitl_scans, statements
+        assert any("NULLS LAST" in sql for sql in hitl_scans), hitl_scans
+        assert _by_type(index)[ARTIFACT_HITL_DECISION].detail["latest_decision_at"] is not None
+
+
+class TestCollectorQueryScoping:
+    async def test_run_snapshot_scan_filters_the_snapshot_organisation(self, session: AsyncSession) -> None:
+        """A run may reference a snapshot row; only OUR snapshots may be counted.
+
+        The join reaches the snapshot side independently of the run, so filtering
+        only ``Run.organisation_id`` would let another tenant's snapshot into the
+        count if a run ever pointed at one.
+        """
+        mine = await _seed_full_org(session, slug="snapshot-mine")
+        other = await _seed_full_org(session, slug="snapshot-other")
+        await _make_run(
+            session,
+            mine["org_id"],
+            mine["pipeline_id"],
+            other["snapshot_id"],
+            run_number=2,
+        )
+        await session.commit()
+
+        index = await build_evidence_index(session, mine["org_id"])
+        entry = _by_type(index)[ARTIFACT_RUN_SNAPSHOT]
+
+        assert entry.record_count == 1
+        assert entry.identifiers == (f"pipeline-snapshot:{mine['snapshot_id']}@v1",)
+
+    async def test_audit_events_without_a_chain_head_are_not_reported_as_no_events(self, session: AsyncSession) -> None:
+        """A false absence reason is worse than no reason.
+
+        Reporting "holds no audit events yet" next to ``event_count: 3`` is
+        provably false and hides the real finding: the trail exists but its
+        integrity cannot be evidenced.
+        """
+        org_id = await _make_org(session, "events-no-head")
+        await _make_audit_event(session, org_id, event_type="pipeline_created", created_at=_BASE_TIME)
+        await session.commit()
+
+        index = await build_evidence_index(session, org_id)
+        entry = _by_type(index)[ARTIFACT_AUDIT_CHAIN]
+
+        assert entry.status == STATUS_ABSENT
+        assert entry.detail["event_count"] == 1
+        assert entry.detail["chain_head_present"] is False
+        assert "no audit events" not in (entry.absence_reason or "")
+        assert "chain head" in (entry.absence_reason or "")
 
 
 class TestArtefactVocabulary:
