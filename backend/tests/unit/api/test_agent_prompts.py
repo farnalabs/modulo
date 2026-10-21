@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -189,6 +190,43 @@ class TestOptimizePrompt:
         assert data["rationale"] == "More detail needed"
         assert data["analysis"] == "Brevity failures"
         assert data["version"] == "v2"
+
+    def test_optimize_propagates_http_exception_from_optimizer(self, client: TestClient) -> None:
+        agent = _make_agent()
+        agent.prompt_version_history = [{"version": "v1", "template": "Hello", "created_at": _NOW.isoformat()}]
+        mock_optimizer = MagicMock()
+        mock_optimizer.optimize = AsyncMock(side_effect=HTTPException(status_code=409, detail="teapot"))
+        eval_results = [
+            {
+                "id": str(uuid.uuid4()),
+                "eval_id": str(_EVAL_ID),
+                "run_id": str(uuid.uuid4()),
+                "passed": False,
+                "score": 0.0,
+                "detail": "Too brief",
+            }
+        ]
+
+        with (
+            patch("modulo.api.routes.agents.get_agent", return_value=agent),
+            patch(
+                "modulo.api.routes.agents.get_eval_results_with_defs",
+                return_value=(eval_results, {}),
+            ),
+            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("modulo.api.routes.agents.set_rls_user_context"),
+            patch("modulo.api.routes.agents.create_secrets_backend") as mock_sb_factory,
+            patch("modulo.core.model_backend_hub._build_backend"),
+            patch("modulo.api.routes.agents.PromptOptimizer", return_value=mock_optimizer),
+        ):
+            mock_sb = AsyncMock()
+            mock_sb.get_secret = AsyncMock(return_value=json.dumps({"api_key": "sk-test"}))
+            mock_sb_factory.return_value = mock_sb
+
+            resp = client.post(_OPTIMIZE_URL, json={"eval_result_ids": [str(uuid.uuid4())]})
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "teapot"
 
     def test_optimize_returns_404_when_agent_not_found(self, client: TestClient) -> None:
         with (

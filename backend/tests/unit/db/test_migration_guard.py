@@ -56,6 +56,17 @@ class TestLoadRepoRevisionsEdgeCases:
             revisions = _load_repo_revisions()
         assert revisions == {"0001", "0002", "0003"}
 
+    def test_merge_tuple_with_empty_entry_skips_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import modulo.db.migration_guard as mg
+
+        monkeypatch.setattr(mg, "_REPO_REVISIONS", None)
+        walks = [_FakeWalk("0003", ("0001", ""))]
+        fake_script = MagicMock()
+        fake_script.walk_revisions.return_value = walks
+        with patch("alembic.script.ScriptDirectory.from_config", return_value=fake_script):
+            revisions = _load_repo_revisions()
+        assert revisions == {"0001", "0003"}
+
     def test_tree_load_failure_returns_empty_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import modulo.db.migration_guard as mg
 
