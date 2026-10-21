@@ -916,3 +916,27 @@ class TestBytesAccounting:
     async def test_empty_ids_request_is_cheap(self, session: AsyncSession) -> None:
         totals = await read_node_output_blob_bytes(session, [])
         assert not totals
+
+
+def test_assemble_skips_non_final_rows_with_absent_markers() -> None:
+    """A non-final row whose marker side is NULL contributes no marker entry."""
+    from types import SimpleNamespace
+
+    from modulo.db.crud.run_node_outputs import _assemble
+
+    row = SimpleNamespace(
+        attempt_key="attempt-1",
+        node_id="node-1",
+        outputs_json=None,
+        node_telemetry_json=None,
+        raw_output_markers=None,
+        outputs_absent=False,
+        telemetry_absent=False,
+        markers_absent=True,
+    )
+
+    blobs = _assemble([row])
+
+    assert blobs.outputs is None
+    assert blobs.telemetry is None
+    assert blobs.markers is None
