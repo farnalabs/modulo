@@ -1027,6 +1027,35 @@ async def test_bounded_final_drain_logs_an_awaited_failure() -> None:
     mock_log.warning.assert_not_called()
 
 
+async def test_bounded_final_drain_logs_a_failure_on_the_timeout_boundary() -> None:
+    """A drain that fails ON the timeout boundary is logged as a FAILURE.
+
+    ``asyncio.wait_for(asyncio.shield(task), timeout=...)`` raises
+    ``TimeoutError`` even when the shielded task has already settled with an
+    exception: the timer cancels the shield's OUTER future while the INNER task
+    completed with the error in the same loop iteration. ``timeout=0.0`` forces
+    that boundary deterministically (the drain task's first step is already
+    scheduled, so it raises before the cancellation of the inner task is
+    processed). The timeout arm must then surface the real exception — with its
+    traceback — instead of logging only a timeout, which would lose it.
+    """
+
+    async def _drain() -> None:
+        raise RuntimeError("boundary drain failure")
+
+    sequencer = _BoundedFinalDrain(_drain, timeout=0.0)
+    with patch("modulo.core.pipeline_engine.node_runner._log") as mock_log:
+        await sequencer.run_once()
+
+    mock_log.error.assert_called_once()
+    assert mock_log.error.call_args.args[0] == "sandbox_agent.cancel_retention_drain_failed"
+    boundary_exc = mock_log.error.call_args.kwargs["exc_info"]
+    assert isinstance(boundary_exc, RuntimeError)
+    # The failure is reported INSTEAD of the bare timeout warning, so a lost
+    # traceback can never hide behind a timeout classification.
+    mock_log.warning.assert_not_called()
+
+
 async def test_bounded_final_drain_logs_a_late_failure() -> None:
     """A drain that fails AFTER a timed-out wait is logged by the callback.
 

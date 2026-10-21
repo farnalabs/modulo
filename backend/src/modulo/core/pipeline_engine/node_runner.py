@@ -2331,21 +2331,43 @@ class _BoundedFinalDrain:
         except asyncio.CancelledError:  # NOSONAR
             _uncancel_current_task()
         except TimeoutError:
-            # The drain is still alive (shielded); it will run to completion in
-            # the background and the next look joins it instead of duplicating
-            # the read. Loud, so a persistently slow drain is visible. A drain
-            # that fails AFTER this point is logged by ``_log_late_failure``
-            # (``_awaiting`` is cleared in ``finally``), and one that failed
-            # before the timeout propagates through the ``except Exception``
-            # arm above — ``wait_for`` never reports a timeout for a settled
-            # task.
-            _log.warning("sandbox_agent.cancel_retention_drain_timed_out", extra=self._log_context)
+            # Either the drain is still alive (shielded) — it will run to
+            # completion in the background and the next look joins it instead
+            # of duplicating the read — or it settled with an exception in the
+            # same loop iteration the timer fired. ``wait_for`` reports a
+            # timeout in BOTH cases (the timer cancels the shield's OUTER
+            # future; an INNER task that already completed keeps its
+            # exception), so the boundary failure must be surfaced here: the
+            # done callback stays silent (``_awaiting`` is still True) and
+            # nothing else observes it. A drain that fails AFTER this point is
+            # logged by ``_log_late_failure``; one that failed before the
+            # timeout propagates through the ``except Exception`` arm above.
+            if not self._log_boundary_failure(task):
+                _log.warning("sandbox_agent.cancel_retention_drain_timed_out", extra=self._log_context)
         except Exception:
             # The drain itself failed. Logged HERE (the callback stays silent
             # while awaited) so the failure is never swallowed.
             _log.error(_CANCEL_DRAIN_FAILED_EVENT, extra=self._log_context, exc_info=True)
         finally:
             self._awaiting = False
+
+    def _log_boundary_failure(self, task: asyncio.Future[None]) -> bool:
+        """Log a drain that failed on the timeout boundary; return whether it did.
+
+        ``wait_for(asyncio.shield(task), ...)`` raises ``TimeoutError`` even
+        when the shielded task has ALREADY settled with an exception: the timer
+        cancels the shield's outer future, while the inner task completed with
+        the error in the same loop iteration. Without this arm the exception and
+        its traceback would be reported only as a timeout (the done callback
+        stays silent while ``_awaiting`` is True), losing the real failure.
+        """
+        if not task.done() or task.cancelled():
+            return False
+        exc = task.exception()
+        if exc is None:
+            return False
+        _log.error(_CANCEL_DRAIN_FAILED_EVENT, extra=self._log_context, exc_info=exc)
+        return True
 
     def _log_late_failure(self, task: asyncio.Future[None]) -> None:
         """Retrieve (and log) an in-flight drain's failure, never silently."""
