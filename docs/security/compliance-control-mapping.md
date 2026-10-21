@@ -164,9 +164,13 @@ Each entry carries:
 two approval outcomes, `approved` **and** `deliver_manual` (a reviewer who
 supplies the output directly has approved the gate). `rejected` is not an
 approval. Whether a gate counts as human-only is resolved through the product's
-single rule (`human_only_effective`): an omitted, `null` or non-dict
-`human_only` key means **true**, so legacy and raw-JSON gates are counted as
-human oversight rather than skipped.
+full precedence chain (`resolve_review_human_only_map`): the claim's fire-time
+`gate_config_json` stamp, then the run's frozen snapshot config, then the
+fail-safe default. An omitted, `null` or non-dict `human_only` key in the config
+that applies means **true**; a claim whose stamp is `null` (a gate that fired
+before the stamp column existed, or whose fire-time stamp failed) is classified
+from its run's snapshot, so a gate whose snapshot opted out of human-only is not
+counted as human oversight.
 
 A `present` `audit_chain` entry means the trail exists **in this instance**. It
 does not assert that the offline-verifiable evidence-pack export is available

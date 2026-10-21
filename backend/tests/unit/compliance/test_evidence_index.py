@@ -49,7 +49,7 @@ from modulo.compliance.evidence_index import (
     build_evidence_index,
 )
 from modulo.compliance.pack import load_mapping_pack
-from modulo.db.crud.hitl_review_config import human_only_effective
+from modulo.db.crud.hitl_review_config import human_only_effective, make_review_id
 from modulo.db.models.account import Account
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.base import Base
@@ -124,16 +124,23 @@ async def _make_pipeline(session: AsyncSession, org_id: uuid.UUID, name: str, ac
     return pipeline_id
 
 
-async def _make_snapshot(session: AsyncSession, org_id: uuid.UUID, pipeline_id: uuid.UUID) -> uuid.UUID:
+async def _make_snapshot(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    *,
+    graph_json: dict | None = None,
+    snapshot_version: int = 1,
+) -> uuid.UUID:
     snapshot_id = uuid.uuid4()
     session.add(
         PipelineSnapshot(
             id=snapshot_id,
             organisation_id=org_id,
             pipeline_id=pipeline_id,
-            snapshot_version=1,
+            snapshot_version=snapshot_version,
             created_at=_BASE_TIME,
-            graph_json={"nodes": []},
+            graph_json={"nodes": []} if graph_json is None else graph_json,
             connector_bindings_json=[],
             schema_pins_json=[],
             prompt_pins_json=[],
@@ -674,6 +681,110 @@ class TestHumanOnlyCountingMatchesTheProductRule:
         # deliver_manual one is the third approval, not a fourth non-approval.
         assert entry.detail["human_only_gate_approvals"] == 3
         assert entry.detail["human_only_approval_outcomes"] == ["approved", "deliver_manual"]
+
+
+class TestHumanOnlyResolutionUsesTheFullPrecedenceChain:
+    """The index must resolve ``human_only`` the way the pending surfaces do.
+
+    ``hitl_claims.gate_config_json`` is nullable (migration 0195): a gate that
+    fired before the column existed, or one whose fire-time stamp failed,
+    carries NULL while its frozen run snapshot still names the gate's config.
+    The pending surfaces resolve through the shared
+    ``resolve_review_human_only_map`` chain (claim stamp -> run snapshot ->
+    fail-safe default). Reading only the stamp makes the fail-safe
+    ``human_only_effective(None)`` answer for a gate whose snapshot says
+    ``human_only: false``, which over-reports human oversight in an audit
+    artefact - the one direction the pack must never be wrong in.
+    """
+
+    async def _seed_snapshot_gate(
+        self,
+        session: AsyncSession,
+        *,
+        snapshot_config: dict,
+        claim_config: dict | None,
+        slug: str,
+    ) -> dict[str, uuid.UUID]:
+        seeded = await _seed_full_org(session, slug=slug)
+        source, target = "node-gate-source", "node-gate-target"
+        snapshot_id = await _make_snapshot(
+            session,
+            seeded["org_id"],
+            seeded["pipeline_id"],
+            snapshot_version=2,
+            graph_json={
+                "nodes": [{"id": source}, {"id": target}],
+                "edges": [
+                    {
+                        "source": source,
+                        "target": target,
+                        "hitl_review_config": snapshot_config,
+                    }
+                ],
+            },
+        )
+        run_id = await _make_run(session, seeded["org_id"], seeded["pipeline_id"], snapshot_id, run_number=2)
+        await _make_hitl(
+            session,
+            org_id=seeded["org_id"],
+            run_id=run_id,
+            pipeline_id=seeded["pipeline_id"],
+            account_id=seeded["account_id"],
+            review_id=make_review_id(source, target),
+            decision="approved",
+            gate_config=claim_config,
+            decided_at=_BASE_TIME + timedelta(hours=12),
+        )
+        await session.commit()
+        return seeded
+
+    async def test_unstamped_claim_uses_the_snapshot_config(self, session: AsyncSession) -> None:
+        """A NULL stamp on a gate whose snapshot opted out is NOT human oversight."""
+        seeded = await self._seed_snapshot_gate(
+            session,
+            snapshot_config={"human_only": False},
+            claim_config=None,
+            slug="precedence-optout",
+        )
+
+        index = await build_evidence_index(session, seeded["org_id"])
+        entry = _by_type(index)[ARTIFACT_HITL_DECISION]
+
+        # The seeded org contributes 3 human-only decisions (2 approvals); the
+        # unstamped snapshot-opted-out approval must not be added to either.
+        assert entry.record_count == 5
+        assert entry.detail["human_only_gate_decisions"] == 3
+        assert entry.detail["human_only_gate_approvals"] == 2
+
+    async def test_unstamped_claim_uses_a_human_only_snapshot_config(self, session: AsyncSession) -> None:
+        """The snapshot fallback must count a gate the snapshot marks human-only."""
+        seeded = await self._seed_snapshot_gate(
+            session,
+            snapshot_config={"human_only": True},
+            claim_config=None,
+            slug="precedence-optin",
+        )
+
+        index = await build_evidence_index(session, seeded["org_id"])
+        entry = _by_type(index)[ARTIFACT_HITL_DECISION]
+
+        assert entry.detail["human_only_gate_decisions"] == 4
+        assert entry.detail["human_only_gate_approvals"] == 3
+
+    async def test_claim_stamp_still_wins_over_the_snapshot(self, session: AsyncSession) -> None:
+        """The fire-time stamp is authoritative; the snapshot is only a fallback."""
+        seeded = await self._seed_snapshot_gate(
+            session,
+            snapshot_config={"human_only": True},
+            claim_config={"human_only": False},
+            slug="precedence-stamp-wins",
+        )
+
+        index = await build_evidence_index(session, seeded["org_id"])
+        entry = _by_type(index)[ARTIFACT_HITL_DECISION]
+
+        assert entry.detail["human_only_gate_decisions"] == 3
+        assert entry.detail["human_only_gate_approvals"] == 2
 
 
 class TestHitlScanCorrectness:

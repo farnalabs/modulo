@@ -23,10 +23,12 @@ Design rules (each is a requirement, not a preference):
   organisation is always the caller's principal's organisation.
 * **The human-oversight count uses the product's own rule.** Whether a gate is
   ``human_only`` is resolved through
-  :func:`modulo.db.crud.hitl_review_config.human_only_effective` - the single
-  source of truth for the fail-safe default (FAR-609). Re-implementing the rule
-  here would under-report human oversight, because an omitted ``human_only``
-  key means TRUE, not FALSE.
+  :func:`modulo.db.crud.hitl_review_config.resolve_review_human_only_map` - the
+  same precedence chain every pending surface reads (claim stamp, then the
+  run's frozen snapshot, then the fail-safe default). Re-implementing the rule
+  here would misreport human oversight in both directions: an omitted
+  ``human_only`` key means TRUE, not FALSE, and a NULL claim stamp falls back
+  to the snapshot config rather than straight to the default.
 """
 
 from __future__ import annotations
@@ -56,7 +58,7 @@ from modulo.compliance.artifacts import (
 )
 from modulo.compliance.pack import MappingPack, load_mapping_pack
 from modulo.core.audit_logger import get_chain_head
-from modulo.db.crud.hitl_review_config import human_only_effective
+from modulo.db.crud.hitl_review_config import resolve_review_human_only_map
 from modulo.db.models.audit_event import AuditEvent
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.hitl_claim import HitlClaim
@@ -396,42 +398,51 @@ async def _collect_hitl_decisions(
             reason="no human-in-the-loop gate has been decided in this instance",
         )
 
-    decided_rows = (
-        await session.execute(
-            select(
-                HitlClaim.id,
-                HitlClaim.decision,
-                HitlClaim.decision_at,
-                HitlClaim.decided_by,
-                HitlClaim.gate_config_json,
+    decided_claims = (
+        (
+            await session.execute(
+                select(HitlClaim)
+                .where(
+                    HitlClaim.organisation_id == organisation_id,
+                    HitlClaim.decision.is_not(None),
+                )
+                # ``nulls_last`` is explicit: Postgres sorts NULLs FIRST under
+                # ``DESC``, which would put undated rows at the head of the scan,
+                # report ``latest_decision_at`` as None and fill the truncated
+                # window with rows that carry no decision time at all.
+                .order_by(HitlClaim.decision_at.desc().nulls_last())
+                .limit(_HITL_SCAN_LIMIT)
             )
-            .where(
-                HitlClaim.organisation_id == organisation_id,
-                HitlClaim.decision.is_not(None),
-            )
-            # ``nulls_last`` is explicit: Postgres sorts NULLs FIRST under
-            # ``DESC``, which would put undated rows at the head of the scan,
-            # report ``latest_decision_at`` as None and fill the truncated
-            # window with rows that carry no decision time at all.
-            .order_by(HitlClaim.decision_at.desc().nulls_last())
-            .limit(_HITL_SCAN_LIMIT)
         )
-    ).all()
+        .scalars()
+        .all()
+    )
+    # Resolve through the SAME precedence chain the pending surfaces use -
+    # claim stamp, then the run's frozen snapshot, then the fail-safe default
+    # (``resolve_review_human_only_map``). Reading only the stamp would make a
+    # NULL stamp (a gate fired before migration 0195, or one whose fire-time
+    # stamp failed) answer through ``human_only_effective(None)`` -> TRUE even
+    # though its snapshot opted out, over-reporting human oversight in an
+    # audit artefact.
+    human_only_by_review = await resolve_review_human_only_map(
+        session,
+        gates=list(decided_claims),
+        org_id=organisation_id,
+    )
     human_only_approved = 0
     human_only_total = 0
-    for row in decided_rows:
-        # Single-source the fail-safe default (FAR-609): an omitted, null or
-        # non-dict ``human_only`` means TRUE, so a legacy/raw-JSON gate is
-        # counted as human oversight, never skipped.
-        if not human_only_effective(row[4]):
+    for claim in decided_claims:
+        # Direct indexing: the resolver returns an entry for every gate passed
+        # in, so a missing key is a contract breach, not "machine-decidable".
+        if not human_only_by_review[(claim.run_id, claim.review_id)]:
             continue
         human_only_total += 1
-        if row[1] in APPROVAL_DECISIONS:
+        if claim.decision in APPROVAL_DECISIONS:
             human_only_approved += 1
 
     truncated = total > _HITL_SCAN_LIMIT
-    latest = decided_rows[0][2] if decided_rows else None
-    identifiers = [f"hitl-decision:{row[0]}" for row in decided_rows[:_SAMPLE_LIMIT]]
+    latest = decided_claims[0].decision_at if decided_claims else None
+    identifiers = [f"hitl-decision:{claim.id}" for claim in decided_claims[:_SAMPLE_LIMIT]]
     return _present(
         pack=pack,
         artifact_type=ARTIFACT_HITL_DECISION,

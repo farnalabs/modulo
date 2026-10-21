@@ -1212,6 +1212,23 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `modulo evidence verify` CLI and the `hashing.py` extraction now have one.
 > `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-10-21):** tracked the untracked FAR-2036
+> **compliance control-mapping pack and per-instance evidence index** as a new
+> `feat-compliance` behaviour tracker
+> (`compliance/control-mapping.md`). The API-only
+> `GET /api/v1/compliance/evidence-index` surface, the versioned in-product
+> mapping pack (SOC 2 / ISO 42001 / EU AI Act, fail-closed honesty validation
+> and a content hash) and the index that reports every mapped artefact type -
+> absent ones included - shipped with three unit suites and an integration
+> suite but were described by neither product-map layer, so they were invisible
+> to the feature graph and to Assistant's `search_documentation` indexer. The
+> walk also fixed a MAJOR Lens-9 List C finding on the way: the HITL human-only
+> count read only the claim's nullable fire-time stamp, so an unstamped legacy
+> gate whose frozen snapshot opted out of `human_only` was counted as human
+> oversight; the collector now resolves through the product's full precedence
+> chain (`resolve_review_human_only_map`: stamp -> snapshot -> fail-safe) with
+> three regression tests. `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A
@@ -1221,6 +1238,9 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 
 ### Audit
 - [feat-audit](audit/audit-trail.md) => PRD N/A
+
+### Compliance
+- [feat-compliance](compliance/control-mapping.md) => PRD N/A
 
 ### Auth and Security
 - [feat-auth](auth/auth.md) => PRD N/A
