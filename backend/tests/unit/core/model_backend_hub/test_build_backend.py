@@ -325,3 +325,71 @@ def test_backend_class_imports_provider_module() -> None:
     # proves it imports lazily by name and fails for non-existent adapters.
     with pytest.raises(ModuleNotFoundError):
         _backend_class("custom", "NopeBackend")
+
+
+# ---------------------------------------------------------------------------
+# FAR-2046: operator-supplied custom endpoint overrides the provider default
+# ---------------------------------------------------------------------------
+
+
+def test_build_backend_openai_honours_custom_base_url() -> None:
+    """``openai`` has no default URL — a credential base_url must be used."""
+    with patch("modulo.model_backends.module.OpenAICompatibleBackend") as klass:
+        klass.side_effect = _DummyBackend
+        result = _build_backend(
+            "openai",
+            "gpt-4o",
+            {"api_key": "k", "base_url": "https://gateway.internal.example/v1"},
+            {},
+        )
+    assert result.kwargs["base_url"] == "https://gateway.internal.example/v1"
+
+
+def test_build_backend_named_local_provider_custom_base_url_overrides_default() -> None:
+    with patch("modulo.model_backends.module.OpenAICompatibleBackend") as klass:
+        klass.side_effect = _DummyBackend
+        result = _build_backend(
+            "ollama",
+            "llama3",
+            {"api_key": "k", "base_url": "http://gpu-node-7:11434/v1"},
+            {},
+        )
+    assert result.kwargs["base_url"] == "http://gpu-node-7:11434/v1"
+
+
+def test_build_backend_legacy_default_params_base_url_is_honoured_without_duplicate_kwarg() -> None:
+    """A base_url left in default_params (pre-FAR-2046 UI) must not raise TypeError."""
+    with patch("modulo.model_backends.module.OpenAICompatibleBackend") as klass:
+        klass.side_effect = _DummyBackend
+        result = _build_backend(
+            "openai",
+            "gpt-4o",
+            {"api_key": "k"},
+            {"base_url": "https://legacy.internal.example/v1", "temperature": 0.2},
+        )
+    assert result.kwargs["base_url"] == "https://legacy.internal.example/v1"
+    assert result.kwargs["temperature"] == pytest.approx(0.2)
+
+
+def test_build_backend_credentials_base_url_wins_over_legacy_default_params() -> None:
+    with patch("modulo.model_backends.module.OpenAICompatibleBackend") as klass:
+        klass.side_effect = _DummyBackend
+        result = _build_backend(
+            "openai",
+            "gpt-4o",
+            {"api_key": "k", "base_url": "https://new.internal.example/v1"},
+            {"base_url": "https://legacy.internal.example/v1"},
+        )
+    assert result.kwargs["base_url"] == "https://new.internal.example/v1"
+
+
+def test_build_backend_opencode_honours_custom_base_url() -> None:
+    with patch("modulo.model_backends.opencode.OpenCodeBackend") as klass:
+        klass.side_effect = _DummyBackend
+        result = _build_backend(
+            "opencode",
+            "glm-5.3-flash",
+            {"api_key": "k", "base_url": "https://zen.internal.example/v1"},
+            {},
+        )
+    assert result.kwargs["base_url"] == "https://zen.internal.example/v1"

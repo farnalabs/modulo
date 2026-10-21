@@ -1456,3 +1456,171 @@ def test_update_model_backend_resolves_secretref_api_key(client: TestClient) -> 
     assert isinstance(ciphertext, bytes)
     assert _decrypt(ciphertext) == "sk-rotated"
     assert stub.set_calls == [(str(_BACKEND_ID), json.dumps({"api_key": "sk-rotated"}))]
+
+
+# ---------------------------------------------------------------------------
+# FAR-2046: custom endpoint (base_url)
+# ---------------------------------------------------------------------------
+
+_CUSTOM_BASE_URL = "https://gateway.internal.example/v1"
+
+
+def test_create_persists_base_url_beside_api_key_and_returns_it(client: TestClient) -> None:
+    """base_url is endpoint configuration stored in the credential JSON, not default_params."""
+    backend = _make_backend()
+    stub = _StubSecretsBackend({})
+
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.post(
+            "/api/v1/model-backends",
+            json={**_CREATE_BODY, "base_url": _CUSTOM_BASE_URL},
+        )
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["base_url"] == _CUSTOM_BASE_URL
+    assert not body["default_params"]
+    assert stub.set_calls == [(str(_BACKEND_ID), json.dumps({"api_key": "sk-test", "base_url": _CUSTOM_BASE_URL}))]
+
+
+@pytest.mark.parametrize(
+    "blocked",
+    [
+        "http://169.254.169.254/latest/meta-data",
+        "http://[fe80::1]/v1",
+        "http://[fd00:ec2::254]/v1",
+        "http://100.100.100.200/v1",
+        "https://metadata.google.internal/v1",
+    ],
+)
+def test_create_rejects_cloud_metadata_base_url(client: TestClient, blocked: str) -> None:
+    """Cloud metadata endpoints are a hard deny, on every scheme."""
+    with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
+        resp = client.post("/api/v1/model-backends", json={**_CREATE_BODY, "base_url": blocked})
+    assert resp.status_code == 422
+    assert "cloud metadata" in str(resp.json()["detail"])
+    create_mock.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "ftp://example.com/v1",
+        "https://user:pass@example.com/v1",
+        "https://example.com/v1?token=leak",
+        "https://example.com/v1#fragment",
+        "not-a-url",
+        "http://example.com/v1",
+    ],
+)
+def test_create_rejects_invalid_base_url(client: TestClient, invalid: str) -> None:
+    """Scheme/userinfo/query/fragment and non-private http URLs are rejected."""
+    with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
+        resp = client.post("/api/v1/model-backends", json={**_CREATE_BODY, "base_url": invalid})
+    assert resp.status_code == 422
+    create_mock.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "allowed",
+    [
+        "http://10.0.0.5:8000/v1",
+        "http://llm-gateway:8080/v1",
+        "http://localhost:11434/v1",
+        "https://models.example.com/v1",
+    ],
+)
+def test_create_allows_private_http_and_public_https_base_url(client: TestClient, allowed: str) -> None:
+    """Plain http is allowed only for loopback/private/internal hosts."""
+    backend = _make_backend()
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/model-backends", json={**_CREATE_BODY, "base_url": allowed})
+    assert resp.status_code == 201
+    assert resp.json()["base_url"] == allowed
+
+
+def _secrets_stub_with_url(url: str) -> _StubSecretsBackend:
+    return _StubSecretsBackend({str(_BACKEND_ID): json.dumps({"api_key": "sk-test", "base_url": url})})
+
+
+def test_list_returns_full_base_url_to_operator_and_host_only_to_viewer(viewer_client: TestClient) -> None:
+    """Full endpoint for a manager; redacted to the host for a read-only caller."""
+    page_result = MagicMock(items=[_make_backend()], total=1, page=1, page_size=20)
+    stub = _secrets_stub_with_url(_CUSTOM_BASE_URL)
+    with (
+        patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = viewer_client.get("/api/v1/model-backends")
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["base_url"] == "gateway.internal.example"
+
+
+def test_get_returns_full_base_url_to_operator(client: TestClient) -> None:
+    stub = _secrets_stub_with_url(_CUSTOM_BASE_URL)
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
+    assert resp.status_code == 200
+    assert resp.json()["base_url"] == _CUSTOM_BASE_URL
+
+
+def test_update_base_url_only_merges_beside_the_existing_api_key(client: TestClient) -> None:
+    """An endpoint-only PATCH never drops the stored api_key, and stores no column."""
+    backend = _make_backend()
+    captured: dict[str, object] = {}
+    stub = _StubSecretsBackend({str(_BACKEND_ID): json.dumps({"api_key": "sk-existing"})})
+
+    async def fake_update(session: object, backend_id: object, updates: dict[str, object]) -> MagicMock:
+        captured["updates"] = updates
+        return backend
+
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", new=fake_update),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"base_url": _CUSTOM_BASE_URL},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["base_url"] == _CUSTOM_BASE_URL
+    updates = captured["updates"]
+    assert isinstance(updates, dict)
+    assert "base_url" not in updates
+    assert "credentials_ciphertext" not in updates
+    assert stub.set_calls == [(str(_BACKEND_ID), json.dumps({"api_key": "sk-existing", "base_url": _CUSTOM_BASE_URL}))]
+
+
+def test_update_null_base_url_clears_it(client: TestClient) -> None:
+    backend = _make_backend()
+    stub = _StubSecretsBackend({str(_BACKEND_ID): json.dumps({"api_key": "sk-existing", "base_url": _CUSTOM_BASE_URL})})
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"base_url": None})
+
+    assert resp.status_code == 200
+    assert resp.json()["base_url"] is None
+    assert stub.set_calls == [(str(_BACKEND_ID), json.dumps({"api_key": "sk-existing"}))]

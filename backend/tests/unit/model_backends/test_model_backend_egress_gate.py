@@ -113,3 +113,16 @@ def test_public_base_url_still_constructs(monkeypatch) -> None:
         provider="custom",
     )
     assert backend.base_url == "https://models.example.com/v1"
+
+
+def test_hub_custom_base_url_still_goes_through_the_ssrf_gate() -> None:
+    """FAR-2046: honouring a custom endpoint does not bypass the pinned SSRF gate."""
+    from modulo.core.model_backend_hub import _build_backend
+
+    with pytest.raises(ValueError, match="private/internal"):
+        _build_backend(
+            "openai",
+            "m",
+            {"api_key": API_KEY, "base_url": "http://10.1.2.3:8000/v1"},
+            {},
+        )

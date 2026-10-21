@@ -585,6 +585,23 @@ def _build_custom_stub_backend(fixture_map: dict[str, str]) -> ModelBackendBase:
     return _CustomStubBackend(fixture_map)
 
 
+def _credential_base_url(
+    creds: Mapping[str, Any],
+    default_params: Mapping[str, Any],
+) -> str | None:
+    """Return an operator-supplied custom endpoint, or ``None`` (FAR-2046).
+
+    Canonical location is the credential JSON (endpoint configuration belongs
+    beside ``api_key``, never in a model parameter). ``default_params`` is the
+    legacy pre-FAR-2046 UI location and is still honoured for existing rows.
+    """
+    for source in (creds, default_params):
+        raw = source.get("base_url")
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return None
+
+
 def _build_backend(
     provider: str,
     model_id: str,
@@ -623,7 +640,17 @@ def _build_backend(
 
     default_base_url = _OPENAI_COMPATIBLE_BACKENDS.get(provider)
     if default_base_url is not None or provider == "openai":
-        base_url = creds.get("base_url", default_base_url) if default_base_url is not None else None
+        # FAR-2046: a custom endpoint supplied by the operator (credentials
+        # ``base_url``) overrides the provider's built-in default — including
+        # ``openai``, which has no default of its own. This is what makes a
+        # self-hosted OpenAI-compatible gateway on a custom host/port usable.
+        # A ``base_url`` left in ``default_params`` by the pre-FAR-2046 UI is
+        # honoured too, but must be popped: splatting it as a kwarg alongside
+        # the explicit ``base_url`` argument would raise TypeError.
+        params = dict(default_params)
+        params.pop("base_url", None)
+        custom_base_url = _credential_base_url(creds, default_params)
+        base_url = custom_base_url if custom_base_url is not None else default_base_url
 
         # FAR-1139: the opencode provider needs custom headers (session ID +
         # User-Agent) that only OpenCodeBackend sends. All other OpenAI-
@@ -631,10 +658,12 @@ def _build_backend(
         if provider == "opencode":
             from modulo.model_backends.opencode import OpenCodeBackend
 
+            if custom_base_url is not None:
+                params["base_url"] = custom_base_url
             backend: ModelBackendBase = OpenCodeBackend(
                 api_key=creds.get("api_key") or "",
                 model_id=model_id,
-                **default_params,
+                **params,
             )
         else:
             from modulo.model_backends.module import OpenAICompatibleBackend
@@ -644,7 +673,7 @@ def _build_backend(
                 model_id=model_id,
                 base_url=base_url,
                 provider=provider,
-                **default_params,
+                **params,
             )
         # FIX 3 (FAR-898): disable native structured output for providers
         # that do not support OpenAI-style response_format json_schema.

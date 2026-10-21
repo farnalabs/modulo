@@ -16637,6 +16637,8 @@ export interface components {
             model_id: string;
             /** Api Key */
             api_key: string;
+            /** Base Url */
+            base_url?: string | null;
             /** Default Params */
             default_params?: {
                 [key: string]: unknown;
@@ -16719,6 +16721,8 @@ export interface components {
             model_id: string;
             /** Has Credentials */
             has_credentials: boolean;
+            /** Base Url */
+            base_url?: string | null;
             /** Default Params */
             default_params: {
                 [key: string]: unknown;
@@ -16763,6 +16767,8 @@ export interface components {
             model_id?: string | null;
             /** Api Key */
             api_key?: string | null;
+            /** Base Url */
+            base_url?: string | null;
             /** Default Params */
             default_params?: {
                 [key: string]: unknown;

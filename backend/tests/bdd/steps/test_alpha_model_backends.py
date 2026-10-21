@@ -139,6 +139,10 @@ def get_model_backends(client, request):
         ),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        # FAR-2046: a read now resolves each backend's stored base_url from the
+        # credential JSON; stub the secrets backend (this suite's settings use a
+        # non-Fernet key and no credential read is under test here).
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
     ):
         resp = client.get("/api/v1/model-backends")
     request.node._resp = resp
@@ -186,6 +190,8 @@ def patch_model_backend(name: str, model: str, client, request):
         ),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        # FAR-2046: the update merges the stored base_url beside the API key.
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
     ):
         resp = client.patch(f"/api/v1/model-backends/{_backend_id_for(name)}", json={"model_id": model})
     request.node._resp = resp
@@ -293,6 +299,10 @@ def _post_health_check(request, mb, health_status, health_detail):
         ) as mock_health,
         patch("modulo.api.routes.model_backends.set_rls_org", new=AsyncMock()),
         patch("modulo.api.routes.model_backends.set_rls_user_context", new=AsyncMock()),
+        # FAR-2046: the re-check also reads the stored base_url from the
+        # credential JSON; stub the secrets backend (the test fernet key is not
+        # a real Fernet key and no credential read is under test here).
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
     ):
         resp = request.node._client.post(f"/api/v1/model-backends/{mb.id}/health-check")
     request.node._resp = resp

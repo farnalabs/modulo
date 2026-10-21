@@ -5,11 +5,13 @@ never exposed in any response — only a boolean `has_credentials` field.
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -36,6 +38,7 @@ from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import decode_stored_secret_scoped
+from modulo.auth.team_rbac import org_role_level
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.model_backend_hub import _build_backend
@@ -90,6 +93,202 @@ def _encrypt(api_key: str, fernet_key: str) -> bytes:
     return Fernet(fernet_key.encode()).encrypt(api_key.encode())
 
 
+# ---------------------------------------------------------------------------
+# Custom endpoint (base_url) validation — FAR-2046
+# ---------------------------------------------------------------------------
+#
+# A model backend may point at a self-hosted / OpenAI-compatible gateway on a
+# custom host. The endpoint is ENDPOINT CONFIGURATION (stored beside ``api_key``
+# in the encrypted credentials JSON), never a model parameter, so credentials
+# belong in ``api_key`` and the URL itself must never carry them.
+
+_BASE_URL_MAX_LENGTH = 2048
+
+# Cloud metadata endpoints are a HARD DENY — never reachable by the model
+# backend egress path regardless of scheme, hostname or allowlist. 169.254.0.0/16
+# is IPv4 link-local (AWS/GCP/Azure IMDS); fe80::/10 is the IPv6 equivalent.
+# fd00:ec2::254 is the AWS IMDS IPv6 address, 100.100.100.200 the Aliyun
+# endpoint, and ::ffff:169.254.169.254 is the IPv4 address in mapped form (the
+# IPv6 network below is checked via ``ipv4_mapped`` too).
+_METADATA_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("fd00:ec2::254/128"),
+    ipaddress.ip_network("100.100.100.200/32"),
+)
+_METADATA_HOSTNAMES = frozenset(
+    {
+        "metadata",
+        "metadata.google.internal",
+        "instance-data",
+        "instance-data.ec2.internal",
+    }
+)
+# Hostname shapes that are unambiguously local/internal. A single-label host
+# (no dot) is an internal DNS short name; ``.internal``/``.local``/
+# ``.home.arpa``/``.localhost`` are private-use names.
+_LOCAL_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".home.arpa")
+_LOCAL_HOSTNAMES = frozenset({"localhost", "host.docker.internal"})
+
+
+def _base_url_error(message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "type": "value_error",
+                "loc": ["body", "base_url"],
+                "msg": message,
+            }
+        ],
+    )
+
+
+def _reject_metadata_endpoint(host: str) -> None:
+    """Raise 422 for a cloud metadata host/literal; never allowlisted."""
+    normalized = host.strip("[]").rstrip(".").lower()
+    if normalized in _METADATA_HOSTNAMES:
+        raise _base_url_error("Base URL must not target a cloud metadata endpoint")
+    try:
+        address: ipaddress.IPv4Address | ipaddress.IPv6Address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    if any(address in network for network in _METADATA_NETWORKS if network.version == address.version):
+        raise _base_url_error("Base URL must not target a cloud metadata endpoint")
+
+
+def _is_local_or_private_host(host: str) -> bool:
+    """True when *host* is a loopback/private literal or a local/internal name."""
+    normalized = host.strip("[]").rstrip(".").lower()
+    if normalized in _LOCAL_HOSTNAMES:
+        return True
+    if normalized.endswith(_LOCAL_HOST_SUFFIXES):
+        return True
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        # A single-label hostname is an internal DNS short name (air-gapped
+        # customers commonly address an endpoint as ``llm-gateway``).
+        return "." not in normalized
+    return address.is_loopback or address.is_private
+
+
+def _validate_base_url(value: str) -> str:
+    """Validate and normalise an operator-supplied model-backend base URL.
+
+    Rules (FAR-2046):
+    * ``http``/``https`` only, no embedded userinfo (credentials belong in
+      ``api_key``), no query and no fragment;
+    * cloud metadata endpoints are refused outright;
+    * ``https`` is required by default; plain ``http`` is accepted only for a
+      loopback/private/internal host (an air-gapped customer's own endpoint),
+      and the downgrade is logged.
+
+    Returns the trimmed URL. Raises a typed 422 for any violation.
+    """
+    candidate = value.strip()
+    if not candidate:
+        raise _base_url_error("Base URL must not be empty")
+    if len(candidate) > _BASE_URL_MAX_LENGTH:
+        raise _base_url_error(f"Base URL must be at most {_BASE_URL_MAX_LENGTH} characters")
+    try:
+        parsed = urlparse(candidate)
+        _ = parsed.port  # validates the port, raising ValueError when out of range
+    except ValueError:
+        raise _base_url_error("Base URL must be a valid URL") from None
+    scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https"):
+        raise _base_url_error("Base URL must use http:// or https:// scheme")
+    if parsed.username is not None or parsed.password is not None:
+        raise _base_url_error("Base URL must not contain userinfo credentials; supply the API key separately")
+    if parsed.query or parsed.fragment:
+        raise _base_url_error("Base URL must not contain a query string or fragment")
+    host = parsed.hostname
+    if not host:
+        raise _base_url_error("Base URL must have a valid hostname")
+    _reject_metadata_endpoint(host)
+    if scheme == "http":
+        if not _is_local_or_private_host(host):
+            raise _base_url_error(
+                "Base URL must use https:// unless the host is loopback, private or an internal hostname"
+            )
+        logger.warning(
+            "model_backends.base_url_http_downgrade host=%s",
+            _sanitise_log_value(host),
+        )
+    return candidate
+
+
+def _redact_base_url(value: str | None) -> str | None:
+    """Reduce a base URL to its host only, for callers who may not manage backends."""
+    if not value:
+        return None
+    try:
+        host = urlparse(value).hostname
+    except ValueError:
+        return None
+    return host or None
+
+
+def _can_manage_model_backends(principal: TenantPrincipal) -> bool:
+    """Operator+ may see the full endpoint; viewers/runners only its host."""
+    return org_role_level(principal.org_role) >= org_role_level("operator")
+
+
+def _stored_secret_payload(raw: str | None) -> dict[str, Any]:
+    """Parse a stored credential JSON object; malformed/absent -> ``{}``."""
+    if not isinstance(raw, str) or not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("model_backends.malformed_credential_json")
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+async def _read_secret_payload(
+    secrets_backend: SecretsBackend,
+    backend_id: uuid.UUID,
+) -> dict[str, Any]:
+    """Read a backend's stored credential JSON, treating a missing row as empty.
+
+    Legacy rows written before FAR-2046 have a secrets row containing only
+    ``api_key``; a row with no secrets entry (the raw-ciphertext fallback) yields
+    ``{}`` here and the hub's own fallback still decrypts the API key.
+    """
+    try:
+        raw = await secrets_backend.get_secret(str(backend_id))
+    except (KeyError, ValueError):
+        return {}
+    return _stored_secret_payload(raw)
+
+
+def _stored_base_url(payload: dict[str, Any]) -> str | None:
+    value = payload.get("base_url")
+    return value if isinstance(value, str) and value.strip() else None
+
+
+async def _base_urls_for_backends(
+    session: AsyncSession,
+    settings: Settings,
+    backends: list[Any],
+) -> dict[uuid.UUID, str | None]:
+    """Resolve each row's stored custom endpoint for a read response.
+
+    ``base_url`` lives in the encrypted credential JSON (FAR-2046), so a read
+    route must decrypt it. A missing/malformed secret is treated as "no custom
+    endpoint" rather than failing the whole listing. Runs inside the caller's
+    already-open RLS transaction.
+    """
+    if not backends:
+        return {}
+    secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+    return {mb.id: _stored_base_url(await _read_secret_payload(secrets_backend, mb.id)) for mb in backends}
+
+
 async def _resolve_credential_or_422(
     session: AsyncSession,
     settings: Settings,
@@ -121,6 +320,7 @@ async def _run_health_check_on_save(
     model_id: str,
     api_key: str | None,
     default_params: dict[str, Any],
+    base_url: str | None = None,
 ) -> tuple[HealthCheckStatus, str | None]:
     """Best-effort test-inference health check run on save (PRD §8.1 ``health_check``).
 
@@ -147,6 +347,8 @@ async def _run_health_check_on_save(
     """
     try:
         creds: dict[str, Any] = {"api_key": api_key} if api_key else {}
+        if base_url:
+            creds["base_url"] = base_url
         backend = _build_backend(provider, model_id, creds, default_params)
     except HTTPException:
         raise
@@ -213,6 +415,7 @@ async def _run_health_check_on_save_and_persist(
     org_id: uuid.UUID,
     user_id: uuid.UUID,
     org_role: str,
+    base_url: str | None = None,
 ) -> tuple[HealthCheckStatus, str | None]:
     """Run the save-time health check outside the write transaction and persist it.
 
@@ -220,7 +423,7 @@ async def _run_health_check_on_save_and_persist(
     runs, so a check or persistence failure must not fail the request — the
     result is logged, not propagated.
     """
-    status_, detail = await _run_health_check_on_save(provider, model_id, api_key, default_params)
+    status_, detail = await _run_health_check_on_save(provider, model_id, api_key, default_params, base_url)
     try:
         await _persist_health_check_result(
             session,
@@ -294,6 +497,10 @@ class ModelBackendCreate(TeamVisibilityMixin):
     # A literal credential, or a ``secretref://<key>`` vault reference the
     # SERVER resolves at write time (FAR-1640).
     api_key: str = Field(..., min_length=1)
+    # Optional custom endpoint (FAR-2046): a self-hosted / OpenAI-compatible
+    # gateway. Endpoint configuration, persisted beside ``api_key`` in the
+    # encrypted credentials JSON — never a model parameter.
+    base_url: str | None = Field(None, max_length=_BASE_URL_MAX_LENGTH)
     # A REAL field (not ClassVar): pydantic v2 excludes ClassVar annotations
     # from the model fields, so a ClassVar default_params silently dropped
     # every POST body's default_params on the floor (FAR-681 apply round-trip).
@@ -309,6 +516,9 @@ class ModelBackendUpdate(TeamVisibilityMixin):
     display_name: str | None = Field(None, min_length=1, max_length=255)
     model_id: str | None = Field(None, min_length=1, max_length=128)
     api_key: str | None = Field(None, min_length=1)
+    # Optional endpoint override. An explicit ``null`` clears a stored base_url;
+    # omitting the field leaves it unchanged.
+    base_url: str | None = Field(None, max_length=_BASE_URL_MAX_LENGTH)
     default_params: dict[str, Any] | None = None
     visibility: str | None = None
     owner_team_id: uuid.UUID | None = None
@@ -324,6 +534,9 @@ class ModelBackendResponse(BaseModel):
     provider: str
     model_id: str
     has_credentials: bool
+    # The custom endpoint, if configured. For a caller who may not manage
+    # model backends this is redacted to the host only (never the full URL).
+    base_url: str | None = None
     default_params: dict[str, Any]
     visibility: str
     owner_team_id: uuid.UUID | None = None
@@ -379,7 +592,12 @@ class ModelBackendPresetListResponse(BaseModel):
     items: list[ModelBackendPresetResponse]
 
 
-def _to_response(mb: Any) -> ModelBackendResponse:
+def _to_response(
+    mb: Any,
+    *,
+    base_url: str | None = None,
+    can_manage: bool = True,
+) -> ModelBackendResponse:
     raw_fallback_ids = getattr(mb, "fallback_backend_ids", None)
     fallback_ids: list[uuid.UUID] | None = None
     if raw_fallback_ids is not None:
@@ -392,6 +610,7 @@ def _to_response(mb: Any) -> ModelBackendResponse:
         provider=mb.provider,
         model_id=mb.model_id,
         has_credentials=bool(mb.credentials_ciphertext),
+        base_url=base_url if can_manage else _redact_base_url(base_url),
         default_params=mb.default_params,
         visibility=mb.visibility,
         owner_team_id=mb.owner_team_id,
@@ -411,6 +630,7 @@ async def list_model_backends_endpoint(
     page_size: int = Query(20, ge=1, le=100),
     include_in_dev: bool = Query(default=False, description="Include in_dev tier items (default excludes them)"),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
     # any_credential: declarative apply (FAR-681) and CI/CD list this resource
     # with mk_ org API keys; roles are clamped to the key's live membership.
     principal: TenantPrincipal = require_permission_any_credential(_PERM_MODEL_BACKEND_LIST),
@@ -428,6 +648,7 @@ async def list_model_backends_endpoint(
                 page_size=page_size,
                 excluded_tiers=[] if include_in_dev else None,
             )
+            base_urls = await _base_urls_for_backends(session, settings, result.items)
     except IntegrityError:
         logger.exception(_CODE_MODEL_BACKENDS_LIST_MODEL)
         raise HTTPException(
@@ -455,8 +676,9 @@ async def list_model_backends_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while listing model backends.",
         ) from None
+    can_manage = _can_manage_model_backends(principal)
     return ModelBackendListResponse(
-        items=[_to_response(mb) for mb in result.items],
+        items=[_to_response(mb, base_url=base_urls.get(mb.id), can_manage=can_manage) for mb in result.items],
         total=result.total,
         page=result.page,
         page_size=result.page_size,
@@ -639,6 +861,7 @@ async def create_model_backend_endpoint(
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
     _validate_provider(req.provider)
+    base_url = _validate_base_url(req.base_url) if req.base_url and req.base_url.strip() else None
     try:
         async with session.begin():
             # FAR-1825: bound the creation-name uniqueness lock below (the
@@ -692,9 +915,9 @@ async def create_model_backend_endpoint(
                 tier=req.tier,
             )
 
-            secret_value = json.dumps({"api_key": resolved_api_key})
+            secret_value = json.dumps({"api_key": resolved_api_key, **({"base_url": base_url} if base_url else {})})
             await secrets_backend.set_secret(str(mb.id), secret_value)
-            response = _to_response(mb)
+            response = _to_response(mb, base_url=base_url, can_manage=True)
         # The entity write has COMMITTED above. The PRD 8.1 health check runs
         # OUTSIDE the write transaction so the provider network call (up to
         # HEALTH_CHECK_TIMEOUT=10s) never holds the DB connection or a row
@@ -709,6 +932,7 @@ async def create_model_backend_endpoint(
             org_id=principal.organisation_id,
             user_id=principal.account_id,
             org_role=principal.org_role,
+            base_url=base_url,
         )
 
         # PRD §8.12 audit trail: backend registration was previously invisible.
@@ -727,6 +951,7 @@ async def create_model_backend_endpoint(
                 "tier": mb.tier,
                 "fallback_backend_ids": [str(fid) for fid in (mb.fallback_backend_ids or [])],
                 "has_credentials": bool(mb.credentials_ciphertext),
+                "has_custom_base_url": base_url is not None,
             },
             log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
         )
@@ -769,13 +994,18 @@ async def create_model_backend_endpoint(
 async def get_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
     principal: TenantPrincipal = require_permission(_PERM_MODEL_BACKEND_LIST),
 ) -> ModelBackendResponse:
+    base_url: str | None = None
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             mb = await get_model_backend(session, backend_id)
+            if mb is not None:
+                base_urls = await _base_urls_for_backends(session, settings, [mb])
+                base_url = base_urls.get(mb.id)
     except IntegrityError:
         logger.exception(_CODE_MODEL_BACKENDS_GET_MODEL)
         raise HTTPException(
@@ -805,7 +1035,7 @@ async def get_model_backend_endpoint(
         ) from None
     if mb is None or mb.organisation_id != principal.organisation_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MODEL_BACKEND_NOT_FOUND)
-    return _to_response(mb)
+    return _to_response(mb, base_url=base_url, can_manage=_can_manage_model_backends(principal))
 
 
 @router.get("/{backend_id}/pipeline-references")
@@ -875,6 +1105,9 @@ def _prepare_update_payload(req: ModelBackendUpdate) -> dict[str, Any]:
     """
     updates: dict[str, Any] = req.model_dump(exclude_unset=True)
     updates.pop("api_key", None)
+    # base_url is endpoint configuration in the encrypted credential JSON, not a
+    # database column (FAR-2046) — handled inside the transaction beside api_key.
+    updates.pop("base_url", None)
     return updates
 
 
@@ -907,9 +1140,11 @@ async def _update_backend_tx(
 
     FAR-1640: a supplied ``api_key`` carrying a ``secretref://<key>`` vault
     reference is resolved and encrypted inside this transaction — the resolved
-    value is never echoed. Returns the resolved credential (or None when no
-    credential change was requested) so the post-commit health check can use it.
+    value is never echoed. Returns the credential to use for the post-commit
+    health check (``None`` when neither the credential nor the endpoint
+    changed), so an endpoint-only change is re-validated against its new target.
     """
+    base_url_supplied = "base_url" in req.model_fields_set
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
@@ -918,21 +1153,34 @@ async def _update_backend_tx(
         if existing is None or existing.organisation_id != principal.organisation_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
         resolved_api_key: str | None = None
-        secrets_backend: SecretsBackend | None = None
+        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+        # Read the stored credential JSON so an endpoint-only edit merges beside
+        # the existing api_key instead of replacing it (FAR-2046), and so the
+        # response carries the effective endpoint for a non-endpoint edit too.
+        secret_payload = await _read_secret_payload(secrets_backend, backend_id)
         if req.api_key is not None:
             resolved_api_key, secrets_backend = await _resolve_credential_or_422(session, settings, value=req.api_key)
             updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
                 resolved_api_key, settings.fernet_key
             )
+            secret_payload["api_key"] = resolved_api_key
+        if base_url_supplied:
+            if req.base_url:
+                secret_payload["base_url"] = req.base_url
+            else:
+                secret_payload.pop("base_url", None)
+        if resolved_api_key is not None or base_url_supplied:
+            await secrets_backend.set_secret(str(backend_id), json.dumps(secret_payload))
         mb = await update_model_backend(session, backend_id, updates)
         if mb is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MODEL_BACKEND_NOT_FOUND)
         await session.refresh(mb)
-        if resolved_api_key is not None and secrets_backend is not None:
-            secret_value = json.dumps({"api_key": resolved_api_key})
-            await secrets_backend.set_secret(str(mb.id), secret_value)
-        response = _to_response(mb)
-        return mb, response, resolved_api_key
+        response = _to_response(mb, base_url=_stored_base_url(secret_payload), can_manage=True)
+        health_api_key: str | None = None
+        if resolved_api_key is not None or base_url_supplied:
+            raw_key = resolved_api_key if resolved_api_key is not None else secret_payload.get("api_key")
+            health_api_key = raw_key if isinstance(raw_key, str) else None
+        return mb, response, health_api_key
 
 
 async def _update_and_post_process(
@@ -957,20 +1205,24 @@ async def _update_and_post_process(
     its exact PRD name when an API key is supplied; the generic edit event
     carries only the non-credential fields that actually changed.
     """
-    mb, response, resolved_api_key = await _update_backend_tx(session, backend_id, principal, req, settings, updates)
-    if resolved_api_key is not None:
+    mb, response, health_api_key = await _update_backend_tx(session, backend_id, principal, req, settings, updates)
+    if health_api_key is not None:
         await _run_health_check_on_save_and_persist(
             session,
             mb,
             mb.provider,
             mb.model_id,
-            resolved_api_key,
+            health_api_key,
             dict(mb.default_params or {}),
             org_id=principal.organisation_id,
             user_id=principal.account_id,
             org_role=principal.org_role,
+            base_url=response.base_url,
         )
     changed_fields = _audit_safe_backend_fields(updates)
+    if "base_url" in req.model_fields_set:
+        # Endpoint changes are audited by state, never by URL value.
+        changed_fields["base_url"] = "updated" if req.base_url else "cleared"
     if changed_fields:
         await append_audit_event_isolated(
             session,
@@ -981,7 +1233,7 @@ async def _update_and_post_process(
             payload={"backend_id": str(mb.id), "changed_fields": changed_fields},
             log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
         )
-    if resolved_api_key is not None:
+    if req.api_key is not None:
         await append_audit_event_isolated(
             session,
             principal,
@@ -1055,6 +1307,9 @@ async def update_model_backend_endpoint(
     principal: TenantPrincipal = require_permission_any_credential("model_backend.update"),
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
+    if req.base_url is not None:
+        # A blank string clears a stored endpoint, mirroring an explicit null.
+        req.base_url = _validate_base_url(req.base_url) if req.base_url.strip() else None
     updates = _prepare_update_payload(req)
     return await _apply_backend_update(session, backend_id, principal, req, settings, updates)
 
@@ -1085,6 +1340,7 @@ async def recheck_model_backend_health_endpoint(
     result is persisted in a short transaction after the read transaction
     commits, so the network call never holds a DB connection or row lock.
     """
+    base_url: str | None = None
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -1092,6 +1348,8 @@ async def recheck_model_backend_health_endpoint(
             mb = await get_model_backend(session, backend_id)
             if mb is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
+            secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+            base_url = _stored_base_url(await _read_secret_payload(secrets_backend, backend_id))
             try:
                 api_key = await decode_stored_secret_scoped(
                     session, mb.credentials_ciphertext, settings.fernet_key, org_id=principal.organisation_id
@@ -1109,6 +1367,7 @@ async def recheck_model_backend_health_endpoint(
             org_id=principal.organisation_id,
             user_id=principal.account_id,
             org_role=principal.org_role,
+            base_url=base_url,
         )
     except IntegrityError:
         logger.exception(_CODE_MODEL_BACKENDS_RECHECK_MODEL)
