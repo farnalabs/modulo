@@ -88,8 +88,12 @@
     </FilterBar>
 
     <!-- Skeleton rows (STATE-3): the shared DataTable renders pulse placeholders,
-         so a slow fetch never shows an unqualified indeterminate spinner. -->
-    <div v-if="loading" class="table-wrapper" data-testid="admin-errors-loading">
+         so a slow fetch never shows an unqualified indeterminate spinner.
+         Decorative only: DataTable's horizontally scrollable wrapper has no
+         focusable content while loading, which axe flags as
+         `scrollable-region-focusable`, so hide the subtree from assistive tech
+         (same pattern as AdminAuditView / SchemaListView skeletons). -->
+    <div v-if="loading" class="table-wrapper" aria-hidden="true" data-testid="admin-errors-loading">
       <DataTable :columns="columns" :rows="[]" :loading="true" :loading-rows="5" :row-clickable="false" />
     </div>
 
