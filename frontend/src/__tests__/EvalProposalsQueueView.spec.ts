@@ -120,6 +120,25 @@ describe('EvalProposalsQueueView', () => {
     expect(wrapper.findComponent(PageTabs).exists()).toBe(false)
   })
 
+  const typedJudgeConfig = {
+    field: 'output',
+    answer_contract: 'typed_questions',
+    backing: { kind: 'model_backend' },
+    questions: [
+      {
+        id: 'verdict',
+        type: 'noul',
+        instructions: 'Is the output acceptable?',
+        criteria: [],
+        weight: 1,
+        required: true,
+        min_pass_confidence: 0.5,
+      },
+    ],
+    pass_rule: { kind: 'weighted_score_at_least', threshold: 0.5 },
+    verdict_kind: 'assessment',
+  }
+
   it('POSTs the publish endpoint with snake_case body on submit', async () => {
     const wrapper = mountView()
     await flush()
@@ -129,7 +148,7 @@ describe('EvalProposalsQueueView', () => {
     expect(wrapper.find('[data-testid="publish-name"]').exists()).toBe(true)
 
     await wrapper.find('[data-testid="publish-name"]').setValue('Response quality check')
-    await wrapper.find('[data-testid="publish-config"]').setValue('{"criteria":["accurate"]}')
+    await wrapper.find('[data-testid="publish-config"]').setValue(JSON.stringify(typedJudgeConfig))
     await wrapper.find('[data-testid="publish-confirm"]').trigger('click')
     await flush()
 
@@ -140,7 +159,7 @@ describe('EvalProposalsQueueView', () => {
       body: {
         name: 'Response quality check',
         eval_type: 'model_judge',
-        config: { criteria: ['accurate'] },
+        config: typedJudgeConfig,
       },
     })
   })
@@ -154,7 +173,11 @@ describe('EvalProposalsQueueView', () => {
     await nextTick()
 
     await wrapper.find('[data-testid="publish-name"]').setValue('Schema check')
-    await wrapper.find('[data-testid="publish-config"]').setValue('{}')
+    // The dialog now seeds a VALID typed model_judge config by default.
+    const seeded = JSON.parse(
+      (wrapper.vm as unknown as { publishForm: { config_json: string } }).publishForm.config_json,
+    )
+    expect(seeded.answer_contract).toBe('typed_questions')
     await wrapper.find('[data-testid="publish-confirm"]').trigger('click')
     await flush()
 
@@ -163,7 +186,7 @@ describe('EvalProposalsQueueView', () => {
       body: {
         name: 'Schema check',
         eval_type: 'model_judge',
-        config: {},
+        config: seeded,
         node_id: '11111111-1111-1111-1111-111111111111',
       },
     })

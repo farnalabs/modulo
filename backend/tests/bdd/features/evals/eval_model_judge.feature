@@ -41,12 +41,13 @@ Feature: Model judge Eval
     Then the callable receives the rubric_prompt in its input
     And the prompt treats agent output as untrusted
 
-  Scenario: Model judge with no callable returns failed
+  Scenario: Model judge with no callable records an error outcome
     Given node "code-reviewer" has an model_judge scorer eval "quality-check"
     When the node outputs {"code": "def foo(): pass"}
     And no model_judge callable is configured
-    Then the eval result has passed false
-    And the eval result has score 0.0
+    Then the eval result has outcome "error"
+    And the eval result has no score
+    And the eval result has passed false
 
   Scenario: Model judge block behaviour stops the pipeline
     Given node "code-reviewer" has an model_judge scorer eval "quality-check"

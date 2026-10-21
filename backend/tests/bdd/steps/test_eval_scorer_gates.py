@@ -187,6 +187,22 @@ def _eval_result_passed(flag: str, ctx) -> None:
     assert result.passed == expected, f"Expected passed={expected}, got {result.passed}"
 
 
+@then(parsers.parse('the eval result has outcome "{outcome}"'))
+def _eval_result_outcome(outcome: str, ctx) -> None:
+    _run_eval(ctx)
+    result = ctx["eval_result"]
+    assert result is not None, f"No eval result was computed ({ctx['eval_error'] or 'no error'})"
+    assert result.outcome.value == outcome, f"Expected outcome {outcome!r}, got {result.outcome.value!r}"
+
+
+@then("the eval result has no score")
+def _eval_result_has_no_score(ctx) -> None:
+    _run_eval(ctx)
+    result = ctx["eval_result"]
+    assert result is not None, f"No eval result was computed ({ctx['eval_error'] or 'no error'})"
+    assert result.score is None, f"Expected a NULL score on {result.outcome.value!r}, got {result.score}"
+
+
 @then(parsers.parse("the eval result has score {score}"))
 def _eval_result_score(score: float, ctx) -> None:
     _run_eval(ctx)

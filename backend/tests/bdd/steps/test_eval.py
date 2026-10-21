@@ -226,7 +226,10 @@ def eval_run_case_scored(score: float, ctx):
         org_id=ORG_ID,
         name="quality-check",
         eval_type="model_judge",
-        config={},
+        # Explicit whole-output judging: the judge below reads output["score"]
+        # directly, and the guarded wrapper leaves the output untouched (a
+        # field-scoped config would replace that value with the fenced text).
+        config={"judge_whole_output": True},
         pass_threshold=ctx["pass_threshold"],
         failure_behaviour="warn",
     )
