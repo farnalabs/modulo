@@ -38,6 +38,7 @@ from modulo.core.eval_engine.execute_suite_run import (
     suite_run_daily_spend_used,
     suite_run_daily_spend_used_for_trigger,
 )
+from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
 from modulo.db.models import Base
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.eval import Eval
@@ -193,6 +194,48 @@ async def test_execute_suite_run_rejects_empty_dataset(session) -> None:
         await build_suite_run(
             session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
         )
+
+
+async def test_partial_run_keeps_one_row_per_definition_per_case(session) -> None:
+    """Some — not all — cases excluded is ``partial``, with no dropped rows."""
+    org = await _org()
+    suite, dataset, _, backend = await seed_suite(session, org)
+    await seed_cases(session, org, dataset, [{"category": "billing"}, {"category": "other"}])
+    judge_def = Eval(
+        organisation_id=org,
+        pipeline_id=uuid.uuid4(),
+        name="judge",
+        eval_type="model_judge",
+        config_json={"field": "output", "model_backend_id": str(uuid.uuid4())},
+        eval_suite_id=suite.id,
+        account_id=org,
+    )
+    session.add(judge_def)
+    await session.flush()
+    suite.eval_definition_ids = [*suite.eval_definition_ids, str(judge_def.id)]
+
+    def _judge(output: dict[str, Any], eval_def: Any) -> dict[str, Any]:
+        content = str(eval_def.config.get("_judge_content", ""))
+        if "'other'" in content:
+            raise JudgeExecutionError(JudgeErrorCode.JUDGE_UNAVAILABLE, "judge unavailable for this case")
+        return {"passed": True, "score": 1.0, "detail": "ok"}
+
+    run = await build_suite_run(
+        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
+    )
+    await _suite_run_transition(session, run, SuiteRunState.RUNNING)
+    stats = await execute_suite_run(session, run, model_judge_callable=_judge)
+
+    assert stats["state"] == SuiteRunState.PARTIAL.value
+    assert stats["passed_cases"] == 1
+    assert stats["excluded_case_count"] == 1
+    rows = list((await session.execute(select(EvalResult).where(EvalResult.suite_run_id == run.id))).scalars())
+    # 2 cases x 2 definitions, including the errored judge row.
+    assert len(rows) == 4
+    error_rows = [row for row in rows if row.outcome == "error"]
+    assert len(error_rows) == 1
+    assert error_rows[0].eval_id == judge_def.id
+    assert error_rows[0].score is None
 
 
 async def test_model_judge_without_callable_persists_error_and_fails_run(session) -> None:

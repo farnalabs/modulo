@@ -62,6 +62,40 @@ def _make_result(scalar_one_value=None, scalar_value=None, all_value=None) -> Ma
     return m
 
 
+class TestEvalDefinitionJudgeDisplay:
+    def test_typed_judge_exposes_the_composed_display(self) -> None:
+        from modulo.api.routes.evals import _eval_def_to_dict
+
+        row = _make_eval_def(
+            eval_type="model_judge",
+            config_json={
+                "answer_contract": "typed_questions",
+                "field": "output",
+                "backing": {"kind": "model_backend", "model_backend_id": str(uuid.uuid4())},
+                "questions": [{"id": "q", "type": "noul"}],
+                "pass_rule": {"kind": "weighted_score_at_least", "threshold": 0.5},
+                "verdict_kind": "assessment",
+            },
+        )
+
+        body = _eval_def_to_dict(row)
+
+        assert body["judge"]["display"].startswith("Typed questions")
+        assert "System One" not in body["judge"]["display"]
+
+    def test_legacy_judge_exposes_the_legacy_display(self) -> None:
+        from modulo.api.routes.evals import _eval_def_to_dict
+
+        row = _make_eval_def(
+            eval_type="model_judge",
+            config_json={"field": "output", "model_backend_id": str(uuid.uuid4())},
+        )
+
+        body = _eval_def_to_dict(row)
+
+        assert "legacy" in body["judge"]["display"]
+
+
 def _make_eval_def(**overrides) -> MagicMock:
     m = MagicMock()
     m.id = overrides.get("id", _EVAL_DEF_ID)
@@ -657,6 +691,35 @@ class TestUpdateEvalDefinition:
         # so a rubric change is explicitly version-scoped.
         assert data["version"] == 2
         assert data["pre_version_raw"] == {"config_json": {"pattern": r"\d+"}}
+
+    def test_update_legacy_judge_config_is_a_typed_422(self, admin_client: TestClient) -> None:
+        """Editing a frozen legacy judge config is a coded 422 at the REST edge."""
+        legacy_config = {"field": "output", "model_backend_id": str(uuid.uuid4())}
+        eval_def = _make_eval_def(eval_type="model_judge", config_json=legacy_config)
+        mock_session = _make_mock_session()
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=eval_def),  # Eval lookup
+            _make_result(scalar_one_value=None),  # PolicyGate lookup
+            _make_result(scalar_one_value=eval_def),  # judge chokepoint: stored row
+        ]
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = admin_client.put(
+            f"{self.URL}/{_EVAL_DEF_ID}",
+            json={"config_json": {**legacy_config, "instructions": "changed"}},
+        )
+
+        assert resp.status_code == 422
+        body = resp.json()
+        assert body["code"] == "judge_config_legacy_read_only"
+        assert "typed" in body["detail"]
 
     def test_update_not_found(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()

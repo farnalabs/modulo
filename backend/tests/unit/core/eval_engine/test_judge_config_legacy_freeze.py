@@ -7,6 +7,7 @@ a stored legacy config is byte-identical-or-rejected on update. No backfill.
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 import pytest
@@ -22,6 +23,7 @@ from modulo.core.eval_engine.typed_judge import (
     canonical_json,
     is_legacy_judge_config,
     is_typed_judge_config,
+    record_legacy_execution,
     reject_legacy_judge_write,
     validate_typed_judge_config,
 )
@@ -98,6 +100,19 @@ class TestWriteGuard:
         assert exc_info.value.code == CODE_LEGACY_READ_ONLY
         assert exc_info.value.detail()["hint"]
 
+    def test_migrating_a_stored_legacy_config_to_typed_in_place_is_allowed(self) -> None:
+        """The remediation hint's repair: a typed replacement is legal."""
+        typed = _typed_config()
+
+        reject_legacy_judge_write(
+            config_json=typed,
+            stored_config=_LEGACY_CONFIG,
+            stored_eval_type="model_judge",
+            is_update=True,
+        )
+
+        assert is_typed_judge_config(typed) is True
+
     def test_resending_a_stored_legacy_config_byte_identically_is_allowed(self) -> None:
         """A metadata edit may re-send the config; key order does not matter."""
         reordered = dict(reversed(list(_LEGACY_CONFIG.items())))
@@ -145,6 +160,24 @@ class TestTypedShapeValidation:
             (lambda c: c.update(pass_rule={"kind": "nope", "threshold": 0.5}), CODE_INVALID),
             (lambda c: c["backing"].update(vendor="jev"), CODE_INVALID),
             (lambda c: c.update(confidence_kind="model_self_reported"), CODE_INVALID),
+            (lambda c: c.pop("field"), CODE_INVALID),
+            (lambda c: c.update(api_key="sk-live-pasted"), CODE_INVALID),
+            (lambda c: c.update(model_backend_id=str(uuid.uuid4())), CODE_INVALID),
+            (lambda c: c["questions"][0].update(unexpected="x"), CODE_INVALID),
+            (lambda c: c["backing"].update(unexpected="x"), CODE_INVALID),
+        ],
+        ids=[
+            "missing-dialect",
+            "derivation-kind",
+            "empty-questions",
+            "bad-pass-rule",
+            "decision-fields-on-model-backing",
+            "confidence-kind-in-config",
+            "missing-field",
+            "credential-key",
+            "top-level-backend-id",
+            "extra-question-key",
+            "extra-backing-key",
         ],
     )
     def test_invalid_typed_shapes_are_rejected(self, mutate, code: str) -> None:
@@ -155,6 +188,29 @@ class TestTypedShapeValidation:
             validate_typed_judge_config(config)
 
         assert exc_info.value.code == code
+
+
+class TestPayloadScope:
+    def test_whole_output_must_be_explicit(self) -> None:
+        config = _typed_config()
+        config.pop("field")
+        config["judge_whole_output"] = True
+
+        validate_typed_judge_config(config)
+
+        assert config["judge_whole_output"] is True
+
+    def test_a_credential_key_is_rejected_even_when_nested(self) -> None:
+        config = _typed_config()
+        config["questions"][0]["options"] = [
+            {"key": "a", "description": "x", "client_secret": "shh"},
+            {"key": "b", "description": "y"},
+        ]
+
+        with pytest.raises(JudgeConfigWriteError) as exc_info:
+            validate_typed_judge_config(config)
+
+        assert "credential-like" in exc_info.value.message
 
 
 class TestChokepoint:
@@ -175,7 +231,7 @@ class TestChokepoint:
             )
 
         assert exc_info.value.status_code == 422
-        assert exc_info.value.detail["code"] == CODE_TYPED_REQUIRED
+        assert exc_info.value.detail["error"] == CODE_TYPED_REQUIRED
 
     async def test_update_path_returns_the_legacy_read_only_422(self, session) -> None:
         org = uuid.uuid4()
@@ -208,7 +264,7 @@ class TestChokepoint:
             )
 
         assert exc_info.value.status_code == 422
-        assert exc_info.value.detail["code"] == CODE_LEGACY_READ_ONLY
+        assert exc_info.value.detail["error"] == CODE_LEGACY_READ_ONLY
 
     async def test_update_path_allows_a_typed_config(self, session) -> None:
         org = uuid.uuid4()
@@ -240,3 +296,34 @@ class TestChokepoint:
         )
 
         assert updated.version == 2
+
+
+class TestLegacyExecutionCounter:
+    """The counter gates eventual removal of the legacy read path.
+
+    A broken counter that silently reads zero would strand the branch forever,
+    so both the log line and the metrics-unavailable arm are pinned.
+    """
+
+    def test_a_legacy_execution_emits_a_counted_log_line(self, caplog: pytest.LogCaptureFixture) -> None:
+        eval_id = uuid.uuid4()
+        with caplog.at_level(logging.WARNING):
+            record_legacy_execution(eval_id=eval_id, eval_name="legacy-judge")
+
+        records = [r for r in caplog.records if r.getMessage() == "eval_judge.legacy_rows_count"]
+        assert records
+        assert records[0].legacy_rows_count == 1
+        assert records[0].eval_id == str(eval_id)
+
+    def test_metrics_unavailable_still_logs(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import modulo.core.eval_engine.typed_judge.legacy as legacy
+
+        monkeypatch.setattr(legacy, "_get_legacy_counter", lambda: None)
+        with caplog.at_level(logging.WARNING):
+            record_legacy_execution(eval_id=uuid.uuid4())
+
+        assert any(r.getMessage() == "eval_judge.legacy_rows_count" for r in caplog.records)

@@ -1,11 +1,13 @@
 """Unit tests for llm_judge evals inside a HITL gate (FAR-307).
 
-Prior to the fix, an ``llm_judge`` eval run inside ``make_hitl_review_fn`` never
-received an ``model_judge_callable``, so ``_evaluate_llm`` returned a fail result
-with ``score=0.0`` and a conditional gate referencing it fired on EVERY run.
-This suite proves the fix: the judge callable is resolved from
-``eval_def.config["model_backend_id"]`` via the ModelBackendHub and passed to
-``engine.evaluate``, so the gate fires only when the judge actually scores low.
+The judge callable is resolved from ``eval_def.config["model_backend_id"]`` via
+the ModelBackendHub and passed to ``engine.evaluate``, so the gate fires only
+when the judge actually scores low.
+
+When NO judge can run (no backend id, a hung backend), the engine now records
+``outcome=error`` with a NULL score — never ``passed=False/score=0.0``
+(FAR-1496, ADR 066 D6). The gate still fails closed and fires; these tests
+assert BOTH that it fires and that the engine result is an error, not a verdict.
 """
 
 import asyncio
@@ -20,8 +22,8 @@ from langgraph.errors import GraphInterrupt
 from langgraph.types import Interrupt
 
 import modulo.core.pipeline_engine.llm_judge as llm_judge
-from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
+from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError, JudgeOutcome
 
 
 class _FakeBackend:
@@ -97,6 +99,25 @@ def _run_gate_fn(
         return True
 
 
+def _run_gate_fn_capturing_results(
+    gate_config: dict[str, Any],
+    state: dict[str, Any],
+    eval_defs: list[EvalDefinition] | None,
+) -> tuple[bool, list[Any]]:
+    """Run the gate fn and capture every engine result it computed."""
+    captured: list[Any] = []
+    real = EvalEngine.evaluate_result
+
+    def _spy(self: EvalEngine, *args: Any, **kwargs: Any) -> Any:
+        result = real(self, *args, **kwargs)
+        captured.append(result)
+        return result
+
+    with patch.object(EvalEngine, "evaluate_result", _spy):
+        interrupted = _run_gate_fn(gate_config, state, eval_defs)
+    return interrupted, captured
+
+
 def _gate_config(eval_name: str) -> dict[str, Any]:
     return {
         "review_id": "gate-llm",
@@ -162,21 +183,28 @@ def test_low_score_fires_gate() -> None:
     assert interrupted is True
 
 
-def test_no_model_backend_id_falls_back_to_zero_and_fires_gate() -> None:
-    """Without a model_backend_id the judge callable is not built, so the eval
-    scores 0.0 (pre-existing behaviour) and the lt gate fires."""
+def test_no_model_backend_id_records_error_outcome_and_fires_gate() -> None:
+    """Without a model_backend_id the judge produces NO verdict.
+
+    The gate still fails closed and fires, but the result is
+    ``outcome=error``/NULL score — not a 0.0 verdict (FAR-1496).
+    """
     eval_def = _make_eval_def(
         "judge-quality",
         config={"field": "content"},  # no model_backend_id
     )
 
-    interrupted = _run_gate_fn(
+    interrupted, captured = _run_gate_fn_capturing_results(
         _gate_config("judge-quality"),
         _base_state(),
         [eval_def],
     )
 
     assert interrupted is True
+    assert captured
+    assert captured[0].outcome is JudgeOutcome.ERROR
+    assert captured[0].score is None
+    assert captured[0].passed is False
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +259,7 @@ def _shrink_timeout_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_hung_judge_times_out_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A judge whose backend never answers fails THIS eval closed (score 0.0).
+    """A judge whose backend never answers records an ERROR outcome (no score).
 
     FAR-1652: ``future.result()`` had no timeout, so a hung judge blocked the
     pipeline event loop indefinitely. With the bound the call returns a
@@ -330,9 +358,10 @@ def test_hung_hub_get_is_bounded_and_releases_the_bridge_for_the_next_call(
     assert second["score"] == pytest.approx(0.9)
 
 
-def test_hung_judge_fires_the_gate_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
-    """End-to-end through ``make_hitl_review_fn``: a hung judge scores 0.0 and
-    the ``lt`` gate fires, instead of the run hanging on the judge call."""
+def test_hung_judge_records_error_outcome_and_fires_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """End-to-end through ``make_hitl_review_fn``: a hung judge produces NO
+    verdict (``outcome=error``, NULL score) and the ``lt`` gate fires, instead
+    of the run hanging on the judge call."""
     _shrink_timeout_bounds(monkeypatch)
     eval_def = _make_eval_def(
         "judge-quality",
@@ -344,10 +373,14 @@ def test_hung_judge_fires_the_gate_end_to_end(monkeypatch: pytest.MonkeyPatch) -
         "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
         return_value=hub,
     ):
-        interrupted = _run_gate_fn(
+        interrupted, captured = _run_gate_fn_capturing_results(
             _gate_config("judge-quality"),
             _base_state(),
             [eval_def],
         )
 
     assert interrupted is True
+    assert captured
+    assert captured[0].outcome is JudgeOutcome.ERROR
+    assert captured[0].score is None
+    assert captured[0].passed is False

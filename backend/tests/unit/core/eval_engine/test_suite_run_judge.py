@@ -4,13 +4,14 @@ Covers, without Docker (in-memory SQLite async engine + a stub judge backend):
 
 * the org-scoped hub builder: no active backend -> ``None``; active rows ->
   an initialised hub; a cross-org active backend is never resolvable;
-* the per-definition dispatch callable: missing / malformed
-  ``model_backend_id`` fails THAT eval closed; two definitions with different
-  backends each resolve their OWN backend;
+* the per-definition dispatch callable: a missing / malformed
+  ``model_backend_id`` raises a coded configuration error that the engine
+  persists as ``outcome=error``; two definitions with different backends each
+  resolve their OWN backend;
 * the SAQ ``execute_suite_run`` job: a judge-bearing suite runs end-to-end,
   the judge is actually invoked, the hub is torn down; a judge suite with no
-  active backend still surfaces the runner's loud refusal (never a silent
-  pass); and a suite with no judge definition builds no hub.
+  active backend persists error rows and terminalises ``failed`` (never a
+  silent pass); and a suite with no judge definition builds no hub.
 """
 
 import uuid
@@ -370,6 +371,36 @@ def test_judge_callable_dispatches_each_definition_to_its_own_backend() -> None:
 
     assert result_a["score"] == pytest.approx(0.13)
     assert result_b["score"] == pytest.approx(0.87)
+
+
+def test_judge_callable_typed_uses_only_the_backing_backend() -> None:
+    """A top-level ``model_backend_id`` must not override ``backing`` here either."""
+    org = uuid.uuid4()
+    top_level_id = uuid.uuid4()
+    backing_id = uuid.uuid4()
+    hub = ModelBackendHub()
+    hub.register(top_level_id, _FixedJudgeAdapter('{"answers": {"q": false}, "detail": "A"}'))
+    hub.register(backing_id, _FixedJudgeAdapter('{"answers": {"q": true}, "detail": "B"}'))
+    judge = build_suite_run_model_judge_callable(hub)
+    eval_def = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=org,
+        name="judge",
+        eval_type=EvalType.MODEL_JUDGE,
+        config={
+            "field": "output",
+            "answer_contract": "typed_questions",
+            "backing": {"kind": "model_backend", "model_backend_id": str(backing_id)},
+            "model_backend_id": str(top_level_id),
+            "questions": [{"id": "q", "type": "noul", "weight": 1.0, "required": True}],
+            "pass_rule": {"kind": "weighted_score_at_least", "threshold": 0.5},
+        },
+    )
+
+    result = judge({"output": "x"}, eval_def)
+
+    assert result["outcome"] == "pass"
+    assert result["detail"] == "B"
 
 
 def test_judge_callable_caches_each_built_backend_across_calls() -> None:

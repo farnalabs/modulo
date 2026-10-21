@@ -277,20 +277,21 @@ class TestPostNodeLlmJudgeCallable:
     """FAR-315: the standalone post-node eval path must resolve the Model judge.
 
     Before the fix ``_run_post_node_evals`` called ``run_evals_persist_before_decide``
-    WITHOUT ``resolve_model_judge``, so every model_judge eval scored 0.0 with
-    detail "Model judge callable not provided" — and a ``block`` gate failed
-    every run regardless of the judge's verdict. These tests pin the wiring:
+    WITHOUT ``resolve_model_judge``, so every model_judge eval was recorded as a
+    failing verdict and a ``block`` gate failed every run regardless of the
+    judge's verdict. Today an unresolvable judge is ``outcome=error`` (ADR 066
+    D6), which still fails a block gate closed. These tests pin the wiring:
     the judge callable is resolved from ``eval_def.config["model_backend_id"]``
     via the ModelBackendHub (same resolver the HITL-gate path uses, FAR-307)
     and the engine scores against the judge's response.
     """
 
     async def test_model_judge_scores_via_hub(self, caplog: pytest.LogCaptureFixture) -> None:
-        """A judge returning 0.9 must produce score 0.9 (not the fail-closed 0.0).
+        """A judge returning 0.9 must produce score 0.9 (not an error outcome).
 
         ``failure_behaviour="block"`` + a passing high score means: without the
-        fix this raises ``EvalBlockedError`` (score 0.0 fails the block), with
-        the fix it completes and the structured log carries the judge's score.
+        fix the unresolvable judge raised ``EvalBlockedError``, with the fix it
+        completes and the structured log carries the judge's score.
         """
         eval_def = _model_judge_eval_def()
         hub = _FakeHub(json.dumps({"passed": True, "score": 0.9, "detail": "judged"}))
@@ -319,7 +320,7 @@ class TestPostNodeLlmJudgeCallable:
         assert judge_records[0].detail != "Model judge callable not provided"
 
     async def test_model_judge_without_backend_id_still_fails_closed(self) -> None:
-        """No model_backend_id ⇒ no judge callable ⇒ score 0.0 fails the block.
+        """No model_backend_id ⇒ no judge callable ⇒ an error outcome fails the block.
 
         Documents the intended fail-closed fallback is preserved: the resolver
         only builds a callable when the eval config names a backend.
@@ -340,7 +341,7 @@ class TestPostNodeLlmJudgeCallable:
         self,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """A malformed (non-UUID) model_backend_id fails THAT eval closed with a
+        """A malformed (non-UUID) model_backend_id is an error outcome with a
         clear configuration message — sibling evals still run.
 
         ``eval_def.config["model_backend_id"]`` is unvalidated free-form JSON;

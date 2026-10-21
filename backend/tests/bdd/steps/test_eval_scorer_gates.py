@@ -9,7 +9,6 @@ the guarded rubric prompt), warn-vs-block ``failure_behaviour``, and the
 ``EvalBlockedError`` / ``eval_failed`` run transition.
 """
 
-import contextlib
 import json
 import uuid
 from typing import Any
@@ -21,9 +20,10 @@ from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, ModelJudge
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
-with contextlib.suppress(FileNotFoundError, OSError):
-    scenarios("../features/evals/eval_regex.feature")
-    scenarios("../features/evals/eval_model_judge.feature")
+# Deliberately unsuppressed: a missing/renamed feature file must fail
+# collection loudly, never silently drop its scenarios (14 -> 8).
+scenarios("../features/evals/eval_regex.feature")
+scenarios("../features/evals/eval_model_judge.feature")
 
 
 @pytest.fixture

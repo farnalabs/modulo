@@ -103,6 +103,25 @@ def test_non_json_response_is_a_malformed_response_error() -> None:
     assert "this is not json" not in exc_info.value.detail
 
 
+@pytest.mark.parametrize(
+    "raw_response",
+    [
+        '{"passed": "false", "score": 1.0}',
+        '{"passed": "no", "score": 1.0}',
+        '{"passed": "False", "score": 1.0}',
+        '{"passed": "0", "score": 1.0}',
+    ],
+)
+def test_non_boolean_passed_is_a_malformed_response(raw_response: str) -> None:
+    """A JSON string that looks falsy is truthy in Python — never coerce it."""
+    judge = llm_judge.build_model_judge_callable(_FakeHub(raw_response), str(uuid.uuid4()))
+
+    with pytest.raises(JudgeExecutionError) as exc_info:
+        judge({"content": "some output"}, _make_eval_def())
+
+    assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+
 def test_response_detail_null_is_coerced_to_empty_string() -> None:
     """A JSON verdict with ``detail: null`` must not surface a ``None`` detail."""
     judge = llm_judge.build_model_judge_callable(
@@ -239,3 +258,31 @@ def test_bridge_timeout_leaves_running_coroutine_to_inner_bound(
 
     assert future.cancelled is True
     assert coro.closed is False
+
+
+def test_a_typed_config_ignores_a_top_level_model_backend_id() -> None:
+    """``backing.model_backend_id`` is the only source for a typed config."""
+    backing_id = uuid.uuid4()
+    eval_def = _make_eval_def(
+        config={
+            "answer_contract": "typed_questions",
+            "field": "content",
+            "model_backend_id": str(uuid.uuid4()),
+            "backing": {"kind": "model_backend", "model_backend_id": str(backing_id)},
+        }
+    )
+
+    assert llm_judge._judge_backend_id(eval_def.config) == str(backing_id)
+
+
+def test_a_typed_config_without_a_backing_id_does_not_fall_back_to_the_top_level() -> None:
+    eval_def = _make_eval_def(
+        config={
+            "answer_contract": "typed_questions",
+            "field": "content",
+            "model_backend_id": str(uuid.uuid4()),
+            "backing": {"kind": "model_backend"},
+        }
+    )
+
+    assert llm_judge._judge_backend_id(eval_def.config) is None

@@ -1011,3 +1011,16 @@ def test_node_deadline_guidance_states_the_observable_not_an_assumed_cause():
     assert spec.error_class == "node"
     assert spec.retryable is False
     assert spec.alert_severity == "warning"
+
+
+def test_every_judge_error_code_is_registered():
+    """ADR 066 D6: the judge sub-namespace is part of the run taxonomy.
+
+    An unregistered code reaches the first canonicalising consumer as
+    "Unknown error", so every JudgeErrorCode value must have an entry (the
+    ``provider.*`` values already do and are asserted too).
+    """
+    from modulo.core.eval_engine.typed_judge import JudgeErrorCode
+
+    missing = [code.value for code in JudgeErrorCode if code.value not in ERROR_CODE_REGISTRY]
+    assert not missing, missing

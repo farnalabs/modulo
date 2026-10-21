@@ -14,6 +14,8 @@ Pins the load-bearing invariants:
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from pydantic import ValidationError
 
@@ -61,6 +63,22 @@ class TestVerdictInvariants:
             )
 
 
+class TestErrorProvenance:
+    def test_an_error_verdict_keeps_the_resolved_judge_identity(self) -> None:
+        from modulo.core.eval_engine.typed_judge import JudgeIdentity
+
+        exc = JudgeExecutionError(
+            JudgeErrorCode.JUDGE_TIMEOUT,
+            "timed out",
+            judge=JudgeIdentity(mechanism="model_backend", judge_backend_id="backend-1"),
+        )
+
+        verdict = exc.as_verdict()
+
+        assert verdict.outcome is JudgeOutcome.ERROR
+        assert verdict.judge.judge_backend_id == "backend-1"
+
+
 class TestCallableDialect:
     def test_legacy_dict_is_preserved_exactly(self) -> None:
         verdict = from_judge_callable_dict({"passed": True, "score": 0.87, "detail": "good"})
@@ -88,6 +106,14 @@ class TestCallableDialect:
         assert verdict.questions[0].question_id == "tone"
         assert verdict.confidence_kind is JudgeConfidenceKind.MODEL_SELF_REPORTED
         assert verdict.escalated is True
+
+    @pytest.mark.parametrize("raw_passed", ["false", "no", "False", "0"])
+    def test_legacy_passed_must_be_a_real_boolean(self, raw_passed: str) -> None:
+        """``bool("false")`` is True — a string must never flip a gate."""
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            from_judge_callable_dict({"passed": raw_passed, "score": 1.0, "detail": "ok"})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
 
     def test_non_dict_is_a_malformed_response(self) -> None:
         with pytest.raises(JudgeExecutionError) as exc_info:
@@ -177,6 +203,32 @@ class TestTypedAggregation:
             )
 
         assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    @pytest.mark.parametrize("answer", ["false", "no", "False", "0"])
+    def test_noul_answer_must_be_a_real_boolean(self, answer: str) -> None:
+        text = self._response({"grounded": answer, "tone": "neutral", "quality": 4})
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            verdict_from_typed_response(
+                text,
+                questions=self._questions(),
+                pass_rule={"kind": "weighted_score_at_least", "threshold": 0.5},
+            )
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    @pytest.mark.parametrize(
+        "pass_rule",
+        [None, {}, {"kind": "weighted_score_at_least"}, {"threshold": "0.5"}, {"threshold": 1.5}],
+    )
+    def test_a_missing_or_invalid_threshold_is_a_configuration_error(self, pass_rule: Any) -> None:
+        """Fail closed: a missing threshold must not make every aggregate pass."""
+        text = self._response({"grounded": True, "tone": "neutral", "quality": 4})
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            verdict_from_typed_response(text, questions=self._questions(), pass_rule=pass_rule)
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
 
     def test_non_json_response_is_a_malformed_response(self) -> None:
         with pytest.raises(JudgeExecutionError) as exc_info:

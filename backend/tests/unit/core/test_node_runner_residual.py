@@ -925,7 +925,7 @@ def test_finalize_node_result_schema_violation_raises():
 
 
 # ---------------------------------------------------------------------------
-# Model judge — non-JSON model response falls back to a failed eval
+# Model judge — a non-JSON model response is a coded malformed-response error
 # ---------------------------------------------------------------------------
 
 
@@ -941,13 +941,19 @@ def _stub_run_coroutine_sync(content: str) -> Callable[[Any], SimpleNamespace]:
     return _fake
 
 
-def test_model_judge_non_json_response_falls_back(monkeypatch: pytest.MonkeyPatch):
+def test_model_judge_non_json_response_is_malformed(monkeypatch: pytest.MonkeyPatch):
+    """No verdict: a coded error, never ``passed=False/score=0.0``.
+
+    The raw model text is never copied into the human-readable detail.
+    """
+    from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
+
     judge = llm_judge.build_model_judge_callable(MagicMock(), _judge_backend_id())
     monkeypatch.setattr(llm_judge, "run_coroutine_sync", _stub_run_coroutine_sync("model said: no"))
-    result = judge({"answer": "hello"}, SimpleNamespace(config={"field": "answer"}))
-    assert result["passed"] is False
-    assert result["score"] == 0.0
-    assert "model said: no" in result["detail"]
+    with pytest.raises(JudgeExecutionError) as exc_info:
+        judge({"answer": "hello"}, SimpleNamespace(config={"field": "answer"}))
+    assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+    assert "model said: no" not in exc_info.value.detail
 
 
 def test_model_judge_parses_structured_response(monkeypatch: pytest.MonkeyPatch):

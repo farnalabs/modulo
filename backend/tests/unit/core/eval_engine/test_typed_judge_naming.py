@@ -16,6 +16,7 @@ from modulo.core.eval_engine.typed_judge import (
     JudgeConfidenceKind,
     backing_display,
     confidence_label,
+    legacy_judge_display,
     mechanism_label,
 )
 
@@ -73,3 +74,12 @@ class TestConfidenceLabel:
         labels = {confidence_label(kind) for kind in JudgeConfidenceKind}
 
         assert len(labels) == len(JudgeConfidenceKind)
+
+
+def test_legacy_judge_display_is_composed_and_names_the_migration() -> None:
+    display = legacy_judge_display()
+
+    assert display.startswith(TYPED_QUESTIONS_MECHANISM)
+    assert "legacy" in display
+    assert "migration required" in display
+    assert "System One" not in display

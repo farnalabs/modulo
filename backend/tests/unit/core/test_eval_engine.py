@@ -387,6 +387,26 @@ class TestModelJudgeEval:
 # =============================================================================
 
 
+class TestJudgeDetailBound:
+    def test_a_verbose_detail_is_truncated_but_the_envelope_keeps_it(self) -> None:
+        """The column is String(2000); a verbose judge must not fail the INSERT."""
+        from modulo.core.eval_engine import _DETAIL_MAX_LENGTH
+
+        engine = EvalEngine()
+        eval_def = _make_eval_def("model_judge", {"field": "output"})
+        verbose = "x" * (_DETAIL_MAX_LENGTH + 2500)
+
+        result = engine.evaluate(
+            {"output": "test"},
+            eval_def,
+            model_judge_callable=_make_llm_callable({"passed": True, "score": 1.0, "detail": verbose}),
+        )
+
+        assert len(result.detail) == _DETAIL_MAX_LENGTH
+        assert result.judge_verdict is not None
+        assert result.judge_verdict.detail == verbose
+
+
 class TestEvalDispatch:
     def test_block_failure_behaviour_raises_blocked_error(self) -> None:
         engine = EvalEngine()
@@ -654,14 +674,17 @@ class TestNormalContent:
         assert _CONTENT_BEGIN in safe_output["output"]
         assert _CONTENT_END in safe_output["output"]
 
-    def test_missing_field_defaults_to_empty_string(self) -> None:
+    def test_missing_field_is_a_configuration_error(self) -> None:
+        """An unresolvable field is never an empty judgement (ADR 066 D16)."""
         captured: list = []
         engine = EvalEngine()
         eval_def = _make_eval_def("model_judge", {"field": "nonexistent"})
 
         result = engine.evaluate({"output": "hello"}, eval_def, model_judge_callable=_make_capturing_callable(captured))
 
-        assert result.passed is True
+        assert result.outcome is JudgeOutcome.ERROR
+        assert result.score is None
+        assert not captured
 
     def test_none_field_value_coerced_to_empty_string(self) -> None:
         captured: list = []
