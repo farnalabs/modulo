@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.main import app
@@ -134,7 +134,10 @@ def _make_provider(
 
 
 def _make_session() -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct sync preamble: ``set_rls_org`` calls ``in_transaction()``
+    # and ``get_bind()`` synchronously, so a bare AsyncMock child hands back a
+    # never-awaited coroutine on every org-slug request.
+    session = configure_rls_preamble(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
