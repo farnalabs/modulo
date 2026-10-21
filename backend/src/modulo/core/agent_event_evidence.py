@@ -76,7 +76,12 @@ def _coerce_step_cost(value: Any) -> Decimal | None:
         return None
     try:
         parsed = Decimal(str(value))
-    except (TypeError, ValueError, ArithmeticError):
+    except (TypeError, ValueError, ArithmeticError, RecursionError):
+        # ``RecursionError`` is not a ``ValueError``: like the decode guard
+        # below, ``str()`` on a deeply nested agent-reported container can
+        # exceed the recursion budget. The WHOLE per-event body must degrade to
+        # "unusable cost"; nothing here may escape into the caller's terminal
+        # path (FAR-1914).
         return None
     if not parsed.is_finite() or parsed < 0 or parsed > _MAX_PLAUSIBLE_STEP_COST:
         return None
@@ -109,7 +114,15 @@ def _event_part(line: str) -> dict[str, Any] | None:
         return None
     try:
         event = json.loads(line)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
+        # ``RecursionError`` is a ``RuntimeError``, NOT the ``ValueError`` the
+        # other decode failures raise: the decoder raises it for a line nested
+        # past the recursion budget (a ~10k-level, ~40 KB line fits inside the
+        # retention window, so this is agent-controlled input). It must degrade
+        # here — escaping would replace the caller's typed
+        # ``SandboxNodeFailedError`` and drop the cost salvage. ``MemoryError``
+        # is the only remaining decode failure and is bounded by that same
+        # retention cap.
         return None
     if not isinstance(event, dict) or event.get("type") != _STEP_FINISH_EVENT:
         return None
@@ -131,8 +144,12 @@ def parse_step_finish_evidence(raw: str | None) -> tuple[dict[str, int], Decimal
     BOUNDED and fail-open: one linear pass, line by line; non-JSON lines, other
     event types and invalid counters/costs are skipped; ANY failure degrades to
     ``({}, None)`` — this never raises and never changes the caller's failure
-    semantics. FAR-1914 round-3 M2: "invalid cost" includes a finite but
-    implausibly large value (``"1E+999999999"``) whose addition would raise
+    semantics. That includes a line nested deeply enough that ``json.loads``
+    raises ``RecursionError`` (a ``RuntimeError``, not a ``ValueError``): such a
+    line is skipped like any other unusable one, so the rest of the stream is
+    still parsed and the caller keeps its typed failure. FAR-1914 round-3 M2:
+    "invalid cost" includes a finite but implausibly large value
+    (``"1E+999999999"``) whose addition would raise
     ``decimal.Overflow``; it is rejected per event so a hostile/agent-reported
     stream cannot replace a typed ``SandboxNodeFailedError`` with a decimal
     exception and drop the salvage read.

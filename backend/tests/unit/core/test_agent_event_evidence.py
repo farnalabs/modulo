@@ -14,6 +14,18 @@ from decimal import Decimal
 import pytest
 
 from modulo.core.agent_event_evidence import heartbeat_liveness_seconds, parse_step_finish_evidence
+from modulo.core.pipeline_engine.node_runner import (
+    RECOVERED_TOKEN_USAGE_ATTR,
+    SandboxNodeFailedError,
+    _attach_recovered_token_usage,
+)
+
+#: A ~40 KB line whose nesting (~10k levels) is far past ``json.loads``'s
+#: recursion budget. It mentions ``step_finish``, so it reaches the decoder;
+#: the decoder raises ``RecursionError`` — a ``RuntimeError``, NOT a
+#: ``ValueError``. Inside the retention window, so it is agent-controlled input
+#: the parser must survive.
+_DEEP_STEP_FINISH_LINE = "[" * 20_000 + '"step_finish"' + "]" * 20_000
 
 
 def _event(
@@ -109,6 +121,29 @@ class TestParseStepFinishEvidence:
             assert tokens == {}
             assert cost is None
 
+    def test_deeply_nested_line_degrades_instead_of_raising_recursion_error(self) -> None:
+        """A ~10k-level line inside the retention window must not escape.
+
+        ``json.loads`` raises ``RecursionError`` (a ``RuntimeError``, not the
+        ``ValueError`` the guard used to catch) for nesting past its budget.
+        The documented contract is that the parser NEVER raises and degrades to
+        ``({}, None)`` — otherwise the terminal path loses its salvage read.
+        """
+
+        tokens, cost = parse_step_finish_evidence(_DEEP_STEP_FINISH_LINE)
+
+        assert tokens == {}
+        assert cost is None
+
+    def test_a_deeply_nested_line_does_not_discard_a_valid_sibling_event(self) -> None:
+        """The failure is PER EVENT: the rest of the stream is still parsed."""
+        raw = "\n".join([_DEEP_STEP_FINISH_LINE, _event(cost=0.0004, tokens={"total": 9})])
+
+        tokens, cost = parse_step_finish_evidence(raw)
+
+        assert tokens == {"total": 9}
+        assert cost == Decimal("0.0004")
+
 
 class TestCostCoercionErrors:
     """A bad report stays distinguishable from a genuine zero."""
@@ -202,6 +237,27 @@ class TestCostCoercionErrors:
         _, cost = parse_step_finish_evidence(raw)
 
         assert cost == Decimal("0.002")
+
+
+class TestTypedFailureSurvivesHostileInput:
+    """The raise-site hook must never replace a typed failure with its own."""
+
+    def test_deeply_nested_line_leaves_the_typed_failure_intact(self) -> None:
+        """FAR-1914: a ``RecursionError`` here would replace the real failure.
+
+        ``_attach_recovered_token_usage`` runs on the terminal path beside a
+        ``SandboxNodeFailedError``. Before the guard covered ``RecursionError``
+        it propagated out of the parse and destroyed the typed failure — and
+        the caller lost the derived sandbox line/agent cost. The exception must
+        come out exactly as it went in, with nothing attached.
+        """
+        exc = SandboxNodeFailedError("no output", node_id="node-1")
+
+        _attach_recovered_token_usage(exc, _DEEP_STEP_FINISH_LINE)
+
+        assert isinstance(exc, SandboxNodeFailedError)
+        assert str(exc) == "no output"
+        assert not hasattr(exc, RECOVERED_TOKEN_USAGE_ATTR)
 
 
 class TestHeartbeatLivenessSeconds:
