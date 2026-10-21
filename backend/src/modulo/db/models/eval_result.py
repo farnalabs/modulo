@@ -1,21 +1,23 @@
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
     ForeignKeyConstraint,
     Integer,
     String,
+    Text,
     Uuid,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import JSONB_COL, OrgScoped
 
 if TYPE_CHECKING:
     from modulo.db.models.eval_suite_run import SuiteRun
@@ -36,6 +38,19 @@ class EvalResult(OrgScoped):
             ["evals.id", "evals.organisation_id"],
             ondelete="CASCADE",
             name="fk_eval_results_eval_org",
+        ),
+        # ADR 066 D5/D6: ``outcome`` is the truth, with ``error`` a third state
+        # meaning "no verdict was produced". Deliberately no server default —
+        # a write that forgets the outcome must fail rather than record a fail.
+        CheckConstraint(
+            "outcome IN ('pass', 'fail', 'error')",
+            name="ck_eval_results_outcome",
+        ),
+        # ADR 066 §0: confidence provenance is a closed vocabulary.
+        CheckConstraint(
+            "judge_confidence_kind IS NULL OR judge_confidence_kind IN "
+            "('vendor_claimed_calibrated', 'model_self_reported', 'unavailable')",
+            name="ck_eval_results_judge_confidence_kind",
         ),
     )
 
@@ -73,8 +88,21 @@ class EvalResult(OrgScoped):
     # regression. NULL for legacy rows written before versioning was cut over —
     # such rows should be resolved to the definition's current (latest) version.
     eval_definition_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # ``passed`` is the compatibility projection of ``outcome`` (ADR 066 D5),
+    # never the truth. ``error`` projects to False so a block gate fails closed.
     passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # NOT NULL with NO server default: a write that omits the outcome fails
+    # loudly instead of silently recording a failure.
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Schema-versioned verdict envelope (ADR 066 D5). Physical jsonb; the
+    # shared JSONB_COL alias keeps SQLite/MariaDB parity.
+    judge_result_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True)
+    # Denormalised confidence provenance (envelope key ``confidence_kind``).
+    judge_confidence_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Coded reason when ``outcome == 'error'`` (the judge sub-namespace of the
+    # run error taxonomy). NULL on pass/fail.
+    error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     detail: Mapped[str | None] = mapped_column(String(2000))
     observed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     evaluated_at: Mapped[datetime] = mapped_column(

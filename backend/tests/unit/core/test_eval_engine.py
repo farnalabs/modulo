@@ -21,6 +21,7 @@ from modulo.core.eval_engine import (
     EvalType,
     UnknownEvalTypeError,
 )
+from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeOutcome
 
 
 def _make_eval_def(
@@ -314,12 +315,17 @@ class TestModelJudgeEval:
         assert result.passed is False
         assert result.score == pytest.approx(0.4)
 
-    def test_no_callable_returns_failed(self) -> None:
+    def test_no_callable_returns_error_not_a_verdict(self) -> None:
+        """FAR-1496: an absent judge is ``error``, never ``passed=False/score=0.0``."""
         engine = EvalEngine()
         eval_def = _make_eval_def("model_judge", {"field": "output"})
         result = engine.evaluate({"output": "test"}, eval_def, model_judge_callable=None)
+        assert result.outcome is JudgeOutcome.ERROR
         assert result.passed is False
-        assert result.score == 0.0
+        assert result.score is None
+        assert result.score != 0.0
+        assert result.judge_verdict is not None
+        assert result.judge_verdict.error_code is JudgeErrorCode.JUDGE_UNAVAILABLE
         assert "not provided" in result.detail
 
     def test_callable_returns_non_numeric_score_handled(self) -> None:
@@ -333,7 +339,7 @@ class TestModelJudgeEval:
         assert result.passed is True
         assert result.score is None
 
-    def test_callable_raises_exception(self) -> None:
+    def test_callable_raises_exception_is_an_error(self) -> None:
         engine = EvalEngine()
 
         def broken(output: dict, eval_def: EvalDefinition) -> dict:
@@ -341,11 +347,13 @@ class TestModelJudgeEval:
 
         eval_def = _make_eval_def("model_judge", {"field": "output"})
         result = engine.evaluate({"output": "test"}, eval_def, model_judge_callable=broken)
+        assert result.outcome is JudgeOutcome.ERROR
         assert result.passed is False
-        assert result.score == 0.0
-        assert "raised" in result.detail
+        assert result.score is None
+        assert result.judge_verdict is not None
+        assert result.judge_verdict.error_code is JudgeErrorCode.JUDGE_UNAVAILABLE
 
-    def test_content_too_long_returns_failed(self) -> None:
+    def test_content_too_long_returns_error(self) -> None:
         engine = EvalEngine()
         eval_def = _make_eval_def("model_judge", {"field": "output"})
         long_content = "x" * (_MAX_JUDGE_CONTENT_LENGTH + 1)
@@ -354,8 +362,9 @@ class TestModelJudgeEval:
             eval_def,
             model_judge_callable=_make_llm_callable(),
         )
+        assert result.outcome is JudgeOutcome.ERROR
         assert result.passed is False
-        assert result.score == 0.0
+        assert result.score is None
         assert "exceeds maximum" in result.detail
 
     def test_block_behaviour_raises_error_on_fail(self) -> None:
@@ -665,7 +674,7 @@ class TestNormalContent:
 
 
 class TestContentLengthLimit:
-    def test_content_too_long_returns_failed(self) -> None:
+    def test_content_too_long_returns_error(self) -> None:
         engine = EvalEngine()
         eval_def = _make_eval_def("model_judge", {"field": "output"})
         long_content = "x" * (_MAX_JUDGE_CONTENT_LENGTH + 1)
@@ -676,8 +685,9 @@ class TestContentLengthLimit:
             model_judge_callable=_make_llm_callable(),
         )
 
+        assert result.outcome is JudgeOutcome.ERROR
         assert result.passed is False
-        assert result.score == 0.0
+        assert result.score is None
         assert "exceeds maximum" in result.detail
         assert str(_MAX_JUDGE_CONTENT_LENGTH) in result.detail
 

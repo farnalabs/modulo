@@ -209,6 +209,56 @@ def test_regex_revalidation_with_empty_pattern_fails_closed():
     assert result.passed is False
 
 
+def test_model_judge_revalidation_carries_the_rubric_as_a_typed_question():
+    """The rubric used to be silently ignored by the judge.
+
+    It is now a declared ``noul`` question, and the whole produced output
+    reaches the judge through the guarded input (an empty field previously
+    produced empty content, so the judge validated nothing).
+    """
+    from modulo.core.eval_engine import EvalEngine
+    from modulo.core.guardrails.correction import _revalidate_model_judge
+
+    captured: dict[str, Any] = {}
+
+    def judge(output: dict[str, Any], eval_def: EvalDefinition) -> dict[str, Any]:
+        captured["config"] = dict(eval_def.config)
+        captured["output"] = dict(output)
+        return {"passed": True, "detail": "clear"}
+
+    result = _revalidate_model_judge(
+        EvalEngine(),
+        {"body": "safe content"},
+        judge_callable=judge,
+        rubric="does it still contain the guarded data?",
+        threshold=0.7,
+        model_backend_id=str(uuid.uuid4()),
+    )
+
+    assert result.passed is True
+    config = captured["config"]
+    assert config["answer_contract"] == "typed_questions"
+    assert config["questions"][0]["instructions"] == "does it still contain the guarded data?"
+    assert config["questions"][0]["min_pass_confidence"] == pytest.approx(0.7)
+    assert config["pass_rule"]["threshold"] == pytest.approx(0.7)
+    assert "safe content" in config["_judge_content"]
+
+
+def test_model_judge_revalidation_without_a_backend_raises_loudly():
+    """A rubric that cannot be represented is an error, never a silent default."""
+    from modulo.core.eval_engine import EvalEngine
+    from modulo.core.guardrails.correction import _revalidate_model_judge
+
+    with pytest.raises(ValueError, match="revalidation model backend"):
+        _revalidate_model_judge(
+            EvalEngine(),
+            {"body": "x"},
+            judge_callable=lambda output, eval_def: {"passed": True},
+            rubric="rubric",
+            model_backend_id=None,
+        )
+
+
 def test_restricted_backend_rejects_privileged_capabilities():
     correction = _correction()
     with pytest.raises(RestrictedBackendViolationError, match="restricted"):

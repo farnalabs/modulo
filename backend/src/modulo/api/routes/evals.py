@@ -2987,9 +2987,12 @@ async def list_run_evals(
                 "run_id": str(r.run_id),
                 "node_id": str(r.node_id) if r.node_id else None,
                 "eval_id": str(r.eval_id),
+                "outcome": r.outcome,
                 "passed": r.passed,
                 "score": r.score,
                 "detail": r.detail,
+                "error_code": r.error_code,
+                "judge_confidence_kind": r.judge_confidence_kind,
                 "evaluated_at": r.evaluated_at.isoformat() if r.evaluated_at else None,
             }
             for r in rows
@@ -3380,7 +3383,29 @@ def _build_eval_config_json(eval_type: str, sample_output: dict[str, Any]) -> di
     if eval_type == "json_schema":
         return {"field": field, "schema": {}}
     if eval_type == "model_judge":
-        return {"field": field, "instructions": ""}
+        # ADR 066 D8: new definitions must carry the typed dialect. This is the
+        # "create eval from run" stub, so it is a minimal one-question set the
+        # author then edits (the full builder lands in S2).
+        from modulo.core.eval_engine.typed_judge import TYPED_ANSWER_CONTRACT
+
+        return {
+            "field": field,
+            "answer_contract": TYPED_ANSWER_CONTRACT,
+            "backing": {"kind": "model_backend"},
+            "questions": [
+                {
+                    "id": "verdict",
+                    "type": "noul",
+                    "instructions": "",
+                    "criteria": [],
+                    "weight": 1.0,
+                    "required": True,
+                    "min_pass_confidence": 0.5,
+                }
+            ],
+            "pass_rule": {"kind": "weighted_score_at_least", "threshold": 0.5},
+            "verdict_kind": "assessment",
+        }
     if eval_type == "custom_function":
         return {"field": field, "function": ""}
     return {}

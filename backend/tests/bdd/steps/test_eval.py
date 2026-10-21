@@ -357,6 +357,7 @@ def completed_eval_run_with_scores(ctx):
             suite_run_id=None,
             node_id=uuid.uuid4(),
             eval_id=eval_id,
+            outcome="pass" if passed else "fail",
             passed=passed,
             score=score,
             detail="rubric verdict",

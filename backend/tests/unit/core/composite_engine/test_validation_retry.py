@@ -1,6 +1,5 @@
 """Tests for composite output validation with retry."""
 
-import asyncio
 import uuid
 
 import pytest
@@ -12,6 +11,7 @@ from modulo.core.composite_engine.composite_binding import (
     ValidationResult,
 )
 from modulo.core.composite_engine.expander import (
+    _validate_model_judge_eval,
     execute_composite_with_retry,
     run_output_validation,
 )
@@ -130,7 +130,13 @@ class TestRunOutputValidation:
         result = run_output_validation({"payload": {"x": 1}}, ov)
         assert result.passed
 
-    def test_model_judge_passes(self) -> None:
+    def test_model_judge_is_loudly_unsupported(self) -> None:
+        """ADR 066 D11: the composite engine is an explicit named exclusion.
+
+        Its judge callable is unwired and has an incompatible signature, and the
+        surface is scheduled for retirement. A model_judge definition must fail
+        loudly — never be silently skipped or treated as incomparable.
+        """
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
@@ -141,45 +147,12 @@ class TestRunOutputValidation:
                 ),
             ],
         )
-        result = run_output_validation(
-            {"text": "good"},
-            ov,
-            model_judge_callable=lambda output, config: {"passed": True, "detail": "ok"},
-        )
-        assert result.passed
-
-    def test_model_judge_fails(self) -> None:
-        ov = OutputValidation(
-            eval_definitions=[
-                EvalDefinitionConfig(
-                    id="e1",
-                    name="judge",
-                    type="model_judge",
-                    config={"rubric": "check quality"},
-                ),
-            ],
-        )
-        result = run_output_validation(
-            {"text": "bad"},
-            ov,
-            model_judge_callable=lambda output, config: {"passed": False, "detail": "low quality"},
-        )
-        assert not result.passed
-        assert "low quality" in result.failures[0]
-
-    def test_model_judge_no_callable_fails(self) -> None:
-        ov = OutputValidation(
-            eval_definitions=[
-                EvalDefinitionConfig(
-                    id="e1",
-                    name="judge",
-                    type="model_judge",
-                    config={"rubric": "check"},
-                ),
-            ],
-        )
-        result = run_output_validation({"text": "test"}, ov)
-        assert not result.passed
+        with pytest.raises(NotImplementedError, match="ADR 066 D11"):
+            run_output_validation(
+                {"text": "good"},
+                ov,
+                model_judge_callable=lambda output, config: {"passed": True, "detail": "ok"},
+            )
 
     def test_unknown_eval_type_raises(self) -> None:
         ov = OutputValidation(
@@ -331,61 +304,14 @@ class TestRunOutputValidation:
         assert not result.passed
         assert "JSON Schema definition error" in result.failures[0]
 
-    def test_model_judge_non_dict_result_fails(self) -> None:
-        ov = OutputValidation(
-            eval_definitions=[
-                EvalDefinitionConfig(
-                    id="e1",
-                    name="judge",
-                    type="model_judge",
-                    config={"rubric": "check"},
-                ),
-            ],
-        )
-        result = run_output_validation(
-            {"text": "test"},
-            ov,
-            model_judge_callable=lambda output, config: "not-a-dict",
-        )
-        assert not result.passed
-        assert "non-dict result" in result.failures[0]
+    def test_model_judge_helper_is_loudly_unsupported_even_directly(self) -> None:
+        """A direct helper call fails loudly too (ADR 066 D11).
 
-    def test_model_judge_raised_exception_reports_error(self) -> None:
-        ov = OutputValidation(
-            eval_definitions=[
-                EvalDefinitionConfig(
-                    id="e1",
-                    name="judge",
-                    type="model_judge",
-                    config={"rubric": "check"},
-                ),
-            ],
-        )
-        result = run_output_validation(
-            {"text": "test"},
-            ov,
-            model_judge_callable=lambda output, config: (_ for _ in ()).throw(RuntimeError("boom")),
-        )
-        assert not result.passed
-        assert "model_judge raised" in result.failures[0]
-
-    def test_model_judge_cancelled_error_reraised(self) -> None:
-        ov = OutputValidation(
-            eval_definitions=[
-                EvalDefinitionConfig(
-                    id="e1",
-                    name="judge",
-                    type="model_judge",
-                    config={"rubric": "check"},
-                ),
-            ],
-        )
-        with pytest.raises(asyncio.CancelledError):
-            run_output_validation(
-                {"text": "test"},
-                ov,
-                model_judge_callable=lambda output, config: (_ for _ in ()).throw(asyncio.CancelledError()),
-            )
+        Kept reachable so a future caller cannot resurrect the old
+        silently-incomparable path through the private helper.
+        """
+        with pytest.raises(NotImplementedError, match="ADR 066 D11"):
+            _validate_model_judge_eval("judge", {"rubric": "check"}, {"text": "x"}, None, [])
 
 
 class TestExecuteCompositeWithRetry:

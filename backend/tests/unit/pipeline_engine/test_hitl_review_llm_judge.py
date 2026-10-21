@@ -21,6 +21,7 @@ from langgraph.types import Interrupt
 
 import modulo.core.pipeline_engine.llm_judge as llm_judge
 from modulo.core.eval_engine import EvalDefinition, EvalType
+from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
 
 
 class _FakeBackend:
@@ -246,11 +247,11 @@ def test_hung_judge_times_out_fail_closed(monkeypatch: pytest.MonkeyPatch) -> No
     )
     judge = llm_judge.build_model_judge_callable(_HangingHub(), str(uuid.uuid4()))
 
-    result = judge({"content": "some agent output"}, eval_def)
+    with pytest.raises(JudgeExecutionError) as exc_info:
+        judge({"content": "some agent output"}, eval_def)
 
-    assert result["passed"] is False
-    assert result["score"] == 0.0
-    assert "timed out" in result["detail"]
+    assert exc_info.value.code is JudgeErrorCode.JUDGE_TIMEOUT
+    assert "timed out" in exc_info.value.detail
 
 
 def test_hung_judge_releases_the_bridge_for_the_next_call(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -273,10 +274,11 @@ def test_hung_judge_releases_the_bridge_for_the_next_call(monkeypatch: pytest.Mo
         str(uuid.uuid4()),
     )
 
-    first = hung_judge({"content": "some agent output"}, eval_def)
+    with pytest.raises(JudgeExecutionError) as exc_info:
+        hung_judge({"content": "some agent output"}, eval_def)
     second = healthy_judge({"content": "some agent output"}, eval_def)
 
-    assert first["passed"] is False
+    assert exc_info.value.code is JudgeErrorCode.JUDGE_TIMEOUT
     assert second["passed"] is True
     assert second["score"] == pytest.approx(0.9)
 
@@ -314,14 +316,14 @@ def test_hung_hub_get_is_bounded_and_releases_the_bridge_for_the_next_call(
         str(uuid.uuid4()),
     )
 
-    first = hung_resolve_judge({"content": "some agent output"}, eval_def)
+    with pytest.raises(JudgeExecutionError) as exc_info:
+        hung_resolve_judge({"content": "some agent output"}, eval_def)
     second = healthy_judge({"content": "some agent output"}, eval_def)
 
-    # Fail closed with the standard timeout detail (an unjudged output must
-    # not pass a gate).
-    assert first["passed"] is False
-    assert first["score"] == 0.0
-    assert "timed out" in first["detail"]
+    # Coded timeout — no verdict was produced (an unjudged output must not
+    # pass a gate).
+    assert exc_info.value.code is JudgeErrorCode.JUDGE_TIMEOUT
+    assert "timed out" in exc_info.value.detail
     # The bridge's single worker thread was released, so this healthy call
     # actually reached its backend instead of queueing behind the hang.
     assert second["passed"] is True

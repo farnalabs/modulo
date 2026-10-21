@@ -66,6 +66,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType, ModelJudgeCallable
+from modulo.core.eval_engine.typed_judge import TYPED_ANSWER_CONTRACT
 from modulo.core.guardrails import GUARDRAIL_DETECTION_TYPES, REDACTION_MASK, GuardrailAction
 
 _log = logging.getLogger(__name__)
@@ -702,20 +703,66 @@ def _revalidate_regex(
     return raw.model_copy(update={"passed": not raw.passed})
 
 
+def _revalidation_judge_config(*, rubric: str, threshold: float, model_backend_id: str) -> dict[str, Any]:
+    """Build a single-question typed config that carries the rubric to the judge.
+
+    The pre-ADR-066 config was ``{rubric, threshold}``, which the judge silently
+    ignored (it only read ``field``) — the rubric never reached the model. The
+    rubric is now a declared ``noul`` question with the same threshold as both
+    its pass-confidence floor and the verdict's pass rule.
+    """
+    return {
+        # Empty field -> the engine's guarded input uses the WHOLE produced
+        # output (a judge given an empty string cannot validate anything).
+        "field": "",
+        "answer_contract": TYPED_ANSWER_CONTRACT,
+        "backing": {"kind": "model_backend", "model_backend_id": model_backend_id},
+        "questions": [
+            {
+                "id": "revalidation",
+                "type": "noul",
+                "instructions": rubric,
+                "criteria": [rubric],
+                "weight": 1.0,
+                "required": True,
+                "min_pass_confidence": threshold,
+            }
+        ],
+        "pass_rule": {"kind": "weighted_score_at_least", "threshold": threshold},
+        "verdict_kind": "assessment",
+    }
+
+
 def _revalidate_model_judge(
     engine: EvalEngine,
     produced_output: dict[str, Any],
     *,
     judge_callable: ModelJudgeCallable | None,
     rubric: str,
+    threshold: float = 0.5,
+    model_backend_id: str | None = None,
 ) -> EvalResult:
-    """Re-validate with an Model judge (DIFFERENT backend than the correction backend)."""
+    """Re-validate with a model judge (DIFFERENT backend than the correction backend).
+
+    The rubric is a programmatic typed question (never silently dropped). If it
+    cannot be represented — no re-validation backend is bound — this raises
+    loudly instead of judging with a default prompt.
+    """
+    if not model_backend_id:
+        raise ValueError(
+            "model_judge revalidation cannot be represented: no revalidation model "
+            "backend is bound (revalidation_model_backend_id is required)"
+        )
     eval_def = EvalDefinition(
         id=uuid.uuid4(),
         org_id=uuid.uuid4(),
         name="correction_revalidation_model_judge",
         eval_type=EvalType.MODEL_JUDGE,
-        config={"rubric": rubric, "threshold": 0.5},
+        config=_revalidation_judge_config(
+            rubric=rubric,
+            threshold=threshold,
+            model_backend_id=model_backend_id,
+        ),
         failure_behaviour="warn",
     )
     return engine.evaluate(produced_output, eval_def, model_judge_callable=judge_callable)
@@ -1165,6 +1212,10 @@ async def _run_different_family_revalidation(
                 produced_output,
                 judge_callable=judge_callable,
                 rubric=str(config.get("rubric") or "does the corrected output still contain the guarded data?"),
+                threshold=float(config.get("threshold", 0.5)),
+                model_backend_id=(
+                    str(correction.revalidation_model_backend_id) if correction.revalidation_model_backend_id else None
+                ),
             )
         return _revalidate_pii(produced_output)
     except asyncio.CancelledError:

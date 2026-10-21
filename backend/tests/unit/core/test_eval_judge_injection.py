@@ -185,7 +185,7 @@ class TestNormalContent:
 class TestContentLengthLimit:
     """Content over 100K chars is rejected."""
 
-    def test_content_too_long_returns_failed(self) -> None:
+    def test_content_too_long_returns_error(self) -> None:
         engine = EvalEngine()
         eval_def = _make_eval_def({"field": "output"})
         long_content = "x" * (_MAX_JUDGE_CONTENT_LENGTH + 1)
@@ -196,8 +196,9 @@ class TestContentLengthLimit:
             model_judge_callable=lambda o, e: {"passed": True, "score": 1.0, "detail": ""},
         )
 
+        assert result.outcome.value == "error"
         assert result.passed is False
-        assert result.score == 0.0
+        assert result.score is None
         assert "exceeds maximum" in result.detail
         assert str(_MAX_JUDGE_CONTENT_LENGTH) in result.detail
 

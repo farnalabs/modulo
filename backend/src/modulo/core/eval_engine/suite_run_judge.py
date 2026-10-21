@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.eval_engine import EvalDefinition, ModelJudgeCallable
+from modulo.core.eval_engine.typed_judge import TYPED_ANSWER_CONTRACT, JudgeErrorCode, JudgeExecutionError
 from modulo.core.model_backend_hub import BackendNotFoundError, ModelBackendHub
 from modulo.db.models.model_backend import ModelBackend
 
@@ -127,17 +128,23 @@ def build_suite_run_model_judge_callable(hub: ModelBackendHub) -> ModelJudgeCall
     cache: dict[str, ModelJudgeCallable] = {}
 
     def _judge(output: dict[str, Any], eval_def: EvalDefinition) -> dict[str, Any]:
-        backend_id_raw = eval_def.config.get("model_backend_id")
+        config = eval_def.config or {}
+        backend_id_raw = config.get("model_backend_id")
+        if not backend_id_raw and config.get("answer_contract") == TYPED_ANSWER_CONTRACT:
+            backing = config.get("backing")
+            if isinstance(backing, dict):
+                backend_id_raw = backing.get("model_backend_id")
         if not backend_id_raw:
             detail = (
                 "model_judge eval has no model_backend_id configured; set the eval "
-                "definition's config['model_backend_id'] to an active model backend id"
+                "definition's config['model_backend_id'] (or the typed "
+                "config['backing']['model_backend_id']) to an active model backend id"
             )
             _log.error(
                 "suite_run_judge.missing_model_backend_id",
                 extra={"eval_id": str(eval_def.id), "detail": detail},
             )
-            return {"passed": False, "score": 0.0, "detail": detail}
+            raise JudgeExecutionError(JudgeErrorCode.JUDGE_CONFIGURATION, detail)
         key = str(backend_id_raw)
         judge = cache.get(key)
         if judge is None:
@@ -145,14 +152,10 @@ def build_suite_run_model_judge_callable(hub: ModelBackendHub) -> ModelJudgeCall
             cache[key] = judge
         try:
             return judge(output, eval_def)
-        except BackendNotFoundError:
+        except BackendNotFoundError as exc:
             # A VALID-UUID id that the hub does not hold (deleted, deactivated,
-            # or another org's backend) makes ``hub.get`` raise. Letting it
-            # escape would be caught by the runner's per-eval guard, which
-            # EXCLUDES the case (run -> partial) rather than failing it - the
-            # inconsistent behaviour the missing/malformed paths above avoid.
-            # Fail THIS eval closed, exactly as they do, so the case fails and
-            # its siblings still run.
+            # or another org's backend) means the judge cannot run. It is a
+            # configuration error (no verdict), never a failing verdict.
             detail = (
                 f"model_judge eval's model_backend_id {key!r} is not an active model "
                 "backend for this organisation; set the eval definition's "
@@ -162,6 +165,6 @@ def build_suite_run_model_judge_callable(hub: ModelBackendHub) -> ModelJudgeCall
                 "suite_run_judge.unknown_model_backend_id",
                 extra={"eval_id": str(eval_def.id), "detail": detail},
             )
-            return {"passed": False, "score": 0.0, "detail": detail}
+            raise JudgeExecutionError(JudgeErrorCode.JUDGE_CONFIGURATION, detail) from exc
 
     return _judge

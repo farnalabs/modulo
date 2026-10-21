@@ -119,6 +119,7 @@ async def _seed_eval_result(
         run_id=run_id,
         node_id=None,
         eval_id=eval_id,
+        outcome="pass" if passed else "fail",
         passed=passed,
         observed=observed,
     )

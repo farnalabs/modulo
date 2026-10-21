@@ -37,6 +37,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.eval_engine import EvalEngine
+from modulo.core.eval_engine.typed_judge import JudgeOutcome
 
 # Re-export from sub-modules for backward compatibility
 from modulo.core.feedback_manager.exceptions import (
@@ -446,12 +447,29 @@ class FeedbackManager:
         eval_def: Any,
         eval_engine: EvalEngine,
     ) -> tuple[bool, bool | None]:
-        """Run one eval against the rejected output."""
+        """Run one eval against the rejected output.
+
+        A ``model_judge`` definition resolves its judge through the SAME
+        resolver the pipeline and suite paths use. When no judge can be
+        resolved the engine records ``outcome=error``; the feedback path treats
+        that as "not evaluated" (returns ``passed=None``), never as a failing
+        verdict — the FAR-1496 defect.
+        """
         if not isinstance(eval_def, dict) and not hasattr(eval_def, "eval_type"):
             logger.warning("Malformed eval_def in eval_suite: %s", eval_def)
             return False, None
         try:
-            result = eval_engine.evaluate(record.rejected_output, self._normalise_eval_def(eval_def))
+            dto = self._normalise_eval_def(eval_def)
+            judge = None
+            if str(getattr(dto, "eval_type", "")) == "model_judge":
+                from modulo.core.pipeline_engine.llm_judge import resolve_model_judge_callable
+
+                judge = resolve_model_judge_callable(dto)
+            result = eval_engine.evaluate(
+                record.rejected_output,
+                dto,
+                model_judge_callable=judge,
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -459,6 +477,13 @@ class FeedbackManager:
                 "EvalEngine.evaluate failed for FeedbackRecord %s on eval_def %s",
                 record.id,
                 eval_def,
+            )
+            return True, None
+        if result.outcome is JudgeOutcome.ERROR:
+            logger.warning(
+                "FeedbackRecord %s eval produced no verdict (%s); excluding it from the eval-gap decision",
+                record.id,
+                result.detail,
             )
             return True, None
         return True, result.passed

@@ -134,6 +134,9 @@ def run_output_validation(
             case "json_schema":
                 _validate_json_schema_eval(name, config, mapped_output, failures)
             case "model_judge":
+                # ADR 066 D11: the composite engine is an EXPLICIT named
+                # exclusion. The helper raises a loud NotImplementedError rather
+                # than silently treating the eval as absent or incomparable.
                 _validate_model_judge_eval(name, config, mapped_output, model_judge_callable, failures)
             case _:
                 raise ValueError(f"Unknown eval type for output validation: {eval_def.type}")
@@ -200,21 +203,15 @@ def _validate_model_judge_eval(
     model_judge_callable: Any | None,
     failures: list[str],
 ) -> None:
-    if model_judge_callable is None:
-        failures.append(_eval_fail(name, "model_judge requires a callable but none provided"))
-        return
-    try:
-        raw = model_judge_callable(mapped_output, config)
-        if not isinstance(raw, dict):
-            failures.append(_eval_fail(name, "model_judge returned non-dict result"))
-            return
-        if not raw.get("passed"):
-            detail = raw.get("detail", "model_judge evaluated as failed")
-            failures.append(_eval_fail(name, detail))
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        failures.append(_eval_fail(name, f"model_judge raised: {exc}"))
+    """Loudly unsupported — see ADR 066 D11 (explicit named exclusion).
+
+    Kept (rather than deleted) so a direct caller fails loudly too instead of
+    resurrecting the silently-incomparable path.
+    """
+    raise NotImplementedError(
+        f"model_judge output validation ({name!r}) is not supported by the composite "
+        "engine (ADR 066 D11: explicit named exclusion). Use a pipeline eval."
+    )
 
 
 async def execute_composite_with_retry(

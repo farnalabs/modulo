@@ -24,13 +24,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.eval_engine.execute_suite_run import (
-    SuiteRunExecutionError,
     build_suite_run,
 )
 from modulo.core.eval_engine.suite_run_judge import (
     build_org_model_backend_hub,
     build_suite_run_model_judge_callable,
 )
+from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
 from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.db.models import Base
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
@@ -316,45 +316,44 @@ async def test_build_hub_tears_down_when_initialise_fails(session, monkeypatch) 
 # --------------------------------------------------------------------------- #
 # build_suite_run_model_judge_callable                                          #
 # --------------------------------------------------------------------------- #
-def test_judge_callable_missing_backend_id_fails_closed() -> None:
+def test_judge_callable_missing_backend_id_is_a_configuration_error() -> None:
     hub = ModelBackendHub()
     judge = build_suite_run_model_judge_callable(hub)
 
-    result = judge({"output": "x"}, _judge_def(uuid.uuid4(), None))
+    with pytest.raises(JudgeExecutionError) as exc_info:
+        judge({"output": "x"}, _judge_def(uuid.uuid4(), None))
 
-    assert result["passed"] is False
-    assert result["score"] == 0.0
-    assert "model_backend_id" in result["detail"]
+    assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+    assert "model_backend_id" in exc_info.value.detail
 
 
-def test_judge_callable_malformed_backend_id_fails_closed() -> None:
+def test_judge_callable_malformed_backend_id_is_a_configuration_error() -> None:
     hub = ModelBackendHub()
     judge = build_suite_run_model_judge_callable(hub)
 
-    result = judge({"output": "x"}, _judge_def(uuid.uuid4(), "not-a-uuid"))
+    with pytest.raises(JudgeExecutionError) as exc_info:
+        judge({"output": "x"}, _judge_def(uuid.uuid4(), "not-a-uuid"))
 
-    assert result["passed"] is False
-    assert result["score"] == 0.0
-    assert "malformed" in result["detail"]
+    assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+    assert "malformed" in exc_info.value.detail
 
 
-def test_judge_callable_absent_backend_id_fails_closed() -> None:
-    """A valid UUID the hub does not hold fails THAT eval closed, not the case.
+def test_judge_callable_absent_backend_id_is_a_configuration_error() -> None:
+    """A valid UUID the hub does not hold means the judge cannot run.
 
     A deleted/deactivated/cross-org backend is absent from the hub, so
-    ``hub.get`` raises ``BackendNotFoundError``. Letting it escape would be
-    caught by the runner's per-eval guard, which EXCLUDES the case (run ->
-    partial) - inconsistent with the missing/malformed paths, which fail the
-    eval closed. Pin the fail-closed behaviour.
+    ``hub.get`` raises ``BackendNotFoundError``. That is a configuration
+    failure (no verdict), persisted as ``outcome=error``; it is never a
+    failing verdict.
     """
     hub = ModelBackendHub()
     judge = build_suite_run_model_judge_callable(hub)
 
-    result = judge({"output": "x"}, _judge_def(uuid.uuid4(), str(uuid.uuid4())))
+    with pytest.raises(JudgeExecutionError) as exc_info:
+        judge({"output": "x"}, _judge_def(uuid.uuid4(), str(uuid.uuid4())))
 
-    assert result["passed"] is False
-    assert result["score"] == 0.0
-    assert "model_backend_id" in result["detail"]
+    assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+    assert "model_backend_id" in exc_info.value.detail
 
 
 def test_judge_callable_dispatches_each_definition_to_its_own_backend() -> None:
@@ -529,12 +528,13 @@ async def test_saq_job_runs_judge_end_to_end_and_tears_down_hub(monkeypatch) -> 
     await engine.dispose()
 
 
-async def test_saq_job_missing_backend_id_fails_eval_closed_and_suite_completes(monkeypatch) -> None:
-    """A judge def with NO ``model_backend_id`` fails THAT eval, suite still completes.
+async def test_saq_job_missing_backend_id_persists_error_and_fails_run(monkeypatch) -> None:
+    """A judge def with NO ``model_backend_id`` records an error verdict row.
 
-    AC4: the malformed/missing backend id must never raise out of the per-case
-    loop. The whole suite must still reach its terminal state, with a failed
-    (not excluded/errored) case — never an orchestration failure.
+    The missing id must never raise out of the per-case loop, and it must never
+    be recorded as a failing verdict. Every case is excluded (the only
+    definition errored) so the run terminalises ``failed``, with one error row
+    carrying the coded reason.
     """
     import modulo.core.saq_worker as sw
     from modulo.core.eval_engine import suite_run_judge
@@ -568,14 +568,17 @@ async def test_saq_job_missing_backend_id_fails_eval_closed_and_suite_completes(
 
     stats = await sw.execute_suite_run({}, suite_run_id=rid, org_id=oid)
 
-    assert stats["state"] == SuiteRunState.COMPLETED.value
-    assert stats["failed_cases"] == 1
-    assert stats["excluded_case_count"] == 0
+    assert stats["state"] == SuiteRunState.FAILED.value
+    assert stats["failed_cases"] == 0
+    assert stats["excluded_case_count"] == 1
 
     async with factory() as s:
         rows = list((await s.execute(select(EvalResult).where(EvalResult.suite_run_id == uuid.UUID(rid)))).scalars())
     assert len(rows) == 1
+    assert rows[0].outcome == "error"
+    assert rows[0].score is None
     assert rows[0].passed is False
+    assert rows[0].error_code == "judge.configuration"
     assert "model_backend_id" in (rows[0].detail or "")
 
     await engine.dispose()
@@ -621,13 +624,13 @@ async def test_saq_job_logs_and_continues_when_hub_teardown_fails(monkeypatch) -
 
     stats = await sw.execute_suite_run({}, suite_run_id=rid, org_id=oid)
 
-    assert stats["state"] == SuiteRunState.COMPLETED.value
-    assert stats["failed_cases"] == 1
+    assert stats["state"] == SuiteRunState.FAILED.value
+    assert stats["excluded_case_count"] == 1
 
     await engine.dispose()
 
 
-async def test_saq_job_judge_suite_without_active_backend_still_refuses(monkeypatch) -> None:
+async def test_saq_job_judge_suite_without_active_backend_records_errors(monkeypatch) -> None:
     import modulo.core.saq_worker as sw
 
     org = uuid.uuid4()
@@ -655,12 +658,16 @@ async def test_saq_job_judge_suite_without_active_backend_still_refuses(monkeypa
     monkeypatch.setattr("modulo.core.error_tracking.ErrorIngestionService", _FakeIngestionService)
     monkeypatch.setattr(sw, "_make_session_factory", lambda: factory)
 
-    with pytest.raises(SuiteRunExecutionError, match="judge callable"):
-        await sw.execute_suite_run({}, suite_run_id=rid, org_id=oid)
+    stats = await sw.execute_suite_run({}, suite_run_id=rid, org_id=oid)
 
     async with factory() as s:
         fresh = await s.get(SuiteRun, uuid.UUID(rid))
+        rows = list((await s.execute(select(EvalResult).where(EvalResult.suite_run_id == uuid.UUID(rid)))).scalars())
     assert fresh is not None
     assert fresh.state == SuiteRunState.FAILED.value
+    assert stats["excluded_case_count"] == 1
+    assert len(rows) == 1
+    assert rows[0].outcome == "error"
+    assert rows[0].error_code == "judge.unavailable"
 
     await engine.dispose()

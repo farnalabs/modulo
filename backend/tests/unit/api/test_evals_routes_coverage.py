@@ -219,12 +219,34 @@ def client() -> Generator[tuple[TestClient, AsyncMock], None, None]:
 # ---------------------------------------------------------------------------
 
 
+def _typed_judge_config() -> dict:
+    """A structurally valid typed judge config (ADR 066 D8)."""
+    return {
+        "field": "output",
+        "answer_contract": "typed_questions",
+        "backing": {"kind": "model_backend", "model_backend_id": str(uuid.uuid4())},
+        "questions": [
+            {
+                "id": "verdict",
+                "type": "noul",
+                "instructions": "Is the output acceptable?",
+                "criteria": [],
+                "weight": 1.0,
+                "required": True,
+                "min_pass_confidence": 0.5,
+            }
+        ],
+        "pass_rule": {"kind": "weighted_score_at_least", "threshold": 0.5},
+        "verdict_kind": "assessment",
+    }
+
+
 def _create_payload(**overrides: object) -> dict:
     payload = {
         "pipeline_id": str(_PIPELINE_ID),
         "name": "my-eval",
         "eval_type": "model_judge",
-        "config_json": {},
+        "config_json": _typed_judge_config(),
     }
     payload.update(overrides)
     return payload

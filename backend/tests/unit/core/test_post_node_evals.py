@@ -387,7 +387,8 @@ class TestPostNodeLlmJudgeCallable:
         records = {r.eval_name: r for r in caplog.records if r.getMessage() == "post_node_eval.result"}
         judge_record = records["model-judge"]
         assert judge_record.passed is False
-        assert judge_record.score == 0.0
+        # An unconfigured judge is an ERROR outcome: no score at all, never 0.0.
+        assert judge_record.score is None
         # A clear, fail-closed configuration error — not the MISSING-id
         # message and not a silent 0.0 with no explanation.
         assert "malformed" in judge_record.detail

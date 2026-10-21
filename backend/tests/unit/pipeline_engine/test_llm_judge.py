@@ -24,6 +24,7 @@ from langchain_core.messages import AIMessage
 
 import modulo.core.pipeline_engine.llm_judge as llm_judge
 from modulo.core.eval_engine import EvalDefinition, EvalType
+from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
 
 
 class _FakeBackend:
@@ -67,32 +68,39 @@ def _make_eval_def(
 # ---------------------------------------------------------------------------
 
 
-def test_malformed_model_backend_id_fails_closed() -> None:
-    """A non-UUID ``model_backend_id`` never raises out of the eval loop; it
-    returns a judge that fails THIS eval closed with a clear config message."""
+def test_malformed_model_backend_id_is_a_configuration_error() -> None:
+    """A non-UUID ``model_backend_id`` yields a coded configuration error.
+
+    It never raises out of the eval loop uncaught — the engine turns the coded
+    error into ``outcome=error`` (no verdict), so sibling evals still run.
+    """
     judge = llm_judge.build_model_judge_callable(_FakeHub("ignored"), "not-a-uuid")
 
-    result = judge({"content": "some output"}, _make_eval_def())
+    with pytest.raises(JudgeExecutionError) as exc_info:
+        judge({"content": "some output"}, _make_eval_def())
 
-    assert result["passed"] is False
-    assert result["score"] == 0.0
-    assert "malformed" in result["detail"]
-    assert "not-a-uuid" in result["detail"]
+    assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+    assert "malformed" in exc_info.value.detail
+    assert "not-a-uuid" in exc_info.value.detail
 
 
-def test_non_json_response_falls_back_to_raw_text() -> None:
-    """A backend that answers with prose (not JSON) fails closed with the raw
-    text as the detail instead of raising ``json.JSONDecodeError``."""
+def test_non_json_response_is_a_malformed_response_error() -> None:
+    """Prose (not JSON) is a malformed response with no verdict.
+
+    The raw model text is never copied into the human-readable detail — the
+    detail carries the instrument failure, not the payload.
+    """
     judge = llm_judge.build_model_judge_callable(
         _FakeHub("this is not json"),
         str(uuid.uuid4()),
     )
 
-    result = judge({"content": "some output"}, _make_eval_def())
+    with pytest.raises(JudgeExecutionError) as exc_info:
+        judge({"content": "some output"}, _make_eval_def())
 
-    assert result["passed"] is False
-    assert result["score"] == 0.0
-    assert result["detail"] == "this is not json"
+    assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+    assert "non-JSON" in exc_info.value.detail
+    assert "this is not json" not in exc_info.value.detail
 
 
 def test_response_detail_null_is_coerced_to_empty_string() -> None:

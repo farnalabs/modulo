@@ -67,6 +67,7 @@ from modulo.core.eval_engine.suite_run import (
     record_completion,
     suite_cumulative_exceeded,
 )
+from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeOutcome
 from modulo.db.models.eval import Eval as EvalRow
 from modulo.db.models.eval_dataset import EvalCase, EvalDataset
 from modulo.db.models.eval_result import EvalResult
@@ -348,34 +349,52 @@ def _case_results(
 ) -> tuple[list[EvalResult], int]:
     """Evaluate one case against every suite definition.
 
-    Returns ``(results, errored_count)``. An ``model_judge`` definition without a
-    provided judge callable returns a FAIL path (never a silent pass) — the
-    runner rejects it up front via ``_has_model_judge``, so this is defensive. Every
-    result is stamped with ``suite_run_id`` and
-    ``extra['eval_definition_version']`` (FAR-382 stamp).
+    Returns ``(results, errored_count)``. **Every definition produces exactly
+    one row per case** (ADR 066 D13/§S1): an engine failure or a judge that
+    produced no verdict is persisted as ``outcome='error'`` with a NULL score,
+    never dropped and never recorded as a failure. ``errored_count`` counts
+    those rows so the case can be excluded from the pass-rate denominator.
+
+    Every result is stamped with ``suite_run_id`` and the definition version
+    (FAR-382 stamp).
     """
     output = _synthesise_output(case, scenario_inputs)
     results: list[EvalResult] = []
     errored = 0
     for definition in definitions:
         try:
-            result = engine.evaluate(
+            result = engine.evaluate_result(
                 output,
                 definition,
                 run_id=run.id,
                 model_judge_callable=model_judge_callable,
             )
         except Exception as exc:
+            # An unexpected engine failure still produces its row, as an error.
             _log.warning("suite_run case eval errored case=%s definition=%s: %s", case.id, definition.id, exc)
+            result = EvalEngine.error_result(
+                definition,
+                run.id,
+                JudgeErrorCode.JUDGE_UNAVAILABLE,
+                f"eval execution failed ({type(exc).__name__}); no verdict was produced",
+            )
+        verdict = result.judge_verdict
+        is_error = result.outcome is JudgeOutcome.ERROR
+        if is_error:
             errored += 1
-            continue
         results.append(
             EvalResult(
                 organisation_id=run.organisation_id,
                 suite_run_id=run.id,
                 eval_id=definition.id,
+                outcome=result.outcome.value,
                 passed=bool(result.passed),
                 score=result.score,
+                judge_result_json=verdict.to_json() if verdict is not None else None,
+                judge_confidence_kind=(verdict.confidence_kind.value if verdict is not None and not is_error else None),
+                error_code=(
+                    verdict.error_code.value if verdict is not None and verdict.error_code is not None else None
+                ),
                 detail=(result.detail or "")[:2000],
                 observed=True,
                 eval_definition_version=eval_definition_version,
@@ -469,12 +488,12 @@ async def _run_suite_cases(
         for result in results:
             session.add(result)
 
-        # ``all(passed_flags)`` is only reached when ``passed_flags`` is
-        # non-empty (guarded by ``bool``) — a case that resolved to zero
-        # results is never a silent pass. The flags are collected first so
-        # the ``all`` is evaluated on a concrete list, never an empty one.
-        passed_flags = [r.passed for r in results]
-        case_passed = errored == 0 and len(results) == len(suite_defs) and bool(passed_flags) and all(passed_flags)
+        # A case is EXCLUDED when any definition produced no verdict (error) —
+        # an instrument failure is not a defect escape (ADR 066 D18). Every
+        # non-error row is one definition, so the flags are never pooled with
+        # an error's fail-closed projection.
+        verdict_flags = [r.passed for r in results if r.outcome != JudgeOutcome.ERROR.value]
+        case_passed = bool(verdict_flags) and all(verdict_flags)
         if errored:
             excluded += 1
         elif case_passed:
@@ -534,12 +553,11 @@ async def execute_suite_run(
         definitions, cases = await _load_suite_defs_and_cases(session, run)
         suite_defs = [_definition_dto(r, run.organisation_id) for r in definitions]
         engine = EvalEngine()
-        if _has_model_judge(suite_defs) and model_judge_callable is None:
-            raise SuiteRunExecutionError(
-                "suite contains model_judge definitions but no judge callable was provided "
-                "(wire a ModelBackendHub-backed callable — deterministic evals need none)"
-            )
-
+        # A suite that contains judge definitions but has no callable is NOT
+        # refused up front: each judge row persists as outcome=error and the
+        # run terminalises honestly (all cases excluded -> failed). Refusing
+        # here would lose the per-definition rows the verdict contract exists
+        # to record.
         claims_llm = _has_model_judge(suite_defs)
         passed, failed, excluded = await _run_suite_cases(
             session,
@@ -570,8 +588,14 @@ async def execute_suite_run(
         # ``partial`` means SOME CASES ERRORED (excluded). A run that executed
         # every case — even one where evals failed — is ``completed``; failed
         # evals are counted in ``failed_cases`` and feed the pass-rate, not the
-        # state machine. ``failed`` is reserved for an orchestration error.
-        target = SuiteRunState.PARTIAL if excluded else SuiteRunState.COMPLETED
+        # state machine. A run where EVERY case is excluded produced no verdict
+        # at all and terminalises ``failed``, never a misleading ``partial``.
+        if excluded and excluded == len(cases):
+            target = SuiteRunState.FAILED
+        elif excluded:
+            target = SuiteRunState.PARTIAL
+        else:
+            target = SuiteRunState.COMPLETED
 
         await _suite_run_transition(session, run, target)
         await session.flush()

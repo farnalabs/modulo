@@ -13,6 +13,7 @@ Blocked evals raise EvalBlockedError.
 """
 
 import asyncio
+import json
 import logging
 import re
 from datetime import UTC, datetime
@@ -21,7 +22,17 @@ from typing import Any, ClassVar, Literal, Protocol
 from uuid import UUID, uuid4
 
 import jsonschema
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from modulo.core.eval_engine.typed_judge import (
+    JudgeErrorCode,
+    JudgeExecutionError,
+    JudgeVerdict,
+    from_judge_callable_dict,
+    is_legacy_judge_config,
+    record_legacy_execution,
+)
+from modulo.core.eval_engine.typed_judge.envelope import JudgeOutcome, error_verdict
 
 _log = logging.getLogger(__name__)
 
@@ -92,16 +103,46 @@ class EvalDefinition(BaseModel):
 
 
 class EvalResult(BaseModel):
-    """Pydantic DTO — the outcome of a single eval against an output."""
+    """Pydantic DTO — the outcome of a single eval against an output.
+
+    ``outcome`` is the truth. ``passed`` is the compatibility projection of it
+    (``error`` projects to ``False`` so a block gate keeps failing closed), and
+    is derived by the before-validator so no caller can record a projection
+    that contradicts the outcome. An ``error`` result never carries a score
+    (``None``, never ``0.0``) and always carries a coded
+    :class:`JudgeVerdict` when a judge was involved.
+    """
 
     id: UUID = Field(default_factory=uuid4)
     run_id: UUID
     node_id: str
     eval_id: UUID
     passed: bool
+    outcome: JudgeOutcome = JudgeOutcome.FAIL
     score: float | None = None
     detail: str = ""
+    judge_verdict: JudgeVerdict | None = None
     evaluated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @model_validator(mode="before")
+    @classmethod
+    def _project_passed_from_outcome(cls, data: Any) -> Any:
+        """Derive ``passed`` from ``outcome`` (never the other way round)."""
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        raw_outcome = payload.get("outcome")
+        if raw_outcome is None:
+            payload["outcome"] = JudgeOutcome.PASS if payload.get("passed") else JudgeOutcome.FAIL
+            return payload
+        outcome = JudgeOutcome(raw_outcome)
+        payload["outcome"] = outcome
+        if outcome is JudgeOutcome.ERROR:
+            payload["passed"] = False
+            payload["score"] = None
+        else:
+            payload["passed"] = outcome is JudgeOutcome.PASS
+        return payload
 
 
 class EvalBlockedError(RuntimeError):
@@ -157,29 +198,60 @@ def _fail_result(
     )
 
 
-def _result_from_dict(
-    raw: dict[str, Any],
+def _error_result(
     run_id: UUID,
     node_id: str,
     eval_id: UUID,
+    code: JudgeErrorCode,
+    detail: str,
+    *,
+    judge_verdict: JudgeVerdict | None = None,
 ) -> EvalResult:
-    if not isinstance(raw, dict):
-        raise TypeError(f"Expected dict from eval callable, got {type(raw).__name__}")
-    score: float | None = None
-    if raw.get("score") is not None:
-        try:
-            score = float(raw["score"])
-        except (ValueError, TypeError):
-            score = None
-    raw_detail = raw.get("detail")
-    detail = "" if raw_detail is None else str(raw_detail)
+    """Build an ``error`` result: no verdict was produced.
+
+    This is the FAR-1496 fix: an unavailable, misconfigured or timed-out judge
+    is never recorded as a failing verdict, and never as ``score=0.0``.
+    """
+    verdict = judge_verdict if judge_verdict is not None else error_verdict(code, detail)
     return EvalResult(
         run_id=run_id,
         node_id=node_id,
         eval_id=eval_id,
-        passed=bool(raw.get("passed", False)),
-        score=score,
+        outcome=JudgeOutcome.ERROR,
+        passed=False,
+        score=None,
         detail=detail,
+        judge_verdict=verdict,
+    )
+
+
+def _result_from_judge_dict(
+    raw: Any,
+    run_id: UUID,
+    node_id: str,
+    eval_id: UUID,
+    *,
+    judge_verdict: JudgeVerdict | None = None,
+) -> EvalResult:
+    """Normalise a judge callable's return value into an :class:`EvalResult`.
+
+    The typed dialect (``outcome``/``error_code``) and the legacy dialect
+    (``passed``/``score``/``detail``) both go through
+    :func:`from_judge_callable_dict`, so a malformed response becomes an
+    ``error`` outcome rather than a silent failing verdict.
+    """
+    verdict = from_judge_callable_dict(raw)
+    if judge_verdict is not None:
+        verdict = verdict.model_copy(update={"judge": judge_verdict.judge})
+    return EvalResult(
+        run_id=run_id,
+        node_id=node_id,
+        eval_id=eval_id,
+        outcome=verdict.outcome,
+        passed=verdict.passed,
+        score=verdict.score,
+        detail=verdict.detail,
+        judge_verdict=verdict,
     )
 
 
@@ -209,7 +281,7 @@ class EvalEngine:
             case EvalType.CUSTOM_FUNCTION:
                 return self._evaluate_custom(output, eval_def, run_id)
             case EvalType.MODEL_JUDGE:
-                return self._evaluate_llm(output, eval_def, run_id, model_judge_callable)
+                return self._evaluate_model_judge(output, eval_def, run_id, model_judge_callable)
             case EvalType.GUARDRAIL:
                 # Guardrail detection is a sibling function (modulo.core.guardrails)
                 # that reuses the pure regex/json_schema helpers; it must never be
@@ -250,10 +322,18 @@ class EvalEngine:
         run_id = run_id or uuid4()
         result = self._compute_result(output, eval_def, run_id, model_judge_callable)
 
-        if not result.passed:
+        if result.outcome is not JudgeOutcome.PASS:
+            # An ``error`` outcome is not a verdict, but it still fails closed:
+            # a block gate blocks and a warn gate warns, exactly as before
+            # (ADR 066 D6 — the gate vocabulary is unchanged).
             if eval_def.failure_behaviour == "block":
                 raise EvalBlockedError(eval_def.name, result.detail)
-            _log.warning("Eval %s failed (warn): %s", eval_def.name, result.detail)
+            _log.warning(
+                "Eval %s %s (warn): %s",
+                eval_def.name,
+                "errored" if result.outcome is JudgeOutcome.ERROR else "failed",
+                result.detail,
+            )
 
         return result
 
@@ -275,8 +355,13 @@ class EvalEngine:
         """
         run_id = run_id or uuid4()
         result = self._compute_result(output, eval_def, run_id, model_judge_callable)
-        if not result.passed:
-            _log.warning("Eval %s failed: %s", eval_def.name, result.detail)
+        if result.outcome is not JudgeOutcome.PASS:
+            _log.warning(
+                "Eval %s %s: %s",
+                eval_def.name,
+                "errored" if result.outcome is JudgeOutcome.ERROR else "failed",
+                result.detail,
+            )
         return result
 
     _RE_FLAG_MAP: ClassVar[dict[str, int]] = {
@@ -468,9 +553,11 @@ class EvalEngine:
         log_prefix: str,
         callable_name: str,
     ) -> EvalResult:
-        """Call *callable_fn* with *callable_args* and parse the result.
+        """Call a deterministic *callable_fn* and parse its ``passed`` dict.
 
-        Shared helper for ``_evaluate_custom`` and ``_evaluate_llm``.
+        Used by ``_evaluate_custom`` only. A judge goes through
+        :meth:`_run_model_judge_and_parse`, where an exception means *no
+        verdict* (``error``) rather than a failing verdict.
         """
         try:
             raw = callable_fn(*callable_args)
@@ -485,10 +572,10 @@ class EvalEngine:
                 detail=f"{callable_name} raised: {exc}",
             )
         try:
-            return _result_from_dict(raw, run_id, eval_def.node_id or "", eval_def.id)
-        except TypeError:
+            return _result_from_judge_dict(raw, run_id, eval_def.node_id or "", eval_def.id)
+        except JudgeExecutionError as exc:
             _log.warning(
-                "%s eval %s %s returned non-dict: %s",
+                "%s eval %s %s returned an unusable result: %s",
                 log_prefix,
                 eval_def.id,
                 callable_name,
@@ -499,7 +586,74 @@ class EvalEngine:
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
                 eval_id=eval_def.id,
-                detail=f"{callable_name} returned non-dict value",
+                detail=f"{callable_name} returned non-dict value: {exc}",
+            )
+
+    @staticmethod
+    def _run_model_judge_and_parse(
+        callable_fn: Any,
+        callable_args: tuple[Any, ...],
+        *,
+        eval_def: EvalDefinition,
+        run_id: UUID,
+        judge_verdict: JudgeVerdict | None = None,
+    ) -> EvalResult:
+        """Call a judge and produce a typed verdict — never an inferred failure.
+
+        Any exception from a judge means no verdict was produced, so the result
+        is ``outcome=error`` with a coded reason. A malformed response is
+        likewise an error (ADR 066 D5/D6); only a well-formed verdict becomes
+        ``pass``/``fail``.
+        """
+        try:
+            raw = callable_fn(*callable_args)
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+            raise
+        except JudgeExecutionError as exc:
+            _log.warning(
+                "Model judge eval %s produced no verdict (%s): %s",
+                eval_def.id,
+                exc.code.value,
+                exc.detail,
+            )
+            return _error_result(
+                run_id,
+                eval_def.node_id or "",
+                eval_def.id,
+                exc.code,
+                exc.detail,
+                judge_verdict=exc.as_verdict(),
+            )
+        except Exception as exc:
+            detail = f"judge callable raised {type(exc).__name__}; no verdict was produced"
+            _log.warning("Model judge eval %s raised: %s", eval_def.id, exc, exc_info=True)
+            return _error_result(
+                run_id,
+                eval_def.node_id or "",
+                eval_def.id,
+                JudgeErrorCode.JUDGE_UNAVAILABLE,
+                detail,
+            )
+        try:
+            return _result_from_judge_dict(
+                raw,
+                run_id,
+                eval_def.node_id or "",
+                eval_def.id,
+                judge_verdict=judge_verdict,
+            )
+        except JudgeExecutionError as exc:
+            _log.warning(
+                "Model judge eval %s returned a malformed response (%s)",
+                eval_def.id,
+                exc.code.value,
+            )
+            return _error_result(
+                run_id,
+                eval_def.node_id or "",
+                eval_def.id,
+                exc.code,
+                exc.detail,
             )
 
     def _evaluate_custom(
@@ -549,8 +703,17 @@ class EvalEngine:
         output: dict[str, Any],
         eval_def: EvalDefinition,
     ) -> tuple[dict[str, Any], EvalDefinition]:
+        """Wrap the evaluated content in the guarded delimiters (100k bound).
+
+        A configured ``field`` behaves exactly as today: the field's value is
+        replaced in a copy of the output. With NO field (the guardrail
+        revalidation path), the whole output is the evaluated content — a judge
+        given an empty string can never validate anything, which silently
+        ignored the guardrail rubric. The guarded string is also exposed on
+        ``config["_judge_content"]`` so the caller need not re-derive it.
+        """
         field = eval_def.config.get("field", "")
-        raw_content = output.get(field)
+        raw_content = output.get(field) if field else json.dumps(output, sort_keys=True, default=str)
         content = "" if raw_content is None else str(raw_content)
 
         cleaned = _DELIMITER_STRIP_PATTERN.sub("", content)
@@ -570,46 +733,75 @@ class EvalEngine:
         )
 
         safe_output = dict(output)
-        safe_output[field] = safe_content
+        if field:
+            safe_output[field] = safe_content
 
         safe_config = dict(eval_def.config)
         safe_config["_judge_guard_instruction"] = _GUARD_INSTRUCTION
+        safe_config["_judge_content"] = safe_content
         safe_eval_def = eval_def.model_copy(update={"config": safe_config})
 
         return safe_output, safe_eval_def
 
-    def _evaluate_llm(
+    def _evaluate_model_judge(
         self,
         output: dict[str, Any],
         eval_def: EvalDefinition,
         run_id: UUID,
         model_judge_callable: ModelJudgeCallable | None,
     ) -> EvalResult:
+        """Evaluate through a model judge, treating absence as ``error``.
+
+        FAR-1496: a judge that was never wired must not masquerade as a
+        ``passed=False, score=0.0`` verdict. It produces ``outcome=error`` with
+        ``judge.unavailable`` and a NULL score.
+        """
+        if is_legacy_judge_config(eval_def.config):
+            # D8: legacy rows stay executable; count them so the read path can
+            # be removed when the count reaches zero.
+            record_legacy_execution(eval_id=eval_def.id, eval_name=eval_def.name)
         if model_judge_callable is None:
+            detail = "Model judge callable not provided; no verdict was produced"
             _log.warning("Model judge eval %s callable not provided", eval_def.id)
-            return _fail_result(
-                run_id=run_id,
-                node_id=eval_def.node_id or "",
-                eval_id=eval_def.id,
-                detail="Model judge callable not provided",
+            return _error_result(
+                run_id,
+                eval_def.node_id or "",
+                eval_def.id,
+                JudgeErrorCode.JUDGE_UNAVAILABLE,
+                detail,
             )
         try:
             safe_output, safe_eval_def = self._build_safe_judge_input(output, eval_def)
         except ContentTooLongError as exc:
             _log.warning("Model judge eval %s content too long: %s", eval_def.id, exc)
-            return _fail_result(
-                run_id=run_id,
-                node_id=eval_def.node_id or "",
-                eval_id=eval_def.id,
-                detail=str(exc),
+            return _error_result(
+                run_id,
+                eval_def.node_id or "",
+                eval_def.id,
+                JudgeErrorCode.JUDGE_CONFIGURATION,
+                str(exc),
             )
-        return self._run_callable_and_parse(
+        return self._run_model_judge_and_parse(
             model_judge_callable,
             (safe_output, safe_eval_def),
             eval_def=eval_def,
             run_id=run_id,
-            log_prefix="Model judge",
-            callable_name="callable",
+        )
+
+    @staticmethod
+    def error_result(
+        eval_def: Any,
+        run_id: UUID,
+        code: JudgeErrorCode,
+        detail: str,
+    ) -> EvalResult:
+        """Public constructor for a no-verdict result (used by the suite runner)."""
+        return _error_result(
+            run_id,
+            eval_def.node_id or "",
+            eval_def.id,
+            code,
+            detail,
         )
 
     def _evaluate_human_set(

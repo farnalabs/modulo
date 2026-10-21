@@ -643,6 +643,64 @@ class TestDetectEvalGap:
         assert sample_record.eval_gap is None
         mock_eval_engine.evaluate.assert_called_once()
 
+    async def test_an_error_outcome_is_inconclusive_not_a_failure(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
+    ) -> None:
+        """A judge that produced no verdict must not read as "the eval caught it".
+
+        ADR 066 D6/D18: an error is an instrument failure, excluded from the
+        decision — never a failing verdict.
+        """
+        from modulo.core.eval_engine.typed_judge import JudgeOutcome
+
+        error_result = MagicMock()
+        error_result.outcome = JudgeOutcome.ERROR
+        error_result.detail = "judge unavailable"
+        mock_eval_engine = MagicMock()
+        mock_eval_engine.evaluate = MagicMock(return_value=error_result)
+
+        is_gap = await mgr.detect_eval_gap(
+            sample_record,
+            eval_engine=mock_eval_engine,
+            eval_suite=[{"name": "judge"}],
+        )
+
+        assert is_gap is True
+        assert sample_record.eval_gap is True
+
+    async def test_model_judge_resolves_the_shared_judge_callable(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
+    ) -> None:
+        """The feedback path uses the SAME resolver as pipeline/suite runs."""
+        from modulo.core.eval_engine import EvalDefinition, EvalType
+        from modulo.core.eval_engine.typed_judge import JudgeOutcome
+
+        dto = EvalDefinition(
+            id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            name="judge",
+            eval_type=EvalType.MODEL_JUDGE,
+            config={"field": "output"},
+        )
+        ok_result = MagicMock()
+        ok_result.outcome = JudgeOutcome.PASS
+        ok_result.passed = True
+        mock_eval_engine = MagicMock()
+        mock_eval_engine.evaluate = MagicMock(return_value=ok_result)
+        sentinel = object()
+
+        with patch(
+            "modulo.core.pipeline_engine.llm_judge.resolve_model_judge_callable",
+            return_value=sentinel,
+        ):
+            await mgr.detect_eval_gap(
+                sample_record,
+                eval_engine=mock_eval_engine,
+                eval_suite=[dto],
+            )
+
+        assert mock_eval_engine.evaluate.call_args.kwargs["model_judge_callable"] is sentinel
+
     async def test_returns_true_when_eval_passes(
         self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
     ) -> None:

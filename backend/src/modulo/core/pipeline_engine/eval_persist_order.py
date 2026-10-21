@@ -334,14 +334,23 @@ async def _persist_eval_outcome(
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
             node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
+            verdict = eval_result.judge_verdict
             eval_result_row = EvalResultModel(
                 organisation_id=org_id,
                 run_id=run_id,
                 node_id=node_uuid,
                 eval_id=eval_def.id,
                 eval_definition_version=eval_def.version,
+                # ``outcome`` is the truth; ``passed`` is its compatibility
+                # projection (ADR 066 D5). ``score`` is NULL on error.
+                outcome=eval_result.outcome.value,
                 passed=eval_result.passed,
                 score=eval_result.score,
+                judge_result_json=verdict.to_json() if verdict is not None else None,
+                judge_confidence_kind=(verdict.confidence_kind.value if verdict is not None else None),
+                error_code=(
+                    verdict.error_code.value if verdict is not None and verdict.error_code is not None else None
+                ),
                 detail=eval_result.detail,
             )
             session.add(eval_result_row)
@@ -455,6 +464,7 @@ def _decide_after_persist(
             "eval_id": str(eval_def.id),
             "node_id": node_id,
             "passed": eval_result.passed,
+            "outcome": eval_result.outcome.value,
         },
     )
     if not eval_result.passed and eval_def.failure_behaviour == "block":

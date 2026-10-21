@@ -49,6 +49,15 @@ from typing import Any
 from langchain_core.messages import HumanMessage
 
 from modulo.core.eval_engine import EvalDefinition, EvalType, ModelJudgeCallable
+from modulo.core.eval_engine.typed_judge import (
+    TYPED_ANSWER_CONTRACT,
+    JudgeConfidenceKind,
+    JudgeErrorCode,
+    JudgeExecutionError,
+    JudgeIdentity,
+    build_typed_judge_prompt,
+    verdict_from_typed_response,
+)
 from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
 
 _log = logging.getLogger(__name__)
@@ -78,13 +87,34 @@ SYNC_BRIDGE_TIMEOUT_SECONDS = 75.0
 
 
 def _timeout_detail() -> str:
-    """Fail-closed detail for a judge timeout (reads the bounds at call time)."""
+    """Coded detail for a judge timeout (reads the bounds at call time)."""
     return (
-        "Model judge model backend call timed out "
+        "Model judge backend call timed out "
         f"(invoke bound {BACKEND_INVOKE_TIMEOUT_SECONDS:g}s, "
-        f"bridge bound {SYNC_BRIDGE_TIMEOUT_SECONDS:g}s); "
-        "failing closed with score 0.0"
+        f"bridge bound {SYNC_BRIDGE_TIMEOUT_SECONDS:g}s); no verdict was produced"
     )
+
+
+def _classify_provider_exception(exc: BaseException) -> JudgeErrorCode:
+    """Map a backend-bridge failure onto the judge error vocabulary.
+
+    ``provider.authentication`` / ``provider.billing`` are REUSED from the run
+    error taxonomy (the same refusal, whether it happens in a node or a judge).
+    Everything else means the judge produced no verdict.
+    """
+    if type(exc).__name__ == "BackendNotFoundError":
+        return JudgeErrorCode.JUDGE_CONFIGURATION
+    from modulo.core.pipeline_engine.model_backend_errors import non_retryable_provider_code
+
+    try:
+        code = non_retryable_provider_code(str(exc))
+    except Exception:
+        code = None
+    if code == "provider.authentication":
+        return JudgeErrorCode.PROVIDER_AUTHENTICATION
+    if code == "provider.billing":
+        return JudgeErrorCode.PROVIDER_BILLING
+    return JudgeErrorCode.JUDGE_UNAVAILABLE
 
 
 async def invoke_backend(
@@ -198,36 +228,49 @@ def build_model_judge_callable(
         detail = (
             f"model_judge eval has a malformed model_backend_id {backend_id_str!r}: "
             f"not a valid UUID ({exc}); fix the eval definition's "
-            "config['model_backend_id']"
+            "config['model_backend_id'] or config['backing']['model_backend_id']"
         )
         _log.error(
             "model_judge.malformed_model_backend_id",
             extra={"model_backend_id": backend_id_str, "detail": detail},
         )
 
-        def _fail_closed_judge(
+        def _config_error_judge(
             output: dict[str, Any],
             eval_def: EvalDefinition,
         ) -> dict[str, Any]:
-            return {"passed": False, "score": 0.0, "detail": detail}
+            raise JudgeExecutionError(JudgeErrorCode.JUDGE_CONFIGURATION, detail)
 
-        return _fail_closed_judge
+        return _config_error_judge
+
+    identity = JudgeIdentity(mechanism="model_backend", judge_backend_id=str(backend_id))
 
     def _judge(
         output: dict[str, Any],
         eval_def: EvalDefinition,
     ) -> dict[str, Any]:
-        field = eval_def.config.get("field", "")
-        content = output.get(field, "")
-        prompt = (
-            "Evaluate the following output and return JSON with keys passed "
-            "(bool), score (float 0-1), detail (str).\n\n"
-            f"Output:\n{content}"
-        )
+        config = eval_def.config
+        # The engine's guarded-input helper exposes the delimited content here;
+        # fall back to the legacy flat field for a direct caller.
+        content = config.get("_judge_content")
+        if content is None:
+            field = config.get("field", "")
+            content = output.get(field, "")
+
+        typed = config.get("answer_contract") == TYPED_ANSWER_CONTRACT
+        if typed:
+            questions = config.get("questions") or []
+            prompt = build_typed_judge_prompt(questions, config.get("pass_rule"), str(content))
+        else:
+            prompt = (
+                "Evaluate the following output and return JSON with keys passed "
+                "(bool), score (float 0-1), detail (str).\n\n"
+                f"Output:\n{content}"
+            )
         messages = [HumanMessage(content=prompt)]
         try:
             response = run_coroutine_sync(invoke_backend(hub, backend_id, messages))
-        except TimeoutError:
+        except TimeoutError as exc:
             detail = _timeout_detail()
             _log.error(
                 "model_judge.timeout",
@@ -236,13 +279,59 @@ def build_model_judge_callable(
                     "detail": detail,
                 },
             )
-            # Fail closed: an unjudged output must not pass a gate.
-            return {"passed": False, "score": 0.0, "detail": detail}
+            raise JudgeExecutionError(JudgeErrorCode.JUDGE_TIMEOUT, detail) from exc
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+            raise
+        except Exception as exc:
+            from modulo.core.model_backend_hub import BackendNotFoundError
+
+            if isinstance(exc, BackendNotFoundError):
+                detail = (
+                    f"model_judge eval's model_backend_id {backend_id} is not an active "
+                    "model backend for this organisation; fix the eval definition's "
+                    "config['model_backend_id'] (or the typed backing)"
+                )
+                _log.error(
+                    "model_judge.unknown_model_backend_id",
+                    extra={"model_backend_id": str(backend_id), "detail": detail},
+                )
+                raise JudgeExecutionError(JudgeErrorCode.JUDGE_CONFIGURATION, detail) from exc
+            code = _classify_provider_exception(exc)
+            _log.error(
+                "model_judge.provider_failure",
+                extra={
+                    "model_backend_id": str(backend_id),
+                    "error_code": code.value,
+                    "exception_type": type(exc).__name__,
+                },
+            )
+            raise JudgeExecutionError(
+                code,
+                f"model judge backend failed ({code.value}); no verdict was produced",
+            ) from exc
+
         text = response.content if hasattr(response, "content") else str(response)
+        if typed:
+            verdict = verdict_from_typed_response(
+                text,
+                questions=config.get("questions") or [],
+                pass_rule=config.get("pass_rule"),
+                judge=identity,
+                confidence_kind=JudgeConfidenceKind.MODEL_SELF_REPORTED,
+            )
+            return verdict.to_json()
         try:
             parsed = json.loads(text)
-        except ValueError:
-            parsed = {"passed": False, "score": 0.0, "detail": text}
+        except ValueError as exc:
+            raise JudgeExecutionError(
+                JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+                "judge returned a non-JSON response; no verdict was produced",
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise JudgeExecutionError(
+                JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+                "judge returned a non-object JSON response; no verdict was produced",
+            )
         detail = parsed.get("detail", "")
         return {
             "passed": bool(parsed.get("passed", False)),
@@ -253,12 +342,25 @@ def build_model_judge_callable(
     return _judge
 
 
-def resolve_model_judge_callable(eval_def: EvalDefDTO) -> ModelJudgeCallable | None:
-    """Resolve the Model judge callable for an eval definition, if configured."""
-    if eval_def.eval_type == EvalType.MODEL_JUDGE and eval_def.config.get("model_backend_id"):
-        from modulo.core.pipeline_engine.decorator import get_model_backend_hub
+def _judge_backend_id(config: dict[str, Any]) -> Any:
+    """Read the judge's backend id from either dialect."""
+    if config.get("answer_contract") == TYPED_ANSWER_CONTRACT:
+        backing = config.get("backing")
+        if isinstance(backing, dict):
+            return backing.get("model_backend_id")
+    return config.get("model_backend_id")
 
-        hub = get_model_backend_hub()
-        if hub is not None:
-            return build_model_judge_callable(hub, str(eval_def.config["model_backend_id"]))
+
+def resolve_model_judge_callable(eval_def: EvalDefDTO) -> ModelJudgeCallable | None:
+    """Resolve the model judge callable for an eval definition, if configured."""
+    if eval_def.eval_type != EvalType.MODEL_JUDGE:
+        return None
+    backend_id = _judge_backend_id(dict(eval_def.config or {}))
+    if not backend_id:
+        return None
+    from modulo.core.pipeline_engine.decorator import get_model_backend_hub
+
+    hub = get_model_backend_hub()
+    if hub is not None:
+        return build_model_judge_callable(hub, str(backend_id))
     return None

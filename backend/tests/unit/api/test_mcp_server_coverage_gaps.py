@@ -2274,6 +2274,28 @@ class TestTriggerPipelinePaths(_AuthContext):
 # ---------------------------------------------------------------------------
 
 
+def _typed_judge_config() -> dict:
+    """A structurally valid typed judge config (ADR 066 D8)."""
+    return {
+        "field": "output",
+        "answer_contract": "typed_questions",
+        "backing": {"kind": "model_backend", "model_backend_id": str(uuid.uuid4())},
+        "questions": [
+            {
+                "id": "verdict",
+                "type": "noul",
+                "instructions": "Is the output acceptable?",
+                "criteria": [],
+                "weight": 1.0,
+                "required": True,
+                "min_pass_confidence": 0.5,
+            }
+        ],
+        "pass_rule": {"kind": "weighted_score_at_least", "threshold": 0.5},
+        "verdict_kind": "assessment",
+    }
+
+
 class TestEvalDefinitionTools(_AdminContext):
     def test_assert_failure_behaviour_rejects_unknown(self) -> None:
         # FAR-1103 chunk 5a retired the helper; the symbol must not reappear
@@ -2369,7 +2391,12 @@ class TestEvalDefinitionTools(_AdminContext):
             patch("modulo.api.routes.evals._eval_def_to_dict", return_value={"id": "x"}),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
         ):
-            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="model_judge")
+            result = await create_eval_definition(
+                pipeline_id=str(uuid.uuid4()),
+                name="n",
+                eval_type="model_judge",
+                config_json=_typed_judge_config(),
+            )
         assert result["error"] == expected
 
     async def test_create_outer_http_exception(self) -> None:
@@ -2496,7 +2523,7 @@ class TestEvalDefinitionTools(_AdminContext):
                 node_id=str(uuid.uuid4()),
                 name="new-name",
                 eval_type="model_judge",
-                config_json={"k": "v"},
+                config_json=_typed_judge_config(),
                 pass_threshold=0.5,
                 suite_id="suite-1",
             )

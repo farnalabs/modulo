@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.eval_engine.policy_gate import (
     validate_binding,
 )
+from modulo.core.eval_engine.typed_judge import JudgeConfigWriteError, reject_legacy_judge_write
 
 _log = logging.getLogger(__name__)
 
@@ -147,6 +148,62 @@ def validate_guardrail_request(
     _reject_invalid_detection_type(config_json)
     _reject_invalid_detection_envelope(config_json)
     _reject_destroy_without_pepper(config_json)
+
+
+# ---------------------------------------------------------------------------
+# Judge config chokepoint (ADR 066 D8)
+# ---------------------------------------------------------------------------
+
+
+async def _enforce_judge_config_write(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    eval_type: str,
+    config_json: dict[str, Any],
+    existing_eval_id: uuid.UUID | None,
+) -> None:
+    """Require the typed dialect on create; freeze a stored legacy config.
+
+    ``create_or_update_eval`` is the single chokepoint for every write path, so
+    enforcing here covers REST, MCP, feedback publish and config-as-code at
+    once. No backfill: a stored legacy config stays byte-identical and is
+    executable as today; editing it is a typed 422 (ADR 066 D8).
+    """
+    stored_config: Any = None
+    stored_eval_type: str | None = None
+    if existing_eval_id is not None:
+        from modulo.db.models.eval import Eval
+
+        row = (
+            await session.execute(
+                select(Eval.config_json, Eval.eval_type).where(
+                    Eval.id == existing_eval_id,
+                    Eval.organisation_id == org_id,
+                )
+            )
+        ).first()
+        if row is not None:
+            stored_config, stored_eval_type = row[0], row[1]
+
+    # Run for a write that lands ``model_judge`` AND for one leaving a frozen
+    # legacy judge (changing its type away would otherwise discard the config
+    # without a migration).
+    if eval_type != "model_judge" and stored_eval_type != "model_judge":
+        return
+    try:
+        reject_legacy_judge_write(
+            config_json=config_json,
+            stored_config=stored_config,
+            stored_eval_type=stored_eval_type,
+            is_update=stored_config is not None,
+            new_eval_type=eval_type,
+        )
+    except JudgeConfigWriteError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=exc.detail(),
+        ) from None
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +344,16 @@ async def create_or_update_eval(
     eval_suite_id = opts.eval_suite_id
     existing_eval_id = opts.existing_eval_id
     evaluation_mode = opts.evaluation_mode
+
+    # --- Judge dialect gate (ADR 066 D8) — every write path lands here ---
+
+    await _enforce_judge_config_write(
+        session,
+        org_id=org_id,
+        eval_type=eval_type,
+        config_json=config_json,
+        existing_eval_id=existing_eval_id,
+    )
 
     # --- Branch on eval type BEFORE calling validate_binding ---
 

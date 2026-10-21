@@ -195,13 +195,18 @@ async def test_execute_suite_run_rejects_empty_dataset(session) -> None:
         )
 
 
-async def test_failure_sink_transitions_run_to_failed(session) -> None:
-    """An orchestration failure sinks the run to ``failed`` + surfaces detail."""
+async def test_model_judge_without_callable_persists_error_and_fails_run(session) -> None:
+    """No judge callable is an ERROR outcome, not a silent refusal or a fail.
+
+    ADR 066 D6/D13: an eval that produced no verdict is still exactly ONE row
+    per definition per case (``outcome='error'``, NULL score, coded reason), the
+    case is excluded, and a run in which EVERY case is excluded terminalises
+    ``failed`` rather than ``partial``.
+    """
     org = await _org()
     suite, dataset, _, backend = await seed_suite(session, org)
     await seed_cases(session, org, dataset, [{"category": "billing"}])
-    # Add an model_judge definition with NO judge callable -> execute refuses.
-    llm_def = Eval(
+    judge_def = Eval(
         organisation_id=org,
         pipeline_id=uuid.uuid4(),
         name="judge",
@@ -210,17 +215,28 @@ async def test_failure_sink_transitions_run_to_failed(session) -> None:
         eval_suite_id=suite.id,
         account_id=org,
     )
-    session.add(llm_def)
+    session.add(judge_def)
     await session.flush()
+    suite.eval_definition_ids = [*suite.eval_definition_ids, str(judge_def.id)]
 
     run = await build_suite_run(
         session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
     )
     await _suite_run_transition(session, run, SuiteRunState.RUNNING)
-    with pytest.raises(SuiteRunExecutionError, match="model_judge"):
-        await execute_suite_run(session, run)
+    stats = await execute_suite_run(session, run)
+
     assert run.state == SuiteRunState.FAILED.value
-    assert "model_judge" in (run.error_detail or "")
+    assert stats["state"] == SuiteRunState.FAILED.value
+    assert run.excluded_case_count == 1
+    rows = list((await session.execute(select(EvalResult).where(EvalResult.suite_run_id == run.id))).scalars())
+    judge_rows = [row for row in rows if row.eval_id == judge_def.id]
+    assert len(judge_rows) == 1
+    judge_row = judge_rows[0]
+    assert judge_row.outcome == "error"
+    assert judge_row.score is None
+    assert judge_row.passed is False
+    assert judge_row.error_code == "judge.unavailable"
+    assert judge_row.judge_result_json is not None
 
 
 async def test_execute_suite_run_runs_model_judge_when_callable_provided(session) -> None:

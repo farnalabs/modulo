@@ -145,6 +145,34 @@ def test_schema_create_valid(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _valid_config_for(eval_type: str) -> dict:
+    """A minimal config valid for each eval type (model_judge needs the typed dialect)."""
+    if eval_type == "model_judge":
+        return {
+            "field": "output",
+            "answer_contract": "typed_questions",
+            "backing": {"kind": "model_backend"},
+            "questions": [
+                {
+                    "id": "verdict",
+                    "type": "noul",
+                    "instructions": "Is it acceptable?",
+                    "criteria": [],
+                    "weight": 1.0,
+                    "required": True,
+                    "min_pass_confidence": 0.5,
+                }
+            ],
+            "pass_rule": {"kind": "weighted_score_at_least", "threshold": 0.5},
+            "verdict_kind": "assessment",
+        }
+    if eval_type == "regex":
+        return {"field": "output", "pattern": ".+"}
+    if eval_type == "json_schema":
+        return {"field": "output", "schema": {"type": "object"}}
+    return {"field": "output", "function": "noop"}
+
+
 def test_eval_create_valid_eval_types(client: TestClient) -> None:
     for eval_type in ("model_judge", "regex", "json_schema", "custom_function"):
         with patch("modulo.api.routes.evals.set_rls_org"):
@@ -154,6 +182,7 @@ def test_eval_create_valid_eval_types(client: TestClient) -> None:
                     "pipeline_id": str(uuid.uuid4()),
                     "name": "Test Eval",
                     "eval_type": eval_type,
+                    "config_json": _valid_config_for(eval_type),
                 },
             )
         # Should pass Pydantic validation (not 422). May fail handler
