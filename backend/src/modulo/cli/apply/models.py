@@ -1172,6 +1172,50 @@ def _walk_config_strings(
     return found
 
 
+def _drop_secret_shaped_string(item: str, key_str: str) -> bool:
+    """True when a config string is secret-shaped (so its entry must be dropped)."""
+    from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+
+    if not item:
+        return False
+    return SENSITIVE_VALUE_MASK in item or is_sensitive_key(key_str) or _value_is_secret_pattern(item)
+
+
+def _strip_secret_shaped_list(items: list[Any], key_str: str) -> list[Any]:
+    """Strip a config list element-wise, keeping every non-secret entry in order."""
+    kept: list[Any] = []
+    for element in items:
+        if isinstance(element, str):
+            if not _drop_secret_shaped_string(element, key_str):
+                kept.append(element)
+        else:
+            kept.append(_strip_secret_shaped_child(element, key_str))
+    return kept
+
+
+def _strip_secret_shaped_child(item: Any, key_str: str) -> Any:
+    """Strip one config value; ``None`` means "drop this entry"."""
+    if isinstance(item, str):
+        return None if _drop_secret_shaped_string(item, key_str) else item
+    if isinstance(item, dict):
+        return _strip_secret_shaped_node(item)
+    if isinstance(item, list):
+        return _strip_secret_shaped_list(item, key_str)
+    return item
+
+
+def _strip_secret_shaped_node(node: dict[str, Any]) -> dict[str, Any]:
+    """Strip one config dict, dropping every secret-shaped entry."""
+    out: dict[str, Any] = {}
+    for key, item in node.items():
+        key_str = str(key)
+        child = _strip_secret_shaped_child(item, key_str)
+        if child is None:
+            continue
+        out[key_str] = child
+    return out
+
+
 def strip_secret_shaped_config(config: dict[str, Any]) -> dict[str, Any]:
     """Recursively REMOVE secret-shaped entries from config_json.
 
@@ -1183,40 +1227,7 @@ def strip_secret_shaped_config(config: dict[str, Any]) -> dict[str, Any]:
     declared config on any create/update (the server Fernet-encrypts
     hmac_secret/signing_secret and merges non-masked values).
     """
-    from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
-
-    def _drop_secret_string(item: str, key_str: str) -> bool:
-        if not item:
-            return False
-        return SENSITIVE_VALUE_MASK in item or is_sensitive_key(key_str) or _value_is_secret_pattern(item)
-
-    def _strip_child(item: Any, key_str: str) -> Any:
-        if isinstance(item, str):
-            return None if _drop_secret_string(item, key_str) else item
-        if isinstance(item, dict):
-            return _strip(item)
-        if isinstance(item, list):
-            kept: list[Any] = []
-            for element in item:
-                if isinstance(element, str):
-                    if not _drop_secret_string(element, key_str):
-                        kept.append(element)
-                else:
-                    kept.append(_strip_child(element, key_str))
-            return kept
-        return item
-
-    def _strip(node: dict[str, Any]) -> dict[str, Any]:
-        out: dict[str, Any] = {}
-        for key, item in node.items():
-            key_str = str(key)
-            child = _strip_child(item, key_str)
-            if child is None:
-                continue
-            out[key_str] = child
-        return out
-
-    return _strip(config)
+    return _strip_secret_shaped_node(config)
 
 
 def _value_is_secret_pattern(value: str) -> bool:
@@ -1331,6 +1342,33 @@ def _scrubbed_graph(graph: dict[str, Any]) -> dict[str, Any]:
     return {"nodes": scrub_nodes, "edges": edges or []}
 
 
+def _mask_graph_node_for_hash(node: dict[str, Any]) -> dict[str, Any]:
+    """Apply every graph masking tier to one node for the drift-hash view."""
+    masked_node = dict(node)
+    env = node.get("env_vars")
+    if isinstance(env, dict):
+        masked_node["env_vars"] = _mask_graph_env_vars_for_hash(env)
+    contexts = node.get("context_files")
+    if isinstance(contexts, dict):
+        masked_node["context_files"] = _mask_graph_context_files_for_hash(contexts)
+    for field in ("composite_parameter_values", "parameter_overrides"):
+        deep = node.get(field)
+        if isinstance(deep, dict):
+            masked_node[field] = _mask_graph_deep_config_for_hash(deep)
+    return masked_node
+
+
+def _mask_graph_nodes_for_hash(nodes: list[Any]) -> list[Any]:
+    """Mask each graph node, passing non-dict entries through untouched."""
+    masked_nodes: list[Any] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            masked_nodes.append(node)
+            continue
+        masked_nodes.append(_mask_graph_node_for_hash(node))
+    return masked_nodes
+
+
 def strip_secret_shaped_graph(graph: dict[str, Any]) -> dict[str, Any]:
     """FAR-1232: symmetric graph REDACTION for pipeline drift-hash views.
 
@@ -1372,27 +1410,41 @@ def strip_secret_shaped_graph(graph: dict[str, Any]) -> dict[str, Any]:
     """
     try:
         nodes = graph.get("nodes") if isinstance(graph, dict) else []
-        masked_nodes: list[Any] = []
-        for node in nodes or []:
-            if not isinstance(node, dict):
-                masked_nodes.append(node)
-                continue
-            masked_node = dict(node)
-            env = node.get("env_vars")
-            if isinstance(env, dict):
-                masked_node["env_vars"] = _mask_graph_env_vars_for_hash(env)
-            contexts = node.get("context_files")
-            if isinstance(contexts, dict):
-                masked_node["context_files"] = _mask_graph_context_files_for_hash(contexts)
-            for field in ("composite_parameter_values", "parameter_overrides"):
-                deep = node.get(field)
-                if isinstance(deep, dict):
-                    masked_node[field] = _mask_graph_deep_config_for_hash(deep)
-            masked_nodes.append(masked_node)
+        masked_nodes = _mask_graph_nodes_for_hash(nodes or [])
         edges = graph.get("edges") if isinstance(graph, dict) else []
         return {"nodes": masked_nodes, "edges": edges or []}
     except Exception:
         return _scrubbed_graph(graph)
+
+
+def _graph_env_vars_declare_secrets(env: dict[str, Any]) -> bool:
+    """True when any env entry is secret-shaped (sensitive key or value)."""
+    return any(_graph_env_value_is_secret(str(key), value) for key, value in env.items())
+
+
+def _graph_context_files_declare_secrets(contexts: dict[str, Any]) -> bool:
+    """True when any context-file value is secret-shaped."""
+    return any(_graph_string_value_is_secret(None, value) for value in contexts.values())
+
+
+def _graph_deep_fields_declare_secrets(node: dict[str, Any]) -> bool:
+    """True when a node's deep-config tiers carry a secret-shaped leaf."""
+    for field in ("composite_parameter_values", "parameter_overrides"):
+        deep = node.get(field)
+        if isinstance(deep, dict) and _deep_secret_detect(deep):
+            return True
+    return False
+
+
+def _graph_node_declares_secrets(node: dict[str, Any]) -> bool:
+    """True when one graph node carries a secret-shaped entry in any mask tier."""
+    env = node.get("env_vars")
+    if isinstance(env, dict) and _graph_env_vars_declare_secrets(env):
+        return True
+    contexts = node.get("context_files")
+    if isinstance(contexts, dict) and _graph_context_files_declare_secrets(contexts):
+        return True
+    return _graph_deep_fields_declare_secrets(node)
 
 
 def graph_declares_secrets(graph: dict[str, Any]) -> bool:
@@ -1415,24 +1467,7 @@ def graph_declares_secrets(graph: dict[str, Any]) -> bool:
       string the mask would change (sensitive key or value pattern).
     """
     nodes = graph.get("nodes") if isinstance(graph, dict) else []
-    for node in nodes or []:
-        if not isinstance(node, dict):
-            continue
-        env = node.get("env_vars")
-        if isinstance(env, dict):
-            for key, value in env.items():
-                if _graph_env_value_is_secret(str(key), value):
-                    return True
-        contexts = node.get("context_files")
-        if isinstance(contexts, dict):
-            for value in contexts.values():
-                if _graph_string_value_is_secret(None, value):
-                    return True
-        for field in ("composite_parameter_values", "parameter_overrides"):
-            deep = node.get(field)
-            if isinstance(deep, dict) and _deep_secret_detect(deep):
-                return True
-    return False
+    return any(isinstance(node, dict) and _graph_node_declares_secrets(node) for node in nodes or [])
 
 
 def _graph_env_value_is_secret(key: str, value: Any) -> bool:
