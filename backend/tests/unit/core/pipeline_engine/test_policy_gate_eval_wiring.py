@@ -83,13 +83,37 @@ def _gate_row(
     )
 
 
-def _pin(eval_row: SimpleNamespace, gate_row: SimpleNamespace, *, action: str = "block") -> dict[str, str]:
-    return {
+def _pin(
+    eval_row: SimpleNamespace,
+    gate_row: SimpleNamespace,
+    *,
+    action: str = "block",
+    evaluation_mode: str | None = None,
+) -> dict[str, str]:
+    """A snapshot pin entry.
+
+    ``evaluation_mode`` defaults to ABSENT — the legacy shape, which keeps
+    every pre-FAR-1749 test case on the live-row fallback it was written for.
+    """
+    pin = {
         "policy_gate_id": str(gate_row.id),
         "eval_id": str(eval_row.id),
         "action": action,
         "node_id": str(gate_row.node_id),
     }
+    if evaluation_mode is not None:
+        pin["evaluation_mode"] = evaluation_mode
+    return pin
+
+
+def _from_pin(gate_row: SimpleNamespace, pin: dict[str, Any]) -> tuple[Any, ...]:
+    """Call the pure pin resolver for one (gate, pin) pair."""
+    return PipelineExecutor._governed_gate_from_pin(
+        gate_row,
+        pin,
+        eval_id=str(gate_row.eval_id),
+        pipeline_key=str(uuid.uuid4()),
+    )
 
 
 def _only(rows: list[tuple[Any, Any]], pins: list[dict[str, Any]] | None) -> Any:
@@ -513,18 +537,125 @@ def test_disabled_human_gate_is_ungoverned_so_mode_is_none() -> None:
     assert dto.policy_gate_evaluation_mode is None
 
 
-def test_pinned_universe_carries_the_live_gate_mode() -> None:
-    """``policy_gate_pins`` do not carry ``evaluation_mode`` (named
-    foreclosure, chunk 12 §10): in a pinned universe the PIN governs the
-    action, and the LIVE row's mode marks the DTO."""
+def test_legacy_pin_without_mode_falls_back_to_the_live_gate_mode() -> None:
+    """A LEGACY pin (pre-FAR-1749 snapshots carry no ``evaluation_mode``)
+    keeps the old behaviour: in a pinned universe the PIN governs the action
+    and the LIVE row's mode marks the DTO. New snapshots pin the mode, so the
+    live row no longer governs there (see the freeze tests below)."""
     eval_row = _eval_row()
     gate_row = _gate_row(eval_row, action="warn", evaluation_mode="human")
-    pins = [_pin(eval_row, gate_row, action="block")]
+    pins = [_pin(eval_row, gate_row, action="block")]  # no evaluation_mode key
 
     dto = _only([(eval_row, gate_row)], pins)
 
     assert dto.failure_behaviour == "block"  # the pin governs the action
-    assert dto.policy_gate_evaluation_mode == "human"  # the live row governs the mode
+    assert dto.policy_gate_evaluation_mode == "human"  # legacy fallback: the live row
+
+
+# ---------------------------------------------------------------------------
+# FAR-1749 — the pinned evaluation mode is the run-start freeze
+# ---------------------------------------------------------------------------
+
+
+def test_governed_gate_from_pin_freezes_human_over_live_automatic() -> None:
+    """A pin captured ``human``; the live row now reads ``automatic``. The
+    pin wins — the mode is resolved once at run start and run-frozen."""
+    eval_row = _eval_row()
+    gate_row = _gate_row(eval_row, action="block", evaluation_mode="automatic")
+    pin = _pin(eval_row, gate_row, evaluation_mode="human")
+
+    verdict = _from_pin(gate_row, pin)
+
+    assert verdict[4] == "human"
+
+
+def test_governed_gate_from_pin_freezes_automatic_over_live_human() -> None:
+    """The symmetric direction: a pinned ``automatic`` must NOT become
+    ``human`` because the live row was switched mid-run."""
+    eval_row = _eval_row()
+    gate_row = _gate_row(eval_row, action="block", evaluation_mode="human")
+    pin = _pin(eval_row, gate_row, evaluation_mode="automatic")
+
+    verdict = _from_pin(gate_row, pin)
+
+    assert verdict[4] == "automatic"
+
+
+def test_governed_gate_from_pin_legacy_pin_falls_back_to_live_mode() -> None:
+    """A legacy pin without the field resolves the live mode — unchanged
+    pre-FAR-1749 behaviour, at the pure resolver level."""
+    eval_row = _eval_row()
+    gate_row = _gate_row(eval_row, action="block", evaluation_mode="human")
+    pin = _pin(eval_row, gate_row)  # no evaluation_mode key
+
+    verdict = _from_pin(gate_row, pin)
+
+    assert verdict[4] == "human"
+
+
+@pytest.mark.parametrize("pinned_mode", ["bogus", "HUMAN", ["human"], {"mode": "human"}])
+def test_governed_gate_from_pin_malformed_mode_falls_back_and_logs(
+    pinned_mode: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An out-of-vocabulary pinned mode cannot drive the DTO's closed
+    vocabulary — it falls back to the live mode and is logged (an
+    unverified case-(ii) pin list is the only way to reach this). The
+    container cases pin the tuple membership: an unhashable JSON value must
+    degrade to the fallback, never raise out of the run build."""
+    import logging
+
+    eval_row = _eval_row()
+    gate_row = _gate_row(eval_row, action="block", evaluation_mode="human")
+    pin = _pin(eval_row, gate_row)
+    pin["evaluation_mode"] = pinned_mode  # type: ignore[assignment]
+
+    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.executor"):
+        verdict = _from_pin(gate_row, pin)
+
+    assert verdict[4] == "human"  # the live fallback, never the junk value
+    assert any(r.getMessage() == "eval_defs.pin_evaluation_mode_invalid" for r in caplog.records)
+
+
+def test_governed_gate_from_pin_replaced_gate_ignores_its_pinned_mode() -> None:
+    """The pin-gate-id mismatch check stays FIRST: a replaced gate (the live
+    row belongs to a different gate) is ungoverned, so a mode carried on the
+    stale pin is never used — operator control/gate identity win."""
+    eval_row = _eval_row()
+    replacement_gate = _gate_row(eval_row, action="block", evaluation_mode="automatic")
+    original_gate = _gate_row(eval_row, action="block", evaluation_mode="human")
+    pin = _pin(eval_row, original_gate, evaluation_mode="human")
+
+    verdict = _from_pin(replacement_gate, pin)
+
+    assert verdict == ("warn", None, None, None, None)
+
+
+def test_snapshot_pin_freezes_mode_when_live_gate_flips_to_human() -> None:
+    """Acceptance scenario (resolver path): a run whose snapshot pinned gate
+    B as ``automatic`` resumes after an operator flips B's live row to
+    ``human`` — the resolver still returns ``automatic``."""
+    eval_row = _eval_row()
+    gate_row = _gate_row(eval_row, action="block", evaluation_mode="human")  # flipped before resume
+    pins = [_pin(eval_row, gate_row, action="block", evaluation_mode="automatic")]
+
+    dto = _only([(eval_row, gate_row)], pins)
+
+    assert dto.policy_gate_evaluation_mode == "automatic"
+    assert dto.policy_gate_id == gate_row.id
+
+
+def test_snapshot_pin_freezes_mode_when_live_gate_flips_to_automatic() -> None:
+    """The reverse acceptance scenario: pinned ``human`` survives a live flip
+    back to ``automatic`` — the human-skip decision the run started with is
+    not silently undone mid-run."""
+    eval_row = _eval_row()
+    gate_row = _gate_row(eval_row, action="block", evaluation_mode="automatic")  # flipped before resume
+    pins = [_pin(eval_row, gate_row, action="block", evaluation_mode="human")]
+
+    dto = _only([(eval_row, gate_row)], pins)
+
+    assert dto.policy_gate_evaluation_mode == "human"
 
 
 def test_unpinned_gate_has_mode_none() -> None:
