@@ -24,6 +24,38 @@ const mcpAuthorityState = vi.hoisted(() => ({
   reject: false,
 }))
 
+// View-level data-load state (billing overview + org profile) and the
+// data-export endpoint state, so the load/export/delete branches are all
+// independently reachable from a test.
+const orgOverviewState = vi.hoisted(() => ({
+  data: {
+    total_users: 5,
+    total_teams: 2,
+    total_pipelines: 12,
+    plan_tier: 'community',
+    plan_id: 'community',
+  } as unknown,
+  error: undefined as unknown,
+  reject: false,
+}))
+
+const orgProfileState = vi.hoisted(() => ({
+  data: {
+    id: '00000000-0000-0000-0000-000000000001',
+    name: 'Test Org',
+    slug: 'test-org',
+    created_at: '2025-01-15T00:00:00+00:00',
+  } as unknown,
+  error: undefined as unknown,
+  reject: false,
+}))
+
+const exportState = vi.hoisted(() => ({
+  data: { exported_at: '2025-06-30T12:00:00+00:00' } as unknown,
+  error: undefined as unknown,
+  reject: false,
+}))
+
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn().mockImplementation((url: string) => {
@@ -52,35 +84,22 @@ vi.mock('../lib/api/client', () => ({
         return Promise.resolve({ data: mcpAuthorityState.data, error: mcpAuthorityState.error })
       }
       if (url === '/api/v1/admin/billing/overview') {
-        return Promise.resolve({
-          data: {
-            total_users: 5,
-            total_teams: 2,
-            total_pipelines: 12,
-            plan_tier: 'community',
-            plan_id: 'community',
-          },
-          error: undefined,
-        })
+        if (orgOverviewState.reject) {
+          return Promise.reject(new Error('overview unreachable'))
+        }
+        return Promise.resolve({ data: orgOverviewState.data, error: orgOverviewState.error })
       }
       if (url === '/api/v1/admin/org') {
-        return Promise.resolve({
-          data: {
-            id: '00000000-0000-0000-0000-000000000001',
-            name: 'Test Org',
-            slug: 'test-org',
-            created_at: '2025-01-15T00:00:00+00:00',
-          },
-          error: undefined,
-        })
+        if (orgProfileState.reject) {
+          return Promise.reject(new Error('profile unreachable'))
+        }
+        return Promise.resolve({ data: orgProfileState.data, error: orgProfileState.error })
       }
       if (url === '/api/v1/admin/org/export') {
-        return Promise.resolve({
-          data: {
-            exported_at: '2025-06-30T12:00:00+00:00',
-          },
-          error: undefined,
-        })
+        if (exportState.reject) {
+          return Promise.reject(new Error('export unreachable'))
+        }
+        return Promise.resolve({ data: exportState.data, error: exportState.error })
       }
       return Promise.resolve({ data: null, error: 'Unknown route' })
     }),
@@ -137,6 +156,26 @@ describe('AdminOrgSettingsView', () => {
     hitlWindowState.error = undefined
     hitlWindowState.reject = false
     hitlWindowState.deferred = null
+    orgOverviewState.data = {
+      total_users: 5,
+      total_teams: 2,
+      total_pipelines: 12,
+      plan_tier: 'community',
+      plan_id: 'community',
+    }
+    orgOverviewState.error = undefined
+    orgOverviewState.reject = false
+    orgProfileState.data = {
+      id: '00000000-0000-0000-0000-000000000001',
+      name: 'Test Org',
+      slug: 'test-org',
+      created_at: '2025-01-15T00:00:00+00:00',
+    }
+    orgProfileState.error = undefined
+    orgProfileState.reject = false
+    exportState.data = { exported_at: '2025-06-30T12:00:00+00:00' }
+    exportState.error = undefined
+    exportState.reject = false
     vi.mocked(api.PUT).mockResolvedValue({ data: {}, error: undefined } as any)
   })
 
@@ -150,6 +189,37 @@ describe('AdminOrgSettingsView', () => {
     })
     await flushPromises()
     return wrapper
+  }
+
+  // The delete FormDialog is a PrimeVue Dialog, teleported to document.body,
+  // so its confirm button has to be queried from the document rather than the
+  // wrapper. attachTo keeps the trigger inside the live DOM tree.
+  async function mountAttachedView() {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { team_rbac: true }, currentTier: 'team' })
+    const wrapper = mount(AdminOrgSettingsView, {
+      global: { plugins: [pinia], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    return wrapper
+  }
+
+  async function openDeleteDialog(wrapper: Awaited<ReturnType<typeof mountAttachedView>>) {
+    await wrapper.find('[data-testid="org-delete-open"]').trigger('click')
+    await nextTick()
+    const input = document.querySelector('input[data-testid="org-delete-confirm-input"]') as HTMLInputElement
+    expect(input).not.toBeNull()
+    input.value = 'Test Org'
+    input.dispatchEvent(new Event('input'))
+    await nextTick()
+    const confirmBtn = Array.from(document.querySelectorAll('button')).find(
+      button => button.textContent?.includes('Permanently Delete'),
+    ) as HTMLButtonElement
+    expect(confirmBtn).toBeTruthy()
+    return confirmBtn
   }
 
   function windowPutBodies(): unknown[] {
@@ -491,6 +561,114 @@ describe('AdminOrgSettingsView', () => {
     expect(wrapper.text()).toContain('Export All Data')
   })
 
+  // -- View-level load failures (billing overview + org profile) ------------
+
+  it('reports a load failure when the billing overview request is rejected', async () => {
+    orgOverviewState.reject = true
+    const wrapper = await mountWindowView()
+    expect(wrapper.text()).toContain('Failed to load org info: Unknown error')
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('reports a load failure carried in the billing overview response', async () => {
+    orgOverviewState.error = { detail: 'billing unavailable' }
+    const wrapper = await mountWindowView()
+    expect(wrapper.text()).toContain('Failed to load org info: billing unavailable')
+    wrapper.unmount()
+  })
+
+  it('reports a load failure when the org profile request is rejected', async () => {
+    orgProfileState.reject = true
+    const wrapper = await mountWindowView()
+    expect(wrapper.text()).toContain('Failed to load org info: Unknown error')
+    wrapper.unmount()
+  })
+
+  it('reports a load failure carried in the org profile response', async () => {
+    orgProfileState.error = { detail: 'profile unavailable' }
+    const wrapper = await mountWindowView()
+    expect(wrapper.text()).toContain('Failed to load org info: profile unavailable')
+    wrapper.unmount()
+  })
+
+  it('falls back to the unnamed-org label and an unknown date for an incomplete profile', async () => {
+    orgProfileState.data = { id: '00000000-0000-0000-0000-000000000001' }
+    const wrapper = await mountWindowView()
+    expect(wrapper.text()).toContain('Unnamed Org')
+    expect(wrapper.text()).toContain('N/A')
+    wrapper.unmount()
+  })
+
+  // -- Data export ---------------------------------------------------------
+
+  it('exports the organisation data and offers download and re-export', async () => {
+    const createObjectURL = vi.fn(() => 'blob:org-export')
+    const revokeObjectURL = vi.fn()
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const originalCreate = URL.createObjectURL
+    const originalRevoke = URL.revokeObjectURL
+    URL.createObjectURL = createObjectURL
+    URL.revokeObjectURL = revokeObjectURL
+
+    const wrapper = await mountWindowView()
+    await wrapper.find('[data-testid="org-export-start"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="org-export-exported-at"]').text()).toContain('Jun 30, 2025')
+
+    await wrapper.find('[data-testid="org-export-download"]').trigger('click')
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+    expect(clickSpy).toHaveBeenCalledTimes(1)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:org-export')
+
+    await wrapper.find('[data-testid="org-export-again"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="org-export-start"]').exists()).toBe(true)
+
+    wrapper.unmount()
+    clickSpy.mockRestore()
+    URL.createObjectURL = originalCreate
+    URL.revokeObjectURL = originalRevoke
+  })
+
+  it('falls back to the current time when the export payload omits the timestamp', async () => {
+    exportState.data = {}
+    const wrapper = await mountWindowView()
+    await wrapper.find('[data-testid="org-export-start"]').trigger('click')
+    await flushPromises()
+
+    const exportedAt = wrapper.find('[data-testid="org-export-exported-at"]')
+    expect(exportedAt.exists()).toBe(true)
+    expect(exportedAt.text()).toContain('Exported at')
+    wrapper.unmount()
+  })
+
+  it('reports an export failure carried in the response and retries successfully', async () => {
+    exportState.error = { detail: 'quota exceeded' }
+    const wrapper = await mountWindowView()
+    await wrapper.find('[data-testid="org-export-start"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="org-export-error"]').text()).toContain('Export failed: quota exceeded')
+
+    exportState.error = undefined
+    await wrapper.find('[data-testid="org-export-retry"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="org-export-download"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('reports an export failure that throws', async () => {
+    exportState.reject = true
+    const wrapper = await mountWindowView()
+    await wrapper.find('[data-testid="org-export-start"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="org-export-error"]').text()).toContain('Export failed: export unreachable')
+    wrapper.unmount()
+  })
+
   it('renders the delete organisation section', async () => {
     const wrapper = await mountView()
     expect(wrapper.text()).toContain('Delete Organisation')
@@ -506,6 +684,19 @@ describe('AdminOrgSettingsView', () => {
   it('displays the plan badge', async () => {
     const wrapper = await mountView()
     expect(wrapper.text()).toContain('Community')
+  })
+
+  it('displays the Team plan badge when the organisation is on the team tier', async () => {
+    orgOverviewState.data = {
+      total_users: 5,
+      total_teams: 2,
+      total_pipelines: 12,
+      plan_tier: 'team',
+      plan_id: 'team',
+    }
+    const wrapper = await mountWindowView()
+    expect(wrapper.find('.badge-context-purple').text()).toBe('Team')
+    wrapper.unmount()
   })
 
   it('enables delete confirm button when correct org name is typed', async () => {
@@ -542,6 +733,50 @@ describe('AdminOrgSettingsView', () => {
 
     expect(confirmBtn.disabled).toBe(false)
     wrapper.unmount()
+  })
+
+  it('deletes the organisation and redirects to the login page', async () => {
+    const wrapper = await mountAttachedView()
+    const confirmBtn = await openDeleteDialog(wrapper)
+    confirmBtn.click()
+    await flushPromises()
+
+    expect(api.DELETE).toHaveBeenCalledWith('/api/v1/admin/org')
+    expect(mockPush).toHaveBeenCalledWith('/login')
+
+    wrapper.unmount()
+    document.body.innerHTML = ''
+  })
+
+  it('reports a delete failure carried in the response without redirecting', async () => {
+    vi.mocked(api.DELETE).mockResolvedValueOnce({
+      data: undefined,
+      error: { detail: 'org is locked' },
+    } as any)
+    const wrapper = await mountAttachedView()
+    const confirmBtn = await openDeleteDialog(wrapper)
+    confirmBtn.click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('Failed to delete org: org is locked')
+    expect(mockPush).not.toHaveBeenCalled()
+
+    wrapper.unmount()
+    document.body.innerHTML = ''
+  })
+
+  it('reports a delete failure that throws without redirecting', async () => {
+    vi.mocked(api.DELETE).mockRejectedValueOnce(new Error('network down'))
+    const wrapper = await mountAttachedView()
+    const confirmBtn = await openDeleteDialog(wrapper)
+    confirmBtn.click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('Failed to delete org: network down')
+    expect(mockPush).not.toHaveBeenCalled()
+
+    wrapper.unmount()
+    document.body.innerHTML = ''
   })
 
   it('renders the community objects kill switch', async () => {
