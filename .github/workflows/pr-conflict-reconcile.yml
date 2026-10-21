@@ -35,6 +35,12 @@ jobs:
     name: Detect and reconcile conflicted PRs
     runs-on: ubicloud-standard-2
     steps:
+      - name: Checkout (for the shared dispatch script)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
       - name: Find conflicted open PRs
         id: detect
         env:
@@ -48,14 +54,19 @@ jobs:
           # conflicted PRs beyond the cap would go undetected for a cycle. Raise
           # the limit (or page) if modulo's open-PR count approaches this bound.
           #
-          # --repo is required on any gh call that infers the repository: this
-          # job has no actions/checkout step, so there is no git remote for `gh`
-          # to infer from and such calls die with `failed to run git: fatal: not
-          # a git repository` (all 31 scheduled runs red since the workflow
-          # landed). The explicit /repos/farnalabs/modulo/... REST paths are
-          # unaffected, but `gh pr list` here and `gh pr view` / `gh pr comment`
-          # below must all pass --repo — without it on the latter two the marker
-          # dedup reads "0" and every cycle re-posts the manual-delivery note.
+          # --repo is required on any gh call that infers the repository.
+          # Historical context: this job originally had NO actions/checkout
+          # step, so there was no git remote for `gh` to infer from and such
+          # calls died with `failed to run git: fatal: not a git repository`
+          # (all 31 scheduled runs red when the workflow landed). The job now
+          # carries a checkout (added only so the dispatch step can call the
+          # shared scripts/dispatch_with_retry.sh), but the explicit
+          # /repos/farnalabs/modulo/... REST paths are kept — they work
+          # identically and do not depend on what the checkout happens to
+          # place in the working tree. `gh pr list` here and `gh pr view` /
+          # `gh pr comment` below must all pass --repo — without it on the
+          # latter two the marker dedup reads "0" and every cycle re-posts
+          # the manual-delivery note.
           #
           # The `|| GH_RC=$?` is a second safeguard: under `set -e` a bare
           # non-zero `gh pr list` aborts the step before the fail-open guard
@@ -131,8 +142,9 @@ jobs:
         if: steps.detect.outputs.api_failed == 'false'
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
-          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
-          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          DISPATCH_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_LABEL: "Modulo Branch Fixer"
         shell: bash
         run: |
           set -euo pipefail
@@ -148,12 +160,12 @@ jobs:
           FAILED=0
 
           # Tip of main, the volatile half of the dispatch fingerprint below.
-          # This job has no actions/checkout step, so there is no git remote to
-          # `git ls-remote` against; the explicit REST path through the existing
-          # GH_TOKEN is the cheap equivalent (mirrors the /repos/... paths
-          # already used in this step). Fail-open: if the lookup fails we fall
-          # back to a per-run nonce, so the fingerprint can never freeze on a
-          # stale value and silently suppress every future dispatch.
+          # The explicit REST path through the existing GH_TOKEN is the cheap
+          # equivalent of `git ls-remote` (mirrors the /repos/... paths already
+          # used in this step, and does not depend on the checkout's state).
+          # Fail-open: if the lookup fails we fall back to a per-run nonce, so
+          # the fingerprint can never freeze on a stale value and silently
+          # suppress every future dispatch.
           MAIN_SHA=$(gh api repos/farnalabs/modulo/commits/main --jq '.sha' 2>/dev/null || echo "")
           if [ -z "$MAIN_SHA" ]; then
             echo "::warning::Could not resolve the tip of main; falling back to a per-run nonce so the conflict fingerprint still allows dispatch."
@@ -210,9 +222,10 @@ jobs:
             # FAIL OPEN: an unresolvable SHA leaves HEAD_SHA empty and the
             # payload omits the key, so the delivery behaves exactly as it did
             # before (an absent headSha derives no coalesce key) and the
-            # dispatch is never blocked or skipped. Explicit REST path because
-            # this job has no actions/checkout step, so `gh` has no remote to
-            # infer the repository from.
+            # dispatch is never blocked or skipped. The explicit REST path is
+            # kept from before the job grew a checkout (see the "Find
+            # conflicted open PRs" step): it works identically and does not
+            # depend on remote inference.
             HEAD_SHA=""
             SHA_RC=0
             HEAD_SHA=$(gh api "/repos/farnalabs/modulo/pulls/${PR_NUM}" --jq '.head.sha' 2>/tmp/pr_head_sha_stderr.txt) || SHA_RC=$?
@@ -248,49 +261,33 @@ jobs:
               '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo, fingerprint: $fingerprint, taskKind: $taskKind}
                + (if $headSha == "" then {} else {headSha: $headSha} end)')
 
-            # Retry with exponential backoff on network failures (curl HTTP 000) and 429/5xx (max 5 attempts).
-            # TIMESTAMP and HMAC are recomputed per attempt: the server
-            # enforces a +/-300s replay window on X-Modulo-Timestamp.
-            DISPATCH_OK=false
-            LAST_HTTP=""
-            for attempt in 1 2 3 4 5; do
-              TIMESTAMP=$(date +%s)
-              HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
-              RESPONSE=$(curl -s --max-time 30 -w "\n%{http_code}" -X POST "${WEBHOOK_URL}" \
-                -H "Content-Type: application/json" \
-                -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-                -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-                -d "${BODY}")
-              HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-              BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-              LAST_HTTP="$HTTP_CODE"
-              if [ "$HTTP_CODE" = "202" ]; then
-                echo "Branch Fixer accepted for PR #$PR_NUM (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
-                DISPATCH_OK=true
-                DISPATCHED=$((DISPATCHED + 1))
-                break
-              elif [ "$HTTP_CODE" = "400" ] && echo "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
-                # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
-                # engine's byte-level idempotency guard (DuplicateWebhookError) —
-                # this PR's identical conflict payload was already ACCEPTED within
-                # the ~5-min dedup window (e.g. a previous run of this reconciler).
-                # A handled no-op, NOT a dispatch failure.
-                echo "::notice::Branch Fixer duplicate delivery suppressed for PR #$PR_NUM (identical payload already accepted within the dedup window)"
-                DISPATCH_OK=true
-                DISPATCHED=$((DISPATCHED + 1))
-                break
-              elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-                DELAY=$((2 ** (attempt - 1) * 5))
-                echo "::warning::Branch Fixer returned HTTP $HTTP_CODE for PR #$PR_NUM (attempt $attempt/5) — retrying in ${DELAY}s"
-                sleep "$DELAY"
-              else
-                echo "::warning::Branch Fixer returned HTTP $HTTP_CODE for PR #$PR_NUM: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
-                break
-              fi
-            done
+            # One shared retry policy (scripts/dispatch_with_retry.sh):
+            # 429 (capacity) and 000/502/503/504 (transient) retry with
+            # exponential backoff + jitter, an attempt cap and a wall-clock
+            # budget, honouring Retry-After; every other status is terminal.
+            # The 400 "Duplicate webhook payload" handled no-op (FAR-1097)
+            # and the per-attempt timestamp+HMAC signing (the server enforces
+            # a +/-300s replay window on X-Modulo-Timestamp) are the script's
+            # defaults, mirroring the inline ladder this replaced. The script
+            # exits 1 when the dispatch is never delivered, and it writes
+            # machine-readable results (last HTTP status / class / detail /
+            # attempt count) to DISPATCH_RESULT_FILE so the durable
+            # undelivered-dispatch comment below can cite the real values.
+            DISPATCH_RESULT_FILE="/tmp/last_dispatch_result_${PR_NUM}.env"
+            rm -f "${DISPATCH_RESULT_FILE}"
+            DISPATCH_DELIVERED="false"
+            if ! DISPATCH_RESULT_FILE="${DISPATCH_RESULT_FILE}" \
+                 DISPATCH_BODY="${BODY}" bash scripts/dispatch_with_retry.sh; then
+              # shellcheck disable=SC1090
+              source "${DISPATCH_RESULT_FILE}" 2>/dev/null || true
+            else
+              DISPATCH_DELIVERED="true"
+              DISPATCHED=$((DISPATCHED + 1))
+            fi
 
-            if [ "$DISPATCH_OK" = "false" ]; then
-              DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
+            if [ "$DISPATCH_DELIVERED" = "false" ]; then
+              LAST_HTTP="${DISPATCH_LAST_HTTP:-unknown}"
+              DETAIL="${DISPATCH_LAST_DETAIL:-unknown}"
               # FAR-1949: an undelivered dispatch must never be SILENT, and it must
               # be attributable to the PR it concerns. On 2026-10-17 the dispatch was
               # refused with HTTP 429 ("Concurrent run limit of 5 reached") and the
@@ -301,8 +298,9 @@ jobs:
               # merge-queue.yml fallback emits only ::error:: + exit 1 (it posts no
               # PR comment); the durable-comment + HTML-marker pattern is mirrored
               # from this workflow's own manual-delivery note in the "Surface
-              # manual-delivery conflicts" step below. The retry count and backoff
-              # above are deliberately unchanged.
+              # manual-delivery conflicts" step below. The retry ladder (cap, budget,
+              # backoff) is the SHARED policy now — deliberately the same
+              # every other webhook dispatch step in this repo uses.
               echo "::error::Branch Fixer dispatch failed for PR #$PR_NUM (HTTP ${LAST_HTTP}: ${DETAIL}) after retries — this PR was never handed to the fixer."
               # Idempotent: this reconciler runs every 15 minutes, so a persistently
               # failing webhook (e.g. a sustained 429) would otherwise post a fresh
@@ -313,7 +311,7 @@ jobs:
               if [ "$EXISTING" != "0" ]; then
                 echo "::notice::PR #$PR_NUM already carries an undelivered-dispatch note — not reposting."
               else
-                UNDELIVERED_BODY="The PR Conflict Reconciler could NOT dispatch the Branch Fixer for this PR: all 5 webhook attempts failed (last HTTP ${LAST_HTTP}: ${DETAIL}). Until the conflict is reconciled this PR stays conflicted against \`origin/main\` (mergeable=CONFLICTING), so no pull_request workflow will run to hand it to the fixer. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} ${UNDELIVERED_MARKER}"
+                UNDELIVERED_BODY="The PR Conflict Reconciler could NOT dispatch the Branch Fixer for this PR: every webhook attempt failed (last HTTP ${LAST_HTTP}: ${DETAIL}). Until the conflict is reconciled this PR stays conflicted against \`origin/main\` (mergeable=CONFLICTING), so no pull_request workflow will run to hand it to the fixer. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} ${UNDELIVERED_MARKER}"
                 if gh pr comment "$PR_NUM" --repo farnalabs/modulo --body "$UNDELIVERED_BODY" > /dev/null 2>/tmp/undelivered_comment_stderr.txt; then
                   echo "::notice::PR #$PR_NUM: posted a comment recording that the Branch Fixer was never dispatched."
                 else
