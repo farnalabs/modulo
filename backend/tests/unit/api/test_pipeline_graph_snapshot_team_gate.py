@@ -89,6 +89,9 @@ def _make_auth_session() -> AsyncMock:
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
     session.in_transaction = MagicMock(return_value=True)
+    # ``add`` is SYNC on AsyncSession; the audit logger's ``session.add(event)``
+    # / ``session.add(head)`` would orphan a coroutine on a bare AsyncMock child.
+    session.add = MagicMock()
     session.get_bind = MagicMock()
     session.get_bind.return_value.dialect.name = "sqlite"
     result = MagicMock()
@@ -169,6 +172,7 @@ def _make_team_session(*, is_member: bool) -> AsyncMock:
     session.begin = MagicMock(return_value=begin_cm)
     session.begin_nested = MagicMock(return_value=begin_cm)
     session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
     session.info = {}
     bind = MagicMock()
     bind.dialect.name = "sqlite"
