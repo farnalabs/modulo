@@ -518,7 +518,7 @@ async def _handle_compensation(ctx: _RetryContext, state: dict[str, Any], exc: B
     the run as designed.
     """
     if _is_control_flow_fault(exc):
-        raise
+        raise exc
     resolver = ctx.raw_fn_resolver
     comp_target = resolve_compensation_target(ctx.node_id, ctx.outgoing_edges)
     if not comp_target or resolver is None:
