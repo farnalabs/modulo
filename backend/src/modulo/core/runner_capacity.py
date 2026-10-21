@@ -1562,6 +1562,165 @@ async def _record_marker_sweep_terminalisations(
         _log.exception("runner.capacity.marker_sweep_audit_failed entries=%d", len(entries))
 
 
+def _resolve_sweep_windows(settings: Any, stale_seconds: int | None) -> tuple[int, int, float]:
+    """Resolve the sweep's staleness/node-started/freshness windows."""
+    from modulo.core.cron_helpers import RECONCILE_STALE_HEARTBEAT_FACTOR
+
+    stale_window = stale_seconds if stale_seconds is not None else settings.runner_marker_stale_seconds
+    # FAR-1808: the node-started reclaim bound. The authoritative value is the
+    # Settings knob; a double that does not expose it falls back to the module
+    # default so the sweep still runs (the fallback equals the shipped default).
+    node_started_stale_seconds = int(
+        getattr(settings, "node_started_stale_seconds", DEFAULT_NODE_STARTED_STALE_SECONDS)
+    )
+    # The heartbeat-freshness window for the d2 exemption AND the FAR-1808
+    # liveness condition: a run whose heartbeat (falling back to
+    # started_at/created_at) is more recent than the reconciler's
+    # stale-heartbeat window is alive — the sweep clears its stale marker but
+    # never terminalises over it. Mirrors ``reconcile_pipeline_slots``'s
+    # reference; keyed on ``heartbeat_at`` (NOT the static ``updated_at``).
+    fresh_window = RECONCILE_STALE_HEARTBEAT_FACTOR * int(settings.saq_job_heartbeat)
+    return stale_window, node_started_stale_seconds, float(fresh_window)
+
+
+async def _fetch_sweep_org_ids(factory: async_sessionmaker[AsyncSession]) -> list[uuid.UUID]:
+    """The org-id index for the sweep; raises a partial-count sweep error on failure."""
+    try:
+        # FAR-1202: both production factories (``saq_worker._make_session_factory``
+        # and ``cron_helpers._open_factory``) are ``autobegin=False`` (the DI
+        # convention), so the org-index query must run inside an explicit
+        # transaction — a bare ``session.execute`` raises ``InvalidRequestError:
+        # Autobegin is disabled on this Session`` and the sweep fails on every
+        # tick (observed via the advisory /healthz/ready runner_marker_sweep
+        # check). Matches the per-org pass below, which already begins explicitly.
+        async with factory() as org_index_session, org_index_session.begin():
+            org_result = await org_index_session.execute(text("SELECT id FROM organisations"))
+            return [row[0] for row in org_result.all()]
+    except asyncio.CancelledError:
+        raise
+    except Exception as org_index_exc:
+        _log.exception("runner.capacity.marker_sweep_org_index_failed")
+        raise RunnerMarkerSweepError(
+            scanned=0,
+            cleared=0,
+            transitioned=0,
+            org_failures=0,
+            detail=f"org index query failed: {org_index_exc!r}",
+        ) from org_index_exc
+
+
+def _log_org_sweep_failure(exc: Exception, org_id: uuid.UUID, org_failure_details: list[str]) -> None:
+    """Record + log one failed org pass (FAR-767 lock-timeout distinct event)."""
+    # FAR-767: a lock_timeout (SQLSTATE 55P03) means a sandbox-run transaction
+    # holds a conflicting row lock. Log at warning level with a distinctive
+    # event name so the sweep is visible in prod logs without the noisy
+    # traceback of a genuine org failure; the 60s cadence retries the org next
+    # tick (fail-open, self-healing).
+    sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
+    org_failure_details.append(f"org={org_id}: {type(exc).__name__}: {exc}"[:200])
+    if sqlstate == "55P03":
+        _log.warning(
+            "runner.capacity.marker_sweep_org_lock_timeout org=%s",
+            org_id,
+        )
+    else:
+        _log.exception("runner.capacity.marker_sweep_org_failed org=%s", org_id)
+
+
+@dataclass(frozen=True)
+class _OrgSweepResult:
+    """One org pass's committed outcomes (or its partial scan count on failure)."""
+
+    scanned: int
+    cleared: int
+    transitioned: int
+    terminalised: list[tuple[uuid.UUID, uuid.UUID]]
+    breach: bool
+    failed: bool
+
+
+async def _sweep_org(
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+    *,
+    settings: Any,
+    recovery_or: Any,
+    exclusion: Any,
+    now: datetime,
+    fresh_window: float,
+    stale_window: int,
+    node_started_stale_seconds: int | None,
+    org_failure_details: list[str],
+) -> _OrgSweepResult:
+    """Run one org's sweep pass, isolating (and logging) its failure."""
+    from modulo.core.cron_helpers import _bound_org
+
+    org_scanned_slot: list[int] = [0]
+    # FAR-1501: bind this org so per-org failures logged below
+    # (marker_sweep_org_failed, capacity violations) are attributed
+    # by ErrorTrackingLogHandler instead of dropped as no_org_context.
+    async with _bound_org(org_id):
+        try:
+            org_scanned, org_breach, committed_outcomes = await _scan_org_markers(
+                factory,
+                org_id,
+                settings=settings,
+                recovery_or=recovery_or,
+                exclusion=exclusion,
+                now=now,
+                fresh_window=fresh_window,
+                stale_window=stale_window,
+                node_started_stale_seconds=node_started_stale_seconds,
+                scanned_slot=org_scanned_slot,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # qa F5: a failed org pass still reports the PARTIAL scan count —
+            # the rows it had already classified before the failure must not
+            # be silently dropped to zero on the raised RunnerMarkerSweepError.
+            _log_org_sweep_failure(exc, org_id, org_failure_details)
+            return _OrgSweepResult(
+                scanned=org_scanned_slot[0],
+                cleared=0,
+                transitioned=0,
+                terminalised=[],
+                breach=False,
+                failed=True,
+            )
+    # The org transaction COMMITTED — emit the outcomes + the breach verdict
+    # now (post-commit, never phantom).
+    org_cleared, org_transitioned, org_terminalised = _emit_sweep_outcomes(org_id, committed_outcomes)
+    return _OrgSweepResult(
+        scanned=org_scanned,
+        cleared=org_cleared,
+        transitioned=org_transitioned,
+        terminalised=org_terminalised,
+        breach=org_breach,
+        failed=False,
+    )
+
+
+def _raise_sweep_org_failures(
+    *,
+    orgs_failed: int,
+    scanned: int,
+    cleared: int,
+    transitioned: int,
+    org_failure_details: list[str],
+) -> None:
+    """Raise the partial-count sweep error when any org pass failed."""
+    if not orgs_failed:
+        return
+    raise RunnerMarkerSweepError(
+        scanned=scanned,
+        cleared=cleared,
+        transitioned=transitioned,
+        org_failures=orgs_failed,
+        detail="; ".join(org_failure_details)[:400],
+    )
+
+
 async def reconcile_runner_dispatch_markers(
     factory: async_sessionmaker[AsyncSession],
     *,
@@ -1603,22 +1762,7 @@ async def reconcile_runner_dispatch_markers(
     index fails or any org pass fails (carrying the partial counts).
     """
     settings = get_settings()
-    stale_window = stale_seconds if stale_seconds is not None else settings.runner_marker_stale_seconds
-    # FAR-1808: the node-started reclaim bound. The authoritative value is the
-    # Settings knob; a double that does not expose it falls back to the module
-    # default so the sweep still runs (the fallback equals the shipped default).
-    node_started_stale_seconds = int(
-        getattr(settings, "node_started_stale_seconds", DEFAULT_NODE_STARTED_STALE_SECONDS)
-    )
-    # The heartbeat-freshness window for the d2 exemption AND the FAR-1808
-    # liveness condition: a run whose heartbeat (falling back to
-    # started_at/created_at) is more recent than the reconciler's
-    # stale-heartbeat window is alive — the sweep clears its stale marker but
-    # never terminalises over it. Mirrors ``reconcile_pipeline_slots``'s
-    # reference; keyed on ``heartbeat_at`` (NOT the static ``updated_at``).
-    from modulo.core.cron_helpers import RECONCILE_STALE_HEARTBEAT_FACTOR, _bound_org
-
-    fresh_window = RECONCILE_STALE_HEARTBEAT_FACTOR * int(settings.saq_job_heartbeat)
+    stale_window, node_started_stale_seconds, fresh_window = _resolve_sweep_windows(settings, stale_seconds)
     now = datetime.now(UTC)
     scanned = 0
     cleared = 0
@@ -1648,81 +1792,29 @@ async def reconcile_runner_dispatch_markers(
 
     try:
         recovery_or, exclusion = _sweep_recoverability_predicate()
-
-        try:
-            # FAR-1202: both production factories (``saq_worker._make_session_factory``
-            # and ``cron_helpers._open_factory``) are ``autobegin=False`` (the DI
-            # convention), so the org-index query must run inside an explicit
-            # transaction — a bare ``session.execute`` raises ``InvalidRequestError:
-            # Autobegin is disabled on this Session`` and the sweep fails on every
-            # tick (observed via the advisory /healthz/ready runner_marker_sweep
-            # check). Matches the per-org pass below, which already begins explicitly.
-            async with factory() as org_index_session, org_index_session.begin():
-                org_result = await org_index_session.execute(text("SELECT id FROM organisations"))
-                org_ids: list[uuid.UUID] = [row[0] for row in org_result.all()]
-        except asyncio.CancelledError:
-            raise
-        except Exception as org_index_exc:
-            _log.exception("runner.capacity.marker_sweep_org_index_failed")
-            raise RunnerMarkerSweepError(
-                scanned=scanned,
-                cleared=cleared,
-                transitioned=transitioned,
-                org_failures=orgs_failed,
-                detail=f"org index query failed: {org_index_exc!r}",
-            ) from org_index_exc
+        org_ids = await _fetch_sweep_org_ids(factory)
 
         for org_id in org_ids:
-            org_scanned_slot: list[int] = [0]
-            # FAR-1501: bind this org so per-org failures logged below
-            # (marker_sweep_org_failed, capacity violations) are attributed
-            # by ErrorTrackingLogHandler instead of dropped as no_org_context.
-            async with _bound_org(org_id):
-                try:
-                    org_scanned, org_breach, committed_outcomes = await _scan_org_markers(
-                        factory,
-                        org_id,
-                        settings=settings,
-                        recovery_or=recovery_or,
-                        exclusion=exclusion,
-                        now=now,
-                        fresh_window=fresh_window,
-                        stale_window=stale_window,
-                        node_started_stale_seconds=node_started_stale_seconds,
-                        scanned_slot=org_scanned_slot,
-                    )
-                    scanned += org_scanned
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    orgs_failed += 1
-                    # qa F5: a failed org pass still reports the PARTIAL scan count —
-                    # the rows it had already classified before the failure must not
-                    # be silently dropped to zero on the raised RunnerMarkerSweepError.
-                    scanned += org_scanned_slot[0]
-                    # FAR-767: a lock_timeout (SQLSTATE 55P03) means a sandbox-run
-                    # transaction holds a conflicting row lock.  Log at warning level
-                    # with a distinctive event name so the sweep is visible in prod
-                    # logs without the noisy traceback of a genuine org failure; the
-                    # 60s cadence retries the org next tick (fail-open, self-healing).
-                    sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
-                    org_failure_details.append(f"org={org_id}: {type(exc).__name__}: {exc}"[:200])
-                    if sqlstate == "55P03":
-                        _log.warning(
-                            "runner.capacity.marker_sweep_org_lock_timeout org=%s",
-                            org_id,
-                        )
-                    else:
-                        _log.exception("runner.capacity.marker_sweep_org_failed org=%s", org_id)
-                    continue
-                # The org transaction COMMITTED — emit the outcomes + the breach
-                # verdict now (post-commit, never phantom).
-                org_cleared, org_transitioned, org_terminalised = _emit_sweep_outcomes(org_id, committed_outcomes)
-                cleared += org_cleared
-                transitioned += org_transitioned
-                terminalised_entries.extend(org_terminalised)
-                if org_breach:
-                    violations += 1
+            result = await _sweep_org(
+                factory,
+                org_id,
+                settings=settings,
+                recovery_or=recovery_or,
+                exclusion=exclusion,
+                now=now,
+                fresh_window=fresh_window,
+                stale_window=stale_window,
+                node_started_stale_seconds=node_started_stale_seconds,
+                org_failure_details=org_failure_details,
+            )
+            scanned += result.scanned
+            cleared += result.cleared
+            transitioned += result.transitioned
+            terminalised_entries.extend(result.terminalised)
+            if result.failed:
+                orgs_failed += 1
+            if result.breach:
+                violations += 1
         # FAR-1549: record the stale-RUNNING terminalisations. Runs AFTER the
         # per-org loop so a later org's failure cannot lose the earlier orgs'
         # records (and BEFORE the sweep-error raise, for the same reason).
@@ -1733,14 +1825,13 @@ async def reconcile_runner_dispatch_markers(
             cleared,
             transitioned,
         )
-        if orgs_failed:
-            raise RunnerMarkerSweepError(
-                scanned=scanned,
-                cleared=cleared,
-                transitioned=transitioned,
-                org_failures=orgs_failed,
-                detail="; ".join(org_failure_details)[:400],
-            )
+        _raise_sweep_org_failures(
+            orgs_failed=orgs_failed,
+            scanned=scanned,
+            cleared=cleared,
+            transitioned=transitioned,
+            org_failure_details=org_failure_details,
+        )
         return {
             "scanned": scanned,
             "cleared": cleared,
