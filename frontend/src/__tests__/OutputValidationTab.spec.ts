@@ -28,7 +28,7 @@ const i18n = createI18n({
               eval_name: 'Eval name',
               regex: 'Regex',
               json_schema: 'JSON Schema',
-              llm_judge: 'LLM Judge',
+              model_judge: 'Model judge',
               retry: 'Retry',
               block: 'Block',
               warn: 'Warn',
@@ -45,7 +45,7 @@ const i18n = createI18n({
 interface EvalConfig {
   id: string
   name: string
-  type: 'regex' | 'json_schema' | 'llm_judge'
+  type: 'regex' | 'json_schema' | 'model_judge'
   config: Record<string, unknown>
   failure_behaviour: 'retry' | 'block' | 'warn'
 }
@@ -153,8 +153,8 @@ describe('OutputValidationTab', () => {
     expect(wrapper.text()).toContain('Schema (JSON)')
   })
 
-  it('shows llm_judge config fields when type is llm_judge', () => {
-    const evals = [makeEval({ id: 'e1', type: 'llm_judge' })]
+  it('shows model_judge config fields when type is model_judge', () => {
+    const evals = [makeEval({ id: 'e1', type: 'model_judge' })]
     const wrapper = mount(OutputValidationTab, {
       props: { evalDefinitions: evals, maxValidationRetries: 0 },
       global: { plugins: [i18n] },
@@ -283,8 +283,8 @@ describe('OutputValidationTab', () => {
     consoleSpy.mockRestore()
   })
 
-  it('emits update:evalDefinitions when llm_judge rubric changes', async () => {
-    const evals = [makeEval({ id: 'e1', type: 'llm_judge', config: { rubric: '' } })]
+  it('emits update:evalDefinitions when model_judge rubric changes', async () => {
+    const evals = [makeEval({ id: 'e1', type: 'model_judge', config: { rubric: '' } })]
     const wrapper = mount(OutputValidationTab, {
       props: { evalDefinitions: evals, maxValidationRetries: 0 },
       global: { plugins: [i18n] },

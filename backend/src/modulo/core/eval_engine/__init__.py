@@ -1,7 +1,7 @@
 """EvalEngine — evaluates node outputs against eval definitions.
 
 Supports five eval types:
-  - llm_judge      : LLM-as-judge via ModelBackendHub (soft signal, injection-prone)
+  - model_judge      : LLM-as-judge via ModelBackendHub (soft signal, injection-prone)
   - regex          : pattern match against output field (shape-only)
   - json_schema    : validate output against JSON Schema (shape-only)
   - custom_function: call a user-defined function
@@ -56,7 +56,7 @@ class ContentTooLongError(ValueError):
 
 
 class EvalType(StrEnum):
-    LLM_JUDGE = "llm_judge"
+    MODEL_JUDGE = "model_judge"
     REGEX = "regex"
     JSON_SCHEMA = "json_schema"
     CUSTOM_FUNCTION = "custom_function"
@@ -135,8 +135,8 @@ class GuardrailMisroutedError(RuntimeError):
         self.eval_name = eval_name
 
 
-class LLMJudgeCallable(Protocol):
-    """Protocol for LLM judge callables."""
+class ModelJudgeCallable(Protocol):
+    """Protocol for Model judge callables."""
 
     def __call__(self, output: dict[str, Any], eval_def: EvalDefinition) -> dict[str, Any]: ...
 
@@ -191,7 +191,7 @@ class EvalEngine:
         output: dict[str, Any],
         eval_def: EvalDefinition,
         run_id: UUID,
-        llm_judge_callable: LLMJudgeCallable | None = None,
+        model_judge_callable: ModelJudgeCallable | None = None,
     ) -> EvalResult:
         """Core compute dispatch — shared by ``evaluate()`` and ``evaluate_result()``.
 
@@ -208,8 +208,8 @@ class EvalEngine:
                 return self._evaluate_json_schema(output, eval_def, run_id)
             case EvalType.CUSTOM_FUNCTION:
                 return self._evaluate_custom(output, eval_def, run_id)
-            case EvalType.LLM_JUDGE:
-                return self._evaluate_llm(output, eval_def, run_id, llm_judge_callable)
+            case EvalType.MODEL_JUDGE:
+                return self._evaluate_llm(output, eval_def, run_id, model_judge_callable)
             case EvalType.GUARDRAIL:
                 # Guardrail detection is a sibling function (modulo.core.guardrails)
                 # that reuses the pure regex/json_schema helpers; it must never be
@@ -228,7 +228,7 @@ class EvalEngine:
         eval_def: EvalDefinition,
         *,
         run_id: UUID | None = None,
-        llm_judge_callable: LLMJudgeCallable | None = None,
+        model_judge_callable: ModelJudgeCallable | None = None,
     ) -> EvalResult:
         """Run a single eval against *output*.
 
@@ -236,7 +236,7 @@ class EvalEngine:
             output: The node's output dict (may contain ``field`` per eval_def.config).
             eval_def: The eval definition (EvalDefinition DTO).
             run_id: Pipeline run ID. If omitted, a random UUID is generated.
-            llm_judge_callable: Required for ``llm_judge`` type. Should accept
+            model_judge_callable: Required for ``model_judge`` type. Should accept
                 ``(output_dict, eval_def)`` and return a dict with keys
                 ``passed`` (bool), ``score`` (float|None), ``detail`` (str).
 
@@ -248,7 +248,7 @@ class EvalEngine:
 
         """
         run_id = run_id or uuid4()
-        result = self._compute_result(output, eval_def, run_id, llm_judge_callable)
+        result = self._compute_result(output, eval_def, run_id, model_judge_callable)
 
         if not result.passed:
             if eval_def.failure_behaviour == "block":
@@ -263,7 +263,7 @@ class EvalEngine:
         eval_def: EvalDefinition,
         *,
         run_id: UUID | None = None,
-        llm_judge_callable: LLMJudgeCallable | None = None,
+        model_judge_callable: ModelJudgeCallable | None = None,
     ) -> EvalResult:
         """Compute-only: return the result without raising ``EvalBlockedError``.
 
@@ -274,7 +274,7 @@ class EvalEngine:
         exceptions from custom functions) are still raised.
         """
         run_id = run_id or uuid4()
-        result = self._compute_result(output, eval_def, run_id, llm_judge_callable)
+        result = self._compute_result(output, eval_def, run_id, model_judge_callable)
         if not result.passed:
             _log.warning("Eval %s failed: %s", eval_def.name, result.detail)
         return result
@@ -583,20 +583,20 @@ class EvalEngine:
         output: dict[str, Any],
         eval_def: EvalDefinition,
         run_id: UUID,
-        llm_judge_callable: LLMJudgeCallable | None,
+        model_judge_callable: ModelJudgeCallable | None,
     ) -> EvalResult:
-        if llm_judge_callable is None:
-            _log.warning("LLM judge eval %s callable not provided", eval_def.id)
+        if model_judge_callable is None:
+            _log.warning("Model judge eval %s callable not provided", eval_def.id)
             return _fail_result(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
                 eval_id=eval_def.id,
-                detail="LLM judge callable not provided",
+                detail="Model judge callable not provided",
             )
         try:
             safe_output, safe_eval_def = self._build_safe_judge_input(output, eval_def)
         except ContentTooLongError as exc:
-            _log.warning("LLM judge eval %s content too long: %s", eval_def.id, exc)
+            _log.warning("Model judge eval %s content too long: %s", eval_def.id, exc)
             return _fail_result(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
@@ -604,11 +604,11 @@ class EvalEngine:
                 detail=str(exc),
             )
         return self._run_callable_and_parse(
-            llm_judge_callable,
+            model_judge_callable,
             (safe_output, safe_eval_def),
             eval_def=eval_def,
             run_id=run_id,
-            log_prefix="LLM judge",
+            log_prefix="Model judge",
             callable_name="callable",
         )
 
@@ -624,7 +624,7 @@ class EvalEngine:
         ``config["version"]`` is currently advisory — the registry holds a
         single active version per name). Human-authored sets are deterministic
         and not model-mediated, so they are the trustworthy correctness path
-        that ``llm_judge`` (circular, injection-prone) and ``regex`` /
+        that ``model_judge`` (circular, injection-prone) and ``regex`` /
         ``json_schema`` (shape-only) cannot provide.
         """
         from modulo.core.eval_engine.human_eval_sets import run_human_eval_set
@@ -681,6 +681,6 @@ __all__ = [
     "EvalType",
     "FailureBehaviour",
     "GuardrailMisroutedError",
-    "LLMJudgeCallable",
+    "ModelJudgeCallable",
     "UnknownEvalTypeError",
 ]

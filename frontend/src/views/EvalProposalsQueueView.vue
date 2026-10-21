@@ -277,7 +277,7 @@ const actionMessages = ref<Record<string, { type: string; text: string }>>({})
 // addition is a one-line change here instead of a silent drift. Option labels
 // stay i18n-driven: the locale key is `views.EvalProposalsQueueView.<value>`,
 // which matches each enum value by name.
-const EVAL_TYPES = ['llm_judge', 'regex', 'json_schema', 'custom_function'] as const
+const EVAL_TYPES = ['model_judge', 'regex', 'json_schema', 'custom_function'] as const
 type EvalType = (typeof EVAL_TYPES)[number]
 const DEFAULT_EVAL_TYPE: EvalType = EVAL_TYPES[0]
 

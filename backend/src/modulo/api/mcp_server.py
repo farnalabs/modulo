@@ -5481,7 +5481,7 @@ def _assert_eval_type(eval_type: str) -> dict[str, Any] | None:
     if not re.fullmatch(_EVAL_TYPE_PATTERN, eval_type):
         return {
             "error": "invalid_eval_type",
-            "detail": "eval_type must be one of: llm_judge|regex|json_schema|custom_function|guardrail|human_set",
+            "detail": "eval_type must be one of: model_judge|regex|json_schema|custom_function|guardrail|human_set",
         }
     return None
 

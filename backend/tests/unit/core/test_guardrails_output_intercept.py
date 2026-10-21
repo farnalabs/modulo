@@ -906,7 +906,7 @@ async def test_run_evals_persist_before_decide_skips_guardrail_typed_def():
     results = await run_evals_persist_before_decide(
         eval_defs=[_guardrail(name="gr-straggler"), normal],
         resolve_eval_target=lambda _d: {"body": "x"},
-        resolve_llm_judge=lambda _d: None,
+        resolve_model_judge=lambda _d: None,
         node_id="n1",
     )
     assert set(results) == {"eval-ok"}

@@ -31,7 +31,7 @@ from typing import Any
 from modulo.core.eval_engine import (
     EvalBlockedError,
     EvalEngine,
-    LLMJudgeCallable,
+    ModelJudgeCallable,
 )
 from modulo.core.eval_engine import (
     EvalResult as EngineEvalResult,
@@ -289,17 +289,17 @@ def _compute_eval_result(
     engine: EvalEngine,
     compute_run_id: uuid.UUID,
     resolve_eval_target: Callable[[EvalDefDTO], Any],
-    resolve_llm_judge: Callable[[EvalDefDTO], LLMJudgeCallable | None],
+    resolve_model_judge: Callable[[EvalDefDTO], ModelJudgeCallable | None],
     on_eval_result: Callable[[EvalDefDTO, EngineEvalResult], None] | None,
 ) -> EngineEvalResult:
     """Phase 1 — compute the eval result (never raises ``EvalBlockedError``)."""
-    judge = resolve_llm_judge(eval_def)
+    judge = resolve_model_judge(eval_def)
     eval_target = resolve_eval_target(eval_def)
     eval_result = engine.evaluate_result(
         eval_target,
         eval_def,  # type: ignore[arg-type]  # EvalDefDTO duck-types EvalDefinition
         run_id=compute_run_id,
-        llm_judge_callable=judge,
+        model_judge_callable=judge,
     )
     # Per-eval structured log callback (Defect 3 fix).
     if on_eval_result is not None:
@@ -469,7 +469,7 @@ async def run_evals_persist_before_decide(
     org_id: uuid.UUID | None = None,
     session_factory: SessionFactory | None = None,
     node_id: str | None = None,
-    resolve_llm_judge: Callable[[EvalDefDTO], LLMJudgeCallable | None],
+    resolve_model_judge: Callable[[EvalDefDTO], ModelJudgeCallable | None],
     on_eval_result: Callable[[EvalDefDTO, EngineEvalResult], None] | None = None,
 ) -> dict[str, EngineEvalResult]:
     """Per-eval compute→persist→decide loop (shared by both call sites).
@@ -512,11 +512,11 @@ async def run_evals_persist_before_decide(
         session_factory: Callable returning an async context manager for
             ``AsyncSession``.  When ``None``, persistence is skipped.
         node_id: Graph node id (for logging / DB row).
-        resolve_llm_judge: REQUIRED callback ``eval_def → LLMJudgeCallable | None``
+        resolve_model_judge: REQUIRED callback ``eval_def → ModelJudgeCallable | None``
             (FAR-1652: previously optional, so a call site that simply forgot
-            it silently fail-closed every ``llm_judge`` eval to 0.0 — the
+            it silently fail-closed every ``model_judge`` eval to 0.0 — the
             exact FAR-315 symptom). Both call sites pass
-            ``llm_judge.resolve_llm_judge_callable``: the executor's
+            ``llm_judge.resolve_model_judge_callable``: the executor's
             post-node path (FAR-315) and the node-runner HITL-gate path
             (FAR-307) — each resolves a real judge callable from
             ``eval_def.config["model_backend_id"]`` via the
@@ -585,7 +585,7 @@ async def run_evals_persist_before_decide(
             engine=engine,
             compute_run_id=compute_run_id,
             resolve_eval_target=resolve_eval_target,
-            resolve_llm_judge=resolve_llm_judge,
+            resolve_model_judge=resolve_model_judge,
             on_eval_result=on_eval_result,
         )
         results[eval_def.name] = eval_result

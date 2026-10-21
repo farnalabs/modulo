@@ -890,7 +890,7 @@ async def test_suite_run_trigger_build_skip_propagates():
         patch.object(ch, "_open_factory", return_value=_factory_for(session)),
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
         patch.object(ch, "_suite_run_fire_gates", new_callable=AsyncMock, return_value=None),
-        patch.object(ch, "_suite_run_llm_judge_guard", new_callable=AsyncMock, return_value=None),
+        patch.object(ch, "_suite_run_model_judge_guard", new_callable=AsyncMock, return_value=None),
         patch.object(ch, "_build_suite_run_or_skip", new_callable=AsyncMock, return_value=(None, skip)),
     ):
         outcome = await ch.fire_suite_run_trigger(trigger_id=TRIGGER_A, org_id=ORG, pipeline_id=PIPELINE)
@@ -910,7 +910,7 @@ async def test_suite_run_trigger_judge_suite_without_backend_skips_at_fire():
         config_json={"dataset_id": str(uuid.uuid4()), "model_backend_id": str(uuid.uuid4())},
     )
     judge_def = MagicMock()
-    judge_def.eval_type = "llm_judge"
+    judge_def.eval_type = "model_judge"
     backend_none = MagicMock()
     backend_none.first.return_value = None
     session = _MockSession([_lock_result(True), _trigger_result(trigger), backend_none])
@@ -926,7 +926,7 @@ async def test_suite_run_trigger_judge_suite_without_backend_skips_at_fire():
     ):
         outcome = await ch.fire_suite_run_trigger(trigger_id=TRIGGER_A, org_id=ORG, pipeline_id=PIPELINE)
     assert outcome["status"] == "skipped"
-    assert outcome["reason"] == "llm_judge_backend_unavailable"
+    assert outcome["reason"] == "model_judge_backend_unavailable"
     build.assert_not_awaited()
 
 

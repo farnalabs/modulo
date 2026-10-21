@@ -63,7 +63,7 @@ test.describe('Real-stack journeys: eval definition lifecycle', { tag: '@regress
       await page.locator(`[data-value="${pipeline.id}"]`).first().click()
 
       // Create through the real form: name + the lightweight regex type
-      // (the default llm_judge judge-config placeholder stays untouched).
+      // (the default model_judge judge-config placeholder stays untouched).
       const evalName = uniqueName('E2E Journey EVAL_N')
       await page.getByTestId('eval-editor-name').fill(evalName)
       await page.getByTestId('eval-editor-eval-type').click()

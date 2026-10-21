@@ -105,7 +105,7 @@ describe('EvalEditorView', () => {
       expect(el.exists()).toBe(true)
       return el
     })
-    expect(textarea.attributes('placeholder')).toBe('views.EvalEditorView.configPlaceholder.llm_judge')
+    expect(textarea.attributes('placeholder')).toBe('views.EvalEditorView.configPlaceholder.model_judge')
 
     ;(wrapper.vm as any).form.eval_type = 'regex'
     await nextTick()
@@ -262,7 +262,7 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
       pipeline_id: 'p1',
       node_id: null,
       name: 'Fresh Eval',
-      eval_type: 'llm_judge',
+      eval_type: 'model_judge',
       config_json: { pattern: 'abc' },
       pass_threshold: 0.55,
     })

@@ -99,8 +99,8 @@ def test_config_declares_schema_envelope_not_dict():
 # ---------------------------------------------------------------------------
 
 
-def test_revalidation_backend_error_non_llm_judge():
-    """Non-LLM-judge family → None."""
+def test_revalidation_backend_error_non_model_judge():
+    """Non-model-judge family → None."""
     defn = CorrectionDefinition(
         id="c1",
         guardrail_id="g1",
@@ -110,38 +110,38 @@ def test_revalidation_backend_error_non_llm_judge():
     assert _revalidation_backend_error(defn) is None
 
 
-def test_revalidation_backend_error_llm_judge_no_revalidation_id():
-    """LLM-judge without revalidation_model_backend_id → model_validator catches it."""
+def test_revalidation_backend_error_model_judge_no_revalidation_id():
+    """model-judge without revalidation_model_backend_id → model_validator catches it."""
     with pytest.raises(ValueError, match="revalidation_model_backend_id"):
         CorrectionDefinition(
             id="c1",
             guardrail_id="g1",
             model_backend_id="m1",
-            revalidation_detector_family=CorrectionDetectorFamily.LLM_JUDGE,
+            revalidation_detector_family=CorrectionDetectorFamily.MODEL_JUDGE,
             output_schema={"type": "object"},
         )
 
 
-def test_revalidation_backend_error_llm_judge_same_backend():
-    """LLM-judge with same backend id → model_validator catches it."""
+def test_revalidation_backend_error_model_judge_same_backend():
+    """model-judge with same backend id → model_validator catches it."""
     with pytest.raises(ValueError, match="DIFFERENT"):
         CorrectionDefinition(
             id="c1",
             guardrail_id="g1",
             model_backend_id="m1",
-            revalidation_detector_family=CorrectionDetectorFamily.LLM_JUDGE,
+            revalidation_detector_family=CorrectionDetectorFamily.MODEL_JUDGE,
             revalidation_model_backend_id="m1",
             output_schema={"type": "object"},
         )
 
 
-def test_revalidation_backend_error_llm_judge_different_backend():
-    """LLM-judge with different backend id → passes validation."""
+def test_revalidation_backend_error_model_judge_different_backend():
+    """model-judge with different backend id → passes validation."""
     defn = CorrectionDefinition(
         id="c1",
         guardrail_id="g1",
         model_backend_id="m1",
-        revalidation_detector_family=CorrectionDetectorFamily.LLM_JUDGE,
+        revalidation_detector_family=CorrectionDetectorFamily.MODEL_JUDGE,
         revalidation_model_backend_id="m2",
         output_schema={"type": "object"},
     )

@@ -1,4 +1,4 @@
-"""Unit tests for the FAR-1652 shared LLM-judge resolver and sync bridge.
+"""Unit tests for the FAR-1652 shared model-judge resolver and sync bridge.
 
 ``llm_judge.py`` owns the resolver both eval call sites share plus the two
 bounds that keep a hung judge from wedging a run.  The gate-level tests in
@@ -7,7 +7,7 @@ pins the branches they do not reach:
 
 * the malformed ``model_backend_id`` fail-closed judge,
 * the non-JSON response fallback,
-* ``resolve_llm_judge_callable``'s ``None`` guards (non-judge eval, absent hub),
+* ``resolve_model_judge_callable``'s ``None`` guards (non-judge eval, absent hub),
 * the caller-side bridge timeout's two arms — a still-queued future is
   cancelled and its coroutine closed, while an already-running future is left
   to the inner :func:`invoke_backend` bound.
@@ -48,7 +48,7 @@ class _FakeHub:
 
 def _make_eval_def(
     *,
-    eval_type: EvalType = EvalType.LLM_JUDGE,
+    eval_type: EvalType = EvalType.MODEL_JUDGE,
     config: dict[str, Any] | None = None,
 ) -> EvalDefinition:
     return EvalDefinition(
@@ -63,14 +63,14 @@ def _make_eval_def(
 
 
 # ---------------------------------------------------------------------------
-# build_llm_judge_callable: configuration + response failure branches
+# build_model_judge_callable: configuration + response failure branches
 # ---------------------------------------------------------------------------
 
 
 def test_malformed_model_backend_id_fails_closed() -> None:
     """A non-UUID ``model_backend_id`` never raises out of the eval loop; it
     returns a judge that fails THIS eval closed with a clear config message."""
-    judge = llm_judge.build_llm_judge_callable(_FakeHub("ignored"), "not-a-uuid")
+    judge = llm_judge.build_model_judge_callable(_FakeHub("ignored"), "not-a-uuid")
 
     result = judge({"content": "some output"}, _make_eval_def())
 
@@ -83,7 +83,7 @@ def test_malformed_model_backend_id_fails_closed() -> None:
 def test_non_json_response_falls_back_to_raw_text() -> None:
     """A backend that answers with prose (not JSON) fails closed with the raw
     text as the detail instead of raising ``json.JSONDecodeError``."""
-    judge = llm_judge.build_llm_judge_callable(
+    judge = llm_judge.build_model_judge_callable(
         _FakeHub("this is not json"),
         str(uuid.uuid4()),
     )
@@ -97,7 +97,7 @@ def test_non_json_response_falls_back_to_raw_text() -> None:
 
 def test_response_detail_null_is_coerced_to_empty_string() -> None:
     """A JSON verdict with ``detail: null`` must not surface a ``None`` detail."""
-    judge = llm_judge.build_llm_judge_callable(
+    judge = llm_judge.build_model_judge_callable(
         _FakeHub('{"passed": true, "score": 1.0, "detail": null}'),
         str(uuid.uuid4()),
     )
@@ -109,21 +109,21 @@ def test_response_detail_null_is_coerced_to_empty_string() -> None:
 
 
 # ---------------------------------------------------------------------------
-# resolve_llm_judge_callable: the None guards
+# resolve_model_judge_callable: the None guards
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_llm_judge_returns_none_for_non_judge_eval() -> None:
+def test_resolve_model_judge_returns_none_for_non_judge_eval() -> None:
     """A non-llm_judge eval never resolves a judge, even with a backend id."""
     eval_def = _make_eval_def(
         eval_type=EvalType.REGEX,
         config={"field": "content", "model_backend_id": str(uuid.uuid4())},
     )
 
-    assert llm_judge.resolve_llm_judge_callable(eval_def) is None
+    assert llm_judge.resolve_model_judge_callable(eval_def) is None
 
 
-def test_resolve_llm_judge_returns_none_when_hub_unavailable() -> None:
+def test_resolve_model_judge_returns_none_when_hub_unavailable() -> None:
     """An llm_judge eval with no ambient ModelBackendHub resolves to ``None``
     (the caller then fails the eval closed, pre-existing behaviour)."""
     eval_def = _make_eval_def(
@@ -134,10 +134,10 @@ def test_resolve_llm_judge_returns_none_when_hub_unavailable() -> None:
         "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
         return_value=None,
     ):
-        assert llm_judge.resolve_llm_judge_callable(eval_def) is None
+        assert llm_judge.resolve_model_judge_callable(eval_def) is None
 
 
-def test_resolve_llm_judge_builds_callable_when_hub_present() -> None:
+def test_resolve_model_judge_builds_callable_when_hub_present() -> None:
     """With an ambient hub, the resolver returns a working judge backed by it."""
     eval_def = _make_eval_def(
         config={"field": "content", "model_backend_id": str(uuid.uuid4())},
@@ -148,7 +148,7 @@ def test_resolve_llm_judge_builds_callable_when_hub_present() -> None:
         "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
         return_value=hub,
     ):
-        judge = llm_judge.resolve_llm_judge_callable(eval_def)
+        judge = llm_judge.resolve_model_judge_callable(eval_def)
 
     assert judge is not None
     result = judge({"content": "some output"}, eval_def)

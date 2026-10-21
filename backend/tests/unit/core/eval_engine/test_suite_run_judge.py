@@ -1,4 +1,4 @@
-"""Suite-run LLM-judge wiring (FAR-1712).
+"""Suite-run model-judge wiring (FAR-1712).
 
 Covers, without Docker (in-memory SQLite async engine + a stub judge backend):
 
@@ -29,7 +29,7 @@ from modulo.core.eval_engine.execute_suite_run import (
 )
 from modulo.core.eval_engine.suite_run_judge import (
     build_org_model_backend_hub,
-    build_suite_run_llm_judge_callable,
+    build_suite_run_model_judge_callable,
 )
 from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.db.models import Base
@@ -113,7 +113,7 @@ def _judge_def(org: uuid.UUID, backend_id: str | None, *, field: str = "output")
         id=uuid.uuid4(),
         org_id=org,
         name="judge",
-        eval_type=EvalType.LLM_JUDGE,
+        eval_type=EvalType.MODEL_JUDGE,
         config=config,
     )
 
@@ -146,7 +146,7 @@ async def _add_judge_def(session, org: uuid.UUID, suite: EvalSuite, config: dict
         organisation_id=org,
         pipeline_id=uuid.uuid4(),
         name="judge",
-        eval_type="llm_judge",
+        eval_type="model_judge",
         config_json=config,
         eval_suite_id=suite.id,
         account_id=org,
@@ -314,11 +314,11 @@ async def test_build_hub_tears_down_when_initialise_fails(session, monkeypatch) 
 
 
 # --------------------------------------------------------------------------- #
-# build_suite_run_llm_judge_callable                                          #
+# build_suite_run_model_judge_callable                                          #
 # --------------------------------------------------------------------------- #
 def test_judge_callable_missing_backend_id_fails_closed() -> None:
     hub = ModelBackendHub()
-    judge = build_suite_run_llm_judge_callable(hub)
+    judge = build_suite_run_model_judge_callable(hub)
 
     result = judge({"output": "x"}, _judge_def(uuid.uuid4(), None))
 
@@ -329,7 +329,7 @@ def test_judge_callable_missing_backend_id_fails_closed() -> None:
 
 def test_judge_callable_malformed_backend_id_fails_closed() -> None:
     hub = ModelBackendHub()
-    judge = build_suite_run_llm_judge_callable(hub)
+    judge = build_suite_run_model_judge_callable(hub)
 
     result = judge({"output": "x"}, _judge_def(uuid.uuid4(), "not-a-uuid"))
 
@@ -348,7 +348,7 @@ def test_judge_callable_absent_backend_id_fails_closed() -> None:
     eval closed. Pin the fail-closed behaviour.
     """
     hub = ModelBackendHub()
-    judge = build_suite_run_llm_judge_callable(hub)
+    judge = build_suite_run_model_judge_callable(hub)
 
     result = judge({"output": "x"}, _judge_def(uuid.uuid4(), str(uuid.uuid4())))
 
@@ -364,7 +364,7 @@ def test_judge_callable_dispatches_each_definition_to_its_own_backend() -> None:
     hub = ModelBackendHub()
     hub.register(id_a, _FixedJudgeAdapter('{"passed": true, "score": 0.13, "detail": "A"}'))
     hub.register(id_b, _FixedJudgeAdapter('{"passed": true, "score": 0.87, "detail": "B"}'))
-    judge = build_suite_run_llm_judge_callable(hub)
+    judge = build_suite_run_model_judge_callable(hub)
 
     result_a = judge({"output": "x"}, _judge_def(org, str(id_a)))
     result_b = judge({"output": "x"}, _judge_def(org, str(id_b)))
@@ -384,7 +384,7 @@ def test_judge_callable_caches_each_built_backend_across_calls() -> None:
     hub = ModelBackendHub()
     adapter = _FixedJudgeAdapter('{"passed": true, "score": 0.5, "detail": "cached"}')
     hub.register(backend_id, adapter)
-    judge = build_suite_run_llm_judge_callable(hub)
+    judge = build_suite_run_model_judge_callable(hub)
     definition = _judge_def(org, str(backend_id))
 
     first = judge({"output": "x"}, definition)
@@ -423,7 +423,7 @@ async def test_maybe_wire_no_judge_defs_builds_no_hub(session, monkeypatch) -> N
 
     assert hub is None
     assert not calls
-    assert "llm_judge_callable" not in kwargs
+    assert "model_judge_callable" not in kwargs
 
 
 async def test_maybe_wire_judge_def_sets_callable_and_returns_hub(session, monkeypatch) -> None:
@@ -450,7 +450,7 @@ async def test_maybe_wire_judge_def_sets_callable_and_returns_hub(session, monke
     hub = await sw._maybe_wire_suite_judge(session, run, kwargs)
 
     assert hub is sentinel
-    assert callable(kwargs["llm_judge_callable"])
+    assert callable(kwargs["model_judge_callable"])
 
 
 async def test_maybe_wire_no_active_backend_leaves_kwargs_untouched(session, monkeypatch) -> None:
@@ -474,7 +474,7 @@ async def test_maybe_wire_no_active_backend_leaves_kwargs_untouched(session, mon
     hub = await sw._maybe_wire_suite_judge(session, run, kwargs)
 
     assert hub is None
-    assert "llm_judge_callable" not in kwargs
+    assert "model_judge_callable" not in kwargs
 
 
 # --------------------------------------------------------------------------- #

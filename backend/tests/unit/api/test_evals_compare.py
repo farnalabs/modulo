@@ -595,7 +595,7 @@ class TestEvalFromRun:
         assert resp.status_code == 404
 
     def test_from_run_prepopulates_config_by_type(self, admin_client: TestClient) -> None:
-        for eval_type in ("regex", "json_schema", "llm_judge", "custom_function"):
+        for eval_type in ("regex", "json_schema", "model_judge", "custom_function"):
             mock_session = _make_mock_session()
 
             run = _make_row(

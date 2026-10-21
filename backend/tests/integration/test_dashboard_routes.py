@@ -234,7 +234,7 @@ async def _seed_eval(engine: AsyncEngine, org_id: uuid.UUID, pipeline_id: uuid.U
             text(
                 "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
                 "eval_type, config_json, account_id) "
-                "VALUES (:id, :oid, :pid, NULL, 'Dash Eval', 'llm_judge', '{}'::jsonb, :aid)"
+                "VALUES (:id, :oid, :pid, NULL, 'Dash Eval', 'model_judge', '{}'::jsonb, :aid)"
             ),
             {"id": str(eval_id), "oid": str(org_id), "pid": str(pipeline_id), "aid": str(user_id)},
         )

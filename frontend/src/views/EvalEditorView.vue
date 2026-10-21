@@ -73,10 +73,10 @@
                 <Select
   :aria-label="$t('views.EvalEditorView.eval_type_aria')"
   v-model="form.eval_type"
-  :placeholder="$t('views.EvalEditorView.llm_judge')"
+  :placeholder="$t('views.EvalEditorView.model_judge')"
   data-testid="eval-editor-eval-type"
   class="w-full"
-  :options="[{ value: 'llm_judge', label: $t('views.EvalEditorView.llm_judge') }, { value: 'regex', label: $t('views.EvalEditorView.regex') }, { value: 'json_schema', label: $t('views.EvalEditorView.json_schema') }, { value: 'custom_function', label: $t('views.EvalEditorView.custom_function') }]"
+  :options="[{ value: 'model_judge', label: $t('views.EvalEditorView.model_judge') }, { value: 'regex', label: $t('views.EvalEditorView.regex') }, { value: 'json_schema', label: $t('views.EvalEditorView.json_schema') }, { value: 'custom_function', label: $t('views.EvalEditorView.custom_function') }]"
   option-label="label"
   option-value="value"
 >
@@ -497,7 +497,7 @@ const evalsError = ref<string | null>(null)
 const form = reactive({
   name: '',
   node_id: '__all__',
-  eval_type: 'llm_judge',
+  eval_type: 'model_judge',
   config_json: '{}',
   pass_threshold: 0.8,
 })
@@ -557,7 +557,7 @@ const configParseError = computed(() => {
 })
 
 const configPlaceholder = computed(() => {
-  return t(`views.EvalEditorView.configPlaceholder.${form.eval_type || 'llm_judge'}`)
+  return t(`views.EvalEditorView.configPlaceholder.${form.eval_type || 'model_judge'}`)
 })
 
 const canSave = computed(() => {
@@ -576,7 +576,7 @@ const isGateDirty = computed(() => policyGate.action !== gateSnapshot.action)
 function resetForm() {
   form.name = ''
   form.node_id = '__all__'
-  form.eval_type = 'llm_judge'
+  form.eval_type = 'model_judge'
   form.config_json = '{}'
   form.pass_threshold = 0.8
   editingEvalId.value = null

@@ -86,7 +86,7 @@ def _configure_execute(
         trend_rows = [_make_row(bucket="2025-06-01", total=5, passed=3, failed=2)]
 
     if type_rows is None:
-        type_rows = [_make_row(eval_type="llm_judge", total=6, passed=4, failed=2)]
+        type_rows = [_make_row(eval_type="model_judge", total=6, passed=4, failed=2)]
 
     if pipeline_rows is None:
         pipeline_rows = [
@@ -106,7 +106,7 @@ def _configure_execute(
                 id=_EVAL_RESULT_1,
                 eval_id=_EVAL_DEF_ID,
                 eval_name="Test Eval",
-                eval_type="llm_judge",
+                eval_type="model_judge",
                 passed=True,
                 score=0.95,
                 detail="All good",
@@ -262,7 +262,7 @@ class TestEvalDashboardSections:
         data = resp.json()
         assert len(data["by_type"]) == 1
         bt = data["by_type"][0]
-        assert bt["eval_type"] == "llm_judge"
+        assert bt["eval_type"] == "model_judge"
         assert bt["total"] == 6
         assert bt["passed"] == 4
         assert bt["failed"] == 2
@@ -300,7 +300,7 @@ class TestEvalDashboardSections:
         assert len(data["recent_results"]) == 1
         rr = data["recent_results"][0]
         assert rr["eval_name"] == "Test Eval"
-        assert rr["eval_type"] == "llm_judge"
+        assert rr["eval_type"] == "model_judge"
         assert rr["passed"] is True
         assert rr["score"] == pytest.approx(0.95)
 
@@ -359,7 +359,7 @@ class TestEvalDashboardMultiType:
         mock_session = _make_mock_session()
 
         summary_row = _make_row(total_results=10, passed=6, failed=4)
-        t1 = _make_row(eval_type="llm_judge", total=5, passed=4, failed=1)
+        t1 = _make_row(eval_type="model_judge", total=5, passed=4, failed=1)
         t2 = _make_row(eval_type="regex", total=3, passed=1, failed=2)
         t3 = _make_row(eval_type="json_schema", total=2, passed=1, failed=1)
 
@@ -385,6 +385,6 @@ class TestEvalDashboardMultiType:
         by_type = resp.json()["by_type"]
         assert len(by_type) == 3
         types = {bt["eval_type"]: bt for bt in by_type}
-        assert types["llm_judge"]["passed"] == 4
+        assert types["model_judge"]["passed"] == 4
         assert types["regex"]["failed"] == 2
         assert types["json_schema"]["total"] == 2

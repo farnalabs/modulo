@@ -234,7 +234,7 @@ def pass_rate_by_eval_type(rows: Sequence[tuple[str, bool]]) -> dict[str, dict[s
     """Aggregate pass rates grouped by ``eval_type``.
 
     Pass rates are computed per ``eval_type`` and NEVER averaged across differing
-    eval types — averaging raw ``score`` across ``llm_judge`` and ``regex`` is
+    eval types — averaging raw ``score`` across ``model_judge`` and ``regex`` is
     type-incorrect (different scales, different semantics). Each ``row`` is a
     ``(eval_type, passed)`` pair; the caller resolves ``eval_type`` via the
     eval-definition join. ``errored`` rows (excluded by the caller) are not
@@ -292,7 +292,7 @@ def suite_pass_rate(results: Sequence[EvalResult], excluded_case_count: int = 0)
 #
 # Pass-rate discipline (the non-circular rule): pass-rates are computed from
 # the ``passed`` BOOLEAN only, NEVER from the raw ``score`` column. Scores are
-# not comparable across differing ``eval_type`` (an ``llm_judge`` 0.8 and a
+# not comparable across differing ``eval_type`` (an ``model_judge`` 0.8 and a
 # ``regex`` 0.6 measure different things), so every aggregation partitions by
 # ``eval_type`` and rolls up by counting passes, never by averaging scores. A
 # mixed-``eval_type`` axis never ranks by raw score.

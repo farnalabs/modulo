@@ -463,13 +463,13 @@ export default {
       "config_invalid": "Config JSON is invalid",
       "config_must_be_object": "Config must be a JSON object",
       "config_placeholders": {
-        "llm_judge": "\\{ \"criteria\": [\"response is accurate\", \"response is concise\"], \"prompt\": \"...\" \\}",
+        "model_judge": "\\{ \"criteria\": [\"response is accurate\", \"response is concise\"], \"prompt\": \"...\" \\}",
         "regex": "\\{ \"pattern\": \"(error|failed)\", \"field\": \"output\" \\}",
         "json_schema": "\\{ \"schema\": { \"type\": \"object\", \"properties\": { \"valid\": { \"type\": \"boolean\" } } } \\}",
         "custom_function": "\\{ \"function\": \"def evaluate(output):\\n    return output.get('score', 0) >= 0.8\" \\}"
       },
       "publish_confirm": "Publish",
-      "llm_judge": "LLM Judge",
+      "model_judge": "Model judge",
       "regex": "Regex",
       "json_schema": "JSON Schema",
       "custom_function": "Custom Function",
@@ -1942,7 +1942,7 @@ export default {
       "config_json": "Config (JSON)",
       "config_placeholder": "\\{ \"field\": \"output\", \"instructions\": \"...\" \\}",
       "configPlaceholder": {
-        "llm_judge": "\\{ \"criteria\": [\"response is accurate\", \"response is concise\"], \"prompt\": \"...\" \\}",
+        "model_judge": "\\{ \"criteria\": [\"response is accurate\", \"response is concise\"], \"prompt\": \"...\" \\}",
         "regex": "\\{ \"pattern\": \"(error|failed)\", \"field\": \"output\" \\}",
         "json_schema": "\\{ \"schema\": { \"type\": \"object\", \"properties\": { \"valid\": { \"type\": \"boolean\" } } } \\}",
         "custom_function": "\\{ \"function\": \"def evaluate(output):\\n    return output.get('score', 0) >= 0.8\" \\}"
@@ -1963,7 +1963,7 @@ export default {
       "failed_to_load_nodes": "Failed to load nodes.",
       "failed_to_load_evals": "Failed to load evals.",
       "eval_already_deleted": "Eval was already deleted.",
-      "llm_judge": "LLM Judge",
+      "model_judge": "Model judge",
       "regex": "Regex",
       "json_schema": "JSON Schema",
       "custom_function": "Custom Function",
@@ -4319,7 +4319,7 @@ export default {
         "OutputValidationTab": {
           "failure_behaviour": "Failure Behaviour",
           "regex_pattern": "regex pattern",
-          "llm_judge": "LLM Judge",
+          "model_judge": "Model judge",
           "json_schema": "JSON Schema",
           "eval_name": "eval name",
           "output_validation": "Output Validation",

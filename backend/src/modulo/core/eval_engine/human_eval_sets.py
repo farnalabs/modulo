@@ -6,7 +6,7 @@ The built-in eval types are either shape-only or model-mediated:
 
 * ``regex`` / ``json_schema`` only assert the *shape/structure* of an output —
   they cannot tell a *correct* answer from a confidently-wrong one.
-* ``llm_judge`` is an LLM grading an LLM. It is a useful *soft* signal, but it
+* ``model_judge`` is an LLM grading an LLM. It is a useful *soft* signal, but it
   is circular (LLM-judging-LLM) and vulnerable to eval injection: a payload in
   the agent output can instruct the judge to return a passing score. See the
   guardrail wrapping in ``eval_engine.__init__`` — that mitigates *instruction*
@@ -40,7 +40,7 @@ from typing import Any
 from modulo.core.eval_engine import EvalResult
 
 # A single assertion: a deterministic, human-written check.
-# The signature mirrors the callable contract used by custom_function / llm_judge
+# The signature mirrors the callable contract used by custom_function / model_judge
 # evals so the engine can reuse its result-parsing helpers.
 HumanAssertionFn = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
 
@@ -226,7 +226,7 @@ DEMO_CLASSIFICATION_V1 = HumanEvalSet(
         "Human-authored correctness checks for a support-message classification "
         "agent that emits JSON with category/priority. Encodes semantic "
         "invariants (enum membership + business consistency) that shape-only "
-        "checks (regex/json_schema) and injection-prone llm_judge cannot verify."
+        "checks (regex/json_schema) and injection-prone model_judge cannot verify."
     ),
     assertions=[
         HumanAssertion("valid_json", _demo_parse_json, "Output field parses as a JSON object."),

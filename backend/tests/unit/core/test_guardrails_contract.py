@@ -29,8 +29,8 @@ from modulo.core.eval_engine import EvalType
 from modulo.core.graph_validator import GraphValidator
 from modulo.db.models.eval import Eval as EvalModel
 
-FULL_UNIVERSE = {"llm_judge", "regex", "json_schema", "custom_function", "guardrail", "human_set"}
-COMPOSITE_ELIGIBLE = {"regex", "json_schema", "llm_judge"}
+FULL_UNIVERSE = {"model_judge", "regex", "json_schema", "custom_function", "guardrail", "human_set"}
+COMPOSITE_ELIGIBLE = {"regex", "json_schema", "model_judge"}
 
 
 def test_site_a_evaltype_full_universe():
@@ -60,7 +60,7 @@ def test_site_b_from_run_regex_excludes_guardrail():
     from_run_pattern = evals.CreateEvalFromRunRequest.model_fields["eval_type"].metadata[0].pattern
     assert not re.match(f"^{from_run_pattern}$", "guardrail"), from_run_pattern
     # The pre-populatable subset remains expressible.
-    for value in ("llm_judge", "regex", "json_schema", "custom_function"):
+    for value in ("model_judge", "regex", "json_schema", "custom_function"):
         assert re.match(f"^{from_run_pattern}$", value), value
 
 
@@ -82,7 +82,7 @@ def test_site_c_graph_validator_composite_valid_types_exclude_guardrail():
     codes = [issue.code for issue in result.issues]
     assert "COMPOSITE_VALIDATION_INVALID_TYPE" in codes
     assert any("guardrail" in issue.message for issue in result.issues)
-    # And regex/json_schema/llm_judge pass validation (no invalid-type error).
+    # And regex/json_schema/model_judge pass validation (no invalid-type error).
     clean = ValidationResult()
     GraphValidator()._check_output_validation(
         "node-1",
@@ -90,7 +90,7 @@ def test_site_c_graph_validator_composite_valid_types_exclude_guardrail():
             "eval_definitions": [
                 {"id": "r", "name": "regex-eval", "type": "regex", "config": {"field": "x", "pattern": "y"}},
                 {"id": "s", "name": "schema-eval", "type": "json_schema", "config": {"schema": {}}},
-                {"id": "l", "name": "judge-eval", "type": "llm_judge", "config": {}},
+                {"id": "l", "name": "judge-eval", "type": "model_judge", "config": {}},
             ]
         },
         clean,

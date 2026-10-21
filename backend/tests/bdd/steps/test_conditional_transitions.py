@@ -84,7 +84,7 @@ def gate_has_eval_definition(eval_name: str, threshold: str, operator: str | Non
     ctx["eval_definitions"] = [
         {
             "name": eval_name,
-            "eval_type": "llm_judge",
+            "eval_type": "model_judge",
             "threshold": float(threshold),
             "operator": operator or "lt",
             "failure_behaviour": "interrupt",

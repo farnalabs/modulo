@@ -437,22 +437,22 @@ def test_daily_spend_independent_of_suite_ceiling() -> None:
 # --------------------------------------------------------------------------- #
 def test_pass_rate_by_eval_type_never_cross_combines() -> None:
     rows = [
-        ("llm_judge", True),
-        ("llm_judge", False),
+        ("model_judge", True),
+        ("model_judge", False),
         ("regex", True),
         ("regex", True),
         ("regex", True),
         ("human_set", False),
     ]
     by_type = pass_rate_by_eval_type(rows)
-    assert by_type["llm_judge"]["pass_rate"] == 0.5
+    assert by_type["model_judge"]["pass_rate"] == 0.5
     assert by_type["regex"]["pass_rate"] == 1.0
     assert by_type["human_set"]["pass_rate"] == 0.0
-    # each type is partitioned — llm_judge is not diluted by regex passes.
-    assert by_type["llm_judge"]["total"] == 2
+    # each type is partitioned — model_judge is not diluted by regex passes.
+    assert by_type["model_judge"]["total"] == 2
     assert by_type["regex"]["total"] == 3
     # mixed types must NOT be averaged together into a single score.
-    assert set(by_type) == {"llm_judge", "regex", "human_set"}
+    assert set(by_type) == {"model_judge", "regex", "human_set"}
 
 
 def test_pass_rate_excludes_errored() -> None:

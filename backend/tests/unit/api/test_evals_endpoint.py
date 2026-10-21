@@ -343,7 +343,7 @@ class TestCreateEvalDefinition:
                 "pipeline_id": str(_PIPELINE_ID),
                 "name": "Envelope Eval",
                 "eval_type": "guardrail",
-                "config_json": {"detection": {"type": "llm_judge"}},
+                "config_json": {"detection": {"type": "model_judge"}},
             },
         )
         assert resp.status_code == 422

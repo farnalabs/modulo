@@ -3,7 +3,7 @@
 Covers the genuinely-new bounded correction engine (``modulo.core.guardrails.correction``):
 
   * correction definition validation: redact+correct HARD-BLOCK, different-family
-    enforcement, restricted-backend validation, llm_judge backend split;
+    enforcement, restricted-backend validation, model_judge backend split;
   * embedded static+regex input redaction (not vault-backed);
   * the bounded ``run_single_node_correction`` flow: pre-redaction -> restricted
     backend -> strict output schema -> different-family re-validation -> verdict;
@@ -218,7 +218,7 @@ def test_restricted_backend_rejects_privileged_capabilities():
     correction.validate_restricted_backend(["filesystem", "http"])  # benign
 
 
-def test_llm_judge_revalidation_requires_different_backend():
+def test_model_judge_revalidation_requires_different_backend():
     backend_id = str(uuid.uuid4())
     with pytest.raises(ValueError, match="revalidation_model_backend_id"):
         CorrectionDefinition.model_validate(
@@ -227,7 +227,7 @@ def test_llm_judge_revalidation_requires_different_backend():
                 "guardrail_id": "g",
                 "model_backend_id": backend_id,
                 "output_schema": {"type": "object"},
-                "revalidation_detector_family": "llm_judge",
+                "revalidation_detector_family": "model_judge",
             }
         )
     with pytest.raises(ValueError, match="DIFFERENT backend"):
@@ -237,7 +237,7 @@ def test_llm_judge_revalidation_requires_different_backend():
                 "guardrail_id": "g",
                 "model_backend_id": backend_id,
                 "output_schema": {"type": "object"},
-                "revalidation_detector_family": "llm_judge",
+                "revalidation_detector_family": "model_judge",
                 "revalidation_model_backend_id": backend_id,
             }
         )
@@ -247,7 +247,7 @@ def test_llm_judge_revalidation_requires_different_backend():
             "guardrail_id": "g",
             "model_backend_id": backend_id,
             "output_schema": {"type": "object"},
-            "revalidation_detector_family": "llm_judge",
+            "revalidation_detector_family": "model_judge",
             "revalidation_model_backend_id": str(uuid.uuid4()),
         }
     )

@@ -83,7 +83,7 @@ from modulo.db.models.model_backend import ModelBackend
 _log = logging.getLogger(__name__)
 
 # Nominal cost charged to the per-suite ledger per evaluated case when the suite
-# contains an llm_judge definition and no explicit ``cost_per_case`` is given.
+# contains an model_judge definition and no explicit ``cost_per_case`` is given.
 # Deterministic evals cost nothing. This is an ESTIMATE — real per-token cost
 # accounting is the model backend's responsibility.
 _DEFAULT_COST_PER_LLM_CASE = Decimal("0.001")
@@ -341,16 +341,16 @@ def _case_results(
     case: EvalCase,
     definitions: Sequence[EvalDefinition],
     engine: EvalEngine,
-    llm_judge_callable: Any,
+    model_judge_callable: Any,
     scenario_inputs: dict[str, Any] | None,
     *,
     eval_definition_version: int,
 ) -> tuple[list[EvalResult], int]:
     """Evaluate one case against every suite definition.
 
-    Returns ``(results, errored_count)``. An ``llm_judge`` definition without a
+    Returns ``(results, errored_count)``. An ``model_judge`` definition without a
     provided judge callable returns a FAIL path (never a silent pass) — the
-    runner rejects it up front via ``_has_llm_judge``, so this is defensive. Every
+    runner rejects it up front via ``_has_model_judge``, so this is defensive. Every
     result is stamped with ``suite_run_id`` and
     ``extra['eval_definition_version']`` (FAR-382 stamp).
     """
@@ -363,7 +363,7 @@ def _case_results(
                 output,
                 definition,
                 run_id=run.id,
-                llm_judge_callable=llm_judge_callable,
+                model_judge_callable=model_judge_callable,
             )
         except Exception as exc:
             _log.warning("suite_run case eval errored case=%s definition=%s: %s", case.id, definition.id, exc)
@@ -384,8 +384,8 @@ def _case_results(
     return results, errored
 
 
-def _has_llm_judge(definitions: Sequence[EvalDefinition]) -> bool:
-    return any(d.eval_type == EvalType.LLM_JUDGE for d in definitions)
+def _has_model_judge(definitions: Sequence[EvalDefinition]) -> bool:
+    return any(d.eval_type == EvalType.MODEL_JUDGE for d in definitions)
 
 
 async def _claim_case_cost(session: AsyncSession, run: SuiteRun, cost: Decimal, suite_ceiling: Decimal | None) -> None:
@@ -435,7 +435,7 @@ async def _run_suite_cases(
     cases: list[EvalCase],
     suite_defs: list[EvalDefinition],
     engine: EvalEngine,
-    llm_judge_callable: Any,
+    model_judge_callable: Any,
     scenario_inputs: dict[str, Any] | None,
     eval_definition_version: int,
     claims_llm: bool,
@@ -462,7 +462,7 @@ async def _run_suite_cases(
             case,
             suite_defs,
             engine,
-            llm_judge_callable,
+            model_judge_callable,
             scenario_inputs,
             eval_definition_version=eval_definition_version,
         )
@@ -500,7 +500,7 @@ async def execute_suite_run(
     session: AsyncSession,
     run: SuiteRun,
     *,
-    llm_judge_callable: Any = None,
+    model_judge_callable: Any = None,
     entity_thresholds: dict[str, Any] | None = None,
     suite_ceiling: Decimal | None = None,
     scenario_inputs: dict[str, Any] | None = None,
@@ -534,20 +534,20 @@ async def execute_suite_run(
         definitions, cases = await _load_suite_defs_and_cases(session, run)
         suite_defs = [_definition_dto(r, run.organisation_id) for r in definitions]
         engine = EvalEngine()
-        if _has_llm_judge(suite_defs) and llm_judge_callable is None:
+        if _has_model_judge(suite_defs) and model_judge_callable is None:
             raise SuiteRunExecutionError(
-                "suite contains llm_judge definitions but no judge callable was provided "
+                "suite contains model_judge definitions but no judge callable was provided "
                 "(wire a ModelBackendHub-backed callable — deterministic evals need none)"
             )
 
-        claims_llm = _has_llm_judge(suite_defs)
+        claims_llm = _has_model_judge(suite_defs)
         passed, failed, excluded = await _run_suite_cases(
             session,
             run,
             cases=cases,
             suite_defs=suite_defs,
             engine=engine,
-            llm_judge_callable=llm_judge_callable,
+            model_judge_callable=model_judge_callable,
             scenario_inputs=scenario_inputs,
             eval_definition_version=eval_definition_version,
             claims_llm=claims_llm,

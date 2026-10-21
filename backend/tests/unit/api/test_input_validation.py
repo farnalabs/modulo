@@ -146,7 +146,7 @@ def test_schema_create_valid(client: TestClient) -> None:
 
 
 def test_eval_create_valid_eval_types(client: TestClient) -> None:
-    for eval_type in ("llm_judge", "regex", "json_schema", "custom_function"):
+    for eval_type in ("model_judge", "regex", "json_schema", "custom_function"):
         with patch("modulo.api.routes.evals.set_rls_org"):
             resp = client.post(
                 "/api/v1/evals",

@@ -15,7 +15,7 @@ from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
 # Centralised eval_type vocabulary — MUST match EvalDefinition's CHECK constraint
 # vocabulary AND order exactly.  A test asserts consistency across both tables.
 _VALID_EVAL_TYPES = (
-    "llm_judge",
+    "model_judge",
     "regex",
     "json_schema",
     "custom_function",

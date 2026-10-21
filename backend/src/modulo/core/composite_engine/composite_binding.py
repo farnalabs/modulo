@@ -11,7 +11,7 @@ class EvalDefinitionConfig(BaseModel):
 
     id: str
     name: str
-    type: Literal["regex", "json_schema", "llm_judge"]
+    type: Literal["regex", "json_schema", "model_judge"]
     config: dict[str, Any] = Field(default_factory=dict)
     failure_behaviour: Literal["retry", "block", "warn"] = "retry"
 

@@ -1,9 +1,9 @@
-"""Suite-run LLM-judge wiring (FAR-1712).
+"""Suite-run model-judge wiring (FAR-1712).
 
 The production suite-run path (the SAQ ``execute_suite_run`` job) previously
-never supplied an ``llm_judge_callable``, so the runner
+never supplied an ``model_judge_callable``, so the runner
 (:mod:`modulo.core.eval_engine.execute_suite_run`) hard-refused every
-``EvalSuite`` that contained an ``llm_judge`` definition. This module closes the
+``EvalSuite`` that contained an ``model_judge`` definition. This module closes the
 gap: it builds an ORG-SCOPED :class:`~modulo.core.model_backend_hub.ModelBackendHub`
 from the org's ACTIVE ``ModelBackend`` rows and a single dispatch callable that
 resolves each judge definition's OWN ``config["model_backend_id"]`` through that
@@ -29,7 +29,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.eval_engine import EvalDefinition, LLMJudgeCallable
+from modulo.core.eval_engine import EvalDefinition, ModelJudgeCallable
 from modulo.core.model_backend_hub import BackendNotFoundError, ModelBackendHub
 from modulo.db.models.model_backend import ModelBackend
 
@@ -37,7 +37,7 @@ _log = logging.getLogger(__name__)
 
 __all__ = [
     "build_org_model_backend_hub",
-    "build_suite_run_llm_judge_callable",
+    "build_suite_run_model_judge_callable",
 ]
 
 
@@ -100,10 +100,10 @@ async def build_org_model_backend_hub(
     return hub
 
 
-def build_suite_run_llm_judge_callable(hub: ModelBackendHub) -> LLMJudgeCallable:
+def build_suite_run_model_judge_callable(hub: ModelBackendHub) -> ModelJudgeCallable:
     """Build ONE synchronous judge callable that dispatches per definition.
 
-    The :class:`~modulo.core.eval_engine.LLMJudgeCallable` protocol is
+    The :class:`~modulo.core.eval_engine.ModelJudgeCallable` protocol is
     synchronous and receives ``(output, eval_def)`` per call, and the suite
     runner hands the SAME callable to every definition in the suite. This
     dispatcher therefore reads ``eval_def.config["model_backend_id"]`` per call
@@ -114,7 +114,7 @@ def build_suite_run_llm_judge_callable(hub: ModelBackendHub) -> LLMJudgeCallable
     A MISSING ``model_backend_id`` fails THAT eval closed
     (``{"passed": False, "score": 0.0, "detail": ...}``) with a clear
     configuration message. A MALFORMED id is delegated to
-    :func:`~modulo.core.pipeline_engine.llm_judge.build_llm_judge_callable`,
+    :func:`~modulo.core.pipeline_engine.llm_judge.build_model_judge_callable`,
     which already fails closed with its own malformed-id detail. An ABSENT id (a
     VALID UUID that the hub does not know - deleted, deactivated, or another
     org's backend) is caught here and fails THAT eval closed too. None raises:
@@ -122,15 +122,15 @@ def build_suite_run_llm_judge_callable(hub: ModelBackendHub) -> LLMJudgeCallable
     terminalise the whole run, when the intended contract is a single failed
     eval with the rest still running.
     """
-    from modulo.core.pipeline_engine.llm_judge import build_llm_judge_callable
+    from modulo.core.pipeline_engine.llm_judge import build_model_judge_callable
 
-    cache: dict[str, LLMJudgeCallable] = {}
+    cache: dict[str, ModelJudgeCallable] = {}
 
     def _judge(output: dict[str, Any], eval_def: EvalDefinition) -> dict[str, Any]:
         backend_id_raw = eval_def.config.get("model_backend_id")
         if not backend_id_raw:
             detail = (
-                "llm_judge eval has no model_backend_id configured; set the eval "
+                "model_judge eval has no model_backend_id configured; set the eval "
                 "definition's config['model_backend_id'] to an active model backend id"
             )
             _log.error(
@@ -141,7 +141,7 @@ def build_suite_run_llm_judge_callable(hub: ModelBackendHub) -> LLMJudgeCallable
         key = str(backend_id_raw)
         judge = cache.get(key)
         if judge is None:
-            judge = build_llm_judge_callable(hub, key)
+            judge = build_model_judge_callable(hub, key)
             cache[key] = judge
         try:
             return judge(output, eval_def)
@@ -154,7 +154,7 @@ def build_suite_run_llm_judge_callable(hub: ModelBackendHub) -> LLMJudgeCallable
             # Fail THIS eval closed, exactly as they do, so the case fails and
             # its siblings still run.
             detail = (
-                f"llm_judge eval's model_backend_id {key!r} is not an active model "
+                f"model_judge eval's model_backend_id {key!r} is not an active model "
                 "backend for this organisation; set the eval definition's "
                 "config['model_backend_id'] to an active model backend id"
             )

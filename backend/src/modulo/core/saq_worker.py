@@ -955,18 +955,18 @@ async def _maybe_wire_suite_judge(
     run: Any,
     run_kwargs: dict[str, Any],
 ) -> Any:
-    """Wire an org-scoped LLM-judge callable into the run kwargs when needed (FAR-1712).
+    """Wire an org-scoped model-judge callable into the run kwargs when needed (FAR-1712).
 
     Loads the suite's live definition rows from ``evals`` — the SAME source the
     runner reads (FAR-1729) — scoped unconditionally to ``run.organisation_id``.
-    When the suite has NO ``llm_judge`` definition the kwargs are left untouched
+    When the suite has NO ``model_judge`` definition the kwargs are left untouched
     and no hub is built. When it HAS one, an org-scoped ``ModelBackendHub`` is
     built from the org's ACTIVE backends and a per-definition dispatch callable
     is set on ``run_kwargs``; the hub is returned so the caller tears it down in
     a ``finally``.
 
     When the org has no ACTIVE backend, nothing is set and ``None`` is returned
-    — the runner's own loud refusal ("suite contains llm_judge definitions but
+    — the runner's own loud refusal ("suite contains model_judge definitions but
     no judge callable was provided") is then preserved, never a silent pass.
     """
     from sqlalchemy.exc import SQLAlchemyError
@@ -978,7 +978,7 @@ async def _maybe_wire_suite_judge(
     )
     from modulo.core.eval_engine.suite_run_judge import (
         build_org_model_backend_hub,
-        build_suite_run_llm_judge_callable,
+        build_suite_run_model_judge_callable,
     )
 
     try:
@@ -989,13 +989,13 @@ async def _maybe_wire_suite_judge(
         # job's committed-transaction failure path terminalises the run and the
         # after_process sink sees a typed error — never a bare driver exception.
         raise SuiteRunExecutionError(f"{_sql_error_status(exc)}: {exc}") from exc
-    if not any(str(getattr(d, "eval_type", "")) == "llm_judge" for d in definitions):
+    if not any(str(getattr(d, "eval_type", "")) == "model_judge" for d in definitions):
         return None
 
     hub = await build_org_model_backend_hub(session, run.organisation_id)
     if hub is None:
         return None
-    run_kwargs["llm_judge_callable"] = build_suite_run_llm_judge_callable(hub)
+    run_kwargs["model_judge_callable"] = build_suite_run_model_judge_callable(hub)
     return hub
 
 
@@ -1075,8 +1075,8 @@ async def execute_suite_run(ctx: dict[str, Any], *, suite_run_id: str, org_id: s
             # the (already-``None``) value from ``run.extra``.
             if suite_ceiling_raw is not None:
                 run_kwargs["suite_ceiling"] = Decimal(str(suite_ceiling_raw))
-            # FAR-1712: wire the org-scoped LLM-judge callable when the suite has
-            # an llm_judge definition. No judge definition -> kwargs untouched and
+            # FAR-1712: wire the org-scoped model-judge callable when the suite has
+            # an model_judge definition. No judge definition -> kwargs untouched and
             # no hub built. A judge suite with no ACTIVE backend also leaves the
             # kwargs untouched, so the runner's loud refusal is preserved (never
             # a silent pass). The hub is torn down in the finally below so its

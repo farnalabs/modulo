@@ -200,12 +200,12 @@ async def test_failure_sink_transitions_run_to_failed(session) -> None:
     org = await _org()
     suite, dataset, _, backend = await seed_suite(session, org)
     await seed_cases(session, org, dataset, [{"category": "billing"}])
-    # Add an llm_judge definition with NO judge callable -> execute refuses.
+    # Add an model_judge definition with NO judge callable -> execute refuses.
     llm_def = Eval(
         organisation_id=org,
         pipeline_id=uuid.uuid4(),
         name="judge",
-        eval_type="llm_judge",
+        eval_type="model_judge",
         config_json={"field": "output", "prompt": "grade"},
         eval_suite_id=suite.id,
         account_id=org,
@@ -217,13 +217,13 @@ async def test_failure_sink_transitions_run_to_failed(session) -> None:
         session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
     )
     await _suite_run_transition(session, run, SuiteRunState.RUNNING)
-    with pytest.raises(SuiteRunExecutionError, match="llm_judge"):
+    with pytest.raises(SuiteRunExecutionError, match="model_judge"):
         await execute_suite_run(session, run)
     assert run.state == SuiteRunState.FAILED.value
-    assert "llm_judge" in (run.error_detail or "")
+    assert "model_judge" in (run.error_detail or "")
 
 
-async def test_execute_suite_run_runs_llm_judge_when_callable_provided(session) -> None:
+async def test_execute_suite_run_runs_model_judge_when_callable_provided(session) -> None:
     """The counterpart to the refusal test: a wired callable runs the judge.
 
     Prove-the-fix (FAR-1712): the runner hard-refuses a judge-bearing suite when
@@ -238,7 +238,7 @@ async def test_execute_suite_run_runs_llm_judge_when_callable_provided(session) 
         organisation_id=org,
         pipeline_id=uuid.uuid4(),
         name="judge",
-        eval_type="llm_judge",
+        eval_type="model_judge",
         config_json={"field": "output", "model_backend_id": str(uuid.uuid4())},
         eval_suite_id=suite.id,
         account_id=org,
@@ -255,7 +255,7 @@ async def test_execute_suite_run_runs_llm_judge_when_callable_provided(session) 
     run = await build_suite_run(
         session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
     )
-    stats = await execute_suite_run(session, run, llm_judge_callable=_callable)
+    stats = await execute_suite_run(session, run, model_judge_callable=_callable)
     await session.flush()
 
     assert stats["state"] == SuiteRunState.COMPLETED.value

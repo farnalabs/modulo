@@ -1,7 +1,7 @@
 """Unit tests for llm_judge evals inside a HITL gate (FAR-307).
 
 Prior to the fix, an ``llm_judge`` eval run inside ``make_hitl_review_fn`` never
-received an ``llm_judge_callable``, so ``_evaluate_llm`` returned a fail result
+received an ``model_judge_callable``, so ``_evaluate_llm`` returned a fail result
 with ``score=0.0`` and a conditional gate referencing it fired on EVERY run.
 This suite proves the fix: the judge callable is resolved from
 ``eval_def.config["model_backend_id"]`` via the ModelBackendHub and passed to
@@ -63,7 +63,7 @@ def _make_eval_def(
         org_id=uuid.uuid4(),
         node_id="n1",
         name=name,
-        eval_type=EvalType.LLM_JUDGE,
+        eval_type=EvalType.MODEL_JUDGE,
         config=config or {"field": "content"},
         failure_behaviour="warn",
     )
@@ -99,8 +99,8 @@ def _run_gate_fn(
 def _gate_config(eval_name: str) -> dict[str, Any]:
     return {
         "review_id": "gate-llm",
-        "label": "LLM Judge Gate",
-        "description": "Gate that fires when the LLM judge scores low",
+        "label": "Model judge Gate",
+        "description": "Gate that fires when the Model judge scores low",
         "human_only": False,
         "eval_condition": {
             "eval_name": eval_name,
@@ -244,7 +244,7 @@ def test_hung_judge_times_out_fail_closed(monkeypatch: pytest.MonkeyPatch) -> No
         "judge-quality",
         config={"field": "content", "model_backend_id": str(uuid.uuid4())},
     )
-    judge = llm_judge.build_llm_judge_callable(_HangingHub(), str(uuid.uuid4()))
+    judge = llm_judge.build_model_judge_callable(_HangingHub(), str(uuid.uuid4()))
 
     result = judge({"content": "some agent output"}, eval_def)
 
@@ -267,8 +267,8 @@ def test_hung_judge_releases_the_bridge_for_the_next_call(monkeypatch: pytest.Mo
         "judge-quality",
         config={"field": "content", "model_backend_id": str(uuid.uuid4())},
     )
-    hung_judge = llm_judge.build_llm_judge_callable(_HangingHub(), str(uuid.uuid4()))
-    healthy_judge = llm_judge.build_llm_judge_callable(
+    hung_judge = llm_judge.build_model_judge_callable(_HangingHub(), str(uuid.uuid4()))
+    healthy_judge = llm_judge.build_model_judge_callable(
         _FakeHub(_judge_payload(0.9)),
         str(uuid.uuid4()),
     )
@@ -305,11 +305,11 @@ def test_hung_hub_get_is_bounded_and_releases_the_bridge_for_the_next_call(
         "judge-quality",
         config={"field": "content", "model_backend_id": str(uuid.uuid4())},
     )
-    hung_resolve_judge = llm_judge.build_llm_judge_callable(
+    hung_resolve_judge = llm_judge.build_model_judge_callable(
         _HungResolveHub(),
         str(uuid.uuid4()),
     )
-    healthy_judge = llm_judge.build_llm_judge_callable(
+    healthy_judge = llm_judge.build_model_judge_callable(
         _FakeHub(_judge_payload(0.9)),
         str(uuid.uuid4()),
     )

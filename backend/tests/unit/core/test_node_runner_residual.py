@@ -925,7 +925,7 @@ def test_finalize_node_result_schema_violation_raises():
 
 
 # ---------------------------------------------------------------------------
-# LLM judge — non-JSON model response falls back to a failed eval
+# Model judge — non-JSON model response falls back to a failed eval
 # ---------------------------------------------------------------------------
 
 
@@ -941,8 +941,8 @@ def _stub_run_coroutine_sync(content: str) -> Callable[[Any], SimpleNamespace]:
     return _fake
 
 
-def test_llm_judge_non_json_response_falls_back(monkeypatch: pytest.MonkeyPatch):
-    judge = llm_judge.build_llm_judge_callable(MagicMock(), _judge_backend_id())
+def test_model_judge_non_json_response_falls_back(monkeypatch: pytest.MonkeyPatch):
+    judge = llm_judge.build_model_judge_callable(MagicMock(), _judge_backend_id())
     monkeypatch.setattr(llm_judge, "run_coroutine_sync", _stub_run_coroutine_sync("model said: no"))
     result = judge({"answer": "hello"}, SimpleNamespace(config={"field": "answer"}))
     assert result["passed"] is False
@@ -950,8 +950,8 @@ def test_llm_judge_non_json_response_falls_back(monkeypatch: pytest.MonkeyPatch)
     assert "model said: no" in result["detail"]
 
 
-def test_llm_judge_parses_structured_response(monkeypatch: pytest.MonkeyPatch):
-    judge = llm_judge.build_llm_judge_callable(MagicMock(), _judge_backend_id())
+def test_model_judge_parses_structured_response(monkeypatch: pytest.MonkeyPatch):
+    judge = llm_judge.build_model_judge_callable(MagicMock(), _judge_backend_id())
     monkeypatch.setattr(
         llm_judge,
         "run_coroutine_sync",
@@ -1127,7 +1127,7 @@ async def test_run_evals_persist_before_decide_reraises_cancellation():
         await eval_persist_order.run_evals_persist_before_decide(
             eval_defs=eval_defs,
             resolve_eval_target=lambda ed: {"text": "pass"},
-            resolve_llm_judge=lambda _ed: None,
+            resolve_model_judge=lambda _ed: None,
             run_id=uuid.uuid4(),
             org_id=_ORG_UUID,
             session_factory=lambda: session,
@@ -1151,7 +1151,7 @@ async def test_run_evals_persist_before_decide_persistence_failure_boundaries():
         results = await eval_persist_order.run_evals_persist_before_decide(
             eval_defs=eval_defs,
             resolve_eval_target=lambda ed: {"text": "pass"},
-            resolve_llm_judge=lambda _ed: None,
+            resolve_model_judge=lambda _ed: None,
             run_id=uuid.uuid4(),
             org_id=_ORG_UUID,
             session_factory=lambda: session,
@@ -1173,7 +1173,7 @@ async def test_run_evals_persist_before_decide_persistence_failure_boundaries():
         await eval_persist_order.run_evals_persist_before_decide(
             eval_defs=block_defs,
             resolve_eval_target=lambda ed: {"text": "pass"},
-            resolve_llm_judge=lambda _ed: None,
+            resolve_model_judge=lambda _ed: None,
             run_id=uuid.uuid4(),
             org_id=_ORG_UUID,
             session_factory=lambda: block_session,
@@ -1201,7 +1201,7 @@ async def test_run_evals_persist_before_decide_skips_without_run_id():
     results = await eval_persist_order.run_evals_persist_before_decide(
         eval_defs=eval_defs,
         resolve_eval_target=lambda ed: {"text": "pass"},
-        resolve_llm_judge=lambda _ed: None,
+        resolve_model_judge=lambda _ed: None,
         run_id=None,
         org_id=_ORG_UUID,
         session_factory=lambda: session,

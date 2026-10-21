@@ -226,22 +226,22 @@ def test_unknown_stored_class_is_skipped_and_logged(caplog: Any) -> None:
 async def test_most_specific_pattern_wins() -> None:
     rules = [
         _rule("*", "viewer", ["internal_metadata"]),
-        _rule("llm_judge.*", "viewer", ["sensitive_output"]),
-        _rule("llm_judge.grade", "viewer", ["sensitive_output", "internal_metadata"]),
+        _rule("model_judge.*", "viewer", ["sensitive_output"]),
+        _rule("model_judge.grade", "viewer", ["sensitive_output", "internal_metadata"]),
     ]
 
-    classes = await _resolve(rules, "viewer", "llm_judge.grade")
+    classes = await _resolve(rules, "viewer", "model_judge.grade")
 
     assert classes == _BOTH_CLASSES
 
 
 async def test_longer_matching_pattern_wins_over_shorter() -> None:
     rules = [
-        _rule("llm_judge.*", "viewer", ["sensitive_output"]),
-        _rule("llm_judge.grade.*", "viewer", ["internal_metadata"]),
+        _rule("model_judge.*", "viewer", ["sensitive_output"]),
+        _rule("model_judge.grade.*", "viewer", ["internal_metadata"]),
     ]
 
-    classes = await _resolve(rules, "viewer", "llm_judge.grade.score")
+    classes = await _resolve(rules, "viewer", "model_judge.grade.score")
 
     assert classes == frozenset({"internal_metadata"})
 
@@ -279,14 +279,14 @@ def test_equal_length_patterns_break_ties_deterministically() -> None:
     # Two equal-length patterns that both match the key: the tie-break is
     # lexicographic on the pattern, so the result does not depend on row order.
     rules = [
-        _rule("llm_judge.a*", "viewer", ["internal_metadata"]),
-        _rule("llm_judge.*a", "viewer", ["sensitive_output"]),
+        _rule("model_judge.a*", "viewer", ["internal_metadata"]),
+        _rule("model_judge.*a", "viewer", ["sensitive_output"]),
     ]
 
-    classes = resolve_redaction_classes_from(rules, "viewer", "llm_judge.aa")
+    classes = resolve_redaction_classes_from(rules, "viewer", "model_judge.aa")
     assert classes == frozenset({"sensitive_output"})
 
-    reordered = resolve_redaction_classes_from(list(reversed(rules)), "viewer", "llm_judge.aa")
+    reordered = resolve_redaction_classes_from(list(reversed(rules)), "viewer", "model_judge.aa")
     assert reordered == frozenset({"sensitive_output"})
 
 

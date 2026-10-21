@@ -197,7 +197,7 @@ def test_guardrail_config_requires_deterministic_detection():
         org_id=_ORG_ID,
         name="llm-detection-forbidden",
         eval_type=EvalType.GUARDRAIL,
-        config={"action": "block", "type": "llm_judge"},
+        config={"action": "block", "type": "model_judge"},
         failure_behaviour="block",
     )
     with pytest.raises(GuardrailConfigError):
@@ -213,7 +213,7 @@ def test_guardrail_top_level_forbidden_type_with_schema_fails_closed():
         org_id=_ORG_ID,
         name="llm-with-schema",
         eval_type=EvalType.GUARDRAIL,
-        config={"action": "block", "type": "llm_judge", "schema": {"type": "object"}},
+        config={"action": "block", "type": "model_judge", "schema": {"type": "object"}},
         failure_behaviour="block",
     )
     with pytest.raises(GuardrailConfigError):
@@ -388,7 +388,7 @@ def test_guardrail_detection_envelope_forbidden_type_fails_closed():
         config={
             "action": "block",
             "interception_point": "input",
-            "detection": {"type": "llm_judge", "field": "body", "pattern": r"SECRET_[A-Z0-9]{8}"},
+            "detection": {"type": "model_judge", "field": "body", "pattern": r"SECRET_[A-Z0-9]{8}"},
         },
         failure_behaviour="block",
     )

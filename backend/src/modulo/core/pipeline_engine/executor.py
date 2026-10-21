@@ -111,7 +111,7 @@ from modulo.core.pipeline_engine.evidence import (
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile, struct_hash_with_eval_defs
 from modulo.core.pipeline_engine.hitl_context import HitlReviewContext, build_hitl_review_context
 from modulo.core.pipeline_engine.idempotency import read_before_write_suppression
-from modulo.core.pipeline_engine.llm_judge import resolve_llm_judge_callable
+from modulo.core.pipeline_engine.llm_judge import resolve_model_judge_callable
 from modulo.core.pipeline_engine.model_backend_errors import (
     NON_RETRYABLE_PROVIDER_CODES,
     classify_provider_error,
@@ -3417,9 +3417,9 @@ class PipelineExecutor:
             node_id=node_id,
             # FAR-315: mirror the HITL-gate path (FAR-307) — resolve the LLM
             # judge callable from eval_def.config["model_backend_id"] via the
-            # ModelBackendHub, so llm_judge evals score against a real judge
+            # ModelBackendHub, so model_judge evals score against a real judge
             # instead of returning the fail-closed 0.0 "callable not provided".
-            resolve_llm_judge=resolve_llm_judge_callable,
+            resolve_model_judge=resolve_model_judge_callable,
             on_eval_result=_on_post_node_eval_result,
         )
 

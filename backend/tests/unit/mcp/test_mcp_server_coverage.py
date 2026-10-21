@@ -697,7 +697,7 @@ class TestParseAnalyticsIds:
 
 class TestAssertEvalType:
     def test_valid(self) -> None:
-        assert _assert_eval_type("llm_judge") is None
+        assert _assert_eval_type("model_judge") is None
         assert _assert_eval_type("regex") is None
 
     def test_invalid(self) -> None:
@@ -1617,17 +1617,17 @@ class TestSanitizeCostBreakdownEntry:
 
 class TestAssertCreateEvalDefinitionParams:
     def test_empty_name(self) -> None:
-        err = _assert_create_eval_definition_params("", "llm_judge", None)
+        err = _assert_create_eval_definition_params("", "model_judge", None)
         assert err is not None
         assert err["error"] == "invalid_name"
 
     def test_whitespace_name(self) -> None:
-        err = _assert_create_eval_definition_params("   ", "llm_judge", None)
+        err = _assert_create_eval_definition_params("   ", "model_judge", None)
         assert err is not None
         assert err["error"] == "invalid_name"
 
     def test_name_too_long(self) -> None:
-        err = _assert_create_eval_definition_params("x" * 256, "llm_judge", None)
+        err = _assert_create_eval_definition_params("x" * 256, "model_judge", None)
         assert err is not None
         assert err["error"] == "invalid_name"
 
@@ -1640,15 +1640,15 @@ class TestAssertCreateEvalDefinitionParams:
         # Retired from the public surface (FAR-1103 chunk 5a): the parameter is
         # gone, so supplying it is a TypeError rather than an error dict.
         with pytest.raises(TypeError):
-            _assert_create_eval_definition_params("test", "llm_judge", "crash", None)  # type: ignore[call-arg]
+            _assert_create_eval_definition_params("test", "model_judge", "crash", None)  # type: ignore[call-arg]
 
     def test_bad_pass_threshold(self) -> None:
-        err = _assert_create_eval_definition_params("test", "llm_judge", 2.0)
+        err = _assert_create_eval_definition_params("test", "model_judge", 2.0)
         assert err is not None
         assert err["error"] == "invalid_pass_threshold"
 
     def test_all_valid(self) -> None:
-        assert _assert_create_eval_definition_params("my eval", "llm_judge", 0.5) is None
+        assert _assert_create_eval_definition_params("my eval", "model_judge", 0.5) is None
 
 
 class TestAssertUpdateEvalDefinitionParams:
@@ -1677,7 +1677,7 @@ class TestAssertUpdateEvalDefinitionParams:
         assert err["error"] == "invalid_name"
 
     def test_all_valid(self) -> None:
-        assert _assert_update_eval_definition_params("llm_judge", 0.8, "new name") is None
+        assert _assert_update_eval_definition_params("model_judge", 0.8, "new name") is None
 
     def test_all_none(self) -> None:
         assert _assert_update_eval_definition_params(None, None, None) is None
@@ -1690,14 +1690,14 @@ class TestCollectEvalDefinitionUpdates:
             node_id=str(nid),
             nid=nid,
             name="test",
-            eval_type="llm_judge",
+            eval_type="model_judge",
             config_json={"key": "val"},
             pass_threshold=0.5,
             suite_id="suite-1",
         )
         assert updates["node_id"] == nid
         assert updates["name"] == "test"
-        assert updates["eval_type"] == "llm_judge"
+        assert updates["eval_type"] == "model_judge"
         assert updates["pass_threshold"] == 0.5
         assert updates["suite_id"] == "suite-1"
 

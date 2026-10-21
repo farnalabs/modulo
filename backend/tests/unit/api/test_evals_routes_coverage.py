@@ -223,7 +223,7 @@ def _create_payload(**overrides: object) -> dict:
     payload = {
         "pipeline_id": str(_PIPELINE_ID),
         "name": "my-eval",
-        "eval_type": "llm_judge",
+        "eval_type": "model_judge",
         "config_json": {},
     }
     payload.update(overrides)
@@ -302,7 +302,7 @@ def test_create_eval_returns_definition_dict(client: tuple[TestClient, AsyncMock
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["name"] == "my-eval"
-    assert body["eval_type"] == "llm_judge"
+    assert body["eval_type"] == "model_judge"
     assert body["version"] == 1
 
 

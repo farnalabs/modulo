@@ -185,7 +185,7 @@ def _clone_eval_and_gate() -> tuple[Eval, PolicyGate]:
         pipeline_id=_CLONE_PIPELINE_ID,
         node_id=uuid.UUID(_CLONE_NODE),
         account_id=_ACCOUNT_ID,
-        eval_type="llm_judge",
+        eval_type="model_judge",
         config_json={},
         version=1,
     )

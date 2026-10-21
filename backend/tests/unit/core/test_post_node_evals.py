@@ -12,11 +12,11 @@ These tests pin: an envelope whose artifact output carries pr_url/changed_files
 PASSES the schema eval, and the engine validates the artifact-level contract
 output (not the outer envelope ``output``).
 
-FAR-315: also pins that an ``llm_judge`` eval in the standalone post-node path
-receives an ``llm_judge_callable`` resolved from
+FAR-315: also pins that an ``model_judge`` eval in the standalone post-node path
+receives an ``model_judge_callable`` resolved from
 ``eval_def.config["model_backend_id"]`` via the ModelBackendHub — before the
-fix the post-node loop passed no callable, so every llm_judge eval returned
-score=0.0 with detail "LLM judge callable not provided".
+fix the post-node loop passed no callable, so every model_judge eval returned
+score=0.0 with detail "Model judge callable not provided".
 """
 
 import json
@@ -246,7 +246,7 @@ class _FakeHub:
         return self._backend
 
 
-def _llm_judge_eval_def(
+def _model_judge_eval_def(
     *,
     with_backend_id: bool = True,
     failure_behaviour: str = "block",
@@ -262,8 +262,8 @@ def _llm_judge_eval_def(
         org_id=uuid4(),
         pipeline_id=uuid4(),
         node_id="reviewer",
-        name="llm-judge",
-        eval_type=EvalType.LLM_JUDGE,
+        name="model-judge",
+        eval_type=EvalType.MODEL_JUDGE,
         config=config,
         failure_behaviour=failure_behaviour,
     )
@@ -274,25 +274,25 @@ def _agent_envelope(content: str) -> dict[str, Any]:
 
 
 class TestPostNodeLlmJudgeCallable:
-    """FAR-315: the standalone post-node eval path must resolve the LLM judge.
+    """FAR-315: the standalone post-node eval path must resolve the Model judge.
 
     Before the fix ``_run_post_node_evals`` called ``run_evals_persist_before_decide``
-    WITHOUT ``resolve_llm_judge``, so every llm_judge eval scored 0.0 with
-    detail "LLM judge callable not provided" — and a ``block`` gate failed
+    WITHOUT ``resolve_model_judge``, so every model_judge eval scored 0.0 with
+    detail "Model judge callable not provided" — and a ``block`` gate failed
     every run regardless of the judge's verdict. These tests pin the wiring:
     the judge callable is resolved from ``eval_def.config["model_backend_id"]``
     via the ModelBackendHub (same resolver the HITL-gate path uses, FAR-307)
     and the engine scores against the judge's response.
     """
 
-    async def test_llm_judge_scores_via_hub(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_model_judge_scores_via_hub(self, caplog: pytest.LogCaptureFixture) -> None:
         """A judge returning 0.9 must produce score 0.9 (not the fail-closed 0.0).
 
         ``failure_behaviour="block"`` + a passing high score means: without the
         fix this raises ``EvalBlockedError`` (score 0.0 fails the block), with
         the fix it completes and the structured log carries the judge's score.
         """
-        eval_def = _llm_judge_eval_def()
+        eval_def = _model_judge_eval_def()
         hub = _FakeHub(json.dumps({"passed": True, "score": 0.9, "detail": "judged"}))
         executor = _executor()
 
@@ -316,17 +316,17 @@ class TestPostNodeLlmJudgeCallable:
         assert len(judge_records) == 1
         assert judge_records[0].score == pytest.approx(0.9)
         assert judge_records[0].passed is True
-        assert judge_records[0].detail != "LLM judge callable not provided"
+        assert judge_records[0].detail != "Model judge callable not provided"
 
-    async def test_llm_judge_without_backend_id_still_fails_closed(self) -> None:
+    async def test_model_judge_without_backend_id_still_fails_closed(self) -> None:
         """No model_backend_id ⇒ no judge callable ⇒ score 0.0 fails the block.
 
         Documents the intended fail-closed fallback is preserved: the resolver
         only builds a callable when the eval config names a backend.
         """
-        eval_def = _llm_judge_eval_def(with_backend_id=False)
+        eval_def = _model_judge_eval_def(with_backend_id=False)
         executor = _executor()
-        with pytest.raises(EvalBlockedError, match="llm-judge"):
+        with pytest.raises(EvalBlockedError, match="model-judge"):
             await executor._run_post_node_evals(
                 "reviewer",
                 _agent_envelope("some agent output"),
@@ -344,9 +344,9 @@ class TestPostNodeLlmJudgeCallable:
         clear configuration message — sibling evals still run.
 
         ``eval_def.config["model_backend_id"]`` is unvalidated free-form JSON;
-        before the defensive parse in ``build_llm_judge_callable``, a typo or
+        before the defensive parse in ``build_model_judge_callable``, a typo or
         stale manual edit (e.g. ``"not-a-uuid"``) raised a raw ``ValueError``
-        inside ``resolve_llm_judge_callable()`` in ``run_evals_persist_before_decide``'s
+        inside ``resolve_model_judge_callable()`` in ``run_evals_persist_before_decide``'s
         per-eval loop — aborting every sibling eval and terminalising the run
         via the generic error path.
 
@@ -355,7 +355,7 @@ class TestPostNodeLlmJudgeCallable:
         with a clear detail (not a silent 0.0, not the MISSING-id message)
         and the sibling regex eval still scores.
         """
-        judge_def = _llm_judge_eval_def(failure_behaviour="warn", backend_id="not-a-uuid")
+        judge_def = _model_judge_eval_def(failure_behaviour="warn", backend_id="not-a-uuid")
         sibling = EvalDefinition(
             id=uuid4(),
             org_id=uuid4(),
@@ -385,14 +385,14 @@ class TestPostNodeLlmJudgeCallable:
             )
 
         records = {r.eval_name: r for r in caplog.records if r.getMessage() == "post_node_eval.result"}
-        judge_record = records["llm-judge"]
+        judge_record = records["model-judge"]
         assert judge_record.passed is False
         assert judge_record.score == 0.0
         # A clear, fail-closed configuration error — not the MISSING-id
         # message and not a silent 0.0 with no explanation.
         assert "malformed" in judge_record.detail
         assert "not-a-uuid" in judge_record.detail
-        assert judge_record.detail != "LLM judge callable not provided"
+        assert judge_record.detail != "Model judge callable not provided"
         # The sibling eval still ran (pre-fix the ValueError aborted the loop).
         assert records["sibling-regex"].passed is True
 

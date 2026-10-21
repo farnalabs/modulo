@@ -130,13 +130,13 @@ class TestRunOutputValidation:
         result = run_output_validation({"payload": {"x": 1}}, ov)
         assert result.passed
 
-    def test_llm_judge_passes(self) -> None:
+    def test_model_judge_passes(self) -> None:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
                     id="e1",
                     name="judge",
-                    type="llm_judge",
+                    type="model_judge",
                     config={"rubric": "check quality"},
                 ),
             ],
@@ -144,17 +144,17 @@ class TestRunOutputValidation:
         result = run_output_validation(
             {"text": "good"},
             ov,
-            llm_judge_callable=lambda output, config: {"passed": True, "detail": "ok"},
+            model_judge_callable=lambda output, config: {"passed": True, "detail": "ok"},
         )
         assert result.passed
 
-    def test_llm_judge_fails(self) -> None:
+    def test_model_judge_fails(self) -> None:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
                     id="e1",
                     name="judge",
-                    type="llm_judge",
+                    type="model_judge",
                     config={"rubric": "check quality"},
                 ),
             ],
@@ -162,18 +162,18 @@ class TestRunOutputValidation:
         result = run_output_validation(
             {"text": "bad"},
             ov,
-            llm_judge_callable=lambda output, config: {"passed": False, "detail": "low quality"},
+            model_judge_callable=lambda output, config: {"passed": False, "detail": "low quality"},
         )
         assert not result.passed
         assert "low quality" in result.failures[0]
 
-    def test_llm_judge_no_callable_fails(self) -> None:
+    def test_model_judge_no_callable_fails(self) -> None:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
                     id="e1",
                     name="judge",
-                    type="llm_judge",
+                    type="model_judge",
                     config={"rubric": "check"},
                 ),
             ],
@@ -331,13 +331,13 @@ class TestRunOutputValidation:
         assert not result.passed
         assert "JSON Schema definition error" in result.failures[0]
 
-    def test_llm_judge_non_dict_result_fails(self) -> None:
+    def test_model_judge_non_dict_result_fails(self) -> None:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
                     id="e1",
                     name="judge",
-                    type="llm_judge",
+                    type="model_judge",
                     config={"rubric": "check"},
                 ),
             ],
@@ -345,18 +345,18 @@ class TestRunOutputValidation:
         result = run_output_validation(
             {"text": "test"},
             ov,
-            llm_judge_callable=lambda output, config: "not-a-dict",
+            model_judge_callable=lambda output, config: "not-a-dict",
         )
         assert not result.passed
         assert "non-dict result" in result.failures[0]
 
-    def test_llm_judge_raised_exception_reports_error(self) -> None:
+    def test_model_judge_raised_exception_reports_error(self) -> None:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
                     id="e1",
                     name="judge",
-                    type="llm_judge",
+                    type="model_judge",
                     config={"rubric": "check"},
                 ),
             ],
@@ -364,18 +364,18 @@ class TestRunOutputValidation:
         result = run_output_validation(
             {"text": "test"},
             ov,
-            llm_judge_callable=lambda output, config: (_ for _ in ()).throw(RuntimeError("boom")),
+            model_judge_callable=lambda output, config: (_ for _ in ()).throw(RuntimeError("boom")),
         )
         assert not result.passed
-        assert "llm_judge raised" in result.failures[0]
+        assert "model_judge raised" in result.failures[0]
 
-    def test_llm_judge_cancelled_error_reraised(self) -> None:
+    def test_model_judge_cancelled_error_reraised(self) -> None:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
                     id="e1",
                     name="judge",
-                    type="llm_judge",
+                    type="model_judge",
                     config={"rubric": "check"},
                 ),
             ],
@@ -384,7 +384,7 @@ class TestRunOutputValidation:
             run_output_validation(
                 {"text": "test"},
                 ov,
-                llm_judge_callable=lambda output, config: (_ for _ in ()).throw(asyncio.CancelledError()),
+                model_judge_callable=lambda output, config: (_ for _ in ()).throw(asyncio.CancelledError()),
             )
 
 

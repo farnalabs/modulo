@@ -411,7 +411,7 @@ async def test_propose_validates_bad_detection_type(
     org_b: uuid.UUID,
     admin_b: uuid.UUID,
 ):
-    bad_yaml = _CONFIG_YAML.replace("type: regex", "type: llm_judge")
+    bad_yaml = _CONFIG_YAML.replace("type: regex", "type: model_judge")
     resp = await integration_client.post(
         "/api/v1/guardrails/config/propose",
         json={"config_yaml": bad_yaml},
@@ -1012,7 +1012,7 @@ async def test_import_rejects_invalid_and_empty_configs(
     org_b: uuid.UUID,
     admin_b: uuid.UUID,
 ):
-    bad_yaml = _CONFIG_YAML.replace("type: regex", "type: llm_judge")
+    bad_yaml = _CONFIG_YAML.replace("type: regex", "type: model_judge")
     resp = await integration_client.post(
         "/api/v1/guardrails/config/import",
         json={"config_yaml": bad_yaml},

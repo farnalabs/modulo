@@ -139,7 +139,7 @@ describe('EvalProposalsQueueView', () => {
       params: { path: { record_id: 'rec-1' } },
       body: {
         name: 'Response quality check',
-        eval_type: 'llm_judge',
+        eval_type: 'model_judge',
         config: { criteria: ['accurate'] },
       },
     })
@@ -162,7 +162,7 @@ describe('EvalProposalsQueueView', () => {
       params: { path: { record_id: 'rec-3' } },
       body: {
         name: 'Schema check',
-        eval_type: 'llm_judge',
+        eval_type: 'model_judge',
         config: {},
         node_id: '11111111-1111-1111-1111-111111111111',
       },
@@ -218,7 +218,7 @@ describe('EvalProposalsQueueView', () => {
 
     expect(mockPost).toHaveBeenCalledWith('/api/v1/feedback/proposals/{record_id}/publish', {
       params: { path: { record_id: 'rec-1' } },
-      body: { name: 'No config', eval_type: 'llm_judge', config: {} },
+      body: { name: 'No config', eval_type: 'model_judge', config: {} },
     })
   })
 

@@ -1,10 +1,10 @@
-"""Shared LLM-judge resolver and sync-to-async model-backend bridge (FAR-1652).
+"""Shared model-judge resolver and sync-to-async model-backend bridge (FAR-1652).
 
 The judge resolver used to live in ``node_runner``'s private namespace even
 though two call sites need it: the executor's post-node eval path (FAR-315)
 and the node-runner HITL-gate eval path (FAR-307).  Both hand it to
 :func:`modulo.core.pipeline_engine.eval_persist_order.run_evals_persist_before_decide`
-as the ``resolve_llm_judge`` callback, so it now lives here and both modules
+as the ``resolve_model_judge`` callback, so it now lives here and both modules
 import it.
 
 The module also owns the two bounds that keep one slow or hung judge from
@@ -28,7 +28,7 @@ was never judged must not pass.
 Type note (FAR-1652 review): the judge callables built below annotate their
 ``eval_def`` parameter as
 :class:`~modulo.core.eval_engine.EvalDefinition` because that is what the
-:class:`~modulo.core.eval_engine.LLMJudgeCallable` protocol declares, while
+:class:`~modulo.core.eval_engine.ModelJudgeCallable` protocol declares, while
 both call sites actually pass the duck-typed
 :class:`~modulo.core.pipeline_engine.eval_persist_order.EvalDefDTO` (FAR-1100
 cutover).  Only ``eval_def.config`` is read, and ``EvalDefDTO`` mirrors the
@@ -48,7 +48,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
-from modulo.core.eval_engine import EvalDefinition, EvalType, LLMJudgeCallable
+from modulo.core.eval_engine import EvalDefinition, EvalType, ModelJudgeCallable
 from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
 
 _log = logging.getLogger(__name__)
@@ -56,9 +56,9 @@ _log = logging.getLogger(__name__)
 __all__ = [
     "BACKEND_INVOKE_TIMEOUT_SECONDS",
     "SYNC_BRIDGE_TIMEOUT_SECONDS",
-    "build_llm_judge_callable",
+    "build_model_judge_callable",
     "invoke_backend",
-    "resolve_llm_judge_callable",
+    "resolve_model_judge_callable",
     "run_coroutine_sync",
 ]
 
@@ -80,7 +80,7 @@ SYNC_BRIDGE_TIMEOUT_SECONDS = 75.0
 def _timeout_detail() -> str:
     """Fail-closed detail for a judge timeout (reads the bounds at call time)."""
     return (
-        "LLM judge model backend call timed out "
+        "Model judge model backend call timed out "
         f"(invoke bound {BACKEND_INVOKE_TIMEOUT_SECONDS:g}s, "
         f"bridge bound {SYNC_BRIDGE_TIMEOUT_SECONDS:g}s); "
         "failing closed with score 0.0"
@@ -125,7 +125,7 @@ def run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
 
     ``make_hitl_review_fn`` runs inside an already-running asyncio event loop,
     so ``asyncio.run`` and ``loop.run_until_complete`` both raise "This event
-    loop is already running". The LLMJudgeCallable protocol is synchronous, so
+    loop is already running". The ModelJudgeCallable protocol is synchronous, so
     we bridge sync -> async by executing the coroutine on a dedicated event
     loop in a worker thread and blocking on the result.
 
@@ -140,7 +140,7 @@ def run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
     if _JUDGE_EXECUTOR is None:
         _JUDGE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
             max_workers=1,
-            thread_name_prefix="llm-judge",
+            thread_name_prefix="model-judge",
         )
 
     def _run() -> Any:
@@ -160,7 +160,7 @@ def run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
             # Never started - close the coroutine so it does not warn on GC.
             coro.close()
         _log.error(
-            "llm_judge.bridge_timeout",
+            "model_judge.bridge_timeout",
             extra={
                 "timeout_seconds": SYNC_BRIDGE_TIMEOUT_SECONDS,
                 "detail": _timeout_detail(),
@@ -169,13 +169,13 @@ def run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
         raise
 
 
-def build_llm_judge_callable(
+def build_model_judge_callable(
     hub: Any,
     backend_id_str: str,
-) -> LLMJudgeCallable:
-    """Build a synchronous LLM judge callable backed by a model backend.
+) -> ModelJudgeCallable:
+    """Build a synchronous Model judge callable backed by a model backend.
 
-    The ``LLMJudgeCallable`` protocol is synchronous, but ``make_hitl_review_fn``
+    The ``ModelJudgeCallable`` protocol is synchronous, but ``make_hitl_review_fn``
     runs inside an already-running asyncio event loop. We bridge sync -> async
     by running the async backend invoke on a dedicated event loop in a worker
     thread via :func:`run_coroutine_sync`.
@@ -196,12 +196,12 @@ def build_llm_judge_callable(
         backend_id = uuid.UUID(backend_id_str)
     except (ValueError, TypeError) as exc:
         detail = (
-            f"llm_judge eval has a malformed model_backend_id {backend_id_str!r}: "
+            f"model_judge eval has a malformed model_backend_id {backend_id_str!r}: "
             f"not a valid UUID ({exc}); fix the eval definition's "
             "config['model_backend_id']"
         )
         _log.error(
-            "llm_judge.malformed_model_backend_id",
+            "model_judge.malformed_model_backend_id",
             extra={"model_backend_id": backend_id_str, "detail": detail},
         )
 
@@ -230,7 +230,7 @@ def build_llm_judge_callable(
         except TimeoutError:
             detail = _timeout_detail()
             _log.error(
-                "llm_judge.timeout",
+                "model_judge.timeout",
                 extra={
                     "model_backend_id": str(backend_id),
                     "detail": detail,
@@ -253,12 +253,12 @@ def build_llm_judge_callable(
     return _judge
 
 
-def resolve_llm_judge_callable(eval_def: EvalDefDTO) -> LLMJudgeCallable | None:
-    """Resolve the LLM judge callable for an eval definition, if configured."""
-    if eval_def.eval_type == EvalType.LLM_JUDGE and eval_def.config.get("model_backend_id"):
+def resolve_model_judge_callable(eval_def: EvalDefDTO) -> ModelJudgeCallable | None:
+    """Resolve the Model judge callable for an eval definition, if configured."""
+    if eval_def.eval_type == EvalType.MODEL_JUDGE and eval_def.config.get("model_backend_id"):
         from modulo.core.pipeline_engine.decorator import get_model_backend_hub
 
         hub = get_model_backend_hub()
         if hub is not None:
-            return build_llm_judge_callable(hub, str(eval_def.config["model_backend_id"]))
+            return build_model_judge_callable(hub, str(eval_def.config["model_backend_id"]))
     return None

@@ -118,7 +118,7 @@ _CODE_EVALS_POLICY_GATE_CREATE = "evals.policy_gate.create"
 _CODE_EVALS_POLICY_GATE_UPDATE = "evals.policy_gate.update"
 _CODE_EVALS_POLICY_GATE_DELETE = "evals.policy_gate.delete"
 _CODE_EVALS_POLICY_GATE_GET = "evals.policy_gate.get"
-_EVAL_TYPE_PATTERN = r"^(llm_judge|regex|json_schema|custom_function|guardrail|human_set)$"
+_EVAL_TYPE_PATTERN = r"^(model_judge|regex|json_schema|custom_function|guardrail|human_set)$"
 _POLICY_GATE_ACTION_PATTERN = r"^(warn|block)$"
 # FAR-939 chunk 12 — gate evaluation-mode vocabulary (migration 0316 CHECK).
 _POLICY_GATE_EVALUATION_MODE_PATTERN = r"^(automatic|human)$"
@@ -3018,7 +3018,7 @@ class CreateEvalFromRunRequest(BaseModel):
     # guardrail is a deny-rule (regex pattern / json_schema) that cannot be
     # derived from a sample, and a stub config would be silently-inert
     # (fail-open) for a data-safety control. Guardrails are authored directly.
-    eval_type: str = Field(pattern=r"^(llm_judge|regex|json_schema|custom_function)$")
+    eval_type: str = Field(pattern=r"^(model_judge|regex|json_schema|custom_function)$")
     name: str = Field(min_length=1, max_length=255)
 
 
@@ -3379,7 +3379,7 @@ def _build_eval_config_json(eval_type: str, sample_output: dict[str, Any]) -> di
         return {"field": field, "pattern": ""}
     if eval_type == "json_schema":
         return {"field": field, "schema": {}}
-    if eval_type == "llm_judge":
+    if eval_type == "model_judge":
         return {"field": field, "instructions": ""}
     if eval_type == "custom_function":
         return {"field": field, "function": ""}
