@@ -1006,6 +1006,154 @@ async def test_cancelled_node_capture_of_delivery_sentinel_flushed_during_the_gr
     assert len(reads) >= 2
 
 
+async def test_bounded_final_drain_logs_an_awaited_failure() -> None:
+    """A drain that fails while awaited is logged ONCE, at error level.
+
+    The failure is logged by the awaiter (the done callback stays silent while
+    ``_awaiting`` is True), so a post-cancel drain failure can never be
+    swallowed — and never produces a duplicate record.
+    """
+
+    async def _drain() -> None:
+        raise RuntimeError("drain failed")
+
+    sequencer = _BoundedFinalDrain(_drain, timeout=1.0)
+    with patch("modulo.core.pipeline_engine.node_runner._log") as mock_log:
+        await sequencer.run_once()
+
+    mock_log.error.assert_called_once()
+    assert mock_log.error.call_args.args[0] == "sandbox_agent.cancel_retention_drain_failed"
+    assert mock_log.error.call_args.kwargs["exc_info"] is True
+    mock_log.warning.assert_not_called()
+
+
+async def test_bounded_final_drain_logs_a_late_failure() -> None:
+    """A drain that fails AFTER a timed-out wait is logged by the callback.
+
+    The first look times out (the drain is shielded and still running); when it
+    later raises, nothing is awaiting it — the done callback must retrieve and
+    log the failure rather than letting it vanish (or surface as a GC
+    traceback).
+    """
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _drain() -> None:
+        started.set()
+        await release.wait()
+        raise RuntimeError("late drain failure")
+
+    sequencer = _BoundedFinalDrain(_drain, timeout=0.01)
+    with patch("modulo.core.pipeline_engine.node_runner._log") as mock_log:
+        await sequencer.run_once()
+        await started.wait()
+        mock_log.warning.assert_called_once()
+        mock_log.error.assert_not_called()
+
+        release.set()
+        for _ in range(20):
+            await asyncio.sleep(0.005)
+            if mock_log.error.called:
+                break
+
+    mock_log.error.assert_called_once()
+    assert mock_log.error.call_args.args[0] == "sandbox_agent.cancel_retention_drain_failed"
+    assert isinstance(mock_log.error.call_args.kwargs["exc_info"], RuntimeError)
+
+
+async def test_cancelled_node_with_no_grace_skips_the_second_look():
+    """A zero/disabled grace runs ONE post-cancel drain, not a pointless second.
+
+    ``_CANCEL_DELIVERY_GRACE_SECONDS`` is the operator-visible knob for the
+    second look; at 0 the extra wait and its drain must be skipped entirely
+    (the first drain already ran) while evidence retention is unchanged.
+    """
+    reads: list[str] = []
+
+    async def _read(path: Any, format: str = "text", **kwargs: Any) -> Any:
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        reads.append(str(path))
+        return "agent working\n"
+
+    sandbox = _make_sandbox_mock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len("agent working\n")))
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    row = _FakeRunRow()
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._CANCEL_DELIVERY_GRACE_SECONDS", 0),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    assert len(reads) == 1, "no grace -> no second log read"
+    marker = _single_marker(row)
+    assert marker["deadline_triage"] is True
+
+
+async def test_bounded_final_drain_starts_a_fresh_look_after_the_previous_finished():
+    """Once the in-flight drain has FINISHED, the next look starts a fresh one.
+
+    The sequencer only joins an IN-FLIGHT drain; a completed one must not be
+    reused, or content flushed after it would never be read.
+    """
+    calls = 0
+
+    async def _drain() -> None:
+        nonlocal calls
+        calls += 1
+
+    sequencer = _BoundedFinalDrain(_drain, timeout=1.0)
+
+    await sequencer.run_once()
+    await sequencer.run_once()
+
+    assert calls == 2
+
+
+async def test_cancelled_during_the_post_cancel_grace_still_retains_the_marker():
+    """A SECOND cancellation landing inside the grace window must not skip
+    evidence retention (FAR-1914 B2).
+
+    The grace sleep is a new await point on the cancel path, so an outer
+    cancellation can arrive there. That nested cancel is consumed
+    (``_uncancel_current_task``), the grace look still joins the drain, and the
+    triage marker is written — the original cancellation then re-raises.
+    """
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content="agent working\n")
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    row = _FakeRunRow()
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._CANCEL_DELIVERY_GRACE_SECONDS", 30),
+    ):
+        task = asyncio.create_task(fn(_run_state()))
+        # Well past the (mocked, instant) first drain: the node is parked in
+        # the 30s grace sleep.
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    marker = _single_marker(row)
+    assert marker["deadline_triage"] is True
+    assert marker["status"] == "failed"
+
+
 async def test_bounded_final_drain_never_overlaps_a_slow_first_drain():
     """FAR-1914 round-3 M3 (prove-the-fix): a drain that outlives its
     ``wait_for`` is not restarted by the grace look.

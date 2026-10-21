@@ -9,11 +9,16 @@ window is never credited without a proof.
 
 import json
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 
 import pytest
 
-from modulo.core.agent_event_evidence import heartbeat_liveness_seconds, parse_step_finish_evidence
+from modulo.core import agent_event_evidence
+from modulo.core.agent_event_evidence import (
+    _add_step_cost,
+    heartbeat_liveness_seconds,
+    parse_step_finish_evidence,
+)
 from modulo.core.pipeline_engine.node_runner import (
     RECOVERED_TOKEN_USAGE_ATTR,
     SandboxNodeFailedError,
@@ -289,3 +294,57 @@ class TestHeartbeatLivenessSeconds:
         heartbeat = start + timedelta(minutes=10)
 
         assert heartbeat_liveness_seconds(start, heartbeat, None) == 600.0
+
+
+class TestAddStepCost:
+    """The belt-and-braces sum guard (FAR-1914 round-3 M2)."""
+
+    @staticmethod
+    def test_sums_plausible_costs() -> None:
+        assert _add_step_cost(Decimal("0.0003"), Decimal("0.000178")) == Decimal("0.000478")
+
+    @staticmethod
+    def test_decimal_exception_degrades_to_none() -> None:
+        """A decimal arithmetic failure must never escape into the caller.
+
+        Per-step costs are bounded, so this cannot happen with real values; the
+        test pins the degradation contract with a ``Decimal`` subclass whose
+        reflected add raises, which is the only way to reach the guard.
+        """
+
+        class _OverflowingCost(Decimal):
+            def __radd__(self, other: object) -> Decimal:
+                raise DecimalException("overflow")
+
+        assert _add_step_cost(Decimal(0), _OverflowingCost(1)) is None
+
+
+def test_parse_step_finish_evidence_skips_an_overflowing_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unusable addition is skipped per event; the rest of the stream counts.
+
+    Per-step costs are bounded so this cannot arise from real values; the test
+    forces the ``Decimal`` overflow guard through the public parser to pin that
+    a single bad event degrades to "no usable cost" rather than aborting the
+    whole salvage read.
+    """
+
+    class _OverflowingCost(Decimal):
+        def __radd__(self, other: object) -> Decimal:
+            raise DecimalException("overflow")
+
+    real_coerce = agent_event_evidence._coerce_step_cost
+
+    def _coerce(value: object) -> Decimal | None:
+        if value == "overflow":
+            return _OverflowingCost(1)
+        return real_coerce(value)
+
+    monkeypatch.setattr(agent_event_evidence, "_coerce_step_cost", _coerce)
+    stream = '{"type": "step_finish", "part": {"cost": "overflow", "tokens": {"total": 5}}}\n' + _event(
+        cost=0.5, tokens={"total": 7}
+    )
+
+    tokens, cost = parse_step_finish_evidence(stream)
+
+    assert cost == Decimal("0.5")
+    assert tokens["total"] == 12

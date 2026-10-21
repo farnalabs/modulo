@@ -642,6 +642,10 @@ _IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT = 5.0
 #: Deliberately tiny: the node is already cancelled, so this must not delay the
 #: re-raise beyond the existing bounded persist budget.
 _CANCEL_DELIVERY_GRACE_SECONDS = 0.5
+#: FAR-1914: the single log event for a post-cancel retention drain that failed
+#: (on the timeout boundary, while awaited, or after a timed-out wait). Defined
+#: once so the three emitters can never drift apart (SonarCloud S1192).
+_CANCEL_DRAIN_FAILED_EVENT = "sandbox_agent.cancel_retention_drain_failed"
 # FAR-458: the per-connector-per-write ``on_unknown`` modes and default live in
 # ONE place — ``modulo.connectors.base`` (a stdlib-only leaf imported by both
 # the pipeline engine's gate read and the REST connector's config validation)
@@ -2329,21 +2333,17 @@ class _BoundedFinalDrain:
         except TimeoutError:
             # The drain is still alive (shielded); it will run to completion in
             # the background and the next look joins it instead of duplicating
-            # the read. Loud, so a persistently slow drain is visible.
-            if task.done() and not task.cancelled() and task.exception() is not None:
-                # It failed on the timeout boundary — surface the real error
-                # (the done callback saw _awaiting=True and stayed silent).
-                _log.error(
-                    "sandbox_agent.cancel_retention_drain_failed",
-                    extra=self._log_context,
-                    exc_info=task.exception(),
-                )
-            else:
-                _log.warning("sandbox_agent.cancel_retention_drain_timed_out", extra=self._log_context)
+            # the read. Loud, so a persistently slow drain is visible. A drain
+            # that fails AFTER this point is logged by ``_log_late_failure``
+            # (``_awaiting`` is cleared in ``finally``), and one that failed
+            # before the timeout propagates through the ``except Exception``
+            # arm above — ``wait_for`` never reports a timeout for a settled
+            # task.
+            _log.warning("sandbox_agent.cancel_retention_drain_timed_out", extra=self._log_context)
         except Exception:
             # The drain itself failed. Logged HERE (the callback stays silent
             # while awaited) so the failure is never swallowed.
-            _log.error("sandbox_agent.cancel_retention_drain_failed", extra=self._log_context, exc_info=True)
+            _log.error(_CANCEL_DRAIN_FAILED_EVENT, extra=self._log_context, exc_info=True)
         finally:
             self._awaiting = False
 
@@ -2354,7 +2354,7 @@ class _BoundedFinalDrain:
         exc = task.exception()
         if exc is not None and not self._awaiting:
             _log.error(
-                "sandbox_agent.cancel_retention_drain_failed",
+                _CANCEL_DRAIN_FAILED_EVENT,
                 extra=self._log_context,
                 exc_info=exc,
             )

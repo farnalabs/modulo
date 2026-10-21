@@ -130,6 +130,41 @@ def _event_part(line: str) -> dict[str, Any] | None:
     return part if isinstance(part, dict) else None
 
 
+def _add_step_cost(cost_total: Decimal, step_cost: Decimal) -> Decimal | None:
+    """Add one plausible per-step cost, or ``None`` when the sum is unusable.
+
+    Belt-and-braces for the documented never-raises contract: a bounded
+    per-step cost cannot overflow in practice, but a shared parser must degrade
+    to "no usable cost", never replace the caller's typed failure with a
+    decimal exception (FAR-1914 round-3 M2).
+    """
+    try:
+        return cost_total + step_cost
+    except DecimalException:
+        return None
+
+
+def _accumulate_event(
+    totals: dict[str, int],
+    seen: set[str],
+    part: dict[str, Any],
+) -> Decimal | None:
+    """Fold one ``step_finish`` *part* into *totals*; return its usable cost.
+
+    Token counters are added when present; the per-step ``cost`` is coerced and
+    returned only when plausible (``None`` otherwise, distinct from a genuine
+    zero). Kept out of :func:`parse_step_finish_evidence` so the loop body stays
+    a flat two-branch iteration (SonarCloud S3776).
+    """
+    tokens = part.get("tokens")
+    if isinstance(tokens, dict):
+        _accumulate_counters(totals, seen, tokens, _STEP_FINISH_TOKEN_PAIRS)
+        cache = tokens.get("cache")
+        if isinstance(cache, dict):
+            _accumulate_counters(totals, seen, cache, _STEP_FINISH_CACHE_PAIRS)
+    return _coerce_step_cost(part.get("cost"))
+
+
 def parse_step_finish_evidence(raw: str | None) -> tuple[dict[str, int], Decimal | None]:
     """Recover summed ``(tokens, cost)`` from a retained opencode JSONL stream.
 
@@ -166,23 +201,14 @@ def parse_step_finish_evidence(raw: str | None) -> tuple[dict[str, int], Decimal
         if part is None:
             continue
         found_event = True
-        tokens = part.get("tokens")
-        if isinstance(tokens, dict):
-            _accumulate_counters(totals, seen, tokens, _STEP_FINISH_TOKEN_PAIRS)
-            cache = tokens.get("cache")
-            if isinstance(cache, dict):
-                _accumulate_counters(totals, seen, cache, _STEP_FINISH_CACHE_PAIRS)
-        step_cost = _coerce_step_cost(part.get("cost"))
-        if step_cost is not None:
-            try:
-                cost_total += step_cost
-            except DecimalException:
-                # Belt-and-braces for the documented never-raises contract: a
-                # bounded per-step cost cannot overflow in practice, but a
-                # shared parser must degrade to "no usable cost", never replace
-                # the caller's typed failure with a decimal exception.
-                continue
-            found_cost = True
+        step_cost = _accumulate_event(totals, seen, part)
+        if step_cost is None:
+            continue
+        new_total = _add_step_cost(cost_total, step_cost)
+        if new_total is None:
+            continue
+        cost_total = new_total
+        found_cost = True
     token_usage = {key: totals[key] for key in _STEP_FINISH_TOKEN_KEYS if key in seen} if found_event else {}
     return token_usage, (cost_total if found_cost else None)
 

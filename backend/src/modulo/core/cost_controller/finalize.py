@@ -3387,6 +3387,73 @@ def _salvage_breakdown_entry(salvage: _SalvagedAttemptEvidence) -> dict[str, Any
     }
 
 
+def _assemble_derived_breakdown(
+    *,
+    run_id: uuid.UUID,
+    status: str,
+    wall_hours: float | None,
+    derived_from: str,
+    sandbox_evidence: bool,
+    salvage: _SalvagedAttemptEvidence | None,
+) -> tuple[Decimal, list[dict[str, Any]]] | None:
+    """Build the derived-cost breakdown, or ``None`` when nothing is provable.
+
+    Extracted from :func:`_write_derived_deadline_terminal` (S3776). The derived
+    sandbox line is BILLABLE, so a proven duration is written only when
+    *sandbox_evidence* also exists; a duration without that proof is withheld
+    with a loud log. The salvaged agent-reported line (``self_reported``,
+    non-billable) is appended whenever the markers carried a usable cost. An
+    empty breakdown means nothing can be attributed — the caller writes nothing
+    rather than fabricating a terminal.
+
+    Returns ``(total, breakdown)`` where *total* is the BILLABLE derived total
+    (a clamp marker is prepended when it hit :data:`COST_COLUMN_CAP`).
+    """
+    total = Decimal(0)
+    breakdown: list[dict[str, Any]] = []
+    clamped = False
+    has_duration = wall_hours is not None and math.isfinite(wall_hours) and wall_hours > 0
+    if has_duration and not sandbox_evidence:
+        _log.warning(
+            "cost_finalize.derived_sandbox_cost_withheld",
+            extra={
+                "run_id": str(run_id),
+                "status": status,
+                "wall_clock_hours": wall_hours,
+                "derived_from": derived_from,
+                "reason": "no_sandbox_attempt_marker",
+            },
+        )
+    if has_duration and sandbox_evidence:
+        rate = _e2b_rate()
+        total = Decimal(str(wall_hours)) * rate
+        if total > COST_COLUMN_CAP:
+            total = COST_COLUMN_CAP
+            clamped = True
+        breakdown.append(
+            {
+                "component": "sandbox_infra",
+                "display_name": "Sandbox Infrastructure",
+                "source": "derived",
+                "amount_usd": _entry_amount(total),
+                "formula_applied": "rate * wall_clock_hours",
+                "rate_usd": str(rate),
+                "basis": {
+                    "wall_clock_hours": wall_hours,
+                    "derived_from": derived_from,
+                },
+            }
+        )
+    if salvage is not None and salvage.agent_cost_usd is not None:
+        breakdown.append(_salvage_breakdown_entry(salvage))
+    if not breakdown:
+        _log.warning("cost_finalize.no_attributable_cost", extra={"run_id": str(run_id)})
+        return None
+    if clamped:
+        breakdown.insert(0, dict(TOTAL_CLAMPED_MARKER))
+    return total, breakdown
+
+
 async def _write_derived_deadline_terminal(
     session: AsyncSession,
     *,
@@ -3464,52 +3531,18 @@ async def _write_derived_deadline_terminal(
     it passes ``min(heartbeat_at, completed_at) - started_at`` instead, from
     the run's own last-liveness stamp — the same basis the cancel path uses.
     """
-    total = Decimal(0)
-    breakdown: list[dict[str, Any]] = []
-    clamped = False
-    has_duration = wall_hours is not None and math.isfinite(wall_hours) and wall_hours > 0
-    if has_duration and not sandbox_evidence:
-        # FAR-1914 round-2 B: a proven duration alone is not proof a SANDBOX
-        # ran (a non-sandbox node killed at its deadline still has a
-        # heartbeat). The line is billable, so withhold it — loudly.
-        _log.warning(
-            "cost_finalize.derived_sandbox_cost_withheld",
-            extra={
-                "run_id": str(run_id),
-                "status": status,
-                "wall_clock_hours": wall_hours,
-                "derived_from": derived_from,
-                "reason": "no_sandbox_attempt_marker",
-            },
-        )
-    if has_duration and sandbox_evidence:
-        rate = _e2b_rate()
-        total = Decimal(str(wall_hours)) * rate
-        if total > COST_COLUMN_CAP:
-            total = COST_COLUMN_CAP
-            clamped = True
-        breakdown.append(
-            {
-                "component": "sandbox_infra",
-                "display_name": "Sandbox Infrastructure",
-                "source": "derived",
-                "amount_usd": _entry_amount(total),
-                "formula_applied": "rate * wall_clock_hours",
-                "rate_usd": str(rate),
-                "basis": {
-                    "wall_clock_hours": wall_hours,
-                    "derived_from": derived_from,
-                },
-            }
-        )
-    if salvage is not None and salvage.agent_cost_usd is not None:
-        breakdown.append(_salvage_breakdown_entry(salvage))
-    if not breakdown:
+    assembled = _assemble_derived_breakdown(
+        run_id=run_id,
+        status=status,
+        wall_hours=wall_hours,
+        derived_from=derived_from,
+        sandbox_evidence=sandbox_evidence,
+        salvage=salvage,
+    )
+    if assembled is None:
         # Nothing provable — do not write a fabricated terminal.
-        _log.warning("cost_finalize.no_attributable_cost", extra={"run_id": str(run_id)})
         return
-    if clamped:
-        breakdown.insert(0, dict(TOTAL_CLAMPED_MARKER))
+    total, breakdown = assembled
     _log.warning(
         "cost_finalize.derived_deadline_cost",
         extra={
@@ -3546,35 +3579,67 @@ async def _write_derived_deadline_terminal(
     # (``org_daily_run_counts``) and the circuit breaker. ``run_date`` is
     # ``None`` for a zero total / missing ``started_at``, so no ledger row is
     # written in that case (a salvage-only breakdown legitimately totals 0).
-    run_date = _ledger_run_date(True, total, run)
-    if run_date is not None:
-        try:
-            await _ledger_block(
-                session,
-                run_id=run_id,
-                org_id=org_id,
-                status=status,
-                total=total,
-                owner_team_id=run.owner_team_id,
-                run_date=run_date,
-                finalize_fields={
-                    "error_code": error_code,
-                    "error_detail": error_detail,
-                    "total_cost_usd": total,
-                },
-                session_factory=None,
-                claim_token=None,
-                metric_sink=None,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            if is_lock_abort(exc):
-                # Do NOT swallow a whole-transaction lock abort — the outer
-                # transaction is aborted, so the ownership layer must own it.
-                raise
-            _log.exception("cost_ledger.derived_deadline_block_failed", extra={"run_id": str(run_id)})
+    await _write_derived_ledger_block(
+        session,
+        run=run,
+        run_id=run_id,
+        org_id=org_id,
+        status=status,
+        total=total,
+        error_code=error_code,
+        error_detail=error_detail,
+    )
     await _record_terminal_analytics(session, run, status, {}, writer=_WRITER_EARLY_RETURN)
+
+
+async def _write_derived_ledger_block(
+    session: AsyncSession,
+    *,
+    run: Run,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    status: str,
+    total: Decimal,
+    error_code: str | None,
+    error_detail: str | None,
+) -> None:
+    """The terminal ledger write for a derived-cost run (FAR-1993).
+
+    Extracted from :func:`_write_derived_deadline_terminal` so that writer's
+    error handling does not pile onto its cognitive complexity (S3776). A
+    whole-transaction lock abort is re-raised (the outer transaction is
+    aborted, so the ownership layer must own it); any other ledger failure is
+    logged and swallowed, exactly as before.
+    """
+    run_date = _ledger_run_date(True, total, run)
+    if run_date is None:
+        return
+    try:
+        await _ledger_block(
+            session,
+            run_id=run_id,
+            org_id=org_id,
+            status=status,
+            total=total,
+            owner_team_id=run.owner_team_id,
+            run_date=run_date,
+            finalize_fields={
+                "error_code": error_code,
+                "error_detail": error_detail,
+                "total_cost_usd": total,
+            },
+            session_factory=None,
+            claim_token=None,
+            metric_sink=None,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if is_lock_abort(exc):
+            # Do NOT swallow a whole-transaction lock abort — the outer
+            # transaction is aborted, so the ownership layer must own it.
+            raise
+        _log.exception("cost_ledger.derived_deadline_block_failed", extra={"run_id": str(run_id)})
 
 
 async def _finalize_failed_run(

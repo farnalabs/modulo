@@ -2540,6 +2540,25 @@ def test_salvage_from_markers_without_evidence_has_none() -> None:
     assert salvage.node_ids == ("n1",)
 
 
+def test_salvage_from_markers_skips_non_dict_marker_values() -> None:
+    """A malformed marker value degrades to "no evidence", never an exception.
+
+    The salvage runs on the terminal/failure path, so a non-dict value in the
+    retained marker map must be skipped like any other unusable marker rather
+    than raising out of the compensating write.
+    """
+    salvage = _salvage_from_markers(
+        {
+            "bad": "not-a-marker",
+            "good": _step_finish_marker(cost=0.0001),
+        }
+    )
+
+    assert salvage.agent_cost_usd == Decimal("0.0001")
+    assert salvage.node_ids == ("n1",)
+    assert _salvage_from_markers({"bad": "not-a-marker"}).has_evidence is False
+
+
 def test_salvage_from_markers_tokens_only_has_no_evidence() -> None:
     """Round-2 minor 4: token counters alone are NOT salvage evidence.
 
@@ -2898,6 +2917,16 @@ async def test_salvage_cancelled_run_cost_attributes_settled_marker_spend() -> N
     assert breakdown[1]["billable"] is False
 
 
+async def test_salvage_cancelled_run_cost_skips_when_the_run_is_missing() -> None:
+    """A settle race may leave no row to salvage — a quiet no-op, never a raise."""
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+    with patch("modulo.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs:
+        await salvage_cancelled_run_cost(session, run_id=uuid.uuid4(), org_id=_ORG_ID)
+
+    mock_blobs.assert_not_awaited()
+
+
 async def test_salvage_cancelled_run_cost_skips_when_status_is_not_cancelled() -> None:
     """A watchdog/successor outcome is downstream of this one salvage (C2).
 
@@ -3067,6 +3096,8 @@ def test_salvage_sandbox_line_never_attributed_without_an_attempt_marker() -> No
     assert _has_sandbox_attempt_evidence({"a": {"deadline_triage": True}}) is False
     assert _has_sandbox_attempt_evidence({"a": {"node_id": "n1"}}) is False
     assert _has_sandbox_attempt_evidence(None) is False
+    # Fail-open: a non-dict marker value is skipped, never raised on.
+    assert _has_sandbox_attempt_evidence({"a": "not-a-marker"}) is False
 
 
 async def test_salvage_cancelled_run_cost_does_not_bill_a_connector_only_run() -> None:
@@ -3206,4 +3237,22 @@ def test_attributed_cost_present_run_shapes() -> None:
 
     run.total_cost_usd = None
     run.cost_breakdown = [{"component": "sandbox_infra", "amount_usd": "0.065"}]
+    assert _attributed_cost_present(run) is True
+
+
+def test_attributed_cost_present_treats_an_unreadable_total_as_attributed() -> None:
+    """A total that cannot be coerced must never be overwritten by a salvage.
+
+    The compensating write is only safe when the run provably has no cost. An
+    unreadable total is treated as PRESENT (fail closed) rather than risking
+    overwriting a real attribution.
+    """
+
+    class _Unstringable:
+        def __str__(self) -> str:
+            raise TypeError("unstringable")
+
+    run = _make_run()
+    run.total_cost_usd = _Unstringable()
+    run.cost_breakdown = None
     assert _attributed_cost_present(run) is True
