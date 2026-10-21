@@ -451,15 +451,20 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="sandbox",
         retryable=True,
         alert_severity="warning",
-        guidance="E2B provisioner rate-limited sandbox creation (429); the run will be retried.",
+        guidance=(
+            "E2B provisioner rate-limited sandbox creation (429) and the retry budget"
+            " is exhausted; this run failed terminally. Re-run once the provisioner"
+            " quota recovers."
+        ),
     ),
     _CODE_SANDBOX_QUEUE_TIMEOUT: ErrorCodeSpec(
         error_class="sandbox",
         retryable=True,
         alert_severity="warning",
         guidance=(
-            "Sandbox provisioning was retried but the rate-limit retry budget"
-            " was exhausted within the node timeout window."
+            "Sandbox provisioning did not complete: either the rate-limit retry"
+            " budget was exhausted (repeated 429s), or the provisioning watchdog"
+            " fired because sandbox creation never returned within its bound."
         ),
     ),
     # FAR-510: a sandbox_agent node whose synthetic failure path (generic
@@ -774,7 +779,10 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="capacity",
         retryable=True,
         alert_severity=None,
-        guidance="Queued — waiting for org capacity.",
+        guidance=(
+            "Org capacity exhausted: the run is queued waiting for org capacity, or"
+            " failed terminally because its retries ran out while the org cap stayed full."
+        ),
     ),
     "capacity.pipeline": ErrorCodeSpec(
         error_class="capacity",
