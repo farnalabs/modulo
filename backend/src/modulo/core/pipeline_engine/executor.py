@@ -1951,6 +1951,24 @@ def _is_non_retryable_error_code(code: str | None) -> bool:
     return not spec.retryable
 
 
+def _sandbox_failure_error_code(exc: SandboxNodeFailedError) -> str:
+    """The caught sandbox failure's OWN canonical code, else the generic one.
+
+    Every ``SandboxNodeFailedError`` role that outlives the retry budget used
+    to be written as ``sandbox.no_output_json`` regardless of its subclass,
+    which hid the distinct retryable classes from the Error Dashboard and
+    daily facts (FAR-1887: an exhausted E2B rate-limit retry budget —
+    ``SandboxQueueTimeoutError`` — was recorded as "no output json", so
+    ``sandbox.queue_timeout`` / ``sandbox.rate_limited`` never appeared in
+    analytics). ``LEGACY_ALIASES`` keys these subclasses by exception class
+    name, so resolve through it and fall back to ``sandbox.no_output_json``
+    only for the BASE class or a subclass the alias table does not map —
+    never to ``harness.unknown``, which would be a regression for an
+    unclassified sandbox failure.
+    """
+    return LEGACY_ALIASES.get(type(exc).__name__, _CODE_SANDBOX_NO_OUTPUT_JSON)
+
+
 def _non_retryable_failure_detail(
     non_retryable_code: str,
     exc: Exception,
@@ -6573,16 +6591,20 @@ class PipelineExecutor:
             # drop) used to terminal-fail under the GENERIC
             # ``node_cancelled`` code — whose registry guidance reads "Node
             # was cancelled." — so a stall was bucketed as a cancellation in
-            # the error dashboard and daily facts, while the SAME exception
-            # escaping through the executor's generic catch canonicalises to
-            # ``sandbox.no_output_json`` (LEGACY_ALIASES). Surface the
-            # exception's own canonical code here too: one failure class, one
-            # code. EXCEPTION: the FAR-136 hang death carries "likely hung"
+            # the error dashboard and daily facts. Surface the exception's
+            # OWN canonical code here instead: one failure class, one code.
+            # FAR-1887: that must be the SUBCLASS's code, not the family's
+            # generic one — ``SandboxQueueTimeoutError`` (E2B rate-limit
+            # retry budget exhausted) and ``SandboxRateLimitedError`` carry
+            # their own ``sandbox.queue_timeout`` / ``sandbox.rate_limited``
+            # aliases, and hard-setting ``sandbox.no_output_json`` for the
+            # whole family made those classes invisible in analytics.
+            # EXCEPTION: the FAR-136 hang death carries "likely hung"
             # in the detail and is excluded from ``failure`` retries ONLY
             # while its code resolves to ``node.cancelled`` — that marker
             # keeps the generic code.
             if isinstance(exc, SandboxNodeFailedError) and "likely hung" not in error_detail:
-                error_code = _CODE_SANDBOX_NO_OUTPUT_JSON
+                error_code = _sandbox_failure_error_code(exc)
             # FAR-734: scan the retained stdout (embedded in the
             # exception message) for terminal provider-error
             # signatures.  When a signature matches, upgrade the
@@ -6590,6 +6612,9 @@ class PipelineExecutor:
             # ``model.*`` code so the Error Dashboard and daily facts
             # bucket it as a first-class failure dimension.  Fail
             # open: when no signature matches the generic code stays.
+            # FAR-2006: the 401/402 credential/funding refusal
+            # classification runs AFTER the sandbox-code override, so a
+            # provider refusal still wins over the sandbox family code.
             _provider_code = classify_provider_error(str(exc))
             if _provider_code is not None:
                 error_code = _provider_code

@@ -32,6 +32,8 @@ from modulo.core.pipeline_engine.executor import (
 from modulo.core.pipeline_engine.node_runner import (
     SANDBOX_AGENT_FAILED_SUMMARY,
     SandboxNodeFailedError,
+    SandboxQueueTimeoutError,
+    SandboxRateLimitedError,
     _build_sandbox_node_envelope,
     _SandboxNodeOutput,
 )
@@ -5001,6 +5003,60 @@ class TestTransientFailureDetail:
         )
         assert code == "sandbox.no_output_json"
         assert "Sandbox node failed (transient) after retries exhausted: agent produced no output for 600s" in detail
+
+    def test_sandbox_queue_timeout_surfaces_its_own_code(self) -> None:
+        """FAR-1887: an exhausted E2B rate-limit retry budget is a
+        ``SandboxQueueTimeoutError`` — a distinct retryable class — so the
+        terminal run must record ``sandbox.queue_timeout``, not the family's
+        generic ``sandbox.no_output_json`` (which hid the class in analytics)."""
+        exc = SandboxQueueTimeoutError(
+            "E2B rate-limited after 4 attempts creating sandbox for node 'node-a'",
+            node_id="node-a",
+        )
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=exc, script_lease_ok=True, graph_idempotent=True, node_attempt_count=1, retries=1
+        )
+        assert code == "sandbox.queue_timeout"
+        assert "rate-limited after 4 attempts" in detail
+
+    def test_sandbox_rate_limited_surfaces_its_own_code(self) -> None:
+        """FAR-1887: the single-event rate limit class maps to
+        ``sandbox.rate_limited`` — a code distinct from the queue-timeout one."""
+        exc = SandboxRateLimitedError(
+            "E2B rate-limited creating sandbox for node 'node-a'",
+            node_id="node-a",
+        )
+        code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=exc, script_lease_ok=True, graph_idempotent=True, node_attempt_count=1, retries=1
+        )
+        assert code == "sandbox.rate_limited"
+
+    def test_unmapped_sandbox_subclass_falls_back_to_no_output_json(self) -> None:
+        """FAR-1887: an unmapped subclass keeps the family's generic code — the
+        override must never degrade it to ``harness.unknown``."""
+
+        class _UnmappedSandboxError(SandboxNodeFailedError):
+            pass
+
+        exc = _UnmappedSandboxError("sandbox died in an unclassified way", node_id="node-a")
+        code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=exc, script_lease_ok=True, graph_idempotent=True, node_attempt_count=1, retries=1
+        )
+        assert code == "sandbox.no_output_json"
+
+    def test_provider_refusal_wins_over_subclass_sandbox_code(self) -> None:
+        """FAR-2006 ordering: the 401/402 provider classification runs AFTER the
+        sandbox-code override, so a permanent provider refusal still wins even
+        when the exception is a sandbox subclass that maps to its own code."""
+        exc = SandboxQueueTimeoutError(
+            "E2B rate-limited after 4 attempts creating sandbox for node 'node-a'; "
+            '{"type":"error","error":{"statusCode":402,"message":"Insufficient account funds"}}',
+            node_id="node-a",
+        )
+        code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=exc, script_lease_ok=True, graph_idempotent=True, node_attempt_count=1, retries=1
+        )
+        assert code == "model.insufficient_funds"
 
     def test_hang_death_keeps_generic_cancelled_code(self) -> None:
         """FAR-136 guard: a hang death carries the "likely hung" marker and is
