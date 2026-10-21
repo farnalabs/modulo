@@ -143,6 +143,21 @@ an eligible tier.
       per-route data is captured, client or server side
       (`frontend/src/App.vue`,
       `frontend/src/composables/useProductAnalytics.ts`)
+- [x] A client-supplied `recorded_at` is bounded so the staging retention
+      bound holds: the ingest route clamps a FUTURE timestamp to the server
+      clock (no dump looks past today, so a future-dated row is neither
+      delivered nor purged by the past-only cutoff, and any `viewer` - the
+      `metrics.ingest` floor - could grow `metrics_staging` without bound with
+      one skewed browser clock) and reads a naive timestamp as UTC, because the
+      column is `timestamptz` and every server-side window is UTC;
+      `_purge_staging` additionally enforces the retention bound on BOTH sides
+      of `now`, so a row dated beyond the future horizon expires even when no
+      writer clamps it (`api/routes/metrics_ingest.py` `_bounded_recorded_at`,
+      `core/product_analytics/metrics_dump.py` `_purge_staging`,
+      `tests/unit/product_analytics/test_metrics_ingest.py`
+      `TestRecordedAtBounds`,
+      `tests/unit/product_analytics/test_metrics_staging_consumer.py`
+      `test_far_future_dated_rows_are_purged`)
 
 ## Consent scoping (FAR-1635)
 
@@ -179,13 +194,39 @@ intentional, not an open question:
   remains unshipped (warehouse scope sits under `feat-analytics`).
 - Events staged AFTER the daily dump moment on dump day are not delivered: the
   dump is a point-in-time snapshot and the watermark advances to dump day, so
-  the next dump starts the following day; such rows are held back by the purge
-  (never deleted by their own dump day) and drop out via the 30-day retention
-  bound. Closing this would require the watermark to lag a full closed day -
-  which makes the vendor receive two payloads for the current date - i.e. a
-  payload-dedup contract change on the vendor side, not taken in FAR-1717.
+  the next dump starts the following day. Such rows are kept for the rest of
+  their own dump day, then purged by the watermark cutoff at the first tick of
+  the next UTC day (they are not held for the 30-day retention bound, which
+  only covers rows whose date was never dumped). Closing this would require
+  the watermark to lag a full closed day - which makes the vendor receive two
+  payloads for the current date - i.e. a payload-dedup contract change on the
+  vendor side, not taken in FAR-1717.
 
 ## QA History
+- 2026-10-21: **Improve Architecture product-map walk** - fixed MAJOR
+  (resilience / Lens 9 List A - *unlisted but implied*): the staging retention
+  bound was falsifiable by the one client-controlled field that keys it. The
+  ingest route staged `event.recorded_at or now` **verbatim**
+  (`api/routes/metrics_ingest.py`), and `_purge_staging`
+  (`core/product_analytics/metrics_dump.py`) deletes only
+  `recorded_at < cutoff`. A future-dated `recorded_at` is therefore
+  **undeliverable** (no dump iterates past today) *and* **unpurgeable** (a
+  past-only cutoff never matches it), so any member - `metrics.ingest` is a
+  `viewer` floor - could park rows in `metrics_staging` forever with a skewed
+  browser clock, falsifying the FAR-1717 "the table cannot grow unbounded"
+  invariant. Reproduced against a real in-memory DB (future row survives the
+  purge) and at the route (the raw future value reaches the insert). Fixed in
+  two layers: `recorded_at` is normalised at ingest (naive read as UTC, future
+  clamped to the server clock, valid past values untouched) by the new
+  `_bounded_recorded_at`, and `_purge_staging` now bounds retention on BOTH
+  sides of `now` (past cutoff plus a future horizon) so the invariant does not
+  depend on any writer being correct. Prove-the-fix tests fail against the old
+  code: `TestRecordedAtBounds` (future clamped / naive UTC / past preserved)
+  and `test_far_future_dated_rows_are_purged` (with
+  `test_near_future_dated_rows_are_retained` pinning that tomorrow's row, which
+  the next dump can consume, is not swept). Also corrected the Known Gap that
+  claimed post-dump same-day events survive to the 30-day bound - they are
+  purged by the watermark cutoff at the first tick of the next UTC day.
 - 2026-10-19: **Improve Architecture product-map walk** - fixed MAJOR
   (behaviour-adversarial / Lens 9 List B - *listed but vacuously covered*): the
   frontend event-capture composable generated `event_id` from a module-scoped

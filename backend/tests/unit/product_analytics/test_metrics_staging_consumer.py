@@ -293,6 +293,53 @@ class TestPurgeStaging:
         assert deleted == 1
         assert await _count(factory) == 1
 
+    async def test_far_future_dated_rows_are_purged(
+        self,
+        factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A future-dated row is never consumed and must still expire.
+
+        ``recorded_at`` is client-supplied; no dump looks past today, so a
+        far-future row is undeliverable, and a past-only cutoff would keep it
+        forever even with no watermark (the instance switch off). The purge
+        owns the retention bound, so it deletes beyond the future horizon too.
+        This FAILS against the pre-change code, which only deleted rows older
+        than its cutoff and left the future row in place.
+        """
+        now = datetime.now(UTC)
+        await _seed(
+            factory,
+            [
+                _event(
+                    org_id=_ORG_A,
+                    event_type="pipeline_created",
+                    recorded_at=now + timedelta(days=_STAGING_RETENTION_DAYS + 10),
+                ),
+                _event(org_id=_ORG_A, event_type="api_error", recorded_at=now),
+            ],
+        )
+
+        deleted = await _purge_staging(factory, now=now)
+
+        assert deleted == 1
+        assert await _count(factory) == 1
+
+    async def test_near_future_dated_rows_are_retained(
+        self,
+        factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A row dated a day ahead is consumable by tomorrow's dump and survives."""
+        now = datetime.now(UTC)
+        await _seed(
+            factory,
+            [_event(org_id=_ORG_A, event_type="api_error", recorded_at=now + timedelta(days=1))],
+        )
+
+        deleted = await _purge_staging(factory, now=now)
+
+        assert deleted == 0
+        assert await _count(factory) == 1
+
     async def test_future_watermark_never_purges_todays_rows(
         self,
         factory: async_sessionmaker[AsyncSession],

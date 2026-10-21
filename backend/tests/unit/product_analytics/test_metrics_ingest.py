@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -41,6 +42,15 @@ def _inserted_payload(mock_session: AsyncMock, index: int = -1) -> dict:
     payload = compiled.params.get("payload")
     assert isinstance(payload, dict), "captured insert must carry a payload dict"
     return payload
+
+
+def _inserted_recorded_at(mock_session: AsyncMock, index: int = -1) -> datetime:
+    """Compile the captured insert at *index* and return its ``recorded_at`` value."""
+    stmt = _insert_calls(mock_session)[index]
+    compiled = stmt.compile(dialect=postgresql.dialect())
+    recorded_at = compiled.params.get("recorded_at")
+    assert isinstance(recorded_at, datetime), "captured insert must carry a recorded_at datetime"
+    return recorded_at
 
 
 def _make_settings() -> Settings:
@@ -133,6 +143,81 @@ class TestSuccessfulIngest:
         events = [_valid_event(f"evt-{i}") for i in range(5)]
         resp = _post_events(client, events)
         assert resp.status_code == 204
+
+
+class TestRecordedAtBounds:
+    """A client-supplied ``recorded_at`` must stay inside the deliverable window.
+
+    The value decides which UTC day's dump consumes the row, and the retention
+    purge only deletes rows older than its cutoffs, so a far-future timestamp is
+    both undeliverable and unpurgeable. Each test FAILS against the pre-change
+    code, which staged the client value verbatim.
+    """
+
+    @patch("modulo.api.routes.metrics_ingest.get_organisation")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    def test_future_recorded_at_is_clamped_to_server_now(
+        self,
+        mock_rls: MagicMock,
+        mock_user_ctx: MagicMock,
+        mock_get_org: MagicMock,
+        client: TestClient,
+        mock_session: AsyncMock,
+    ) -> None:
+        mock_get_org.return_value = _consented_org()
+        event = _valid_event()
+        event["recorded_at"] = (datetime.now(UTC) + timedelta(days=400)).isoformat()
+        before = datetime.now(UTC)
+
+        resp = _post_events(client, [event])
+
+        after = datetime.now(UTC)
+        assert resp.status_code == 204
+        staged = _inserted_recorded_at(mock_session)
+        assert before <= staged <= after, (
+            f"future recorded_at must be clamped to the server clock, got {staged!r} "
+            f"(before={before!r}, after={after!r})"
+        )
+
+    @patch("modulo.api.routes.metrics_ingest.get_organisation")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    def test_naive_recorded_at_is_read_as_utc(
+        self,
+        mock_rls: MagicMock,
+        mock_user_ctx: MagicMock,
+        mock_get_org: MagicMock,
+        client: TestClient,
+        mock_session: AsyncMock,
+    ) -> None:
+        mock_get_org.return_value = _consented_org()
+        event = _valid_event()
+        event["recorded_at"] = "2026-10-20T09:30:00"
+        resp = _post_events(client, [event])
+        assert resp.status_code == 204
+        staged = _inserted_recorded_at(mock_session)
+        assert staged.tzinfo is not None, "a naive recorded_at must be normalised to UTC"
+        assert staged == datetime(2026, 10, 20, 9, 30, tzinfo=UTC)
+
+    @patch("modulo.api.routes.metrics_ingest.get_organisation")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    def test_past_recorded_at_is_preserved(
+        self,
+        mock_rls: MagicMock,
+        mock_user_ctx: MagicMock,
+        mock_get_org: MagicMock,
+        client: TestClient,
+        mock_session: AsyncMock,
+    ) -> None:
+        mock_get_org.return_value = _consented_org()
+        supplied = datetime.now(UTC) - timedelta(days=2)
+        event = _valid_event()
+        event["recorded_at"] = supplied.isoformat()
+        resp = _post_events(client, [event])
+        assert resp.status_code == 204
+        assert _inserted_recorded_at(mock_session) == supplied, "a valid past timestamp must not be rewritten"
 
 
 class TestConsentGate:

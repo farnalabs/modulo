@@ -135,6 +135,31 @@ def _consent_active(settings_json: dict[str, Any] | None) -> bool:
     return is_org_consenting(settings_json)
 
 
+def _bounded_recorded_at(recorded_at: datetime | None, now: datetime) -> datetime:
+    """Normalise a client-supplied event time into the window the dump can consume.
+
+    ``recorded_at`` is optional, so the client's own clock decides which UTC day
+    a row belongs to. No dump ever looks past today, so a future-dated row is
+    undeliverable until its own day arrives — and a hostile or badly skewed
+    clock can park it centuries ahead, where only the purge's future horizon
+    eventually reaches it. Clamping at the write keeps an event that is being
+    reported NOW in the current dump day instead of parking it: one skewed
+    browser clock (or a hostile ``viewer``, the ``metrics.ingest`` floor) could
+    otherwise grow ``metrics_staging`` without bound and lose the event, both
+    of which falsify the FAR-1717 retention and delivery contract. Future
+    values are clamped to the server clock and a naive timestamp is read as
+    UTC, because the column is ``timestamptz`` and every server-side window
+    comparison is UTC.
+    """
+    if recorded_at is None:
+        return now
+    recorded_at = recorded_at.replace(tzinfo=UTC) if recorded_at.tzinfo is None else recorded_at.astimezone(UTC)
+    if recorded_at > now:
+        _log.debug("Clamping future recorded_at %s to %s", recorded_at, now)
+        return now
+    return recorded_at
+
+
 async def _stage_single_event(
     session: AsyncSession,
     event: MetricsEventItem,
@@ -164,7 +189,7 @@ async def _stage_single_event(
     if event.event_type == "api_error" and "route" in payload:
         payload["route"] = _sanitize_route_template(payload["route"], registered_templates)
 
-    recorded_at = event.recorded_at or now
+    recorded_at = _bounded_recorded_at(event.recorded_at, now)
 
     stmt = (
         pg_insert(MetricsStaging)

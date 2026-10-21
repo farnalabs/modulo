@@ -165,6 +165,13 @@ async def _purge_staging(factory: Any, *, now: datetime | None = None) -> int:
       endpoint failing), which is what makes retention bounded rather than
       "until the next successful dump".
 
+    The retention bound is enforced on BOTH sides of ``now``: a row dated more
+    than ``_STAGING_RETENTION_DAYS`` in the FUTURE is dropped too. The ingest
+    endpoint clamps client-supplied ``recorded_at`` to the server clock, but the
+    purge owns the retention invariant, so it must not depend on that writer
+    being correct — a future-dated row is never consumed (no dump looks past
+    today) and a past-only cutoff would keep it forever.
+
     ``now`` is injectable for testing; defaults to ``datetime.now(UTC)``.
     Returns the number of rows deleted (0 when nothing matched).
     """
@@ -174,6 +181,7 @@ async def _purge_staging(factory: Any, *, now: datetime | None = None) -> int:
         now = datetime.now(UTC)
 
     cutoff = now - timedelta(days=_STAGING_RETENTION_DAYS)
+    future_cutoff = now + timedelta(days=_STAGING_RETENTION_DAYS)
     async with factory() as session, session.begin():
         watermark = await read_system_config(session, DUMP_WATERMARK_KEY)
         if watermark is not None:
@@ -181,11 +189,18 @@ async def _purge_staging(factory: Any, *, now: datetime | None = None) -> int:
             consumed_through = min(watermark_date + timedelta(days=1), now.date())
             consumed_cutoff = datetime.combine(consumed_through, datetime.min.time(), tzinfo=UTC)
             cutoff = max(cutoff, consumed_cutoff)
-        result = await session.execute(delete(MetricsStaging).where(MetricsStaging.recorded_at < cutoff))
+        result = await session.execute(
+            delete(MetricsStaging).where(
+                sa.or_(MetricsStaging.recorded_at < cutoff, MetricsStaging.recorded_at > future_cutoff)
+            )
+        )
         deleted = max(int(result.rowcount or 0), 0)
 
     if deleted:
-        _log.info("product_analytics.staging_purged", extra={"rows": deleted, "cutoff": cutoff.isoformat()})
+        _log.info(
+            "product_analytics.staging_purged",
+            extra={"rows": deleted, "cutoff": cutoff.isoformat(), "future_cutoff": future_cutoff.isoformat()},
+        )
     return deleted
 
 
