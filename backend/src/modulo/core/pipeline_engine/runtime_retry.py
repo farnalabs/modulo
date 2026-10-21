@@ -540,31 +540,58 @@ async def _handle_compensation(ctx: _RetryContext, state: dict[str, Any], exc: B
         ) from comp_exc
 
 
+async def _invoke_attempt(ctx: _RetryContext, state: dict[str, Any], attempt_n: int) -> dict[str, Any] | None:
+    """Invoke the node once; return its result, or ``None`` when a retry is due.
+
+    A RETURNED (not raised) result is still classified: a stalled sandbox-agent
+    node returns a failed output dict rather than raising (FAR-98), so the
+    policy may request a retry even though no exception surfaced. The backoff
+    sleep for that retry is performed here, before the caller loops; ``None``
+    therefore means "the caller should immediately run the next attempt".
+    """
+    result = await _invoke_with_key(ctx.raw_fn, ctx.node_id, state, ctx.idempotency_key)
+    outcome = _classify_attempt(result, ctx.effective_policy, None)
+    if _should_retry(outcome, attempt_n, ctx.effective_policy):
+        await _sleep(attempt_n, ctx.effective_policy)
+        return None
+    return result
+
+
+async def _resolve_failed_attempt(
+    ctx: _RetryContext, state: dict[str, Any], exc: Exception, attempt_n: int
+) -> dict[str, Any] | None:
+    """Resolve one failed attempt; ``None`` means the caller should retry.
+
+    Order is load-bearing (FAR-402): the node's own retry budget is consulted
+    first, then per-edge retry, then compensation. When none resolves the
+    failure the ORIGINAL exception is re-raised so the executor terminalizes
+    the run as designed.
+    """
+    outcome = _classify_attempt(None, ctx.effective_policy, exc)
+    if _should_retry(outcome, attempt_n, ctx.effective_policy):
+        await _sleep(attempt_n, ctx.effective_policy)
+        return None
+    edge_result = await _edge_retry(ctx, state, outcome.event)
+    if edge_result is not None:
+        return edge_result
+    if await _handle_compensation(ctx, state, exc):
+        return _compensated_marker(ctx.node_id)
+    raise exc
+
+
 async def _run_retry_loop(ctx: _RetryContext, state: dict[str, Any]) -> dict[str, Any]:
     """Run the per-node retry loop, falling through to edge retry / compensation."""
     attempts = 0
     while True:
         attempts += 1
         try:
-            result = await _invoke_with_key(ctx.raw_fn, ctx.node_id, state, ctx.idempotency_key)
-            outcome = _classify_attempt(result, ctx.effective_policy, None)
-            if _should_retry(outcome, attempts, ctx.effective_policy):
-                await _sleep(attempts, ctx.effective_policy)
-                continue
-            return result
+            result = await _invoke_attempt(ctx, state, attempts)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            outcome = _classify_attempt(None, ctx.effective_policy, exc)
-            if _should_retry(outcome, attempts, ctx.effective_policy):
-                await _sleep(attempts, ctx.effective_policy)
-                continue
-            edge_result = await _edge_retry(ctx, state, outcome.event)
-            if edge_result is not None:
-                return edge_result
-            if await _handle_compensation(ctx, state, exc):
-                return _compensated_marker(ctx.node_id)
-            raise
+            result = await _resolve_failed_attempt(ctx, state, exc, attempts)
+        if result is not None:
+            return result
 
 
 async def _sleep(attempt_n: int, policy: NodeRetryPolicy) -> None:
