@@ -110,6 +110,78 @@ def get_runtime_config(
         ) from exc
 
 
+def _validated_overrides(overrides: Any) -> list[tuple[str, str]]:
+    """Validate the request's ``overrides`` mapping into (key, value) pairs."""
+    if not isinstance(overrides, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="'overrides' must be a dict",
+        )
+    validated_overrides: list[tuple[str, str]] = []
+    for key, value in overrides.items():
+        _validate_known_key(key, "override")
+        if not isinstance(value, str):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Override value for '{key}' must be a string, got {type(value).__name__}",
+            )
+        _validate_override_key(key)
+        _validate_override_value(key, value)
+        validated_overrides.append((key, value))
+    return validated_overrides
+
+
+def _validated_clear_keys(clear_keys: Any) -> list[str]:
+    """Validate the request's ``clear`` list into known config keys."""
+    if not isinstance(clear_keys, list):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="'clear' must be a list",
+        )
+    validated_clear: list[str] = []
+    for key in clear_keys:
+        if not isinstance(key, str):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Clear key must be a string, got {type(key).__name__}",
+            )
+        _validate_known_key(key, "clear")
+        validated_clear.append(key)
+    return validated_clear
+
+
+def _apply_override_changes(
+    store: RuntimeConfigStore,
+    validated_overrides: list[tuple[str, str]],
+    validated_clear: list[str],
+) -> list[str]:
+    """Apply the validated overrides then clears; return the touched keys."""
+    touched_keys: list[str] = []
+    for key, value in validated_overrides:
+        store.set_override(key, value)
+        touched_keys.append(key)
+    for key in validated_clear:
+        store.clear_override(key)
+        touched_keys.append(key)
+    return touched_keys
+
+
+def _run_apply_hooks(touched_keys: list[str]) -> None:
+    """Re-apply each touched key's apply-on-write hook (FAR-1135)."""
+    # Apply-on-write hooks: keys whose governed state is configured once (not
+    # read per-call) re-apply here so the override takes effect without a
+    # restart (FAR-1135).
+    for key in touched_keys:
+        hook = APPLY_HOOKS.get(key)
+        if hook is not None:
+            try:
+                hook()
+            except Exception:
+                # The override itself is committed; a hook failure must not
+                # roll the response into a 500 (commit-then-error).
+                _log.exception("Runtime config apply hook failed for %s", _sanitise_log_value(key))
+
+
 @router.put(
     "",
     dependencies=[
@@ -123,62 +195,10 @@ def set_runtime_config_overrides(
 ) -> dict[str, Any]:
     try:
         store = get_runtime_config_store()
-
-        overrides = req.get("overrides", {})
-        if not isinstance(overrides, dict):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="'overrides' must be a dict",
-            )
-        validated_overrides: list[tuple[str, str]] = []
-        for key, value in overrides.items():
-            _validate_known_key(key, "override")
-            if not isinstance(value, str):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Override value for '{key}' must be a string, got {type(value).__name__}",
-                )
-            _validate_override_key(key)
-            _validate_override_value(key, value)
-            validated_overrides.append((key, value))
-
-        clear_keys = req.get("clear", [])
-        if not isinstance(clear_keys, list):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="'clear' must be a list",
-            )
-        validated_clear: list[str] = []
-        for key in clear_keys:
-            if not isinstance(key, str):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Clear key must be a string, got {type(key).__name__}",
-                )
-            _validate_known_key(key, "clear")
-            validated_clear.append(key)
-
-        touched_keys: list[str] = []
-        for key, value in validated_overrides:
-            store.set_override(key, value)
-            touched_keys.append(key)
-        for key in validated_clear:
-            store.clear_override(key)
-            touched_keys.append(key)
-
-        # Apply-on-write hooks: keys whose governed state is configured
-        # once (not read per-call) re-apply here so the override takes
-        # effect without a restart (FAR-1135).
-        for key in touched_keys:
-            hook = APPLY_HOOKS.get(key)
-            if hook is not None:
-                try:
-                    hook()
-                except Exception:
-                    # The override itself is committed; a hook failure must
-                    # not roll the response into a 500 (commit-then-error).
-                    _log.exception("Runtime config apply hook failed for %s", _sanitise_log_value(key))
-
+        validated_overrides = _validated_overrides(req.get("overrides", {}))
+        validated_clear = _validated_clear_keys(req.get("clear", []))
+        touched_keys = _apply_override_changes(store, validated_overrides, validated_clear)
+        _run_apply_hooks(touched_keys)
         return _build_response(store)
     except HTTPException:
         raise
