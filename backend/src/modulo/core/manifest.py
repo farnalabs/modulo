@@ -60,6 +60,12 @@ def _load_manifest_yaml(path: Path) -> Any:
 
 
 def get_manifest_path() -> Path:
+    """Locate ``manifest.yaml`` without depending on the current directory.
+
+    Resolution order: the ``MANIFEST_PATH`` environment variable when set, the
+    container path ``/app/manifest.yaml`` when it exists, then the in-repo
+    ``frontend/src/manifest.yaml`` resolved relative to this module.
+    """
     env_path = os.environ.get("MANIFEST_PATH")
     if env_path:
         return Path(env_path)
@@ -71,6 +77,13 @@ def get_manifest_path() -> Path:
 
 
 def load_manifest() -> Manifest:
+    """Load and cache the manifest from :func:`get_manifest_path`.
+
+    A missing file yields an empty manifest structure, so callers never have to
+    handle ``None``. A file that exists but is not a YAML mapping raises
+    ``RuntimeError`` — a broken manifest must fail loudly rather than silently
+    serving an empty one.
+    """
     global _MANIFEST
     path = get_manifest_path()
     if path.exists():
@@ -87,6 +100,11 @@ def load_manifest() -> Manifest:
 
 
 def get_manifest() -> Manifest:
+    """Return the cached manifest, loading it on first use.
+
+    The returned mapping is the shared cache entry: callers must treat it as
+    read-only rather than mutating it in place.
+    """
     if _MANIFEST is None:
         return load_manifest()
     return _MANIFEST
