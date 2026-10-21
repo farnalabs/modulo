@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Uuid,
+    event,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -90,9 +91,12 @@ class EvalResult(OrgScoped):
     # ``passed`` is the compatibility projection of ``outcome`` (ADR 066 D5),
     # never the truth. ``error`` projects to False so a block gate fails closed.
     passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    # NOT NULL with NO server default: a write that omits the outcome fails
-    # loudly instead of silently recording a failure.
-    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    # EXPAND release (FAR-2040): nullable at the DB layer while the OLD image
+    # is still serving during the rollout (it has no such column). "Every
+    # writer sets outcome" is enforced by the ``before_insert`` guard below.
+    # STAGE 2 flips this to NOT NULL (no server default) once the new image is
+    # fully rolled out; see migration 0325's docstring.
+    outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Schema-versioned verdict envelope (ADR 066 D5). Physical jsonb; the
     # shared JSONB_COL alias keeps SQLite/MariaDB parity.
@@ -109,3 +113,20 @@ class EvalResult(OrgScoped):
     )
 
     suite_run: Mapped["SuiteRun"] = relationship(back_populates="eval_results")
+
+
+@event.listens_for(EvalResult, "before_insert")
+def _require_outcome_on_insert(mapper: Any, connection: Any, target: EvalResult) -> None:
+    """Application-layer NOT NULL while the DB column is still nullable.
+
+    The 0325 EXPAND migration cannot set NOT NULL while the previous image is
+    serving (that image has no ``outcome`` and would fail every insert). This
+    guard is the contract in the meantime: a NEW-image write that forgets the
+    value fails loudly instead of introducing a NULL. It covers ORM INSERTs
+    (the only production write path); STAGE 2 makes the database enforce it.
+    """
+    if target.outcome is None:
+        raise ValueError(
+            "EvalResult.outcome is required (FAR-2040 expand contract): set it on every "
+            "insert; stage 2 sets the database column NOT NULL."
+        )

@@ -6,11 +6,14 @@ Covers the migration's own contract, on a private database per test (the
 * the pre-upgrade shape (``0323``) has no ``outcome`` / ``judge_result_json`` /
   ``judge_confidence_kind`` / ``error_code`` and still stores ``llm_judge``;
 * the REAL upgrade renames the stored vocabulary, backfills ``outcome`` from
-  ``passed``, and lands the columns with the exact contract — ``outcome``
-  ``NOT NULL`` **with no server default**, ``judge_result_json`` physical
-  ``jsonb``, the closed confidence vocabulary;
-* a write that omits ``outcome`` FAILS (no server default), and an unknown
-  outcome / confidence kind violates its CHECK;
+  ``passed``, and lands the EXPAND contract — ``outcome`` NULLABLE (the old
+  image is still serving during the rollout), ``judge_result_json`` physical
+  ``jsonb``, the closed confidence vocabulary, and a TRANSITIONAL eval-type
+  CHECK that accepts both stored names;
+* an unknown outcome / confidence kind violates its CHECK;
+* a SINGLE ``alembic upgrade 0323 -> 0325`` invocation completes (the
+  self-hosted rollout path, where 0324 and 0325 share one transaction — the
+  side-connection deadlock reproduction);
 * the ``jsonb`` envelope round-trips as an object;
 * the downgrade restores the previous shape and vocabulary.
 """
@@ -147,18 +150,35 @@ async def pre_upgrade_db_url(db_url: str) -> AsyncGenerator[str, None]:
         await _drop_db(db_url, db_name)
 
 
-async def _insert_old_vocabulary_eval(engine: AsyncEngine) -> None:
-    """Insert an ``llm_judge`` row, bypassing FK triggers (a CHECK-only probe)."""
+async def _insert_eval(engine: AsyncEngine, eval_type: str) -> None:
+    """Insert an eval row, bypassing FK triggers (a CHECK-only probe)."""
     async with engine.begin() as conn:
         await conn.execute(text("SET session_replication_role = replica"))
         await conn.execute(
             text(
                 "INSERT INTO evals "
                 "(id, organisation_id, pipeline_id, account_id, eval_type, config_json, version) "
-                "VALUES (gen_random_uuid(), :org, :pipeline, :account, 'llm_judge', '{}'::jsonb, 1)"
+                "VALUES (gen_random_uuid(), :org, :pipeline, :account, :eval_type, '{}'::jsonb, 1)"
             ),
-            {"org": _ORG, "pipeline": _PIPELINE, "account": _ACCOUNT},
+            {"org": _ORG, "pipeline": _PIPELINE, "account": _ACCOUNT, "eval_type": eval_type},
         )
+
+
+@pytest_asyncio.fixture
+async def one_shot_db_url(db_url: str) -> AsyncGenerator[str, None]:
+    """A database at 0323, upgraded to 0325 in ONE alembic invocation.
+
+    This is the self-hosted rollout path: the release's single
+    ``alembic upgrade heads`` applies 0324_purge and 0325 in the SAME
+    transaction, which is where a side connection taking a lock on ``evals``
+    would self-deadlock.
+    """
+    db_name, iso_url = await _fresh_db(db_url, "m0325_shot")
+    try:
+        _migrate(iso_url, "0323_pipeline_snapshots_substantive_version_index")
+        yield iso_url
+    finally:
+        await _drop_db(db_url, db_name)
 
 
 class TestMigration0325:
@@ -196,9 +216,9 @@ class TestMigration0325:
             assert outcomes[_FAIL_RESULT] == "fail"
 
             shapes = await _column_shapes(engine)
-            assert shapes["outcome"]["nullable"] == "NO"
-            # The load-bearing detail: NO server default, so a writer that
-            # forgets the outcome fails INSTEAD of recording a failure.
+            # EXPAND release: nullable while the old image is still serving.
+            # Stage 2 flips this to NOT NULL after the rollout.
+            assert shapes["outcome"]["nullable"] == "YES"
             assert shapes["outcome"]["default"] is None
             assert shapes["judge_result_json"]["type"] == "jsonb"
             assert shapes["judge_confidence_kind"]["nullable"] == "YES"
@@ -225,29 +245,59 @@ class TestMigration0325:
         finally:
             await engine.dispose()
 
-    async def test_the_old_vocabulary_is_rejected_after_upgrade(self, pre_upgrade_db_url: str) -> None:
+    async def test_the_transitional_vocabulary_accepts_both_names(self, pre_upgrade_db_url: str) -> None:
+        """EXPAND: the old image's ``llm_judge`` writes stay valid."""
         _migrate(pre_upgrade_db_url, MIGRATION_REV)
         engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
         try:
+            await _insert_eval(engine, "llm_judge")
+            await _insert_eval(engine, "model_judge")
             with pytest.raises(IntegrityError):
-                await _insert_old_vocabulary_eval(engine)
+                await _insert_eval(engine, "bogus_judge")
         finally:
             await engine.dispose()
 
-    async def test_a_write_that_omits_outcome_fails(self, pre_upgrade_db_url: str) -> None:
+    async def test_single_invocation_0323_to_0325_completes(self, one_shot_db_url: str) -> None:
+        """The self-hosted path: 0324 + 0325 in ONE transaction, no deadlock."""
+        _migrate(one_shot_db_url, MIGRATION_REV)
+
+        engine = create_async_engine(one_shot_db_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as conn:
+                version = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar_one()
+                legacy_table = (await conn.execute(text("SELECT to_regclass('public.eval_definitions')"))).scalar_one()
+            shapes = await _column_shapes(engine)
+            assert version == MIGRATION_REV
+            assert legacy_table is None
+            assert shapes["outcome"]["nullable"] == "YES"
+            assert shapes["judge_result_json"]["type"] == "jsonb"
+        finally:
+            await engine.dispose()
+
+    async def test_the_expand_database_still_allows_a_null_outcome(self, pre_upgrade_db_url: str) -> None:
+        """EXPAND contract: the old image (which has no ``outcome``) can insert.
+
+        The application-layer ``before_insert`` guard is what prevents the NEW
+        image from introducing a NULL; stage 2 makes the DB enforce it.
+        """
         _migrate(pre_upgrade_db_url, MIGRATION_REV)
         engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
         try:
-            with pytest.raises(IntegrityError):
-                async with engine.begin() as conn:
-                    await conn.execute(
-                        text(
-                            "INSERT INTO eval_results "
-                            "(id, organisation_id, run_id, eval_id, passed, observed) "
-                            "VALUES (gen_random_uuid(), :org, :run, :eval, true, true)"
-                        ),
-                        {"org": _ORG, "run": _RUN, "eval": _EVAL},
-                    )
+            async with engine.begin() as conn:
+                await conn.execute(text("SET session_replication_role = replica"))
+                await conn.execute(
+                    text(
+                        "INSERT INTO eval_results "
+                        "(id, organisation_id, run_id, eval_id, passed, observed) "
+                        "VALUES (gen_random_uuid(), :org, :run, :eval, true, true)"
+                    ),
+                    {"org": _ORG, "run": _RUN, "eval": _EVAL},
+                )
+            async with engine.connect() as conn:
+                null_count = (
+                    await conn.execute(text("SELECT count(*) FROM eval_results WHERE outcome IS NULL"))
+                ).scalar_one()
+            assert null_count == 1
         finally:
             await engine.dispose()
 
