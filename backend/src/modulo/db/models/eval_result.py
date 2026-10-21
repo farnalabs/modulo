@@ -11,7 +11,6 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Integer,
     String,
-    Text,
     Uuid,
     func,
 )
@@ -93,16 +92,16 @@ class EvalResult(OrgScoped):
     passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
     # NOT NULL with NO server default: a write that omits the outcome fails
     # loudly instead of silently recording a failure.
-    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Schema-versioned verdict envelope (ADR 066 D5). Physical jsonb; the
     # shared JSONB_COL alias keeps SQLite/MariaDB parity.
     judge_result_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True)
     # Denormalised confidence provenance (envelope key ``confidence_kind``).
-    judge_confidence_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
+    judge_confidence_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # Coded reason when ``outcome == 'error'`` (the judge sub-namespace of the
     # run error taxonomy). NULL on pass/fail.
-    error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     detail: Mapped[str | None] = mapped_column(String(2000))
     observed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     evaluated_at: Mapped[datetime] = mapped_column(

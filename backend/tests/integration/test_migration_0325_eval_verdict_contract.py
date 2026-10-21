@@ -1,4 +1,4 @@
-"""FAR-2040 / ADR 066 S1: migration ``0324_eval_verdict_contract`` against real Postgres.
+"""FAR-2040 / ADR 066 S1: migration ``0325_eval_verdict_contract`` against real Postgres.
 
 Covers the migration's own contract, on a private database per test (the
 ``test_migration_0308`` harness):
@@ -35,8 +35,8 @@ from sqlalchemy.pool import NullPool
 pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[2]  # backend/
-MIGRATION_REV = "0324_eval_verdict_contract"
-PREV_REV = "0323_pipeline_snapshots_substantive_version_index"
+MIGRATION_REV = "0325_eval_verdict_contract"
+PREV_REV = "0324_purge_eval_definitions"
 
 _ORG = "d0c00000-0000-0000-0000-000000000001"
 _PIPELINE = "d0c00000-0000-0000-0000-000000000002"
@@ -147,7 +147,21 @@ async def pre_upgrade_db_url(db_url: str) -> AsyncGenerator[str, None]:
         await _drop_db(db_url, db_name)
 
 
-class TestMigration0324:
+async def _insert_old_vocabulary_eval(engine: AsyncEngine) -> None:
+    """Insert an ``llm_judge`` row, bypassing FK triggers (a CHECK-only probe)."""
+    async with engine.begin() as conn:
+        await conn.execute(text("SET session_replication_role = replica"))
+        await conn.execute(
+            text(
+                "INSERT INTO evals "
+                "(id, organisation_id, pipeline_id, account_id, eval_type, config_json, version) "
+                "VALUES (gen_random_uuid(), :org, :pipeline, :account, 'llm_judge', '{}'::jsonb, 1)"
+            ),
+            {"org": _ORG, "pipeline": _PIPELINE, "account": _ACCOUNT},
+        )
+
+
+class TestMigration0325:
     async def test_pre_upgrade_has_no_verdict_columns(self, pre_upgrade_db_url: str) -> None:
         """NEGATIVE CONTROL: the columns do not exist before the upgrade."""
         engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
@@ -189,6 +203,34 @@ class TestMigration0324:
             assert shapes["judge_result_json"]["type"] == "jsonb"
             assert shapes["judge_confidence_kind"]["nullable"] == "YES"
             assert shapes["error_code"]["nullable"] == "YES"
+
+            async with engine.connect() as conn:
+                temp_check = (
+                    await conn.execute(
+                        text("SELECT COUNT(*) FROM pg_constraint WHERE conname = 'ck_eval_results_outcome_not_null'")
+                    )
+                ).scalar_one()
+                vocabulary_valid = (
+                    await conn.execute(
+                        text(
+                            "SELECT convalidated FROM pg_constraint WHERE conname = 'ck_evals_type' "
+                            "AND conrelid = 'public.evals'::regclass"
+                        )
+                    )
+                ).scalar_one()
+            # The temporary NOT NULL-proof check is dropped after SET NOT NULL.
+            assert temp_check == 0
+            # The swapped vocabulary CHECK is VALID, not left NOT VALID.
+            assert vocabulary_valid is True
+        finally:
+            await engine.dispose()
+
+    async def test_the_old_vocabulary_is_rejected_after_upgrade(self, pre_upgrade_db_url: str) -> None:
+        _migrate(pre_upgrade_db_url, MIGRATION_REV)
+        engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
+        try:
+            with pytest.raises(IntegrityError):
+                await _insert_old_vocabulary_eval(engine)
         finally:
             await engine.dispose()
 
