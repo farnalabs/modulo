@@ -215,7 +215,9 @@ describe('EnvironmentProfileForm — create mode', () => {
 
     const hint = wrapper.find('#envprofile-form-tier-hint')
     expect(hint.exists()).toBe(true)
-    expect(hint.attributes('role')).toBe('status')
+    // Native <output> carries the implicit status role (Web:S6819).
+    expect(hint.element.tagName).toBe('OUTPUT')
+    expect(hint.attributes('role')).toBeUndefined()
     expect(combobox.attributes('aria-describedby')).toContain('envprofile-form-tier-hint')
   })
 

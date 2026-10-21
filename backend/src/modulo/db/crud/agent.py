@@ -159,6 +159,12 @@ async def add_prompt_version(
 
     Returns None if the agent is not found.
     """
+    # FAR-1825: the agent row lock is the request transaction's first lock
+    # (apply-optimized-prompt). Bound it so a contended agent row surfaces
+    # 55P03 (409) instead of an unbounded wait.
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
     result = await session.execute(select(Agent).where(Agent.id == agent_id).with_for_update())
     agent = result.scalar_one_or_none()
     if agent is None:
@@ -226,6 +232,11 @@ async def rollback_prompt_version(
     the target version's template as the active prompt_template.
     Returns None if agent or target version not found.
     """
+    # FAR-1825: bound the request transaction's first row lock (rollback route)
+    # so a contended agent row surfaces 55P03 (409), never an unbounded wait.
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
     result = await session.execute(select(Agent).where(Agent.id == agent_id).with_for_update())
     agent = result.scalar_one_or_none()
     if agent is None:

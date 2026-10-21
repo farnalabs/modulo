@@ -312,7 +312,8 @@ describe('NotificationBell (FAR-250)', () => {
 
     const banner = wrapper.find('[data-testid="sse-reconnect-banner"]')
     expect(banner.exists()).toBe(true)
-    expect(banner.attributes('role')).toBe('status')
+    expect(banner.element.tagName).toBe('OUTPUT')
+    expect(banner.attributes('role')).toBeUndefined()
     expect(banner.attributes('aria-live')).toBe('polite')
 
     await wrapper.find('[data-testid="sse-reconnect-button"]').trigger('click')

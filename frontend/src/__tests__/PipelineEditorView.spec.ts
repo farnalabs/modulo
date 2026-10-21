@@ -3649,12 +3649,14 @@ describe('PipelineEditorView - system-admin snapshot lock (FAR-1287)', () => {
     wrapper.unmount()
   })
 
-  it('keeps the async status region a polite role=status live region', async () => {
+  it('keeps the async status region a polite live region on a native <output>', async () => {
     vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
     const wrapper = await mountEditorSettled()
 
     const status = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-status"]')
-    expect(status.attributes('role')).toBe('status')
+    // Web:S6819: the implicit status role comes from <output>, not an explicit role.
+    expect(status.element.tagName).toBe('OUTPUT')
+    expect(status.attributes('role')).toBeUndefined()
     expect(status.attributes('aria-live')).toBe('polite')
     wrapper.unmount()
   })

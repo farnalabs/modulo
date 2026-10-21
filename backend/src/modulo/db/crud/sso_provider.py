@@ -195,6 +195,12 @@ async def create_provider(
     provider_id: str | None = None,
     system_session: AsyncSession | None = None,
 ) -> SsoProvider:
+    # FAR-1825: the name-uniqueness lock is the request transaction's first row
+    # lock. Bound it so a contended SSO-provider name raises 55P03 (a visible
+    # 409) instead of parking a pooled connection indefinitely.
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
     normalized_allowed_domains = validate_allowed_domains(allowed_domains)
 
     result = await session.execute(
@@ -284,6 +290,13 @@ async def update_provider(
     fernet_key: str,
     **updates: str | bool | list[str] | None,
 ) -> SsoProvider | None:
+    # FAR-1825: bound the request transaction before its first row lock (the
+    # conditional name-uniqueness SELECT ... FOR UPDATE below). Without it a
+    # contended SSO-provider rename waits unbounded; with it the wait expires
+    # as 55P03, which the route maps to a visible 409.
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
     provider = await get_provider(session, provider_id, org_id=org_id)
     if provider is None:
         return None

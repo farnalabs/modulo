@@ -20,26 +20,24 @@
       <!-- FAR-1234: point-in-time run metadata resolved when the list loads.
            The notification body still says what the trigger knew; this line
            says what the linked run looks like NOW. -->
-      <p
+      <output
         v-if="hasRunState"
         data-testid="notification-run-state"
         class="mt-1 flex flex-wrap items-center gap-x-1 text-xs"
         :class="runStateClass"
-        role="status"
         aria-live="polite"
       >
         <span class="font-medium">{{ runStateLabel }}</span>
         <span v-if="cancelReasonText" class="text-muted-foreground">{{ cancelReasonText }}</span>
-      </p>
+      </output>
 
       <!-- HITL awaiting affordance: only while the linked run can still be
            reviewed. A terminal run (cancelled/failed/…) demotes this to an
            explanatory label so a stale request never reads as live work. -->
-      <div
+      <output
         v-if="hitlAffordance"
         class="mt-2 flex items-center gap-2 rounded-md px-3 py-2 text-xs"
         :class="hitlAffordanceClass"
-        role="status"
         aria-live="polite"
       >
         <svg
@@ -59,7 +57,7 @@
           <line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg>
         <span>{{ hitlAffordance }}</span>
-      </div>
+      </output>
 
       <div class="mt-2 flex items-center gap-2">
         <router-link

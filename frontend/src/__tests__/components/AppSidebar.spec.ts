@@ -133,7 +133,7 @@ describe('AppSidebar', () => {
       const wrapper = mountSidebar()
       await flushPromises()
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(true)
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
     })
 
@@ -357,8 +357,10 @@ describe('AppSidebar', () => {
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
       // Labelled live region with a non-interactive hamburger affordance: a tap
-      // gets visible pending feedback, not a response-less blank slot.
-      expect(pending.attributes('role')).toBe('status')
+      // gets visible pending feedback, not a response-less blank slot. The
+      // native <output> carries the implicit status role (Web:S6819).
+      expect(pending.element.tagName).toBe('OUTPUT')
+      expect(pending.attributes('role')).toBeUndefined()
       expect(pending.attributes('aria-busy')).toBe('true')
       expect(pending.attributes('aria-label')).toBe('Loading navigation')
       expect(pending.find('[data-testid="mobile-nav-pending-hamburger"]').exists()).toBe(true)
@@ -436,61 +438,107 @@ describe('AppSidebar', () => {
       await flushPromises()
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
       expect(wrapper.find('[aria-label="Collapse sidebar"]').exists()).toBe(false)
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
     })
 
-    it('opens the mobile overlay panel when the rail expand button is clicked', async () => {
-      const wrapper = mountSidebar({}, { mobileRail: true })
+    it('opens the mobile overlay panel as a native modal <dialog>', async () => {
+      const showModal = vi.spyOn(HTMLDialogElement.prototype, 'showModal')
+      const wrapper = mountSidebar({}, { mobileRail: true, attachTo: document.body })
       await flushPromises()
       await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
       await flushPromises()
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
-      expect(wrapper.find('div[aria-hidden="true"].fixed.inset-0').exists()).toBe(true)
+
+      const panel = wrapper.find('#mobile-nav-panel')
+      expect(panel.exists()).toBe(true)
+      // Web:S6819 — the element IS a dialog; a redundant role/aria-modal on a
+      // non-dialog is what SonarCloud rejects.
+      expect(panel.element.tagName).toBe('DIALOG')
+      expect(panel.attributes('role')).toBeUndefined()
+      expect(panel.attributes('aria-modal')).toBeUndefined()
+      expect(panel.attributes('aria-label')).toBe('Main navigation')
+      expect((panel.element as HTMLDialogElement).open).toBe(true)
+      // showModal() is the containment/inertness mechanism; without it this
+      // is a painted-over non-modal panel.
+      expect(showModal).toHaveBeenCalledTimes(1)
+      expect(panel.element.contains(document.activeElement)).toBe(true)
+      // The scrim is the native ::backdrop, not a separate div layer.
+      expect(panel.classes()).toContain('backdrop:bg-black/50')
+
+      showModal.mockRestore()
+      wrapper.unmount()
     })
 
     it('closes the mobile panel when the backdrop is clicked', async () => {
-      const wrapper = mountSidebar({}, { mobileRail: true })
+      const wrapper = mountSidebar({}, { mobileRail: true, attachTo: document.body })
       await flushPromises()
       await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
       await flushPromises()
-      await wrapper.find('div[aria-hidden="true"].fixed.inset-0').trigger('click')
+      // A click whose target is the dialog itself is a ::backdrop click. The
+      // second dispatch lands while the (still-rendered) dialog is already
+      // closed, exercising the guarded no-op path in closeMobilePanel().
+      const panel = wrapper.find('#mobile-nav-panel')
+      panel.element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      panel.element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       await flushPromises()
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
+      wrapper.unmount()
     })
 
-    it('closes the mobile panel when Escape is fired on the backdrop (FAR-821 a11y)', async () => {
-      const wrapper = mountSidebar({}, { mobileRail: true })
+    it('closes the mobile panel on the native cancel (Escape) event', async () => {
+      const wrapper = mountSidebar({}, { mobileRail: true, attachTo: document.body })
       await flushPromises()
       await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
       await flushPromises()
-      const backdrop = wrapper.find('div[aria-hidden="true"].fixed.inset-0')
-      expect(backdrop.exists()).toBe(true)
+      const panel = wrapper.find('#mobile-nav-panel')
+      expect((panel.element as HTMLDialogElement).open).toBe(true)
 
-      await backdrop.trigger('keydown', { key: 'Escape' })
+      // Browsers fire `cancel` when Escape is pressed inside a modal dialog.
+      await panel.trigger('cancel')
       await flushPromises()
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
+      wrapper.unmount()
     })
 
-    it('closes the mobile panel on Escape', async () => {
-      const wrapper = mountSidebar({}, { mobileRail: true })
+    it('does not close when a click originates inside the panel', async () => {
+      const wrapper = mountSidebar({}, { mobileRail: true, attachTo: document.body })
       await flushPromises()
       await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
       await flushPromises()
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      const panel = wrapper.find('#mobile-nav-panel')
+      // The avatar ring is inside the panel and emits nothing, so an inner
+      // click must NOT be mistaken for a ::backdrop click.
+      await panel.find('.avatar-ring').trigger('click')
       await flushPromises()
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(true)
+      wrapper.unmount()
     })
 
     it('closes the mobile panel when a nav item is activated', async () => {
-      const wrapper = mountSidebar({}, { mobileRail: true })
+      const wrapper = mountSidebar({}, { mobileRail: true, attachTo: document.body })
       await flushPromises()
       await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
       await flushPromises()
-      const dialog = wrapper.find('[role="dialog"]')
-      await dialog.find('.sidebar-link').trigger('click')
+      const panel = wrapper.find('#mobile-nav-panel')
+      await panel.find('.sidebar-link').trigger('click')
       await flushPromises()
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('closes the mobile panel when the command palette opens from it (no stacked modals)', async () => {
+      const wrapper = mountSidebar({}, { mobileRail: true, attachTo: document.body })
+      await flushPromises()
+      await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(true)
+
+      await wrapper.find('#mobile-nav-panel [aria-label="Search pages"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
+      expect(wrapper.emitted('open-command-palette')).toHaveLength(1)
+      wrapper.unmount()
     })
 
     it('renders the avatar as a router-link to /admin/my-profile in rail mode', async () => {
@@ -508,41 +556,38 @@ describe('AppSidebar', () => {
       const expandButton = wrapper.find('[aria-label="Expand sidebar"]')
       await expandButton.trigger('click')
       await flushPromises()
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(true)
 
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      await wrapper.find('#mobile-nav-panel').trigger('cancel')
       await flushPromises()
 
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
       expect(document.activeElement).toBe(expandButton.element)
 
       wrapper.unmount()
     })
 
-    it('traps focus within the mobile dialog while it is open', async () => {
+    it('contains focus through the native modal rather than a document Tab trap', async () => {
+      const showModal = vi.spyOn(HTMLDialogElement.prototype, 'showModal')
+      const addListener = vi.spyOn(document, 'addEventListener')
       const wrapper = mountSidebar({}, { mobileRail: true, attachTo: document.body })
       await flushPromises()
+      addListener.mockClear()
       await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
       await flushPromises()
 
-      const dialog = wrapper.find('[role="dialog"]')
-      const focusables = dialog.findAll(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      )
-      expect(focusables.length).toBeGreaterThan(0)
-      const first = focusables[0].element as HTMLElement
-      const last = focusables[focusables.length - 1].element as HTMLElement
+      const dialog = wrapper.find('#mobile-nav-panel')
+      const dialogEl = dialog.element as HTMLDialogElement
+      // showModal() is what makes the background inert and contains Tab.
+      expect(showModal).toHaveBeenCalledTimes(1)
+      expect(dialogEl.open).toBe(true)
+      expect(dialogEl.contains(document.activeElement)).toBe(true)
+      // The old document-level Tab/Escape trap is gone — containment is native.
+      const keydownRegistrations = addListener.mock.calls.filter(([type]) => type === 'keydown')
+      expect(keydownRegistrations).toHaveLength(0)
 
-      last.focus()
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }))
-      await flushPromises()
-      expect(document.activeElement).toBe(first)
-
-      first.focus()
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true }))
-      await flushPromises()
-      expect(document.activeElement).toBe(last)
-
+      showModal.mockRestore()
+      addListener.mockRestore()
       wrapper.unmount()
     })
 
@@ -552,12 +597,12 @@ describe('AppSidebar', () => {
       await flushPromises()
       await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
       await flushPromises()
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(true)
 
       route.path = '/notifications'
       await flushPromises()
 
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
 
       route.path = '/'
     })
@@ -587,7 +632,7 @@ describe('AppSidebar', () => {
       const wrapper = mountSidebar()
       await flushPromises()
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
-      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('#mobile-nav-panel').exists()).toBe(false)
     })
 
     it('renders the avatar as a router-link to /admin/my-profile in full mode', async () => {

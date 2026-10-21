@@ -1174,7 +1174,27 @@ export default {
       "scope_label": "Scope",
       "scope_organisation": "Organisation",
       "scope_instance": "Instance",
-      "scope_instance_hint": "Instance-level errors are not attributed to any organisation (public frontend ingest and org-less backend errors). This view is read-only and for system admins."
+      "scope_instance_hint": "Instance-level errors are not attributed to any organisation (public frontend ingest and org-less backend errors). This view is read-only and for system admins.",
+      "dashboard": "Dashboard",
+      "level": "Level",
+      "level_error": "Error",
+      "level_warning": "Warning",
+      "level_critical": "Critical",
+      "message": "Message",
+      "count": "Count",
+      "status": "Status",
+      "status_new": "New",
+      "status_acknowledged": "Acknowledged",
+      "status_resolved": "Resolved",
+      "status_archived": "Archived",
+      "source": "Source",
+      "source_backend": "Backend",
+      "source_frontend": "Frontend",
+      "source_saq": "SAQ",
+      "source_celery": "Celery (legacy)",
+      "assignee": "Assignee",
+      "group_count": "{count} group | {count} groups",
+      "failed_to_load_scheduler_starvation": "Failed to load scheduler starvation:"
     },
     "AdminNodeCategoriesView": {
       "failed_to_load_categories": "Failed to load categories:",
@@ -4300,6 +4320,7 @@ export default {
           "select": "Select..."
         },
         "PublishCompositeFlow": {
+          "publish_composite": "Publish composite",
           "a_reusable_composite_that_performs_code_review_across_multip": "A reusable composite that performs code review across multiple agents",
           "name_description": "Name & Description",
           "version": "Version *",
@@ -4844,6 +4865,11 @@ export default {
       "preview": "Preview",
       "dev_preview": "Dev Preview",
       "in_dev": "In Dev"
+    },
+    "CommandPalette": {
+      "label": "Command palette",
+      "search_placeholder": "Search pages...",
+      "no_results": "No results found"
     },
     "JsonViewer": {
       "copy": "Copy",

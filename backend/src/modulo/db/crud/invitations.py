@@ -84,6 +84,12 @@ async def get_live_for_email(session: AsyncSession, *, org_id: uuid.UUID, email:
     MUST treat the row locked by ``with_for_update`` and consume it in the
     same transaction, mirroring the accept-invite route).
     """
+    # FAR-1825: this is the SSO JIT transaction's first row lock. Bound it so a
+    # contended invitation row surfaces 55P03 (mapped to a login failure) rather
+    # than parking the pre-auth pooled connection indefinitely.
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
     result = await session.execute(
         select(Invitation)
         .where(
@@ -116,7 +122,14 @@ async def get_valid_by_token_hash(session: AsyncSession, token_hash: str) -> Inv
 
     Rejects consumed, revoked, and expired rows. Row-locks so two concurrent
     accepts cannot both read the same still-valid row before the CAS.
+
+    FAR-1825: bounded because this is the accept-invite transaction's first row
+    lock. A contended invitation row expires as 55P03 (the route's DB-error arm
+    maps it to a conflict) instead of an unbounded pre-auth wait.
     """
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
     result = await session.execute(
         select(Invitation)
         .where(

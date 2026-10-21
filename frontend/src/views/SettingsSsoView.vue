@@ -42,31 +42,33 @@
             v-for="provider in providers"
             :key="provider.id"
             class="card cursor-pointer transition-colors hover:bg-accent/30"
-            role="button"
-            tabindex="0"
-            :aria-label="$t('views.SettingsSsoView.edit_provider')"
             data-testid="settings-sso-provider-row"
             @click="openEditForm(provider)"
-            @keydown.enter.prevent="openEditForm(provider)"
-            @keydown.space.prevent="openEditForm(provider)"
+            @keydown.enter.self="openEditForm(provider)"
+            @keydown.space.self.prevent="openEditForm(provider)"
           >
             <div class="flex items-center justify-between p-4">
-              <div class="flex min-w-0 items-center gap-3">
-                <div
+              <button
+                type="button"
+                class="flex min-w-0 items-center gap-3 text-left"
+                :aria-label="`${$t('views.SettingsSsoView.edit_provider')}: ${provider.name}`"
+                @click.stop="openEditForm(provider)"
+              >
+                <span
                   class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-sm font-bold"
                   :class="provider.provider_type === 'oidc' ? 'badge badge-context-blue' : 'badge badge-context-amber'"
                 >
                   {{ provider.provider_type === 'oidc' ? 'O' : 'S' }}
-                </div>
-                <div class="min-w-0">
-                  <p class="font-medium">{{ provider.name }}</p>
-                  <p class="break-all text-sm text-muted-foreground">
+                </span>
+                <span class="block min-w-0">
+                  <span class="block font-medium">{{ provider.name }}</span>
+                  <span class="block break-all text-sm text-muted-foreground">
                     {{ provider.provider_type.toUpperCase() }}
                     <span v-if="provider.client_id" class="ml-2">&middot; {{ provider.client_id }}</span>
                     <span v-if="provider.entity_id" class="ml-2">&middot; {{ provider.entity_id }}</span>
-                  </p>
-                </div>
-              </div>
+                  </span>
+                </span>
+              </button>
               <div class="flex shrink-0 items-center gap-2" @click.stop @keydown.stop>
                 <button type="button"
                   :disabled="testingId === provider.id"

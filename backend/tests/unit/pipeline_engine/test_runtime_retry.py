@@ -160,10 +160,19 @@ def test_provider_refusal_is_never_retried_inline() -> None:
 
     ``SandboxNodeFailedError`` is normally retryable, but a provider
     credential/funding refusal can never succeed — the inline retry must not
-    re-execute it.
+    re-execute it. Both 402 carrier spellings are covered: the plain gateway
+    echo (``provider.billing``) and the captured JSONL event shape carrying
+    ``"statusCode":402`` (``model.insufficient_funds``).
     """
     policy = NodeRetryPolicy(max_attempts=3, backoff_seconds=0.0, events=frozenset({"error"}))
-    for text in ('HTTP 401 "This API key has expired"', 'HTTP 402 "Insufficient account funds"'):
+    carriers = (
+        'HTTP 401 "This API key has expired"',
+        'HTTP 402 "Insufficient account funds"',
+        '{"type":"error","error":{"name":"APIError","data":'
+        '{"message":"Upstream request failed: Insufficient account funds",'
+        '"statusCode":402,"isRetryable":false}}}',
+    )
+    for text in carriers:
         outcome = _classify_attempt(None, policy, SandboxNodeFailedError(text))
         assert outcome.kind == "terminal_failure"
         assert outcome.event is None

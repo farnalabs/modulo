@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_lock_timeout_conflict_if
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -39,6 +39,7 @@ from modulo.db.crud.notifications import (
     review_later,
     set_notification_preferences,
 )
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.models.notification import Notification
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
@@ -54,6 +55,23 @@ _CODE_APP_NOTIFICATIONS_REVIEW_LATER = "in_app_notifications.review_later_endpoi
 _CODE_APP_NOTIFICATIONS_DISMISS_ENDPOINT = "in_app_notifications.dismiss_endpoint"
 _CODE_APP_NOTIFICATIONS_GET_PREFERENCES = "in_app_notifications.get_preferences"
 _CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES = "in_app_notifications.update_preferences"
+
+# The dashboard level an account gets when it has never stored one. This is the
+# single source of truth for the default WITHIN this module:
+# ``NotificationPreferencesResponse``'s declared default (which is the published
+# OpenAPI contract) and ``_load_dashboard_level``'s fallback both read this
+# constant, so the contract and the behaviour cannot drift apart (FAR-2024: the
+# model declared "warning" while every real GET returned "info", publishing an
+# unreachable contract).
+#
+# It is not a process-wide source of truth: the crud read helpers in
+# ``db/crud/notifications.py`` (``get_dashboard_notifications`` and
+# ``get_unread_count``) keep ``min_level="warning"`` signature defaults. Every
+# production caller here passes ``min_level`` explicitly from
+# ``_load_dashboard_level``, so those defaults never decide the user-facing
+# default. Imports flow api -> db, so the crud module cannot read this constant
+# without a cycle.
+_DEFAULT_DASHBOARD_LEVEL = "info"
 
 
 _log = logging.getLogger(__name__)
@@ -92,7 +110,11 @@ class DashboardNotificationResponse(BaseModel):
 
 
 class NotificationPreferencesResponse(BaseModel):
-    dashboard_level: str = "warning"
+    # The declared default IS the behaviour, not a placeholder: every GET
+    # returns ``_load_dashboard_level``'s value, which falls back to the same
+    # constant. A default stated here independently would be unreachable at
+    # runtime yet still published as the contract in the OpenAPI schema.
+    dashboard_level: str = _DEFAULT_DASHBOARD_LEVEL
     notification_opt_outs: dict[str, bool] = Field(default_factory=dict)
 
 
@@ -102,6 +124,10 @@ class NotificationPreferencesUpdate(BaseModel):
     # ``{"opt_outs": {...}}`` (a typo'd key), answered 200 and stored nothing.
     model_config = ConfigDict(extra="forbid")
 
+    # ``None`` here means "the request did not carry a level" (leave the stored
+    # one untouched) — it is NOT the dashboard default. Do not "align" it with
+    # ``_DEFAULT_DASHBOARD_LEVEL``: that would turn every opt-out-only PUT into
+    # an explicit level write and break the no-op detection below.
     dashboard_level: str | None = None
     notification_opt_outs: dict[str, bool] | None = None
 
@@ -141,11 +167,19 @@ _NOTIFICATION_STATUS_VALUES: frozenset[str] = frozenset({"active", "dismissed_se
 
 
 async def _load_dashboard_level(session: AsyncSession, account_id: uuid.UUID) -> str:
+    """Resolve the caller's dashboard severity floor.
+
+    Falls back to ``_DEFAULT_DASHBOARD_LEVEL`` both when the account row is
+    missing and when the account has never stored a level. This is the value
+    every real GET returns, and it is the same constant
+    ``NotificationPreferencesResponse`` declares as its default, so the
+    published contract matches observed behaviour (FAR-2024).
+    """
     account = await get_account_by_id(session, account_id)
     if account is None:
-        return "info"
+        return _DEFAULT_DASHBOARD_LEVEL
     prefs = account.preferences if isinstance(account.preferences, dict) else {}
-    return cast(str, prefs.get(_DASHBOARD_LEVEL_KEY, "info"))
+    return cast(str, prefs.get(_DASHBOARD_LEVEL_KEY, _DEFAULT_DASHBOARD_LEVEL))
 
 
 def _preference_change_is_noop(
@@ -514,6 +548,14 @@ async def update_preferences(
             )
     try:
         async with session.begin():
+            # FAR-1825: the FIRST write on this path is
+            # ``set_notification_preferences`` (DELETE/INSERT on the preference
+            # rows), which runs BEFORE ``update_account_preferences`` takes the
+            # Account row lock inside ``_get_account_locked``. Bounding only at
+            # that later lock would leave the preference DML's own row waits
+            # unbounded, so the bound is set at the top of the transaction,
+            # before any statement that can block.
+            await set_mutation_row_lock_timeout(session)
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             # FAR-247: read the CURRENT state first so the audit event can be
@@ -570,7 +612,11 @@ async def update_preferences(
             status_code=status.HTTP_409_CONFLICT,
             detail=_MSG_DATA_CONFLICT_OCCURRED,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        # FAR-1825: this transaction bounds its first (preference DML) lock, so
+        # 55P03 is reachable here — a busy row is a 409 conflict. Other
+        # SQLAlchemy errors keep their pre-existing 500 mapping.
+        raise_lock_timeout_conflict_if(exc, _CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES)
         _log.exception(_CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

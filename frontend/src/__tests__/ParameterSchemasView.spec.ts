@@ -104,10 +104,16 @@ describe('ParameterSchemasView — list', () => {
     await nextTick()
     expect(wrapper.find('[data-testid="paramschema-new"]').exists()).toBe(true)
     // STATE-3: the list renders a pulse skeleton (TableSkeleton), not a spinner
-    // and not a blank region.
-    const skeleton = wrapper.find('[role="status"][aria-busy="true"]')
+    // and not a blank region. The placeholder table is the busy element; the
+    // visually-hidden live region is its SIBLING (never inside a busy
+    // ancestor, which would defer the announcement until it clears).
+    const skeleton = wrapper.find('table[aria-busy="true"]')
     expect(skeleton.exists()).toBe(true)
     expect(skeleton.findAll('.animate-pulse').length).toBeGreaterThan(0)
+    const status = wrapper.find('output[aria-live="polite"]')
+    expect(status.exists()).toBe(true)
+    expect(status.text()).toBe('Loading parameter schemas...')
+    expect(status.element.closest('[aria-busy="true"]')).toBeNull()
     expect(wrapper.find('[data-testid="paramschema-delete"]').exists()).toBe(false)
   })
 
@@ -460,12 +466,13 @@ describe('ParameterSchemasView — parameter sets tab', () => {
     await wrapper.find('tbody tr').trigger('click')
     await flush()
     await switchTab(wrapper, 'Parameter Sets')
-    // <output> carries the implicit ARIA status role natively (SonarCloud
-    // Web:S6819) — assert the native element rather than a redundant role.
-    const skeleton = wrapper.find('output[aria-busy="true"]')
+    // <output> may only contain phrasing content: it carries the status text
+    // alone, and the skeleton blocks are a SIBLING busy region.
+    const live = wrapper.find('output[aria-live="polite"]')
+    expect(live.text()).toBe('Loading parameter sets...')
+    expect(live.element.closest('[aria-busy="true"]')).toBeNull()
+    const skeleton = wrapper.find('div[aria-busy="true"]')
     expect(skeleton.exists()).toBe(true)
-    expect(skeleton.element.tagName).toBe('OUTPUT')
-    expect(skeleton.attributes('aria-label')).toBe('Loading parameter sets...')
     expect(skeleton.findAll('.animate-pulse').length).toBeGreaterThan(0)
     expect(wrapper.text()).not.toContain('No parameter sets yet.')
   })
@@ -636,12 +643,13 @@ describe('ParameterSchemasView — references tab', () => {
     await wrapper.find('tbody tr').trigger('click')
     await flush()
     await switchTab(wrapper, 'References')
-    // <output> carries the implicit ARIA status role natively (SonarCloud
-    // Web:S6819) — assert the native element rather than a redundant role.
-    const skeleton = wrapper.find('output[aria-busy="true"]')
+    // <output> may only contain phrasing content: it carries the status text
+    // alone, and the skeleton blocks are a SIBLING busy region.
+    const live = wrapper.find('output[aria-live="polite"]')
+    expect(live.text()).toBe('Loading schema references...')
+    expect(live.element.closest('[aria-busy="true"]')).toBeNull()
+    const skeleton = wrapper.find('div[aria-busy="true"]')
     expect(skeleton.exists()).toBe(true)
-    expect(skeleton.element.tagName).toBe('OUTPUT')
-    expect(skeleton.attributes('aria-label')).toBe('Loading schema references...')
     expect(skeleton.findAll('.animate-pulse').length).toBeGreaterThan(0)
     expect(wrapper.text()).not.toContain('Agents Using This Schema')
   })

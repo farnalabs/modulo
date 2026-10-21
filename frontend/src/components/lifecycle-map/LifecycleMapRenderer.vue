@@ -21,39 +21,45 @@
       <Background :gap="24" :size="1" />
       <FlowControls :show-interactive="false" position="bottom-right" />
       <template #node-stage="nodeProps">
-        <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
-          @keydown="onStageKeydown(nodeProps, $event)"
-          :aria-label="stageNodeAriaLabel(nodeProps.data)"
+        <div
           class="stage-node rounded-lg border-2 px-4 py-3 shadow-sm min-w-[180px] max-w-[260px] transition-shadow hover:shadow-md"
           :class="stageNodeClasses(nodeProps.data)"
           @click="onStageClick(nodeProps)"
+          @keydown="onStageKeydown(nodeProps, $event)"
         >
-          <div class="flex items-center justify-between gap-2 mb-1">
-            <span class="text-sm font-semibold text-foreground truncate">{{ nodeProps.data.label }}</span>
-            <span
-              v-if="nodeProps.data.graduated"
-              class="shrink-0 inline-flex items-center gap-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
-              title="Graduated stage"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
-              Graduated
+          <button
+            type="button"
+            :aria-label="stageNodeAriaLabel(nodeProps.data)"
+            class="w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            @click.stop="onStageClick(nodeProps)"
+          >
+            <span class="flex items-center justify-between gap-2 mb-1">
+              <span class="text-sm font-semibold text-foreground truncate">{{ nodeProps.data.label }}</span>
+              <span
+                v-if="nodeProps.data.graduated"
+                class="shrink-0 inline-flex items-center gap-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
+                title="Graduated stage"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
+                Graduated
+              </span>
+              <span
+                v-if="nodeProps.data.type === 'placeholder'"
+                class="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+              >
+                Planned
+              </span>
             </span>
-            <span
-              v-if="nodeProps.data.type === 'placeholder'"
-              class="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
-            >
-              Planned
+            <span v-if="nodeProps.data.description" class="mb-1 block text-xs text-muted-foreground line-clamp-2">
+              {{ nodeProps.data.description }}
             </span>
-          </div>
-          <p v-if="nodeProps.data.description" class="text-xs text-muted-foreground line-clamp-2 mb-1">
-            {{ nodeProps.data.description }}
-          </p>
-          <div v-if="nodeProps.data.ownerBadge" class="flex items-center gap-1 mt-1">
-            <span class="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-              {{ nodeProps.data.ownerBadge }}
+            <span v-if="nodeProps.data.ownerBadge" class="mt-1 flex items-center gap-1">
+              <span class="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                {{ nodeProps.data.ownerBadge }}
+              </span>
             </span>
-          </div>
+          </button>
           <div
             v-if="nodeJourneys(nodeProps.data.stageId).length"
             class="mt-2 flex flex-col gap-1"

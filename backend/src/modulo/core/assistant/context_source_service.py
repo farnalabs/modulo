@@ -119,6 +119,14 @@ class AssistantContextSourceService:
             raise ValueError("source_key must not be empty")
         if source_mode not in _VALID_SOURCE_MODES:
             raise ValueError(f"Invalid source_mode '{source_mode}'. Must be one of {sorted(_VALID_SOURCE_MODES)}")
+        # FAR-1825: bound the upsert's row-lock wait. Both the user-scoped
+        # (``/me/assistant/context-sources``) and org-scoped (admin assistant)
+        # request transactions reach this as their first row lock; a contended
+        # context-source row must expire as 55P03 (a visible 409), never wait
+        # unbounded.
+        from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+        await set_mutation_row_lock_timeout(self._session)
         if user_id is None:
             stmt = (
                 select(AssistantContextSource)

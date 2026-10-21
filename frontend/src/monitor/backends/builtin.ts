@@ -4,8 +4,10 @@ import { enqueueError, disposeTransport } from '../../lib/error-tracking/transpo
 export class BuiltinMonitorBackend implements MonitorBackend {
   readonly key = 'builtin'
 
-  async init(_config: MonitorConfig): Promise<boolean> {
-    return true
+  // MonitorBackend.init() is a Promise-returning contract (other backends
+  // await an SDK import), but this backend needs no async work.
+  init(_config: MonitorConfig): Promise<boolean> {
+    return Promise.resolve(true)
   }
 
   captureError(event: ErrorEventInput): void {

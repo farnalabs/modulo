@@ -1132,6 +1132,40 @@ def test_create_model_backend_sqlalchemy_error_returns_503(client: TestClient) -
     assert resp.status_code == 503
 
 
+def test_create_model_backend_lock_timeout_returns_409(client: TestClient) -> None:
+    """FAR-1825: a bounded row-lock wait (SQLSTATE 55P03) is a 409 conflict.
+
+    The create route bounds its first lock (the same-name uniqueness
+    ``SELECT ... FOR UPDATE``), so a contended row can now raise 55P03 from
+    inside the endpoint. The route-local ``except SQLAlchemyError`` arm must
+    classify it as the busy-row conflict it is — before FAR-1825 it answered
+    the generic 503 ("Database temporarily unavailable"), which invites a
+    client retry storm against the very lock that is busy.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    class _PgError(Exception):
+        """Driver-error double carrying an asyncpg ``sqlstate``."""
+
+        def __init__(self, state: str) -> None:
+            super().__init__(f"driver error {state}")
+            self.sqlstate = state
+
+    lock_timeout = OperationalError(
+        "SELECT ... FOR UPDATE",
+        {},
+        _PgError("55P03"),
+    )
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", side_effect=lock_timeout),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/model-backends", json=_CREATE_BODY)
+    assert resp.status_code == 409, resp.text
+    assert "another change is in progress" in resp.json()["detail"]
+
+
 def test_get_model_backend_sqlalchemy_error_returns_503(client: TestClient) -> None:
     from sqlalchemy.exc import SQLAlchemyError as SQLAlchemyError_
 

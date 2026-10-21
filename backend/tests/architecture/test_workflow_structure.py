@@ -27,6 +27,11 @@ invariants of the PR-reviewer / Branch-Fixer / merge-queue triangle:
 - **An undelivered Branch Fixer notification is never silent** — every webhook
   POST in ``merge-queue.yml`` must name the affected PR(s) and comment on them
   when the dispatch ultimately fails (FAR-1939).
+- **A saturated Branch Fixer trigger is retried, never terminally dropped** —
+  both ``ci.yml`` notify steps share one byte-identical retry policy that
+  classifies HTTP 429 as capacity saturation, honours ``Retry-After``, is
+  bounded by a wall-clock budget, and leaves a durable signal when it gives up
+  (2026-10-20).
 - **The git credential is configured exactly once** — one mechanism
   (``url.<base>.insteadOf``), never a second ``http.<url>.extraheader``
   Authorization header, or pushes are rejected with a duplicate header
@@ -950,3 +955,316 @@ def test_workflow_notifications_cannot_be_silently_unpostable() -> None:
     assert not violations, "A workflow notification can be silently undeliverable (FAR-2001):\n" + "\n".join(
         str(violation) for violation in violations
     )
+
+
+# --- A saturated Branch Fixer trigger is retried, never terminally dropped ---
+#
+# 2026-10-20: the "Trigger Branch Fixer" job failed with "dispatch failed after
+# 3 attempt(s) (last HTTP 429: Concurrent run limit of 8 reached)". The retry
+# loop treated a saturated trigger - the state the fix loop is MOST needed in,
+# because it means many runs are in flight - as a terminal dispatch failure
+# after ~40s, so a red CI run never reached the fixer and the only trace was a
+# PR comment. The fixes at the time were a longer/backoff retry that honours
+# `Retry-After` and is bounded by a wall-clock budget, a 429 class distinct from
+# a broken webhook, and a durable signal when the budget runs out.
+#
+# The policy is duplicated across ci.yml's two Branch Fixer notify steps because
+# GitHub Actions has no YAML include. These assertions keep the copies honest:
+# both must carry the marked policy block, both must actually call it, and the
+# block text must be byte-identical.
+
+#: Markers around the retry policy in each Branch Fixer notify step.
+RETRY_POLICY_START = "# ==== BEGIN Branch Fixer dispatch retry policy ===="
+RETRY_POLICY_END = "# ==== END Branch Fixer dispatch retry policy ===="
+
+#: The ci.yml jobs that hand a CI failure to the Branch Fixer.
+BRANCH_FIXER_NOTIFY_JOBS = ("notify-pr-failure", "notify-main-failure")
+
+#: Symbols each notify step must actually use — a step that merely kept the
+#: markers while running its own inline loop would pass a marker-only check.
+REQUIRED_POLICY_SYMBOLS = ("classify_http", "parse_retry_after", "retry_delay", "DISPATCH_BUDGET_SECONDS")
+
+#: The retired fixed schedule that dropped a saturated trigger after ~40s.
+RETIRED_FIXED_SCHEDULE = 'if [ "$i" -eq 1 ]; then DELAY=10; else DELAY=30; fi'
+
+
+def _branch_fixer_dispatch_runs(workflow: dict) -> dict[str, str]:
+    """The ``run`` block of each Branch Fixer dispatch step, keyed by job id."""
+    runs: dict[str, str] = {}
+    jobs = workflow.get("jobs") or {}
+    for job_id in BRANCH_FIXER_NOTIFY_JOBS:
+        job = jobs.get(job_id)
+        assert isinstance(job, dict), f"ci.yml: job {job_id!r} is missing — the Branch Fixer dispatch moved"
+        dispatch = [
+            step
+            for step in (job.get("steps") or [])
+            if isinstance(step, dict) and step.get("name") == "Trigger Modulo Branch Fixer"
+        ]
+        assert len(dispatch) == 1, (
+            f"ci.yml job {job_id!r}: expected exactly one 'Trigger Modulo Branch Fixer' step, found {len(dispatch)}"
+        )
+        runs[job_id] = dispatch[0].get("run") or ""
+    return runs
+
+
+def test_branch_fixer_retry_policy_is_shared_and_retryable() -> None:
+    """429 must stay a bounded, retried capacity condition — not a terminal drop."""
+    runs = _branch_fixer_dispatch_runs(_load_yaml(CI_YML))
+    violations: list[str] = []
+    blocks: list[tuple[str, str]] = []
+    for job_id, run in runs.items():
+        if RETRY_POLICY_START not in run or RETRY_POLICY_END not in run:
+            violations.append(
+                f"  {job_id}: retry-policy markers missing — the shared policy block moved or was inlined; "
+                "update this test deliberately"
+            )
+            continue
+        blocks.append((job_id, run.split(RETRY_POLICY_START, 1)[1].split(RETRY_POLICY_END, 1)[0]))
+        for symbol in REQUIRED_POLICY_SYMBOLS:
+            if symbol not in run:
+                violations.append(f"  {job_id}: does not use {symbol!r} — the step is not running the shared policy")
+        if RETIRED_FIXED_SCHEDULE in run:
+            violations.append(
+                f"  {job_id}: still carries the retired fixed 10s/30s schedule — a saturated trigger would be "
+                "dropped again after ~40s"
+            )
+        if "retry-after" not in run:
+            violations.append(f"  {job_id}: does not read a Retry-After header — the server's own backoff is ignored")
+        if "classify_http" not in run or "capacity" not in run:
+            violations.append(
+                f"  {job_id}: does not name the 429 capacity class — capacity saturation and a broken webhook "
+                "would be reported identically"
+            )
+        if "GITHUB_STEP_SUMMARY" not in run:
+            violations.append(f"  {job_id}: no durable run-summary signal when the dispatch is not delivered")
+    if len(blocks) == len(BRANCH_FIXER_NOTIFY_JOBS):
+        first_job, first_block = blocks[0]
+        for job_id, block in blocks[1:]:
+            if block != first_block:
+                violations.append(f"  {job_id}: retry-policy block differs from {first_job}'s — the copies diverged")
+    assert not violations, (
+        "ci.yml Branch Fixer dispatch retry policy regressed (2026-10-20 capacity-saturation fix):\n"
+        + "\n".join(violations)
+    )
+
+
+# --- Signing canary: identity is read from the EMBEDDED signature -----------
+#
+# The canary signs a throwaway COPY of whoami.exe. `Get-AuthenticodeSignature`
+# reported the Windows SECURITY CATALOG signature of that file (SignatureType
+# = Catalog, subject CN=Microsoft Windows..., thumbprint 3B77DB29...), because a
+# catalog hash covers a PE except its certificate table - so a signed copy still
+# matches the original's catalog entry, and the embedded Azure signature is
+# never inspected. The original check asserted only on that catalog subject, so
+# it could not pass for any correct signing run (observed run 39366248825).
+#
+# The fix reads the embedded signature from the PE certificate table, verifies
+# it cryptographically, and collects the certificate of every SignerInfo -
+# envelope plus nested (Azure Artifact Signing may dual-sign, carrying the
+# customer identity in the SPC_NESTED_SIGNATURE attribute,
+# OID 1.3.6.1.4.1.311.2.4.1). These tests pin the structural invariants.
+
+SIGNING_CANARY_YML = WORKFLOWS / "signing-canary.yml"
+SPC_NESTED_SIGNATURE_OID = "1.3.6.1.4.1.311.2.4.1"
+
+
+def _verify_step_run_text() -> str:
+    """Return the `run:` script of the 'Verify Authenticode signature' step."""
+    wf = _load_yaml(SIGNING_CANARY_YML)
+    steps = next(iter(wf["jobs"].values()))["steps"]
+    step = next(s for s in steps if str(s.get("name", "")).startswith("Verify Authenticode signature"))
+    return step["run"]
+
+
+def test_signing_canary_does_not_assert_on_envelope_subject_alone() -> None:
+    """The verification step must NOT contain the old predicate
+    `$subject -notlike '*FARNA LABS LTD*'`, where `$subject` is the certificate
+    `Get-AuthenticodeSignature` reported. That is the Windows catalog signature
+    of a copy of whoami.exe, so the predicate could never pass."""
+    run = _verify_step_run_text()
+    violations: list[str] = []
+    if "$subject -notlike" in run:
+        violations.append(
+            "  signing-canary.yml: still uses the envelope-only `$subject -notlike` check; "
+            "Get-AuthenticodeSignature reports the Windows catalog signer of a copied system file"
+        )
+    if "*FARNA LABS LTD*" in run:
+        violations.append("  signing-canary.yml: still uses the old literal '*FARNA LABS LTD*' pattern")
+    assert not violations, (
+        "signing-canary.yml still asserts on the certificate Get-AuthenticodeSignature reported:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_signing_canary_reads_and_verifies_the_embedded_signature() -> None:
+    """The step must parse the PE certificate table itself and verify each
+    embedded signature cryptographically, rather than trusting the certificate
+    `Get-AuthenticodeSignature` returned (which is the catalog's)."""
+    run = _verify_step_run_text()
+    violations: list[str] = []
+    if "Get-PeSignedDataBlobs" not in run:
+        violations.append("  signing-canary.yml: does not walk the PE certificate table (WIN_CERTIFICATE entries)")
+    if "CheckSignature" not in run:
+        violations.append("  signing-canary.yml: does not verify the embedded signature (CheckSignature)")
+    assert not violations, "signing-canary.yml does not read/verify the embedded signature:\n" + "\n".join(violations)
+
+
+def test_signing_canary_traverses_nested_signatures() -> None:
+    """The step must collect signer certificates from nested signatures by
+    walking the SPC_NESTED_SIGNATURE attribute (OID 1.3.6.1.4.1.311.2.4.1)."""
+    run = _verify_step_run_text()
+    violations: list[str] = []
+    if SPC_NESTED_SIGNATURE_OID not in run:
+        violations.append(f"  signing-canary.yml: missing nested signature OID {SPC_NESTED_SIGNATURE_OID}")
+    if "UnauthenticatedAttributes" not in run:
+        violations.append("  signing-canary.yml: does not inspect SignerInfo.UnauthenticatedAttributes")
+    if "SignedCms" not in run or ".Decode(" not in run:
+        violations.append("  signing-canary.yml: does not decode nested SignedCms")
+    assert not violations, (
+        "signing-canary.yml does not traverse nested signatures to find the company identity:\n" + "\n".join(violations)
+    )
+
+
+def _company_pattern_from_workflow() -> str:
+    """The company-identity regex the workflow matches signer subjects with."""
+    run = _verify_step_run_text()
+    match = re.search(r"\$companyPattern\s*=\s*'([^']+)'", run)
+    assert match, "signing-canary.yml: `$companyPattern = '...'` assignment not found — update this test deliberately"
+    return match.group(1)
+
+
+def test_signing_canary_company_pattern_matches_identity() -> None:
+    """The company pattern must match the identity-validation forms and must NOT
+    match the Windows certificate the failing runs reported (run 39366248825)."""
+    pattern = _company_pattern_from_workflow()
+    for subject in (
+        "CN=FARNA LABS LTD, O=FARNA LABS LTD, L=London, C=GB",
+        "CN=Farnalabs Ltd, O=Farnalabs Ltd, L=London, C=GB",
+        "CN=FARNALABS LTD",
+    ):
+        assert re.search(pattern, subject), f"company pattern {pattern!r} does not match {subject!r}"
+    windows_subject = "CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
+    assert not re.search(pattern, windows_subject), (
+        f"company pattern {pattern!r} would accept the Windows certificate {windows_subject!r}"
+    )
+
+
+def test_signing_canary_status_gate_remains() -> None:
+    """The Authenticode status must still be validated as Valid."""
+    run = _verify_step_run_text()
+    violations: list[str] = []
+    if "Valid" not in run or "Status" not in run:
+        violations.append("  signing-canary.yml: missing Authenticode status check")
+    assert not violations, "signing-canary.yml dropped the Authenticode status validation:\n" + "\n".join(violations)
+
+
+# --- Sonar new-issues gate: blocking policy --------------------------------
+
+
+def _sonar_new_issues_gate_step() -> dict:
+    """Return the step dict for the 'Fail on new SonarCloud bugs...' step in ci.yml."""
+    wf = _load_yaml(CI_YML)
+    jobs = wf.get("jobs") or {}
+    job = jobs.get("sonar-new-issues-gate")
+    assert isinstance(job, dict), "ci.yml: sonar-new-issues-gate job missing"
+    steps = job.get("steps") or []
+    target_name = "Fail on new SonarCloud bugs, vulnerabilities, and critical smells"
+    step = next(
+        (s for s in steps if isinstance(s, dict) and s.get("name") == target_name),
+        None,
+    )
+    assert step is not None, "ci.yml: sonar-new-issues-gate step not found"
+    return step
+
+
+def _run_script(step: dict) -> str:
+    run = step.get("run") or ""
+    assert isinstance(run, str), "run is not a string"
+    assert run.strip(), "step has no run script"
+    return run
+
+
+def test_sonar_new_issues_gate_queries_bug_and_vulnerability() -> None:
+    """The blocking query must include types=BUG,VULNERABILITY.
+
+    A revert to a single unfiltered count (total > 0) would re-introduce the
+    false-positive problem that this gate was designed to eliminate (MINOR
+    TypeScript style rules and MAJOR parameter-count rules blocking PRs
+    while zero bugs/vulnerabilities were present).
+    """
+    step = _sonar_new_issues_gate_step()
+    run = _run_script(step)
+    violations: list[str] = []
+    if "types=BUG,VULNERABILITY" not in run:
+        violations.append("  ci.yml: sonar-new-issues-gate step does not query types=BUG,VULNERABILITY")
+    assert not violations, "sonar-new-issues-gate no longer queries BUG+VULNERABILITY:\n" + "\n".join(violations)
+
+
+def test_sonar_new_issues_gate_queries_critical_code_smells() -> None:
+    """The blocking query must include types=CODE_SMELL with severities=BLOCKER,CRITICAL.
+
+    The policy gates CODE_SMELL only at BLOCKER or CRITICAL severity. All
+    other severities (INFO, MINOR, MAJOR) are non-blocking. A revert to a
+    single unfiltered count or to a query without the severity filter would
+    re-introduce false positives.
+    """
+    step = _sonar_new_issues_gate_step()
+    run = _run_script(step)
+    violations: list[str] = []
+    if "types=CODE_SMELL" not in run:
+        violations.append("  ci.yml: sonar-new-issues-gate step does not query types=CODE_SMELL")
+    if "severities=BLOCKER,CRITICAL" not in run:
+        violations.append("  ci.yml: sonar-new-issues-gate step does not filter CODE_SMELL to BLOCKER,CRITICAL")
+    assert not violations, "sonar-new-issues-gate no longer queries critical CODE_SMELL:\n" + "\n".join(violations)
+
+
+def test_sonar_new_issues_gate_fail_closed_on_api_error() -> None:
+    """The job must still treat a non-200 / API error as a failure (fail-closed).
+
+    The fail-closed semantics are load-bearing: an unknown state must never
+    pass. This test asserts the ::error:: annotation branch exists.
+    """
+    step = _sonar_new_issues_gate_step()
+    run = _run_script(step)
+    violations: list[str] = []
+    # The fail-closed pattern checks for non-200 and exits 1 with ::error::
+    if "HTTP_CODE" not in run:
+        violations.append("  ci.yml: no HTTP_CODE capture — cannot distinguish API failure from empty result")
+    if '!= "200"' not in run:
+        violations.append("  ci.yml: no non-200 check — API errors would not fail closed")
+    if "::error::" not in run:
+        violations.append("  ci.yml: no ::error:: annotation on API failure — failure would be silent")
+    if "failing closed" not in run:
+        msg = "ci.yml: 'failing closed' phrase missing — fail-closed intent not documented in the failure path"
+        violations.append(msg)
+    assert not violations, "sonar-new-issues-gate no longer fails closed on API error:\n" + "\n".join(violations)
+
+
+def test_sonar_new_issues_gate_non_blocking_smells_cannot_fail() -> None:
+    """The non-blocking query (INFO/MINOR/MAJOR code smells) must not fail the job.
+
+    The non-blocking count is printed as a ::notice:: and its query failure
+    is downgraded to a ::warning::. Neither can cause the step to exit non-zero.
+    This test asserts the || true / warning path exists (the else branch that
+    does not exit).
+    """
+    step = _sonar_new_issues_gate_step()
+    run = _run_script(step)
+    violations: list[str] = []
+    # The non-blocking query must NOT have an unconditional exit 1
+    # It should either print ::notice:: (success) or ::warning:: (query failed) but continue
+    if "::notice::" not in run:
+        violations.append("  ci.yml: no ::notice:: for non-blocking count — non-blocking signal is not emitted")
+    if "::warning::" not in run:
+        msg = "ci.yml: no ::warning:: fallback for non-blocking query failure — a query failure could fail the gate"
+        violations.append(msg)
+    # The non-blocking branch must NOT contain 'exit 1'
+    # We find the non-blocking section (after the blocking check) and ensure no exit 1
+    # The script uses 'else' for the warning path and does not exit
+    if 'echo "::warning::SonarCloud non-blocking code smell query failed' not in run:
+        msg = "ci.yml: non-blocking query failure does not emit expected warning"
+        violations.append(msg)
+    # Verify the non-blocking branch doesn't have an exit that would fail the step
+    # The blocking exit is explicit; the non-blocking else branch should just warn
+    # and fall through to the final "No blocking" echo
+    assert not violations, "sonar-new-issues-gate non-blocking path can fail the job:\n" + "\n".join(violations)

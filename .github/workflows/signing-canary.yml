@@ -17,6 +17,31 @@
 # Renewal: the identity validation for the FARNA LABS LTD certificate profile
 # expires 2029-01-13. Renewal reminders are tracked in FAR-679.
 #
+# What "the signer is the company" means here
+# -------------------------------------------
+# `Get-AuthenticodeSignature` reported the WRONG certificate. Every run since
+# 2026-10-14 printed (run 39366248825):
+#   Status:     Valid
+#   Subject:    CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond, S=Washington, C=US
+#   Thumbprint: 3B77DB29AC72AA6B5880ECB2ED5EC1EC6601D847
+# That thumbprint belongs to the Windows SECURITY CATALOG signature of
+# `whoami.exe`, not to the signature Azure applied: a catalog hash covers a PE
+# except its certificate table, so a copy that has been signed still matches
+# the original file's catalog entry, and `Get-AuthenticodeSignature` reports
+# the catalog signature (SignatureType = Catalog) instead of the embedded one.
+# The canary therefore read a certificate it never asked Azure to apply, and
+# the check could not pass for ANY correct signing run.
+#
+# This step reads the EMBEDDED signature directly from the PE certificate
+# table instead: it walks every WIN_CERTIFICATE entry, verifies each signature
+# cryptographically (`CheckSignature`), and collects the certificate of every
+# SignerInfo - envelope plus nested. Azure Artifact Signing may dual-sign, with
+# the customer identity carried in a NESTED signature inside the envelope's
+# SPC_NESTED_SIGNATURE attribute (OID 1.3.6.1.4.1.311.2.4.1), so nested
+# signatures are traversed too. One of those signers must name the company.
+# It never falls back to "any certificate in the file", and it still requires
+# the Authenticode status to be Valid.
+#
 # Nothing secret is printed: tenant, client and subscription IDs live only in
 # GitHub secrets. Nothing binary is committed: the file to sign is copied from
 # the runner's System32 at run time.
@@ -76,23 +101,111 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
-      - name: Verify Authenticode signature
+      - name: Verify Authenticode signature (envelope + nested)
         shell: pwsh
         run: |
-          $sig = Get-AuthenticodeSignature -FilePath (Join-Path $env:CANARY_DIR 'canary.exe')
+          $ErrorActionPreference = 'Stop'
+          $path = Join-Path $env:CANARY_DIR 'canary.exe'
+
+          # 1) OS-level Authenticode verdict (chain/trust/timestamp).
+          $sig = Get-AuthenticodeSignature -FilePath $path
           if (-not $sig.SignerCertificate) {
             Write-Error "No signer certificate found (status: $($sig.Status))"
             exit 1
           }
-          $subject = $sig.SignerCertificate.Subject
-          Write-Host "Status:     $($sig.Status)"
-          Write-Host "Subject:    $subject"
-          Write-Host "Thumbprint: $($sig.SignerCertificate.Thumbprint)"
+          Write-Host "Envelope Status  : $($sig.Status)"
+          Write-Host "Envelope Type    : $($sig.SignatureType)"
+          Write-Host "Envelope Subject : $($sig.SignerCertificate.Subject)"
+          Write-Host "Envelope Thumbprint: $($sig.SignerCertificate.Thumbprint)"
           if ($sig.Status -ne 'Valid') {
             Write-Error "Signature status is $($sig.Status), expected Valid"
             exit 1
           }
-          if ($subject -notlike '*FARNA LABS LTD*') {
-            Write-Error 'Signer subject does not contain FARNA LABS LTD'
+
+          # 2) Collect the signer certificates that actually signed something:
+          #    every embedded signature (a PE may carry several WIN_CERTIFICATE
+          #    entries) plus every nested signature inside each. Azure Artifact
+          #    Signing dual-signs: the outer PKCS#7 is signed by the service
+          #    ("CN=Microsoft Windows ..."), the customer certificate is a nested
+          #    signature in the SPC_NESTED_SIGNATURE attribute (OID 1.3.6.1.4.1.311.2.4.1).
+          function Get-PeSignedDataBlobs([string]$Path) {
+            $bytes = [IO.File]::ReadAllBytes($Path)
+            $lfanew = [BitConverter]::ToInt32($bytes, 0x3C)
+            if ([BitConverter]::ToUInt32($bytes, $lfanew) -ne 0x00004550) { throw "not a PE file: $Path" }
+            $optHeader = $lfanew + 24
+            $magic = [BitConverter]::ToUInt16($bytes, $optHeader)
+            $ddOffset = if ($magic -eq 0x20B) { $optHeader + 112 } else { $optHeader + 96 }
+            $securityDir = $ddOffset + (4 * 8)
+            $certOffset = [BitConverter]::ToUInt32($bytes, $securityDir)
+            $certSize = [BitConverter]::ToUInt32($bytes, $securityDir + 4)
+            if ($certOffset -eq 0 -or $certSize -eq 0) { throw "no certificate table (file is unsigned)" }
+            $blobs = [System.Collections.Generic.List[byte[]]]::new()
+            $pos = $certOffset
+            $end = $certOffset + $certSize
+            while ($pos + 8 -le $end) {
+              $length = [BitConverter]::ToUInt32($bytes, $pos)
+              if ($length -lt 8) { break }
+              $blob = New-Object byte[] ($length - 8)
+              [Array]::Copy($bytes, $pos + 8, $blob, 0, $blob.Length)
+              $blobs.Add($blob)
+              $pos += [int](($length + 7) -band -bnot 7) # WIN_CERTIFICATE entries are 8-byte aligned
+            }
+            return , $blobs
+          }
+
+          function Get-SignerSubjects([byte[]]$SignedData, [string]$Label) {
+            $subjects = [System.Collections.Generic.List[string]]::new()
+            $queue = [System.Collections.Generic.Queue[object]]::new()
+            $cms = [System.Security.Cryptography.Pkcs.SignedCms]::new()
+            $cms.Decode($SignedData)
+            $queue.Enqueue([pscustomobject]@{ Cms = $cms; Label = $Label })
+            while ($queue.Count -gt 0) {
+              $entry = $queue.Dequeue()
+              $current = $entry.Cms
+              # Verify the signature itself: `Get-AuthenticodeSignature` reports the
+              # CATALOG signature for a catalog-signed file, so a status of Valid does
+              # not prove the EMBEDDED signature is sound.
+              if ($current.Detached) {
+                Write-Host "WARN $($entry.Label): detached signature, cannot verify standalone"
+              } else {
+                try {
+                  $current.CheckSignature($true) # signature only; trust is covered by the status check
+                  Write-Host "$($entry.Label): signature verified"
+                } catch {
+                  Write-Error "$($entry.Label): signature failed to verify: $($_.Exception.Message)"
+                  exit 1
+                }
+              }
+              foreach ($signer in $current.SignerInfos) {
+                if ($null -ne $signer.Certificate) { $subjects.Add($signer.Certificate.Subject) }
+                foreach ($attr in $signer.UnauthenticatedAttributes) {
+                  if ($attr.Oid.Value -ne '1.3.6.1.4.1.311.2.4.1') { continue }
+                  $nested = [System.Security.Cryptography.Pkcs.SignedCms]::new()
+                  try { $nested.Decode($attr.RawData) }
+                  catch { Write-Host "WARN nested signature decode failed: $($_.Exception.Message)"; continue }
+                  $queue.Enqueue([pscustomobject]@{ Cms = $nested; Label = "$($entry.Label)/nested" })
+                }
+              }
+            }
+            return , $subjects
+          }
+
+          $blobs = Get-PeSignedDataBlobs $path
+          Write-Host "embedded signatures: $($blobs.Count)"
+          $signerSubjects = [System.Collections.Generic.List[string]]::new()
+          for ($i = 0; $i -lt $blobs.Count; $i++) {
+            Write-Host "signature[$i] : $($blobs[$i].Length) bytes"
+            foreach ($subject in (Get-SignerSubjects $blobs[$i] "signature[$i]")) { $signerSubjects.Add($subject) }
+          }
+          Write-Host "signer certs     : $($signerSubjects.Count) (envelope + nested)"
+          $signerSubjects | ForEach-Object { Write-Host "  - $_" }
+
+          # 3) Assert the company identity in ANY signer certificate (case-insensitive,
+          #    tolerant of "FARNA LABS LTD" vs "Farnalabs Ltd" etc.).
+          $companyPattern = '(?i)FARNA\s*LABS'
+          $matching = $signerSubjects | Where-Object { $_ -match $companyPattern }
+          if (-not $matching) {
+            Write-Error "No signer certificate contains the company identity (pattern: $companyPattern)."
             exit 1
           }
+          Write-Host "Company identity verified in: $($matching -join '; ')"

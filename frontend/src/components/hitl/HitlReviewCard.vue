@@ -142,22 +142,28 @@
     >
       <template v-if="choiceOptions.length">
         <p class="text-xs font-semibold text-muted-foreground">{{ $t('hitl.gate.select_an_option') }}</p>
-        <!-- eslint-disable-next-line vuejs-accessibility/interactive-supports-focus -- roving tabindex is dynamic (the checked option is the tab stop); the rule only understands literal tabindex values -->
         <div
           v-for="(opt, index) in choiceOptions"
           :key="opt.id"
-          class="flex items-start gap-2 rounded-lg border px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          class="flex items-start gap-2 rounded-lg border px-3 py-2 text-sm transition-colors focus-within:outline-none focus-within:ring-2 focus-within:ring-ring"
           :class="selectedOption === opt.id
             ? 'border-primary bg-primary/5'
             : 'border-input hover:border-primary/50'"
-          role="radio"
-          :aria-checked="selectedOption === opt.id ? 'true' : 'false'"
-          :data-testid="`hitl-gate-option-${opt.id}`"
-          :tabindex="selectedOption === opt.id || (!selectedOption && index === 0) ? 0 : -1"
           @click="selectOption(opt.id)"
           @keydown="onOptionKeydown($event, index)"
         >
+          <input
+            :id="`hitl-choice-${opt.id}`"
+            type="radio"
+            class="sr-only"
+            :name="`hitl-choice-${gate.review_id}`"
+            :checked="selectedOption === opt.id"
+            :data-testid="`hitl-gate-option-${opt.id}`"
+            :tabindex="selectedOption === opt.id || (!selectedOption && index === 0) ? 0 : -1"
+            @click="selectOption(opt.id)"
+          />
           <span
+            aria-hidden="true"
             class="mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full border"
             :class="selectedOption === opt.id ? 'border-primary' : 'border-muted-foreground'"
           >
@@ -166,23 +172,22 @@
               class="h-2 w-2 rounded-full bg-primary"
             />
           </span>
-          <div class="min-w-0 flex-1">
+          <label :for="`hitl-choice-${opt.id}`" class="min-w-0 flex-1">
             <span class="font-medium text-foreground">{{ opt.label }}</span>
-            <p v-if="opt.description" class="mt-0.5 text-xs text-muted-foreground">{{ opt.description }}</p>
-          </div>
+            <span v-if="opt.description" class="mt-0.5 block text-xs text-muted-foreground">{{ opt.description }}</span>
+          </label>
         </div>
       </template>
       <!-- A choice gate with an empty/missing options list can never be
            answered: render an explicit fallback rather than an empty
            radiogroup beside a permanently-disabled Approve button. -->
-      <p
+      <output
         v-else
         data-testid="hitl-gate-choice-fallback"
-        role="status"
-        class="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive-text"
+        class="block rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive-text"
       >
         {{ $t('hitl.gate.choice_no_options') }}
-      </p>
+      </output>
     </div>
 
     <!-- Actions -->
@@ -231,7 +236,7 @@
          this session's token was dropped as stale. Render the claimed-by-other
          state only (the claimed metadata row above already shows the holder):
          no approve/reject and no re-claim — the backend 409s foreign claims.
-         role="status" announces the swap from interactive controls to
+         aria-live announces the swap from interactive controls to
          read-only. -->
     <div
       v-else-if="status === 'claimed' && isForeignClaim"
@@ -502,7 +507,7 @@ function focusAndSelect(index: number) {
   const opt = choiceOptions.value[next]
   if (!opt) return
   selectedOption.value = opt.id
-  const nodes = optionsGroupRef.value?.querySelectorAll<HTMLElement>('[role="radio"]')
+  const nodes = optionsGroupRef.value?.querySelectorAll<HTMLElement>('input[type="radio"]')
   nodes?.[next]?.focus()
 }
 
@@ -648,6 +653,32 @@ async function claimGate() {
   }
 }
 
+/** Approve body, optionally carrying the required choice answer (FAR-860). */
+function approveBody(token: string) {
+  const body = { claim_token: token, notes: notes.value || null }
+  if (!isChoiceGate.value || !selectedOption.value) return body
+  return {
+    ...body,
+    answer: { kind: 'choice' as const, option_id: selectedOption.value },
+  }
+}
+
+/**
+ * FAR-1486: the reject outcome is only "routed to the reject target" when the
+ * gate actually HAS a reject route; without one the rejection records the
+ * decision and the run continues along its normal path.
+ */
+function decisionSuccessText(decision: 'approve' | 'reject'): string {
+  if (decision === 'approve') return t('hitl.gate.gate_approved_pipeline_resuming')
+  const consequence = rejectConsequence.value
+  if (consequence?.disposition === 'terminate') return t('hitl.gate.gate_rejected_run_ended')
+  if (consequence?.disposition === 'proceed') return t('hitl.gate.gate_rejected_proceeding')
+  if (consequence) {
+    return t('hitl.gate.gate_rejected_pipeline_routed_to_reject_target', { target: rejectTargetName(consequence) })
+  }
+  return t('hitl.gate.gate_rejected_no_reject_route')
+}
+
 async function decideGate(decision: 'approve' | 'reject') {
   const token = claimToken.value
   if (!token) {
@@ -665,50 +696,25 @@ async function decideGate(decision: 'approve' | 'reject') {
         : '/api/v1/runs/{run_id}/hitl/{review_id}/reject',
       {
         params: { path: { run_id: props.gate.run_id, review_id: props.gate.review_id } },
-        body:
-          decision === 'approve'
-            ? {
-                claim_token: token,
-                notes: notes.value || null,
-                ...(isChoiceGate.value && selectedOption.value
-                  ? { answer: { kind: 'choice', option_id: selectedOption.value } }
-                  : {}),
-              }
-            : { claim_token: token, reason },
+        body: decision === 'approve' ? approveBody(token) : { claim_token: token, reason },
       },
     )
     if (err) {
       showMessage({ type: 'error', text: `${t(errorKey)} ${formatApiError(err)}` }, false)
-    } else {
-      // Decision done: drop the persisted token/notes for this gate so no
-      // stale session state is left behind (FAR-686).
-      reviewState.clear()
-      claimedByYou.value = false
-      track(
-        decision === 'approve'
-          ? ANALYTICS_EVENTS.HITL_REVIEW_APPROVED
-          : ANALYTICS_EVENTS.HITL_REVIEW_REJECTED,
-      )
-      // FAR-1486: the reject outcome is only "routed to the reject target"
-      // when the gate actually HAS a reject route; without one the rejection
-      // records the decision and the run continues along its normal path.
-      const consequence = rejectConsequence.value
-      let successText: string
-      if (decision === 'approve') {
-        successText = t('hitl.gate.gate_approved_pipeline_resuming')
-      } else if (consequence?.disposition === 'terminate') {
-        successText = t('hitl.gate.gate_rejected_run_ended')
-      } else if (consequence?.disposition === 'proceed') {
-        successText = t('hitl.gate.gate_rejected_proceeding')
-      } else if (consequence) {
-        successText = t('hitl.gate.gate_rejected_pipeline_routed_to_reject_target', { target: rejectTargetName(consequence) })
-      } else {
-        successText = t('hitl.gate.gate_rejected_no_reject_route')
-      }
-      const payload: HitlMessage = { type: 'success', text: successText }
-      showMessage(payload)
-      emit('decided', payload)
+      return
     }
+    // Decision done: drop the persisted token/notes for this gate so no
+    // stale session state is left behind (FAR-686).
+    reviewState.clear()
+    claimedByYou.value = false
+    track(
+      decision === 'approve'
+        ? ANALYTICS_EVENTS.HITL_REVIEW_APPROVED
+        : ANALYTICS_EVENTS.HITL_REVIEW_REJECTED,
+    )
+    const payload: HitlMessage = { type: 'success', text: decisionSuccessText(decision) }
+    showMessage(payload)
+    emit('decided', payload)
   } catch (e: unknown) {
     showMessage({ type: 'error', text: `${t(errorKey)} ${formatApiError(e)}` }, false)
   } finally {

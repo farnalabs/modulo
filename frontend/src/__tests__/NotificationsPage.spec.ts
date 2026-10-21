@@ -92,14 +92,15 @@ describe('NotificationsPage', () => {
     const wrapper = mount(NotificationsPage)
     await nextTick()
 
-    const skeleton = wrapper.find('[data-testid="notifications-loading"]')
-    expect(skeleton.exists()).toBe(true)
-    // A native <output> carries the implicit ARIA status role, so its
-    // aria-label is permitted (axe aria-prohibited-attr) without an explicit
-    // role attribute (SonarCloud Web:S6819) — assert the native element rather
-    // than a redundant role, matching ParameterSchemasView / NotificationBell.
-    expect(skeleton.element.tagName).toBe('OUTPUT')
-    expect(skeleton.attributes('aria-busy')).toBe('true')
+    const loading = wrapper.find('[data-testid="notifications-loading"]')
+    expect(loading.exists()).toBe(true)
+    // <output> may only contain phrasing content, so it carries the status
+    // text alone; the skeleton blocks are SIBLINGS and hold aria-busy.
+    expect(loading.element.tagName).toBe('DIV')
+    const live = loading.find('output[aria-live="polite"]')
+    expect(live.text()).toBe('Loading notifications')
+    expect(live.element.closest('[aria-busy="true"]')).toBeNull()
+    expect(loading.find('div[aria-busy="true"]').exists()).toBe(true)
     expect(wrapper.find('.animate-spin').exists()).toBe(false)
   })
 

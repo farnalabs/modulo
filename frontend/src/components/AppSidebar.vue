@@ -60,21 +60,21 @@
       />
     </aside>
 
-    <div
+    <!-- A native modal <dialog> opened with showModal(): the browser provides
+         the inert background, focus containment, Escape (`cancel` -> `close`)
+         and focus restore to the rail expand button. `::backdrop` is the
+         scrim, and the id stays stable for the mobile e2e specs. No
+         `role="dialog"`/`aria-modal` — the element IS the dialog. -->
+    <dialog
       v-if="mobileExpanded"
-      class="fixed inset-0 z-30 bg-black/50 md:hidden"
-      @click="mobileExpanded = false"
-      @keydown.escape="mobileExpanded = false"
-      aria-hidden="true"
-    />
-
-    <aside
-      v-if="mobileExpanded"
+      id="mobile-nav-panel"
       ref="mobilePanelRef"
-      role="dialog"
-      aria-modal="true"
       :aria-label="$t('components.AppLayout.main_navigation')"
-      class="fixed top-0 left-0 z-40 h-full w-64 border-r bg-background p-4 flex flex-col overflow-y-auto md:hidden"
+      class="fixed top-0 left-0 z-40 m-0 h-full w-64 max-h-none max-w-none border-r bg-background p-4 flex flex-col overflow-y-auto text-foreground backdrop:bg-black/50 md:hidden"
+      @click="onMobilePanelBackdropClick"
+      @keydown.escape="closeMobilePanel"
+      @cancel="closeMobilePanel"
+      @close="mobileExpanded = false"
     >
       <SidebarFull
         :is-system-admin="isSystemAdmin"
@@ -84,13 +84,13 @@
         :user-initial="userInitial"
         :is-light="isLight"
         class="flex flex-col flex-1 min-h-0"
-        @collapse="mobileExpanded = false"
-        @navigate="mobileExpanded = false"
+        @collapse="closeMobilePanel"
+        @navigate="closeMobilePanel"
         @logout="$emit('logout')"
         @toggle-theme="$emit('toggle-theme')"
-        @open-command-palette="$emit('open-command-palette')"
+        @open-command-palette="onOpenCommandPalette"
       />
-    </aside>
+    </dialog>
   </template>
 
   <!-- Mobile + flag UNRESOLVED (FAR-1237): a neutral placeholder occupies the
@@ -103,14 +103,13 @@
        Review finding: the placeholder must read as pending NAV, not a blank
        slot. It now mirrors the drawer header's hamburger geometry (same 22px
        Menu glyph in the same 44px rounded box, but non-interactive with a muted
-       tone) and is a labelled live region (`role="status"` + `aria-busy`) so
+       tone) and is a labelled live region (`<output>` + `aria-busy`) so
        attempted activation gets visible wait feedback instead of silence. The
        header is position:fixed, so neither it nor <main>'s offset shifts when
        the resolved chrome mounts. -->
   <template v-if="!isDesktop && mobileNavMode === 'pending'">
-    <header
+    <output
       :data-testid="MOBILE_NAV_PENDING_TESTID"
-      role="status"
       aria-busy="true"
       :aria-label="$t('components.AppLayout.loading_navigation')"
       class="md:hidden fixed top-0 left-0 right-0 z-50 flex items-center border-b bg-background px-4 h-14"
@@ -122,8 +121,8 @@
       >
         <Menu class="h-[22px] w-[22px]" />
       </span>
-      <div class="ml-2 h-5 w-28 rounded-md bg-muted animate-pulse" aria-hidden="true" />
-    </header>
+      <span class="ml-2 block h-5 w-28 rounded-md bg-muted animate-pulse" aria-hidden="true" />
+    </output>
   </template>
 
   <!-- Mobile + flag OFF: hamburger header + slide-in drawer + backdrop (restored from main) -->
@@ -251,7 +250,7 @@ const props = defineProps<{
   isLight: boolean;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   logout: [];
   "toggle-theme": [];
   "open-command-palette": [];
@@ -265,7 +264,7 @@ const route = useRoute();
 
 // Flag-ON mobile path: 64px rail + overlay panel state.
 const mobileExpanded = ref(false);
-const mobilePanelRef = ref<HTMLElement | null>(null);
+const mobilePanelRef = ref<HTMLDialogElement | null>(null);
 const railRef = ref<InstanceType<typeof SidebarRail> | null>(null);
 
 // Flag-OFF mobile path: hamburger drawer state.
@@ -283,15 +282,6 @@ const showMobilePanel = computed(
   () => !isDesktop.value && mobileExpanded.value && mobileNavMode.value === 'rail',
 );
 
-function handleMobileKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") {
-    mobileExpanded.value = false;
-    return;
-  }
-  if (e.key !== "Tab") return;
-  trapTabInElement(e, mobilePanelRef.value);
-}
-
 function handleDrawerKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
     mobileOpen.value = false;
@@ -308,20 +298,44 @@ function focusRailExpandButton() {
   }
 }
 
-watch(showMobilePanel, (open) => {
-  if (open) {
-    document.addEventListener("keydown", handleMobileKeydown);
-    nextTick(() => {
-      const firstFocusable = mobilePanelRef.value?.querySelector<HTMLElement>(
-        FOCUSABLE_SELECTOR,
-      );
-      firstFocusable?.focus();
-    });
-  } else {
-    document.removeEventListener("keydown", handleMobileKeydown);
-    focusRailExpandButton();
-  }
-});
+/** A click whose target is the dialog itself landed on `::backdrop`. */
+function onMobilePanelBackdropClick(event: MouseEvent) {
+  if (event.target === event.currentTarget) closeMobilePanel();
+}
+
+/**
+ * Close through the native dialog, which restores focus to the element that
+ * was focused when showModal() ran (the rail expand button). State is cleared
+ * eagerly too: the `close` event is queued as a task, and every caller needs
+ * the panel to be gone from the next render.
+ */
+function closeMobilePanel(): void {
+  mobileExpanded.value = false;
+  const dialog = mobilePanelRef.value;
+  if (dialog?.open) dialog.close();
+}
+
+/** The palette is a second modal layer: closing the first avoids a stacked,
+ *  inert panel underneath it. */
+function onOpenCommandPalette(): void {
+  closeMobilePanel();
+  emit("open-command-palette");
+}
+
+// flush:'post' waits for the v-if branch to render the <dialog>; showModal()
+// makes it a real modal (inert background, focus containment, native Escape).
+watch(
+  showMobilePanel,
+  (open) => {
+    if (open) {
+      const dialog = mobilePanelRef.value;
+      if (dialog && !dialog.open) dialog.showModal();
+    } else {
+      focusRailExpandButton();
+    }
+  },
+  { flush: "post" },
+);
 
 watch(mobileOpen, (open) => {
   nextTick(() => {
@@ -348,7 +362,6 @@ watch(
 );
 
 onUnmounted(() => {
-  document.removeEventListener("keydown", handleMobileKeydown);
   document.removeEventListener("keydown", handleDrawerKeydown);
 });
 </script>

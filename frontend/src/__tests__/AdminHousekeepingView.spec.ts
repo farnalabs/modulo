@@ -88,14 +88,16 @@ describe('AdminHousekeepingView — scan', () => {
     expect(wrapper.find('[data-testid="hk-error"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="hk-category"]').exists()).toBe(false)
 
-    // The skeleton is a labelled live region: a native <output> carries the
-    // implicit `status` role, so assistive tech is told the scan is running
-    // without an explicit role attribute (which SonarCloud Web:S6819 rejects).
-    // Matches the NotificationsPage / AdminErrorDetailView skeleton pattern.
-    const skeleton = wrapper.find('[data-testid="hk-loading"]')
-    expect(skeleton.exists()).toBe(true)
-    expect(skeleton.element.tagName).toBe('OUTPUT')
-    expect(skeleton.attributes('aria-busy')).toBe('true')
+    // <output> may only contain phrasing content, so it carries the status
+    // text alone; the skeleton blocks are SIBLINGS and hold aria-busy (a busy
+    // ancestor would defer the live announcement until it clears).
+    const loading = wrapper.find('[data-testid="hk-loading"]')
+    expect(loading.exists()).toBe(true)
+    expect(loading.element.tagName).toBe('DIV')
+    const live = loading.find('output[aria-live="polite"]')
+    expect(live.text()).toBe('Loading')
+    expect(live.element.closest('[aria-busy="true"]')).toBeNull()
+    expect(loading.find('div[aria-busy="true"]').exists()).toBe(true)
   })
 
   it('renders categories and candidates after a successful scan', async () => {

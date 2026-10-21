@@ -514,16 +514,21 @@ describe('MyProfileView loading placeholders and fallbacks', () => {
     const hitlLoading = wrapper.find('[data-testid="my-profile-hitl-email-loading"]')
     expect(teamsLoading.exists()).toBe(true)
     expect(hitlLoading.exists()).toBe(true)
-    // Native <output> elements carry the implicit `status` role, so the live
-    // regions are announced without an explicit role attribute (which
-    // SonarCloud Web:S6819 rejects). Mirrors the AdminHousekeepingView and
-    // NotificationsPage skeleton pattern.
-    expect(teamsLoading.element.tagName).toBe('OUTPUT')
-    expect(hitlLoading.element.tagName).toBe('OUTPUT')
-    expect(teamsLoading.attributes('aria-busy')).toBe('true')
-    expect(hitlLoading.attributes('aria-busy')).toBe('true')
-    expect(teamsLoading.attributes('aria-label')).toBe('Loading')
-    expect(hitlLoading.attributes('aria-label')).toBe('Loading')
+    // The live region is a visually-hidden native <output> (implicit `status`
+    // role, so no explicit role attribute — Web:S6819) and the skeleton blocks
+    // that are layout live beside it, not inside it (phrasing-content model).
+    const teamsOutput = teamsLoading.find('output')
+    const hitlOutput = hitlLoading.find('output')
+    expect(teamsOutput.exists()).toBe(true)
+    expect(hitlOutput.exists()).toBe(true)
+    expect(teamsOutput.text()).toBe('Loading')
+    expect(hitlOutput.text()).toBe('Loading')
+    // aria-busy sits on the placeholder layout, never on the live region's
+    // ancestor: a busy ancestor defers the announcement until it clears.
+    expect(teamsOutput.attributes('aria-busy')).toBeUndefined()
+    expect(hitlOutput.attributes('aria-busy')).toBeUndefined()
+    expect(teamsLoading.find('[aria-busy="true"]').exists()).toBe(true)
+    expect(hitlLoading.find('[aria-busy="true"]').exists()).toBe(true)
   })
 
   it('falls back to an em dash when org_role is missing', async () => {

@@ -7,7 +7,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
@@ -70,6 +70,14 @@ def mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1825: the fail-open invite-consumed audit runs inside a SAVEPOINT so
+    # a swallowed failure (now including a bounded-lock 55P03) cannot abort the
+    # enrollment transaction. A bare MagicMock child would return a truthy
+    # ``__aexit__`` and SUPPRESS the error instead of letting the helper log it.
+    nested = MagicMock()
+    nested.__aenter__ = AsyncMock(return_value=None)
+    nested.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested)
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = None
     scalars_mock = MagicMock()
@@ -485,3 +493,78 @@ def test_accept_invite_unexpected_exception_maps_to_500(client: TestClient) -> N
         resp = client.post("/api/v1/auth/accept-invite", json={"token": "tok", "password": _STRONG_PASSWORD})
     assert resp.status_code == 500
     assert resp.json()["detail"] == MSG_INTERNAL_SERVER_ERROR
+
+
+# ---------------------------------------------------------------------------
+# FAR-1825: the accept-invite transaction now bounds its first row lock
+# (``get_valid_by_token_hash``), so the audit-chain-head lock taken by the
+# fail-open ``invite_consumed`` append can raise SQLSTATE 55P03.
+# ``append_audit_event`` ALREADY wraps each attempt in its own savepoint, so
+# the caller's transaction was never poisoned by this path. The helper keeps
+# its OWN outer savepoint as explicit defence-in-depth; the test below pins
+# that outer seam (and the fail-open 200), not a poisoning it prevents today.
+# ---------------------------------------------------------------------------
+
+
+class _LockTimeoutDriverError(Exception):
+    """Driver-error double carrying an asyncpg ``sqlstate``."""
+
+    def __init__(self, state: str) -> None:
+        super().__init__(f"driver error {state}")
+        self.sqlstate = state
+
+
+def _lock_timeout_error() -> OperationalError:
+    return OperationalError("SELECT ... FOR UPDATE", {}, _LockTimeoutDriverError("55P03"))
+
+
+def test_accept_invite_audit_lock_timeout_is_contained_by_the_outer_savepoint(
+    client: TestClient, mock_session: AsyncMock
+) -> None:
+    """A 55P03 from the audit append still answers 200; the enrollment survives.
+
+    ``append_audit_event`` already contains the failed attempt in its own
+    per-attempt savepoint, so the caller's transaction is not poisoned. The
+    helper's outer savepoint is defence-in-depth: this test pins that the
+    outer ``__aexit__`` observes the lock-timeout error (SQLAlchemy issues
+    ROLLBACK TO SAVEPOINT there) while the route still returns 200 and the
+    enrollment writes still ran.
+    """
+    invitation = _make_invitation()
+    patches = _base_patches(invitation)
+    nested_exceptions: list[type[BaseException] | None] = []
+
+    nested = MagicMock()
+    nested.__aenter__ = AsyncMock(return_value=None)
+
+    async def _exit(exc_type: type[BaseException] | None, exc: BaseException | None, tb: object) -> bool:
+        nested_exceptions.append(exc_type)
+        return False
+
+    nested.__aexit__ = AsyncMock(side_effect=_exit)
+    mock_session.begin_nested = MagicMock(return_value=nested)
+    create_account = AsyncMock(return_value=_make_account())
+    audit = AsyncMock(side_effect=_lock_timeout_error())
+
+    with patch.dict(
+        "modulo.api.routes.auth.__dict__",
+        {
+            **patches,
+            "append_audit_event": audit,
+            "validate_password_strength": MagicMock(),
+            "get_account_by_email": AsyncMock(return_value=None),
+            "create_account": create_account,
+            "get_membership_by_account_and_org": AsyncMock(return_value=None),
+            "create_membership": AsyncMock(return_value=MagicMock()),
+        },
+    ):
+        resp = client.post("/api/v1/auth/accept-invite", json={"token": "tok", "password": _STRONG_PASSWORD})
+
+    assert resp.status_code == 200, resp.text
+    # The enrollment write ran, and only the audit append failed.
+    create_account.assert_awaited_once()
+    audit.assert_awaited_once()
+    # The outer savepoint observed (and did not suppress) the lock timeout.
+    # Defence-in-depth: the logger's per-attempt savepoint contains the failed
+    # append today; this seam keeps the helper's guarantee explicit.
+    assert nested_exceptions == [OperationalError]

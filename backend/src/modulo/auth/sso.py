@@ -421,18 +421,36 @@ async def _deny_join(provider: SsoProvider, org_id: uuid.UUID) -> None:
 
 
 async def _audit_invite_consumed_fail_open(session: AsyncSession, org_id: uuid.UUID, invitation_id: uuid.UUID) -> None:
-    """Record the SSO-consumed invitation; audit failure never fails the login."""
+    """Record the SSO-consumed invitation; audit failure never fails the login.
+
+    FAR-1825: ``append_audit_event`` takes the per-org audit-chain-head row lock
+    (``FOR UPDATE``) and the SSO JIT transaction now bounds its lock waits
+    (C17 ``get_live_for_email``). A contended chain head can therefore raise
+    SQLSTATE 55P03.
+
+    The append is already savepoint-contained: every attempt inside
+    ``append_audit_event`` runs in its own ``session.begin_nested()``, so a
+    55P03 rolls back only that attempt and never poisons the caller's
+    transaction. This outer savepoint is explicit defence-in-depth: it states
+    the fail-open guarantee locally so the token-issue writes that follow
+    cannot be lost if that inner seam changes. It is not what prevents the
+    poisoning today. Mirrors the REST twin in ``api/routes/auth.py``.
+    """
     from modulo.core.audit_logger import append_audit_event
 
     try:
-        await append_audit_event(
-            session,
-            org_id=org_id,
-            event_type="invite_consumed",
-            resource_type="invitation",
-            resource_id=invitation_id,
-            payload_json={"invitation_id": str(invitation_id), "via": "sso"},
-        )
+        # Defence-in-depth: ``append_audit_event`` already savepoints each
+        # attempt; this outer savepoint makes the fail-open guarantee explicit
+        # here rather than dependent on that inner seam.
+        async with session.begin_nested():
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type="invite_consumed",
+                resource_type="invitation",
+                resource_id=invitation_id,
+                payload_json={"invitation_id": str(invitation_id), "via": "sso"},
+            )
     except Exception:
         _log.warning("sso.jit_invite_audit_failed", exc_info=True)
 

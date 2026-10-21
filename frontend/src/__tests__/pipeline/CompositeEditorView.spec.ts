@@ -101,8 +101,9 @@ function editorPayload() {
   }
 }
 
-function mountView() {
+function mountView(attachToBody = false) {
   return mount(CompositeEditorView, {
+    ...(attachToBody ? { attachTo: document.body } : {}),
     global: {
       stubs: {
         BackLink: { template: '<div />' },
@@ -110,6 +111,11 @@ function mountView() {
       },
     },
   })
+}
+
+/** The native `close` event is queued as a task (see the jsdom dialog shim). */
+function flushCloseEvent(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 async function flush() {
@@ -361,9 +367,125 @@ describe('CompositeEditorView', () => {
     const cancelBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Cancel')!
     await cancelBtn.trigger('click')
     await nextTick()
+    await flushCloseEvent()
     expect(wrapper.find('#compositeeditorview-field-2').exists()).toBe(false)
     expect(postMock).not.toHaveBeenCalled()
     wrapper.unmount()
+  })
+
+  it('save-as dialog is a real modal <dialog> and closes on Escape from the focused field', async () => {
+    const wrapper = mountView(true)
+    await flush()
+
+    const saveAsBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Save as composite')!
+    await saveAsBtn.trigger('click')
+    await nextTick()
+
+    const dialog = wrapper.find('dialog')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.attributes('role')).toBeUndefined()
+    const dialogEl = dialog.element as HTMLDialogElement
+    expect(dialogEl.open).toBe(true)
+    const focused = document.activeElement as HTMLElement | null
+    expect(focused).not.toBeNull()
+    expect(dialogEl.contains(focused)).toBe(true)
+
+    focused!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+    await flushCloseEvent()
+
+    expect(dialogEl.open).toBe(false)
+    expect(wrapper.find('#compositeeditorview-field-2').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('open/close save-as dialog helpers are safe no-ops while the dialog is not rendered', async () => {
+    const wrapper = mountView()
+    await flush()
+    expect(wrapper.find('dialog').exists()).toBe(false)
+
+    const vm = wrapper.vm as unknown as {
+      openSaveAsDialog: () => void
+      closeSaveAsDialog: () => void
+    }
+    expect(() => vm.openSaveAsDialog()).not.toThrow()
+    expect(() => vm.closeSaveAsDialog()).not.toThrow()
+    expect(wrapper.find('dialog').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('re-opening an already-open save-as dialog is a guarded no-op', async () => {
+    const wrapper = mountView()
+    await flush()
+
+    await wrapper.findAll('button').find((b) => b.text().trim() === 'Save as composite')!.trigger('click')
+    await nextTick()
+    const dialogEl = wrapper.find('dialog').element as HTMLDialogElement
+    expect(dialogEl.open).toBe(true)
+
+    const vm = wrapper.vm as unknown as { openSaveAsDialog: () => void }
+    // A second showModal() would throw InvalidStateError; the guard no-ops.
+    expect(() => vm.openSaveAsDialog()).not.toThrow()
+    expect(dialogEl.open).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('closes the save-as dialog on a backdrop click', async () => {
+    const wrapper = mountView(true)
+    await flush()
+
+    await wrapper.findAll('button').find((b) => b.text().trim() === 'Save as composite')!.trigger('click')
+    await nextTick()
+    const dialog = wrapper.find('dialog')
+    expect((dialog.element as HTMLDialogElement).open).toBe(true)
+
+    // A click whose target is the dialog itself is a ::backdrop click.
+    await dialog.trigger('click')
+    await nextTick()
+    await flushCloseEvent()
+
+    expect((dialog.element as HTMLDialogElement).open).toBe(false)
+    expect(wrapper.find('#compositeeditorview-field-2').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('returns focus to the Save as composite trigger after the dialog closes', async () => {
+    const wrapper = mountView(true)
+    await flush()
+
+    const trigger = wrapper.findAll('button').find((b) => b.text().trim() === 'Save as composite')!
+    ;(trigger.element as HTMLElement).focus()
+    await trigger.trigger('click')
+    await nextTick()
+    const dialogEl = wrapper.find('dialog').element as HTMLDialogElement
+    expect(dialogEl.contains(document.activeElement as HTMLElement)).toBe(true)
+
+    await wrapper.findAll('button').find((b) => b.text().trim() === 'Cancel')!.trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(document.activeElement).toBe(trigger.element)
+    wrapper.unmount()
+  })
+
+  it('unmounts safely while the save-as dialog is open and remounts cleanly', async () => {
+    const wrapper = mountView(true)
+    await flush()
+
+    await wrapper.findAll('button').find((b) => b.text().trim() === 'Save as composite')!.trigger('click')
+    await nextTick()
+    expect((wrapper.find('dialog').element as HTMLDialogElement).open).toBe(true)
+    expect(() => wrapper.unmount()).not.toThrow()
+    expect(document.querySelector('dialog')).toBeNull()
+
+    // A fresh instance must still open its dialog — an unmount that left modal
+    // state or a close handler behind would break this mount.
+    const remounted = mountView(true)
+    await flush()
+    await remounted.findAll('button').find((b) => b.text().trim() === 'Save as composite')!.trigger('click')
+    await nextTick()
+    expect((remounted.find('dialog').element as HTMLDialogElement).open).toBe(true)
+    remounted.unmount()
   })
 
   it('save-as dialog renders a POST failure inline (role=alert) and stays open', async () => {

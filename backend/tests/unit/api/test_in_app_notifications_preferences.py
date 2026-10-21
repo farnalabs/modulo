@@ -10,7 +10,11 @@ endpoints — the contract-round-trip review gate. Covers:
 * 400 on unknown category keys, 422 on unknown top-level fields and on an
   invalid ``dashboard_level``,
 * RLS/per-user scoping — one user's opt-outs never leak to another user, and
-  the dashboard read paths agree with the preference map.
+  the dashboard read paths agree with the preference map,
+* FAR-2024 — the ``dashboard_level`` default the response model DECLARES is
+  the default the GET path actually RETURNS (both fallbacks of
+  ``_load_dashboard_level``), so the published contract cannot drift from the
+  behaviour again.
 """
 
 from __future__ import annotations
@@ -28,7 +32,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.api.routes.in_app_notifications import _preference_change_is_noop
+from modulo.api.routes.in_app_notifications import (
+    _DASHBOARD_LEVELS,
+    NotificationPreferencesResponse,
+    _load_dashboard_level,
+    _preference_change_is_noop,
+)
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.notifier.event_mapper import notification_categories
@@ -440,6 +449,57 @@ def test_dashboard_respects_stored_preference(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# FAR-2024: the declared response default must equal the observed default
+# ---------------------------------------------------------------------------
+
+
+def _declared_dashboard_default() -> object:
+    """The default the PUBLISHED contract declares for ``dashboard_level``."""
+    return NotificationPreferencesResponse.model_fields["dashboard_level"].default
+
+
+def test_declared_dashboard_default_is_info(client: TestClient) -> None:
+    """The response model declares ``dashboard_level``'s default as 'info'.
+
+    It used to declare 'warning' while ``_load_dashboard_level`` returned
+    'info' for an account with no stored value. Every real GET returns the
+    loader's value, so the model default was unreachable at runtime yet still
+    published in the OpenAPI schema as the contract.
+    """
+    assert _declared_dashboard_default() == "info"
+
+    # A fresh account has stored nothing: the real GET path must return exactly
+    # the value the contract declares, so the two can never drift.
+    body = client.get(_PREFERENCES_PATH).json()
+    assert body["dashboard_level"] == "info"
+    assert body["dashboard_level"] == _declared_dashboard_default()
+
+
+def test_default_dashboard_level_is_restorable_through_the_put_vocabulary() -> None:
+    """A default the PUT validator rejects would be un-settable back.
+
+    The default is only a coherent contract if a user may explicitly write it.
+    """
+    assert _declared_dashboard_default() in _DASHBOARD_LEVELS
+
+
+def test_load_dashboard_level_missing_account_uses_the_declared_default() -> None:
+    """The loader's missing-account branch agrees with the declared default.
+
+    ``_load_dashboard_level`` has two fallbacks (account row absent, and
+    stored value absent). Both must yield the single declared default.
+    """
+    with patch(
+        "modulo.api.routes.in_app_notifications.get_account_by_id",
+        new=AsyncMock(return_value=None),
+    ):
+        loaded = asyncio.run(_load_dashboard_level(MagicMock(), _USER_A))
+
+    assert loaded == "info"
+    assert loaded == _declared_dashboard_default()
+
+
+# ---------------------------------------------------------------------------
 # FAR-247: badge/list agreement (dashboard_level threaded into get_unread_count)
 # ---------------------------------------------------------------------------
 
@@ -584,3 +644,35 @@ def test_preference_change_is_noop(
     expected: bool,
 ) -> None:
     assert _preference_change_is_noop(requested_opt_outs, before_opted_out, dashboard_level, before_level) is expected
+
+
+# ---------------------------------------------------------------------------
+# FAR-1825: the preferences PUT's FIRST write is the notification-preference
+# DELETE/INSERT, which runs BEFORE ``update_account_preferences`` takes the
+# Account row lock. The lock bound must therefore be set at the top of the
+# transaction, or the preference DML's own row waits stay unbounded.
+# ---------------------------------------------------------------------------
+
+
+def test_put_preferences_bounds_the_row_lock_before_its_first_write(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from modulo.api.routes import in_app_notifications as mod
+
+    order: list[str] = []
+
+    async def _record_bound(session: object) -> None:
+        order.append("bound")
+
+    async def _record_write(**kwargs: object) -> None:
+        order.append("write")
+
+    monkeypatch.setattr(mod, "set_mutation_row_lock_timeout", _record_bound)
+    monkeypatch.setattr(mod, "set_notification_preferences", _record_write)
+
+    category = min(notification_categories())
+    resp = client.put(_PREFERENCES_PATH, json={"notification_opt_outs": {category: True}})
+
+    assert resp.status_code == 200, resp.text
+    assert order[0] == "bound", f"the lock bound must run before the first write, got {order}"
+    assert "write" in order
