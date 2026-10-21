@@ -49,6 +49,7 @@ import inspect
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Literal, NamedTuple
 
 from langgraph.errors import NodeCancelledError
@@ -557,15 +558,32 @@ async def _invoke_attempt(ctx: _RetryContext, state: dict[str, Any], attempt_n: 
     return result
 
 
+class _AttemptResolution(Enum):
+    """Sentinel result meaning "the caller's original exception must propagate".
+
+    ``_resolve_failed_attempt`` cannot bare-``raise`` its caller's exception
+    itself: it is a callee, so a ``raise exc`` there re-raises the exception
+    outside an ``except`` block (Python:S5747) and loses the bare-``raise``
+    traceback semantics. Returning this sentinel instead lets the caller's own
+    ``except`` block do the bare ``raise``.
+    """
+
+    RERAISE = "reraise"
+
+
+_RERAISE = _AttemptResolution.RERAISE
+
+
 async def _resolve_failed_attempt(
     ctx: _RetryContext, state: dict[str, Any], exc: Exception, attempt_n: int
-) -> dict[str, Any] | None:
+) -> dict[str, Any] | _AttemptResolution | None:
     """Resolve one failed attempt; ``None`` means the caller should retry.
 
     Order is load-bearing (FAR-402): the node's own retry budget is consulted
     first, then per-edge retry, then compensation. When none resolves the
-    failure the ORIGINAL exception is re-raised so the executor terminalizes
-    the run as designed.
+    failure this returns ``_RERAISE`` so the caller's ``except`` block
+    propagates the ORIGINAL exception (bare ``raise``) and the executor
+    terminalizes the run as designed.
     """
     outcome = _classify_attempt(None, ctx.effective_policy, exc)
     if _should_retry(outcome, attempt_n, ctx.effective_policy):
@@ -576,7 +594,7 @@ async def _resolve_failed_attempt(
         return edge_result
     if await _handle_compensation(ctx, state, exc):
         return _compensated_marker(ctx.node_id)
-    raise exc
+    return _RERAISE
 
 
 async def _run_retry_loop(ctx: _RetryContext, state: dict[str, Any]) -> dict[str, Any]:
@@ -589,7 +607,10 @@ async def _run_retry_loop(ctx: _RetryContext, state: dict[str, Any]) -> dict[str
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            result = await _resolve_failed_attempt(ctx, state, exc, attempts)
+            resolved = await _resolve_failed_attempt(ctx, state, exc, attempts)
+            if resolved is _RERAISE:
+                raise
+            result = resolved
         if result is not None:
             return result
 
