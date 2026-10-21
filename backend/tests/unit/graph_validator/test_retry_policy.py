@@ -31,13 +31,6 @@ def test_retry_policy_non_dict_is_malformed() -> None:
         assert not result.is_valid
 
 
-def test_retry_policy_on_not_a_list_is_malformed() -> None:
-    result = ValidationResult()
-    GraphValidator.check_retry_policy({"on": "stall", "max_retries": 2}, result)
-    assert "RETRY_POLICY_MALFORMED" in _codes(result)
-    assert not result.is_valid
-
-
 def test_retry_policy_on_with_non_string_is_malformed() -> None:
     result = ValidationResult()
     GraphValidator.check_retry_policy({"on": ["stall", 42], "max_retries": 2}, result)
@@ -143,8 +136,11 @@ def test_retry_policy_null_on_with_zero_budget_is_shape_valid() -> None:
 
 
 def test_retry_policy_null_on_does_not_loosen_non_list_non_null() -> None:
-    # Only `null` joins the absent case: a non-list non-null `on` (string)
-    # stays RETRY_POLICY_MALFORMED.
+    """A non-list, non-null ``on`` (a bare string) stays RETRY_POLICY_MALFORMED.
+
+    Only ``null`` joins the absent case; this pins that the leniency added for
+    ``on: null`` did not extend to other non-list shapes.
+    """
     result = ValidationResult()
     GraphValidator.check_retry_policy({"on": "stall", "max_retries": 2}, result)
     assert "RETRY_POLICY_MALFORMED" in _codes(result)
