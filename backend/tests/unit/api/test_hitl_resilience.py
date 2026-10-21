@@ -684,6 +684,92 @@ class TestListRunPendingGatesLabelResolution:
         assert resp.status_code == 200
         assert resp.json()["reviews"][0]["label"] is None
 
+    def test_list_run_pending_gates_empty_skips_pipeline_lookup(self, client: TestClient) -> None:
+        from collections.abc import AsyncGenerator
+
+        mock_session = AsyncMock()
+        configure_mock_session(mock_session, allow_empty_execute=True)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.begin = MagicMock(return_value=begin_cm)
+        mock_session.get = AsyncMock(return_value=None)
+
+        run = MagicMock()
+        run.id = _RUN_ID
+        run.snapshot_id = None
+
+        def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.scalars.return_value = []
+            return result
+
+        mock_session.execute = AsyncMock(side_effect=_execute)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        try:
+            with patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
+                resp = client.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        assert not resp.json()["reviews"]
+        mock_session.get.assert_not_awaited()
+
+    def test_list_run_pending_gates_missing_snapshot_row_yields_no_label(self, client: TestClient) -> None:
+        from collections.abc import AsyncGenerator
+
+        mock_session = AsyncMock()
+        configure_mock_session(mock_session, allow_empty_execute=True)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.begin = MagicMock(return_value=begin_cm)
+        mock_session.get = AsyncMock(return_value=None)
+
+        run = MagicMock()
+        run.id = _RUN_ID
+        run.snapshot_id = uuid.uuid4()
+
+        claim = MagicMock()
+        claim.run_id = _RUN_ID
+        claim.review_id = "hitl_review_planner_deploy"
+        claim.pipeline_id = uuid.uuid4()
+        claim.account_id = None
+        claim.claimed_at = None
+        claim.expires_at = None
+        claim.decision = None
+        claim.decision_at = None
+        claim.context_json = None
+
+        def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            if "pipeline_snapshots" in str(stmt):
+                result.scalar_one_or_none.return_value = None
+            else:
+                result.scalars.return_value = [claim]
+            return result
+
+        mock_session.execute = AsyncMock(side_effect=_execute)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        try:
+            with patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
+                resp = client.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        assert resp.json()["reviews"][0]["label"] is None
+        assert resp.json()["reviews"][0]["description"] is None
+
 
 # ---------------------------------------------------------------------------
 # FAR-610: human_only enforcement on the REST decision routes
