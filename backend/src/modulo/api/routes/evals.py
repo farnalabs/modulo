@@ -2716,6 +2716,108 @@ async def update_eval_definition(
     return _eval_def_to_dict(eval_row)
 
 
+async def _soft_delete_eval_with_gate(
+    session: AsyncSession,
+    eval_row: Eval,
+    *,
+    principal: TenantPrincipal,
+    now: datetime,
+) -> None:
+    """Stamp the eval and its live PolicyGate (if any) as soft-deleted."""
+    eval_row.deleted_at = now
+    eval_row.deleted_by = principal.account_id
+    # Soft-delete the live PolicyGate (if any) in the same transaction — no
+    # orphaned gate enforcing silently.
+    gate_result = await session.execute(
+        select(PolicyGate).where(
+            PolicyGate.eval_id == eval_row.id,
+            PolicyGate.organisation_id == principal.organisation_id,
+            PolicyGate.deleted_at.is_(None),
+        )
+    )
+    gate = gate_result.scalar_one_or_none()
+    if gate is not None:
+        gate.deleted_at = now
+        gate.deleted_by = principal.account_id
+
+
+async def _append_eval_delete_audit(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    eval_id: uuid.UUID,
+    eval_id_str: str,
+    eval_name: str | None,
+    purge: bool,
+    soft: bool,
+) -> None:
+    """Best-effort audit for a guardrail eval delete (fail-open with log)."""
+    try:
+        await append_audit_event(
+            session,
+            org_id=principal.organisation_id,
+            event_type="eval_definition.soft_deleted" if soft else "eval_definition.purged",
+            actor_user_id=principal.account_id,
+            resource_type="eval_definition",
+            resource_id=eval_id,
+            payload_json={"eval_id": eval_id_str, "name": eval_name, "purge": purge},
+        )
+    except Exception:
+        _log.exception(
+            "evals.delete_eval_definition_audit_failed",
+            extra={"org_id": str(principal.organisation_id), "eval_id": eval_id_str},
+        )
+
+
+async def _delete_eval_definition_in_tx(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    eval_id: uuid.UUID,
+    purge: bool,
+) -> None:
+    """The delete/purge itself, inside the org-scoped transaction."""
+    await set_rls_org(session, principal.organisation_id)
+    await set_rls_user_context(session, principal.account_id, principal.org_role)
+    result = await session.execute(
+        include_soft_deleted(
+            select(Eval).where(
+                Eval.id == eval_id,
+                Eval.organisation_id == principal.organisation_id,
+            )
+        )
+    )
+    eval_row = result.scalar_one_or_none()
+    if eval_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
+    # Capture identity BEFORE any mutation — a hard-deleted ORM instance no
+    # longer exposes attributes.
+    eval_id_str = str(eval_row.id)
+    eval_name = eval_row.name
+    is_guardrail = eval_row.eval_type == "guardrail"
+    soft = is_guardrail and not purge
+
+    if soft:
+        await _soft_delete_eval_with_gate(session, eval_row, principal=principal, now=datetime.now(UTC))
+    else:
+        # Hard-delete: PolicyGate cascades via ON DELETE CASCADE;
+        # PolicyGateDecision rows block via RESTRICT (→ 409).
+        await session.delete(eval_row)
+
+    # The two-step soft-delete audit applies to guardrail rows only — a
+    # non-guardrail eval keeps its hard delete (no audit event).
+    if is_guardrail:
+        await _append_eval_delete_audit(
+            session,
+            principal=principal,
+            eval_id=eval_id,
+            eval_id_str=eval_id_str,
+            eval_name=eval_name,
+            purge=purge,
+            soft=soft,
+        )
+
+
 @router.delete(
     "/evals/{eval_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -2753,66 +2855,12 @@ async def delete_eval_definition(
 
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            result = await session.execute(
-                include_soft_deleted(
-                    select(Eval).where(
-                        Eval.id == eval_id,
-                        Eval.organisation_id == principal.organisation_id,
-                    )
-                )
+            await _delete_eval_definition_in_tx(
+                session,
+                principal=principal,
+                eval_id=eval_id,
+                purge=purge,
             )
-            eval_row = result.scalar_one_or_none()
-            if eval_row is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
-            # Capture identity BEFORE any mutation — a hard-deleted ORM
-            # instance no longer exposes attributes.
-            eval_id_str = str(eval_row.id)
-            eval_name = eval_row.name
-            is_guardrail = eval_row.eval_type == "guardrail"
-            soft = is_guardrail and not purge
-
-            if soft:
-                now = datetime.now(UTC)
-                eval_row.deleted_at = now
-                eval_row.deleted_by = principal.account_id
-                # Soft-delete the live PolicyGate (if any) in the same
-                # transaction — no orphaned gate enforcing silently.
-                gate_result = await session.execute(
-                    select(PolicyGate).where(
-                        PolicyGate.eval_id == eval_row.id,
-                        PolicyGate.organisation_id == principal.organisation_id,
-                        PolicyGate.deleted_at.is_(None),
-                    )
-                )
-                gate = gate_result.scalar_one_or_none()
-                if gate is not None:
-                    gate.deleted_at = now
-                    gate.deleted_by = principal.account_id
-            else:
-                # Hard-delete: PolicyGate cascades via ON DELETE CASCADE;
-                # PolicyGateDecision rows block via RESTRICT (→ 409).
-                await session.delete(eval_row)
-
-            # The two-step soft-delete audit applies to guardrail rows only —
-            # a non-guardrail eval keeps its hard delete (no audit event).
-            if is_guardrail:
-                try:
-                    await append_audit_event(
-                        session,
-                        org_id=principal.organisation_id,
-                        event_type="eval_definition.soft_deleted" if soft else "eval_definition.purged",
-                        actor_user_id=principal.account_id,
-                        resource_type="eval_definition",
-                        resource_id=eval_id,
-                        payload_json={"eval_id": eval_id_str, "name": eval_name, "purge": purge},
-                    )
-                except Exception:
-                    _log.exception(
-                        "evals.delete_eval_definition_audit_failed",
-                        extra={"org_id": str(principal.organisation_id), "eval_id": eval_id_str},
-                    )
     except HTTPException:
         raise
     except IntegrityError:
