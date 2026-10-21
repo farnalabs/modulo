@@ -234,6 +234,12 @@ Accepts manual, webhook, cron, polling, and agent_signal trigger types. Creates 
 
 Immutable event recording for all state-changing actions. Written in alpha; viewer/export is team-gated. All events carry `organisation_id`, `actor_id`, `action`, `resource_type`, `resource_id`, and `timestamp`. An export can be emitted as **offline-verifiable evidence**: an Ed25519-signed canonical manifest over the exported files and the re-derived chain result, publishable with the org's verification key and checkable with only the artefact + key; see [`docs/offline-verifiable-evidence.md`](offline-verifiable-evidence.md).
 
+### Compliance Control Mapping (`modulo/compliance/`)
+
+Maps Modulo's controls and evidence to the frameworks buyers actually test - SOC 2 Trust Services Criteria (CC6, CC7, CC8 plus the evidence layer), ISO/IEC 42001 clauses touching change approval, oversight and traceability, and the EU AI Act obligations that apply to a system changing software under human oversight. The mapping content is versioned YAML shipped in the product (`backend/src/modulo/compliance/mappings/`, `pack_version` + a deterministic content hash), not a website document, so it moves with the release it describes. Coverage is attributed per row and per framework (`satisfied` / `supported` / `customer-responsibility` / `gap`) and every row states the provenance of its evidence (`observed` / `derived` / `customer-supplied`); the loader rejects a pack that claims everything, presents a customer control as Modulo's, or drops a required SOC 2 clause.
+
+`GET /api/v1/compliance/evidence-index` (permission `compliance.evidence_index.read`, admin) generates the per-instance evidence index: the audit chain, run snapshots, HITL decisions (including human-only approvals), eval results, autonomy promotions and demotions, the release SBOM and the build identity - each keyed to the mapping rows it satisfies, each with its identifiers, location and provenance. A mapped artefact with no records is reported `absent` with a reason and named in `missing_artifact_types`; it is never omitted. The index records the pack version and content hash that produced it. See [`docs/security/compliance-control-mapping.md`](security/compliance-control-mapping.md).
+
 ### Notification System (`modulo/core/notifier/`)
 
 Push notifications (WebSocket events) and outbound webhooks. Per-endpoint HMAC-signed delivery with 3 retries and dead-letter logging. Endpoints auto-disable after repeated failures. Team-scoped notification endpoints.
