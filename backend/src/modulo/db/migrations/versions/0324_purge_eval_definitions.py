@@ -1,7 +1,15 @@
 """FAR-1962 (chunk 13, slices 3+4): purge the legacy ``eval_definitions`` table.
 
-**THIS MIGRATION IS IRREVERSIBLE. ROLLBACK IS A DATABASE RESTORE, NOT A CODE
-REVERT.** See :func:`downgrade`.
+**THIS MIGRATION IS IRREVERSIBLE. A CODE REVERT DOES NOT ROLL IT BACK.** A
+durable rollback needs BOTH halves: a DATABASE RESTORE from the pre-purge
+backup AND rolling the application image back to one that predates this
+migration. A restore alone is not durable — ``deploy/fly/release.sh`` runs
+``alembic upgrade heads`` unconditionally before every rollout, and
+``deploy/fly/entrypoint.sh`` falls through to ``alembic upgrade heads``
+whenever the database is not at the image's head, so an image containing this
+revision re-applies the purge on its next deploy or boot (the restored rows
+satisfy step 1's assertion, so the DELETE and DROP execute again). See
+:func:`downgrade`.
 
 Context — why the table is provably redundant at this point in the chain:
 
@@ -390,7 +398,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """IRREVERSIBLE — rollback requires the pre-purge database backup.
+    """IRREVERSIBLE — a durable rollback is a database restore AND an image rollback.
 
     The dropped rows were proven-redundant copies of live ``evals`` rows (step 1's
     assertion), and every reader/writer has used ``evals`` since
@@ -399,20 +407,37 @@ def downgrade() -> None:
     resurrect the data: a schema-only rewind would recreate an EMPTY legacy table
     that no production path reads or writes, which is not a rollback.
 
-    The rollback procedure is a RESTORE, owned by the pre-purge ``pg_dump``
-    (FAR-1963 — verified with ``pg_restore --list`` and rehearsed on staging
-    before the rollout):
+    A RESTORE ALONE IS NOT DURABLE. ``deploy/fly/release.sh`` runs
+    ``alembic upgrade heads`` unconditionally before every rollout, and
+    ``deploy/fly/entrypoint.sh`` falls through to ``alembic upgrade heads``
+    whenever the database is not at the image's head. An image that contains this
+    revision therefore re-applies the purge on its next deploy or boot — and it
+    succeeds, because the restored rows satisfy step 1's assertion, after which
+    the DELETE and DROP run again. Restoring only the database loses the table a
+    second time on the next restart.
 
-    1. stop the application (web + worker) so nothing writes during the restore;
+    The rollback procedure is a RESTORE of the pre-purge ``pg_dump`` (FAR-1963 —
+    verified with ``pg_restore --list`` and rehearsed on staging before the
+    rollout) TOGETHER WITH rolling the application image back to one that
+    predates 0324_purge_eval_definitions:
+
+    1. stop the application (web + worker) so nothing writes during the restore,
+       and keep it stopped until step 4 completes;
     2. restore the pre-purge dump into the database;
     3. stamp ``alembic_version`` back to ``0323_pipeline_snapshots_substantive_version_index`` so the
-       chain is consistent with the restored schema.
+       chain is consistent with the restored schema;
+    4. roll the application image back to one that predates this migration, and
+       start only that image — an image containing 0324 must never deploy or boot
+       against the restored database, or it re-applies the purge.
 
-    After a restore, deploying the previously running image also redeploys the
-    application code that predates the purge.
+    Both halves are required: the image must be old enough that ``alembic upgrade
+    heads`` has nothing left to apply beyond the restored revision.
     """
     raise RuntimeError(
         "FAR-1962 purge: migration 0324 downgrade is a DOCUMENTED NO-OP — the DROP is "
-        "irreversible and rollback is a database restore from the pre-purge backup "
-        "(FAR-1963), never a code revert. See this function's docstring for the procedure."
+        "irreversible: a durable rollback is a database restore from the pre-purge "
+        "backup (FAR-1963) AND rolling the application image back to one that predates "
+        "this revision, because an image containing 0324 re-applies the purge on its "
+        "next deploy or boot. A code revert alone never restores the data. See this "
+        "function's docstring for the procedure."
     )
