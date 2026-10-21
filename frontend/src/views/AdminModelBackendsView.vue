@@ -552,8 +552,6 @@ interface BackendFormState {
 // providers, but only these route through the OpenAI-compatible client.
 const baseUrlProviders = new Set([
   'ai21',
-  'azure_openai',
-  'custom',
   'deepseek',
   'fireworks',
   'grok',
@@ -827,8 +825,11 @@ function buildDefaultParams(): Record<string, unknown> {
     }
   }
   // FAR-2046: base_url is endpoint configuration, not a model parameter — it
-  // travels as a top-level field and is persisted beside the API key.
-  delete params.base_url
+  // travels as a top-level field and is persisted beside the API key. Providers
+  // that do not expose the field (azure_openai, custom) keep any legacy value.
+  if (showBaseUrl.value) {
+    delete params.base_url
+  }
   return params
 }
 
