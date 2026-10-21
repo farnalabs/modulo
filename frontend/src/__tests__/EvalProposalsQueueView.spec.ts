@@ -201,24 +201,41 @@ describe('EvalProposalsQueueView', () => {
     expect(mockPost).not.toHaveBeenCalled()
   })
 
-  it('treats a blank config field as an empty object', async () => {
+  it('publishes a proposal with a valid typed judge config', async () => {
+    const typedConfig = {
+      field: 'output',
+      answer_contract: 'typed_questions',
+      backing: { kind: 'model_backend' },
+      questions: [
+        {
+          id: 'verdict',
+          type: 'noul',
+          instructions: 'Is the output acceptable?',
+          criteria: [],
+          weight: 1,
+          required: true,
+          min_pass_confidence: 0.5,
+        },
+      ],
+      pass_rule: { kind: 'weighted_score_at_least', threshold: 0.5 },
+      verdict_kind: 'assessment',
+    }
     const wrapper = mountView()
     await flush()
 
     await wrapper.find('[data-testid="proposal-publish"]').trigger('click')
     await nextTick()
-    await wrapper.find('[data-testid="publish-name"]').setValue('No config')
-    await wrapper.find('[data-testid="publish-config"]').setValue('   ')
+    await wrapper.find('[data-testid="publish-name"]').setValue('Typed judge')
+    await wrapper.find('[data-testid="publish-config"]').setValue(JSON.stringify(typedConfig))
     await nextTick()
 
-    // A blank config has no parse error and is submit-able.
     expect(wrapper.text()).not.toContain('views.EvalProposalsQueueView.config_invalid')
     await wrapper.find('[data-testid="publish-confirm"]').trigger('click')
     await flush()
 
     expect(mockPost).toHaveBeenCalledWith('/api/v1/feedback/proposals/{record_id}/publish', {
       params: { path: { record_id: 'rec-1' } },
-      body: { name: 'No config', eval_type: 'model_judge', config: {} },
+      body: { name: 'Typed judge', eval_type: 'model_judge', config: typedConfig },
     })
   })
 

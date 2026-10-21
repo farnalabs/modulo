@@ -463,7 +463,7 @@ export default {
       "config_invalid": "Config JSON is invalid",
       "config_must_be_object": "Config must be a JSON object",
       "config_placeholders": {
-        "model_judge": "\\{ \"criteria\": [\"response is accurate\", \"response is concise\"], \"prompt\": \"...\" \\}",
+        "model_judge": "\\{ \"field\": \"output\", \"answer_contract\": \"typed_questions\", \"backing\": { \"kind\": \"model_backend\" }, \"questions\": [{ \"id\": \"verdict\", \"type\": \"noul\", \"instructions\": \"...\" }], \"pass_rule\": { \"kind\": \"weighted_score_at_least\", \"threshold\": 0.5 }, \"verdict_kind\": \"assessment\" \\}",
         "regex": "\\{ \"pattern\": \"(error|failed)\", \"field\": \"output\" \\}",
         "json_schema": "\\{ \"schema\": { \"type\": \"object\", \"properties\": { \"valid\": { \"type\": \"boolean\" } } } \\}",
         "custom_function": "\\{ \"function\": \"def evaluate(output):\\n    return output.get('score', 0) >= 0.8\" \\}"
@@ -1942,7 +1942,7 @@ export default {
       "config_json": "Config (JSON)",
       "config_placeholder": "\\{ \"field\": \"output\", \"instructions\": \"...\" \\}",
       "configPlaceholder": {
-        "model_judge": "\\{ \"criteria\": [\"response is accurate\", \"response is concise\"], \"prompt\": \"...\" \\}",
+        "model_judge": "\\{ \"field\": \"output\", \"answer_contract\": \"typed_questions\", \"backing\": { \"kind\": \"model_backend\" }, \"questions\": [{ \"id\": \"verdict\", \"type\": \"noul\", \"instructions\": \"...\" }], \"pass_rule\": { \"kind\": \"weighted_score_at_least\", \"threshold\": 0.5 }, \"verdict_kind\": \"assessment\" \\}",
         "regex": "\\{ \"pattern\": \"(error|failed)\", \"field\": \"output\" \\}",
         "json_schema": "\\{ \"schema\": { \"type\": \"object\", \"properties\": { \"valid\": { \"type\": \"boolean\" } } } \\}",
         "custom_function": "\\{ \"function\": \"def evaluate(output):\\n    return output.get('score', 0) >= 0.8\" \\}"
