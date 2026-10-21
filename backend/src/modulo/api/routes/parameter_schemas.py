@@ -11,7 +11,11 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS, MSG_UNEXPECTED_ERROR
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -506,7 +510,11 @@ async def update_parameter_schema_endpoint(
             detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        # FAR-1825: ``update_schema`` bounds its row-lock wait, so 55P03 is
+        # reachable here — classify it as the 409 conflict it is before the
+        # generic 503 below.
         raise_session_contract_error(exc, "parameter_schemas.update_parameter_schema_endpoint")
+        raise_lock_timeout_conflict_if(exc, "parameter_schemas.update_parameter_schema_endpoint")
         logger.exception(_CODE_PARAMETER_SCHEMAS_UPDATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -965,7 +973,11 @@ async def update_parameter_set_endpoint(
             detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        # FAR-1825: ``update_set`` bounds its row-lock wait, so 55P03 is
+        # reachable here — classify it as the 409 conflict it is before the
+        # generic 503 below.
         raise_session_contract_error(exc, "parameter_schemas.update_parameter_set_endpoint")
+        raise_lock_timeout_conflict_if(exc, "parameter_schemas.update_parameter_set_endpoint")
         logger.exception(_CODE_PARAMETER_SCHEMAS_UPDATE_SET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

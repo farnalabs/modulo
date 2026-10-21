@@ -18,7 +18,11 @@ from modulo.api.constants import (
     MSG_NOT_FOUND,
     MSG_RESOURCE_ALREADY_EXISTS,
 )
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
 from modulo.api.dependencies import get_db_session, require_permission, require_permission_any_credential
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -65,6 +69,7 @@ _CODE_AGENTS_CREATE_AGENT_ENDPOINT = "agents.create_agent_endpoint"
 _CODE_AGENTS_APPLY_OPTIMIZED_PROMPT = "agents.apply_optimized_prompt"
 _CODE_AGENTS_ROLLBACK_PROMPT = "agents.rollback_prompt"
 _CODE_AGENTS_DELETE_AGENT_ENDPOINT = "agents.delete_agent_endpoint"
+_CODE_AGENTS_REPLACE_BINDINGS_ENDPOINT = "agents.replace_bindings_endpoint"
 
 
 _log = logging.getLogger(__name__)
@@ -847,7 +852,10 @@ async def apply_optimized_prompt(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        # FAR-1825: ``add_prompt_version`` bounds the agent-row lock, so 55P03
+        # is reachable here — a busy row is a 409 conflict, not the 503 below.
         raise_session_contract_error(exc, _CODE_AGENTS_APPLY_OPTIMIZED_PROMPT)
+        raise_lock_timeout_conflict_if(exc, _CODE_AGENTS_APPLY_OPTIMIZED_PROMPT)
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1000,7 +1008,11 @@ async def rollback_prompt(
         # of the generic-handler 500 (same mapping as the Agent save paths).
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
     except SQLAlchemyError as exc:
+        # FAR-1825: ``rollback_prompt_version`` bounds the agent-row lock, so
+        # 55P03 is reachable here — a busy row is a 409 conflict, not the 503
+        # below.
         raise_session_contract_error(exc, _CODE_AGENTS_ROLLBACK_PROMPT)
+        raise_lock_timeout_conflict_if(exc, _CODE_AGENTS_ROLLBACK_PROMPT)
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1211,7 +1223,7 @@ async def list_bindings_endpoint(
     "/{agent_id}/bindings",
     dependencies=[Depends(audited("agent_bindings_replaced", "agent", principal_dep=get_current_tenant_user))],
 )
-@handle_db_errors("agents.replace_bindings_endpoint")
+@handle_db_errors(_CODE_AGENTS_REPLACE_BINDINGS_ENDPOINT)
 async def replace_bindings_endpoint(
     agent_id: uuid.UUID,
     req: BindingsReplaceRequest,
@@ -1270,7 +1282,7 @@ async def replace_bindings_endpoint(
                 },
             )
     except IntegrityError:
-        _log.exception("agents.replace_bindings_endpoint")
+        _log.exception(_CODE_AGENTS_REPLACE_BINDINGS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
@@ -1282,7 +1294,11 @@ async def replace_bindings_endpoint(
             detail="Invalid binding: reserved or malformed target_env_var, or unknown source_field",
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "agents.replace_bindings_endpoint")
+        # FAR-1825: ``replace_agent_bindings`` bounds the agent-row lock, so
+        # 55P03 is reachable here — a busy row is a 409 conflict, not the 503
+        # below.
+        raise_session_contract_error(exc, _CODE_AGENTS_REPLACE_BINDINGS_ENDPOINT)
+        raise_lock_timeout_conflict_if(exc, _CODE_AGENTS_REPLACE_BINDINGS_ENDPOINT)
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

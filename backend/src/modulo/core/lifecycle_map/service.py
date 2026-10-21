@@ -76,7 +76,14 @@ async def get_lifecycle_map_for_update(session: AsyncSession, lifecycle_map_id: 
     transaction blocks on the row lock, re-reads N+1 after the earlier one
     commits, and writes N+2 — the active version is last-write-wins and the
     counter is strictly increasing with no duplicates.
+
+    FAR-1825: bounded because this is the first row lock in every lifecycle-map
+    save/update request transaction. A contended map row expires as 55P03 (a
+    visible 409) instead of holding the pooled connection open indefinitely.
     """
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
     result = await session.execute(
         select(LifecycleMap)
         .where(

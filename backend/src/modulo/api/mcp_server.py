@@ -57,7 +57,11 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 from tenacity import before_sleep_log, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from modulo.api.db_error_handling import raise_session_contract_error, session_contract_error_payload
+from modulo.api.db_error_handling import (
+    _MSG_LOCK_TIMEOUT,
+    raise_session_contract_error,
+    session_contract_error_payload,
+)
 from modulo.api.dependencies import (
     get_or_create_engine,
     get_or_create_session_factory,
@@ -258,6 +262,12 @@ _MSG_EVAL_DEF_CREATE_FAILED = "create_eval_definition failed"
 _MSG_EVAL_DEF_UPDATE_FAILED = "update_eval_definition failed"
 _MSG_EVAL_DEF_DELETE_FAILED = "delete_eval_definition failed"
 _MSG_DB_OPERATION_FAILED = "Database operation failed. Please try again."
+# FAR-1825: SQLSTATE 55P03 from a bounded row-lock wait is a busy-row CONFLICT,
+# not an outage: the engine is healthy and re-issuing once the other change
+# commits may succeed. The message is imported from ``db_error_handling`` (the
+# single declaration) rather than re-typed here, so the two error surfaces
+# cannot drift; the code is ``lock_timeout`` so a consuming agent branches on it
+# instead of retrying a generic database outage.
 _MSG_CREATE_API_KEY_FAILED = "create_api_key failed"
 _MSG_LIST_API_KEYS_FAILED = "list_api_keys failed"
 _MSG_REVOKE_API_KEY_FAILED = "revoke_api_key failed"
@@ -268,6 +278,10 @@ _MSG_DB_ERROR_TRY_AGAIN = "Database error occurred. Please try again."
 _MSG_UNEXPECTED_ERROR = "An unexpected error occurred"
 _MSG_MCP_AUTH_DB_UNAVAILABLE = "mcp.auth.db_unavailable"
 _CODE_PERMISSION_API_KEY_ROLE_CAP = "permission.api_key_role_cap"
+# FAR-1825: the tool keys for the two bounded parameter CRUD paths, hoisted so
+# the contract / lock-timeout / failure classifiers share one declaration.
+_CODE_MCP_UPDATE_PARAMETER_SCHEMA = "mcp.update_parameter_schema"
+_CODE_MCP_UPDATE_PARAMETER_SET = "mcp.update_parameter_set"
 _JSON_AUTH_DB_UNAVAILABLE = '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}'
 _JSON_FORBIDDEN_ORG_MEMBERSHIP = '{"error":"forbidden","detail":"Organisation membership required"}'
 _BASIC_PREFIX = "Basic "
@@ -2068,6 +2082,62 @@ def _tool_session_contract_error(exc: SQLAlchemyError, log_key: str) -> dict[str
     return session_contract_error_payload(exc, log_key)
 
 
+def _tool_lock_timeout_error(exc: SQLAlchemyError, log_key: str) -> dict[str, Any] | None:
+    """Return the branchable ``lock_timeout`` payload when *exc* is 55P03, else None.
+
+    FAR-1825: the category-C CRUD sweep gave every reachable row lock a
+    transaction-scoped ``lock_timeout`` (``set_mutation_row_lock_timeout``), so
+    SQLSTATE 55P03 (``lock_not_available``) is now reachable from the MCP tools
+    that front one of those helpers. An ``except SQLAlchemyError`` arm that
+    merely returns ``database_unavailable`` reports a busy-row CONFLICT as a
+    database OUTAGE — a retry-now signal against the very lock that is busy.
+
+    Call sites are deliberately SCOPED to the paths where 55P03 is actually
+    reachable, not sprayed onto every MCP tool:
+
+    * ``_tool_exception_error`` (below) — the shared generic-``Exception``
+      mapper every tool's backstop runs, so a bounded tool whose error escapes
+      its narrower arms still classifies (e.g. ``set_hitl_email_alerts``, which
+      reaches C8 ``_get_account_locked`` through the generic arm);
+    * the shared ``_tool_sqlalchemy_error`` mapper behind the explicit
+      ``except SQLAlchemyError`` arms of the two MCP tools whose CRUD helper a
+      request path now bounds — ``update_parameter_schema`` (C14
+      ``update_schema``) and ``update_parameter_set`` (C7 ``update_set``).
+
+    Every other MCP tool's CRUD path takes no newly-bounded lock, so an arm
+    there would be dead code asserting a reachability it does not have (the
+    pre-PR gate rejected exactly that blanket application). ``cancel_run`` and
+    ``update_pipeline_graph`` keep their bespoke inline ``lock_timeout``
+    payloads (FAR-1610 / FAR-1845).
+
+    Returns ``None`` for every other SQLAlchemy error so the caller's existing
+    ``database_unavailable`` / re-raise handling is unchanged.
+    """
+    if sqlstate_of(exc) != LOCK_NOT_AVAILABLE_SQLSTATE:
+        return None
+    _log.warning("%s.lock_timeout", log_key, exc_info=exc)
+    return _tool_error(_MSG_LOCK_TIMEOUT, code="lock_timeout")
+
+
+def _tool_sqlalchemy_error(exc: SQLAlchemyError, log_key: str) -> dict[str, Any]:
+    """Map a non-contract ``SQLAlchemyError`` from a bounded MCP tool to a payload.
+
+    Shared by the two arms whose CRUD helper a request path now bounds
+    (FAR-1825). Those arms run the FAR-1482 session-contract guard as their
+    FIRST statement and log the failure themselves: both are arm-level
+    obligations the architecture guards check (``test_api_db_error_guard`` /
+    ``test_no_silent_db_swallow``), so they must live IN the arm rather than
+    behind a helper the static scanner cannot see through. This helper
+    therefore carries only the FAR-1825 branch — a bounded row-lock wait that
+    timed out (SQLSTATE 55P03) is a retry-now ``lock_timeout`` conflict, not
+    the ``database_unavailable`` outage fallback. Every other error keeps the
+    pre-FAR-1825 ``database_unavailable`` payload.
+    """
+    if (lock_timeout_error := _tool_lock_timeout_error(exc, log_key)) is not None:
+        return lock_timeout_error
+    return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+
+
 def _tool_exception_error(msg: str, exc: BaseException, log_key: str) -> dict[str, Any]:
     """Map an exception that escaped a tool body to a SPECIFIC, branchable code.
 
@@ -2085,6 +2155,10 @@ def _tool_exception_error(msg: str, exc: BaseException, log_key: str) -> dict[st
       ``MissingGreenlet``) → ``session_contract_error`` via the shared
       FAR-1482/FAR-1464 classifier, so the generic arm cannot re-introduce
       the misclassification FAR-1482 fixed on the explicit arms.
+    * SQLSTATE 55P03 (a bounded row-lock wait expiring) → ``lock_timeout``:
+      a busy-row conflict, not a database outage (FAR-1825). This must be
+      checked BEFORE the ``IntegrityError`` / generic arms below, which
+      otherwise answer ``database_unavailable``.
     * ``IntegrityError`` → ``conflict``; ``ProgrammingError`` →
       ``migration_required``; any other ``SQLAlchemyError`` (incl. a transient
       ``OperationalError`` / ``PendingRollbackError``) → ``database_unavailable``.
@@ -2102,6 +2176,8 @@ def _tool_exception_error(msg: str, exc: BaseException, log_key: str) -> dict[st
     if isinstance(exc, SQLAlchemyError):
         if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
             return contract_error
+        if (lock_timeout_error := _tool_lock_timeout_error(exc, log_key)) is not None:
+            return lock_timeout_error
         if isinstance(exc, IntegrityError):
             return _tool_error(msg, code="conflict")
         if isinstance(exc, ProgrammingError):
@@ -11446,13 +11522,16 @@ async def update_parameter_schema(
         _log_tool_failure("update_parameter_schema")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError as exc:
-        if (contract_error := _tool_session_contract_error(exc, "mcp.update_parameter_schema")) is not None:
+        # FAR-1482: a session-contract violation is a programming bug, never a
+        # database outage — classify it before the FAR-1825 lock/outage ladder.
+        if (contract_error := _tool_session_contract_error(exc, _CODE_MCP_UPDATE_PARAMETER_SCHEMA)) is not None:
             return contract_error
         _log_tool_failure("update_parameter_schema")
-        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+        # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict.
+        return _tool_sqlalchemy_error(exc, _CODE_MCP_UPDATE_PARAMETER_SCHEMA)
     except Exception as exc:
         _log_tool_failure("update_parameter_schema")
-        return _tool_exception_error("Failed to update parameter schema", exc, "mcp.update_parameter_schema")
+        return _tool_exception_error("Failed to update parameter schema", exc, _CODE_MCP_UPDATE_PARAMETER_SCHEMA)
 
 
 @mcp.tool(
@@ -11865,13 +11944,16 @@ async def update_parameter_set(
         _log_tool_failure("update_parameter_set")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError as exc:
-        if (contract_error := _tool_session_contract_error(exc, "mcp.update_parameter_set")) is not None:
+        # FAR-1482: a session-contract violation is a programming bug, never a
+        # database outage — classify it before the FAR-1825 lock/outage ladder.
+        if (contract_error := _tool_session_contract_error(exc, _CODE_MCP_UPDATE_PARAMETER_SET)) is not None:
             return contract_error
         _log_tool_failure("update_parameter_set")
-        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+        # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict.
+        return _tool_sqlalchemy_error(exc, _CODE_MCP_UPDATE_PARAMETER_SET)
     except Exception as exc:
         _log_tool_failure("update_parameter_set")
-        return _tool_exception_error("Failed to update parameter set", exc, "mcp.update_parameter_set")
+        return _tool_exception_error("Failed to update parameter set", exc, _CODE_MCP_UPDATE_PARAMETER_SET)
 
 
 @mcp.tool(

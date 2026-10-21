@@ -178,6 +178,16 @@ async def _run_sso_callback_process(
         raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, contract_tag)
+        # FAR-1825: the JIT transaction's first row lock (C17
+        # ``get_live_for_email``) is now bounded, so SQLSTATE 55P03 is reachable
+        # here. This is a BROWSER-REDIRECT surface: the IdP navigated the user
+        # here, so a JSON 409 conflict cannot be delivered and no SSO error
+        # code exists for contention. The 55P03 is therefore deliberately left
+        # mapped to ``provider_unavailable`` (the login did fail; the user
+        # retries) rather than adding a new SPA-facing error code in this
+        # ticket — recorded as an explicit exception in the FAR-1825 guard and
+        # the lock-point inventory's "Mapping truth" table. JSON/API arms keep
+        # their 409 via ``raise_lock_timeout_conflict_if``.
         _log.warning("%s DB error: %s", log_context, exc, exc_info=True)
         raise SsoCallbackError(SSO_ERROR_PROVIDER_UNAVAILABLE) from exc
     except HTTPException:

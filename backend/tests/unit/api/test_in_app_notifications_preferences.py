@@ -644,3 +644,35 @@ def test_preference_change_is_noop(
     expected: bool,
 ) -> None:
     assert _preference_change_is_noop(requested_opt_outs, before_opted_out, dashboard_level, before_level) is expected
+
+
+# ---------------------------------------------------------------------------
+# FAR-1825: the preferences PUT's FIRST write is the notification-preference
+# DELETE/INSERT, which runs BEFORE ``update_account_preferences`` takes the
+# Account row lock. The lock bound must therefore be set at the top of the
+# transaction, or the preference DML's own row waits stay unbounded.
+# ---------------------------------------------------------------------------
+
+
+def test_put_preferences_bounds_the_row_lock_before_its_first_write(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from modulo.api.routes import in_app_notifications as mod
+
+    order: list[str] = []
+
+    async def _record_bound(session: object) -> None:
+        order.append("bound")
+
+    async def _record_write(**kwargs: object) -> None:
+        order.append("write")
+
+    monkeypatch.setattr(mod, "set_mutation_row_lock_timeout", _record_bound)
+    monkeypatch.setattr(mod, "set_notification_preferences", _record_write)
+
+    category = min(notification_categories())
+    resp = client.put(_PREFERENCES_PATH, json={"notification_opt_outs": {category: True}})
+
+    assert resp.status_code == 200, resp.text
+    assert order[0] == "bound", f"the lock bound must run before the first write, got {order}"
+    assert "write" in order

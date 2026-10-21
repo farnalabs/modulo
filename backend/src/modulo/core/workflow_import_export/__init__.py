@@ -2355,16 +2355,27 @@ async def _persist_bindings(
     specs: list[dict[str, Any]],
     warnings: list[str],
 ) -> None:
-    """Replace the agent's runner bindings with the resolved specs."""
+    """Replace the agent's runner bindings with the resolved specs.
+
+    FAR-1825: the binding replace takes the Agent row ``FOR UPDATE`` and is now
+    bounded, so a contended row raises SQLSTATE 55P03. This path is deliberately
+    FAIL-OPEN (a bindings problem must not abort an otherwise valid import), but
+    a swallowed 55P03 would abort the CALLER's transaction and every later
+    statement in the import would then fail — the import would report success
+    around a dead transaction. A SAVEPOINT confines the failure: only the
+    bindings roll back, the import continues, and the existing warning records
+    the degradation.
+    """
     if not specs:
         return
     try:
-        await replace_agent_bindings(
-            ctx.session,
-            org_id=ctx.org_id,
-            agent_id=agent_id,
-            bindings_specs=specs,
-        )
+        async with ctx.session.begin_nested():
+            await replace_agent_bindings(
+                ctx.session,
+                org_id=ctx.org_id,
+                agent_id=agent_id,
+                bindings_specs=specs,
+            )
     except asyncio.CancelledError:
         raise
     except Exception as exc:

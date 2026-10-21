@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_lock_timeout_conflict_if
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -39,6 +39,7 @@ from modulo.db.crud.notifications import (
     review_later,
     set_notification_preferences,
 )
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.models.notification import Notification
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
@@ -547,6 +548,14 @@ async def update_preferences(
             )
     try:
         async with session.begin():
+            # FAR-1825: the FIRST write on this path is
+            # ``set_notification_preferences`` (DELETE/INSERT on the preference
+            # rows), which runs BEFORE ``update_account_preferences`` takes the
+            # Account row lock inside ``_get_account_locked``. Bounding only at
+            # that later lock would leave the preference DML's own row waits
+            # unbounded, so the bound is set at the top of the transaction,
+            # before any statement that can block.
+            await set_mutation_row_lock_timeout(session)
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             # FAR-247: read the CURRENT state first so the audit event can be
@@ -603,7 +612,11 @@ async def update_preferences(
             status_code=status.HTTP_409_CONFLICT,
             detail=_MSG_DATA_CONFLICT_OCCURRED,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        # FAR-1825: this transaction bounds its first (preference DML) lock, so
+        # 55P03 is reachable here — a busy row is a 409 conflict. Other
+        # SQLAlchemy errors keep their pre-existing 500 mapping.
+        raise_lock_timeout_conflict_if(exc, _CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES)
         _log.exception(_CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
