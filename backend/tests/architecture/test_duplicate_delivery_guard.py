@@ -429,3 +429,73 @@ def test_an_unpostable_comment_is_a_warning_not_a_failure(monkeypatch: pytest.Mo
 
     assert exit_code == 0
     assert not fake.posts
+
+
+# --- S8705 taint barriers: operator-supplied argv values are regex-bounded ---
+
+
+class TestArgTaintBarriers:
+    """Bound --repo / --base / --number before they reach a subprocess argv."""
+
+    @pytest.mark.parametrize("repo", ["farnalabs/modulo", "farnalabs/modulo-new", "a/b"])
+    def test_safe_repo_accepts_valid(self, repo: str) -> None:
+        assert _guard._safe_repo(repo) == repo
+
+    @pytest.mark.parametrize(
+        "repo",
+        ["", "no-slash", "--upload-pack=evil", "owner/repo; rm -rf /", "owner/repo --body-file /etc/passwd"],
+    )
+    def test_safe_repo_rejects_injection(self, repo: str) -> None:
+        with pytest.raises(_guard.GuardError):
+            _guard._safe_repo(repo)
+
+    @pytest.mark.parametrize("base", ["main", "release/1.2", "feat/FAR-1883"])
+    def test_safe_base_accepts_valid(self, base: str) -> None:
+        assert _guard._safe_base(base) == base
+
+    @pytest.mark.parametrize("base", ["", "-x", "main; rm -rf /", "main --upload-pack=evil"])
+    def test_safe_base_rejects_injection(self, base: str) -> None:
+        with pytest.raises(_guard.GuardError):
+            _guard._safe_base(base)
+
+    @pytest.mark.parametrize(("raw", "expected"), [(42, 42), ("0042", 42)])
+    def test_safe_pr_normalises_digits(self, raw: int | str, expected: int) -> None:
+        assert _guard._safe_pr(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["-1", "abc", "42; rm -rf /", ""])
+    def test_safe_pr_rejects_non_digits(self, raw: str) -> None:
+        with pytest.raises(_guard.GuardError):
+            _guard._safe_pr(raw)
+
+    def test_invalid_repo_fails_the_guard_loudly(self) -> None:
+        exit_code = _guard.main(
+            [
+                "--repo",
+                "owner/repo; rm -rf /",
+                "--number",
+                "2029",
+                "--title",
+                "feat(FAR-1883): leftovers",
+                "--base",
+                "main",
+            ]
+        )
+
+        assert exit_code == _guard.EXIT_GUARD_BROKEN
+
+    def test_post_comment_passes_the_body_via_a_file(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_run_gh(args, *, expect_failure=False):
+            captured["args"] = list(args)
+            body_path = args[args.index("--body-file") + 1]
+            captured["body"] = Path(body_path).read_text(encoding="utf-8")
+            return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(_guard, "_run_gh", fake_run_gh)
+
+        assert _guard.post_comment("farnalabs/modulo", 2029, "free-form body with --flags")
+
+        assert captured["args"][:3] == ["pr", "comment", "2029"]
+        assert "--body" not in captured["args"]
+        assert captured["body"] == "free-form body with --flags"

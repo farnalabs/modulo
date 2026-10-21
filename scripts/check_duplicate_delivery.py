@@ -37,8 +37,10 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 #: The label added to a PR that collides with another open PR.
 LABEL = "duplicate-delivery"
@@ -150,6 +152,50 @@ def render_comment(subject: PullRequest, counterpart: PullRequest, ticket: str) 
     )
 
 
+#: Taint barriers for operator-supplied argv values (pythonsecurity:S8705).
+#:
+#: ``--repo``, ``--number`` and ``--base`` come from a workflow event and are
+#: forwarded into ``gh`` invocations. Each is bounded to its legitimate
+#: character set with ``re.fullmatch`` and only the fresh match result is
+#: passed on, so a crafted value can never be read by ``gh`` as a CLI flag.
+#: Mirrors the established pattern in ``scripts/fast_lane_classify.py``.
+#: Comment bodies never travel through argv at all: they are written to a
+#: temporary file and passed with ``gh pr comment --body-file``.
+_REPO_ARG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")
+_BASE_ARG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
+_PR_ARG_RE = re.compile(r"\d+")
+
+
+def _safe_arg(value: str, pattern: re.Pattern[str]) -> str | None:
+    """Return *value* only when it fully matches *pattern*."""
+    matched = pattern.fullmatch(value or "")
+    return matched.group(0) if matched else None
+
+
+def _safe_repo(repo: str) -> str:
+    """Bound a ``owner/repo`` slug before it reaches a subprocess argv."""
+    validated = _safe_arg(repo, _REPO_ARG_RE)
+    if validated is None:
+        raise GuardError(f"invalid repository slug {repo!r}")
+    return validated
+
+
+def _safe_base(base: str) -> str:
+    """Bound a base branch name before it reaches a subprocess argv."""
+    validated = _safe_arg(base, _BASE_ARG_RE)
+    if validated is None:
+        raise GuardError(f"invalid base branch {base!r}")
+    return validated
+
+
+def _safe_pr(number: int | str) -> int:
+    """Bound a PR number to digits and return it normalised to ``int``."""
+    validated = _safe_arg(str(number), _PR_ARG_RE)
+    if validated is None:
+        raise GuardError(f"invalid PR number {number!r}")
+    return int(validated)
+
+
 def _run_gh(args: Sequence[str], *, expect_failure: bool = False) -> subprocess.CompletedProcess[str]:
     """Run ``gh`` and return the completed process (never raises on its own)."""
     result = subprocess.run(
@@ -196,11 +242,22 @@ def list_comment_bodies(repo: str, number: int) -> list[str]:
 
 
 def post_comment(repo: str, number: int, body: str) -> bool:
-    """Post a PR comment. Best effort: returns False instead of raising."""
-    result = _run_gh(
-        ["pr", "comment", str(number), "--repo", repo, "--body", body],
-        expect_failure=True,
-    )
+    """Post a PR comment. Best effort: returns False instead of raising.
+
+    The body is written to a temporary file and passed with ``--body-file`` so
+    free-form PR text never becomes a command-line argument
+    (pythonsecurity:S8705).
+    """
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
+        handle.write(body)
+        body_path = handle.name
+    try:
+        result = _run_gh(
+            ["pr", "comment", str(number), "--repo", repo, "--body-file", body_path],
+            expect_failure=True,
+        )
+    finally:
+        Path(body_path).unlink(missing_ok=True)
     return result.returncode == 0
 
 
@@ -264,9 +321,68 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _report_collision(
+    repo: str,
+    subject: PullRequest,
+    counterpart: PullRequest,
+    ticket: str,
+    *,
+    dry_run: bool,
+    label_ready: bool | None,
+) -> bool | None:
+    """Warn about one collision and, unless dry-run, comment and label it.
+
+    Returns the cached label state: ``None`` when not yet checked, ``True``
+    when the label is available and ``False`` when it is not.
+    """
+    body = render_comment(subject, counterpart, ticket)
+    print(
+        f"::warning::PR #{subject.number} and PR #{counterpart.number} both claim {ticket}: "
+        f"{escape_annotation(counterpart.title)}"
+    )
+    if dry_run:
+        print(body)
+        return label_ready
+
+    try:
+        existing = list_comment_bodies(repo, subject.number)
+    except GuardError:
+        # Cannot prove the comment is absent, so do not risk a duplicate.
+        print(f"::warning::could not read existing comments on #{subject.number}; not re-posting")
+        return label_ready
+
+    if already_reported(existing, counterpart.number):
+        print(f"duplicate-delivery-guard: already reported the collision with #{counterpart.number}; skipping.")
+    elif post_comment(repo, subject.number, body):
+        print(f"duplicate-delivery-guard: commented on #{subject.number} about #{counterpart.number}.")
+    else:
+        print(
+            f"::warning::could not post the duplicate-delivery comment on #{subject.number} about "
+            f"#{counterpart.number} (read-only token, e.g. a fork PR?); the collision is recorded in this log only"
+        )
+
+    if label_ready is None:
+        label_ready = ensure_label(repo)
+    if label_ready and add_label(repo, subject.number):
+        print(f"duplicate-delivery-guard: labelled #{subject.number} '{LABEL}'.")
+    else:
+        print(f"::warning::could not apply the '{LABEL}' label to #{subject.number}; the comment is the durable signal")
+    return label_ready
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    subject = PullRequest(number=args.number, title=args.title)
+
+    # S8705: bound operator-supplied argv values before any ``gh`` invocation.
+    try:
+        repo = _safe_repo(args.repo)
+        base = _safe_base(args.base)
+        number = _safe_pr(args.number)
+    except GuardError as exc:
+        print(f"::error::duplicate-delivery-guard received invalid input: {exc}")
+        return EXIT_GUARD_BROKEN
+
+    subject = PullRequest(number=number, title=args.title)
 
     ticket = extract_ticket(subject.title)
     if ticket is None:
@@ -278,51 +394,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_OK
 
     try:
-        others = list_open_prs(args.repo, args.base)
+        others = list_open_prs(repo, base)
     except GuardError as exc:
-        print(f"::error::duplicate-delivery-guard could not list open PRs against {args.base}: {exc}")
+        print(f"::error::duplicate-delivery-guard could not list open PRs against {base}: {exc}")
         return EXIT_GUARD_BROKEN
 
     duplicates = find_duplicate_deliveries(subject, others)
     if not duplicates:
-        print(f"duplicate-delivery-guard: {ticket} is claimed by no other open PR against {args.base}.")
+        print(f"duplicate-delivery-guard: {ticket} is claimed by no other open PR against {base}.")
         return EXIT_OK
 
     label_ready: bool | None = None
     for counterpart in duplicates:
-        body = render_comment(subject, counterpart, ticket)
-        print(
-            f"::warning::PR #{subject.number} and PR #{counterpart.number} both claim {ticket}: "
-            f"{escape_annotation(counterpart.title)}"
+        label_ready = _report_collision(
+            repo,
+            subject,
+            counterpart,
+            ticket,
+            dry_run=args.dry_run,
+            label_ready=label_ready,
         )
-        if args.dry_run:
-            print(body)
-            continue
-
-        try:
-            existing = list_comment_bodies(args.repo, args.number)
-        except GuardError:
-            # Cannot prove the comment is absent, so do not risk a duplicate.
-            print(f"::warning::could not read existing comments on #{args.number}; not re-posting")
-            continue
-        if already_reported(existing, counterpart.number):
-            print(f"duplicate-delivery-guard: already reported the collision with #{counterpart.number}; skipping.")
-        elif post_comment(args.repo, args.number, body):
-            print(f"duplicate-delivery-guard: commented on #{args.number} about #{counterpart.number}.")
-        else:
-            print(
-                f"::warning::could not post the duplicate-delivery comment on #{args.number} about "
-                f"#{counterpart.number} (read-only token, e.g. a fork PR?); the collision is recorded in this log only"
-            )
-
-        if label_ready is None:
-            label_ready = ensure_label(args.repo)
-        if label_ready and add_label(args.repo, args.number):
-            print(f"duplicate-delivery-guard: labelled #{args.number} '{LABEL}'.")
-        else:
-            print(
-                f"::warning::could not apply the '{LABEL}' label to #{args.number}; the comment is the durable signal"
-            )
 
     return EXIT_OK
 
