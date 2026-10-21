@@ -371,6 +371,43 @@ class TestUpdateProvider:
         resp = client.put(self.URL, json={})
         assert resp.status_code == 400
 
+    def test_update_with_google_preset_derives_url_and_scopes(self, client: TestClient) -> None:
+        mock_provider = _make_mock_provider(name="Updated Name", auto_provision=False)
+        with patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=mock_provider)) as upd:
+            resp = client.put(self.URL, json={"preset": "google"})
+
+        assert resp.status_code == 200
+        kwargs = upd.await_args.kwargs
+        assert kwargs["discovery_url"] == "https://accounts.google.com/.well-known/openid-configuration"
+        assert kwargs["scopes"] == ["openid", "email", "profile"]
+
+    def test_update_with_custom_preset_leaves_derived_fields_unset(self, client: TestClient) -> None:
+        mock_provider = _make_mock_provider(name="Updated Name", auto_provision=False)
+        with patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=mock_provider)) as upd:
+            resp = client.put(self.URL, json={"preset": "custom"})
+
+        assert resp.status_code == 200
+        assert "discovery_url" not in upd.await_args.kwargs
+        assert "scopes" not in upd.await_args.kwargs
+
+    def test_update_with_unknown_preset_returns_422(self, client: TestClient) -> None:
+        with patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock()):
+            resp = client.put(self.URL, json={"preset": "not-a-preset"})
+
+        assert resp.status_code == 422
+
+    def test_update_with_preset_resolving_nothing_leaves_fields_unset(self, client: TestClient) -> None:
+        mock_provider = _make_mock_provider(name="Updated Name", auto_provision=False)
+        with (
+            patch("modulo.api.routes.admin_sso.resolve_preset", return_value=(None, None)),
+            patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=mock_provider)) as upd,
+        ):
+            resp = client.put(self.URL, json={"preset": "google"})
+
+        assert resp.status_code == 200
+        assert "discovery_url" not in upd.await_args.kwargs
+        assert "scopes" not in upd.await_args.kwargs
+
 
 class TestDeleteProvider:
     URL = "/api/v1/admin/sso/providers/00000000-0000-0000-0000-000000000010"
