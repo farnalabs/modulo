@@ -403,7 +403,7 @@ def test_paused_org_returns_202_paused(client: TestClient) -> None:
         patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
         patch("modulo.api.routes.slack._dispatch_slack_run", new_callable=AsyncMock) as dispatch,
         patch("modulo.api.routes.slack.set_rls_org"),
-        patch("modulo.api.routes.slack._org_row_exists", new_callable=AsyncMock, return_value=True),
+        patch("modulo.api.routes._trigger_events.org_row_exists", new_callable=AsyncMock, return_value=True),
     ):
         resp = client.post(
             f"/api/v1/triggers/{_TRIGGER_ID}/slack",
@@ -724,7 +724,7 @@ def test_paused_org_missing_row_skips_event_write(client: TestClient) -> None:
         patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
         patch("modulo.api.routes.slack._dispatch_slack_run", new_callable=AsyncMock) as dispatch,
         patch("modulo.api.routes.slack.set_rls_org"),
-        patch("modulo.api.routes.slack._org_row_exists", new_callable=AsyncMock, return_value=False),
+        patch("modulo.api.routes._trigger_events.org_row_exists", new_callable=AsyncMock, return_value=False),
     ):
         resp = client.post(
             f"/api/v1/triggers/{_TRIGGER_ID}/slack",

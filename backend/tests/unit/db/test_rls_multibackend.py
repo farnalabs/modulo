@@ -1,12 +1,18 @@
 """Unit tests for db/rls.py multi-backend behavior — set_rls_org, _inject_tenant_filter."""
 
+import logging
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.rls import _inject_tenant_filter, set_rls_org, set_rls_user_context
+from modulo.db.rls import (
+    _inject_tenant_filter,
+    _operation_label,
+    set_rls_org,
+    set_rls_user_context,
+)
 
 _TENANT_KEY = "org_id"
 _TENANT_COLUMN = "organisation_id"
@@ -197,6 +203,33 @@ class TestInjectTenantFilter:
         _inject_tenant_filter(state)
 
         state.statement.where.assert_not_called()
+
+    def test_operation_label_covers_update_and_delete_kinds(self) -> None:
+        update_state = _make_execute_state(is_select=False)
+        update_state.is_update = True
+        delete_state = _make_execute_state(is_select=False)
+
+        assert _operation_label(update_state) == "update/delete"
+        assert _operation_label(delete_state) == "delete"
+
+    def test_missing_org_context_for_insert_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.DEBUG, logger="modulo.db.rls")
+        state = _make_execute_state(org_id=None, is_select=False)
+        state.is_insert = True
+
+        _inject_tenant_filter(state)
+
+        state.statement.where.assert_not_called()
+        assert not caplog.records
+
+    def test_statement_without_column_descriptions_and_no_mappers_is_untouched(self) -> None:
+        state = _make_execute_state(all_mapper_classes=[])
+        statement = MagicMock(spec=object)
+        state.statement = statement
+
+        _inject_tenant_filter(state)
+
+        assert state.statement is statement
 
 
 class TestSetRlsUserContextMultiBackend:

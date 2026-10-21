@@ -332,6 +332,53 @@ async def me(
     )
 
 
+def _feature_flag_infos(plan_ctx: Any, org: Any) -> list[FeatureFlagInfo]:
+    """The full known flag set with the org ``feature_overrides`` overlay."""
+    # FAR-1806: the full known flag set with the org ``feature_overrides``
+    # overlay — NOT ``list_enabled_features()`` (active-only, no overlay), which
+    # disagreed with the admin endpoint on the same org and dropped default-OFF
+    # flags the client needs to resolve chrome. Shared helper:
+    # ``core.feature_flags.effective_feature_flags``.
+    effective_features = effective_feature_flags(plan_ctx, _org_feature_overrides(org))
+    return [
+        FeatureFlagInfo(
+            name=flag.name,
+            description=flag.description,
+            tier=flag.tier,
+            active=flag.currently_active,
+        )
+        for flag in effective_features
+    ]
+
+
+def _org_info(org: Any, current_user: AuthenticatedPrincipal) -> OrganisationInfo:
+    """The caller's org block, with the system-admin fallback."""
+    org_id = org.id if org else current_user.organisation_id or uuid.uuid4()
+    org_name = org.name if org else "System Admin"
+    settings = {k: v for k, v in (org.settings_json or {}).items() if k in _SAFE_ORG_SETTINGS_KEYS} if org else {}
+    return OrganisationInfo(org_id=org_id, org_name=org_name, settings=settings)
+
+
+def _plan_info(settings: Settings, org: Any) -> PlanInfo:
+    """The plan block, including the org's optional daily spend limit."""
+    daily_spend_limit = float(org.daily_spend_limit) if org is not None and org.daily_spend_limit is not None else None
+    return PlanInfo(tier=_resolve_tier(settings, org=org), daily_spend_limit=daily_spend_limit)
+
+
+def _pipeline_summaries(pipelines_page: Any) -> tuple[list[PipelineSummary], int]:
+    """Validated pipeline summaries plus the page total (empty when absent)."""
+    if pipelines_page is None:
+        return [], 0
+    return [PipelineSummary.model_validate(p) for p in pipelines_page.items], pipelines_page.total
+
+
+def _run_summaries(runs_page: Any) -> tuple[list[RunSummary], int]:
+    """Validated recent-run summaries plus the page total (empty when absent)."""
+    if runs_page is None:
+        return [], 0
+    return [RunSummary.model_validate(r) for r in runs_page.items], runs_page.total
+
+
 @router.get("/api/v1/viewmodel/current")
 @handle_db_errors("viewmodel.viewmodel_current")
 async def viewmodel_current(
@@ -369,48 +416,21 @@ async def viewmodel_current(
         ) from None
 
     org = fetched.org
-    # FAR-1806: the full known flag set with the org ``feature_overrides``
-    # overlay — NOT ``list_enabled_features()`` (active-only, no overlay),
-    # which disagreed with the admin endpoint on the same org and dropped
-    # default-OFF flags the client needs to resolve chrome. Shared helper:
-    # ``core.feature_flags.effective_feature_flags``.
-    effective_features = effective_feature_flags(fetched.plan_ctx, _org_feature_overrides(org))
-    feature_flags = [
-        FeatureFlagInfo(
-            name=flag.name,
-            description=flag.description,
-            tier=flag.tier,
-            active=flag.currently_active,
-        )
-        for flag in effective_features
-    ]
-
-    pipelines_page = fetched.pipelines_page
-    runs_page = fetched.runs_page
+    pipelines, pipelines_total = _pipeline_summaries(fetched.pipelines_page)
+    recent_runs, runs_total = _run_summaries(fetched.runs_page)
     return ViewModelCurrent(
         user=UserInfo(username=current_user.username),
-        org=OrganisationInfo(
-            org_id=org.id if org else current_user.organisation_id or uuid.uuid4(),
-            org_name=org.name if org else "System Admin",
-            settings={k: v for k, v in (org.settings_json or {}).items() if k in _SAFE_ORG_SETTINGS_KEYS}
-            if org
-            else {},
-        ),
+        org=_org_info(org, current_user),
         org_role=current_user.org_role or "",
         team_memberships=[TeamMembershipInfo(team_id=m.team_id, team_role=m.role) for m in fetched.memberships],
         team_memberships_truncated=False,
         preferences=fetched.account.preferences,
-        feature_flags=feature_flags,
-        plan=PlanInfo(
-            tier=_resolve_tier(settings, org=org),
-            daily_spend_limit=(
-                float(org.daily_spend_limit) if org is not None and org.daily_spend_limit is not None else None
-            ),
-        ),
-        pipelines=[PipelineSummary.model_validate(p) for p in (pipelines_page.items if pipelines_page else [])],
-        pipelines_total=pipelines_page.total if pipelines_page else 0,
-        recent_runs=[RunSummary.model_validate(r) for r in (runs_page.items if runs_page else [])],
-        runs_total=runs_page.total if runs_page else 0,
+        feature_flags=_feature_flag_infos(fetched.plan_ctx, org),
+        plan=_plan_info(settings, org),
+        pipelines=pipelines,
+        pipelines_total=pipelines_total,
+        recent_runs=recent_runs,
+        runs_total=runs_total,
         pending_hitl_reviews=[PendingHitlReview.model_validate(h) for h in fetched.pending_hitl],
         views=fetched.all_views,
         current_view=fetched.current_view,
