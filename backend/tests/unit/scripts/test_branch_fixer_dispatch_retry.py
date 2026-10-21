@@ -1,12 +1,18 @@
-"""Behavioural tests for the CI -> Branch Fixer webhook dispatch retry policy.
+"""Behavioural tests for the CI -> Branch Fixer webhook dispatch.
 
-The dispatch lives inline in ``.github/workflows/ci.yml`` (job
-``notify-pr-failure``, step ``Trigger Modulo Branch Fixer``) and no other suite
-executes it, so a retry-policy regression is invisible until a real CI failure
-needs the autonomous fix loop - exactly when it is least affordable. These tests
-run the step's REAL ``run:`` block under ``bash -e`` with stubbed ``curl``,
-``gh`` and ``sleep``, so they assert the shipped shell behaviour rather than a
-re-implementation of it.
+The dispatch is shell code in ``.github/workflows/ci.yml`` (job
+``notify-pr-failure``, step ``Trigger Modulo Branch Fixer``) that delegates the
+retry policy to ``scripts/dispatch_with_retry.sh``. No other suite executes the
+step, so a regression in the CI caller's contract - the durable PR comment, the
+exit 1 vs exit 2 distinction, the run summary - is invisible until a real CI
+failure needs the autonomous fix loop, exactly when it is least affordable.
+
+These tests run the step's REAL ``run:`` block under ``bash -e`` from the repo
+root (so it resolves the shared script) with stubbed ``curl``, ``gh`` and
+``sleep``. The retry-policy assertions therefore exercise the SHIPPED shared
+script end-to-end through the CI caller, not a re-implementation; the script's
+own unit suite (``test_dispatch_with_retry_sh.py``) covers its contract
+directly.
 
 The defect they pin (observed 2026-10-20): a saturated Branch Fixer trigger
 answers HTTP 429 ("Concurrent run limit of 8 reached"); the old policy gave up
@@ -26,10 +32,6 @@ from typing import NamedTuple
 
 import pytest
 import yaml
-
-#: Markers around the retry policy shared by both ci.yml notify steps.
-POLICY_START = "# ==== BEGIN Branch Fixer dispatch retry policy ===="
-POLICY_END = "# ==== END Branch Fixer dispatch retry policy ===="
 
 #: The step that owns the PR-failure dispatch (its body is executed below).
 PR_JOB = "notify-pr-failure"
@@ -195,11 +197,15 @@ def _run_dispatch(
     env.update(env_overrides or {})
 
     bash = shutil.which("bash") or "/bin/bash"
+    # cwd MUST be the repo root: the step delegates to the shared policy with a
+    # repo-relative path (``bash scripts/dispatch_with_retry.sh``), exactly as
+    # GitHub runs it inside the checked-out workspace.
     completed = subprocess.run(  # noqa: S603 — fixed argv: an interpreter and a test-written script path
         [bash, "-e", str(script)],
         capture_output=True,
         text=True,
         env=env,
+        cwd=_repo_root(),
         timeout=120,
         check=False,
     )
