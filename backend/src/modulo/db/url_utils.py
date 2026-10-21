@@ -86,6 +86,33 @@ def fix_database_url(url: str) -> str:
     return fixed
 
 
+_POSTGRES_SCHEMES = frozenset({"postgres", "postgresql", "postgresql+asyncpg", "postgresql+psycopg"})
+
+
+def _ssl_value_for_mode(raw_value: str) -> str | bool:
+    """Translate one ``sslmode`` value to asyncpg's ``ssl`` arg (or raise)."""
+    mode = raw_value.strip().lower().replace("_", "-")
+    if mode in _PLAINTEXT_SSLMODES:
+        return False
+    if mode in _REQUIRE_TLS_SSLMODES:
+        return mode
+    raise ValueError(
+        f"Unsupported sslmode={raw_value!r}: use disable, require, "
+        "verify-ca or verify-full (prefer/allow silently downgrade "
+        "to plaintext and are not permitted)"
+    )
+
+
+def _sslmode_value_for_item(raw_item: str) -> str | bool | None:
+    """The translated ssl value for an ``sslmode`` query item, else None."""
+    parsed_item = parse_qsl(raw_item, keep_blank_values=True)
+    key = parsed_item[0][0] if parsed_item else raw_item
+    if key != "sslmode":
+        return None
+    raw_value = parsed_item[0][1] if len(parsed_item[0]) == 2 else ""
+    return _ssl_value_for_mode(raw_value)
+
+
 def split_postgres_sslmode(url: str) -> tuple[str, str | bool]:
     """Extract ``sslmode`` from a Postgres URL into an asyncpg ``ssl`` value.
 
@@ -110,27 +137,14 @@ def split_postgres_sslmode(url: str) -> tuple[str, str | bool]:
     loudly rather than silently passing a bogus ``ssl`` arg.
     """
     parts = urlsplit(url)
-    scheme_ok = parts.scheme in {"postgres", "postgresql", "postgresql+asyncpg", "postgresql+psycopg"}
-    if not scheme_ok:
+    if parts.scheme not in _POSTGRES_SCHEMES:
         raise ValueError(f"split_postgres_sslmode expects a Postgres URL, got scheme {parts.scheme!r}")
     ssl: str | bool = False
     kept_raw: list[str] = []
     for raw_item in parts.query.split("&") if parts.query else []:
-        parsed_item = parse_qsl(raw_item, keep_blank_values=True)
-        key = parsed_item[0][0] if parsed_item else raw_item
-        if key == "sslmode":
-            raw_value = parsed_item[0][1] if len(parsed_item[0]) == 2 else ""
-            mode = raw_value.strip().lower().replace("_", "-")
-            if mode in _PLAINTEXT_SSLMODES:
-                ssl = False
-            elif mode in _REQUIRE_TLS_SSLMODES:
-                ssl = mode
-            else:
-                raise ValueError(
-                    f"Unsupported sslmode={raw_value!r}: use disable, require, "
-                    "verify-ca or verify-full (prefer/allow silently downgrade "
-                    "to plaintext and are not permitted)"
-                )
+        ssl_value = _sslmode_value_for_item(raw_item)
+        if ssl_value is not None:
+            ssl = ssl_value
         else:
             kept_raw.append(raw_item)
     clean = parts._replace(query="&".join(kept_raw)).geturl()

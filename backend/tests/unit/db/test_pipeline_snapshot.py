@@ -1550,3 +1550,20 @@ async def test_mint_does_not_bake_unreferenced_registry_intent(tmp_path: Any, mo
     node = snapshot.graph_json["nodes"][0]
     assert "_resolved_model" not in node
     assert "_model_origin" not in node
+
+
+async def test_missing_pipeline_returns_none_before_copying_the_graph() -> None:
+    """A snapshot request for a pipeline the caller cannot see returns None.
+
+    The graph copy must not run (no composite expansion, no savepoint) — the
+    missing pipeline row short-circuits before any read work.
+    """
+    pipeline_id = uuid.uuid4()
+    session = AsyncMock(spec=AsyncSession)
+    session.execute.side_effect = [_scalar_result(None)]
+
+    with _bind_lock_connection(session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert snapshot is None
+    assert session.begin_nested.call_count == 0
