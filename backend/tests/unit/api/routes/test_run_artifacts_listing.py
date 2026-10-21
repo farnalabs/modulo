@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from tests.unit.api.mock_session import configure_rls_preamble
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.main import app
@@ -58,7 +59,9 @@ class _BeginRaiser:
 
 def _make_session(*, begin_exc: Exception | None = None) -> AsyncMock:
     """Build a mock session with proper begin() async context manager."""
-    session = AsyncMock()
+    # ``set_rls_org`` calls ``in_transaction()``/``get_bind()`` synchronously;
+    # a bare AsyncMock child leaks a never-awaited coroutine per request.
+    session = configure_rls_preamble(AsyncMock())
     if begin_exc is not None:
         session.begin = MagicMock(return_value=_BeginRaiser(begin_exc))
     else:

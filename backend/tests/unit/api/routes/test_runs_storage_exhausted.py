@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
@@ -37,11 +38,19 @@ def _make_settings() -> Settings:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct session double: ``set_rls_org`` reads ``in_transaction()``
+    # / ``get_bind()`` synchronously, and the route's org-status guard calls
+    # ``result.scalar_one_or_none()`` (a SYNC Result method) — a bare AsyncMock
+    # turns both into never-awaited coroutines. The status read must report an
+    # ACTIVE org so the request reaches the capacity gate under test.
+    session = configure_rls_preamble(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    result = make_empty_execute_result()
+    result.scalar_one_or_none.return_value = "active"
+    session.execute = AsyncMock(return_value=result)
     return session
 
 
