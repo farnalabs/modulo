@@ -9,6 +9,7 @@ import time
 import urllib.parse
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 from defusedxml import ElementTree
@@ -233,6 +234,67 @@ async def _scope_app_session_org(
 # ---------------------------------------------------------------------------
 
 
+async def _resolve_jit_org_id(
+    session: AsyncSession,
+    default_org_id: uuid.UUID | None,
+) -> uuid.UUID:
+    """The JIT target org: the caller's default, else the first Organisation."""
+    if default_org_id is not None:
+        return default_org_id
+    result = await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
+    org = result.scalar_one_or_none()
+    if org is None:
+        raise RuntimeError("No organisation exists — cannot JIT provision account")
+    return org.id
+
+
+async def _jit_existing_member_role(
+    session: AsyncSession,
+    email: str,
+    org_id: uuid.UUID,
+) -> str | None:
+    """Role of the identity's existing LIVE membership in the org, else ``None``."""
+    existing = await get_account_by_email(session, email)
+    if existing is None:
+        return None
+    membership = await get_membership_by_account_and_org(session, existing.id, org_id)
+    if membership is None or membership.deactivated_at is not None:
+        return None
+    return membership.role
+
+
+async def _jit_join_unlocked(
+    provider: SsoProvider,
+    email: str,
+    email_verified: bool,
+    org_id: uuid.UUID,
+) -> bool:
+    """Resolve the self-service join gate, including the mode-3 operator flag."""
+    unlocked, mode = _sso_jit_mode_allows_auto(provider, email, email_verified)
+    if unlocked and mode == "unrestricted":
+        # Mode 3 is DANGEROUS and gated behind the operator-level flag; OFF
+        # fails CLOSED here (falling back to member/invitation-only access).
+        unlocked = await resolve_sso_unrestricted_provisioning(org_id=org_id)
+        if not unlocked:
+            _log.info(
+                "sso.jit_unrestricted_flag_off",
+                extra={"organisation_id": str(org_id), "provider_id": provider.provider_id},
+            )
+    return unlocked
+
+
+async def _consume_jit_invitation(
+    session: AsyncSession,
+    invitation: Invitation,
+    org_id: uuid.UUID,
+) -> None:
+    """CAS-consume the invitation that granted the join, then audit its use."""
+    if not await consume_invitation(session, invitation):
+        # CAS lost the race — abort atomically, identical to accept-invite.
+        raise SsoProvisioningDeniedError(Constants.MSG_SSO_JOIN_DENIED, org_id=org_id)
+    await _audit_invite_consumed_fail_open(session, org_id, invitation.id)
+
+
 async def jit_provision_user(
     session: AsyncSession,
     settings: Settings,
@@ -274,14 +336,7 @@ async def jit_provision_user(
     raises :class:`SsoProvisioningDeniedError` (a ``ValueError`` subclass) so the
     SSO callback surfaces a clean 401 rather than a 500.
     """
-    if default_org_id is not None:
-        org_id = default_org_id
-    else:
-        result = await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
-        org = result.scalar_one_or_none()
-        if org is None:
-            raise RuntimeError("No organisation exists — cannot JIT provision account")
-        org_id = org.id
+    org_id = await _resolve_jit_org_id(session, default_org_id)
 
     if sso_provider is None:
         # Legacy env-var provider path: no DB row means no policy surface to
@@ -295,27 +350,15 @@ async def jit_provision_user(
 
     # Pre-provision eligibility check: NOTHING is written below unless the
     # identity is allowed to join (fail-closed — a denial leaves no orphan row).
-    existing = await get_account_by_email(session, email)
-    existing_membership = None
-    if existing is not None:
-        existing_membership = await get_membership_by_account_and_org(session, existing.id, org_id)
-    if existing_membership is not None and existing_membership.deactivated_at is None:
+    existing_role = await _jit_existing_member_role(session, email, org_id)
+    if existing_role is not None:
         # Already a member (e.g. SCIM/admin-provisioned): never change their role.
         account = await _upsert_sso_identity(session, email, display_name, auth_provider, sso_subject)
-        return account, org_id, existing_membership.role
+        return account, org_id, existing_role
 
     invitation = await get_live_for_email(session, org_id=org_id, email=email)
 
-    unlocked, mode = _sso_jit_mode_allows_auto(sso_provider, email, email_verified)
-    if unlocked and mode == "unrestricted":
-        # Mode 3 is DANGEROUS and gated behind the operator-level flag; OFF
-        # fails CLOSED here (falling back to member/invitation-only access).
-        unlocked = await resolve_sso_unrestricted_provisioning(org_id=org_id)
-        if not unlocked:
-            _log.info(
-                "sso.jit_unrestricted_flag_off",
-                extra={"organisation_id": str(org_id), "provider_id": sso_provider.provider_id},
-            )
+    unlocked = await _jit_join_unlocked(sso_provider, email, email_verified, org_id)
     if not unlocked and invitation is None:
         # No self-service path (mode 1, or mode 2/3 whose gate did not match)
         # and no pending invitation: fail closed before any write.
@@ -341,10 +384,7 @@ async def jit_provision_user(
     )
 
     if invitation is not None and invitation_used:
-        if not await consume_invitation(session, invitation):
-            # CAS lost the race — abort atomically, identical to accept-invite.
-            raise SsoProvisioningDeniedError(Constants.MSG_SSO_JOIN_DENIED, org_id=org_id)
-        await _audit_invite_consumed_fail_open(session, org_id, invitation.id)
+        await _consume_jit_invitation(session, invitation, org_id)
 
     return account, org_id, org_role
 
@@ -656,6 +696,68 @@ async def _read_system_oidc_provider(
         return await get_provider_by_provider_id(system_session, provider_id)
 
 
+async def _read_oidc_provider_with_fallback(
+    provider_id: str,
+    system_session: AsyncSession | None,
+    app_session: AsyncSession | None,
+) -> SsoProvider | None:
+    """Read the provider via the system role, else the app single-org fallback.
+
+    FAR-1058 parity: the app fallback must run inside an active transaction.
+    ``set_rls_org`` requires one (it raises ``RuntimeError`` otherwise), and the
+    caller's app session may hand us the resolver with NO transaction open
+    (``autobegin=False``). Open a scoped transaction when the caller has none
+    (its LOCAL binding reverts at commit, so the binding cannot leak into a
+    later caller transaction); read in place when the caller already holds one
+    (the OIDC login / callback routes always wrap in ``session.begin()``).
+    """
+    db_provider = await _read_system_oidc_provider(system_session, provider_id)
+    if db_provider is not None or app_session is None:
+        return db_provider
+    if app_session.in_transaction():
+        await _set_default_rls_org(app_session)
+        return await get_provider_by_provider_id(app_session, provider_id)
+    async with app_session.begin():
+        await _set_default_rls_org(app_session)
+        return await get_provider_by_provider_id(app_session, provider_id)
+
+
+async def _validate_oidc_discovery_url(discovery_url: str, provider_id: str) -> None:
+    """SSRF-validate the DB provider's discovery URL, naming the provider on reject."""
+    try:
+        await validate_outbound_url_async(discovery_url)
+    except ValueError as exc:
+        raise ValueError(f"Rejected OIDC discovery_url for provider '{provider_id}': {exc}") from None
+
+
+async def _oidc_config_from_db_provider(
+    db_provider: SsoProvider | None,
+    provider_id: str,
+    settings: Settings,
+) -> tuple[str | None, str | None, str | None, list[str] | str | None, SsoProvider | None] | None:
+    """Config tuple from a usable DB provider row, else ``None`` (fall through to env)."""
+    if db_provider is None or db_provider.provider_type != "oidc" or not db_provider.enabled:
+        return None
+    discovery_url = db_provider.discovery_url
+    if discovery_url:
+        await _validate_oidc_discovery_url(discovery_url, provider_id)
+    return (
+        db_provider.client_id,
+        # NOSCOPE: instance-global OIDC IdP config, NOT tenant data. The
+        # provider is read through the modulo_system role (BYPASSRLS) for
+        # pre-auth SSO routes that carry no user/org claim, so there is no
+        # per-request RLS org to bind the decrypt to — org-scoping here would
+        # be a cross-context error, not a hardening gain. Kept on the pure
+        # helper deliberately; the no-unscoped-decrypt gate allows it via the
+        # nosemgrep below.
+        # nosemgrep: no-unscoped-decrypt
+        decode_stored_secret(db_provider.client_secret, settings.fernet_key) if db_provider.client_secret else None,
+        discovery_url,
+        json.loads(db_provider.scopes) if db_provider.scopes else None,
+        db_provider,
+    )
+
+
 async def _resolve_oidc_provider(
     provider_id: str,
     system_session: AsyncSession | None,
@@ -676,45 +778,10 @@ async def _resolve_oidc_provider(
     (used for JIT org placement and SSRF validation); ``None`` for the env path.
     Returns all-``None`` when the provider is not configured at all.
     """
-    db_provider = await _read_system_oidc_provider(system_session, provider_id)
-    if db_provider is None and app_session is not None:
-        # FAR-1058 parity: the app fallback must run inside an active
-        # transaction. set_rls_org requires one (it raises RuntimeError
-        # otherwise), and the caller's app session may hand us the resolver
-        # with NO transaction open (autobegin=False). Open a scoped
-        # transaction when the caller has none (its LOCAL binding reverts at
-        # commit, so the binding cannot leak into a later caller transaction);
-        # read in place when the caller already holds one (the OIDC login /
-        # callback routes always wrap in session.begin()).
-        if app_session.in_transaction():
-            await _set_default_rls_org(app_session)
-            db_provider = await get_provider_by_provider_id(app_session, provider_id)
-        else:
-            async with app_session.begin():
-                await _set_default_rls_org(app_session)
-                db_provider = await get_provider_by_provider_id(app_session, provider_id)
-    if db_provider is not None and db_provider.provider_type == "oidc" and db_provider.enabled:
-        discovery_url = db_provider.discovery_url
-        if discovery_url:
-            try:
-                await validate_outbound_url_async(discovery_url)
-            except ValueError as exc:
-                raise ValueError(f"Rejected OIDC discovery_url for provider '{provider_id}': {exc}") from None
-        return (
-            db_provider.client_id,
-            # NOSCOPE: instance-global OIDC IdP config, NOT tenant data. The
-            # provider is read through the modulo_system role (BYPASSRLS) for
-            # pre-auth SSO routes that carry no user/org claim, so there is no
-            # per-request RLS org to bind the decrypt to — org-scoping here would
-            # be a cross-context error, not a hardening gain. Kept on the pure
-            # helper deliberately; the no-unscoped-decrypt gate allows it via the
-            # nosemgrep below.
-            # nosemgrep: no-unscoped-decrypt
-            decode_stored_secret(db_provider.client_secret, settings.fernet_key) if db_provider.client_secret else None,
-            discovery_url,
-            json.loads(db_provider.scopes) if db_provider.scopes else None,
-            db_provider,
-        )
+    db_provider = await _read_oidc_provider_with_fallback(provider_id, system_session, app_session)
+    db_config = await _oidc_config_from_db_provider(db_provider, provider_id, settings)
+    if db_config is not None:
+        return db_config
 
     providers = _parse_oidc_providers(settings)
     provider = next((p for p in providers if p["provider_id"] == provider_id), None)
@@ -815,6 +882,165 @@ async def oidc_get_authorize_url(
     return f"{auth_endpoint}?{params}", raw_state, nonce, code_verifier
 
 
+def _oidc_provider_id_from_state(state: str, settings: Settings) -> str:
+    """Verify the signed state and return the provider id embedded in it."""
+    state_data = verify_state(state, settings.secret_key)
+    if not state_data:
+        _log.warning(
+            "sso.csrf_state_mismatch", extra={"state_prefix": state[:20] + "..." if len(state) > 20 else state}
+        )
+        raise ValueError("Invalid state parameter — possible CSRF")
+    return state_data.split(":", 1)[0] if ":" in state_data else state_data
+
+
+async def _resolve_oidc_client_config(
+    provider_id: str,
+    system_session: AsyncSession | None,
+    app_session: AsyncSession | None,
+    settings: Settings,
+) -> tuple[str, str, str, SsoProvider | None]:
+    """Resolve and validate the provider's client config for the callback leg."""
+    client_id, client_secret, discovery_url, _scopes, db_provider = await _resolve_oidc_provider(
+        provider_id, system_session, app_session, settings
+    )
+    if client_id is None:
+        raise ValueError(f"OIDC provider '{provider_id}' not found")
+    if not client_id or not client_secret or not discovery_url:
+        raise ValueError(f"OIDC provider '{provider_id}' is missing required configuration")
+    return client_id, client_secret, discovery_url, db_provider
+
+
+async def _fetch_oidc_discovery_document(
+    discovery_url: str,
+    db_provider: SsoProvider | None,
+) -> dict[str, object]:
+    """Fetch the discovery document (pinned for a DB provider), mapping HTTP errors."""
+    try:
+        if db_provider is not None:
+            return await _fetch_discovery_pinned(discovery_url)
+        return await _fetch_discovery(discovery_url)
+    except httpx.HTTPError as exc:
+        raise ValueError(f"Failed to fetch discovery document: {exc}") from None
+
+
+def _oidc_token_endpoint(disc: dict[str, object], discovery_url: str) -> str:
+    """Extract and host-validate the token endpoint from the discovery document."""
+    token_endpoint = disc.get("token_endpoint")
+    if not isinstance(token_endpoint, str) or not token_endpoint:
+        raise ValueError("No token_endpoint in discovery document")
+    raw_issuer = disc.get("issuer")
+    issuer_for_hosts = raw_issuer if isinstance(raw_issuer, str) else None
+    _enforce_oidc_endpoint_host(token_endpoint, discovery_url, issuer_for_hosts, "token")
+    return token_endpoint
+
+
+async def _exchange_oidc_code(
+    token_endpoint: str,
+    client_id: str,
+    client_secret: str,
+    code: str,
+    redirect_uri: str,
+    code_verifier: str,
+) -> dict[str, object]:
+    """Redeem the authorization code, mapping HTTP errors to a ValueError."""
+    try:
+        return await _exchange_code(
+            token_endpoint,
+            client_id,
+            client_secret,
+            code,
+            redirect_uri,
+            code_verifier,
+        )
+    except httpx.HTTPError as exc:
+        raise ValueError(f"Failed to exchange authorization code: {exc}") from None
+
+
+async def _verify_oidc_id_token(
+    disc: dict[str, object],
+    token_data: dict[str, object],
+    client_id: str,
+    discovery_url: str,
+    expected_nonce: str,
+) -> dict[str, Any]:
+    """Require, host-validate and signature-verify the ID token; return its claims."""
+    id_token = token_data.get("id_token")
+    if not isinstance(id_token, str) or not id_token:
+        raise ValueError("OIDC token response is missing a valid id_token")
+
+    jwks_uri = disc.get("jwks_uri")
+    issuer = disc.get("issuer")
+    if not isinstance(jwks_uri, str) or not jwks_uri or not isinstance(issuer, str) or not issuer:
+        raise ValueError(
+            "OIDC provider discovery document is missing jwks_uri or issuer — "
+            "cannot verify ID token signature. Check provider configuration."
+        )
+    _enforce_oidc_endpoint_host(jwks_uri, discovery_url, issuer, "jwks")
+
+    try:
+        return await verify_id_token(id_token, jwks_uri, client_id, issuer, expected_nonce=expected_nonce)
+    except OidcVerifyError as exc:
+        raise ValueError(str(exc)) from None
+
+
+def _oidc_identity_from_claims(claims: dict[str, Any], provider_id: str) -> tuple[str, str, str]:
+    """(email, display name, SSO subject) from verified OIDC claims."""
+    email = claims.get("email", "") or claims.get("sub", "")
+    if not email:
+        raise ValueError("OIDC provider did not return an email or sub claim — cannot provision account")
+    name = claims.get("name", "") or claims.get("preferred_username", "") or email.split("@")[0]
+    sso_subject = f"{provider_id}:{claims.get('sub', email)}"
+    return email, name, sso_subject
+
+
+async def _oidc_jit_provision(
+    app_session: AsyncSession,
+    settings: Settings,
+    email: str,
+    name: str,
+    sso_subject: str,
+    default_org_id: uuid.UUID | None,
+    db_provider: SsoProvider | None,
+    claims: dict[str, Any],
+) -> tuple[Account, uuid.UUID, str]:
+    """JIT-provision the OIDC identity, mapping provisioning failures to ValueError."""
+    try:
+        return await jit_provision_user(
+            app_session,
+            settings,
+            email,
+            name,
+            "oidc",
+            sso_subject,
+            default_org_id=default_org_id,
+            sso_provider=db_provider,
+            # FAR-855: a domain-allowlist join requires a VERIFIED email — the
+            # IdP's email_verified claim; a missing claim is NOT verified.
+            email_verified=bool(claims.get("email_verified")),
+        )
+    except RuntimeError as exc:
+        raise ValueError(str(exc)) from None
+
+
+async def _apply_oidc_group_mappings(
+    app_session: AsyncSession,
+    claims: dict[str, Any],
+    account: Account,
+    org_id: uuid.UUID,
+    client_id: str,
+) -> None:
+    """Apply IdP group-to-team mappings for the provisioned account, when configured."""
+    raw_groups = claims.get("groups", [])
+    if not isinstance(raw_groups, list):
+        raw_groups = []
+    idp_groups: list[str] = raw_groups
+    if not idp_groups:
+        return
+    db_provider_for_groups = await _lookup_provider_by_client_id(app_session, client_id, org_id)
+    if db_provider_for_groups is not None and db_provider_for_groups.group_mappings:
+        await apply_group_mappings(app_session, account, org_id, idp_groups, db_provider_for_groups.group_mappings)
+
+
 async def oidc_process_callback(
     code: str,
     state: str,
@@ -838,104 +1064,31 @@ async def oidc_process_callback(
     and ``expected_nonce`` is the per-login nonce to require on the ID token.
     Both are REQUIRED — a callback that cannot present them must not exchange.
     """
-    state_data = verify_state(state, settings.secret_key)
-    if not state_data:
-        _log.warning(
-            "sso.csrf_state_mismatch", extra={"state_prefix": state[:20] + "..." if len(state) > 20 else state}
-        )
-        raise ValueError("Invalid state parameter — possible CSRF")
-
-    provider_id = state_data.split(":", 1)[0] if ":" in state_data else state_data
-
-    client_id, client_secret, discovery_url, _scopes, db_provider = await _resolve_oidc_provider(
+    provider_id = _oidc_provider_id_from_state(state, settings)
+    client_id, client_secret, discovery_url, db_provider = await _resolve_oidc_client_config(
         provider_id, system_session, app_session, settings
     )
-
-    if client_id is None:
-        raise ValueError(f"OIDC provider '{provider_id}' not found")
-    if not client_id or not client_secret or not discovery_url:
-        raise ValueError(f"OIDC provider '{provider_id}' is missing required configuration")
-
-    try:
-        if db_provider is not None:
-            disc = await _fetch_discovery_pinned(discovery_url)
-        else:
-            disc = await _fetch_discovery(discovery_url)
-    except httpx.HTTPError as exc:
-        raise ValueError(f"Failed to fetch discovery document: {exc}") from None
-
-    token_endpoint = disc.get("token_endpoint")
-    if not isinstance(token_endpoint, str) or not token_endpoint:
-        raise ValueError("No token_endpoint in discovery document")
-    raw_issuer = disc.get("issuer")
-    issuer_for_hosts = raw_issuer if isinstance(raw_issuer, str) else None
-    _enforce_oidc_endpoint_host(token_endpoint, discovery_url, issuer_for_hosts, "token")
-
-    try:
-        token_data = await _exchange_code(
-            token_endpoint,
-            client_id,
-            client_secret,
-            code,
-            redirect_uri,
-            code_verifier,
-        )
-    except httpx.HTTPError as exc:
-        raise ValueError(f"Failed to exchange authorization code: {exc}") from None
-
-    id_token = token_data.get("id_token")
-    if not isinstance(id_token, str) or not id_token:
-        raise ValueError("OIDC token response is missing a valid id_token")
-
-    jwks_uri = disc.get("jwks_uri")
-    issuer = disc.get("issuer")
-    if not isinstance(jwks_uri, str) or not jwks_uri or not isinstance(issuer, str) or not issuer:
-        raise ValueError(
-            "OIDC provider discovery document is missing jwks_uri or issuer — "
-            "cannot verify ID token signature. Check provider configuration."
-        )
-    _enforce_oidc_endpoint_host(jwks_uri, discovery_url, issuer, "jwks")
-
-    try:
-        claims = await verify_id_token(id_token, jwks_uri, client_id, issuer, expected_nonce=expected_nonce)
-    except OidcVerifyError as exc:
-        raise ValueError(str(exc)) from None
-
-    email = claims.get("email", "") or claims.get("sub", "")
-    if not email:
-        raise ValueError("OIDC provider did not return an email or sub claim — cannot provision account")
-    name = claims.get("name", "") or claims.get("preferred_username", "") or email.split("@")[0]
-    sso_subject = f"{provider_id}:{claims.get('sub', email)}"
+    disc = await _fetch_oidc_discovery_document(discovery_url, db_provider)
+    token_endpoint = _oidc_token_endpoint(disc, discovery_url)
+    token_data = await _exchange_oidc_code(
+        token_endpoint,
+        client_id,
+        client_secret,
+        code,
+        redirect_uri,
+        code_verifier,
+    )
+    claims = await _verify_oidc_id_token(disc, token_data, client_id, discovery_url, expected_nonce)
+    email, name, sso_subject = _oidc_identity_from_claims(claims, provider_id)
 
     if app_session is None:
         raise RuntimeError("No app session available for OIDC JIT provisioning")
 
     default_org_id = await _scope_app_session_org(app_session, db_provider)
-    try:
-        account, org_id, org_role = await jit_provision_user(
-            app_session,
-            settings,
-            email,
-            name,
-            "oidc",
-            sso_subject,
-            default_org_id=default_org_id,
-            sso_provider=db_provider,
-            # FAR-855: a domain-allowlist join requires a VERIFIED email — the
-            # IdP's email_verified claim; a missing claim is NOT verified.
-            email_verified=bool(claims.get("email_verified")),
-        )
-    except RuntimeError as exc:
-        raise ValueError(str(exc)) from None
-
-    raw_groups = claims.get("groups", [])
-    if not isinstance(raw_groups, list):
-        raw_groups = []
-    idp_groups: list[str] = raw_groups
-    if idp_groups:
-        db_provider_for_groups = await _lookup_provider_by_client_id(app_session, client_id, org_id)
-        if db_provider_for_groups is not None and db_provider_for_groups.group_mappings:
-            await apply_group_mappings(app_session, account, org_id, idp_groups, db_provider_for_groups.group_mappings)
+    account, org_id, org_role = await _oidc_jit_provision(
+        app_session, settings, email, name, sso_subject, default_org_id, db_provider, claims
+    )
+    await _apply_oidc_group_mappings(app_session, claims, account, org_id, client_id)
 
     return await issue_sso_tokens(account, org_id, org_role, app_session, settings)
 
@@ -1361,6 +1514,120 @@ def _validate_saml_response_destination(saml_response: str, acs_url: str) -> Non
         raise ValueError("SAML response Destination does not match the ACS URL")
 
 
+def _saml_idp_entity_id(idp_metadata: str) -> str:
+    """Parse the IdP metadata, mapping parse failures to a ValueError."""
+    try:
+        _, idp_entity_id = _saml_parse_idp_metadata(idp_metadata)
+    except (ElementTree.ParseError, ValueError) as exc:
+        raise ValueError(f"Failed to parse IdP metadata: {exc}") from None
+    return idp_entity_id
+
+
+def _saml_acs_url(settings: Settings, provider_id: str | None) -> str:
+    """The ACS URL for this response: per-provider when named, else the legacy singleton."""
+    # Per-provider ACS URL (FAR-1001) when provider_id is given; legacy
+    # singleton ACS URL for the single-tenant convenience path.
+    public_url = get_public_url(settings).rstrip("/")
+    if provider_id:
+        return f"{public_url}/api/v1/auth/saml/acs/{provider_id}"
+    return f"{public_url}/api/v1/auth/saml/acs"
+
+
+def _saml_process_result(handler: ModuloSamlAuth, saml_response: str) -> dict[str, Any]:
+    """Run python3-saml validation, mapping signature failures to a ValueError."""
+    try:
+        return handler.process_response(saml_response)
+    except SamlAuthError as exc:
+        _log.warning("sso.saml_signature_validation_failed", extra={"error": str(exc)})
+        raise ValueError(str(exc)) from None
+
+
+def _saml_attributes(result: dict[str, Any]) -> tuple[str, dict[str, str]]:
+    """(name_id, flattened attribute map) from a validated SAML assertion."""
+    name_id = result["name_id"]
+    raw_attrs = result["attributes"]
+    return name_id, {attr_name: ",".join(values) for attr_name, values in raw_attrs.items()}
+
+
+def _saml_identity(name_id: str, attrs: dict[str, str], idp_entity_id: str) -> tuple[str, str, str]:
+    """(email, display name, SSO subject) from a validated SAML assertion."""
+    email = attrs.get("email", "") or attrs.get("Email", "") or name_id or ""
+    if not email:
+        raise ValueError("SAML provider did not return an email attribute — cannot provision account")
+    display_name = (
+        attrs.get("displayName", "")
+        or attrs.get("cn", "")
+        or attrs.get("firstName", "")
+        or (email.split("@")[0] if "@" in email else email)
+    )
+    sso_subject = f"saml:{idp_entity_id}:{name_id}"
+    return email, display_name, sso_subject
+
+
+def _saml_groups(attrs: dict[str, str]) -> list[str]:
+    """The first non-empty group attribute, split into individual group names."""
+    for group_attr in ("groups", "memberOf", "Group"):
+        raw = attrs.get(group_attr, "")
+        if raw:
+            return [g.strip() for g in raw.split(",") if g.strip()]
+    return []
+
+
+async def _apply_saml_group_mappings(
+    app_session: AsyncSession,
+    saml_groups: list[str],
+    account: Account,
+    org_id: uuid.UUID,
+    idp_entity_id: str,
+) -> None:
+    """Apply SAML group-to-team mappings for the provisioned account, when configured."""
+    if not saml_groups:
+        return
+    db_provider = await _lookup_provider_by_entity_id(app_session, idp_entity_id, org_id)
+    if db_provider is not None and db_provider.group_mappings:
+        await apply_group_mappings(app_session, account, org_id, saml_groups, db_provider.group_mappings)
+
+
+async def _saml_jit_provision(
+    app_session: AsyncSession,
+    settings: Settings,
+    email: str,
+    display_name: str,
+    sso_subject: str,
+    default_org_id: uuid.UUID | None,
+    db_saml: SsoProvider | None,
+) -> tuple[Account, uuid.UUID, str]:
+    """JIT-provision the SAML identity, mapping provisioning failures to ValueError."""
+    try:
+        return await jit_provision_user(
+            app_session,
+            settings,
+            email,
+            display_name,
+            "saml",
+            sso_subject,
+            default_org_id=default_org_id,
+            sso_provider=db_saml,
+            email_verified=True,
+        )
+    except RuntimeError as exc:
+        raise ValueError(str(exc)) from None
+
+
+async def _issue_saml_tokens(
+    account: Account,
+    org_id: uuid.UUID,
+    org_role: str,
+    app_session: AsyncSession,
+    settings: Settings,
+) -> dict[str, str]:
+    """Issue the SSO token pair, mapping issuance failures to a ValueError."""
+    try:
+        return await issue_sso_tokens(account, org_id, org_role, app_session, settings)
+    except RuntimeError as exc:
+        raise ValueError(str(exc)) from None
+
+
 async def saml_process_response(
     saml_response: str,
     settings: Settings,
@@ -1398,18 +1665,8 @@ async def saml_process_response(
     idp_metadata, entity_id, sp_key, sp_cert, db_saml = await _resolve_saml_config(
         system_session, app_session, settings, provider_id=provider_id
     )
-
-    try:
-        _, idp_entity_id = _saml_parse_idp_metadata(idp_metadata)
-    except (ElementTree.ParseError, ValueError) as exc:
-        raise ValueError(f"Failed to parse IdP metadata: {exc}") from None
-
-    public_url = get_public_url(settings).rstrip("/")
-    # Per-provider ACS URL (FAR-1001) when provider_id is given; legacy
-    # singleton ACS URL for the single-tenant convenience path.
-    acs_url = (
-        f"{public_url}/api/v1/auth/saml/acs/{provider_id}" if provider_id else f"{public_url}/api/v1/auth/saml/acs"
-    )
+    idp_entity_id = _saml_idp_entity_id(idp_metadata)
+    acs_url = _saml_acs_url(settings, provider_id)
     _validate_saml_response_destination(saml_response, acs_url)
     handler = ModuloSamlAuth(
         entity_id=entity_id,
@@ -1418,61 +1675,19 @@ async def saml_process_response(
         sp_private_key=sp_key,
         sp_x509_cert=sp_cert,
     )
-    try:
-        result = handler.process_response(saml_response)
-    except SamlAuthError as exc:
-        _log.warning("sso.saml_signature_validation_failed", extra={"error": str(exc)})
-        raise ValueError(str(exc)) from None
-
-    name_id = result["name_id"]
-    raw_attrs = result["attributes"]
-    attrs = {attr_name: ",".join(values) for attr_name, values in raw_attrs.items()}
-
-    email = attrs.get("email", "") or attrs.get("Email", "") or name_id or ""
-    if not email:
-        raise ValueError("SAML provider did not return an email attribute — cannot provision account")
-    display_name = (
-        attrs.get("displayName", "")
-        or attrs.get("cn", "")
-        or attrs.get("firstName", "")
-        or (email.split("@")[0] if "@" in email else email)
-    )
-    sso_subject = f"saml:{idp_entity_id}:{name_id}"
+    result = _saml_process_result(handler, saml_response)
+    name_id, attrs = _saml_attributes(result)
+    email, display_name, sso_subject = _saml_identity(name_id, attrs, idp_entity_id)
 
     if app_session is None:
         raise RuntimeError("No app session available for SAML JIT provisioning")
 
     default_org_id = await _scope_app_session_org(app_session, db_saml)
-    try:
-        account, org_id, org_role = await jit_provision_user(
-            app_session,
-            settings,
-            email,
-            display_name,
-            "saml",
-            sso_subject,
-            default_org_id=default_org_id,
-            sso_provider=db_saml,
-            email_verified=True,
-        )
-    except RuntimeError as exc:
-        raise ValueError(str(exc)) from None
-
-    saml_groups: list[str] = []
-    for group_attr in ("groups", "memberOf", "Group"):
-        raw = attrs.get(group_attr, "")
-        if raw:
-            saml_groups = [g.strip() for g in raw.split(",") if g.strip()]
-            break
-    if saml_groups:
-        db_provider = await _lookup_provider_by_entity_id(app_session, idp_entity_id, org_id)
-        if db_provider is not None and db_provider.group_mappings:
-            await apply_group_mappings(app_session, account, org_id, saml_groups, db_provider.group_mappings)
-
-    try:
-        return await issue_sso_tokens(account, org_id, org_role, app_session, settings)
-    except RuntimeError as exc:
-        raise ValueError(str(exc)) from None
+    account, org_id, org_role = await _saml_jit_provision(
+        app_session, settings, email, display_name, sso_subject, default_org_id, db_saml
+    )
+    await _apply_saml_group_mappings(app_session, _saml_groups(attrs), account, org_id, idp_entity_id)
+    return await _issue_saml_tokens(account, org_id, org_role, app_session, settings)
 
 
 def _parse_saml_datetime(value: str) -> datetime:
