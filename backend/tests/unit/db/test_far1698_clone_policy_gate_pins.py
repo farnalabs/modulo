@@ -5,7 +5,8 @@
 (FAR-967 F10). That rationale holds for the guardrail pin pair — those are
 self-contained serialised definitions — but the policy-gate pins are built by
 ``_build_policy_gate_pins`` from the SOURCE pipeline's ``PolicyGate`` rows
-(``policy_gate_id`` / ``eval_id`` / ``action`` / ``node_id`` only). A clone has
+(``policy_gate_id`` / ``eval_id`` / ``action`` / ``node_id`` /
+``evaluation_mode``). A clone has
 NO gate rows (evals and gates are never cloned; declared gate blocks are
 stripped per FAR-1666), so a carried pin set references foreign gates AND
 declares a "pinned universe" under which the clone's OWN gates are unpinned —

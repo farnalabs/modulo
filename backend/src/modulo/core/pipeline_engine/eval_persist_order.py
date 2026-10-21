@@ -86,12 +86,19 @@ class EvalDefDTO:
     policy_gate_id: uuid.UUID | None = None
     policy_gate_version: int | None = None
     policy_gate_node_id: uuid.UUID | None = None
-    # FAR-939 chunk 12 — the governing gate's evaluation mode
-    # (``policy_gates.evaluation_mode``): ``"automatic"`` (current
-    # behaviour) or ``"human"`` (the human's HITL decision is the gate's
-    # evaluation result). ``None`` when no gate governs this eval. Read
-    # once at DTO assembly (run start) and run-frozen for the run's
-    # duration (pins do not carry the mode — chunk 12 §10).
+    # FAR-939 chunk 12, extended by FAR-1749 — the governing gate's
+    # evaluation mode (``policy_gates.evaluation_mode``): ``"automatic"``
+    # (current behaviour) or ``"human"`` (the human's HITL decision is the
+    # gate's evaluation result). ``None`` when no gate governs this eval.
+    # Read once at DTO assembly (run start) and run-frozen for the run's
+    # duration: the snapshot PIN carries the run-start mode for every
+    # pinned gate (FAR-1749), so a live flip in EITHER direction does not
+    # affect an in-flight run. The fire-time stamp on the HITL claim still
+    # covers the already-fired gate and legacy pins. A live DISABLE (or a
+    # replaced gate) still wins for an in-flight run — operator control can
+    # remove, never add or alter, a gate. Operator-facing limitation:
+    # tightening an in-flight run (automatic -> human) requires cancelling
+    # and restarting it; that total freeze is the FAR-1749 design.
     policy_gate_evaluation_mode: str | None = None
 
 
