@@ -73,6 +73,7 @@ from modulo.api.routes.assistant import router as assistant_router
 from modulo.api.routes.audit import router as audit_router
 from modulo.api.routes.auth import router as auth_router
 from modulo.api.routes.community_library import router as community_library_router
+from modulo.api.routes.compliance import router as compliance_router
 from modulo.api.routes.composite_templates import router as composite_templates_router
 from modulo.api.routes.connectors import router as connectors_router
 from modulo.api.routes.contributions import router as contributions_router
@@ -1334,6 +1335,7 @@ app.include_router(api_keys_router)
 app.include_router(audit_router)
 app.include_router(library_router)
 app.include_router(community_library_router)
+app.include_router(compliance_router)
 app.include_router(lifecycle_maps_router)
 # OAuth discovery metadata (RFC 8414 authorization-server, RFC 9728
 # protected-resource) -- unauthenticated and org-less, so it deliberately

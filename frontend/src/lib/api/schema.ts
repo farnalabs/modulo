@@ -6702,6 +6702,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/compliance/evidence-index": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Evidence Index Endpoint
+         * @description Return this organisation's compliance evidence index.
+         *
+         *     The response lists one entry per artefact TYPE THE INSTANCE PRODUCES - the
+         *     audit chain, run snapshots, HITL decisions, eval results, autonomy changes,
+         *     the release SBOM and the build identity. It does not list every artefact the
+         *     pack maps: a row resting on ``customer_records`` (policies, risk assessments,
+         *     internal-audit reports, incident and restore-test records) is the customer's
+         *     own evidence, produced outside Modulo, and the index produces no entry for
+         *     that type - so those rows are not returned here in any form. The shipped
+         *     mapping documentation (``docs/security/compliance-control-mapping.md``)
+         *     lists them for the customer instead.
+         *
+         *     An indexed artefact type with no records is returned with
+         *     ``status: absent`` and a reason, and is named in
+         *     ``missing_artifact_types`` so the caller can see the index is incomplete -
+         *     it is never silently dropped. ``pack_version`` and ``pack_content_hash``
+         *     record which pack produced the index, so a later release cannot silently
+         *     change what was asserted for a past audit period.
+         *
+         *     Coverage is per row and per framework; the response deliberately carries no
+         *     single compliant/not-compliant verdict.
+         */
+        get: operations["get_evidence_index_endpoint_api_v1_compliance_evidence_index_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lifecycle-maps": {
         parameters: {
             query?: never;
@@ -11689,6 +11729,34 @@ export interface components {
             } | null;
         };
         /**
+         * ArtifactEntry
+         * @description One evidence artefact in the index, keyed to the clauses it evidences.
+         */
+        ArtifactEntry: {
+            /** Artifact Type */
+            artifact_type: string;
+            /** Status */
+            status: string;
+            /** Provenance */
+            provenance: string;
+            /** Description */
+            description: string;
+            /** Location */
+            location: string;
+            /** Identifiers */
+            identifiers: string[];
+            /** Record Count */
+            record_count: number | null;
+            /** Detail */
+            detail: {
+                [key: string]: unknown;
+            };
+            /** Mapping Row Ids */
+            mapping_row_ids: string[];
+            /** Absence Reason */
+            absence_reason?: string | null;
+        };
+        /**
          * ArtifactListResponse
          * @description Response for the per-node artifact listing endpoint.
          */
@@ -14419,6 +14487,41 @@ export interface components {
             created_at?: unknown;
             /** Updated At */
             updated_at?: unknown;
+        };
+        /**
+         * EvidenceIndex
+         * @description The generated per-instance evidence index.
+         */
+        EvidenceIndex: {
+            /** Pack Version */
+            pack_version: string;
+            /** Pack Content Hash */
+            pack_content_hash: string;
+            /** Pack Published At */
+            pack_published_at: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Product Version */
+            product_version: string;
+            /** Organisation Id */
+            organisation_id: string;
+            /** Framework Ids */
+            framework_ids: string[];
+            /** Coverage */
+            coverage: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** Complete */
+            complete: boolean;
+            /** Missing Artifact Types */
+            missing_artifact_types: string[];
+            /** Artifacts */
+            artifacts: components["schemas"]["ArtifactEntry"][];
         };
         /**
          * EvidenceRetentionPolicyResponse
@@ -36717,6 +36820,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LibraryPrimitiveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_evidence_index_endpoint_api_v1_compliance_evidence_index_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidenceIndex"];
                 };
             };
             /** @description Validation Error */
