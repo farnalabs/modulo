@@ -17,7 +17,7 @@ older than the staleness threshold (2x the probe interval).
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -31,6 +31,14 @@ class RunnerProbeCache(OrgScoped):
             "machine_id",
             name="uq_runner_probe_cache_org_machine",
         ),
+        # The probe tick's global retention sweep
+        # (``crud/runner_probe.prune_stale_runner_probe_rows``) runs
+        # ``DELETE ... WHERE probed_at < :cutoff`` across EVERY org, so its
+        # only predicate is ``probed_at`` — the org-first unique constraint
+        # index above cannot range-scan it. Without this index every tick
+        # (each machine, 60s cadence) scans the whole table just to prove most
+        # rows are young.
+        Index("ix_runner_probe_cache_probed_at", "probed_at"),
     )
 
     machine_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
