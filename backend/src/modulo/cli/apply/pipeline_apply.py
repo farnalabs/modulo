@@ -211,6 +211,106 @@ def resolve_policy_gate_evals(
     return None
 
 
+def _entity_map(current_entities: dict[str, Any], key: str) -> dict[str, Any]:
+    """The named entity map, defaulting to an empty one when absent."""
+    return current_entities.get(key) or {}
+
+
+def _mark_secrets_refresh(views: list[tuple[str, dict[str, Any]]], graph: dict[str, Any] | None) -> None:
+    """FAR-1232: flag a view whose resolved graph declares secret-shaped entries.
+
+    Such a graph is always re-sent (the criterion runs on the TRUE resolved
+    graph, never its masked hash view). The marker key participates in the
+    canonical hash (the current view cannot produce it), so the plan reports
+    updated for the refreshed run.
+    """
+    if graph is not None and graph_declares_secrets(graph):
+        views[-1][1]["secrets_refresh"] = True
+
+
+def _pipeline_name_conflict(entity: PipelineEntity, ambiguous_pipelines: dict[str, Any]) -> str | None:
+    """Block reason when the pipeline's name is ambiguous in the org list."""
+    matches = ambiguous_pipelines.get(entity.name)
+    if matches is None:
+        return None
+    return f"pipeline {entity.name!r}: ambiguous name, {matches} matches"
+
+
+def _first_ambiguous_agent(entity: PipelineEntity, ambiguous_agents: dict[str, Any]) -> str | None:
+    """First graph agent whose referenced name is ambiguous in the org list."""
+    if entity.graph is None:
+        return None
+    for node in entity.graph.nodes:
+        if node.agent is not None and node.agent in ambiguous_agents:
+            return node.agent
+    return None
+
+
+def _ambiguous_agent_reason(entity: PipelineEntity, ambiguous_agents: dict[str, Any]) -> str | None:
+    """Block reason when a referenced graph agent's name is ambiguous."""
+    agent_conflict = _first_ambiguous_agent(entity, ambiguous_agents)
+    if agent_conflict is None:
+        return None
+    return f"agent {agent_conflict!r}: ambiguous name, {ambiguous_agents[agent_conflict]} matches"
+
+
+def _pipeline_block_reason(
+    entity: PipelineEntity,
+    ambiguous_pipelines: dict[str, Any],
+    ambiguous_agents: dict[str, Any],
+) -> str | None:
+    """Pre-resolution block reason: an ambiguous pipeline name or agent name."""
+    name_conflict = _pipeline_name_conflict(entity, ambiguous_pipelines)
+    if name_conflict is not None:
+        return name_conflict
+    return _ambiguous_agent_reason(entity, ambiguous_agents)
+
+
+def _resolve_entity_graph(
+    entity: PipelineEntity,
+    agents: dict[str, Any],
+    git_resolver: Callable[[GitContentRef], str] | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Resolve the declared graph, turning a resolution failure into a block reason."""
+    if entity.graph is None:
+        return None, None
+    try:
+        return resolve_graph(entity, agents, git_resolver=git_resolver), None
+    except ApplyEntityResolutionError as exc:
+        return None, str(exc)
+    except ValueError as exc:
+        return None, f"invalid pipeline graph: {exc}"
+
+
+def _plan_pipeline_view(
+    entity: PipelineEntity,
+    agents: dict[str, Any],
+    ambiguous_agents: dict[str, Any],
+    current_entities: dict[str, Any],
+    git_resolver: Callable[[GitContentRef], str] | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None] | str:
+    """Plan one pipeline's desired view; returns the block reason (str) on failure."""
+    agent_conflict = _first_ambiguous_agent(entity, ambiguous_agents)
+    if agent_conflict is not None:
+        return f"agent {agent_conflict!r}: ambiguous name, {ambiguous_agents[agent_conflict]} matches"
+    graph, graph_error = _resolve_entity_graph(entity, agents, git_resolver)
+    if graph_error is not None:
+        return graph_error
+    gate_error = resolve_policy_gate_evals(entity, current_entities)
+    if gate_error is not None:
+        return gate_error
+    try:
+        business_owner_id, reliability_owner_id = resolve_owner_ids(entity, current_entities)
+    except ApplyEntityResolutionError as exc:
+        return str(exc)
+    view = entity.managed_view(
+        graph=graph,
+        business_owner_id=business_owner_id,
+        reliability_owner_id=reliability_owner_id,
+    )
+    return view, graph
+
+
 def build_desired_views(
     entity_set: EntitySet,
     current_entities: dict[str, dict[str, dict[str, Any]]],
@@ -237,69 +337,24 @@ def build_desired_views(
     ``updated`` and the write path re-sends the declared true graph —
     secret-only graph rotation is invisible to the hash otherwise.
     """
-    agents = current_entities.get("agents") or {}
-    ambiguous_pipelines = current_entities.get("ambiguous_pipeline_names") or {}
-    ambiguous_agents = current_entities.get("ambiguous_agent_names") or {}
+    agents = _entity_map(current_entities, "agents")
+    ambiguous_pipelines = _entity_map(current_entities, "ambiguous_pipeline_names")
+    ambiguous_agents = _entity_map(current_entities, "ambiguous_agent_names")
     for entity in entity_set.pipelines:
         if (KIND_PIPELINE, entity.name) in blocked_keys:
             continue
-        pipeline_matches = ambiguous_pipelines.get(entity.name)
-        if pipeline_matches is not None:
-            blocked.append(
-                (KIND_PIPELINE, entity.name, f"pipeline {entity.name!r}: ambiguous name, {pipeline_matches} matches")
-            )
+        block_reason = _pipeline_block_reason(entity, ambiguous_pipelines, ambiguous_agents)
+        if block_reason is not None:
+            blocked.append((KIND_PIPELINE, entity.name, block_reason))
             continue
-        agent_conflict = next(
-            (
-                node.agent
-                for node in (entity.graph.nodes if entity.graph is not None else [])
-                if node.agent is not None and node.agent in ambiguous_agents
-            ),
-            None,
-        )
-        if agent_conflict is not None:
-            blocked.append(
-                (
-                    KIND_PIPELINE,
-                    entity.name,
-                    f"agent {agent_conflict!r}: ambiguous name, {ambiguous_agents[agent_conflict]} matches",
-                )
-            )
+        planned = _plan_pipeline_view(entity, agents, ambiguous_agents, current_entities, git_resolver)
+        if isinstance(planned, str):
+            blocked.append((KIND_PIPELINE, entity.name, planned))
             continue
-        try:
-            graph = resolve_graph(entity, agents, git_resolver=git_resolver) if entity.graph is not None else None
-        except ApplyEntityResolutionError as exc:
-            blocked.append((KIND_PIPELINE, entity.name, str(exc)))
-            continue
-        except ValueError as exc:
-            blocked.append((KIND_PIPELINE, entity.name, f"invalid pipeline graph: {exc}"))
-            continue
-        gate_error = resolve_policy_gate_evals(entity, current_entities)
-        if gate_error is not None:
-            blocked.append((KIND_PIPELINE, entity.name, gate_error))
-            continue
-        try:
-            business_owner_id, reliability_owner_id = resolve_owner_ids(entity, current_entities)
-        except ApplyEntityResolutionError as exc:
-            blocked.append((KIND_PIPELINE, entity.name, str(exc)))
-            continue
-        desired[KIND_PIPELINE].append(
-            (
-                entity.name,
-                entity.managed_view(
-                    graph=graph,
-                    business_owner_id=business_owner_id,
-                    reliability_owner_id=reliability_owner_id,
-                ),
-            )
-        )
-        # FAR-1232 --refresh-secrets: a graph declaring secret-shaped entries
-        # is always re-sent (the criterion runs on the TRUE resolved graph,
-        # never its masked hash view). The marker key participates in the
-        # canonical hash (the current view cannot produce it), so the plan
-        # reports updated for the refreshed run.
-        if refresh_secrets and graph is not None and graph_declares_secrets(graph):
-            desired[KIND_PIPELINE][-1][1]["secrets_refresh"] = True
+        view, graph = planned
+        desired[KIND_PIPELINE].append((entity.name, view))
+        if refresh_secrets:
+            _mark_secrets_refresh(desired[KIND_PIPELINE], graph)
     return desired, blocked
 
 
