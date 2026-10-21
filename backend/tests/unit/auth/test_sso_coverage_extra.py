@@ -838,3 +838,143 @@ async def test_sso_audit_success_runs_inside_the_savepoint() -> None:
     _, kwargs = audit.await_args
     assert kwargs["event_type"] == "invite_consumed"
     assert kwargs["payload_json"]["via"] == "sso"
+
+
+# ---------------------------------------------------------------------------
+# Group-mapping skip branches + SAML token-issue failure (S3776 helper split)
+# ---------------------------------------------------------------------------
+
+
+async def test_resolve_oidc_provider_app_fallback_opens_transaction() -> None:
+    """The app-session fallback opens a scoped transaction when the caller has none."""
+    settings = _override()
+    session = _mock_session()
+    session.in_transaction = MagicMock(return_value=False)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    db_provider = SimpleNamespace(
+        provider_type="oidc",
+        enabled=True,
+        client_id="cid",
+        client_secret=None,
+        discovery_url=None,
+        scopes=None,
+    )
+    with (
+        patch("modulo.auth.sso._read_system_oidc_provider", new_callable=AsyncMock, return_value=None),
+        patch("modulo.auth.sso._set_default_rls_org", new_callable=AsyncMock) as mock_default_org,
+        patch("modulo.auth.sso.get_provider_by_provider_id", new_callable=AsyncMock, return_value=db_provider),
+    ):
+        client_id, _secret, _discovery, _scopes, provider = await _resolve_oidc_provider(
+            "google", None, session, settings
+        )
+
+    assert client_id == "cid"
+    assert provider is db_provider
+    session.begin.assert_called_once()
+    mock_default_org.assert_awaited_once_with(session)
+
+
+async def test_callback_skips_group_mappings_without_provider() -> None:
+    """IdP groups with no DB provider mapping must not attempt a mapping write."""
+    settings = _override()
+    session = _mock_session()
+    signed = sign_state("google:state", settings.secret_key)
+    with (
+        patch(
+            "modulo.auth.sso._resolve_oidc_provider",
+            new_callable=AsyncMock,
+            return_value=("cid", "csec", "https://d", None, None),
+        ),
+        patch(
+            "modulo.auth.sso._fetch_discovery",
+            new_callable=AsyncMock,
+            return_value={"token_endpoint": "https://d/token", "jwks_uri": "https://d/jwks", "issuer": "i"},
+        ),
+        patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
+        patch(
+            "modulo.auth.sso.verify_id_token",
+            new_callable=AsyncMock,
+            return_value={"email": "u@e.z", "sub": "s", "groups": ["g1"]},
+        ),
+        patch(
+            "modulo.auth.sso.jit_provision_user",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), uuid.uuid4(), "viewer"),
+        ),
+        patch("modulo.auth.sso._lookup_provider_by_client_id", new_callable=AsyncMock, return_value=None),
+        patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
+        patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock, return_value={"access_token": "a"}),
+    ):
+        await oidc_process_callback(
+            "code",
+            signed,
+            settings,
+            session,
+            session,
+            "http://cb",
+            expected_nonce="test-nonce",
+            code_verifier="test-verifier",
+        )
+
+    mock_apply.assert_not_awaited()
+
+
+async def test_saml_process_response_skips_group_mappings_without_provider() -> None:
+    """SAML groups with no DB provider mapping must not attempt a mapping write."""
+    settings = _override()
+    session = _mock_session()
+    handler = MagicMock()
+    handler.process_response.return_value = {
+        "name_id": "n",
+        "attributes": {"email": "u@e.z", "groups": "g1,g2"},
+    }
+    with (
+        patch(
+            "modulo.auth.sso._resolve_saml_config",
+            new_callable=AsyncMock,
+            return_value=(_VALID_METADATA, "entity", None, None, None),
+        ),
+        patch("modulo.auth.sso.ModuloSamlAuth", return_value=handler),
+        patch(
+            "modulo.auth.sso.jit_provision_user",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), uuid.uuid4(), "viewer"),
+        ),
+        patch("modulo.auth.sso._lookup_provider_by_entity_id", new_callable=AsyncMock, return_value=None),
+        patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
+        patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock, return_value={"access_token": "a"}),
+    ):
+        await saml_process_response("<resp>", settings, None, session)
+
+    mock_apply.assert_not_awaited()
+
+
+async def test_saml_process_response_maps_token_issue_failure() -> None:
+    """A RuntimeError from token issuance surfaces as a ValueError (never a 500)."""
+    settings = _override()
+    session = _mock_session()
+    handler = MagicMock()
+    handler.process_response.return_value = {"name_id": "n", "attributes": {"email": "u@e.z"}}
+    with (
+        patch(
+            "modulo.auth.sso._resolve_saml_config",
+            new_callable=AsyncMock,
+            return_value=(_VALID_METADATA, "entity", None, None, None),
+        ),
+        patch("modulo.auth.sso.ModuloSamlAuth", return_value=handler),
+        patch(
+            "modulo.auth.sso.jit_provision_user",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), uuid.uuid4(), "viewer"),
+        ),
+        patch(
+            "modulo.auth.sso.issue_sso_tokens",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("token boom"),
+        ),
+        pytest.raises(ValueError, match="token boom"),
+    ):
+        await saml_process_response("<resp>", settings, None, session)
