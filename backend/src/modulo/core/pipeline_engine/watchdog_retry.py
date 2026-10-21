@@ -83,6 +83,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.core.pipeline_engine import retry_compensation as rc
 from modulo.core.pipeline_engine.executor import (
+    _attempt_consumed_node_budget,
+    _attempt_elapsed_seconds,
     _can_retry_after_policy,
     _graph_has_script_mode,
     _graph_is_idempotent,
@@ -234,6 +236,8 @@ async def _attempt_count_if_retryable(
     claim_token: Any,
     claim_count: int,
     retry_budget: int,
+    final_status: str,
+    error_code: str,
 ) -> int | None:
     """Apply the shared gates + bookkeeping; return the effective attempt count.
 
@@ -255,13 +259,42 @@ async def _attempt_count_if_retryable(
     graph_idempotent = _graph_is_idempotent(graph_json)
     if is_correction_run or not graph_idempotent:
         return None
-    node_attempt_count, current_claim_token = await executor._read_retry_attempt_state(org_id, run_id)
+    node_attempt_count, current_claim_token, attempt_started_at = await executor._read_retry_attempt_state(
+        org_id, run_id
+    )
     attempt_count: int = max(node_attempt_count, claim_count - 1)
     superseded = claim_token is not None and current_claim_token is not None and current_claim_token != claim_token
     script_retry_probe_ok = True
     if _graph_has_script_mode(graph_json):
         script_retry_probe_ok = await executor._probe_script_lease(run_id=run_id, org_id=org_id)
-    if not _can_retry_after_policy(attempt_count, retry_budget, superseded, script_retry_probe_ok):
+    # FAR-2025: refuse the re-dispatch when the killed attempt already consumed the
+    # graph's whole node-budget allowance (a watchdog deadline kill always has). An
+    # over-budget task cannot be rescued by spending the same budgets again, so the
+    # retry is a pure occupancy multiplier. ``_node_timeouts`` is empty before the
+    # first node starts, so a PRE-node hang (the zombie watchdog's sites) is not
+    # affected — it consumed no node budget and stays retryable.
+    node_timeouts = getattr(executor, "_node_timeouts", None)
+    timeouts = node_timeouts.values() if isinstance(node_timeouts, dict) else ()
+    attempt_consumed_budget = _attempt_consumed_node_budget(
+        _attempt_elapsed_seconds(attempt_started_at),
+        timeouts,
+    )
+    if attempt_consumed_budget:
+        _log.warning(
+            "pipeline.watchdog_retry_budget_exhausted run=%s status=%s error_code=%s attempt=%s budget=%s",
+            run_id,
+            final_status,
+            error_code,
+            attempt_count,
+            retry_budget,
+        )
+    if not _can_retry_after_policy(
+        attempt_count,
+        retry_budget,
+        superseded,
+        script_retry_probe_ok,
+        attempt_consumed_budget=attempt_consumed_budget,
+    ):
         return None
     return attempt_count
 
@@ -376,6 +409,8 @@ async def watchdog_retry_after_policy(
         claim_token=claim_token,
         claim_count=claim_count,
         retry_budget=retry_budget,
+        final_status=final_status,
+        error_code=error_code,
     )
     if attempt_count is None:
         return False

@@ -27,6 +27,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -52,7 +53,7 @@ def _make_executor_mock(
     """Executor double exposing exactly the seams the shared hook reuses."""
     executor = MagicMock()
     executor._claim_token = claim_token
-    executor._read_retry_attempt_state = AsyncMock(return_value=(attempt_count, claim_token))
+    executor._read_retry_attempt_state = AsyncMock(return_value=(attempt_count, claim_token, None))
     executor._probe_script_lease = AsyncMock(return_value=probe_ok)
     executor._fenced_pending_reset = AsyncMock(return_value=reset_rowcount)
     return executor
@@ -140,9 +141,15 @@ async def _consult_hook(
     reset_rowcount: int = 1,
     claim_count: int = 1,
     zero_node: bool = False,
+    attempt_started_at: datetime | None = None,
+    node_timeouts: dict[str, int] | None = None,
 ) -> tuple[bool, WatchdogRetryOutcome, AsyncMock]:
     """Run the REAL shared hook once with only DB seams mocked."""
-    executor._read_retry_attempt_state = AsyncMock(return_value=(attempt_count, executor._claim_token))
+    executor._read_retry_attempt_state = AsyncMock(
+        return_value=(attempt_count, executor._claim_token, attempt_started_at)
+    )
+    if node_timeouts is not None:
+        executor._node_timeouts = node_timeouts
     executor._fenced_pending_reset = AsyncMock(return_value=reset_rowcount)
     exec_task = asyncio.create_task(asyncio.sleep(999))
     box = WatchdogRetryOutcome()
@@ -1321,3 +1328,78 @@ def test_capacity_retry_budget_setting_default_and_override(monkeypatch: pytest.
     assert Settings().saq_capacity_retry_budget == 3
     monkeypatch.setenv("SAQ_CAPACITY_RETRY_BUDGET", "7")
     assert Settings().saq_capacity_retry_budget == 7
+
+
+# ---------------------------------------------------------------------------
+# FAR-2025 — a watchdog re-dispatch is refused once the attempt has spent the
+# graph's whole node-budget allowance (an over-budget task, not a transient
+# failure). The dangerous direction is the false positive: a run that failed
+# FAST must keep its retry.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_watchdog_retry_refused_when_attempt_consumed_node_budget() -> None:
+    """FAR-2025: an attempt that spent the whole node budget is not re-dispatched."""
+    executor = _make_executor_mock(claim_token="tok-far-2025")
+    dispatched, box, sleep_mock = await _consult_hook(
+        executor,
+        retry_policy={"on": ["timeout"], "max_retries": 2},
+        final_status="failed",
+        error_code="node_deadline_exceeded",
+        attempt_started_at=datetime.now(UTC) - timedelta(seconds=3300),
+        node_timeouts={"node-a": 3300},
+    )
+    assert dispatched is False
+    assert box.requested is False
+    executor._fenced_pending_reset.assert_not_awaited()
+    sleep_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_watchdog_retry_allowed_after_a_fast_failure() -> None:
+    """FAR-2025 false-positive guard: a fast failure keeps its retry budget."""
+    executor = _make_executor_mock(claim_token="tok-far-2025")
+    dispatched, box, _ = await _consult_hook(
+        executor,
+        retry_policy={"on": ["failure"], "max_retries": 2},
+        final_status="failed",
+        error_code="agent.failed",
+        attempt_started_at=datetime.now(UTC) - timedelta(seconds=60),
+        node_timeouts={"node-a": 3300},
+    )
+    assert dispatched is True
+    assert box.requested is True
+    executor._fenced_pending_reset.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_watchdog_retry_fails_open_when_elapsed_unknown() -> None:
+    """FAR-2025: an unreadable attempt start must not block the retry."""
+    executor = _make_executor_mock(claim_token="tok-far-2025")
+    dispatched, box, _ = await _consult_hook(
+        executor,
+        retry_policy={"on": ["timeout"], "max_retries": 2},
+        final_status="failed",
+        error_code="node.deadline_exceeded",
+        attempt_started_at=None,
+        node_timeouts={"node-a": 3300},
+    )
+    assert dispatched is True
+    assert box.requested is True
+
+
+@pytest.mark.asyncio
+async def test_watchdog_retry_fails_open_when_budget_unknown() -> None:
+    """FAR-2025: a graph with no explicit node timeout has no allowance to check."""
+    executor = _make_executor_mock(claim_token="tok-far-2025")
+    dispatched, box, _ = await _consult_hook(
+        executor,
+        retry_policy={"on": ["timeout"], "max_retries": 2},
+        final_status="failed",
+        error_code="node.deadline_exceeded",
+        attempt_started_at=datetime.now(UTC) - timedelta(seconds=3300),
+        node_timeouts={},
+    )
+    assert dispatched is True
+    assert box.requested is True

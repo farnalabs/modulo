@@ -370,7 +370,7 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   `dispatched_at`/`dispatcher`/`heartbeat_at` cleared) and stamped with the
   truthful `harness.worker_lost` code plus a detail naming the shutdown;
   `dispatcher_reconcile` re-dispatches it on its next 60s tick, so an
-  in-flight run at a release is handed back within ~1 minute of the new worker
+  in-flight run at a release is handed back within ~1 minute of   the new worker
   becoming ready – never 30-35 minutes. If a re-run is NOT safe – a
   non-idempotent node-started graph, or a `retry_policy` that forbids it – the
   run is failed in place with the same `harness.worker_lost` code and a detail
@@ -383,6 +383,20 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   untouched rather than re-dispatched against it. The heartbeat TTL remains
   the backstop for a hard crash (SIGKILL / OOM), where no shutdown hook runs,
   and for any run the observation gate skips.
+- **Over-budget retry guard (FAR-2025):** a run-level retry re-executes the
+  WHOLE run, so it is refused when the attempt that just ended had already
+  consumed the graph's node-budget allowance — the sum of its resolved
+  per-node `timeout_seconds` (the pipeline-level `node_timeout_seconds` fills
+  in any node that does not set one), less a 300 s window for provisioning,
+  the post-run envelope, and a task's own end-of-budget reserve. Such an
+  attempt is an over-budget TASK, not a transient failure: spending the same
+  allowances again cannot rescue it, so the retry only multiplies slot
+  occupancy. The guard lives in the shared `_can_retry_after_policy`, so it
+  covers both retry paths (the in-execute decision and the watchdog hook that
+  reuses it) and applies whatever event the policy matched. Unknown timing
+  data fails OPEN (the retry is allowed, as before). The worker-shutdown
+  handback and the nodeless-zombie re-dispatch do not consume node budget and
+  are unaffected.
 - **HITL review-window terminaliser (FAR-648, FAR-1257):** a sweep wired into
   `dispatcher_reconcile` (every 60s) cancels an `awaiting_human` run whose open
   gate is still UNCLAIMED and UNDECIDED past the resolved review window:

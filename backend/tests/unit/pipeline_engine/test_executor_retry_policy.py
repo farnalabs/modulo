@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import ExitStack, asynccontextmanager, contextmanager
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,6 +22,10 @@ from modulo.core.pipeline_engine import executor as executor_module
 from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
     RunRetryPolicyError,
+    _attempt_consumed_node_budget,
+    _attempt_elapsed_seconds,
+    _attempt_started_at,
+    _can_retry_after_policy,
     _graph_is_idempotent,
     _retry_after_policy,
     _retry_backoff_seconds,
@@ -1716,3 +1721,114 @@ def test_watchdog_codes_never_match_uncorrelated_events():
     assert _retry_after_policy({"on": ["timeout"], "max_retries": 2}, "stalled", "executor_stalled") is None
     assert _retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", "node_deadline_exceeded") is None
     assert _retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", "node.deadline_exceeded") is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-2025 — the over-budget retry guard.
+#
+# A retry must not re-run an attempt that already consumed the graph's whole
+# node-budget allowance: that is a task too big for its budget, not a transient
+# failure, and the retry re-consumes the same budgets. These are the pure
+# decision pieces; the wiring is covered by
+# tests/unit/core/test_pipeline_execution_watchdog_retry.py.
+# ---------------------------------------------------------------------------
+
+
+def test_attempt_elapsed_seconds_none_when_start_unknown() -> None:
+    assert _attempt_elapsed_seconds(None) is None
+
+
+def test_attempt_elapsed_seconds_reads_an_aware_timestamp() -> None:
+    now = datetime(2026, 10, 20, 12, 0, 0, tzinfo=UTC)
+    started = now - timedelta(seconds=3300)
+    assert _attempt_elapsed_seconds(started, now=now) == 3300.0
+
+
+def test_attempt_elapsed_seconds_treats_a_naive_timestamp_as_utc() -> None:
+    now = datetime(2026, 10, 20, 12, 0, 0, tzinfo=UTC)
+    started = datetime(2026, 10, 20, 11, 0, 0)  # naive
+    assert _attempt_elapsed_seconds(started, now=now) == 3600.0
+
+
+def test_attempt_elapsed_seconds_never_negative_for_a_clock_skew() -> None:
+    now = datetime(2026, 10, 20, 12, 0, 0, tzinfo=UTC)
+    started = now + timedelta(seconds=30)
+    assert _attempt_elapsed_seconds(started, now=now) == 0.0
+
+
+def test_attempt_consumed_node_budget_at_the_allowance() -> None:
+    assert _attempt_consumed_node_budget(3300.0, [3300]) is True
+
+
+def test_attempt_consumed_node_budget_within_the_slack_band() -> None:
+    # 3300 - 300 slack: an attempt that has reached this point has already
+    # spent the allowance plus the provisioning / post-run / self-reserve window.
+    assert _attempt_consumed_node_budget(3000.0, [3300]) is True
+
+
+def test_attempt_consumed_node_budget_just_below_the_slack_band() -> None:
+    assert _attempt_consumed_node_budget(2999.0, [3300]) is False
+
+
+def test_attempt_consumed_node_budget_is_false_for_a_fast_attempt() -> None:
+    assert _attempt_consumed_node_budget(60.0, [3300]) is False
+
+
+def test_attempt_consumed_node_budget_sums_a_multi_node_allowance() -> None:
+    # Three 1200s nodes: 2000s is inside the graph's 3600s allowance, so a
+    # retry is still legitimate. A max()-based check would wrongly refuse it
+    # (2000 >= 1200 - 120). The allowance is the SUM.
+    assert _attempt_consumed_node_budget(2000.0, [1200, 1200, 1200]) is False
+    assert _attempt_consumed_node_budget(3500.0, [1200, 1200, 1200]) is True
+
+
+def test_attempt_consumed_node_budget_fails_open_without_inputs() -> None:
+    assert _attempt_consumed_node_budget(None, [3300]) is False
+
+
+def test_attempt_consumed_node_budget_fails_open_without_a_budget() -> None:
+    assert _attempt_consumed_node_budget(3300.0, []) is False
+
+
+def test_attempt_consumed_node_budget_ignores_non_positive_budgets() -> None:
+    assert _attempt_consumed_node_budget(3300.0, [0, -1]) is False
+
+
+def test_can_retry_after_policy_refuses_an_exhausted_budget() -> None:
+    assert _can_retry_after_policy(1, 2, False, True, attempt_consumed_budget=True) is False
+
+
+def test_can_retry_after_policy_allows_a_non_exhausted_budget() -> None:
+    assert _can_retry_after_policy(1, 2, False, True, attempt_consumed_budget=False) is True
+
+
+def test_can_retry_after_policy_defaults_to_the_untaught_caller() -> None:
+    # Every caller that has not been taught the guard keeps today's behaviour.
+    assert _can_retry_after_policy(1, 2, False, True) is True
+
+
+def test_attempt_started_at_uses_started_at_for_the_first_attempt() -> None:
+    """A queue wait before the first claim must NOT count as consumed budget."""
+    run = SimpleNamespace(
+        dispatched_at=datetime(2026, 10, 20, 10, 0, 0, tzinfo=UTC),
+        started_at=datetime(2026, 10, 20, 10, 45, 0, tzinfo=UTC),
+    )
+    assert _attempt_started_at(run) == datetime(2026, 10, 20, 10, 45, 0, tzinfo=UTC)
+
+
+def test_attempt_started_at_uses_the_rewritten_dispatch_for_a_retry() -> None:
+    """A re-dispatch rewrites dispatched_at; the stale started_at must not win."""
+    run = SimpleNamespace(
+        dispatched_at=datetime(2026, 10, 20, 12, 0, 0, tzinfo=UTC),
+        started_at=datetime(2026, 10, 20, 10, 45, 0, tzinfo=UTC),
+    )
+    assert _attempt_started_at(run) == datetime(2026, 10, 20, 12, 0, 0, tzinfo=UTC)
+
+
+def test_attempt_started_at_is_none_when_the_row_has_no_timestamps() -> None:
+    assert _attempt_started_at(SimpleNamespace(dispatched_at=None, started_at=None)) is None
+
+
+def test_attempt_started_at_ignores_a_non_datetime_value() -> None:
+    run = SimpleNamespace(dispatched_at="2026-10-20T12:00:00Z", started_at=MagicMock())
+    assert _attempt_started_at(run) is None
