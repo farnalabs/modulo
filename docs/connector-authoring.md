@@ -150,6 +150,21 @@ identifiers like `filesystem`, `github`, `ci-runner`, `ticket-tracker`, though
 some members use `snake_case` (e.g. `azure_repos`, `dropbox_paper`,
 `microsoft_teams`).
 
+**Buildable type ids versus enum members.** The `ConnectorType` enum is the
+authoring surface, not the full buildable set. `buildable_connector_type_ids()`
+in `core/connector_hub/` returns the hub's own `match` arms plus every
+plugin-registered type, and that is what `GET /api/v1/connectors/types` (the
+Admin UI's create-form dropdown) offers. The two sets differ in both
+directions:
+
+- `plane` is buildable but is deliberately NOT an enum member: the hub
+  dispatches it by its string id, and `PlaneConnector` reports
+  `ConnectorType.TICKET_TRACKER` as its enum member because Plane is
+  work-item tracking.
+- `ci-runner` is an enum member the hub cannot build: it is the abstract
+  CI-runner label, and the buildable CI types are `github_actions_ci`,
+  `gitlab_ci` and `woodpecker`.
+
 ## Credential handling
 
 Credentials are **never** stored as literal values in the connector source.
