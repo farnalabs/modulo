@@ -285,14 +285,14 @@ def _resolve_entity_graph(
 def _plan_pipeline_view(
     entity: PipelineEntity,
     agents: dict[str, Any],
-    ambiguous_agents: dict[str, Any],
     current_entities: dict[str, Any],
     git_resolver: Callable[[GitContentRef], str] | None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None] | str:
-    """Plan one pipeline's desired view; returns the block reason (str) on failure."""
-    agent_conflict = _first_ambiguous_agent(entity, ambiguous_agents)
-    if agent_conflict is not None:
-        return f"agent {agent_conflict!r}: ambiguous name, {ambiguous_agents[agent_conflict]} matches"
+    """Plan one pipeline's desired view; returns the block reason (str) on failure.
+
+    Ambiguous name checks happen before this: :func:`_pipeline_block_reason`
+    resolves both the pipeline-name and referenced-agent-name conflicts.
+    """
     graph, graph_error = _resolve_entity_graph(entity, agents, git_resolver)
     if graph_error is not None:
         return graph_error
@@ -347,7 +347,7 @@ def build_desired_views(
         if block_reason is not None:
             blocked.append((KIND_PIPELINE, entity.name, block_reason))
             continue
-        planned = _plan_pipeline_view(entity, agents, ambiguous_agents, current_entities, git_resolver)
+        planned = _plan_pipeline_view(entity, agents, current_entities, git_resolver)
         if isinstance(planned, str):
             blocked.append((KIND_PIPELINE, entity.name, planned))
             continue
