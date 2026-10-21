@@ -24,6 +24,7 @@ second spelling of a failure that the run taxonomy already names.
 from __future__ import annotations
 
 import json
+import math
 from enum import StrEnum
 from typing import Any
 
@@ -180,13 +181,53 @@ def error_verdict(
     )
 
 
-def _coerce_score(raw: Any) -> float | None:
+def _finite_float(
+    raw: Any,
+    *,
+    field: str,
+    code: JudgeErrorCode = JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+) -> float | None:
+    """Coerce a numeric field, rejecting non-finite values (NaN/Infinity).
+
+    ``json.loads`` accepts ``NaN``/``Infinity`` by default, and a NaN compares
+    False against every bound, so it can silently disable a threshold or a
+    veto. Non-finite numbers are malformed, never a verdict.
+    """
     if raw is None:
         return None
     try:
-        return float(raw)
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise JudgeExecutionError(code, f"{field} is not numeric") from exc
+    if not math.isfinite(value):
+        raise JudgeExecutionError(code, f"{field} is not finite")
+    return value
+
+
+def _coerce_score(raw: Any) -> float | None:
+    """Legacy score coercion: a non-number is dropped (pre-existing behaviour),
+    but a NON-FINITE number is malformed (NaN would otherwise clear every
+    threshold/veto comparison)."""
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(value):
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            "judge returned a non-finite score",
+        )
+    return value
+
+
+def _reject_json_constant(value: str) -> Any:
+    """``json.loads(parse_constant=...)`` hook: NaN/Infinity are malformed."""
+    raise JudgeExecutionError(
+        JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+        f"judge returned the non-finite JSON constant {value}",
+    )
 
 
 def _coerce_questions(raw: Any) -> list[QuestionVerdict]:
@@ -331,27 +372,49 @@ def _question_answer_score(question: dict[str, Any], answer: Any) -> tuple[bool,
         option_scores = question.get("option_scores") or {}
         passed = answer in passing_keys
         if isinstance(option_scores, dict) and answer in option_scores:
-            return passed, _coerce_score(option_scores[answer]) or 0.0
+            option_score = _finite_float(
+                option_scores[answer],
+                field=f"question {qid!r} option score",
+                code=JudgeErrorCode.JUDGE_CONFIGURATION,
+            )
+            return passed, option_score if option_score is not None else (1.0 if passed else 0.0)
         return passed, 1.0 if passed else 0.0
     if qtype == "score":
         levels = question.get("levels") or []
-        scores = [lv.get("score") for lv in levels if isinstance(lv, dict)]
-        numeric = [float(s) for s in scores if isinstance(s, (int, float))]
+        numeric: list[float] = []
+        for level in levels:
+            if not isinstance(level, dict):
+                continue
+            level_score = _finite_float(
+                level.get("score"),
+                field=f"question {qid!r} level score",
+                code=JudgeErrorCode.JUDGE_CONFIGURATION,
+            )
+            if level_score is not None:
+                numeric.append(level_score)
         if len(numeric) < 2:
             raise JudgeExecutionError(
                 JudgeErrorCode.JUDGE_CONFIGURATION,
                 f"score question {qid!r} declares fewer than two ordered levels",
             )
         lo, hi = min(numeric), max(numeric)
-        try:
-            value = float(answer)
-        except (TypeError, ValueError) as exc:
+        value = _finite_float(answer, field=f"question {qid!r} answer")
+        if value is None:
             raise JudgeExecutionError(
                 JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
                 f"question {qid!r} expects a numeric level",
-            ) from exc
-        pass_from = question.get("pass_from")
-        passed = pass_from is not None and value >= float(pass_from)
+            )
+        pass_from = _finite_float(
+            question.get("pass_from"),
+            field=f"question {qid!r} pass_from",
+            code=JudgeErrorCode.JUDGE_CONFIGURATION,
+        )
+        if pass_from is None:
+            raise JudgeExecutionError(
+                JudgeErrorCode.JUDGE_CONFIGURATION,
+                f"score question {qid!r} must declare pass_from",
+            )
+        passed = value >= pass_from
         normalised = 0.0 if hi == lo else (value - lo) / (hi - lo)
         return passed, max(0.0, min(1.0, normalised))
     raise JudgeExecutionError(
@@ -367,10 +430,14 @@ def aggregate_typed_answers(
 ) -> tuple[list[QuestionVerdict], float | None, bool]:
     """Aggregate per-question answers into ``(verdicts, score, passed)``.
 
-    ``aggregate`` is the weighted mean over questions with ``weight > 0``; a
-    ``required`` question whose pass-confidence falls below
-    ``min_pass_confidence`` vetoes the verdict. A missing answer is a malformed
-    response (never an empty judgment).
+    ADR 066 D4: ``aggregate`` is the weighted mean over **non-required**
+    questions with ``weight > 0``. A ``required`` question that FAILS vetoes the
+    verdict, full stop — its normalised score is never compared to a
+    ``min_pass_confidence`` (a score below ``pass_from`` can still normalise
+    above such a threshold, and NaN would clear every bound). Required
+    questions are excluded from the mean; when there are NO non-required
+    questions the verdict is the required set alone (pass iff none vetoed). A
+    missing answer is a malformed response, never an empty judgment.
     """
     raw_threshold = (pass_rule or {}).get("threshold")
     if isinstance(raw_threshold, bool) or not isinstance(raw_threshold, (int, float)):
@@ -380,10 +447,10 @@ def aggregate_typed_answers(
             "a missing threshold would make every aggregate pass",
         )
     threshold = float(raw_threshold)
-    if not 0.0 <= threshold <= 1.0:
+    if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
         raise JudgeExecutionError(
             JudgeErrorCode.JUDGE_CONFIGURATION,
-            f"pass_rule.threshold must be in [0, 1] (got {threshold})",
+            f"pass_rule.threshold must be a finite number in [0, 1] (got {threshold})",
         )
 
     verdicts: list[QuestionVerdict] = []
@@ -400,14 +467,30 @@ def aggregate_typed_answers(
                 f"judge did not answer question {qid!r}",
             )
         passed, qscore = _question_answer_score(question, answers[qid])
-        weight = float(question.get("weight", 1.0))
-        if weight > 0:
-            weighted_total += qscore * weight
-            weight_sum += weight
-        if question.get("required") and not passed:
-            min_conf = float(question.get("min_pass_confidence", 1.0))
-            if qscore < min_conf:
+        required = bool(question.get("required", False))
+        if required:
+            if not passed:
                 vetoed = True
+            # D4: required questions gate; they never contribute to the mean.
+        else:
+            weight = _finite_float(
+                question.get("weight", 1.0),
+                field=f"question {qid!r} weight",
+                code=JudgeErrorCode.JUDGE_CONFIGURATION,
+            )
+            if weight is None:
+                raise JudgeExecutionError(
+                    JudgeErrorCode.JUDGE_CONFIGURATION,
+                    f"question {qid!r} weight is required",
+                )
+            if weight < 0:
+                raise JudgeExecutionError(
+                    JudgeErrorCode.JUDGE_CONFIGURATION,
+                    f"question {qid!r} weight must be non-negative",
+                )
+            if weight > 0:
+                weighted_total += qscore * weight
+                weight_sum += weight
         verdicts.append(
             QuestionVerdict(
                 question_id=qid,
@@ -418,7 +501,13 @@ def aggregate_typed_answers(
             )
         )
     aggregate = (weighted_total / weight_sum) if weight_sum > 0 else None
-    passed = (not vetoed) and aggregate is not None and aggregate >= threshold
+    if vetoed:
+        passed = False
+    elif aggregate is None:
+        # All-required set: every required question passed (none vetoed).
+        passed = True
+    else:
+        passed = aggregate >= threshold
     return verdicts, aggregate, passed
 
 
@@ -465,7 +554,7 @@ def verdict_from_typed_response(
 ) -> JudgeVerdict:
     """Parse a typed-question response and aggregate it into a verdict."""
     try:
-        parsed = json.loads(raw_text)
+        parsed = json.loads(raw_text, parse_constant=_reject_json_constant)
     except ValueError as exc:
         raise JudgeExecutionError(
             JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,

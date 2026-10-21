@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from typing import Any
 
@@ -228,8 +229,17 @@ def _validate_question(index: int, question: Any) -> None:
             f"question {qid!r} has an unsupported type {qtype!r} (expected one of {sorted(_QUESTION_TYPES)})"
         )
     weight = question.get("weight", 1.0)
-    if not isinstance(weight, (int, float)) or weight < 0:
+    if isinstance(weight, bool) or not isinstance(weight, (int, float)):
         raise _invalid(f"question {qid!r} has an invalid weight")
+    if not math.isfinite(float(weight)) or weight < 0:
+        raise _invalid(f"question {qid!r} has an invalid weight")
+
+    min_pass_confidence = question.get("min_pass_confidence")
+    if min_pass_confidence is not None:
+        if isinstance(min_pass_confidence, bool) or not isinstance(min_pass_confidence, (int, float)):
+            raise _invalid(f"question {qid!r} min_pass_confidence must be a number in [0, 1]")
+        if not math.isfinite(float(min_pass_confidence)) or not 0.0 <= float(min_pass_confidence) <= 1.0:
+            raise _invalid(f"question {qid!r} min_pass_confidence must be a finite number in [0, 1]")
     if qtype == "choice":
         options = question.get("options")
         if not isinstance(options, list) or len(options) < 2:
@@ -244,6 +254,17 @@ def _validate_question(index: int, question: Any) -> None:
         passing = question.get("passing_keys")
         if not isinstance(passing, list) or not set(passing).issubset(keys):
             raise _invalid(f"choice question {qid!r} passing_keys must be a subset of its option keys")
+        option_scores = question.get("option_scores")
+        if option_scores is not None:
+            if not isinstance(option_scores, dict):
+                raise _invalid(f"choice question {qid!r} option_scores must be an object")
+            for key, value in option_scores.items():
+                if key not in keys:
+                    raise _invalid(f"choice question {qid!r} option_scores names an unknown option {key!r}")
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise _invalid(f"choice question {qid!r} option score for {key!r} must be a number")
+                if not math.isfinite(float(value)) or not 0.0 <= float(value) <= 1.0:
+                    raise _invalid(f"choice question {qid!r} option score for {key!r} must be in [0, 1]")
     if qtype == "score":
         levels = question.get("levels")
         if not isinstance(levels, list) or len(levels) < 2:
@@ -253,8 +274,21 @@ def _validate_question(index: int, question: Any) -> None:
                 raise _invalid(f"score question {qid!r} levels must be objects")
             _reject_unknown_keys(level, _ALLOWED_LEVEL, f"question {qid!r} level")
         numeric = [lv.get("score") for lv in levels]
-        if len(numeric) < 2 or any(not isinstance(n, (int, float)) for n in numeric):
+        if len(numeric) < 2:
             raise _invalid(f"score question {qid!r} levels must be objects with numeric 'score' values")
+        for n in numeric:
+            if isinstance(n, bool) or not isinstance(n, (int, float)) or not math.isfinite(float(n)):
+                raise _invalid(f"score question {qid!r} levels must have finite numeric 'score' values")
+        pass_from = question.get("pass_from")
+        if pass_from is None:
+            raise _invalid(f"score question {qid!r} must declare 'pass_from'")
+        if (
+            isinstance(pass_from, bool)
+            or not isinstance(pass_from, (int, float))
+            or not math.isfinite(float(pass_from))
+            or not min(float(n) for n in numeric) <= float(pass_from) <= max(float(n) for n in numeric)
+        ):
+            raise _invalid(f"score question {qid!r} pass_from must be one of its declared level scores")
 
 
 def _derivation_error() -> JudgeConfigWriteError:
@@ -319,8 +353,10 @@ def validate_typed_judge_config(config: Any) -> None:
     if pass_rule.get("kind") != "weighted_score_at_least":
         raise _invalid("config_json.pass_rule.kind must be 'weighted_score_at_least'")
     threshold = pass_rule.get("threshold")
-    if not isinstance(threshold, (int, float)) or not 0.0 <= float(threshold) <= 1.0:
+    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
         raise _invalid("config_json.pass_rule.threshold must be a number in [0, 1]")
+    if not math.isfinite(float(threshold)) or not 0.0 <= float(threshold) <= 1.0:
+        raise _invalid("config_json.pass_rule.threshold must be a finite number in [0, 1]")
 
     field = config.get("field", "")
     if not isinstance(field, str):

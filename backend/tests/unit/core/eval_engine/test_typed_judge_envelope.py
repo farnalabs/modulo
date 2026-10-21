@@ -115,6 +115,12 @@ class TestCallableDialect:
 
         assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
 
+    def test_a_non_finite_legacy_score_is_malformed(self) -> None:
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            from_judge_callable_dict({"passed": True, "score": float("nan")})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
     def test_non_dict_is_a_malformed_response(self) -> None:
         with pytest.raises(JudgeExecutionError) as exc_info:
             from_judge_callable_dict("not-a-dict")
@@ -229,6 +235,102 @@ class TestTypedAggregation:
             verdict_from_typed_response(text, questions=self._questions(), pass_rule=pass_rule)
 
         assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+
+    def test_a_failed_required_question_vetoes_a_high_normalised_score(self) -> None:
+        """Sage's reproduction: passed=False, confidence 0.778, previously PASS.
+
+        The old veto compared the normalised score to min_pass_confidence
+        (0.778 >= 0.6 → no veto) and summed the required question into the
+        mean, so a required question below pass_from still produced PASS.
+        """
+        questions = [
+            {
+                "id": "quality",
+                "type": "score",
+                "levels": [{"score": n} for n in range(1, 11)],
+                "pass_from": 9,
+                "weight": 1.0,
+                "required": True,
+                "min_pass_confidence": 0.6,
+                "instructions": "quality?",
+            }
+        ]
+        text = self._response({"quality": 8})
+
+        verdict = verdict_from_typed_response(
+            text,
+            questions=questions,
+            pass_rule={"kind": "weighted_score_at_least", "threshold": 0.5},
+        )
+
+        assert verdict.questions[0].passed is False
+        assert verdict.questions[0].confidence == pytest.approx(7 / 9)
+        assert verdict.outcome is JudgeOutcome.FAIL
+
+    def test_nan_in_a_judge_response_is_malformed(self) -> None:
+        text = '{"answers": {"grounded": NaN, "tone": "neutral", "quality": 4}}'
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            verdict_from_typed_response(
+                text,
+                questions=self._questions(),
+                pass_rule={"kind": "weighted_score_at_least", "threshold": 0.5},
+            )
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    def test_infinity_in_a_judge_response_is_malformed(self) -> None:
+        text = '{"answers": {"grounded": true, "tone": "neutral", "quality": Infinity}}'
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            verdict_from_typed_response(
+                text,
+                questions=self._questions(),
+                pass_rule={"kind": "weighted_score_at_least", "threshold": 0.5},
+            )
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    def test_an_all_required_set_passes_on_the_required_questions_alone(self) -> None:
+        questions = [
+            {"id": "a", "type": "noul", "required": True, "weight": 1.0},
+            {"id": "b", "type": "noul", "required": True, "weight": 1.0},
+        ]
+
+        verdict = verdict_from_typed_response(
+            self._response({"a": True, "b": True}),
+            questions=questions,
+            pass_rule={"kind": "weighted_score_at_least", "threshold": 1.0},
+        )
+
+        assert verdict.outcome is JudgeOutcome.PASS
+        assert verdict.score is None
+
+    def test_a_required_question_is_excluded_from_the_weighted_mean(self) -> None:
+        """A passing required question at a low normalised score must not drag
+        the mean below the threshold (D4: the mean is non-required only)."""
+        questions = [
+            {
+                "id": "required",
+                "type": "score",
+                "levels": [{"score": n} for n in range(1, 11)],
+                "pass_from": 2,
+                "weight": 1.0,
+                "required": True,
+            },
+            {"id": "optional", "type": "noul", "required": False, "weight": 1.0},
+        ]
+
+        verdict = verdict_from_typed_response(
+            self._response({"required": 2, "optional": True}),
+            questions=questions,
+            pass_rule={"kind": "weighted_score_at_least", "threshold": 0.9},
+        )
+
+        assert verdict.questions[0].passed is True
+        assert verdict.questions[0].confidence == pytest.approx(1 / 9)
+        assert verdict.score == pytest.approx(1.0)
+        assert verdict.outcome is JudgeOutcome.PASS
 
     def test_non_json_response_is_a_malformed_response(self) -> None:
         with pytest.raises(JudgeExecutionError) as exc_info:

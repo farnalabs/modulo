@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Any
 
 import pytest
 from fastapi import HTTPException
@@ -70,6 +71,31 @@ class TestDialectDetection:
         assert is_typed_judge_config(_typed_config()) is True
         assert is_legacy_judge_config(_typed_config()) is False
         assert is_legacy_judge_config(_LEGACY_CONFIG) is True
+
+
+def _make_score_question(config: dict, *, pass_from: Any) -> None:
+    question: dict[str, Any] = {
+        "id": "quality",
+        "type": "score",
+        "levels": [{"score": 1}, {"score": 3}, {"score": 5}],
+        "weight": 1.0,
+    }
+    if pass_from is not None:
+        question["pass_from"] = pass_from
+    config["questions"] = [question]
+
+
+def _make_choice_question(config: dict, *, option_scores: dict) -> None:
+    config["questions"] = [
+        {
+            "id": "tone",
+            "type": "choice",
+            "options": [{"key": "a"}, {"key": "b"}],
+            "passing_keys": ["a"],
+            "option_scores": option_scores,
+            "weight": 1.0,
+        }
+    ]
 
 
 class TestWriteGuard:
@@ -165,6 +191,10 @@ class TestTypedShapeValidation:
             (lambda c: c.update(model_backend_id=str(uuid.uuid4())), CODE_INVALID),
             (lambda c: c["questions"][0].update(unexpected="x"), CODE_INVALID),
             (lambda c: c["backing"].update(unexpected="x"), CODE_INVALID),
+            (lambda c: _make_score_question(c, pass_from=None), CODE_INVALID),
+            (lambda c: _make_score_question(c, pass_from=99), CODE_INVALID),
+            (lambda c: c["questions"][0].update(min_pass_confidence=float("nan")), CODE_INVALID),
+            (lambda c: _make_choice_question(c, option_scores={"a": 2.0, "b": 0.0}), CODE_INVALID),
         ],
         ids=[
             "missing-dialect",
@@ -178,6 +208,10 @@ class TestTypedShapeValidation:
             "top-level-backend-id",
             "extra-question-key",
             "extra-backing-key",
+            "score-without-pass-from",
+            "pass-from-out-of-range",
+            "nan-min-pass-confidence",
+            "option-score-out-of-range",
         ],
     )
     def test_invalid_typed_shapes_are_rejected(self, mutate, code: str) -> None:

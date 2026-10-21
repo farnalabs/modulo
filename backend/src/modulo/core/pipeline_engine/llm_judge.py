@@ -95,6 +95,14 @@ def _timeout_detail() -> str:
     )
 
 
+def _reject_json_constant(value: str) -> Any:
+    """NaN/Infinity in a judge response is malformed, never a verdict."""
+    raise JudgeExecutionError(
+        JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+        f"judge returned the non-finite JSON constant {value}",
+    )
+
+
 def _classify_provider_exception(exc: BaseException) -> JudgeErrorCode:
     """Map a backend-bridge failure onto the judge error vocabulary.
 
@@ -332,7 +340,7 @@ def build_model_judge_callable(
             )
             return verdict.to_json()
         try:
-            parsed = json.loads(text)
+            parsed = json.loads(text, parse_constant=_reject_json_constant)
         except ValueError as exc:
             raise JudgeExecutionError(
                 JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
