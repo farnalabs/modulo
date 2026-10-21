@@ -256,4 +256,15 @@ describe('NotificationCard', () => {
     await vm.onDismiss('self')
     expect(wrapper.text()).toContain('dismiss failed')
   })
+
+  it('falls back to the localised message when the API rejects with a non-Error', async () => {
+    vi.mocked(dismissNotification).mockRejectedValue('dismiss failed')
+    const wrapper = mount(NotificationCard, {
+      props: { notification: makeNotification() },
+    })
+    const vm = wrapper.vm as unknown as { onDismiss: (s: 'self' | 'scope') => Promise<void> }
+    await vm.onDismiss('self')
+    expect(wrapper.text()).toContain('Failed to dismiss notification')
+    expect(wrapper.text()).not.toContain('components.NotificationCard')
+  })
 })
