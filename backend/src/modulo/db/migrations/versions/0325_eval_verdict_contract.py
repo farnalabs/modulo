@@ -82,6 +82,7 @@ by the previous code path.
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from typing import Any
 
@@ -97,6 +98,12 @@ logger = logging.getLogger("alembic.runtime.migration")
 
 #: Batch size for the primary-key keyset backfill.
 _BATCH_SIZE = 1000
+
+#: Progress cadence: a large table is thousands of batches, and a silent
+#: release command looks like a hung deploy. Emit at most one line per 10
+#: batches or per 60s, whichever comes first (never one line per batch).
+_PROGRESS_EVERY_BATCHES = 10
+_PROGRESS_EVERY_SECONDS = 60.0
 
 #: Fail loudly rather than wait forever on a lock the migration cannot get.
 _SET_MIGRATION_LOCK_TIMEOUT = "SET LOCAL lock_timeout = '15s'"
@@ -261,11 +268,21 @@ def _execute_side(statements: tuple[str, ...]) -> None:
 def _backfill_outcome() -> int:
     """Primary-key keyset backfill of ``outcome`` (index-backed, resumable)."""
     total = 0
+    batches = 0
+    last: Any = _ZERO_UUID
     with _autocommit_connection() as conn:
         if not _relation_visible(conn):
             logger.info("0325_eval_verdict_contract: fresh chain, no rows to backfill")
             return 0
-        last: Any = _ZERO_UUID
+        logger.info(
+            "0325_eval_verdict_contract: starting online outcome backfill "
+            "(batch_size=%d, primary-key keyset, resumable via WHERE outcome IS NULL; "
+            "progress every %d batches or %ds)",
+            _BATCH_SIZE,
+            _PROGRESS_EVERY_BATCHES,
+            int(_PROGRESS_EVERY_SECONDS),
+        )
+        progress_started = time.monotonic()
         while True:
             rows = conn.execute(
                 sa.text(_BACKFILL_OUTCOME),
@@ -275,8 +292,23 @@ def _backfill_outcome() -> int:
                 break
             ids = [row[0] for row in rows]
             total += len(ids)
+            batches += 1
             last = max(ids)
-    logger.info("0325_eval_verdict_contract: backfilled outcome on %d row(s)", total)
+            if batches % _PROGRESS_EVERY_BATCHES == 0 or (
+                time.monotonic() - progress_started >= _PROGRESS_EVERY_SECONDS
+            ):
+                logger.info(
+                    "0325_eval_verdict_contract: backfill progress rows=%d batches=%d cursor=%s",
+                    total,
+                    batches,
+                    last,
+                )
+                progress_started = time.monotonic()
+    logger.info(
+        "0325_eval_verdict_contract: backfilled outcome on %d row(s) in %d batch(es)",
+        total,
+        batches,
+    )
     return total
 
 
