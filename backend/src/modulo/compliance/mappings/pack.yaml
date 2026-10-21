@@ -1,0 +1,31 @@
+# Modulo self-hosted compliance control-mapping pack (FAR-2036).
+#
+# This file is versioned content shipped in the product. It moves with the
+# release it describes; bump `pack_version` whenever an assertion changes (the
+# evidence index additionally records a content hash, so an unbumped edit is
+# still visible).
+#
+# Coverage is per ROW and per FRAMEWORK. There is deliberately no single
+# "compliant" verdict anywhere in this pack.
+pack_version: "1.1.0"
+published_at: "2026-10-21"
+title: "Modulo self-hosted compliance control-mapping pack"
+honesty_note: >-
+  Modulo holds no SOC 2, ISO/IEC 42001 or EU AI Act attestation. In a
+  self-hosted deployment the customer's auditor audits the customer's own
+  instance, so this pack maps the evidence that instance produces to the
+  clauses being tested. Rows where Modulo does not satisfy the clause are marked
+  `gap` or `customer-responsibility` with the responsibility stated. A
+  customer's own control is never presented as a Modulo control, and coverage is
+  attributed per row - never collapsed into a single verdict.
+
+frameworks:
+  - id: soc2
+    file: soc2.yaml
+    name: "SOC 2 Trust Services Criteria"
+  - id: iso_42001
+    file: iso-42001.yaml
+    name: "ISO/IEC 42001 AI management system"
+  - id: eu_ai_act
+    file: eu-ai-act.yaml
+    name: "EU AI Act (Regulation (EU) 2024/1689)"

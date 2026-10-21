@@ -59,6 +59,7 @@ import click
 import psycopg
 from cryptography.fernet import Fernet, InvalidToken
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from modulo.cli.apply import register_apply
 from modulo.settings import get_settings
@@ -160,6 +161,19 @@ def _parse_org_id(raw: str | None) -> uuid.UUID | None:
         except (ValueError, TypeError):
             raise RuntimeError(f"Invalid organisation_id: {raw!r}") from None
     return None
+
+
+def _jsonb(value: Any) -> Any:
+    """Re-adapt an exported JSON value for a JSONB parameter.
+
+    ``SELECT *`` returns JSONB columns as decoded Python objects, so the
+    restore path receives dicts/lists. psycopg has no default dumper for those
+    (``ProgrammingError: cannot adapt type 'dict'``), which made a restore of
+    any archive containing a checkpoint row fail outright.
+    """
+    if isinstance(value, dict | list):
+        return Jsonb(value)
+    return value
 
 
 def _write_json(path: Path, data: Any) -> None:
@@ -441,8 +455,8 @@ def _restore_checkpoints_sync(raw_url: str, checkpoints: list[dict[str, Any]]) -
                         row.get("checkpoint_ns"),
                         row.get("checkpoint_id"),
                         row.get("parent_checkpoint_id"),
-                        row.get("checkpoint"),
-                        row.get("metadata"),
+                        _jsonb(row.get("checkpoint")),
+                        _jsonb(row.get("metadata")),
                     ),
                 )
         conn.commit()

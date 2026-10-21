@@ -107,7 +107,8 @@ class PipelineSnapshot(OrgScoped):
     guardrail_pins_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # FAR-967 chunk 10 (§3.3): policy-gate snapshot pin set and integrity
     # fingerprint.  ``policy_gate_pins_json`` carries per-gate entries
-    # (policy_gate_id, eval_id, action, node_id) captured at snapshot creation;
+    # (policy_gate_id, eval_id, action, node_id, evaluation_mode — the last
+    # added by FAR-1749) captured at snapshot creation;
     # ``policy_gate_pins_fingerprint`` is a canonical SHA-256 over the
     # serialized pin set.  Both nullable for backward compatibility with
     # legacy snapshots (§6.1 three-case table: no pins + no fingerprint →

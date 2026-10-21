@@ -90,6 +90,7 @@ if TYPE_CHECKING:
 
 import typing
 
+from modulo.core.agent_event_evidence import parse_step_finish_evidence
 from modulo.core.capability_scope import filter_run_context_scope
 from modulo.core.cost_controller.breakdown.constants import (
     MAX_REPORTABLE_BAND_USD,
@@ -634,6 +635,17 @@ _IDEMPOTENCY_GATE_READ_TIMEOUT = 3.0
 # FAR-228: best-effort marker persist bounded inside a caught CancelledError
 # (5s — the node is being cancelled, the write must not delay the re-raise).
 _IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT = 5.0
+#: FAR-1914 B2: bounded post-cancel grace before the final retention drain.
+#: A ``gh pr create`` line can be flushed by the sandbox process just AFTER the
+#: cancellation lands; one extra look at the log tail after this short wait is
+#: what lets the delivery evidence (``pr_url`` / sentinel) reach the marker.
+#: Deliberately tiny: the node is already cancelled, so this must not delay the
+#: re-raise beyond the existing bounded persist budget.
+_CANCEL_DELIVERY_GRACE_SECONDS = 0.5
+#: FAR-1914: the single log event for a post-cancel retention drain that failed
+#: (on the timeout boundary, while awaited, or after a timed-out wait). Defined
+#: once so the three emitters can never drift apart (SonarCloud S1192).
+_CANCEL_DRAIN_FAILED_EVENT = "sandbox_agent.cancel_retention_drain_failed"
 # FAR-458: the per-connector-per-write ``on_unknown`` modes and default live in
 # ONE place — ``modulo.connectors.base`` (a stdlib-only leaf imported by both
 # the pipeline engine's gate read and the REST connector's config validation)
@@ -1061,11 +1073,6 @@ def _build_token_usage_fields(output_json: Any) -> dict[str, Any]:
     return fields
 
 
-#: FAR-1994: the opencode JSONL event type that closes one model step and
-#: carries the authoritative token counters (``tokens.total`` / ``input`` /
-#: ``output`` / ``cache.read`` / ``cache.write``).
-_OPENCODE_STEP_FINISH_EVENT = "step_finish"
-
 #: FAR-1994: provenance class of token counters recovered from a retained
 #: agent raw-output stream. The numbers are parsed from the AGENT'S OWN
 #: opencode event stream — agent-reported, never server-measured — so they
@@ -1081,73 +1088,6 @@ RECOVERED_TOKEN_USAGE_PROVENANCE: str = PROVENANCE_REPORTED
 RECOVERED_TOKEN_USAGE_ATTR: str = "recovered_token_usage"
 
 
-def _coerce_event_token(value: Any) -> int | None:
-    """A plausible non-negative opencode token counter, or ``None``.
-
-    Reuses the shared reported-token coercion (accepts an integral float,
-    rejects bool / negative / non-numeric / above the plausibility ceiling) so
-    a recovered count obeys the SAME trust-boundary rule as a producer
-    ``token_usage`` report.
-    """
-    return coerce_reported_token(value)
-
-
-#: FAR-1994: a ``step_finish`` event's ``tokens`` keys that map to the producer
-#: ``token_usage`` shape unchanged, and its ``cache`` sub-object keys that map
-#: onto the ``cache_*`` producer keys.
-_STEP_FINISH_TOKEN_PAIRS: tuple[tuple[str, str], ...] = (
-    ("input", "input"),
-    ("output", "output"),
-    ("total", "total"),
-)
-_STEP_FINISH_CACHE_PAIRS: tuple[tuple[str, str], ...] = (("read", "cache_read"), ("write", "cache_write"))
-
-#: FAR-1994: every producer ``token_usage`` key the recovery can emit, in the
-#: canonical order. Only keys an event actually carried are returned.
-_RECOVERED_TOKEN_KEYS: tuple[str, ...] = ("input", "output", "total", "cache_read", "cache_write")
-
-
-def _parse_step_finish_tokens(line: str) -> dict[str, Any] | None:
-    """The ``tokens`` object of one opencode ``step_finish`` JSONL line, or ``None``.
-
-    Cheap pre-filter first: only a line that even mentions the event type can be
-    a candidate, so a 512KB blob of ordinary text is not JSON-parsed. Non-JSON
-    lines, non-dict payloads and other event types yield ``None``.
-    """
-    if _OPENCODE_STEP_FINISH_EVENT not in line:
-        return None
-    try:
-        event = json.loads(line)
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(event, dict) or event.get("type") != _OPENCODE_STEP_FINISH_EVENT:
-        return None
-    tokens = event.get("tokens")
-    return tokens if isinstance(tokens, dict) else None
-
-
-def _accumulate_token_counters(
-    totals: dict[str, int],
-    seen: set[str],
-    source: dict[str, Any],
-    key_pairs: tuple[tuple[str, str], ...],
-) -> None:
-    """Add every plausible *source* counter into *totals*, recording *seen* keys."""
-    for source_key, producer_key in key_pairs:
-        coerced = _coerce_event_token(source.get(source_key))
-        if coerced is not None:
-            totals[producer_key] += coerced
-            seen.add(producer_key)
-
-
-def _seen_token_totals(totals: dict[str, int], seen: set[str]) -> dict[str, int]:
-    """Project *totals* onto the canonical key order, keeping only *seen* keys.
-
-    A key an event never carried must not masquerade as a reported zero.
-    """
-    return {key: totals[key] for key in _RECOVERED_TOKEN_KEYS if key in seen}
-
-
 def _recover_token_usage_from_raw_output(raw_output: str | None) -> dict[str, int]:
     """Sum opencode ``step_finish`` token counters from a retained raw stream.
 
@@ -1157,6 +1097,12 @@ def _recover_token_usage_from_raw_output(raw_output: str | None) -> dict[str, in
     normally carries ``token_usage`` never exists, so the run records zero.
     The retained raw output (up to the node's retention cap) holds those events;
     this recovers them.
+
+    FAR-1914 M2: the parse itself lives in the langgraph-free leaf
+    :func:`modulo.core.agent_event_evidence.parse_step_finish_evidence` — ONE
+    implementation shared with the cost finalizer (which is reachable from the
+    API and must not import this module). The shipped CLI nests both ``tokens``
+    and ``cost`` under ``part``; the leaf reads that shape only.
 
     Returns the PRODUCER ``token_usage`` shape
     ``{"input", "output", "total", "cache_read"?, "cache_write"?}`` — the same
@@ -1173,25 +1119,8 @@ def _recover_token_usage_from_raw_output(raw_output: str | None) -> dict[str, in
     run. An EMPTY dict means "no step_finish event found", which is distinct
     from a genuine zero report (a present event with zero counters).
     """
-    if not isinstance(raw_output, str) or not raw_output:
-        return {}
-    totals: dict[str, int] = dict.fromkeys(_RECOVERED_TOKEN_KEYS, 0)
-    seen: set[str] = set()
-    found_event = False
-    for line in raw_output.splitlines():
-        tokens = _parse_step_finish_tokens(line)
-        if tokens is None:
-            continue
-        found_event = True
-        _accumulate_token_counters(totals, seen, tokens, _STEP_FINISH_TOKEN_PAIRS)
-        cache = tokens.get("cache")
-        if isinstance(cache, dict):
-            _accumulate_token_counters(totals, seen, cache, _STEP_FINISH_CACHE_PAIRS)
-    if not found_event:
-        return {}
-    # Only emit a key an event actually carried — a missing ``total`` must not
-    # masquerade as a reported zero.
-    return _seen_token_totals(totals, seen)
+    tokens, _cost = parse_step_finish_evidence(raw_output)
+    return tokens
 
 
 def _attach_recovered_token_usage(exc: BaseException, raw_output: str | None) -> None:
@@ -2352,6 +2281,105 @@ def _uncancel_current_task() -> None:
     task = asyncio.current_task()
     if task is not None:
         task.uncancel()
+
+
+class _BoundedFinalDrain:
+    """Serialise the post-cancel final drains so a slow drain is never doubled.
+
+    FAR-1914 round-3 M3: the cancel path wraps a SHIELDED
+    ``drain_sandbox_log`` in ``wait_for(...)``. When the read is slow the outer
+    wait expires while the shielded drain keeps running; the post-cancel grace
+    look then started a SECOND drain over the same ``_drain_offset``, so the
+    same bytes — and their ``step_finish`` costs — were appended twice (once
+    per drain) before the offset advanced. This holder keeps the in-flight task
+    and, on the next look, awaits THAT task (bounded) instead of starting a
+    second one — so at most one drain is ever in flight. Once it has finished,
+    a later look starts a fresh drain (the grace second look still catches
+    content flushed after the cancellation).
+    """
+
+    def __init__(
+        self,
+        drain: Callable[[], Awaitable[None]],
+        *,
+        timeout: float,
+        log_context: dict[str, Any] | None = None,
+    ) -> None:
+        self._drain = drain
+        self._timeout = timeout
+        self._log_context = log_context or {}
+        self._inflight: asyncio.Future[None] | None = None
+        #: True only while ``run_once`` is awaiting the task, so a task failure
+        #: is logged exactly once (by the awaiter) and a LATE failure (after a
+        #: timed-out wait, when nothing is awaiting) is logged by the callback.
+        self._awaiting = False
+
+    async def run_once(self) -> None:
+        """Run (or join) the bounded final drain once."""
+        if self._inflight is None or self._inflight.done():
+            self._inflight = asyncio.ensure_future(self._drain())
+            # Retrieve a late failure even when no later look awaits the task:
+            # an unretrieved task exception logs a spurious traceback at GC.
+            self._inflight.add_done_callback(self._log_late_failure)
+        task = self._inflight
+        self._awaiting = True
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=self._timeout)
+        # Nested cancellation here is deliberate — idempotency-gate cleanup must
+        # not re-raise early or the delivery-done marker is skipped (FAR-228
+        # fix); the original cancellation re-raises.
+        except asyncio.CancelledError:  # NOSONAR
+            _uncancel_current_task()
+        except TimeoutError:
+            # Either the drain is still alive (shielded) — it will run to
+            # completion in the background and the next look joins it instead
+            # of duplicating the read — or it settled with an exception in the
+            # same loop iteration the timer fired. ``wait_for`` reports a
+            # timeout in BOTH cases (the timer cancels the shield's OUTER
+            # future; an INNER task that already completed keeps its
+            # exception), so the boundary failure must be surfaced here: the
+            # done callback stays silent (``_awaiting`` is still True) and
+            # nothing else observes it. A drain that fails AFTER this point is
+            # logged by ``_log_late_failure``; one that failed before the
+            # timeout propagates through the ``except Exception`` arm above.
+            if not self._log_boundary_failure(task):
+                _log.warning("sandbox_agent.cancel_retention_drain_timed_out", extra=self._log_context)
+        except Exception:
+            # The drain itself failed. Logged HERE (the callback stays silent
+            # while awaited) so the failure is never swallowed.
+            _log.error(_CANCEL_DRAIN_FAILED_EVENT, extra=self._log_context, exc_info=True)
+        finally:
+            self._awaiting = False
+
+    def _log_boundary_failure(self, task: asyncio.Future[None]) -> bool:
+        """Log a drain that failed on the timeout boundary; return whether it did.
+
+        ``wait_for(asyncio.shield(task), ...)`` raises ``TimeoutError`` even
+        when the shielded task has ALREADY settled with an exception: the timer
+        cancels the shield's outer future, while the inner task completed with
+        the error in the same loop iteration. Without this arm the exception and
+        its traceback would be reported only as a timeout (the done callback
+        stays silent while ``_awaiting`` is True), losing the real failure.
+        """
+        if not task.done() or task.cancelled():
+            return False
+        exc = task.exception()
+        if exc is None:
+            return False
+        _log.error(_CANCEL_DRAIN_FAILED_EVENT, extra=self._log_context, exc_info=exc)
+        return True
+
+    def _log_late_failure(self, task: asyncio.Future[None]) -> None:
+        """Retrieve (and log) an in-flight drain's failure, never silently."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None and not self._awaiting:
+            _log.error(
+                _CANCEL_DRAIN_FAILED_EVENT,
+                extra=self._log_context,
+                exc_info=exc,
+            )
 
 
 def _source_contains_delivery_sentinel(text: Any, sentinel: str | None) -> bool:
@@ -12820,18 +12848,29 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # persist a delivery_done marker when the sentinel is a full-line
         # match in the drained tail.
         if _drain_fn is not None and sandbox is not None:
-            try:
-                await asyncio.wait_for(asyncio.shield(_drain_fn()), timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT)
-            # Nested cancellation here is deliberate — idempotency-gate cleanup
-            # must not re-raise early or the delivery-done marker is skipped
-            # (FAR-228 fix); the original cancellation re-raises at line 4566.
-            except asyncio.CancelledError:  # NOSONAR
-                _uncancel_current_task()
-            except Exception:
-                _log.exception(
-                    "sandbox_agent.cancel_retention_drain_failed",
-                    extra={"node_id": node_id, "run_id": run_id},
-                )
+            # FAR-1914 round-3 M3: ONE sequencer for both looks. A slow
+            # shielded drain must never be re-started by the grace look (that
+            # duplicated bytes and their step_finish costs on the same
+            # _drain_offset); the second look joins the in-flight task instead.
+            _final_drain = _BoundedFinalDrain(
+                _drain_fn,
+                timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT,
+                log_context={"node_id": node_id, "run_id": run_id},
+            )
+
+            await _final_drain.run_once()
+            # FAR-1914 B2: one bounded second look. A delivered-then-killed run
+            # can flush its `gh pr create` line just after the cancellation
+            # lands; without this grace the marker is built from a tail that
+            # predates the delivery and the run reads as a bare failure.
+            if _CANCEL_DELIVERY_GRACE_SECONDS > 0:
+                try:
+                    await asyncio.sleep(_CANCEL_DELIVERY_GRACE_SECONDS)
+                except asyncio.CancelledError:  # NOSONAR
+                    _uncancel_current_task()
+                # Join the in-flight drain (or start a fresh look once it has
+                # completed) — never a second concurrent drain.
+                await _final_drain.run_once()
         # FAR-704: retain cancellation TRIAGE evidence whenever a sandbox
         # existed. The absolute node-deadline watchdog (pipeline_execution)
         # cancels this dispatch before output.json is ever read, so no node
@@ -12877,6 +12916,14 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             _cancel_sentinel_hit = bool(
                 delivery_sentinel and _source_contains_delivery_sentinel(_drained_tail, delivery_sentinel)
             )
+            _cancel_pr_url = _extract_pr_url(_drained_tail)
+            # FAR-1914 B2 / C1: the PR url is EVIDENCE, never a gate. Only the
+            # configured full-line sentinel may set ``delivery_done`` — the
+            # idempotency gate suppresses a retry on that field alone, so
+            # arming it from ANY url in the tail (a ``gh pr list --json url``
+            # payload, a quoted url) could turn a false positive into a MISSED
+            # delivery. The url is retained on the marker's existing
+            # non-gating ``pr_url`` field for human/analytics evidence.
             _cancel_no_output_reason = (
                 stall_reason
                 or "Sandbox attempt cancelled before a terminal node envelope was produced "
@@ -12889,11 +12936,15 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     "Sandbox agent cancelled after delivery sentinel observed — "
                     "delivery_done retained (idempotency gate)"
                     if _cancel_sentinel_hit
-                    else "Sandbox agent cancelled — triage evidence retained (FAR-704)"
+                    else (
+                        "Sandbox agent cancelled after a PR url was observed — pr_url retained as non-gating evidence"
+                        if _cancel_pr_url
+                        else "Sandbox agent cancelled — triage evidence retained (FAR-704)"
+                    )
                 ),
                 "raw_output": _redact_raw_output(_drained_tail)[:_stdout_cap],
                 "parse_error": "",
-                "pr_url": _extract_pr_url(_drained_tail),
+                "pr_url": _cancel_pr_url,
                 "exit_code": -1,
                 "stdout_length": len(_drained_tail),
                 "stderr_length": 0,

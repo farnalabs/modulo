@@ -522,6 +522,16 @@ def _warn_unrecognised_config_keys(trigger_id: uuid.UUID, cfg: dict[str, Any]) -
         )
 
 
+def _resolve_ci_coalesce_window(cfg: dict[str, Any]) -> int:
+    """The CI-failure coalesce window, clamped to the supported bounds."""
+    ci_raw = cfg.get("ci_failure_coalesce_window_seconds", _CI_FAILURE_COALESCE_WINDOW_SECONDS)
+    try:
+        ci_window = int(ci_raw)
+    except (TypeError, ValueError):
+        ci_window = _CI_FAILURE_COALESCE_WINDOW_SECONDS
+    return max(1, min(ci_window, _CI_FAILURE_COALESCE_WINDOW_MAX_SECONDS))
+
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -529,6 +539,227 @@ def _warn_unrecognised_config_keys(trigger_id: uuid.UUID, cfg: dict[str, Any]) -
 
 class TriggerEngine:
     """Stateless service - pass a session per call."""
+
+    async def _verify_webhook_timestamp(
+        self,
+        session: AsyncSession,
+        *,
+        trigger: Trigger,
+        org_id: uuid.UUID,
+        trigger_id: uuid.UUID,
+        modulo_timestamp: str | None,
+        payload_hash: str,
+    ) -> int:
+        """X-Modulo-Timestamp replay window check (logs the failed event first)."""
+        try:
+            return verify_timestamp(modulo_timestamp)
+        except TimestampExpiredError as exc:
+            _log.warning("Webhook timestamp validation failed for trigger %s: %s", trigger_id, exc, exc_info=True)
+            await self._log_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                payload_hash=payload_hash,
+                result="timestamp_expired",
+            )
+            raise
+
+    async def _resolve_webhook_hmac_secret(
+        self,
+        session: AsyncSession,
+        *,
+        trigger_id: uuid.UUID,
+        org_id: uuid.UUID,
+        cfg: dict[str, Any],
+    ) -> str | None:
+        """Resolve the trigger's HMAC secret, failing CLOSED on a decrypt error."""
+        hmac_secret_raw: str | None = cfg.get("hmac_secret")
+        if hmac_secret_raw is None:
+            return None
+        from modulo.core.trigger_secrets import resolve_trigger_secret_scoped
+        from modulo.settings import get_settings as _get_settings
+
+        try:
+            return await resolve_trigger_secret_scoped(
+                session,
+                stored_raw=hmac_secret_raw,
+                fernet_key=_get_settings().fernet_key,
+                org_id=org_id,
+                trigger_id=trigger_id,
+                config_key="hmac_secret",
+                context="webhook_engine",
+            )
+        except Exception:
+            # FAR-1735 fail closed: an undecryptable ciphertext secret must
+            # never be used as the HMAC key (the shared resolver only raises
+            # for decryptable values and structurally complete tokens —
+            # anything else is legacy plaintext, returned by the warn-only
+            # dated shim with a warning).
+            _log.exception("trigger_engine.hmac_secret_decrypt_failed trigger=%s", trigger_id)
+            raise
+
+    async def _verify_hmac_or_reject(
+        self,
+        session: AsyncSession,
+        *,
+        trigger: Trigger,
+        org_id: uuid.UUID,
+        trigger_id: uuid.UUID,
+        payload_hash: str,
+        raw_body: bytes,
+        hmac_secret: str | None,
+        hmac_signature: str | None,
+        ts: int,
+    ) -> None:
+        """Verify the HMAC when a secret is configured; log + raise on failure."""
+        if hmac_secret is None:
+            return
+        if verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
+            return
+        _log.warning("Webhook HMAC validation failed for trigger %s", trigger_id)
+        await self._log_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            payload_hash=payload_hash,
+            result="hmac_failed",
+        )
+        raise HmacValidationError
+
+    async def _reject_duplicate_webhook(
+        self,
+        session: AsyncSession,
+        *,
+        trigger: Trigger,
+        org_id: uuid.UUID,
+        dedup_hash: str,
+        trigger_id: uuid.UUID,
+    ) -> None:
+        """Log the deduplicated delivery event and raise the duplicate error."""
+        _log.warning("Webhook deduplicated for trigger %s (hash=%s)", trigger_id, dedup_hash[:16])
+        await self._log_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            payload_hash=dedup_hash,
+            result="deduplicated",
+        )
+        raise DuplicateWebhookError(dedup_hash)
+
+    async def _coalesce_ci_failure(
+        self,
+        session: AsyncSession,
+        *,
+        trigger: Trigger,
+        org_id: uuid.UUID,
+        cfg: dict[str, Any],
+        post_guardrail_payload: dict[str, Any],
+        dedup_hash: str,
+        trigger_id: uuid.UUID,
+    ) -> None:
+        """FAR-1034: suppress a repeat CI-failure event for the same PR + SHA.
+
+        The canonical dedup cannot catch these: each event carries the volatile
+        ``runUrl`` of the CI run that failed, so the payload hashes always
+        differ. Key the window on the stable (prNumber, headSha) subset
+        instead — the same ``config_json.coalesce_pending=false`` kill switch
+        that turns off the D2 pending-fold coalesce also disables this gate,
+        and the window length is configurable via
+        ``config_json.ci_failure_coalesce_window_seconds`` (default 1h).
+
+        Accepted trade-offs (documented FAR-1034):
+
+        * If the first fixer run for (pr, headSha) terminates WITHOUT pushing a
+          fix commit (crash/exhausted/no-fix), a same-head re-fire within the
+          window is deliberately suppressed. A NEW commit always launches a
+          fresh run. branch-fixer.yml now resolves and sends the PR's head SHA
+          too, so its repeat dispatches coalesce; a human bypasses that with
+          the ``force: true`` input, which omits headSha deliberately.
+        * ci.yml's notify-main-failure sends headSha=github.sha, so a manually
+          re-dispatched main CI run failing at the SAME sha within the window
+          is suppressed — same broken commit, same work unit.
+        """
+        ci_key = derive_ci_failure_coalesce_key(post_guardrail_payload)
+        if ci_key is None or not coalesce_enabled(cfg):
+            return
+        ci_window = _resolve_ci_coalesce_window(cfg)
+        # webhook_dedup_hashes.payload_hash is VARCHAR(64) and the canonical
+        # dedup fills it with 64-hex digests. Hash the readable key so a long
+        # head SHA / 6-digit+ PR number can never overflow it — a DataError
+        # (22001) is NOT an IntegrityError, so it would 503 EVERY delivery for
+        # that PR.
+        ci_dedup_hash = hashlib.sha256(ci_key.encode("utf-8")).hexdigest()
+        try:
+            ci_is_new = await self._try_insert_dedup(
+                session,
+                trigger_id,
+                org_id,
+                ci_dedup_hash,
+                ttl_seconds=ci_window,
+            )
+        except SQLAlchemyError:
+            # Best-effort suppression gate: if the coalesce marker cannot be
+            # recorded, FAIL OPEN (log + launch) — never refuse a fixer run
+            # because of gate bookkeeping. The savepoint inside
+            # _try_insert_dedup confines the failure, so the outer transaction
+            # can still create the run.
+            _log.exception(
+                "Webhook CI-failure coalesce write failed for trigger %s — failing open",
+                trigger_id,
+            )
+            ci_is_new = True
+        if ci_is_new:
+            return
+        _log.info(
+            "Webhook CI-failure coalesced for trigger %s (%s) — suppressed for %ss",
+            trigger_id,
+            ci_key,
+            ci_window,
+        )
+        await self._log_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            payload_hash=dedup_hash,
+            result="coalesced",
+            error_detail=f"ci_failure_coalesced:{ci_key}",
+        )
+        raise CiFailureCoalescedError(ci_key)
+
+    async def _enforce_concurrency_limit(
+        self,
+        session: AsyncSession,
+        *,
+        trigger: Trigger,
+        org_id: uuid.UUID,
+        dedup_hash: str,
+        trigger_id: uuid.UUID,
+    ) -> None:
+        """FAR-1863: REFUSE at the run-creation site instead of queueing.
+
+        The declared ``max_concurrent_runs`` must bound execution; the refusal
+        raises ``ConcurrentRunLimitError`` exactly as ``replay_event`` and the
+        other trigger types do, recording the ``concurrency_limit_reached``
+        event before raising (the route re-records + maps it to 429 after the
+        unwound transaction, so the refusal is auditable and replayable).
+        """
+        active_count = await self._count_active_runs(session, trigger.id)
+        if active_count < trigger.max_concurrent_runs:
+            return
+        _log.warning(
+            "Webhook concurrency limit reached for trigger %s (%d active >= %d limit) — delivery refused",
+            trigger_id,
+            active_count,
+            trigger.max_concurrent_runs,
+        )
+        await self._log_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            payload_hash=dedup_hash,
+            result="concurrency_limit_reached",
+        )
+        raise ConcurrentRunLimitError(trigger.id, trigger.max_concurrent_runs)
 
     async def handle_webhook(
         self,
@@ -574,56 +805,35 @@ class TriggerEngine:
             payload_hash = sha256_hex(raw_body)
 
             # X-Modulo-Timestamp replay window check
-            try:
-                ts = verify_timestamp(modulo_timestamp)
-            except TimestampExpiredError as exc:
-                _log.warning("Webhook timestamp validation failed for trigger %s: %s", trigger_id, exc, exc_info=True)
-                await self._log_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    payload_hash=payload_hash,
-                    result="timestamp_expired",
-                )
-                raise
+            ts = await self._verify_webhook_timestamp(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                trigger_id=trigger_id,
+                modulo_timestamp=modulo_timestamp,
+                payload_hash=payload_hash,
+            )
 
             # HMAC validation (only if secret is configured)
             cfg = trigger.config_json or {}
             _warn_unrecognised_config_keys(trigger.id, cfg)
-            hmac_secret_raw: str | None = cfg.get("hmac_secret")
-            hmac_secret: str | None = None
-            if hmac_secret_raw is not None:
-                from modulo.core.trigger_secrets import resolve_trigger_secret_scoped
-                from modulo.settings import get_settings as _get_settings
-
-                try:
-                    hmac_secret = await resolve_trigger_secret_scoped(
-                        session,
-                        stored_raw=hmac_secret_raw,
-                        fernet_key=_get_settings().fernet_key,
-                        org_id=org_id,
-                        trigger_id=trigger_id,
-                        config_key="hmac_secret",
-                        context="webhook_engine",
-                    )
-                except Exception:
-                    # FAR-1735 fail closed: an undecryptable ciphertext secret
-                    # must never be used as the HMAC key (the shared resolver
-                    # only raises for decryptable values and structurally
-                    # complete tokens — anything else is legacy plaintext,
-                    # returned by the warn-only dated shim with a warning).
-                    _log.exception("trigger_engine.hmac_secret_decrypt_failed trigger=%s", trigger_id)
-                    raise
-            if hmac_secret is not None and not verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
-                _log.warning("Webhook HMAC validation failed for trigger %s", trigger_id)
-                await self._log_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    payload_hash=payload_hash,
-                    result="hmac_failed",
-                )
-                raise HmacValidationError
+            hmac_secret = await self._resolve_webhook_hmac_secret(
+                session,
+                trigger_id=trigger_id,
+                org_id=org_id,
+                cfg=cfg,
+            )
+            await self._verify_hmac_or_reject(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                trigger_id=trigger_id,
+                payload_hash=payload_hash,
+                raw_body=raw_body,
+                hmac_secret=hmac_secret,
+                hmac_signature=hmac_signature,
+                ts=ts,
+            )
 
             # Org-wide pause kill-switch. Checked AFTER timestamp+HMAC
             # validation (an unauthenticated delivery still gets its typed
@@ -659,121 +869,38 @@ class TriggerEngine:
             # Deduplication
             is_new = await self._try_insert_dedup(session, trigger_id, org_id, dedup_hash)
             if not is_new:
-                _log.warning("Webhook deduplicated for trigger %s (hash=%s)", trigger_id, dedup_hash[:16])
-                await self._log_event(
+                await self._reject_duplicate_webhook(
                     session,
                     trigger=trigger,
                     org_id=org_id,
-                    payload_hash=dedup_hash,
-                    result="deduplicated",
+                    dedup_hash=dedup_hash,
+                    trigger_id=trigger_id,
                 )
-                raise DuplicateWebhookError(dedup_hash)
 
             # FAR-1034 CI-failure coalescing — a repeat CI-failure event for the
             # SAME PR + head SHA within the window is a no-op (no new run)
-            # instead of launching another full Branch Fixer run. The canonical
-            # dedup above cannot catch these: each event carries the volatile
-            # runUrl of the CI run that failed, so the payload hashes always
-            # differ. Key the window on the stable (prNumber, headSha) subset
-            # instead — the same `config_json.coalesce_pending=false` kill switch
-            # that turns off the D2 pending-fold coalesce also disables this
-            # gate, and the window length is configurable via
-            # `config_json.ci_failure_coalesce_window_seconds` (default 1h).
-            #
-            # Accepted trade-offs (documented FAR-1034):
-            #   * If the first fixer run for (pr, headSha) terminates WITHOUT
-            #     pushing a fix commit (crash/exhausted/no-fix), a same-head
-            #     re-fire within the window is deliberately suppressed. A NEW
-            #     commit always launches a fresh run. branch-fixer.yml now
-            #     resolves and sends the PR's head SHA too, so its repeat
-            #     dispatches coalesce; a human bypasses that with the
-            #     `force: true` input, which omits headSha deliberately.
-            #   * ci.yml's notify-main-failure sends headSha=github.sha, so a
-            #     manually re-dispatched main CI run failing at the SAME sha
-            #     within the window is suppressed — same broken commit, same
-            #     work unit.
-            ci_key = derive_ci_failure_coalesce_key(post_guardrail_payload)
-            if ci_key is not None and coalesce_enabled(cfg):
-                ci_raw = cfg.get("ci_failure_coalesce_window_seconds", _CI_FAILURE_COALESCE_WINDOW_SECONDS)
-                try:
-                    ci_window = int(ci_raw)
-                except (TypeError, ValueError):
-                    ci_window = _CI_FAILURE_COALESCE_WINDOW_SECONDS
-                ci_window = max(1, min(ci_window, _CI_FAILURE_COALESCE_WINDOW_MAX_SECONDS))
-                # webhook_dedup_hashes.payload_hash is VARCHAR(64) and the
-                # canonical dedup fills it with 64-hex digests. Hash the
-                # readable key so a long head SHA / 6-digit+ PR number can
-                # never overflow it — a DataError (22001) is NOT an
-                # IntegrityError, so it would 503 EVERY delivery for that PR.
-                ci_dedup_hash = hashlib.sha256(ci_key.encode("utf-8")).hexdigest()
-                try:
-                    ci_is_new = await self._try_insert_dedup(
-                        session,
-                        trigger_id,
-                        org_id,
-                        ci_dedup_hash,
-                        ttl_seconds=ci_window,
-                    )
-                except SQLAlchemyError:
-                    # Best-effort suppression gate: if the coalesce marker
-                    # cannot be recorded, FAIL OPEN (log + launch) — never
-                    # refuse a fixer run because of gate bookkeeping. The
-                    # savepoint inside _try_insert_dedup confines the failure,
-                    # so the outer transaction can still create the run.
-                    _log.exception(
-                        "Webhook CI-failure coalesce write failed for trigger %s — failing open",
-                        trigger_id,
-                    )
-                    ci_is_new = True
-                if not ci_is_new:
-                    _log.info(
-                        "Webhook CI-failure coalesced for trigger %s (%s) — suppressed for %ss",
-                        trigger_id,
-                        ci_key,
-                        ci_window,
-                    )
-                    await self._log_event(
-                        session,
-                        trigger=trigger,
-                        org_id=org_id,
-                        payload_hash=dedup_hash,
-                        result="coalesced",
-                        error_detail=f"ci_failure_coalesced:{ci_key}",
-                    )
-                    raise CiFailureCoalescedError(ci_key)
+            # instead of launching another full Branch Fixer run.
+            await self._coalesce_ci_failure(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                cfg=cfg,
+                post_guardrail_payload=post_guardrail_payload,
+                dedup_hash=dedup_hash,
+                trigger_id=trigger_id,
+            )
 
             # Flood / concurrency protection (FAR-1863) — REFUSE at the run-
-            # creation site instead of queuing an unbounded run. The previous
-            # behaviour logged ``concurrency_limit_reached`` and created the run
-            # anyway ("queuing anyway"), so a burst could pile unlimited runs
-            # onto the trigger and the declared ``max_concurrent_runs`` never
-            # bound anything. The refusal now raises ``ConcurrentRunLimitError``
-            # exactly as ``replay_event`` and the other trigger types do, and —
-            # matching ``replay_event`` — records the ``concurrency_limit_reached``
-            # event before raising. That in-transaction write rolls back with the
-            # unwound main transaction (the PipelineBackpressureError pattern),
-            # so the receive route re-records the refused delivery + raw payload
-            # in a fresh transaction after the unwind: the refusal is auditable
-            # and replayable, never silent. The route maps the raise to 429 (the
-            # documented concurrent-run-limit rejection — never a fabricated
-            # "queued" ack with no run behind it). A 429 is reject-and-retry, so
-            # the sender can re-deliver once a slot frees.
-            active_count = await self._count_active_runs(session, trigger.id)
-            if active_count >= trigger.max_concurrent_runs:
-                _log.warning(
-                    "Webhook concurrency limit reached for trigger %s (%d active >= %d limit) — delivery refused",
-                    trigger_id,
-                    active_count,
-                    trigger.max_concurrent_runs,
-                )
-                await self._log_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    payload_hash=dedup_hash,
-                    result="concurrency_limit_reached",
-                )
-                raise ConcurrentRunLimitError(trigger.id, trigger.max_concurrent_runs)
+            # creation site instead of queuing an unbounded run: the declared
+            # ``max_concurrent_runs`` bounds execution, and the refusal is
+            # recorded + raised exactly as ``replay_event`` does.
+            await self._enforce_concurrency_limit(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                dedup_hash=dedup_hash,
+                trigger_id=trigger_id,
+            )
 
             # Payload mapping — derived from the POST-guardrail payload so a
             # redact-action guardrail's masks are reflected in the mapped input.

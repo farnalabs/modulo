@@ -11,6 +11,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 from modulo.core.graph_validator import GraphValidator, ValidationResult
 from tests.unit.graph_validator._helpers import codes_of as _codes
+from tests.unit.graph_validator._helpers import (
+    session_returning as _session_with_templates,
+)
 
 
 def _template(
@@ -30,16 +33,6 @@ def _node(nid: str, *, composite_ref: str | None = None, **extra) -> dict:
         node["composite_ref"] = composite_ref
     node.update(extra)
     return node
-
-
-def _session_with_templates(rows: list[MagicMock]) -> AsyncMock:
-    session = AsyncMock()
-    scalars = MagicMock()
-    scalars.all.return_value = rows
-    exc = MagicMock()
-    exc.scalars.return_value = scalars
-    session.execute = AsyncMock(return_value=exc)
-    return session
 
 
 async def _run(graph_json: dict[str, Any], session: AsyncMock) -> ValidationResult:

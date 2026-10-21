@@ -1178,7 +1178,8 @@ async def _clone_snapshots(
         # carry rule. A clone has NO gate rows (evals and gates are never
         # cloned; declared gate blocks are stripped per FAR-1666), and
         # ``_build_policy_gate_pins`` stores only the SOURCE's
-        # ``policy_gate_id`` / ``eval_id`` / ``action`` / ``node_id``. Carrying
+        # ``policy_gate_id`` / ``eval_id`` / ``action`` / ``node_id`` /
+        # ``evaluation_mode``. Carrying
         # them would pin foreign gates AND — worse — declare a "pinned
         # universe" in ``_build_eval_defs_by_node``, under which the clone's
         # OWN gates are unpinned and every clone gate block is silently

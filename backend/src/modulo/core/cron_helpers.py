@@ -27,7 +27,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import math
 import threading
 import time
 import uuid
@@ -49,7 +48,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.connectors.base import ConnectorPermissionError
-from modulo.core.dispatch import SAQ_QUEUED_JOB_TTL, SAQ_RUN_TIMEOUT, _apply_queued_ttl
 
 # FAR-1649: the durable "first node STARTED" phase label. It lives in the
 # dependency-free leaf ``modulo.core.dispatch_phases`` (a module import with NO
@@ -58,6 +56,8 @@ from modulo.core.dispatch import SAQ_QUEUED_JOB_TTL, SAQ_RUN_TIMEOUT, _apply_que
 # and would otherwise need an import-linter whitelist edge here (the lazy shim
 # it replaced did exactly that, coupling the runner-capacity safety sweep to
 # langgraph).
+from modulo.core.agent_event_evidence import heartbeat_liveness_seconds as _shared_heartbeat_liveness_seconds
+from modulo.core.dispatch import SAQ_QUEUED_JOB_TTL, SAQ_RUN_TIMEOUT, _apply_queued_ttl
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
 
@@ -7909,14 +7909,14 @@ def _heartbeat_liveness_seconds(
     proof. (Several runs can share one ``heartbeat_at`` when a single worker
     died holding a batch — that is still each run's own last-liveness stamp,
     not a shared synthetic value.)
+
+    FAR-1914: the implementation now lives in the langgraph-free leaf
+    :mod:`modulo.core.agent_event_evidence` so the cancel path (reachable from
+    ``modulo.api`` via ``cost_controller.finalize``) can share ONE definition
+    without importing this module (which transits LangGraph). Behaviour is
+    unchanged; this name remains the cron-side entry point.
     """
-    if started_at is None or heartbeat_at is None or heartbeat_at <= started_at:
-        return None
-    end = heartbeat_at if completed_at is None else min(heartbeat_at, completed_at)
-    seconds = (end - started_at).total_seconds()
-    if not math.isfinite(seconds) or seconds <= 0:
-        return None
-    return seconds
+    return _shared_heartbeat_liveness_seconds(started_at, heartbeat_at, completed_at)
 
 
 async def _attribute_age_gate_derived_cost(run_id: uuid.UUID, org_id: uuid.UUID) -> None:
@@ -7941,6 +7941,12 @@ async def _attribute_age_gate_derived_cost(run_id: uuid.UUID, org_id: uuid.UUID)
     and cannot be faithfully rebuilt here). A row whose code is no longer
     ``no_progress`` (a later writer relabelled it) is skipped.
 
+    Round-2 B: the age gate itself is NOT sandbox proof — it writes only the
+    run-level synthetic triage marker (``node_id: None``). The derived sandbox
+    line is therefore credited only when the run also retains a per-attempt
+    sandbox marker; a pipeline that never dispatched a sandbox node is not
+    billed sandbox time.
+
     FAIL-OPEN PER RUN: this is a compensating write on a path that has already
     terminalised the run, so an ordinary failure is logged and swallowed so the
     remaining runs in the batch are still attributed and the tick never aborts.
@@ -7949,9 +7955,15 @@ async def _attribute_age_gate_derived_cost(run_id: uuid.UUID, org_id: uuid.UUID)
     """
     try:
         from modulo.core.cost_controller.finalize import finalize_failed_run
+        from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
         from modulo.db.models.run import Run
 
         async with _open_factory()() as session, session.begin():
+            # FAR-1313: the attributed write takes the hot ``runs`` row lock
+            # (``update_run_status`` via finalize) — bound it FIRST, before any
+            # lock, so a contended row is a bounded 55P03, not an unbounded
+            # wait on the reconcile tick.
+            await set_mutation_row_lock_timeout(session)
             await _set_rls_org(session, org_id)
             row = (
                 await session.execute(

@@ -32,6 +32,7 @@ import pytest
 
 from modulo.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
+    _BoundedFinalDrain,
     _marker_delivery_done_for_node,
     _persist_raw_output_marker,
     _RawOutputMarkerRequest,
@@ -348,6 +349,38 @@ async def test_missing_output_json_falls_back_to_captured_stdout():
     assert "OSError" in marker["parse_error"]
     # The stdout carried the raw content (here the fallback source).
     assert "agent stdout" in marker["raw_output"]
+
+
+async def test_huge_exponent_step_cost_keeps_the_typed_node_failure():
+    """FAR-1914 round-3 M2 (prove-the-fix): the shared step-finish parser is on
+    the failure path, so a hostile/agent-reported cost must not replace the
+    typed ``SandboxNodeFailedError`` with ``decimal.Overflow``.
+
+    ``"1E+999999999"`` is a FINITE ``Decimal``; before the bound it passed the
+    ``is_finite`` check and raised when summed, so this raise site surfaced a
+    decimal error instead of the retryable node failure — and the cost salvage
+    read never ran.
+    """
+    huge_cost_event = '{"type": "step_finish", "part": {"cost": "1E+999999999", "tokens": {"total": 7}}}'
+    sandbox = _make_sandbox_mock()
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "broken", '
+        return huge_cost_event
+
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    row = _FakeRunRow()
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["status"] == "failed"
 
 
 async def test_persist_failure_never_blocks_the_raise():
@@ -887,6 +920,316 @@ async def test_cancelled_node_without_sentinel_retains_triage_marker():
     assert marker.get("delivery_done") is not True, "no sentinel observed -> no delivery_done"
     assert marker["status"] == "failed"
     assert "triage evidence retained" in marker["summary"]
+
+
+async def test_cancelled_node_records_pr_url_without_stamping_delivery_done():
+    """FAR-1914 C1: a PR url is retained as evidence, but NEVER gates delivery.
+
+    The idempotency gate suppresses a retry on ``delivery_done is True``
+    alone, so that field must arm ONLY from the configured full-line
+    sentinel — any url-shaped text in the tail (a ``gh pr list --json url``
+    payload, a quoted url) could otherwise turn a false positive into a
+    MISSED delivery. The url lands on the marker's existing non-gating
+    ``pr_url`` field for human/analytics evidence; the summary states that
+    explicitly.
+    """
+    log_content = f"opened the PR\n{_PR_456}\n"
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    row = _FakeRunRow()
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert not marker.get("delivery_done")
+    assert marker["pr_url"] == _PR_456
+    assert "pr_url retained as non-gating evidence" in marker["summary"]
+
+
+async def test_cancelled_node_capture_of_delivery_sentinel_flushed_during_the_grace():
+    """FAR-1914 M5 (stateful): the bounded post-cancel grace catches LATE
+    content — the first final drain sees only the prior tail, the second look
+    (after the grace) sees what the sandbox flushed in between.
+
+    The read mock is STATEFUL, not wall-clock-gated: the FIRST log read
+    returns ``early``; every LATER log read returns ``late`` (sentinel + url).
+    A marker carrying the late sentinel + url therefore PROVES the second
+    drain ran — delete the grace block or the second drain and this test
+    fails, because the tail it would build is the late content's predecessor.
+    """
+    early = "agent working\n"
+    late = f"{early}EMAIL_SENT\n{_PR_777}\n"
+    reads: list[str] = []
+
+    async def _read(path: Any, format: str = "text", **kwargs: Any) -> Any:
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        reads.append(str(path))
+        return late if len(reads) > 1 else early
+
+    sandbox = _make_sandbox_mock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(late)))
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    row = _FakeRunRow()
+
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel="EMAIL_SENT"),
+        session_factory=lambda: _RetentionSession(row),
+    )
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._CANCEL_DELIVERY_GRACE_SECONDS", 0.05),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    # Both late-drain facts travel: the sentinel arms the gate, the url stays
+    # non-gating evidence. Neither exists in ``early`` — only the second drain
+    # could have produced them.
+    assert marker.get("delivery_done") is True
+    assert marker["pr_url"] == _PR_777
+    assert len(reads) >= 2
+
+
+async def test_bounded_final_drain_logs_an_awaited_failure() -> None:
+    """A drain that fails while awaited is logged ONCE, at error level.
+
+    The failure is logged by the awaiter (the done callback stays silent while
+    ``_awaiting`` is True), so a post-cancel drain failure can never be
+    swallowed — and never produces a duplicate record.
+    """
+
+    async def _drain() -> None:
+        raise RuntimeError("drain failed")
+
+    sequencer = _BoundedFinalDrain(_drain, timeout=1.0)
+    with patch("modulo.core.pipeline_engine.node_runner._log") as mock_log:
+        await sequencer.run_once()
+
+    mock_log.error.assert_called_once()
+    assert mock_log.error.call_args.args[0] == "sandbox_agent.cancel_retention_drain_failed"
+    assert mock_log.error.call_args.kwargs["exc_info"] is True
+    mock_log.warning.assert_not_called()
+
+
+async def test_bounded_final_drain_logs_a_failure_on_the_timeout_boundary() -> None:
+    """A drain that fails ON the timeout boundary is logged as a FAILURE.
+
+    ``asyncio.wait_for(asyncio.shield(task), timeout=...)`` raises
+    ``TimeoutError`` even when the shielded task has already settled with an
+    exception: the timer cancels the shield's OUTER future while the INNER task
+    completed with the error in the same loop iteration. ``timeout=0.0`` forces
+    that boundary deterministically (the drain task's first step is already
+    scheduled, so it raises before the cancellation of the inner task is
+    processed). The timeout arm must then surface the real exception — with its
+    traceback — instead of logging only a timeout, which would lose it.
+    """
+
+    async def _drain() -> None:
+        raise RuntimeError("boundary drain failure")
+
+    sequencer = _BoundedFinalDrain(_drain, timeout=0.0)
+    with patch("modulo.core.pipeline_engine.node_runner._log") as mock_log:
+        await sequencer.run_once()
+
+    mock_log.error.assert_called_once()
+    assert mock_log.error.call_args.args[0] == "sandbox_agent.cancel_retention_drain_failed"
+    boundary_exc = mock_log.error.call_args.kwargs["exc_info"]
+    assert isinstance(boundary_exc, RuntimeError)
+    # The failure is reported INSTEAD of the bare timeout warning, so a lost
+    # traceback can never hide behind a timeout classification.
+    mock_log.warning.assert_not_called()
+
+
+async def test_bounded_final_drain_logs_a_late_failure() -> None:
+    """A drain that fails AFTER a timed-out wait is logged by the callback.
+
+    The first look times out (the drain is shielded and still running); when it
+    later raises, nothing is awaiting it — the done callback must retrieve and
+    log the failure rather than letting it vanish (or surface as a GC
+    traceback).
+    """
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _drain() -> None:
+        started.set()
+        await release.wait()
+        raise RuntimeError("late drain failure")
+
+    sequencer = _BoundedFinalDrain(_drain, timeout=0.01)
+    with patch("modulo.core.pipeline_engine.node_runner._log") as mock_log:
+        await sequencer.run_once()
+        await started.wait()
+        mock_log.warning.assert_called_once()
+        mock_log.error.assert_not_called()
+
+        release.set()
+        for _ in range(20):
+            await asyncio.sleep(0.005)
+            if mock_log.error.called:
+                break
+
+    mock_log.error.assert_called_once()
+    assert mock_log.error.call_args.args[0] == "sandbox_agent.cancel_retention_drain_failed"
+    assert isinstance(mock_log.error.call_args.kwargs["exc_info"], RuntimeError)
+
+
+async def test_cancelled_node_with_no_grace_skips_the_second_look():
+    """A zero/disabled grace runs ONE post-cancel drain, not a pointless second.
+
+    ``_CANCEL_DELIVERY_GRACE_SECONDS`` is the operator-visible knob for the
+    second look; at 0 the extra wait and its drain must be skipped entirely
+    (the first drain already ran) while evidence retention is unchanged.
+    """
+    reads: list[str] = []
+
+    async def _read(path: Any, format: str = "text", **kwargs: Any) -> Any:
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        reads.append(str(path))
+        return "agent working\n"
+
+    sandbox = _make_sandbox_mock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len("agent working\n")))
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    row = _FakeRunRow()
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._CANCEL_DELIVERY_GRACE_SECONDS", 0),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    assert len(reads) == 1, "no grace -> no second log read"
+    marker = _single_marker(row)
+    assert marker["deadline_triage"] is True
+
+
+async def test_bounded_final_drain_starts_a_fresh_look_after_the_previous_finished():
+    """Once the in-flight drain has FINISHED, the next look starts a fresh one.
+
+    The sequencer only joins an IN-FLIGHT drain; a completed one must not be
+    reused, or content flushed after it would never be read.
+    """
+    calls = 0
+
+    async def _drain() -> None:
+        nonlocal calls
+        calls += 1
+
+    sequencer = _BoundedFinalDrain(_drain, timeout=1.0)
+
+    await sequencer.run_once()
+    await sequencer.run_once()
+
+    assert calls == 2
+
+
+async def test_cancelled_during_the_post_cancel_grace_still_retains_the_marker():
+    """A SECOND cancellation landing inside the grace window must not skip
+    evidence retention (FAR-1914 B2).
+
+    The grace sleep is a new await point on the cancel path, so an outer
+    cancellation can arrive there. That nested cancel is consumed
+    (``_uncancel_current_task``), the grace look still joins the drain, and the
+    triage marker is written — the original cancellation then re-raises.
+    """
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content="agent working\n")
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    row = _FakeRunRow()
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._CANCEL_DELIVERY_GRACE_SECONDS", 30),
+    ):
+        task = asyncio.create_task(fn(_run_state()))
+        # Well past the (mocked, instant) first drain: the node is parked in
+        # the 30s grace sleep.
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    marker = _single_marker(row)
+    assert marker["deadline_triage"] is True
+    assert marker["status"] == "failed"
+
+
+async def test_bounded_final_drain_never_overlaps_a_slow_first_drain():
+    """FAR-1914 round-3 M3 (prove-the-fix): a drain that outlives its
+    ``wait_for`` is not restarted by the grace look.
+
+    The old cancel path wrapped a SHIELDED drain in ``wait_for``; on a slow
+    read the wait expired while the drain kept running, and the post-cancel
+    grace started a SECOND drain over the same ``_drain_offset`` — appending
+    the same bytes (and their ``step_finish`` costs) twice. The sequencer must
+    join the in-flight task instead: one drain call, one append.
+    """
+    started = asyncio.Event()
+    release = asyncio.Event()
+    appended: list[str] = []
+    calls = 0
+    concurrent = 0
+    max_concurrent = 0
+
+    async def _drain() -> None:
+        nonlocal calls, concurrent, max_concurrent
+        calls += 1
+        concurrent += 1
+        max_concurrent = max(max_concurrent, concurrent)
+        started.set()
+        await release.wait()
+        appended.append("chunk")
+        concurrent -= 1
+
+    sequencer = _BoundedFinalDrain(_drain, timeout=0.01)
+
+    first = asyncio.create_task(sequencer.run_once())
+    await started.wait()
+    # The first bounded wait has expired; the shielded drain is STILL running.
+    await asyncio.sleep(0.02)
+    second = asyncio.create_task(sequencer.run_once())
+    await asyncio.sleep(0.02)
+    # No second drain was started while the first is in flight.
+    assert calls == 1
+    assert max_concurrent == 1
+
+    release.set()
+    # Join the surviving task (the second look may have timed out already).
+    await sequencer.run_once()
+    await first
+    await second
+
+    assert calls == 1
+    assert appended == ["chunk"]
 
 
 async def test_cancelled_during_provisioning_reraises_cleanly():

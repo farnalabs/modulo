@@ -316,21 +316,28 @@ async def _flood_suppressed(session: AsyncSession, now: datetime) -> bool:
     return False
 
 
+def _parse_flood_event_ts(event: dict[str, Any]) -> datetime | None:
+    """Parse one stored flood-event timestamp, or ``None`` when malformed."""
+    ts = event.get("ts")
+    try:
+        return datetime.fromisoformat(str(ts)) if ts else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _is_in_flood_window(event: Any, cutoff: datetime) -> bool:
+    """True when ``event`` is a dict with a run id inside the flood window."""
+    if not isinstance(event, dict):
+        return False
+    parsed = _parse_flood_event_ts(event)
+    return parsed is not None and parsed >= cutoff and bool(event.get("run_id"))
+
+
 def _collect_flood_distinct(events: Any, cutoff: datetime) -> set[str]:
     """Distinct run-ids logged ``duplicate_terminal`` within the flood window."""
-    distinct: set[str] = set()
-    if isinstance(events, list):
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            ts = event.get("ts")
-            try:
-                parsed = datetime.fromisoformat(str(ts)) if ts else None
-            except (ValueError, TypeError):
-                parsed = None
-            if parsed is not None and parsed >= cutoff and event.get("run_id"):
-                distinct.add(str(event["run_id"]))
-    return distinct
+    if not isinstance(events, list):
+        return set()
+    return {str(event["run_id"]) for event in events if _is_in_flood_window(event, cutoff)}
 
 
 async def _duplicate_flood_trigger(session: AsyncSession) -> bool:
