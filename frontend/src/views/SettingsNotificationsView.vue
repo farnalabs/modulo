@@ -131,7 +131,10 @@ import EmptyState from '../components/shared/EmptyState.vue'
 import ToggleSwitch from '../components/shared/ToggleSwitch.vue'
 
 const PREFERENCES_PATH = '/api/v1/notifications/in-app/preferences'
-const DEFAULT_DASHBOARD_LEVEL = 'warning'
+// Mirrors the backend's authoritative default (_DEFAULT_DASHBOARD_LEVEL in
+// backend/src/modulo/api/routes/in_app_notifications.py). Used only when GET
+// omits or invalidates the level; the backend stays the source of truth.
+const DEFAULT_DASHBOARD_LEVEL = 'info'
 const DASHBOARD_LEVELS = ['debug', 'info', 'warning', 'error'] as const
 
 type DashboardLevel = (typeof DASHBOARD_LEVELS)[number]

@@ -417,6 +417,79 @@ async def test_execute_provider_auth_refusal_dispatches_the_alert():
     assert kwargs["payload"]["pipeline_name"] == "Branch Fixer"
 
 
+async def test_execute_jsonl_402_is_terminal_and_alerts_as_insufficient_funds():
+    """The captured JSONL 402 shape: no retry AND the dedicated provider alert fires.
+
+    The merged vocabulary classifies a ``"type":"error"`` event carrying
+    ``"statusCode":402`` as ``model.insufficient_funds`` (matched before
+    ``provider.billing``), so this test pins BOTH consequences for that code,
+    which the isolated-registry tests cannot: the executor must not reset the
+    run to pending (a retry re-hits the same billing wall) and the finalization
+    tail must still dispatch the dedicated ``provider_failure`` alert — the code
+    is in ``NON_RETRYABLE_PROVIDER_CODES`` so alerting is not suppressed, while
+    the generic ``run_failed`` alert stays silent to avoid paging twice.
+    """
+    from modulo.core.notifier import EVENT_PROVIDER_FAILURE
+    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+
+    diagnostic = (
+        "Sandbox agent command produced no output within 600s. Retained stdout tail: "
+        '{"type":"error","error":{"name":"APIError","data":'
+        '{"message":"Upstream request failed: Insufficient account funds",'
+        '"statusCode":402,"isRetryable":false}}}'
+    )
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
+    final_run = _make_run(
+        run_id=run.id,
+        pipeline_id=run.pipeline_id,
+        status="failed",
+        claim_count=10,
+        node_attempt_count=1,
+        claim_token="tok-claim-abc",
+    )
+    snapshot = _make_snapshot()
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(SandboxNodeFailedError(diagnostic, node_id="node-a"))
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5)
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("modulo.core.pipeline_engine.executor._safe_pipeline_name", new=AsyncMock(return_value="Branch Fixer")),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock(), notifier=notifier)
+        result = await executor.execute(
+            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
+        )
+
+    # Terminal on attempt 1 — the full retry budget (5) must not be spent.
+    assert result is final_run
+    assert not any("status='pending'" in s for s in statements)
+    call = mock_finalize.await_args
+    assert call is not None
+    assert call.kwargs["status"] == "failed"
+    assert call.kwargs["error_code"] == "model.insufficient_funds"
+    assert "not retried" in call.kwargs["error_detail"]
+    # One dedicated alert, carrying the same canonical code the run recorded.
+    notifier.dispatch_event.assert_awaited_once()
+    kwargs = notifier.dispatch_event.await_args.kwargs
+    assert kwargs["event_type"] == EVENT_PROVIDER_FAILURE
+    assert kwargs["payload"]["error_code"] == "model.insufficient_funds"
+
+
 async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted():
     """Once the node-attempt count reaches the SAQ retry cap the run
     terminal-fails with error_code 'node_cancelled' (NOT the raw langgraph
