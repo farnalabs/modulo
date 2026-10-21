@@ -763,12 +763,21 @@ jobs:
         run: |
           if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured -- skipping notification"; exit 0; fi
           CONFLICTS=$(cat /tmp/conflict_prs.txt 2>/dev/null || echo "")
+          # taskKind marks this as a CONFLICT task so the Branch Fixer selects the
+          # conflict task profile (ONE long attempt) rather than the CI-failure
+          # retry ladder — the same structural marker pr-conflict-reconcile.yml
+          # sends (FAR-1956). Without it the `phase` alone left the receiver to
+          # guess the task kind; FAR-2033 measured 13 budget-hit runs here that
+          # inherited the wrong profile. Extra payload keys flow through
+          # harmlessly; an absent marker keeps the ladder, so older dispatches
+          # keep working.
           BODY=$(jq -n \
             --arg repo "${{ github.repository }}" \
             --arg phase "merge-conflict" \
+            --arg taskKind "conflict" \
             --arg conflictPrs "$CONFLICTS" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            '{repository: $repo, phase: $phase, conflictPrs: $conflictPrs, runUrl: $run_url}')
+            '{repository: $repo, phase: $phase, taskKind: $taskKind, conflictPrs: $conflictPrs, runUrl: $run_url}')
           # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5 attempts).
           # TIMESTAMP and HMAC are recomputed per attempt: the server enforces a
           # +/-300s replay window on X-Modulo-Timestamp.
@@ -1145,12 +1154,21 @@ jobs:
           fi
 
           echo "Migration-collision PRs excluded from the batch: $COLLISIONS"
+          # taskKind marks this as a CONFLICT task so the Branch Fixer selects the
+          # conflict task profile (ONE long attempt) rather than the CI-failure
+          # retry ladder — the same structural marker pr-conflict-reconcile.yml
+          # sends (FAR-1956). A migration-number collision is conflict-class work:
+          # renumber the migration and rebase/merge main, not a generic CI-failure
+          # fix. Without this marker FAR-2033 measured 8 budget-hit runs on this
+          # path inheriting the wrong profile. Extra payload keys flow through
+          # harmlessly; an absent marker keeps the ladder.
           BODY=$(jq -n \
             --arg repo "${{ github.repository }}" \
             --arg phase "migration-collision" \
+            --arg taskKind "conflict" \
             --arg collisionPrs "$COLLISIONS" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            '{repository: $repo, phase: $phase, collisionPrs: $collisionPrs, runUrl: $run_url}')
+            '{repository: $repo, phase: $phase, taskKind: $taskKind, collisionPrs: $collisionPrs, runUrl: $run_url}')
           # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5 attempts).
           DISPATCHED="false"
           LAST_HTTP=""
@@ -2184,6 +2202,9 @@ jobs:
           MERGED=$(cat /tmp/merged_prs.txt 2>/dev/null || echo "")
           CONFLICTS=$(cat /tmp/conflict_prs.txt 2>/dev/null || echo "")
           FAILURE_DESC=$(cat /tmp/failure_description.txt 2>/dev/null || echo "CI check failed")
+          # Deliberately NO taskKind: this is a CI-failure task, so the absent
+          # marker must keep selecting the CI-failure retry ladder. Only the
+          # conflict-class dispatches above carry `taskKind: conflict` (FAR-2033).
           BODY=$(jq -n \
             --arg repo "${{ github.repository }}" \
             --arg phase "ci-failure" \
