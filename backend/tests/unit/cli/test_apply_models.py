@@ -1183,6 +1183,47 @@ class TestGraphMaskHelpers:
         assert graph_declares_secrets({"nodes": [{"id": "n", "context_files": {}}], "edges": []}) is False
 
 
+class TestStripSecretShapedConfig:
+    """Nested-container coverage for the config secret-stripper (S3776 split).
+
+    The flat-key cases are covered through the managed-view tests; these pin the
+    recursive branches directly (nested dicts, lists with mixed element types,
+    empty and server-masked values).
+    """
+
+    def test_nested_containers_and_secret_shapes(self) -> None:
+        from modulo.cli.apply.models import strip_secret_shaped_config
+        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+
+        config = {
+            "plain": "visible",
+            "empty": "",
+            "masked": SENSITIVE_VALUE_MASK,
+            "nested": {"api_key": "s3cr3t", "kept": "value"},
+            "items": [
+                "clean",
+                "token ghp_00112233445566778899aabbccddeeff00112233",
+                7,
+                {"password": "s3cr3t", "keep": "value"},
+                ["inner", "token ghp_00112233445566778899aabbccddeeff00112233"],
+            ],
+            "count": 3,
+        }
+
+        stripped = strip_secret_shaped_config(config)
+
+        assert stripped["plain"] == "visible"
+        assert "empty" in stripped
+        assert not stripped["empty"]
+        assert "masked" not in stripped
+        assert stripped["nested"] == {"kept": "value"}
+        assert stripped["items"][0] == "clean"
+        assert stripped["items"][1] == 7
+        assert stripped["items"][2] == {"keep": "value"}
+        assert stripped["items"][3] == ["inner"]
+        assert stripped["count"] == 3
+
+
 class TestForwardReferenceMergeGate:
     def test_trigger_pipeline_in_later_document_rejected(self) -> None:
         base = _config(
