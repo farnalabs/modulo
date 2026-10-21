@@ -236,8 +236,13 @@ def test_dispatch_failure_comment_says_why_and_links_the_run() -> None:
     HTTP status / error detail) and link the run, so a conflicted PR is
     visibly stuck rather than silently stuck."""
     block = _dispatch_step_block()
+    # "all 5 webhook attempts" was the hardcoded cap of the inline ladder this
+    # workflow used before the shared scripts/dispatch_with_retry.sh took over
+    # (FAR-2120 follow-up, PR #2133). The cap is now configurable
+    # (DISPATCH_MAX_ATTEMPTS, default 8), so the message must not pin a number
+    # — it states why by reporting the last HTTP status/detail instead.
     why = (
-        "could NOT dispatch the Branch Fixer for this PR: all 5 webhook attempts "
+        "could NOT dispatch the Branch Fixer for this PR: every webhook attempt "
         "failed (last HTTP ${LAST_HTTP}: ${DETAIL})"
     )
     assert why in block, "Undelivered-notification body must state why (HTTP status) (FAR-1949)"
