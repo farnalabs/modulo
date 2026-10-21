@@ -87,6 +87,7 @@ from modulo.db.models.run import (
     TERMINAL_STATUSES,
     Run,
 )
+from modulo.db.models.run_node_outputs import SENTINEL_NODE_ID_PREFIX
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
 from modulo.db.sqlstates import is_row_lock_timeout, is_statement_timeout
 from modulo.settings import (
@@ -474,14 +475,42 @@ _NO_PROGRESS_ERROR_DETAIL_PREFIX_FMT = "No node progress within the {age}m age b
 # the ORM predicate's parameterised leg cannot desynchronise (FAR-1649 qa
 # finding 7): there is one constant and one bind, not two spellings to pin
 # together.
+#
+# FAR-2052: the ``__final__`` leg means "a NODE finalised a store row", never
+# "any row is present". ``workspace_input_audit`` writes
+# ``(run_id, '__mwi_audit__', '__final__')`` BEFORE any node runs (the resolved
+# managed-workspace-input audit), so an unscoped leg read a run whose inputs had
+# merely been resolved as already-progressing: the zero-progress shape went
+# false, the nodeless repairs and the FAR-1999 node-deadline reaper skipped a
+# genuinely stuck run, and only the ~135-minute mid-graph age gate could collect
+# it. ``__run_meta__`` (run metadata) and ``__unknown__`` (unparseable-marker
+# evidence) are bookkeeping rows of the same kind.
+#
+# The reserved ``__``-prefixed sentinel namespace is defined ONCE in
+# :data:`modulo.db.models.run_node_outputs.SENTINEL_NODE_ID_PREFIX`; the graph
+# validator REJECTS any node id using that prefix (``DB_SENTINEL_NODE_ID_PREFIX``
+# in ``core/graph_validator``), so a genuine node id can never be excluded here.
+# ``substr`` rather than ``LIKE '__%'``: ``_`` is a LIKE wildcard, so that
+# pattern would match ANY two leading characters (the ``agent_return_legacy``
+# precedent). Assembled with str.replace from the shared constant (the
+# trigger_streak ``__STATUSES__`` precedent — S608 flags f-string/format SQL
+# construction), so the raw-SQL leg and :func:`_final_row_absent_expr`'s ORM leg
+# cannot drift.
+_NON_SENTINEL_FINAL_NODE_ID_SQL = (
+    ("substr(rno.node_id, 1, __SENTINEL_PREFIX_LENGTH__) <> '__SENTINEL_PREFIX__'")  # nosec B608 - static fragment, module constants only
+    .replace("__SENTINEL_PREFIX_LENGTH__", str(len(SENTINEL_NODE_ID_PREFIX)))
+    .replace("__SENTINEL_PREFIX__", SENTINEL_NODE_ID_PREFIX)
+)
+_NON_SENTINEL_FINAL_NODE_ID_TOKEN = "__NON_SENTINEL_FINAL_NODE_ID__"
 _ZERO_PROGRESS_SHAPE_SQL = (
-    "COALESCE(node_attempt_count,0) = 0 AND node_token_usage IS NULL "
+    "COALESCE(node_attempt_count,0) = 0 AND node_token_usage IS NULL "  # nosec B608 - static constant fragments, never caller data
     "AND NOT EXISTS (SELECT 1 FROM run_node_outputs rno "
-    "WHERE rno.run_id = runs.id AND rno.attempt_key = :final_key) "
+    "WHERE rno.run_id = runs.id AND rno.attempt_key = :final_key "
+    "AND __NON_SENTINEL_FINAL_NODE_ID__) "
     "AND NOT EXISTS (SELECT 1 FROM checkpoints cp "
     "WHERE cp.organisation_id = runs.organisation_id AND cp.thread_id = runs.langgraph_thread_id) "
     "AND (dispatch_phase IS NULL OR dispatch_phase <> :first_node_phase)"
-)
+).replace(_NON_SENTINEL_FINAL_NODE_ID_TOKEN, _NON_SENTINEL_FINAL_NODE_ID_SQL)
 _ZERO_PROGRESS_SHAPE_TOKEN = "__ZERO_PROGRESS_SHAPE__"
 
 # The two FAR-1329 statements. Assembled from static templates + str.replace
@@ -4682,14 +4711,29 @@ def _reconcile_capacity_marker_exclusion(capacity_redispatch_seconds: int) -> An
 
 def _final_row_absent_expr() -> Any:
     """The ONE correlated NOT-EXISTS expression for the run's far-583 store
-    finalisation marker: ``NOT EXISTS(run_node_output __final__ row)``.
+    finalisation marker: ``NOT EXISTS(run_node_output __final__ row for a real
+    node)``.
 
     Single definition shared by the nodeless zombie predicate (line-level
     WHERE leg) and the reconcile org SELECT (the ``outputs_absent`` labeled
     column — the label is applied at the call site) so the two correlated
     subqueries can never drift (qa iteration 1 rider).
+
+    FAR-2052: the ``__final__`` leg is scoped to GENUINE node rows. The reserved
+    ``__``-prefixed sentinel namespace is bookkeeping, not progress — notably
+    ``workspace_input_audit`` writes ``(run_id, '__mwi_audit__', '__final__')``
+    before any node runs, so an unscoped leg made a run whose managed workspace
+    inputs were merely resolved read as already-progressing (the zero-progress
+    shape then excluded it from the nodeless repairs and the FAR-1999
+    node-deadline reaper). The prefix comes from
+    :data:`modulo.db.models.run_node_outputs.SENTINEL_NODE_ID_PREFIX` — the
+    graph validator rejects it for real node ids — and ``substr`` is used rather
+    than ``LIKE '__%'`` because ``_`` is a LIKE wildcard that would match any
+    two leading characters. The raw-SQL twin is
+    :data:`_ZERO_PROGRESS_SHAPE_SQL`'s ``_NON_SENTINEL_FINAL_NODE_ID_SQL``.
     """
     from sqlalchemy import exists as sa_exists
+    from sqlalchemy import func as sa_func
     from sqlalchemy import select as sa_select
 
     from modulo.db.models.run import Run
@@ -4701,6 +4745,7 @@ def _final_row_absent_expr() -> Any:
         .where(
             RunNodeOutput.run_id == Run.id,
             RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
+            sa_func.substr(RunNodeOutput.node_id, 1, len(SENTINEL_NODE_ID_PREFIX)) != SENTINEL_NODE_ID_PREFIX,
         )
     )
 
@@ -4961,10 +5006,11 @@ def _is_zero_progress_shape_row(row: Any) -> bool:
     """Row-level mirror of :data:`_ZERO_PROGRESS_SHAPE_SQL` (FAR-1740).
 
     True when the reconcile flags say ZERO node progress: no token usage, no
-    finalised store row (``outputs_absent``), no LangGraph checkpoint
-    (``checkpoints_absent``) AND no durably-recorded first-node start. Fails
-    CLOSED (``False``) when a flag is absent, so a row source that forgets a
-    column is never treated as zero-progress.
+    finalised store row from a genuine node (``outputs_absent`` — bookkeeping
+    rows in the reserved ``__`` sentinel namespace do not count, FAR-2052), no
+    LangGraph checkpoint (``checkpoints_absent``) AND no durably-recorded
+    first-node start. Fails CLOSED (``False``) when a flag is absent, so a row
+    source that forgets a column is never treated as zero-progress.
 
     FAR-1914: the durable ``first_node_dispatched`` phase (FAR-1649) proves a
     node STARTED even though no super-step completed, so such a row is NOT
@@ -4982,11 +5028,13 @@ def _is_zero_progress_shape_row(row: Any) -> bool:
 def _has_zero_progress_evidence(row: Any) -> bool:
     """Do the reconcile flags prove ZERO node progress for *row*?
 
-    No token usage (written when the run finalises), no finalised store row
-    (``outputs_absent``), and no LangGraph checkpoint (``checkpoints_absent`` —
-    a checkpoint is written when a node COMPLETES a super-step). Fails CLOSED
-    (``False``) when a flag is absent, so a row source that forgets a column is
-    never treated as zero-progress.
+    No token usage (written when the run finalises), no finalised store row from
+    a genuine node (``outputs_absent`` — reserved ``__`` sentinel bookkeeping
+    rows such as the workspace-input audit are not node progress, FAR-2052), and
+    no LangGraph checkpoint (``checkpoints_absent`` — a checkpoint is written
+    when a node COMPLETES a super-step). Fails CLOSED (``False``) when a flag is
+    absent, so a row source that forgets a column is never treated as
+    zero-progress.
     """
     return (
         getattr(row, "node_token_usage", None) is None
