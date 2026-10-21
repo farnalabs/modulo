@@ -1764,6 +1764,9 @@ elements:
       - testid: admin-model-backends-base-url-input
         type: input
         dynamic_testid: false
+      - testid: admin-model-backends-allow-insecure-http
+        type: input
+        dynamic_testid: false
       - testid: admin-model-backends-model-id-input
         type: input
         dynamic_testid: false
@@ -1792,6 +1795,9 @@ elements:
         type: input
         dynamic_testid: false
       - testid: admin-model-backends-edit-base-url
+        type: input
+        dynamic_testid: false
+      - testid: admin-model-backends-edit-allow-insecure-http
         type: input
         dynamic_testid: false
       - testid: admin-model-backends-edit-api-key

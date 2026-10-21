@@ -37,10 +37,18 @@ const backend = (id: string, over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
+const baseUrlCapableProviders = [
+  'ai21', 'deepseek', 'fireworks', 'grok', 'groq', 'jan', 'llamacpp', 'lm_studio',
+  'localai', 'ollama', 'openai', 'opencode', 'openrouter', 'perplexity', 'qwen',
+  'tgi', 'togetherai', 'vllm',
+]
+
 function mockBackendsGet(items: unknown[], presets?: unknown[]) {
   mockGet.mockImplementation(async (url: string) => {
     if (url === '/api/v1/model-backends') return { data: { items }, error: undefined }
-    if (url === '/api/v1/model-backends/presets') return { data: { items: presets ?? [] }, error: undefined }
+    if (url === '/api/v1/model-backends/presets') {
+      return { data: { items: presets ?? [], base_url_providers: baseUrlCapableProviders }, error: undefined }
+    }
     return { data: undefined, error: { detail: `unrouted: ${url}` } }
   })
 }
@@ -214,19 +222,21 @@ describe('AdminModelBackendsView — create', () => {
     await wrapper.find('[data-testid="admin-model-backends-display-name-input"]').setValue('Ollama')
     await wrapper.find('[data-testid="admin-model-backends-model-id-input"]').setValue('llama3')
     await wrapper.find('[data-testid="admin-model-backends-api-key-input"]').setValue('x')
-    await wrapper.find('[data-testid="admin-model-backends-base-url-input"]').setValue('http://localhost:11434')
+    await wrapper.find('[data-testid="admin-model-backends-base-url-input"]').setValue('https://localhost:11434/v1')
     await nextTick()
     await wrapper.find('form').trigger('submit')
     await nextTick()
     await nextTick()
 
-    expect(mockPost.mock.calls[0][1].body.base_url).toBe('http://localhost:11434')
+    expect(mockPost.mock.calls[0][1].body.base_url).toBe('https://localhost:11434/v1')
     expect(mockPost.mock.calls[0][1].body.default_params).toEqual({})
   })
 
   it.each([
     ['http://169.254.169.254/latest/meta-data', 'cloud metadata'],
-    ['http://example.com/v1', 'https://'],
+    ['http://2852039166/latest/meta-data', 'cloud metadata'],
+    ['http://0x7f000001/v1', 'http(s) URL'],
+    ['http://example.com/v1', 'Allow plain HTTP'],
     ['https://user:pass@example.com/v1', 'http(s) URL'],
     ['https://example.com/v1?x=1', 'http(s) URL'],
   ])('rejects an invalid base url client-side before POST (%s)', async (baseUrl, expected) => {
@@ -251,7 +261,7 @@ describe('AdminModelBackendsView — create', () => {
     expect(wrapper.text()).toContain(expected)
   })
 
-  it('accepts a private http base url client-side', async () => {
+  it('accepts an http base url only with the explicit opt-in checkbox', async () => {
     const wrapper = mountView()
     await nextTick()
     await openAddForm(wrapper)
@@ -265,6 +275,7 @@ describe('AdminModelBackendsView — create', () => {
     await wrapper.find('[data-testid="admin-model-backends-model-id-input"]').setValue('m')
     await wrapper.find('[data-testid="admin-model-backends-api-key-input"]').setValue('k')
     await wrapper.find('[data-testid="admin-model-backends-base-url-input"]').setValue('http://10.0.0.5:8000/v1')
+    await wrapper.find('[data-testid="admin-model-backends-allow-insecure-http"]').setValue(true)
     await nextTick()
     await wrapper.find('form').trigger('submit')
     await nextTick()
@@ -272,6 +283,7 @@ describe('AdminModelBackendsView — create', () => {
 
     expect(mockPost).toHaveBeenCalledTimes(1)
     expect(mockPost.mock.calls[0][1].body.base_url).toBe('http://10.0.0.5:8000/v1')
+    expect(mockPost.mock.calls[0][1].body.allow_insecure_http).toBe(true)
   })
 
   it('ignores unparseable default params JSON with a console warning', async () => {
@@ -530,6 +542,58 @@ describe('AdminModelBackendsView — edit', () => {
     await nextTick()
     await nextTick()
     expect(wrapper.text()).toContain('update rejected')
+  })
+
+  it('pre-fills a legacy default_params base url and migrates it on save', async () => {
+    mockBackendsGet([
+      backend('mb-1', {
+        provider: 'openai',
+        default_params: { temperature: 0.7, base_url: 'https://legacy.internal.example/v1' },
+      }),
+    ])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openEdit(wrapper, 'mb-1')
+
+    expect(
+      (wrapper.find('[data-testid="admin-model-backends-edit-base-url"]').element as HTMLInputElement).value,
+    ).toBe('https://legacy.internal.example/v1')
+
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    expect(mockPatch).toHaveBeenCalledTimes(1)
+    const body = mockPatch.mock.calls[0][1].body
+    expect(body.base_url).toBe('https://legacy.internal.example/v1')
+    expect(body.default_params).toEqual({ temperature: 0.7 })
+    expect(body.allow_insecure_http).toBe(false)
+  })
+
+  it('requires the api key when the edit changes the endpoint', async () => {
+    mockBackendsGet([backend('mb-1', { provider: 'openai', base_url: 'https://old.internal.example/v1' })])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openEdit(wrapper, 'mb-1')
+
+    await wrapper.find('[data-testid="admin-model-backends-edit-base-url"]').setValue('https://new.internal.example/v1')
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+
+    expect(mockPatch).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('requires re-entering the API key')
+
+    await wrapper.find('[data-testid="admin-model-backends-edit-api-key"]').setValue('sk-fresh')
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    expect(mockPatch).toHaveBeenCalledTimes(1)
+    const body = mockPatch.mock.calls[0][1].body
+    expect(body.base_url).toBe('https://new.internal.example/v1')
+    expect(body.api_key).toBe('sk-fresh')
   })
 
   it('cancel closes the edit form', async () => {
