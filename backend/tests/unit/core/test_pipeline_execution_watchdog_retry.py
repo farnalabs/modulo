@@ -39,6 +39,7 @@ from modulo.core.pipeline_engine.watchdog_retry import WatchdogRetryOutcome
 from modulo.core.pipeline_execution import (
     _fail_overdue_node,
     _record_derived_deadline_cost,
+    _salvage_cancelled_run_cost,
     _sweep_org_stale_runs,
     _watchdog_retry_enabled_for_job,
     run_executor_with_watchdog,
@@ -1471,3 +1472,62 @@ async def test_failed_run_status_is_not_salvaged():
     salvage.assert_not_awaited()
     fail.assert_awaited_once()
     assert result == {"status": "failed"}
+
+
+async def test_salvage_cancelled_run_cost_rereises_cancelled_error() -> None:
+    """FAR-1914 C2: worker shutdown is not ours to swallow.
+
+    The post-settle salvage is fail-open for ordinary failures (the run is
+    already terminal), but a ``CancelledError`` from the compensating write
+    must propagate so the SAQ job is actually cancelled.
+    """
+    with (
+        patch(
+            "modulo.core.pipeline_execution.async_sessionmaker",
+            side_effect=asyncio.CancelledError(),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _salvage_cancelled_run_cost(MagicMock(), "run-1", "org-1")
+
+
+async def test_salvage_cancelled_run_cost_fails_open(caplog: pytest.LogCaptureFixture) -> None:
+    """An ordinary write failure must never turn a terminal cancelled run into
+    a raised error — the run stays cancelled and the failure is logged."""
+    with (
+        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_execution"),
+        patch(
+            "modulo.core.pipeline_execution.async_sessionmaker",
+            side_effect=RuntimeError("db down"),
+        ),
+    ):
+        await _salvage_cancelled_run_cost(MagicMock(), "run-1", "org-1")
+
+    assert "pipeline_execution.cancel_cost_salvage_failed" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# FAR-1914 M1 — the settle bound covers the whole retention budget
+# ---------------------------------------------------------------------------
+
+
+def test_executor_cancel_settle_covers_the_retention_worst_case():
+    """FAR-1914 M1 prove-the-fix: the deadline watchdog's pre-terminal wait must
+    cover the FULL bounded cancel-retention budget.
+
+    Worst case is four bounded 5s steps — first drain + second/final drain +
+    log-tail fetch + marker persist — plus the 0.5s delivery grace = 20.5s.
+    The pre-rework 12s under-covered it, so a delivered-then-killed run could
+    be terminalised BEFORE its marker (and therefore its cost/delivery
+    evidence) landed. 25-30s is the accepted headroom band.
+    """
+    from modulo.core.pipeline_engine.node_runner import (
+        _CANCEL_DELIVERY_GRACE_SECONDS,
+        _IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT,
+    )
+    from modulo.core.pipeline_execution import _EXECUTOR_CANCEL_SETTLE_SECONDS
+
+    retention_worst_case = 4 * _IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT + _CANCEL_DELIVERY_GRACE_SECONDS
+    assert retention_worst_case == 20.5
+    assert retention_worst_case <= _EXECUTOR_CANCEL_SETTLE_SECONDS
+    assert _EXECUTOR_CANCEL_SETTLE_SECONDS <= 30.0
