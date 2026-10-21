@@ -1,0 +1,65 @@
+name: Determination Eval
+
+on:
+  schedule:
+    # Run nightly at 03:00 UTC
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "backend/src/modulo/determination/**"
+      - "backend/tests/determination/fixtures/**"
+      - "backend/scripts/score_determination_fixtures.py"
+      - ".github/workflows/determination-eval.yml"
+
+permissions:
+  contents: read
+
+# Cancel a superseded PR run, but never a scheduled or manually dispatched one:
+# those are keyed on the unique run id so a cron run can never be displaced.
+concurrency:
+  group: determination-eval-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  score:
+    name: Score Determination Fixtures
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # House pattern: setup-uv owns the Python toolchain and the uv cache.
+      # actions/setup-python with `cache: uv` cannot be used here - it probes
+      # `uv cache dir` to restore the cache, so uv must already be installed.
+      - name: Install uv (and Python 3.12)
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Run determination fixture scorer
+        shell: bash
+        # tee so the mismatch list survives into the uploaded artefact; explicit
+        # pipefail keeps the scorer's exit code rather than tee's.
+        run: |
+          set -o pipefail
+          uv run --no-sync python scripts/score_determination_fixtures.py 2>&1 | tee determination-scorer-output.txt
+
+      - name: Upload scorer output on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: determination-scorer-output
+          path: backend/determination-scorer-output.txt
+          if-no-files-found: warn
+          retention-days: 7
