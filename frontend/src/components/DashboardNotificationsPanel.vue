@@ -172,9 +172,10 @@ function toggleCollapsed() {
   collapsed.value = !collapsed.value;
 }
 
-// The unread badge must reflect the severity-filtered unread count
-// (warning+), not the raw count of all active notifications. Use the
-// existing dedicated endpoint rather than the paginated list total.
+// The unread badge must reflect the unread count at the signed-in user's
+// configured dashboard notification level (default `info`), not the raw
+// count of all active notifications. Use the existing dedicated endpoint
+// rather than the paginated list total.
 async function refreshUnreadCount() {
   try {
     unreadCount.value = await fetchUnreadCount();
