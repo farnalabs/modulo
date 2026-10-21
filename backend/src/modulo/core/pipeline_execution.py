@@ -1710,6 +1710,7 @@ async def _maybe_watchdog_retry(
     final_status: str,
     error_code: str,
     zero_node: bool = False,
+    veto_if_delivered: bool = False,
 ) -> bool:
     """Consult the shared watchdog-retry hook (FAR-690 / FAR-693); fail closed.
 
@@ -1720,16 +1721,28 @@ async def _maybe_watchdog_retry(
     prevent a run from reaching a terminal state.
 
     ``zero_node`` (FAR-1088) opts the caller into the zero-node failure
-    carve-out and is forwarded ONLY when set, so hooks without the parameter
-    keep the exact two-argument call shape. Only the zombie watchdog passes it
-    (zero nodes by construction — it fires pre-first-progress).
+    carve-out; passed ONLY by the zombie watchdog (zero nodes by construction —
+    it fires pre-first-progress).
+
+    ``veto_if_delivered`` (FAR-2053) opts the caller into the delivery veto —
+    refuse to re-dispatch a run whose markers already record a delivery.
+    Passed ONLY by the zombie watchdog: that path's kill is the one reached by
+    a re-dispatched attempt that delivered on a PRIOR attempt, and it is the
+    one whose re-dispatch has no other delivery guard. The FAR-369
+    node-deadline path does not pass it and is unchanged.
+
+    Both flags are forwarded ONLY when set, so hooks without the parameters
+    keep the exact two-argument call shape.
     """
     if retry_hook is None:
         return False
+    forwarding: dict[str, bool] = {}
+    if zero_node:
+        forwarding["zero_node"] = True
+    if veto_if_delivered:
+        forwarding["veto_if_delivered"] = True
     try:
-        if zero_node:
-            return bool(await retry_hook(final_status, error_code, zero_node=True))
-        return bool(await retry_hook(final_status, error_code))
+        return bool(await retry_hook(final_status, error_code, **forwarding))
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -1779,6 +1792,16 @@ async def zombie_watchdog(
     consult additionally opts into the zero-node failure carve-out — a
     ``failure``-covered policy re-dispatches a zero-node death here exactly as
     the cron path does (see the ``zero_node=True`` call below).
+
+    FAR-2053: the consult also opts into the DELIVERY VETO
+    (``veto_if_delivered=True``). A run that delivered on an EARLIER attempt
+    keeps its ``delivery_done`` markers across the pending-reset, so the
+    renewed pre-node stall of a delivered run is reachable here and nowhere
+    else; re-dispatching it would re-execute the graph from the start and risk
+    a second delivery. When a marker records ``delivery_done`` the hook
+    refuses, and this watchdog terminal-fails the run with
+    ``executor_stalled`` exactly as it would without policy coverage (a probe
+    read failure vetoes too — fail closed).
 
     FAR-893: *dispatch_tracker* (optional) reports the executor's progress
     through the claim→first-node-dispatch phases.  When the grace period
@@ -1845,6 +1868,12 @@ async def zombie_watchdog(
         final_status="stalled",
         error_code=EXECUTOR_STALLED_ERROR_CODE,
         zero_node=True,
+        # FAR-2053: a run re-dispatched after an earlier attempt DELIVERED
+        # (its marker rows carry ``delivery_done``) must not be re-run from the
+        # start — the side effect already happened. That prior delivery is only
+        # visible here, on a renewed pre-node stall, so this is the path that
+        # has to read it.
+        veto_if_delivered=True,
     ):
         return
     await fail_run_terminal(
@@ -2482,6 +2511,11 @@ async def run_executor_with_watchdog(
     # re-claim a pending run — see watchdog_retry). The hook fails CLOSED to
     # the terminal fail, so this can never prevent a run from reaching a
     # terminal state.
+    #
+    # FAR-2053: ONE hook, two call sites with different opt-ins — the zombie
+    # watchdog passes ``zero_node=True`` + ``veto_if_delivered=True``, the
+    # node-deadline watchdog passes neither. The delivery veto is deliberately
+    # stall-only; widening it is a separate decision, not a wiring default.
     watchdog_retry_hook: Callable[[str, str], Awaitable[Any]] | None = None
     watchdog_retry_outcome: Any = None
     if _watchdog_retry_enabled_for_job(job):
