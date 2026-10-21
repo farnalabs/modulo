@@ -100,7 +100,13 @@ def _make_account(**overrides: object) -> MagicMock:
 
 
 def _make_session() -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct double: the RLS preamble reads ``in_transaction()`` /
+    # ``get_bind()`` / ``add()`` synchronously, and the accept-invite audit
+    # wraps its append in ``async with session.begin_nested()``. A bare
+    # AsyncMock makes each of those return a never-awaited coroutine (and the
+    # begin_nested one raises, swallowed by the fail-open audit guard). The
+    # execute result is overridden to the route-facing shape below.
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

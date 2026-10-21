@@ -16,6 +16,7 @@ from modulo.api.routes.admin import UpdateWorkItemAgentMintingRequest
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.runtime_config.org_flags import FLAG_WORK_ITEM_AGENT_MINTING_ENABLED, clear_org_flag_cache
+from tests.unit.api.mock_session import configure_rls_preamble
 
 ORG_ID = uuid4()
 USER_ID = uuid4()
@@ -52,7 +53,7 @@ def mock_session(org_settings):
     result = MagicMock()
     result.scalar_one_or_none.return_value = org
 
-    session = AsyncMock()
+    session = configure_rls_preamble(AsyncMock())
     # Real SQLAlchemy sessions expose ``info`` as a dict; the route binds RLS
     # via ``set_rls_org`` which stores the org id here on generic backends, and
     # the FAR-1830/FAR-1832 patch helper (behind ``set_org_flag``) reads it
@@ -90,7 +91,7 @@ def _direct_session() -> AsyncMock:
     org.settings_json = {}
     result = MagicMock()
     result.scalar_one_or_none.return_value = org
-    session = AsyncMock()
+    session = configure_rls_preamble(AsyncMock())
     session.info = {}
     session.begin = _begin_cm()
     session.execute.return_value = result
