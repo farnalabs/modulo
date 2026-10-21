@@ -387,7 +387,7 @@ describe('AdminOrgSettingsView', () => {
     const wrapper = await mountWindowView()
 
     expect(wrapper.find('[data-testid="org-hitl-review-window-value"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('Loading review window')
+    expect(wrapper.find('[data-testid="org-hitl-review-window-skeleton"]').exists()).toBe(true)
 
     resolveGet({ data: { hitl_review_window_seconds: 900, is_default: false }, error: undefined })
     await flushPromises()
