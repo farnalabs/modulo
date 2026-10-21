@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 _log = logging.getLogger(__name__)
@@ -41,16 +42,63 @@ CODE_VERDICT_KIND = "judge_verdict_kind_unsupported"
 
 #: Remediation hint attached to every legacy-freeze rejection.
 MIGRATE_HINT = (
-    "Migrate this definition to the typed dialect: add "
-    '"answer_contract": "typed_questions", a "questions" list, a "backing" and a '
-    '"pass_rule" to config_json. Legacy judge configs are read-only in place '
-    "(ADR 066 D8); no backfill is performed because it would change every "
-    "definition checksum and suite baseline."
+    "Re-send the definition with a typed config_json (answer_contract: "
+    '"typed_questions", a non-empty "field" or judge_whole_output: true, a '
+    '"questions" list, a "backing" and a "pass_rule") to migrate it in place, or '
+    "delete and recreate it. A legacy config cannot be edited as legacy; no "
+    "backfill is performed because it would change every definition checksum and "
+    "suite baseline (ADR 066 D8)."
 )
 
 _QUESTION_TYPES = frozenset({"noul", "choice", "score"})
 _BACKING_KINDS = frozenset({"decision_model", "model_backend"})
 _VERDICT_KINDS = frozenset({"assessment", "derivation"})
+
+#: The typed dialect's COMPLETE key surface (extra="forbid"). A pasted
+#: credential or an unlisted knob is rejected rather than silently stored in a
+#: config_json that ``GET /evals/{id}`` returns verbatim.
+_ALLOWED_TOP_LEVEL = frozenset(
+    {
+        "field",
+        "context_fields",
+        "answer_contract",
+        "backing",
+        "questions",
+        "pass_rule",
+        "verdict_kind",
+        "cascade",
+        "timeouts",
+        "judge_whole_output",
+    }
+)
+_ALLOWED_BACKING = frozenset({"kind", "model_backend_id", "vendor", "model_class"})
+_ALLOWED_QUESTION = frozenset(
+    {
+        "id",
+        "type",
+        "name",
+        "instructions",
+        "criteria",
+        "weight",
+        "required",
+        "min_pass_confidence",
+        "options",
+        "passing_keys",
+        "option_scores",
+        "levels",
+        "pass_from",
+    }
+)
+_ALLOWED_OPTION = frozenset({"key", "description"})
+_ALLOWED_LEVEL = frozenset({"score", "description"})
+
+#: Any key that could carry a credential. The typed dialect has no credential
+#: field at all (credentials live in the vault / model-backend rows, D16), so a
+#: match is a rejection, not a redaction.
+_CREDENTIAL_KEY = re.compile(
+    r"(api[_-]?key|token|secret|password|passwd|credential|bearer|private[_-]?key)",
+    re.IGNORECASE,
+)
 
 
 class JudgeConfigWriteError(ValueError):
@@ -123,10 +171,31 @@ def _invalid(message: str) -> JudgeConfigWriteError:
     return JudgeConfigWriteError(CODE_INVALID, message, hint="Fix config_json and retry.")
 
 
+def _reject_unknown_keys(obj: dict[str, Any], allowed: frozenset[str], where: str) -> None:
+    unknown = sorted(set(obj) - allowed)
+    if unknown:
+        raise _invalid(f"{where} has unsupported key(s) {unknown}; the typed dialect forbids extra keys")
+
+
+def _reject_credential_keys(obj: Any, where: str) -> None:
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if isinstance(key, str) and _CREDENTIAL_KEY.search(key):
+                raise _invalid(
+                    f"{where} carries a credential-like key {key!r}; credentials belong in the "
+                    "model backend / vault, never in config_json (ADR 066 D16)"
+                )
+            _reject_credential_keys(value, f"{where}.{key}")
+    elif isinstance(obj, list):
+        for index, value in enumerate(obj):
+            _reject_credential_keys(value, f"{where}[{index}]")
+
+
 def _validate_backing(config: dict[str, Any]) -> None:
     backing = config.get("backing")
     if not isinstance(backing, dict):
         raise _invalid("config_json.backing must be an object")
+    _reject_unknown_keys(backing, _ALLOWED_BACKING, "config_json.backing")
     kind = backing.get("kind")
     if kind not in _BACKING_KINDS:
         raise _invalid(f"config_json.backing.kind must be one of {sorted(_BACKING_KINDS)} (got {kind!r})")
@@ -149,6 +218,7 @@ def _validate_backing(config: dict[str, Any]) -> None:
 def _validate_question(index: int, question: Any) -> None:
     if not isinstance(question, dict):
         raise _invalid(f"config_json.questions[{index}] must be an object")
+    _reject_unknown_keys(question, _ALLOWED_QUESTION, f"config_json.questions[{index}]")
     qid = question.get("id")
     if not isinstance(qid, str) or not qid:
         raise _invalid(f"config_json.questions[{index}].id must be a non-empty string")
@@ -164,7 +234,11 @@ def _validate_question(index: int, question: Any) -> None:
         options = question.get("options")
         if not isinstance(options, list) or len(options) < 2:
             raise _invalid(f"choice question {qid!r} requires at least two options")
-        keys = {opt.get("key") for opt in options if isinstance(opt, dict)}
+        for option in options:
+            if not isinstance(option, dict):
+                raise _invalid(f"choice question {qid!r} options must be objects")
+            _reject_unknown_keys(option, _ALLOWED_OPTION, f"question {qid!r} option")
+        keys = {opt.get("key") for opt in options}
         if len(keys) < 2 or None in keys:
             raise _invalid(f"choice question {qid!r} options must be objects with unique 'key' values")
         passing = question.get("passing_keys")
@@ -174,7 +248,11 @@ def _validate_question(index: int, question: Any) -> None:
         levels = question.get("levels")
         if not isinstance(levels, list) or len(levels) < 2:
             raise _invalid(f"score question {qid!r} requires at least two ordered levels")
-        numeric = [lv.get("score") for lv in levels if isinstance(lv, dict)]
+        for level in levels:
+            if not isinstance(level, dict):
+                raise _invalid(f"score question {qid!r} levels must be objects")
+            _reject_unknown_keys(level, _ALLOWED_LEVEL, f"question {qid!r} level")
+        numeric = [lv.get("score") for lv in levels]
         if len(numeric) < 2 or any(not isinstance(n, (int, float)) for n in numeric):
             raise _invalid(f"score question {qid!r} levels must be objects with numeric 'score' values")
 
@@ -202,10 +280,19 @@ def validate_typed_judge_config(config: Any) -> None:
     if not isinstance(config, dict):
         raise _invalid("a model_judge eval requires a config_json object")
     if config.get("answer_contract") != TYPED_ANSWER_CONTRACT:
+        # The dialect marker is checked FIRST so a legacy blob is reported as
+        # "migrate it" rather than as a list of forbidden extra keys.
         raise JudgeConfigWriteError(
             CODE_TYPED_REQUIRED,
             "new model_judge definitions require the typed-questions dialect "
             f'("answer_contract": "{TYPED_ANSWER_CONTRACT}")',
+        )
+    _reject_unknown_keys(config, _ALLOWED_TOP_LEVEL, "config_json")
+    _reject_credential_keys(config, "config_json")
+    if "model_backend_id" in config:
+        raise _invalid(
+            "config_json.model_backend_id is not a typed-dialect key; put the judge backend on "
+            "'backing.model_backend_id' (the only source both call sites read)"
         )
     verdict_kind = config.get("verdict_kind")
     if verdict_kind not in _VERDICT_KINDS:
@@ -238,6 +325,14 @@ def validate_typed_judge_config(config: Any) -> None:
     field = config.get("field", "")
     if not isinstance(field, str):
         raise _invalid("config_json.field must be a string")
+    whole_output = config.get("judge_whole_output", False)
+    if not isinstance(whole_output, bool):
+        raise _invalid("config_json.judge_whole_output must be a boolean")
+    if not field and not whole_output:
+        raise _invalid(
+            "config_json.field is required (a dotted path into the output). Whole-output judging "
+            "must be explicit with 'judge_whole_output': true — otherwise the judged payload is empty"
+        )
 
 
 def reject_legacy_judge_write(
@@ -259,11 +354,17 @@ def reject_legacy_judge_write(
     """
     legacy_judge_row = is_update and stored_eval_type == "model_judge" and is_legacy_judge_config(stored_config)
     if legacy_judge_row:
+        # The one legal in-place change is MIGRATING to the typed dialect. A
+        # legacy-to-legacy edit is refused; a typed replacement is the repair
+        # the remediation hint names.
+        if is_typed_judge_config(config_json):
+            validate_typed_judge_config(config_json)
+            return
         if canonical_json(config_json) != canonical_json(stored_config):
             raise JudgeConfigWriteError(
                 CODE_LEGACY_READ_ONLY,
                 "this model_judge definition still uses the legacy (pre-ADR-066) "
-                "config dialect, which is read-only in place",
+                "config dialect, which is read-only as legacy",
             )
         return
     if new_eval_type == "model_judge":

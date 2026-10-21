@@ -174,6 +174,9 @@ class EvalDefinitionResponse(BaseModel):
     version: int = 1
     pre_version_raw: dict[str, Any] | None = None
     created_by: uuid.UUID = Field(validation_alias="account_id")
+    # ADR 066 §0: the judge's display string is composed in
+    # ``typed_judge.naming`` (never in a view).
+    judge: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +192,7 @@ def _eval_def_to_dict(
     Returns the public fields only; ``failure_behaviour`` is excluded from the
     response shape (it is an internal column, not exposed to callers).
     """
-    return {
+    out: dict[str, Any] = {
         "id": str(eval_row.id),
         "pipeline_id": str(eval_row.pipeline_id),
         "node_id": str(eval_row.node_id) if eval_row.node_id else None,
@@ -202,6 +205,27 @@ def _eval_def_to_dict(
         "version": getattr(eval_row, "version", 1),
         "pre_version_raw": getattr(eval_row, "pre_version_raw", None),
     }
+    if eval_row.eval_type == "model_judge":
+        from modulo.core.eval_engine.typed_judge import (
+            backing_display,
+            is_typed_judge_config,
+            legacy_judge_display,
+        )
+
+        config = eval_row.config_json or {}
+        if is_typed_judge_config(config):
+            raw_backing = config.get("backing")
+            backing: dict[str, Any] = raw_backing if isinstance(raw_backing, dict) else {}
+            out["judge"] = {
+                "display": backing_display(
+                    kind=str(backing.get("kind") or "model_backend"),
+                    vendor=backing.get("vendor"),
+                    model=backing.get("model"),
+                )
+            }
+        else:
+            out["judge"] = {"display": legacy_judge_display()}
+    return out
 
 
 def _assert_eval_definition_write_role(principal: TenantPrincipal, action: str) -> None:

@@ -1933,6 +1933,10 @@ async def _persist_guardrail_eval_results(
                 node_id=None,
                 eval_id=gr.eval_id,
                 eval_definition_version=version_by_eval_id.get(gr.eval_id),
+                # ``outcome`` is NOT NULL with no server default by design: a
+                # write that forgets it must fail. A guardrail is deterministic,
+                # so its outcome is the same projection the 0325 backfill used.
+                outcome="pass" if gr.passed else "fail",
                 passed=gr.passed,
                 score=gr.score,
                 detail=(gr.detail or "")[:2000],

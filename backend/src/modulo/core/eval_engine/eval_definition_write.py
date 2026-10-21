@@ -201,9 +201,17 @@ async def _enforce_judge_config_write(
             new_eval_type=eval_type,
         )
     except JudgeConfigWriteError as exc:
+        # The repo's error contract surfaces ``detail["error"]`` as the RFC 9457
+        # ``code`` extension member (api/models/problem.py). Keep the hint in
+        # the human detail so REST callers see the remediation, and keep it as
+        # its own key for the MCP mapper (which does not go through RFC 9457).
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=exc.detail(),
+            detail={
+                "error": exc.code,
+                "detail": f"{exc.message} {exc.hint}",
+                "hint": exc.hint,
+            },
         ) from None
 
 

@@ -235,11 +235,17 @@ def build_model_judge_callable(
             extra={"model_backend_id": backend_id_str, "detail": detail},
         )
 
+        malformed_identity = JudgeIdentity(mechanism="model_backend", judge_backend_id=backend_id_str)
+
         def _config_error_judge(
             output: dict[str, Any],
             eval_def: EvalDefinition,
         ) -> dict[str, Any]:
-            raise JudgeExecutionError(JudgeErrorCode.JUDGE_CONFIGURATION, detail)
+            raise JudgeExecutionError(
+                JudgeErrorCode.JUDGE_CONFIGURATION,
+                detail,
+                judge=malformed_identity,
+            )
 
         return _config_error_judge
 
@@ -279,7 +285,7 @@ def build_model_judge_callable(
                     "detail": detail,
                 },
             )
-            raise JudgeExecutionError(JudgeErrorCode.JUDGE_TIMEOUT, detail) from exc
+            raise JudgeExecutionError(JudgeErrorCode.JUDGE_TIMEOUT, detail, judge=identity) from exc
         except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
             raise
         except Exception as exc:
@@ -295,7 +301,11 @@ def build_model_judge_callable(
                     "model_judge.unknown_model_backend_id",
                     extra={"model_backend_id": str(backend_id), "detail": detail},
                 )
-                raise JudgeExecutionError(JudgeErrorCode.JUDGE_CONFIGURATION, detail) from exc
+                raise JudgeExecutionError(
+                    JudgeErrorCode.JUDGE_CONFIGURATION,
+                    detail,
+                    judge=identity,
+                ) from exc
             code = _classify_provider_exception(exc)
             _log.error(
                 "model_judge.provider_failure",
@@ -308,6 +318,7 @@ def build_model_judge_callable(
             raise JudgeExecutionError(
                 code,
                 f"model judge backend failed ({code.value}); no verdict was produced",
+                judge=identity,
             ) from exc
 
         text = response.content if hasattr(response, "content") else str(response)
@@ -326,15 +337,25 @@ def build_model_judge_callable(
             raise JudgeExecutionError(
                 JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
                 "judge returned a non-JSON response; no verdict was produced",
+                judge=identity,
             ) from exc
         if not isinstance(parsed, dict):
             raise JudgeExecutionError(
                 JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
                 "judge returned a non-object JSON response; no verdict was produced",
+                judge=identity,
+            )
+        raw_passed = parsed.get("passed", False)
+        if not isinstance(raw_passed, bool):
+            # A string "false"/"no"/"0" is truthy in Python — never coerce.
+            raise JudgeExecutionError(
+                JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+                f"judge returned a non-boolean 'passed' ({type(raw_passed).__name__})",
+                judge=identity,
             )
         detail = parsed.get("detail", "")
         return {
-            "passed": bool(parsed.get("passed", False)),
+            "passed": raw_passed,
             "score": parsed.get("score"),
             "detail": str(detail) if detail is not None else "",
         }
@@ -343,11 +364,18 @@ def build_model_judge_callable(
 
 
 def _judge_backend_id(config: dict[str, Any]) -> Any:
-    """Read the judge's backend id from either dialect."""
+    """Read the judge's backend id — ``backing.model_backend_id`` is the ONLY source.
+
+    A typed config's ``backing`` is authoritative in BOTH call sites; falling
+    back to a top-level ``model_backend_id`` made the same definition resolve a
+    different backend (egress/provenance) depending on the caller. Legacy
+    configs keep the historical flat key.
+    """
     if config.get("answer_contract") == TYPED_ANSWER_CONTRACT:
         backing = config.get("backing")
         if isinstance(backing, dict):
             return backing.get("model_backend_id")
+        return None
     return config.get("model_backend_id")
 
 

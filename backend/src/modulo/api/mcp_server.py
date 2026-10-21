@@ -2172,7 +2172,22 @@ def _tool_exception_error(msg: str, exc: BaseException, log_key: str) -> dict[st
     if isinstance(exc, MCPAuthorizationError):
         return {"error": "insufficient_scope", "detail": str(exc)}
     if isinstance(exc, StarletteHTTPException):
-        return _tool_error(msg, code="validation_failed" if exc.status_code < 500 else "server_error")
+        error_code = "validation_failed" if exc.status_code < 500 else "server_error"
+        # A structured 422 detail (e.g. the judge-write freeze's
+        # ``{code, message, hint}``) must reach the caller: the MCP surface is
+        # the only repair path for an agent, so replacing it with a log
+        # constant loses the actionable code and remediation (ADR 066 D8).
+        if isinstance(exc.detail, dict):
+            # ``detail["error"]`` is the repo's machine-readable code convention
+            # (see api/models/problem.py). ``message`` is accepted for the older
+            # structured shape.
+            return {
+                "error": error_code,
+                "code": exc.detail.get("error") or exc.detail.get("code"),
+                "detail": exc.detail.get("detail") or exc.detail.get("message") or msg,
+                "hint": exc.detail.get("hint"),
+            }
+        return _tool_error(msg, code=error_code)
     if isinstance(exc, SQLAlchemyError):
         if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
             return contract_error
@@ -2303,6 +2318,16 @@ async def _run_db_shell[**TOOL_SHELL_P](
         return {"error": "insufficient_scope", "detail": str(exc)}
     except StarletteHTTPException as exc:
         if cfg.handle_http_exception:
+            # Preserve a STRUCTURED 422 detail (e.g. the judge-write freeze's
+            # ``{error, detail, hint}``): the MCP caller gets the machine code +
+            # remediation, not a stringified dict (ADR 066 D8).
+            if isinstance(exc.detail, dict):
+                return {
+                    "error": "validation_failed",
+                    "code": exc.detail.get("error") or exc.detail.get("code"),
+                    "detail": exc.detail.get("detail") or exc.detail.get("message") or cfg.fallback,
+                    "hint": exc.detail.get("hint"),
+                }
             return {"error": "validation_failed", "detail": str(exc.detail)}
         _log.exception(cfg.log_constant)
         return _tool_exception_error(cfg.fallback, exc, log_key)

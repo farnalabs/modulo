@@ -872,6 +872,37 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="Eval suite failed.",
     ),
+    # --- judge codes (ADR 066 D6) -----------------------------------------
+    # A judge that produced NO verdict. These are the failed instrument, not a
+    # failed check: quality aggregates exclude them from denominators. They are
+    # registered here so the first canonicalising consumer renders a real
+    # guidance string instead of "Unknown error".
+    "judge.timeout": ErrorCodeSpec(
+        error_class="judge",
+        retryable=True,
+        alert_severity="warning",
+        guidance="The model judge did not answer before its bound; no verdict was produced.",
+    ),
+    "judge.malformed_response": ErrorCodeSpec(
+        error_class="judge",
+        retryable=False,
+        alert_severity="warning",
+        guidance="The model judge returned a response that is not a valid verdict; no verdict was produced.",
+    ),
+    "judge.unavailable": ErrorCodeSpec(
+        error_class="judge",
+        retryable=True,
+        alert_severity="warning",
+        guidance="No model judge was available to answer; no verdict was produced.",
+    ),
+    "judge.configuration": ErrorCodeSpec(
+        error_class="judge",
+        retryable=False,
+        alert_severity="critical",
+        guidance=(
+            "The judge definition is misconfigured (missing/unresolvable field or backend); no verdict was produced."
+        ),
+    ),
     # --- config codes ----------------------------------------------------
     "config.error": ErrorCodeSpec(
         error_class="config",

@@ -40,6 +40,7 @@ from modulo.core.eval_engine.typed_judge.naming import (
     TYPED_QUESTIONS_MECHANISM,
     backing_display,
     confidence_label,
+    legacy_judge_display,
     mechanism_label,
 )
 
@@ -70,6 +71,7 @@ __all__ = [
     "from_judge_callable_dict",
     "is_legacy_judge_config",
     "is_typed_judge_config",
+    "legacy_judge_display",
     "mechanism_label",
     "record_legacy_execution",
     "reject_legacy_judge_write",

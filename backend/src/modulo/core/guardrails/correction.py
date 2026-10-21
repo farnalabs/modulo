@@ -712,9 +712,10 @@ def _revalidation_judge_config(*, rubric: str, threshold: float, model_backend_i
     its pass-confidence floor and the verdict's pass rule.
     """
     return {
-        # Empty field -> the engine's guarded input uses the WHOLE produced
-        # output (a judge given an empty string cannot validate anything).
-        "field": "",
+        # Whole-output judging is EXPLICIT (D16): a judge given an empty string
+        # cannot validate anything, and shipping the whole node output must never
+        # be the implicit fallback for an authored config.
+        "judge_whole_output": True,
         "answer_contract": TYPED_ANSWER_CONTRACT,
         "backing": {"kind": "model_backend", "model_backend_id": model_backend_id},
         "questions": [

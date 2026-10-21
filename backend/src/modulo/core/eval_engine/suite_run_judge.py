@@ -30,7 +30,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.eval_engine import EvalDefinition, ModelJudgeCallable
-from modulo.core.eval_engine.typed_judge import TYPED_ANSWER_CONTRACT, JudgeErrorCode, JudgeExecutionError
+from modulo.core.eval_engine.typed_judge import (
+    TYPED_ANSWER_CONTRACT,
+    JudgeErrorCode,
+    JudgeExecutionError,
+    JudgeIdentity,
+)
 from modulo.core.model_backend_hub import BackendNotFoundError, ModelBackendHub
 from modulo.db.models.model_backend import ModelBackend
 
@@ -126,11 +131,14 @@ def build_suite_run_model_judge_callable(hub: ModelBackendHub) -> ModelJudgeCall
 
     def _judge(output: dict[str, Any], eval_def: EvalDefinition) -> dict[str, Any]:
         config = eval_def.config or {}
-        backend_id_raw = config.get("model_backend_id")
-        if not backend_id_raw and config.get("answer_contract") == TYPED_ANSWER_CONTRACT:
+        # ``backing.model_backend_id`` is the ONLY source for a typed config —
+        # identical to the pipeline path. A top-level key must never select a
+        # different backend here than it does there.
+        if config.get("answer_contract") == TYPED_ANSWER_CONTRACT:
             backing = config.get("backing")
-            if isinstance(backing, dict):
-                backend_id_raw = backing.get("model_backend_id")
+            backend_id_raw = backing.get("model_backend_id") if isinstance(backing, dict) else None
+        else:
+            backend_id_raw = config.get("model_backend_id")
         if not backend_id_raw:
             detail = (
                 "model_judge eval has no model_backend_id configured; set the eval "
@@ -141,7 +149,11 @@ def build_suite_run_model_judge_callable(hub: ModelBackendHub) -> ModelJudgeCall
                 "suite_run_judge.missing_model_backend_id",
                 extra={"eval_id": str(eval_def.id), "detail": detail},
             )
-            raise JudgeExecutionError(JudgeErrorCode.JUDGE_CONFIGURATION, detail)
+            raise JudgeExecutionError(
+                JudgeErrorCode.JUDGE_CONFIGURATION,
+                detail,
+                judge=JudgeIdentity(mechanism="model_backend"),
+            )
         key = str(backend_id_raw)
         judge = cache.get(key)
         if judge is None:
@@ -162,6 +174,10 @@ def build_suite_run_model_judge_callable(hub: ModelBackendHub) -> ModelJudgeCall
                 "suite_run_judge.unknown_model_backend_id",
                 extra={"eval_id": str(eval_def.id), "detail": detail},
             )
-            raise JudgeExecutionError(JudgeErrorCode.JUDGE_CONFIGURATION, detail) from exc
+            raise JudgeExecutionError(
+                JudgeErrorCode.JUDGE_CONFIGURATION,
+                detail,
+                judge=JudgeIdentity(mechanism="model_backend", judge_backend_id=key),
+            ) from exc
 
     return _judge

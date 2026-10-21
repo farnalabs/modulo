@@ -62,6 +62,15 @@ def mechanism_label() -> str:
     return TYPED_QUESTIONS_MECHANISM
 
 
+def legacy_judge_display() -> str:
+    """Display for a frozen pre-ADR-066 judge definition.
+
+    Composed here so no view can present a legacy prompt blob as a typed
+    question set.
+    """
+    return f"{TYPED_QUESTIONS_MECHANISM} — legacy prompt (migration required)"
+
+
 def backing_display(
     *,
     kind: str,
@@ -92,5 +101,6 @@ __all__ = [
     "TYPED_QUESTIONS_MECHANISM",
     "backing_display",
     "confidence_label",
+    "legacy_judge_display",
     "mechanism_label",
 ]

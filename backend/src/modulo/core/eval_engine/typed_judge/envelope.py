@@ -79,13 +79,23 @@ class JudgeExecutionError(RuntimeError):
     instead of misreading the absence as a failing verdict.
     """
 
-    def __init__(self, code: JudgeErrorCode, detail: str) -> None:
+    def __init__(
+        self,
+        code: JudgeErrorCode,
+        detail: str,
+        *,
+        judge: JudgeIdentity | None = None,
+    ) -> None:
         super().__init__(detail)
         self.code = code
         self.detail = detail
+        # The resolved judge identity travels with the failure so an ``error``
+        # verdict keeps its provenance (D15), rather than losing it at the
+        # moment the verdict could not be produced.
+        self.judge = judge
 
     def as_verdict(self, *, judge: JudgeIdentity | None = None) -> JudgeVerdict:
-        return error_verdict(self.code, self.detail, judge=judge)
+        return error_verdict(self.code, self.detail, judge=judge or self.judge)
 
 
 class JudgeIdentity(BaseModel):
@@ -272,10 +282,18 @@ def from_judge_callable_dict(
                 f"judge returned an invalid verdict envelope: {exc}",
             ) from exc
 
-    # Legacy dialect: ``{passed, score, detail}`` — unchanged behaviour.
+    # Legacy dialect: ``{passed, score, detail}`` — unchanged shape, but
+    # ``passed`` must be a REAL boolean. ``bool("false")`` is True, so a small
+    # model (or an injected output steering it) could otherwise flip a gate.
+    raw_passed = raw.get("passed", False)
+    if not isinstance(raw_passed, bool):
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            f"judge returned a non-boolean 'passed' ({type(raw_passed).__name__})",
+        )
     raw_detail = raw.get("detail")
     return JudgeVerdict(
-        outcome=JudgeOutcome.PASS if bool(raw.get("passed", False)) else JudgeOutcome.FAIL,
+        outcome=JudgeOutcome.PASS if raw_passed else JudgeOutcome.FAIL,
         score=_coerce_score(raw.get("score")),
         detail="" if raw_detail is None else str(raw_detail),
         judge=identity,
@@ -294,8 +312,15 @@ def _question_answer_score(question: dict[str, Any], answer: Any) -> tuple[bool,
     qid = str(raw_qid) if raw_qid is not None else "?"
     qtype = question.get("type")
     if qtype == "noul":
-        passed = bool(answer)
-        return passed, 1.0 if passed else 0.0
+        # NEVER truthiness: a model returning the STRING "false" (or "no",
+        # "False", "0") would otherwise flip a gate to pass. A `noul` answer is
+        # a real boolean or the response is malformed.
+        if not isinstance(answer, bool):
+            raise JudgeExecutionError(
+                JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+                f"question {qid!r} expects a boolean answer, got {type(answer).__name__}",
+            )
+        return answer, 1.0 if answer else 0.0
     if qtype == "choice":
         passing_keys = question.get("passing_keys") or []
         if not isinstance(passing_keys, list):
@@ -347,6 +372,20 @@ def aggregate_typed_answers(
     ``min_pass_confidence`` vetoes the verdict. A missing answer is a malformed
     response (never an empty judgment).
     """
+    raw_threshold = (pass_rule or {}).get("threshold")
+    if isinstance(raw_threshold, bool) or not isinstance(raw_threshold, (int, float)):
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_CONFIGURATION,
+            "pass_rule.threshold is required and must be a number in [0, 1]; "
+            "a missing threshold would make every aggregate pass",
+        )
+    threshold = float(raw_threshold)
+    if not 0.0 <= threshold <= 1.0:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_CONFIGURATION,
+            f"pass_rule.threshold must be in [0, 1] (got {threshold})",
+        )
+
     verdicts: list[QuestionVerdict] = []
     weighted_total = 0.0
     weight_sum = 0.0
@@ -379,7 +418,6 @@ def aggregate_typed_answers(
             )
         )
     aggregate = (weighted_total / weight_sum) if weight_sum > 0 else None
-    threshold = float((pass_rule or {}).get("threshold", 0.0))
     passed = (not vetoed) and aggregate is not None and aggregate >= threshold
     return verdicts, aggregate, passed
 

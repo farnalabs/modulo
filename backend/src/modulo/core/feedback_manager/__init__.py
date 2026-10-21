@@ -446,18 +446,23 @@ class FeedbackManager:
         record: FeedbackRecord,
         eval_def: Any,
         eval_engine: EvalEngine,
-    ) -> tuple[bool, bool | None]:
+    ) -> tuple[str, bool | None]:
         """Run one eval against the rejected output.
 
+        Returns ``(status, passed)`` where status is:
+
+        * ``"verdict"`` — a real pass/fail verdict (``passed`` is a bool);
+        * ``"error"`` — the judge produced NO verdict (FAR-1496). This is an
+          instrument failure, not a quality signal, and must not be read as
+          either "the eval caught it" or "the eval missed it";
+        * ``"skipped"`` — a malformed definition or an engine exception.
+
         A ``model_judge`` definition resolves its judge through the SAME
-        resolver the pipeline and suite paths use. When no judge can be
-        resolved the engine records ``outcome=error``; the feedback path treats
-        that as "not evaluated" (returns ``passed=None``), never as a failing
-        verdict — the FAR-1496 defect.
+        resolver the pipeline and suite paths use.
         """
         if not isinstance(eval_def, dict) and not hasattr(eval_def, "eval_type"):
             logger.warning("Malformed eval_def in eval_suite: %s", eval_def)
-            return False, None
+            return "skipped", None
         try:
             dto = self._normalise_eval_def(eval_def)
             judge = None
@@ -478,15 +483,15 @@ class FeedbackManager:
                 record.id,
                 eval_def,
             )
-            return True, None
+            return "skipped", None
         if result.outcome is JudgeOutcome.ERROR:
             logger.warning(
-                "FeedbackRecord %s eval produced no verdict (%s); excluding it from the eval-gap decision",
+                "FeedbackRecord %s eval produced no verdict (%s); it is excluded from the eval-gap decision",
                 record.id,
                 result.detail,
             )
-            return True, None
-        return True, result.passed
+            return "error", None
+        return "verdict", result.passed
 
     @_rls
     async def detect_eval_gap(
@@ -503,14 +508,30 @@ class FeedbackManager:
             record.eval_gap = True
             return True
         processed_count = 0
+        error_count = 0
         for eval_def in eval_suite:
-            processed, passed = self._evaluate_single_eval_def(record, eval_def, eval_engine)
-            if not processed:
+            status, passed = self._evaluate_single_eval_def(record, eval_def, eval_engine)
+            if status == "skipped":
+                continue
+            if status == "error":
+                error_count += 1
                 continue
             processed_count += 1
             if passed is not None and not passed:
                 return False
         if processed_count == 0:
+            if error_count:
+                # An instrument failure is not evidence of an eval gap. Assert
+                # nothing rather than report a gap the evals never observed
+                # (ADR 066 D18: error is excluded from quality decisions).
+                logger.warning(
+                    "detect_eval_gap: %d of %d eval_defs produced no verdict for FeedbackRecord %s; "
+                    "not asserting an eval gap",
+                    error_count,
+                    len(eval_suite),
+                    record.id,
+                )
+                return False
             logger.warning(
                 "detect_eval_gap: all %d eval_defs in eval_suite were malformed for FeedbackRecord %s",
                 len(eval_suite),
