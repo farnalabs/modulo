@@ -80,8 +80,10 @@ jobs:
         if: steps.detect.outputs.is_fast_lane == 'true' && steps.pr.outputs.pr_number != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_URL }}
-          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_SECRET }}
+          DISPATCH_URL: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_URL }}
+          DISPATCH_SECRET: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_SECRET }}
+          DISPATCH_LABEL: "Modulo PR Review"
+          DISPATCH_ACCEPT_ANY_2XX: "1"
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
         shell: bash
         run: |
@@ -105,52 +107,19 @@ jobs:
             --arg action "post_merge_review" \
             '{action: $action, repository: {full_name: $repo}, pull_request: {number: $prNumber, head: {sha: $sha, ref: $ref}}}')
 
-          RESPONSE_FILE=$(mktemp)
-          trap 'rm -f "${RESPONSE_FILE}"' EXIT
-          ACCEPTED=false
-
-          for i in 1 2 3 4 5; do
-            TIMESTAMP=$(date +%s)
-            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
-            : > "${RESPONSE_FILE}"
-            HTTP_CODE=$(curl -s --connect-timeout 10 --max-time 60 \
-              -o "${RESPONSE_FILE}" -w '%{http_code}' \
-              -X POST "${MODULO_WEBHOOK_URL}" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "${BODY}") || HTTP_CODE="000"
-
-            echo "PR Reviewer webhook responded with HTTP ${HTTP_CODE} (attempt ${i}/5)"
-            cat "${RESPONSE_FILE}" || true
-            echo
-
-            case "${HTTP_CODE}" in
-              2*)
-                echo "Webhook POST accepted."
-                ACCEPTED=true
-                break
-                ;;
-              429|000|5*)
-                if [ "${i}" -eq 5 ]; then
-                  break
-                fi
-                DELAY=$((2 ** (i - 1) * 5))
-                echo "::warning::PR Reviewer webhook returned HTTP ${HTTP_CODE} (attempt ${i}/5) - retrying in ${DELAY}s"
-                sleep "${DELAY}"
-                ;;
-              *)
-                echo "::error::PR Reviewer webhook POST failed with HTTP ${HTTP_CODE} (non-retryable)."
-                exit 1
-                ;;
-            esac
-          done
-
-          if [ "${ACCEPTED}" != "true" ]; then
-            echo "::error::PR Reviewer webhook POST failed after 5 attempts. Post-merge review not dispatched."
-            echo "::notice::The fast-lane circuit breaker (suspension) must be set manually or via Modulo app infrastructure."
-            exit 1
-          fi
+          # One shared retry policy (scripts/dispatch_with_retry.sh):
+          # 429 (capacity) and 000/502/503/504 (transient) retry with
+          # exponential backoff + jitter, an attempt cap and a wall-clock
+          # budget, honouring Retry-After; everything else is terminal.
+          # DISPATCH_ACCEPT_ANY_2XX=1 preserves this step's accept-any-2xx
+          # contract (the PR Reviewer webhook answers 2xx or a transient
+          # 5xx lock error like pr-review.yml does). The post-merge review
+          # is the fast-lane gate that catches severity findings after
+          # merge — if it is never dispatched nobody reviews the merge
+          # automatically, and the fast-lane suspension (which stops the
+          # next merges from skipping review) cannot fire either; it must
+          # be set manually. So a failed dispatch here must stay loud:
+          DISPATCH_BODY="${BODY}" bash scripts/dispatch_with_retry.sh
 
           echo "Post-merge review dispatched for PR #${PR_NUMBER}."
           echo "::notice::The review runs asynchronously on app.modulo.run. If a critical/major finding is discovered, the Modulo app will raise a follow-up PR through the normal lane and set the fast-lane suspension."
