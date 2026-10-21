@@ -8,7 +8,6 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Index,
-    Integer,
     Numeric,
     String,
     Uuid,
@@ -58,12 +57,6 @@ class Organisation(SoftDeleteMixin, Base):
             "NOT guardrails_kill_switch OR guardrails_kill_switch_at IS NOT NULL",
             name="ck_organisations_guardrails_kill_switch_at",
         ),
-        # Retained ONLY so the ORM metadata keeps matching the live schema
-        # (tests/integration/test_initial_migration.py::test_migrated_schema_matches_orm_metadata).
-        # The physical columns + this CHECK are dropped by the follow-up
-        # migration once the additive 0321 release is live — see the cost-column
-        # comment below. Nothing in production code reads or writes them.
-        CheckConstraint("org_cumulative_spend_cents >= 0", name="ck_organisations_cum_spend"),
         Index(
             "uq_organisations_slug",
             "slug",
@@ -111,25 +104,22 @@ class Organisation(SoftDeleteMixin, Base):
     guardrails_kill_switch: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     guardrails_kill_switch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     daily_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
-    # FAR-391 hard spend ceilings (``max_run_cost_cents`` / ``spend_ceiling_cents``)
-    # and the lifetime consumed total (``org_cumulative_spend_cents``) are NO
-    # LONGER USED (FAR-1833): they now live on ``organisation_cost_state`` keyed
-    # by ``org_id``, read/written under the per-org cost-state advisory lock
+    # The per-org cost values are NOT on this row. FAR-1833 moved the hard spend
+    # ceilings (per-run and org lifetime) and the consumed total onto
+    # ``organisation_cost_state`` keyed by ``org_id``, read/written under the
+    # per-org cost-state advisory lock
     # (``modulo.core.runner_capacity.lock_org_cost_state``). Keeping the cost
     # path off the ``organisations`` row removes the lock coupling (the D9
     # deadlock) between the finalize gate+accrual and the ceiling set/clear
-    # endpoints.
-    #
-    # The three columns are STILL MAPPED here (and the CHECK above still
-    # declared) only for expand/contract: migration 0321 deliberately leaves the
-    # physical columns in place so a rolling deploy never serves old code against
-    # a dropped column, and the ORM metadata must keep matching that live schema
-    # (test_migrated_schema_matches_orm_metadata). No production code reads or
-    # writes them; the follow-up DROP migration removes both the columns and
-    # this mapping in the same change.
-    max_run_cost_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    spend_ceiling_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    org_cumulative_spend_cents: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    # endpoints. The retired ``max_run_cost_cents`` / ``spend_ceiling_cents`` /
+    # ``org_cumulative_spend_cents`` columns and the
+    # ``ck_organisations_cum_spend`` CHECK are NO LONGER MAPPED here (FAR-1902).
+    # This release removes the ORM reference only: the physical columns (and the
+    # CHECK) stay in place until migration
+    # ``0324_drop_organisations_cost_columns`` ships in a LATER release, so a
+    # rolling deploy never serves a release whose ORM still names a dropped
+    # column. ``test_migrated_schema_matches_orm_metadata`` carries an expiring
+    # parity entry until that migration lands.
     deletion_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     deletion_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     export_bundle_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True, default=None)
