@@ -34,6 +34,13 @@ def _make_backend() -> VaultSecretsBackend:
     return backend
 
 
+async def _invoke_operation(backend: VaultSecretsBackend, operation: str, key: str) -> None:
+    if operation == "set_secret":
+        await backend.set_secret(key, "value")
+    else:
+        await getattr(backend, operation)(key)
+
+
 class TestVaultSecretsBackend:
     async def test_empty_key_raises_value_error(self, mock_hvac: MagicMock) -> None:
         backend = _make_backend()
@@ -239,6 +246,14 @@ class TestVaultSecretsBackend:
             await backend.get_secret("my-key")
 
     @pytest.mark.parametrize(
+        ("operation", "client_method"),
+        [
+            pytest.param("get_secret", "read_secret_version", id="get"),
+            pytest.param("set_secret", "create_or_update_secret", id="set"),
+            pytest.param("delete_secret", "delete_metadata_and_all_versions", id="delete"),
+        ],
+    )
+    @pytest.mark.parametrize(
         "key",
         [
             pytest.param("../../etc/passwd", id="dot-dot-prefix"),
@@ -247,42 +262,25 @@ class TestVaultSecretsBackend:
             pytest.param("/absolute/path", id="leading-slash"),
         ],
     )
-    async def test_get_secret_rejects_unsafe_paths(self, mock_hvac: MagicMock, key: str) -> None:
-        """Traversal and absolute keys must be rejected before any Vault read."""
-        backend = _make_backend()
-        with pytest.raises(ValueError, match="invalid secret key"):
-            await backend.get_secret(key)
-        backend._client.secrets.kv.v2.read_secret_version.assert_not_called()
+    async def test_operations_reject_unsafe_paths(
+        self,
+        mock_hvac: MagicMock,
+        operation: str,
+        client_method: str,
+        key: str,
+    ) -> None:
+        """Every read/write/delete rejects traversal and absolute keys before touching Vault.
 
-    @pytest.mark.parametrize(
-        "key",
-        [
-            pytest.param("../traversal", id="dot-dot"),
-            pytest.param("key/../subkey", id="dot-dot-embedded"),
-            pytest.param("/absolute/path", id="leading-slash"),
-        ],
-    )
-    async def test_set_secret_rejects_unsafe_paths(self, mock_hvac: MagicMock, key: str) -> None:
-        """Writes must reject traversal keys too, so no secret is written outside the prefix."""
+        A delete that resolves a traversal key could wipe a foreign path, and a
+        write could land outside the configured prefix, so all three operations
+        must fail closed and never call the client method.
+        """
         backend = _make_backend()
-        with pytest.raises(ValueError, match="invalid secret key"):
-            await backend.set_secret(key, "value")
-        backend._client.secrets.kv.v2.create_or_update_secret.assert_not_called()
 
-    @pytest.mark.parametrize(
-        "key",
-        [
-            pytest.param("../traversal", id="dot-dot"),
-            pytest.param("key/../subkey", id="dot-dot-embedded"),
-            pytest.param("/absolute/path", id="leading-slash"),
-        ],
-    )
-    async def test_delete_secret_rejects_unsafe_paths(self, mock_hvac: MagicMock, key: str) -> None:
-        """Deletes must reject traversal keys, or a foreign path could be wiped."""
-        backend = _make_backend()
         with pytest.raises(ValueError, match="invalid secret key"):
-            await backend.delete_secret(key)
-        backend._client.secrets.kv.v2.delete_metadata_and_all_versions.assert_not_called()
+            await _invoke_operation(backend, operation, key)
+
+        getattr(backend._client.secrets.kv.v2, client_method).assert_not_called()
 
     async def test_get_secret_forbidden_raises_permission_error(self, mock_hvac: MagicMock) -> None:
         backend = _make_backend()
