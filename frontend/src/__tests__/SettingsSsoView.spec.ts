@@ -73,6 +73,20 @@ describe('SettingsSsoView — provider list', () => {
     expect(wrapper.text()).toContain('cid-1')
   })
 
+  it('opens the edit form from the provider row keyboard handlers', async () => {
+    const wrapper = mountView()
+    await nextTick()
+
+    const row = wrapper.find('[data-testid="settings-sso-provider-row"]')
+    await row.trigger('keydown.enter')
+    await nextTick()
+    expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
+
+    await row.trigger('keydown.space')
+    await nextTick()
+    expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
+  })
+
   it('shows the empty state when no providers are configured (fe-003)', async () => {
     ;(api.GET as Mock).mockResolvedValue({ data: [], error: undefined })
     const wrapper = mountView()
@@ -730,23 +744,6 @@ describe('SettingsSsoView — row click opens edit (FAR-974 #2)', () => {
     await nextTick()
 
     expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
-  })
-
-  it('the row keyboard equivalents open the edit form (Enter and Space)', async () => {
-    // The row's mouse-click convenience has matching keyboard equivalents
-    // (Web:MouseEventWithoutKeyboardEquivalentCheck); the native button above
-    // remains the primary, tab-reachable target.
-    const enterWrapper = mountView()
-    await nextTick()
-    await enterWrapper.find('[data-testid="settings-sso-provider-row"]').trigger('keydown.enter')
-    await nextTick()
-    expect(enterWrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
-
-    const spaceWrapper = mountView()
-    await nextTick()
-    await spaceWrapper.find('[data-testid="settings-sso-provider-row"]').trigger('keydown.space')
-    await nextTick()
-    expect(spaceWrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
   })
 
   it('clicking the row itself still opens the edit form for mouse users', async () => {
