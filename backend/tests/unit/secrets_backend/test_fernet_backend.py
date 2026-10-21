@@ -6,11 +6,12 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from modulo.core.secrets_backend.fernet import FernetSecretsBackend
 from modulo.db.models.secret import Secret
+from modulo.db.rls import _TENANT_KEY
 
 _KEY = Fernet.generate_key().decode()
 _SECRET_VALUE = "my-secret-value"
@@ -58,6 +59,46 @@ def _statements_against_secrets_table(execute_calls: list[tuple[str, Any, Any, A
     return [(text, stmt) for text, stmt, _args, _kwargs in execute_calls if "secrets" in text]
 
 
+async def _call_operation(backend: FernetSecretsBackend, operation: str, key: str = "some-key") -> None:
+    """Invoke one backend operation by name, so contract cases stay parameterised."""
+    if operation == "get":
+        await backend.get_secret(key)
+    elif operation == "set":
+        await backend.set_secret(key, _SECRET_VALUE)
+    else:
+        await backend.delete_secret(key)
+
+
+@pytest.mark.parametrize("operation", ["get", "set", "delete"])
+async def test_operations_raise_without_session(operation: str) -> None:
+    backend = FernetSecretsBackend(fernet_key=_KEY)
+
+    with pytest.raises(RuntimeError, match="no DB session"):
+        await _call_operation(backend, operation)
+
+
+@pytest.mark.parametrize("operation", ["get", "set", "delete"])
+async def test_operations_reject_empty_key(operation: str, mock_session: MagicMock) -> None:
+    backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
+
+    with pytest.raises(ValueError, match="non-empty"):
+        await _call_operation(backend, operation, key="")
+
+
+@pytest.mark.parametrize("operation", ["get", "set", "delete"])
+async def test_operation_timeout_propagates(operation: str, mock_session: MagicMock) -> None:
+    """The _DB_TIMEOUT wait_for wrappers must surface TimeoutError.
+
+    Timeouts are intentionally NOT wrapped in RuntimeError: the DB is a core
+    dependency and a timeout is a real failure, not a degraded-mode fallback.
+    """
+    backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
+    mock_session.execute = AsyncMock(side_effect=TimeoutError())
+
+    with pytest.raises(TimeoutError):
+        await _call_operation(backend, operation)
+
+
 class TestGetSecret:
     async def test_returns_decrypted_value(self):
         encrypted = Fernet(_KEY.encode()).encrypt(_SECRET_VALUE.encode())
@@ -74,18 +115,6 @@ class TestGetSecret:
 
         with pytest.raises(KeyError, match="unknown-key"):
             await backend.get_secret("unknown-key")
-
-    async def test_no_session_raises_runtime_error(self):
-        backend = FernetSecretsBackend(fernet_key=_KEY)
-
-        with pytest.raises(RuntimeError, match="no DB session"):
-            await backend.get_secret("some-key")
-
-    async def test_empty_key_raises_value_error(self, mock_session):
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
-
-        with pytest.raises(ValueError, match="non-empty"):
-            await backend.get_secret("")
 
     async def test_corrupted_data_raises_value_error(self):
         row = MagicMock(spec=Secret)
@@ -163,17 +192,23 @@ class TestSetSecret:
         assert existing.encrypted_value != b"stale-ciphertext"
         assert backend._fernet.decrypt(existing.encrypted_value).decode() == _SECRET_VALUE
 
-    async def test_no_session_raises_runtime_error(self):
-        backend = FernetSecretsBackend(fernet_key=_KEY)
+    async def test_writes_with_current_key_after_rotation(self):
+        """Rotation: new writes must be encrypted with the current key.
 
-        with pytest.raises(RuntimeError, match="no DB session"):
-            await backend.set_secret("some-key", _SECRET_VALUE)
+        A regression that re-encrypts with ``old_key`` still decrypts via the
+        fallback, so only pinning *both* ciphers proves the write uses the key
+        the next rotation will drop.
+        """
+        old_key = Fernet.generate_key().decode()
+        session = _make_session()
+        backend = FernetSecretsBackend(fernet_key=_KEY, old_key=old_key, session=session)
 
-    async def test_empty_key_raises_value_error(self, mock_session):
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
+        await backend.set_secret("rotated-write", _SECRET_VALUE)
 
-        with pytest.raises(ValueError, match="non-empty"):
-            await backend.set_secret("", _SECRET_VALUE)
+        stored = session.add.call_args[0][0].encrypted_value
+        assert Fernet(_KEY.encode()).decrypt(stored).decode() == _SECRET_VALUE
+        with pytest.raises(InvalidToken):
+            Fernet(old_key.encode()).decrypt(stored)
 
     def test_invalid_fernet_key_at_construction_raises(self) -> None:
         with pytest.raises(ValueError, match="base64-encoded"):
@@ -211,27 +246,6 @@ class TestDeleteSecret:
         assert "organisation_id" in str(delete_stmt), "Expected the delete to be scoped by organisation_id"
         mock_session.flush.assert_awaited_once()
 
-    async def test_no_session_raises_runtime_error(self):
-        backend = FernetSecretsBackend(fernet_key=_KEY)
-
-        with pytest.raises(RuntimeError, match="no DB session"):
-            await backend.delete_secret("some-key")
-
-    async def test_empty_key_raises_value_error(self, mock_session):
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
-
-        with pytest.raises(ValueError, match="non-empty"):
-            await backend.delete_secret("")
-
-
-class TestSetSession:
-    def test_set_session_after_construction(self):
-        backend = FernetSecretsBackend(fernet_key=_KEY)
-        session = MagicMock()
-        session.execute = AsyncMock()
-        backend.set_session(session)
-        assert backend._session is session, "Expected session to be set on backend"
-
 
 class TestSetSecretTOCTOU:
     @staticmethod
@@ -268,8 +282,7 @@ class TestOrgIdResolution:
     async def test_falls_back_to_session_info_on_non_postgres(self):
         """current_setting() is unavailable on non-Postgres backends; session.info is used."""
         session = MagicMock()
-        session.info = {"org_id": str(_ORG_ID)}
-        session.execute = AsyncMock()
+        session.info = {_TENANT_KEY: str(_ORG_ID)}
         session.add = MagicMock()
         session.flush = AsyncMock()
 
@@ -286,6 +299,7 @@ class TestOrgIdResolution:
         await backend.set_secret("new-key", _SECRET_VALUE)
 
         session.flush.assert_called_once()
+        assert session.add.call_args[0][0].organisation_id == _ORG_ID
 
     async def test_invalid_org_id_format_raises(self):
         session = MagicMock()
@@ -437,35 +451,6 @@ class TestOrgIdCaching:
         assert session.execute.call_count == call_count + 1, (
             f"Expected {call_count + 1} execute calls, got {session.execute.call_count}"
         )
-
-
-class TestDBSessionTimeout:
-    """The _DB_TIMEOUT wait_for wrappers must surface TimeoutError.
-
-    Timeouts are intentionally NOT wrapped in RuntimeError: the DB is a core
-    dependency and a timeout is a real failure, not a degraded-mode fallback.
-    """
-
-    async def test_get_secret_timeout_propagates(self, mock_session):
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
-        mock_session.execute = AsyncMock(side_effect=TimeoutError())
-
-        with pytest.raises(TimeoutError):
-            await backend.get_secret("some-key")
-
-    async def test_set_secret_timeout_propagates(self, mock_session):
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
-        mock_session.execute = AsyncMock(side_effect=TimeoutError())
-
-        with pytest.raises(TimeoutError):
-            await backend.set_secret("some-key", "value")
-
-    async def test_delete_secret_timeout_propagates(self, mock_session):
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
-        mock_session.execute = AsyncMock(side_effect=TimeoutError())
-
-        with pytest.raises(TimeoutError):
-            await backend.delete_secret("some-key")
 
 
 class TestSetSessionResetsCache:
