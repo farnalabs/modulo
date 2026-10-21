@@ -3273,6 +3273,13 @@ class PipelineExecutor:
         resume cannot change the resumed run's behaviour (neither the
         human-governed eval skip nor the Evidence grounding can drift).
 
+        Relationship to the FAR-1749 pin freeze: for a snapshot whose pins
+        carry ``evaluation_mode`` the freshly built DTO already holds the
+        SAME run-start mode, so re-applying this stamp is a consistent
+        NO-OP there. The stamp stays load-bearing for legacy pins (which
+        carry no mode) and for the coalesced/claim path, and remains as
+        defence-in-depth. Do not remove it.
+
         Returns ``[]`` for an unparseable gate id (manual nodes have no
         claim row) or when no eval defs were built for the run.
         """
@@ -3311,6 +3318,11 @@ class PipelineExecutor:
         all see the modes the run STARTED with. Returns the number of
         entries applied (a pure no-op when no gate ever fired — every
         pre-M4 claim row carries no stamp).
+
+        For a FAR-1749 snapshot the pin already yields the same run-start
+        mode at DTO assembly, so this overlay is a consistent no-op there;
+        it is kept (not removed) for legacy pins and the coalesced/claim
+        path, and as defence-in-depth for the fired gate.
 
         A stamp whose ``policy_gate_id`` no longer matches the live DTO's
         governing gate (disabled / soft-deleted / replaced since fire) is

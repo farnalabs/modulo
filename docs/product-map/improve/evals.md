@@ -128,7 +128,12 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
       live `action` edit cannot re-score an already-started run, a live gate
       absent from the pin set is never evaluated, and an operator-disabled
       live gate is removed from evaluation even when pinned (control can only
-      remove, never add, gates) (`core/eval_engine/policy_gate.py`,
+      remove, never add, gates); the PINNED `evaluation_mode` (FAR-1749)
+      likewise freezes the run-start `automatic`/`human` mode for every
+      pinned gate, so a live flip in either direction does not affect an
+      in-flight run (a live disable or a replaced gate still wins, and
+      tightening an in-flight run requires cancelling and restarting it)
+      (`core/eval_engine/policy_gate.py`,
       `core/pipeline_engine/executor.py`, `api/routes/evals.py`,
       `db/models/policy_gate.py`,
       `db/migrations/versions/0274_policy_gate_pin_fingerprint_operator_control.py`,

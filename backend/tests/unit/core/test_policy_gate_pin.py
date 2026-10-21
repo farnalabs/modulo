@@ -71,6 +71,7 @@ def _gate_pin(action: str = "block") -> dict[str, str]:
         "eval_id": str(uuid.uuid4()),
         "action": action,
         "node_id": str(uuid.uuid4()),
+        "evaluation_mode": "automatic",
     }
 
 
@@ -340,6 +341,39 @@ def test_verify_removed_gate_fails_closed() -> None:
     assert blocked
     assert "fingerprint mismatch" in message
     assert f"snapshot {snapshot_id}" in message
+
+
+def test_verify_evaluation_mode_only_tamper_fails_closed() -> None:
+    """FAR-1749: flipping ONLY a pin entry's ``evaluation_mode`` — every
+    other field byte-identical — breaks the digest and fails CLOSED.
+
+    The pinned mode is a governance field: a pinned ``human`` gate flipped
+    to ``automatic`` would silently lose its human decision. This test is
+    load-bearing against a fingerprint computed over a field SUBSET (the
+    pre-FAR-1749 ``policy_gate_id``/``eval_id``/``action``/``node_id``
+    shape): such a digest would verify this tampered set clean."""
+    pins = _pins(2)
+    tampered = [dict(entry) for entry in pins]
+    tampered[0]["evaluation_mode"] = "human"
+
+    # Prove the tamper is field-isolated: only the mode differs.
+    differing_keys = {key for key in pins[0].keys() | tampered[0].keys() if pins[0].get(key) != tampered[0].get(key)}
+    assert differing_keys == {"evaluation_mode"}
+
+    stored = fingerprint_policy_gate_pins(pins)
+    recomputed = fingerprint_policy_gate_pins(tampered)
+    assert stored != recomputed
+
+    snapshot_id = uuid.uuid4()
+    blocked, message = _verify_policy_gate_pin_fingerprint(
+        org_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        snapshot_id=snapshot_id,
+        snap_pins=tampered,
+        saved_fingerprint=stored,
+    )
+    assert blocked
+    _assert_mismatch_message(message, snapshot_id, stored, recomputed)
 
 
 def test_verify_mismatch_message_directs_at_a_new_run_only() -> None:
