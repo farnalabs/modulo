@@ -5960,6 +5960,15 @@ async def _fail_node_deadline_run(
 # key would squat a real node id.
 # ---------------------------------------------------------------------------
 _TERMINAL_TRIAGE_ATTEMPT_KEY_PREFIX = "terminal-triage:"
+# A kill that RE-DISPATCHES the run is not a terminalisation, so its note gets
+# its own key: the read-merge-write merges by key and ``write_run_markers``
+# deletes every marker absent from the merged dict, so sharing
+# ``terminal-triage:<run>`` would make a later terminalisation overwrite the
+# earlier re-dispatch note (and vice versa) instead of preserving both
+# observations. Unparseable by the ``run:<uuid>:node:<id>:<suffix>`` grammar,
+# exactly like the terminal key, so the row lands on the ``__unknown__``
+# sentinel node id and cannot squat a real node id.
+_REDISPATCH_TRIAGE_ATTEMPT_KEY_PREFIX = "redispatch-triage:"
 # The reason is PASSED IN by each terminaliser and states only what that
 # terminaliser actually observed — never a cause inferred from a counter.
 # Whether node attempts were recorded is reported as DATA on the envelope
@@ -5970,6 +5979,14 @@ _TERMINAL_TRIAGE_ATTEMPT_KEY_PREFIX = "terminal-triage:"
 _TERMINAL_TRIAGE_REASON_AGE_BOUND = "no node progress within the age bound"
 _TERMINAL_TRIAGE_REASON_STRANDED_PENDING = "stranded pending run past the age bound"
 _TERMINAL_TRIAGE_REASON_NODE_DEADLINE = "node started, no terminal envelope before its deadline"
+# The node-deadline watchdog's RE-DISPATCH branch. It must never claim the run
+# was terminalised: the fenced pending-reset handed the still-live run to a
+# successor attempt. The attempt NUMBER is deliberately not interpolated here —
+# ``run_attempt_count`` is projected as DATA on the envelope, so the count stays
+# truthful even though the successor may be claimed after this note is written.
+_TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH = (
+    "node exceeded its deadline; dispatch killed and the run re-dispatched"
+)
 _TERMINAL_TRIAGE_REASON_WORKER_LOST = "executor lost (worker handoff)"
 # Bounded like ``node_runner._RAW_OUTPUT_MARKER_PERSIST_TIMEOUT``: the run-row
 # lock taken below is client-bounded so a contended row can never stall the
@@ -5982,6 +5999,15 @@ def _terminal_triage_attempt_key(run_id: uuid.UUID) -> str:
     return f"{_TERMINAL_TRIAGE_ATTEMPT_KEY_PREFIX}{run_id}"
 
 
+def _redispatch_triage_attempt_key(run_id: uuid.UUID) -> str:
+    """The synthetic, grammar-unparseable attempt key for a RE-DISPATCH note.
+
+    Distinct from :func:`_terminal_triage_attempt_key` so both observations of
+    the same run can coexist (see ``_REDISPATCH_TRIAGE_ATTEMPT_KEY_PREFIX``).
+    """
+    return f"{_REDISPATCH_TRIAGE_ATTEMPT_KEY_PREFIX}{run_id}"
+
+
 async def _write_terminal_triage_marker(
     session: AsyncSession,
     *,
@@ -5989,13 +6015,20 @@ async def _write_terminal_triage_marker(
     organisation_id: uuid.UUID,
     error_code: str,
     reason: str,
+    attempt_key: str,
+    summary: str,
 ) -> bool:
-    """The savepoint-scoped body of :func:`persist_terminal_triage_marker`.
+    """The savepoint-scoped body of the run-level triage writers.
 
     EVERY read and the write live inside ONE savepoint. A DB-level read
     failure (e.g. a serialisation error on the shared reconcile transaction)
     aborts only the savepoint, never the caller's transaction — so the
     terminalisations that transaction already wrote still commit.
+
+    ``attempt_key`` and ``summary`` are supplied by the public writer, which
+    owns the vocabulary for its own branch: a terminal key/summary must never
+    be reused for a re-dispatch note (it would overwrite the terminal entry and
+    claim the run had ended).
     """
     from modulo.db.crud.run_node_outputs import read_run_markers, write_run_markers
 
@@ -6016,18 +6049,17 @@ async def _write_terminal_triage_marker(
             )
             return False
         markers = dict(await read_run_markers(session, run_id=run_id, organisation_id=organisation_id) or {})
-        key = _terminal_triage_attempt_key(run_id)
-        markers[key] = {
+        markers[attempt_key] = {
             "_modulo_marker": True,
             "status": "failed",
-            "summary": f"Run terminalised by {error_code} — run-level triage evidence (FAR-1886)",
+            "summary": summary,
             "raw_output": "",
             "parse_error": "",
             "pr_url": None,
             "exit_code": -1,
             "stdout_length": 0,
             "stderr_length": 0,
-            "attempt_key": key,
+            "attempt_key": attempt_key,
             "node_id": None,
             "deadline_triage": True,
             "no_output_reason": reason,
@@ -6042,6 +6074,49 @@ async def _write_terminal_triage_marker(
     return True
 
 
+async def _persist_triage_marker_bounded(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    error_code: str,
+    reason: str,
+    attempt_key: str,
+    summary: str,
+    log_event: str,
+) -> bool:
+    """The bounded, best-effort wrapper shared by the run-level triage writers.
+
+    Best-effort by design: observability must never break the repair that
+    already committed. The read-merge-write runs in its OWN savepoint and is
+    bounded by ``_TERMINAL_TRIAGE_PERSIST_TIMEOUT``. Returns ``True`` when
+    the marker was written. ``log_event`` names the calling branch's failure
+    event so a re-dispatch miss is never logged as a terminalisation.
+    """
+    try:
+        return await asyncio.wait_for(
+            _write_terminal_triage_marker(
+                session,
+                run_id=run_id,
+                organisation_id=organisation_id,
+                error_code=error_code,
+                reason=reason,
+                attempt_key=attempt_key,
+                summary=summary,
+            ),
+            timeout=_TERMINAL_TRIAGE_PERSIST_TIMEOUT,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            log_event,
+            extra={"run_id": str(run_id), "error_code": error_code, "attempt_key": attempt_key},
+            exc_info=True,
+        )
+        return False
+
+
 async def persist_terminal_triage_marker(
     session: AsyncSession,
     *,
@@ -6054,9 +6129,10 @@ async def persist_terminal_triage_marker(
 
     Used by the age gate (``run.no_progress``), the stranded-pending backstop
     (``run.no_progress``), the FAR-1999 node-deadline reaper
-    (``node_deadline_exceeded``) and the ``harness.worker_lost`` terminal-fail
-    path — none of which has a prior sandbox attempt marker to project. The
-    marker carries the SAME ``deadline_triage``/``no_output_reason``/tail/stdout
+    (``node_deadline_exceeded``), the ``harness.worker_lost`` terminal-fail
+    path and the FAR-369 in-process node-deadline watchdog's TERMINAL branch —
+    none of which has a prior sandbox attempt marker to project. The marker
+    carries the SAME ``deadline_triage``/``no_output_reason``/tail/stdout
     envelope signature as the FAR-704 per-attempt marker, so the run-detail
     projection needs no special case.
 
@@ -6073,26 +6149,60 @@ async def persist_terminal_triage_marker(
     Must be called with a bound, matching RLS organisation context (the
     ``run_node_outputs`` write contract) inside an open transaction.
     """
-    try:
-        return await asyncio.wait_for(
-            _write_terminal_triage_marker(
-                session,
-                run_id=run_id,
-                organisation_id=organisation_id,
-                error_code=error_code,
-                reason=reason,
-            ),
-            timeout=_TERMINAL_TRIAGE_PERSIST_TIMEOUT,
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.warning(
-            "cron_helpers.terminal_triage_marker_failed",
-            extra={"run_id": str(run_id), "error_code": error_code},
-            exc_info=True,
-        )
-        return False
+    return await _persist_triage_marker_bounded(
+        session,
+        run_id=run_id,
+        organisation_id=organisation_id,
+        error_code=error_code,
+        reason=reason,
+        attempt_key=_terminal_triage_attempt_key(run_id),
+        summary=f"Run terminalised by {error_code} — run-level triage evidence (FAR-1886)",
+        log_event="cron_helpers.terminal_triage_marker_failed",
+    )
+
+
+async def persist_redispatch_triage_marker(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    error_code: str,
+    reason: str,
+) -> bool:
+    """Persist a run-level triage marker for a RE-DISPATCH (not an ending).
+
+    The counterpart of :func:`persist_terminal_triage_marker` for a watchdog
+    kill that handed the run back to a successor attempt. The run is STILL
+    ALIVE: the retry hook's fenced pending-reset NULLs ``error_code``, and
+    nothing in the run row says the watchdog fired — so without this note the
+    run page shows nothing at all (``runs.node_deadline_watchdog_fired_count``
+    is analytics-only and absent from the run response).
+
+    Deliberately a SEPARATE attempt key (``redispatch-triage:<run_id>``) from
+    the terminal writer's ``terminal-triage:<run_id>``: the read-merge-write
+    merges per key, so a later terminalisation of the same run cannot overwrite
+    this observation — and this write cannot overwrite a terminal one.
+
+    ``reason`` must state only what this path observed and must never claim the
+    run was terminalised (see
+    ``_TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH``). The attempt NUMBER
+    is not interpolated: ``run_attempt_count`` is projected as DATA on the
+    envelope, so the count stays truthful if the successor is claimed after
+    this note is written.
+
+    Same savepoint / run-row-lock / client-timeout / best-effort contract as
+    :func:`persist_terminal_triage_marker`; returns ``True`` when written.
+    """
+    return await _persist_triage_marker_bounded(
+        session,
+        run_id=run_id,
+        organisation_id=organisation_id,
+        error_code=error_code,
+        reason=reason,
+        attempt_key=_redispatch_triage_attempt_key(run_id),
+        summary=f"Run re-dispatched after {error_code} — run-level triage evidence (FAR-1886)",
+        log_event="cron_helpers.redispatch_triage_marker_failed",
+    )
 
 
 def _build_re_dispatch_predicate(

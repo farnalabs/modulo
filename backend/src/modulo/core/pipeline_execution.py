@@ -2022,6 +2022,101 @@ async def _record_derived_deadline_cost(
         )
 
 
+async def _write_node_deadline_triage_marker(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    redispatched: bool,
+) -> None:
+    """The RLS-scoped write body of :func:`_persist_node_deadline_triage`."""
+    from modulo.core.cron_helpers import (
+        _TERMINAL_TRIAGE_REASON_NODE_DEADLINE,
+        _TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH,
+        persist_redispatch_triage_marker,
+        persist_terminal_triage_marker,
+    )
+
+    factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+    run_uuid = uuid.UUID(run_id)
+    org_uuid = uuid.UUID(org_id)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_uuid)
+        if redispatched:
+            await persist_redispatch_triage_marker(
+                session,
+                run_id=run_uuid,
+                organisation_id=org_uuid,
+                error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+                # States only what this path observed. The run is still alive,
+                # so the note must never claim it was terminalised.
+                reason=_TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH,
+            )
+        else:
+            await persist_terminal_triage_marker(
+                session,
+                run_id=run_uuid,
+                organisation_id=org_uuid,
+                error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+                # The SAME reason (and the same synthetic key) the FAR-1999
+                # durable reaper writes, so a run reaped by either path is
+                # explained identically on the run page.
+                reason=_TERMINAL_TRIAGE_REASON_NODE_DEADLINE,
+            )
+
+
+async def _persist_node_deadline_triage(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    redispatched: bool,
+) -> None:
+    """Best-effort run-page triage marker for a node-deadline watchdog kill.
+
+    Both FAR-369 outcomes previously left the run page with nothing:
+
+    * TERMINAL (``redispatched=False``) — the kill terminal-fails with
+      ``node_deadline_exceeded``, but ``fail_run_terminal`` persists a
+      run-level marker only for ``harness.worker_lost``, and the sandbox
+      cancellation handler's per-attempt marker is not guaranteed (the node may
+      never have produced an envelope, and the process may die before the
+      marker lands). ``deadline_triage`` could therefore be ``[]`` for exactly
+      the failure that surface exists to explain.
+    * RE-DISPATCH (``redispatched=True``) — the kill returns early and the retry
+      hook's fenced pending-reset NULLs ``error_code``; the only durable
+      fingerprint is ``runs.node_deadline_watchdog_fired_count``, which is
+      analytics-only and absent from the run response.
+
+    The terminal branch writes the SAME marker the FAR-1999 reaper writes; the
+    re-dispatch branch writes a sibling marker under a DISTINCT attempt key
+    whose prose does not claim terminalisation (see
+    ``cron_helpers.persist_redispatch_triage_marker``).
+
+    Best-effort by design: the terminal write / re-dispatch it describes has
+    already committed, so a marker failure must never surface — it is logged
+    and swallowed, bounded by ``_TERMINAL_TRIAGE_PERSIST_TIMEOUT`` (the status
+    write always wins). ``asyncio.CancelledError`` is re-raised: worker
+    shutdown is not ours to swallow.
+    """
+    from modulo.core.cron_helpers import _TERMINAL_TRIAGE_PERSIST_TIMEOUT
+
+    try:
+        await asyncio.wait_for(
+            _write_node_deadline_triage_marker(aeng, run_id, org_id, redispatched=redispatched),
+            timeout=_TERMINAL_TRIAGE_PERSIST_TIMEOUT,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "pipeline_execution.node_deadline_triage_failed run=%s redispatched=%s",
+            run_id,
+            redispatched,
+            exc_info=True,
+        )
+
+
 async def _fail_overdue_node(
     aeng: AsyncEngine,
     run_id: str,
@@ -2054,6 +2149,13 @@ async def _fail_overdue_node(
     analytics whether it re-dispatches or terminal-fails, and the marker
     survives the re-dispatch (neither the claim nor the pending-reset touches
     the column).
+
+    Each branch then writes the run-page evidence for its own outcome
+    (``_persist_node_deadline_triage``): the terminal branch the same run-level
+    triage marker the FAR-1999 reaper writes, and the re-dispatch branch a
+    sibling marker whose prose says the run was re-dispatched, never that it
+    was terminalised. Both are best-effort — a marker failure is logged and
+    swallowed so it can never delay or undo the outcome it describes.
     """
     exceeded = [nid for nid, (dl, _to) in node_deadlines.items() if dl <= time.monotonic()]
     exceeded.sort(key=lambda nid: node_deadlines[nid][0])
@@ -2080,6 +2182,12 @@ async def _fail_overdue_node(
     if await _maybe_watchdog_retry(
         retry_hook, run_id, final_status="failed", error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE
     ):
+        # The retry hook's fenced pending-reset nulls ``error_code`` and the run
+        # is now owned by a successor attempt, so the run page has no trace of
+        # this kill. Persist the re-dispatch note BEFORE returning (best-effort:
+        # the re-dispatch already committed and must never be delayed or
+        # undone by an observability write).
+        await _persist_node_deadline_triage(aeng, run_id, org_id, redispatched=True)
         return
     error_detail = (
         f"Node '{node_id}' did not complete within its configured timeout_seconds "
@@ -2095,6 +2203,13 @@ async def _fail_overdue_node(
         error_detail=error_detail,
     )
     if terminal_written:
+        # A terminal deadline kill writes no run-level triage marker of its own
+        # (``fail_run_terminal`` persists one for ``harness.worker_lost`` only)
+        # and the sandbox cancel handler's per-attempt marker is not guaranteed,
+        # so write the entry the FAR-1999 reaper writes. Triage first: the run
+        # page's explanation should land even if the (slower) cost booking
+        # below fails.
+        await _persist_node_deadline_triage(aeng, run_id, org_id, redispatched=False)
         # FAR-1993: the run is now terminally failed but the raw writer recorded
         # no cost. Attribute the node's configured deadline as DERIVED sandbox
         # spend (the sandbox really did run for approximately that long — this
