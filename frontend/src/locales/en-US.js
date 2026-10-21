@@ -4674,6 +4674,7 @@ export default {
       "hide_from_dashboard_keep_in_notifications_page": "Hide from dashboard, keep in notifications page",
       "dismiss_this_notification": "Dismiss this notification",
       "review_later": "Review Later",
+      "failed_to_dismiss_notification": "Failed to dismiss notification",
       "just_now": "just now",
       "view": "View",
       "awaiting_hitl": "Awaiting your review \u2014 a human-in-the-loop gate is open for this run.",
