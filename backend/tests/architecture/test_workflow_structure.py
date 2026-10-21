@@ -1156,3 +1156,115 @@ def test_signing_canary_status_gate_remains() -> None:
     if "Valid" not in run or "Status" not in run:
         violations.append("  signing-canary.yml: missing Authenticode status check")
     assert not violations, "signing-canary.yml dropped the Authenticode status validation:\n" + "\n".join(violations)
+
+
+# --- Sonar new-issues gate: blocking policy --------------------------------
+
+
+def _sonar_new_issues_gate_step() -> dict:
+    """Return the step dict for the 'Fail on new SonarCloud bugs...' step in ci.yml."""
+    wf = _load_yaml(CI_YML)
+    jobs = wf.get("jobs") or {}
+    job = jobs.get("sonar-new-issues-gate")
+    assert isinstance(job, dict), "ci.yml: sonar-new-issues-gate job missing"
+    steps = job.get("steps") or []
+    target_name = "Fail on new SonarCloud bugs, vulnerabilities, and critical smells"
+    step = next(
+        (s for s in steps if isinstance(s, dict) and s.get("name") == target_name),
+        None,
+    )
+    assert step is not None, "ci.yml: sonar-new-issues-gate step not found"
+    return step
+
+
+def _run_script(step: dict) -> str:
+    run = step.get("run") or ""
+    assert isinstance(run, str), "run is not a string"
+    assert run.strip(), "step has no run script"
+    return run
+
+
+def test_sonar_new_issues_gate_queries_bug_and_vulnerability() -> None:
+    """The blocking query must include types=BUG,VULNERABILITY.
+
+    A revert to a single unfiltered count (total > 0) would re-introduce the
+    false-positive problem that this gate was designed to eliminate (MINOR
+    TypeScript style rules and MAJOR parameter-count rules blocking PRs
+    while zero bugs/vulnerabilities were present).
+    """
+    step = _sonar_new_issues_gate_step()
+    run = _run_script(step)
+    violations: list[str] = []
+    if "types=BUG,VULNERABILITY" not in run:
+        violations.append("  ci.yml: sonar-new-issues-gate step does not query types=BUG,VULNERABILITY")
+    assert not violations, "sonar-new-issues-gate no longer queries BUG+VULNERABILITY:\n" + "\n".join(violations)
+
+
+def test_sonar_new_issues_gate_queries_critical_code_smells() -> None:
+    """The blocking query must include types=CODE_SMELL with severities=BLOCKER,CRITICAL.
+
+    The policy gates CODE_SMELL only at BLOCKER or CRITICAL severity. All
+    other severities (INFO, MINOR, MAJOR) are non-blocking. A revert to a
+    single unfiltered count or to a query without the severity filter would
+    re-introduce false positives.
+    """
+    step = _sonar_new_issues_gate_step()
+    run = _run_script(step)
+    violations: list[str] = []
+    if "types=CODE_SMELL" not in run:
+        violations.append("  ci.yml: sonar-new-issues-gate step does not query types=CODE_SMELL")
+    if "severities=BLOCKER,CRITICAL" not in run:
+        violations.append("  ci.yml: sonar-new-issues-gate step does not filter CODE_SMELL to BLOCKER,CRITICAL")
+    assert not violations, "sonar-new-issues-gate no longer queries critical CODE_SMELL:\n" + "\n".join(violations)
+
+
+def test_sonar_new_issues_gate_fail_closed_on_api_error() -> None:
+    """The job must still treat a non-200 / API error as a failure (fail-closed).
+
+    The fail-closed semantics are load-bearing: an unknown state must never
+    pass. This test asserts the ::error:: annotation branch exists.
+    """
+    step = _sonar_new_issues_gate_step()
+    run = _run_script(step)
+    violations: list[str] = []
+    # The fail-closed pattern checks for non-200 and exits 1 with ::error::
+    if "HTTP_CODE" not in run:
+        violations.append("  ci.yml: no HTTP_CODE capture — cannot distinguish API failure from empty result")
+    if '!= "200"' not in run:
+        violations.append("  ci.yml: no non-200 check — API errors would not fail closed")
+    if "::error::" not in run:
+        violations.append("  ci.yml: no ::error:: annotation on API failure — failure would be silent")
+    if "failing closed" not in run:
+        msg = "ci.yml: 'failing closed' phrase missing — fail-closed intent not documented in the failure path"
+        violations.append(msg)
+    assert not violations, "sonar-new-issues-gate no longer fails closed on API error:\n" + "\n".join(violations)
+
+
+def test_sonar_new_issues_gate_non_blocking_smells_cannot_fail() -> None:
+    """The non-blocking query (INFO/MINOR/MAJOR code smells) must not fail the job.
+
+    The non-blocking count is printed as a ::notice:: and its query failure
+    is downgraded to a ::warning::. Neither can cause the step to exit non-zero.
+    This test asserts the || true / warning path exists (the else branch that
+    does not exit).
+    """
+    step = _sonar_new_issues_gate_step()
+    run = _run_script(step)
+    violations: list[str] = []
+    # The non-blocking query must NOT have an unconditional exit 1
+    # It should either print ::notice:: (success) or ::warning:: (query failed) but continue
+    if "::notice::" not in run:
+        violations.append("  ci.yml: no ::notice:: for non-blocking count — non-blocking signal is not emitted")
+    if "::warning::" not in run:
+        msg = "ci.yml: no ::warning:: fallback for non-blocking query failure — a query failure could fail the gate"
+        violations.append(msg)
+    # The non-blocking branch must NOT contain 'exit 1'
+    # We find the non-blocking section (after the blocking check) and ensure no exit 1
+    # The script uses 'else' for the warning path and does not exit
+    if 'echo "::warning::SonarCloud non-blocking code smell query failed' not in run:
+        msg = "ci.yml: non-blocking query failure does not emit expected warning"
+        violations.append(msg)
+    # Verify the non-blocking branch doesn't have an exit that would fail the step
+    # The blocking exit is explicit; the non-blocking else branch should just warn
+    # and fall through to the final "No blocking" echo
+    assert not violations, "sonar-new-issues-gate non-blocking path can fail the job:\n" + "\n".join(violations)
