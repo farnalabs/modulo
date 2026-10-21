@@ -24,7 +24,6 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
-from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -39,6 +38,7 @@ from modulo.api.dependencies import (
     get_system_db_session,
     system_engine_is_fallback,
 )
+from modulo.api.routes._trigger_events import write_paused_trigger_event
 from modulo.api.routes.runs import pipeline_not_runnable_http
 from modulo.api.trigger_busy import BUSY_ACK_DETAIL, _record_refused_delivery, record_busy_delivery
 from modulo.auth.jwt import TenantPrincipal
@@ -76,11 +76,9 @@ from modulo.core.trigger_engine.slack_app_mention import (
 from modulo.core.trigger_secrets import resolve_trigger_secret_scoped
 from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS, create_snapshot_from_live_graph
 from modulo.db.crud.trigger import load_trigger_and_org_global
-from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
-from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.db.settings_resolver import ensure_triggers_resumable
 from modulo.settings import get_settings
@@ -103,13 +101,6 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/triggers", tags=["slack"])
 
 _trigger_engine = TriggerEngine()
-
-
-async def _org_row_exists(session: AsyncSession, org_id: uuid.UUID) -> bool:
-    """Whether the org row still exists (orphan-org guard for the paused
-    TriggerEvent write — same contract as the webhook route)."""
-    org_exists = await session.execute(select(Organisation.id).where(Organisation.id == org_id))
-    return org_exists.scalar_one_or_none() is not None
 
 
 async def _ingest_slack_dispatch_error(run_id: str, org_id: str, detail: str) -> None:
@@ -316,23 +307,20 @@ async def _record_paused_slack_delivery(
     trigger whose org row was HARD-deleted must not attempt the TriggerEvent
     INSERT (it would violate the organisations FK -> 503). Fail-closed with
     no event row and no crash.
+
+    The shared writer in :mod:`modulo.api.routes._trigger_events` holds that
+    logic once for both intake paths; only the trigger type and log scope are
+    Slack-specific here.
     """
-    if not await _org_row_exists(session, org_id):
-        _log.warning(
-            "slack.receive_event: org %s missing — skipping paused event write for trigger %s",
-            org_id,
-            trigger_id,
-        )
-        return
-    paused_event = TriggerEvent(
-        organisation_id=org_id,
-        trigger_id=trigger.id,
+    await write_paused_trigger_event(
+        session,
+        trigger=trigger,
+        trigger_id=trigger_id,
+        org_id=org_id,
+        raw_body=raw_body,
         trigger_type="slack_app_mention",
-        raw_payload_hash=sha256_hex(raw_body),
-        validation_result="paused",
+        log_scope="slack.receive_event",
     )
-    session.add(paused_event)
-    await session.flush()
 
 
 async def _run_slack_pipeline(
