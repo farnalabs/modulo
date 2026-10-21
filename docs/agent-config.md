@@ -185,3 +185,140 @@ Runs on-save (via the REST API's `PUT /{pipeline_id}/graph` endpoint) and pre-ru
 | `CONNECTOR_INACTIVE` | Error | A connector binding targets an instance whose status is not `active` |
 | `CONNECTOR_MISSING_OPERATIONS` | Error | A connector binding targets an instance whose allowed-operations ACL does not permit an operation the node's routed verb requires |
 | `CONNECTOR_DISPATCH_UNSUPPORTED` | Error | A dispatch binding targets a connector instance whose type does not implement the CI-runner operations (`trigger_run` / `get_run_status` / `get_run_logs` / `list_runs`) |
+
+**Model backend and environment bindings**
+
+| Code | Severity | Rule |
+|---|---|---|
+| `MODEL_BACKEND_NOT_FOUND` | Error | A pinned `model_backend_id` does not resolve to an existing model backend |
+| `MODEL_BACKEND_INACTIVE` | Error | A pinned model backend's `status` is not `active` |
+| `MODEL_BACKEND_UNHEALTHY` | Error | A pinned model backend has a recorded `last_health_check_error` |
+| `ENV_PROFILE_NOT_FOUND` | Error | The snapshot's `environment_profile_id` does not resolve to an existing `EnvironmentProfile` |
+| `ENV_MISSING_CAPABILITIES` | Error | An agent requires capabilities the bound `EnvironmentProfile` does not declare |
+
+**Schema compatibility and run input**
+
+| Code | Severity | Rule |
+|---|---|---|
+| `SCHEMA_INCOMPATIBLE` | Error | An edge's source output-schema id differs from the target's input-schema id (reject, kickback and loop edges are exempt) |
+| `SCHEMA_FIELD_INCOMPATIBLE` | Error | An output-schema field is missing from the target input schema or has an incompatible type |
+| `SCHEMA_CHECK_DEFERRED` | Warning | The edge's schema uses deferred keywords (`$ref`, `oneOf`, ...), so only the identity check ran |
+| `INPUT_SCHEMA_MISMATCH` | Error | The run's `input_payload` does not validate against the entry node's input schema (pre-run only) |
+| `INPUT_NULL_PAYLOAD` | Error | `input_payload` is `None` (pre-run only) |
+| `SCHEMA_PRE_EXISTING_BLOCKED` | Error | A pre-Phase-1 snapshot failed schema or input compatibility; the run is blocked rather than exempted (pre-run only) |
+
+**Conditional and loop edges**
+
+| Code | Severity | Rule |
+|---|---|---|
+| `CONDITION_MISSING_EXPRESSION` | Error | A conditional edge must carry a non-empty `condition_expression` |
+| `CONDITION_INVALID_EXPRESSION` | Error | `condition_expression` is not valid JMESPath |
+| `LOOP_MISSING_DEFAULT_TARGET` | Error | A `loop` edge must declare a `default_target` |
+| `LOOP_DEFAULT_TARGET_NOT_FOUND` | Error | The loop edge's `default_target` is not an existing node id |
+| `LOOP_INVALID_MAX_ITERATIONS` | Error | `max_iterations` is not a non-negative integer |
+| `LOOP_INVALID_EXPRESSION` | Error | A loop edge's `condition_expression` is not valid JMESPath |
+
+**LLM routing nodes (`routing_mode: "llm"`)**
+
+| Code | Severity | Rule |
+|---|---|---|
+| `LLM_ROUTING_MISSING_PROMPT` | Error | The node has no non-empty `routing_prompt` |
+| `LLM_ROUTING_MISSING_LABEL` | Error | An outgoing non-`reject` edge has no `routing_label` |
+| `LLM_ROUTING_DUPLICATE_LABEL` | Error | Two outgoing edges share the same `routing_label` |
+| `LLM_ROUTING_MISSING_DEFAULT` | Error | The node has no `default_target` |
+| `LLM_ROUTING_DEFAULT_NOT_FOUND` | Error | The node's `default_target` is not an existing node id |
+
+**HITL gate configuration**
+
+These checks cover both edge-level `hitl_review_config` and node-level `hitl_config`. The description check is save-time only; the rest also run pre-run.
+
+| Code | Severity | Rule |
+|---|---|---|
+| `HITL_REVIEW_DESCRIPTION_REQUIRED` | Error | The gate has no human-authored description of at least 20 characters explaining why it exists |
+| `HITL_SUBJECT_PATH_TOO_LONG` | Error | `subject_path` exceeds 500 characters |
+| `HITL_SUBJECT_PATH_INVALID_JMESPATH` | Error | `subject_path` is not valid JMESPath |
+| `HITL_EVAL_CONDITION_MISSING_NAME` | Error | `eval_condition` has no non-empty `eval_name` |
+| `HITL_EVAL_CONDITION_INVALID_THRESHOLD` | Error | `eval_condition.threshold` is not a number |
+| `HITL_EVAL_CONDITION_THRESHOLD_RANGE` | Error | `eval_condition.threshold` is outside 0.0 to 1.0 |
+| `HITL_EVAL_CONDITION_INVALID_OPERATOR` | Error | `eval_condition.operator` is not one of `lt`, `gt`, `lte`, `gte`, `eq`, `neq` |
+| `HITL_RESPONSE_CONTRACT_INVALID` | Error | `response_contract` is not an object |
+| `HITL_RESPONSE_CONTRACT_UNKNOWN_KIND` | Error | `response_contract.kind` is not `approval` or `choice` |
+| `HITL_RESPONSE_CONTRACT_CHOICE_REQUIRES_OPTIONS` | Error | A `choice` contract has no non-empty `options` list |
+| `HITL_RESPONSE_CONTRACT_INVALID_OPTION` | Error | An option entry is not an object |
+| `HITL_RESPONSE_CONTRACT_OPTION_MISSING_ID` | Error | An option has no non-empty string `id` |
+| `HITL_RESPONSE_CONTRACT_OPTION_MISSING_LABEL` | Error | An option has no non-empty string `label` |
+| `HITL_RESPONSE_CONTRACT_DUPLICATE_OPTION_ID` | Error | Two options share the same `id` |
+| `HITL_ON_REJECT_INVALID` | Error | `on_reject` is not `terminate` or `proceed` |
+
+**Parameter schemas and sets**
+
+| Code | Severity | Rule |
+|---|---|---|
+| `PARAMETER_SCHEMA_INVALID_ID` | Error | The node's `parameter_schema_id` is not a UUID |
+| `PARAMETER_SCHEMA_NOT_FOUND` | Error | The node's `ParameterSchema` does not exist |
+| `PARAMETER_SET_INVALID_ID` | Error | The node's `parameter_set_id` is not a UUID |
+| `PARAMETER_SET_NOT_FOUND` | Error | The node's `ParameterSet` does not exist or belongs to another org |
+| `PARAMETER_SET_SCHEMA_MISMATCH` | Error | The `ParameterSet` belongs to a different `ParameterSchema` than the node declares |
+| `PARAMETER_SCHEMA_DRIFT` | Warning | The schema has a newer version than the one the `ParameterSet` was created against |
+| `PARAMETER_SCHEMA_DRIFT_COMPOSITE` | Warning | The schema declares parameters absent from the set; their defaults are used |
+
+**Composite template nodes**
+
+| Code | Severity | Rule |
+|---|---|---|
+| `COMPOSITE_INVALID_REF` | Error | `composite_ref` is not a UUID |
+| `COMPOSITE_TEMPLATE_NOT_FOUND` | Error | The referenced `CompositeTemplate` does not exist |
+| `COMPOSITE_MISSING_PARAMETER` | Error | A required template parameter has no value |
+| `COMPOSITE_SUBGRAPH_EMPTY` | Error | The template has no sub-pipeline nodes |
+| `COMPOSITE_SUBGRAPH_INVALID_NODE` | Error | A sub-node is not an object |
+| `COMPOSITE_SUBGRAPH_DUPLICATE_NODE_ID` | Error | Two sub-nodes share an id |
+| `COMPOSITE_SUBGRAPH_INVALID_TYPE` | Error | A sub-node has an invalid `node_type` |
+| `COMPOSITE_SUBGRAPH_SANDBOX_MISSING_COMMAND` | Error | A sandbox sub-node has no `agent_commands` |
+| `COMPOSITE_SUBGRAPH_SANDBOX_MISSING_TEMPLATE` | Error | A sandbox sub-node has no `template_id` |
+| `COMPOSITE_SUBGRAPH_INVALID_EDGE` | Error | A sub-edge is not an object |
+| `COMPOSITE_SUBGRAPH_EDGE_BAD_SOURCE` | Error | A sub-edge references an unknown sub-node as its source |
+| `COMPOSITE_SUBGRAPH_EDGE_BAD_TARGET` | Error | A sub-edge references an unknown sub-node as its target |
+| `COMPOSITE_SUBGRAPH_GATE_UNSUPPORTED` | Error | A sub-edge carries HITL gate config, which composite sub-pipelines do not support |
+| `COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL` | Error | A credential-bearing node field still holds the read-side mask sentinel instead of a real value |
+| `COMPOSITE_VALIDATION_INVALID_TYPE` | Error | An output validation eval's `type` is not a supported value |
+| `COMPOSITE_VALIDATION_INVALID_BEHAVIOUR` | Error | An output validation eval's `failure_behaviour` is not a supported value |
+| `COMPOSITE_VALIDATION_RETRIES_RANGE` | Error | `max_validation_retries` is not an integer between 0 and 5 |
+| `COMPOSITE_VALIDATION_REGEX_NO_FIELD` | Error | A `regex` eval has no `config.field` |
+| `COMPOSITE_VALIDATION_REGEX_NO_PATTERN` | Error | A `regex` eval has no `config.pattern` |
+| `COMPOSITE_VALIDATION_REGEX_INVALID` | Error | A `regex` eval's pattern does not compile |
+| `COMPOSITE_VALIDATION_REGEX_INVALID_TYPE` | Error | A `regex` eval's pattern is not a string |
+| `COMPOSITE_VALIDATION_SCHEMA_MISSING` | Error | A `json_schema` eval has neither `config.schema` nor `config.schema_ref` |
+
+**Guardrails**
+
+| Code | Severity | Rule |
+|---|---|---|
+| `GUARDRAIL_CAP_EXCEEDED` | Error | A node's effective guardrail count (org-level plus node-bound) exceeds the org's per-node cap |
+| `REDACT_CORRECT_BLOCKED` | Error | A `redact`-action guardrail declares a `correction` block, which would re-emit the data redaction protects |
+
+**Retry policy, idempotency and send budgets**
+
+| Code | Severity | Rule |
+|---|---|---|
+| `RETRY_POLICY_MALFORMED` | Error | `retry_policy` is not an object of the form `{"on": [...], "max_retries": 0-5}` |
+| `RETRY_POLICY_SCHEDULE_MALFORMED` | Error | `retry_policy.backoff_schedule` is not `{"delay_seconds": 1-300, "multiplier": 1.0-10.0}` |
+| `NODE_IDEMPOTENT_INVALID` | Error | `idempotent` is not a boolean |
+| `NODE_SEND_BUDGET_OVERSUBSCRIBED` | Warning | A fan-out binding's `max_cardinality` x `per_item_timeout` x attempts exceeds the node's `timeout_seconds`, so retries would be cancelled mid-send |
+| `PARALLEL_RUN_CONTEXT_WRITE` | Warning | A source fans out to several branches that write `run_context`; writes are last-write-wins and order-dependent |
+
+**Node categories**
+
+| Code | Severity | Rule |
+|---|---|---|
+| `CATEGORY_INVALID_ID` | Error | A node's `category_id` is not a UUID |
+| `CATEGORY_NOT_FOUND` | Error | A node references a category that does not exist |
+
+**Git content references**
+
+Stored graphs must pin git-sourced content to a commit SHA (`git+<repo>@<40-hex-sha>#<path>`); `modulo apply` resolves and pins movable refs before saving.
+
+| Code | Severity | Rule |
+|---|---|---|
+| `GIT_CONTENT_REF_INVALID` | Error | A git content ref does not parse |
+| `GIT_CONTENT_REF_UNPINNED` | Error | A git content ref uses a movable ref (branch, tag) instead of a 40-hex commit SHA |
+| `GIT_CONTENT_REF_NOT_WHOLE_FIELD` | Error | A git content ref appears as one item of a multi-item command field; it must be the whole field |
