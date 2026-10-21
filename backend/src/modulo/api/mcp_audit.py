@@ -112,6 +112,104 @@ async def _fresh_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+def _actor_context(
+    mcp: Any,
+    *,
+    log_key: str,
+    extra: dict[str, Any],
+) -> tuple[Any, Any, Any] | None:
+    """Read the audit actor from the MCP request ContextVars (None: no tenant)."""
+    try:
+        org_id = mcp._ctx_org_id_val()
+    except mcp.McpAuthContextError:
+        # No authenticated tenant: there is no truthful row to write.
+        _log.warning(log_key, extra={**extra, "reason": "no_org_context"})
+        return None
+
+    try:
+        actor_user_id = mcp._ctx_user_id_val()
+    except mcp.McpAuthContextError:
+        # Never fabricate an actor — record the event with a null one.
+        actor_user_id = None
+    org_role = mcp._ctx_role_val()
+    return org_id, actor_user_id, org_role
+
+
+async def _open_audit_session(
+    stack: AsyncExitStack,
+    *,
+    org_id: Any,
+    actor_user_id: Any,
+    org_role: Any,
+    log_key: str,
+    extra_org: dict[str, Any],
+) -> AsyncSession | None:
+    """Segment 1: fresh session, BEGIN and RLS context (logged-and-continued)."""
+    try:
+        session = await stack.enter_async_context(_fresh_session())
+        await stack.enter_async_context(session.begin())
+        await set_rls_org(session, org_id)
+        if actor_user_id is not None:
+            await set_rls_user_context(session, actor_user_id, org_role or "")
+        return session
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(log_key, extra={**extra_org, "stage": "session_setup"}, exc_info=True)
+        return None
+
+
+async def _append_audit_event_segment(
+    session: AsyncSession,
+    *,
+    event_type: str,
+    resource_type: str,
+    org_id: Any,
+    actor_user_id: Any,
+    payload: dict[str, Any],
+    log_key: str,
+    extra_org: dict[str, Any],
+    apply_fail_closed: bool,
+) -> bool:
+    """Segment 2: append the event, applying the caller's failure policy."""
+    try:
+        await append_audit_event(
+            session,
+            org_id=org_id,
+            event_type=event_type,
+            actor_user_id=actor_user_id,
+            resource_type=resource_type,
+            payload_json=payload,
+        )
+        return True
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        if apply_fail_closed:
+            raise
+        _log.warning(log_key, extra=extra_org, exc_info=True)
+        return False
+
+
+async def _close_audit_stack(
+    stack: AsyncExitStack,
+    *,
+    log_key: str,
+    extra: dict[str, Any],
+    apply_fail_closed: bool,
+    append_succeeded: bool,
+) -> None:
+    """COMMIT on success / rollback otherwise, without masking an append error."""
+    try:
+        await stack.aclose()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        if apply_fail_closed and append_succeeded:
+            raise
+        _log.warning(f"{log_key}.close_failed", extra=extra, exc_info=True)
+
+
 async def _record(
     *,
     event_type: str,
@@ -138,19 +236,11 @@ async def _record(
         "tool": tool_name,
     }
 
-    try:
-        org_id = _mcp._ctx_org_id_val()
-    except _mcp.McpAuthContextError:
-        # No authenticated tenant: there is no truthful row to write.
-        _log.warning(log_key, extra={**extra, "reason": "no_org_context"})
+    actor = _actor_context(_mcp, log_key=log_key, extra=extra)
+    if actor is None:
         return
+    org_id, actor_user_id, org_role = actor
 
-    try:
-        actor_user_id = _mcp._ctx_user_id_val()
-    except _mcp.McpAuthContextError:
-        # Never fabricate an actor — record the event with a null one.
-        actor_user_id = None
-    org_role = _mcp._ctx_role_val()
     payload: dict[str, Any] = {"tool": tool_name, "outcome": outcome}
     #: Only a SUCCESSFUL call can be failed by its own missing audit record;
     #: when the tool already failed its own error must survive unchanged.
@@ -160,52 +250,39 @@ async def _record(
     stack = AsyncExitStack()
     append_succeeded = False
     try:
-        # Segment 1: establish the audit transaction (fresh session, BEGIN,
-        # RLS context). Always logged-and-continued for both policies.
-        try:
-            session = await stack.enter_async_context(_fresh_session())
-            await stack.enter_async_context(session.begin())
-            await set_rls_org(session, org_id)
-            if actor_user_id is not None:
-                await set_rls_user_context(session, actor_user_id, org_role or "")
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.warning(log_key, extra={**extra_org, "stage": "session_setup"}, exc_info=True)
+        session = await _open_audit_session(
+            stack,
+            org_id=org_id,
+            actor_user_id=actor_user_id,
+            org_role=org_role,
+            log_key=log_key,
+            extra_org=extra_org,
+        )
+        if session is None:
             return
-
-        # Segment 2: append the event to the chain. The COMMIT happens when the
-        # stack unwinds below and is part of the same outcome. Here the caller's
-        # failure policy applies.
-        try:
-            await append_audit_event(
-                session,
-                org_id=org_id,
-                event_type=event_type,
-                actor_user_id=actor_user_id,
-                resource_type=resource_type,
-                payload_json=payload,
-            )
-            append_succeeded = True
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            if apply_fail_closed:
-                raise
-            _log.warning(log_key, extra=extra_org, exc_info=True)
+        append_succeeded = await _append_audit_event_segment(
+            session,
+            event_type=event_type,
+            resource_type=resource_type,
+            org_id=org_id,
+            actor_user_id=actor_user_id,
+            payload=payload,
+            log_key=log_key,
+            extra_org=extra_org,
+            apply_fail_closed=apply_fail_closed,
+        )
     finally:
         # COMMIT on the success path; rollback/close otherwise. A close failure
         # must never mask an append error already propagating — but a COMMIT that
         # fails after a clean append IS the audit write failing, so under
         # fail_closed it raises the same way the append itself would.
-        try:
-            await stack.aclose()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            if apply_fail_closed and append_succeeded:
-                raise
-            _log.warning(f"{log_key}.close_failed", extra=extra, exc_info=True)
+        await _close_audit_stack(
+            stack,
+            log_key=log_key,
+            extra=extra,
+            apply_fail_closed=apply_fail_closed,
+            append_succeeded=append_succeeded,
+        )
 
 
 def mcp_audited(
