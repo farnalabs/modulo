@@ -80,9 +80,11 @@ jobs:
           # before this step existed (an absent headSha derives no coalesce key,
           # so the delivery creates a run as before).
           #
-          # The explicit /repos/farnalabs/modulo/... REST path is required: this
-          # job has no actions/checkout step, so there is no git remote for `gh`
-          # to infer the repository from.
+          # The explicit /repos/farnalabs/modulo/... REST path keeps this step
+          # independent of any git remote layout (the workflow gains a minimal
+          # checkout below only so the dispatch step can call the shared
+          # scripts/dispatch_with_retry.sh; `gh` here uses GH_TOKEN + the
+          # explicit path, exactly as it did before that checkout existed).
           HEAD_SHA=""
           GH_RC=0
           HEAD_SHA=$(gh api "repos/farnalabs/modulo/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/tmp/head_sha_stderr.txt) || GH_RC=$?
@@ -93,18 +95,27 @@ jobs:
           fi
           echo "head_sha=${HEAD_SHA}" >> "${GITHUB_OUTPUT:-/dev/null}"
 
+      # The dispatch step calls scripts/dispatch_with_retry.sh, which lives
+      # in the repo — a minimal checkout provides it. persist-credentials:
+      # false and fetch-depth: 1 keep it cheap and credential-light.
+      - name: Check out the dispatch script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
       - name: Send webhook to Modulo Branch Fixer
         id: webhook
         env:
-          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
-          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          DISPATCH_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_LABEL: "Modulo Branch Fixer"
           PR_NUMBER: ${{ inputs.pr_number }}
           BRANCH: ${{ inputs.branch }}
           FEEDBACK: ${{ inputs.feedback }}
           TASK_KIND: ${{ inputs.taskKind }}
           HEAD_SHA: ${{ steps.head-sha.outputs.head_sha }}
         run: |
-          TIMESTAMP=$(date +%s)
           # taskKind (FAR-2039): a STRUCTURED task-kind marker for the Branch
           # Fixer, so a conflict-class relay dispatch selects the conflict task
           # profile (ONE long attempt) instead of the CI-failure retry ladder.
@@ -140,27 +151,11 @@ jobs:
             '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}
              + (if $headSha == "" then {} else {headSha: $headSha} end)
              + (if $taskKind == "" then {} else {taskKind: $taskKind} end)')
-          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
-
-          # Retry with exponential backoff on 429/5xx (max 5 attempts)
-          for i in 1 2 3 4 5; do
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "${BODY}")
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-            if [ "$HTTP_CODE" = "202" ]; then
-              echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
-              break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-              DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
-              sleep "$DELAY"
-            else
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
-              break
-            fi
-          done
-          echo "Branch Fixer notified"
+          # One shared retry policy (scripts/dispatch_with_retry.sh): the old
+          # inline loop retried 429/5xx five times with backoff and then fell
+          # through to `echo "Branch Fixer notified"` — a FAILED dispatch was
+          # reported as success and the run exited 0, so a PR whose fixer
+          # dispatch was refused had NO durable signal it was never handed to
+          # the fixer. The script exits 1 on a failed dispatch (class-named
+          # ::error:: annotation + run summary), so the job fails visibly.
+          DISPATCH_BODY="${BODY}" bash scripts/dispatch_with_retry.sh

@@ -159,6 +159,31 @@ KNOWN_FIXES: tuple[KnownFix, ...] = (
             "node timeout."
         ),
     ),
+    # A node-deadline kill is NOT a "session interrupted" case: the watchdog
+    # ends the dispatch without the wrapper's fallback string ever being
+    # written, so ``session_interrupted_no_output`` above can never match it.
+    # ``match_known_fixes`` scans ``error_detail`` only, and the two
+    # terminalisers (the in-process watchdog and the FAR-1999 durable reaper)
+    # both name the node-deadline bound — the shared substring is the
+    # signature. Without this entry a deadline-killed run rendered NO
+    # known-fix panel even though the remedy is well understood.
+    KnownFix(
+        fix_id="node_deadline_exceeded",
+        signature="node-deadline",
+        title="Node did not complete within its configured timeout_seconds (node-deadline kill)",
+        body=(
+            "The node-deadline watchdog ended the dispatch because the node did not "
+            "complete within its configured `timeout_seconds`; the cause is not "
+            "asserted. Read the run's `deadline_triage` entries and error_detail "
+            "before choosing a fix. If the agent was still producing output, it "
+            "simply ran out of budget: raise that node's `timeout_seconds` (a "
+            "sandbox node is capped at 3300s by E2B) or shrink the task. If the "
+            "triage entry shows no agent output at all, treat the "
+            "`no_output_reason` as the lead: a provider/session fault needs a "
+            "different fix from a genuinely long task."
+        ),
+        link="https://github.com/farnalabs/modulo/blob/main/docs/troubleshooting.md",
+    ),
     KnownFix(
         fix_id="sandbox_timeout_exceeds_e2b_cap",
         signature="SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP",

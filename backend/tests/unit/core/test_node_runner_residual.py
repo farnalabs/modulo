@@ -3277,9 +3277,11 @@ async def test_sandbox_cancellation_final_drain_reraises_cancellation():
 
 
 async def test_sandbox_cancellation_final_drain_failure_is_isolated(caplog):
-    """A final-drain wait_for failure (here: a zeroed persist timeout) is
-    isolated — the delivery evidence attempt proceeds, then the original
-    cancellation re-raises."""
+    """A final-drain wait_for TIMEOUT (here: a zeroed persist timeout) is
+    classified as a timeout — logged at WARNING, never as the ERROR drain
+    failure reserved for a drain that genuinely raised — and isolated: the
+    shielded drain keeps running, the delivery evidence attempt proceeds, then
+    the original cancellation re-raises."""
     fn = make_sandbox_agent_fn(_sandbox_node_def())
     handle = MagicMock()
     handle.wait = AsyncMock(side_effect=asyncio.CancelledError)
@@ -3291,11 +3293,14 @@ async def test_sandbox_cancellation_final_drain_failure_is_isolated(caplog):
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch("modulo.core.pipeline_engine.node_runner._IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT", 0.0),
-        caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
+        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"),
         pytest.raises(asyncio.CancelledError),
     ):
         await fn(_run_state())
-    assert any("cancel_retention_drain_failed" in m for m in caplog.messages)
+    assert any("cancel_retention_drain_timed_out" in m for m in caplog.messages)
+    # The timeout is classified separately from a genuine drain exception —
+    # the ERROR-level drain-failure log must not fire for a timed-out wait.
+    assert not any("cancel_retention_drain_failed" in m for m in caplog.messages)
 
 
 async def test_sandbox_cancellation_retains_deadline_triage_marker():
