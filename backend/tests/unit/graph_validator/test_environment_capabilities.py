@@ -4,6 +4,9 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 from modulo.core.graph_validator import GraphValidator
+from tests.unit.graph_validator._helpers import (
+    session_returning,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,6 +42,13 @@ def _mock_profile(
     profile.name = name
     profile.capabilities_json = capabilities or []
     return profile
+
+
+def _session_with_profile(profile: MagicMock | None, agents: list[MagicMock]) -> AsyncMock:
+    """Mock session resolving *profile* via ``get()`` and *agents* via ``execute()``."""
+    session = session_returning(agents)
+    session.get = AsyncMock(return_value=profile)
+    return session
 
 
 def _graph_json(*, agent_ids: list[uuid.UUID] | None = None) -> dict:
@@ -108,13 +118,7 @@ async def test_empty_required_capabilities_is_valid():
     profile = _mock_profile(pid, capabilities=["docker"])
     agent = _mock_agent(aid, name="agent-a", required_capabilities=[])
 
-    session = _mock_session()
-    session.get = AsyncMock(return_value=profile)
-    scalars_result = MagicMock()
-    scalars_result.all.return_value = [agent]
-    execute_result = MagicMock()
-    execute_result.scalars.return_value = scalars_result
-    session.execute = AsyncMock(return_value=execute_result)
+    session = _session_with_profile(profile, [agent])
 
     validator = GraphValidator()
     result = await validator.validate_definition(
@@ -132,13 +136,7 @@ async def test_agent_capabilities_satisfied():
     profile = _mock_profile(pid, capabilities=["docker", "gpu", "network"])
     agent = _mock_agent(aid, name="agent-a", required_capabilities=["docker", "network"])
 
-    session = _mock_session()
-    session.get = AsyncMock(return_value=profile)
-    scalars_result = MagicMock()
-    scalars_result.all.return_value = [agent]
-    execute_result = MagicMock()
-    execute_result.scalars.return_value = scalars_result
-    session.execute = AsyncMock(return_value=execute_result)
+    session = _session_with_profile(profile, [agent])
 
     validator = GraphValidator()
     result = await validator.validate_definition(
@@ -156,13 +154,7 @@ async def test_agent_capabilities_missing_is_error():
     profile = _mock_profile(pid, capabilities=["docker"])
     agent = _mock_agent(aid, name="agent-a", required_capabilities=["docker", "gpu", "network"])
 
-    session = _mock_session()
-    session.get = AsyncMock(return_value=profile)
-    scalars_result = MagicMock()
-    scalars_result.all.return_value = [agent]
-    execute_result = MagicMock()
-    execute_result.scalars.return_value = scalars_result
-    session.execute = AsyncMock(return_value=execute_result)
+    session = _session_with_profile(profile, [agent])
 
     validator = GraphValidator()
     result = await validator.validate_definition(
@@ -183,13 +175,7 @@ async def test_multiple_agents_all_checked():
     agent1 = _mock_agent(aid1, name="agent-a", required_capabilities=["docker"])
     agent2 = _mock_agent(aid2, name="agent-b", required_capabilities=["gpu"])
 
-    session = _mock_session()
-    session.get = AsyncMock(return_value=profile)
-    scalars_result = MagicMock()
-    scalars_result.all.return_value = [agent1, agent2]
-    execute_result = MagicMock()
-    execute_result.scalars.return_value = scalars_result
-    session.execute = AsyncMock(return_value=execute_result)
+    session = _session_with_profile(profile, [agent1, agent2])
 
     validator = GraphValidator()
     result = await validator.validate_definition(
@@ -209,13 +195,7 @@ async def test_validate_for_run_includes_env_check():
     profile = _mock_profile(pid, capabilities=["docker"])
     agent = _mock_agent(aid, name="agent-a", required_capabilities=["gpu"])
 
-    session = _mock_session()
-    session.get = AsyncMock(return_value=profile)
-    scalars_result = MagicMock()
-    scalars_result.all.return_value = [agent]
-    execute_result = MagicMock()
-    execute_result.scalars.return_value = scalars_result
-    session.execute = AsyncMock(return_value=execute_result)
+    session = _session_with_profile(profile, [agent])
 
     snap = MagicMock()
     snap.graph_json = _graph_json(agent_ids=[aid])
@@ -237,13 +217,7 @@ async def test_validate_includes_env_check():
     profile = _mock_profile(pid, capabilities=["docker"])
     agent = _mock_agent(aid, name="agent-a", required_capabilities=["gpu"])
 
-    session = _mock_session()
-    session.get = AsyncMock(return_value=profile)
-    scalars_result = MagicMock()
-    scalars_result.all.return_value = [agent]
-    execute_result = MagicMock()
-    execute_result.scalars.return_value = scalars_result
-    session.execute = AsyncMock(return_value=execute_result)
+    session = _session_with_profile(profile, [agent])
 
     snap = MagicMock()
     snap.graph_json = _graph_json(agent_ids=[aid])
@@ -263,14 +237,8 @@ async def test_non_uuid_agent_id_skipped():
     pid = uuid.uuid4()
     profile = _mock_profile(pid, capabilities=["docker"])
 
-    session = _mock_session()
-    session.get = AsyncMock(return_value=profile)
+    session = _session_with_profile(profile, [])
     # No agents should be fetched
-    scalars_result = MagicMock()
-    scalars_result.all.return_value = []
-    execute_result = MagicMock()
-    execute_result.scalars.return_value = scalars_result
-    session.execute = AsyncMock(return_value=execute_result)
 
     graph = {
         "nodes": [{"id": "n1", "agent_id": "not-a-uuid"}],
