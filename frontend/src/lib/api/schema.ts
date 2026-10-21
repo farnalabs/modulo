@@ -1584,11 +1584,17 @@ export interface paths {
          *     Pre-auth discovery endpoint: the login page fetches it BEFORE any user is
          *     authenticated, so it must never require a user and must never surface an
          *     auth error. Plan/feature resolution is anonymous (via
-         *     ``_anonymous_plan_context``); when the SSO feature is not enabled /
-         *     unlicensed the endpoint answers a normal 200 with an EMPTY provider list
-         *     (no 401/402) so the login page simply renders no SSO options. The
-         *     anonymous path resolves system-level licenses only — org-level licenses
-         *     are unreachable pre-auth.
+         *     ``_anonymous_plan_context``) and resolves over the trusted tenant, so an
+         *     organisation-scoped Team key enables SSO for the organisation it belongs to
+         *     (FAR-2060).
+         *
+         *     FAR-2059 — degrade, never strand: when NO valid licence resolves at any
+         *     scope (an expired key is cleared and reads as absent), the endpoint still
+         *     advertises the configured providers so an SSO-only deployment can sign in;
+         *     entitlement is enforced post-auth (Community plan -> Team features off). The
+         *     provider list is suppressed only when a licence DOES resolve but does not
+         *     grant SSO — the auth gate refuses that case (402) and a button that cannot
+         *     complete sign-in is worse than no button.
          *
          *     FAR-1978 — the response is SCOPED. ``display_name`` is admin-chosen free
          *     text and can name a tenant, so an anonymous caller must never read a
