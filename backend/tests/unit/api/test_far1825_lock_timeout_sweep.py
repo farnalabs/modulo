@@ -184,6 +184,7 @@ _MAPPED_55P03_ROUTE_ARMS: tuple[tuple[str, str], ...] = (
     ("api/routes/agents.py", "rollback_prompt"),
     ("api/routes/agents.py", "replace_bindings_endpoint"),
     ("api/routes/admin_sso.py", "create_provider_endpoint"),
+    ("api/routes/admin_sso.py", "update_provider_endpoint"),
     ("api/routes/lifecycle_maps.py", "import_lifecycle_map_endpoint"),
     ("api/routes/lifecycle_maps.py", "update_lifecycle_map_endpoint"),
     ("api/routes/lifecycle_maps.py", "update_lifecycle_map_version_endpoint"),
@@ -238,6 +239,7 @@ _KNOWN_SWEPT_CALLERS: frozenset[tuple[str, str]] = frozenset(
     {
         ("api/routes/admin_assistant.py", "set_org_context_source"),
         ("api/routes/admin_sso.py", "create_provider_endpoint"),
+        ("api/routes/admin_sso.py", "update_provider_endpoint"),
         ("api/routes/agents.py", "apply_optimized_prompt"),
         ("api/routes/agents.py", "rollback_prompt"),
         ("api/routes/agents.py", "replace_bindings_endpoint"),
