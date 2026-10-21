@@ -1,0 +1,28 @@
+{
+  "samples": [
+    {
+      "connector_id": "77777777-7777-7777-7777-777777777777",
+      "connector_type": "github",
+      "resource": "repos",
+      "records": [
+        {"full_name": "team/main-repo", "description": "Main repository with .github/workflows"},
+        {"full_name": "team/lib", "description": "Shared library"}
+      ],
+      "sample_count": 2,
+      "error": null
+    },
+    {
+      "connector_id": "77777777-7777-7777-7777-777777777777",
+      "connector_type": "github",
+      "resource": "pulls",
+      "records": [
+        {"number": 101, "created_at": "2026-09-20T10:00:00Z", "repo": "team/main-repo"},
+        {"number": 102, "created_at": "2026-09-25T14:00:00Z", "repo": "team/main-repo"},
+        {"number": 103, "created_at": "2026-10-18T09:00:00Z", "repo": "team/lib"},
+        {"number": 104, "created_at": "2026-10-19T11:30:00Z", "repo": "team/lib"}
+      ],
+      "sample_count": 4,
+      "error": null
+    }
+  ]
+}

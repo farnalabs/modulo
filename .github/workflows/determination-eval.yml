@@ -1,0 +1,52 @@
+name: Determination Eval
+
+on:
+  schedule:
+    # Run nightly at 03:00 UTC
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "backend/src/modulo/determination/**"
+      - "backend/tests/determination/fixtures/**"
+      - "backend/scripts/score_determination_fixtures.py"
+      - ".github/workflows/determination-eval.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  score:
+    name: Score Determination Fixtures
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "uv"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Sync dependencies
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Run determination fixture scorer
+        working-directory: backend
+        run: uv run --no-sync python scripts/score_determination_fixtures.py
+
+      - name: Upload scorer output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determination-scorer-output
+          path: backend/tests/determination/fixtures/
+          retention-days: 7
