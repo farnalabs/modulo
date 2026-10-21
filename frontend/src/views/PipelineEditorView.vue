@@ -2958,33 +2958,64 @@ function hitlConfigDescriptionTooShort(config: unknown): boolean {
   return codePointLength(description.trim()) < HITL_DESCRIPTION_MIN_LENGTH
 }
 
-function findLegacyHitlDescriptionIssues(nodes: any[], edges: any[]): LegacyHitlIssue[] {
-  const issues: LegacyHitlIssue[] = []
-  const hitlNodeIds = new Set<string>()
+function isHitlNode(node: any): boolean {
+  if (!node || typeof node !== 'object' || !node.id) return false
+  return node.node_type === 'hitl'
+}
+
+function hitlNodeIds(nodes: any[]): Set<string> {
+  const ids = new Set<string>()
   for (const node of nodes) {
-    if (!node || typeof node !== 'object' || !node.id) continue
-    if (node.node_type !== 'hitl') continue
-    hitlNodeIds.add(String(node.id))
-    if (hitlConfigDescriptionTooShort(node.hitl_config)) {
-      const label = (typeof node.label === 'string' && node.label.trim()) || shortId(String(node.id))
-      issues.push({ key: `node:${node.id}`, kind: 'node', label })
-    }
+    if (isHitlNode(node)) ids.add(String(node.id))
   }
-  for (const edge of edges) {
-    if (!edge || typeof edge !== 'object') continue
-    const config = edge.hitl_review_config
-    if (!config || typeof config !== 'object') continue
-    // A node-level gate's config is injected onto its outgoing edges at
-    // compile time; the persisted definition carries it on the NODE, and
-    // the node pass already reported it — never double-list one gate.
-    if (edge.source_node_id != null && hitlNodeIds.has(String(edge.source_node_id))) continue
-    if (!hitlConfigDescriptionTooShort(config)) continue
-    const source = shortId(String(edge.source_node_id ?? edge.source ?? '?'))
-    const target = shortId(String(edge.target_node_id ?? edge.target ?? '?'))
-    const fallbackKey = `${source}->${target}`
-    issues.push({ key: `edge:${edge.id ?? fallbackKey}`, kind: 'edge', label: `${source} ? ${target}` })
+  return ids
+}
+
+function hitlNodeIssue(node: any): LegacyHitlIssue {
+  const label = (typeof node.label === 'string' && node.label.trim()) || shortId(String(node.id))
+  return { key: `node:${node.id}`, kind: 'node', label }
+}
+
+function hitlNodeIssues(nodes: any[]): LegacyHitlIssue[] {
+  const issues: LegacyHitlIssue[] = []
+  for (const node of nodes) {
+    if (!isHitlNode(node)) continue
+    if (!hitlConfigDescriptionTooShort(node.hitl_config)) continue
+    issues.push(hitlNodeIssue(node))
   }
   return issues
+}
+
+function edgeGateOwnedByHitlNode(edge: any, nodeIds: Set<string>): boolean {
+  return edge.source_node_id != null && nodeIds.has(String(edge.source_node_id))
+}
+
+function hitlEdgeIssue(edge: any, nodeIds: Set<string>): LegacyHitlIssue | null {
+  if (!edge || typeof edge !== 'object') return null
+  const config = edge.hitl_review_config
+  if (!config || typeof config !== 'object') return null
+  // A node-level gate's config is injected onto its outgoing edges at
+  // compile time; the persisted definition carries it on the NODE, and
+  // the node pass already reported it — never double-list one gate.
+  if (edgeGateOwnedByHitlNode(edge, nodeIds)) return null
+  if (!hitlConfigDescriptionTooShort(config)) return null
+  const source = shortId(String(edge.source_node_id ?? edge.source ?? '?'))
+  const target = shortId(String(edge.target_node_id ?? edge.target ?? '?'))
+  const fallbackKey = `${source}->${target}`
+  return { key: `edge:${edge.id ?? fallbackKey}`, kind: 'edge', label: `${source} ? ${target}` }
+}
+
+function hitlEdgeIssues(edges: any[], nodeIds: Set<string>): LegacyHitlIssue[] {
+  const issues: LegacyHitlIssue[] = []
+  for (const edge of edges) {
+    const issue = hitlEdgeIssue(edge, nodeIds)
+    if (issue) issues.push(issue)
+  }
+  return issues
+}
+
+function findLegacyHitlDescriptionIssues(nodes: any[], edges: any[]): LegacyHitlIssue[] {
+  return [...hitlNodeIssues(nodes), ...hitlEdgeIssues(edges, hitlNodeIds(nodes))]
 }
 
 // Reactive over the loaded graph — a save that fixed the last violation
