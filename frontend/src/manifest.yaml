@@ -2054,8 +2054,32 @@ elements:
       - testid: lock-icon
         type: element
         dynamic_testid: false
+      - testid: org-delete-open
+        type: button
+        dynamic_testid: false
       - testid: org-delete-confirm-input
         type: input
+        dynamic_testid: false
+      - testid: org-export-start
+        type: button
+        dynamic_testid: false
+      - testid: org-export-skeleton
+        type: element
+        dynamic_testid: false
+      - testid: org-export-error
+        type: element
+        dynamic_testid: false
+      - testid: org-export-retry
+        type: button
+        dynamic_testid: false
+      - testid: org-export-exported-at
+        type: element
+        dynamic_testid: false
+      - testid: org-export-download
+        type: button
+        dynamic_testid: false
+      - testid: org-export-again
+        type: button
         dynamic_testid: false
       - testid: product-analytics-toggle
         type: element
@@ -2068,6 +2092,9 @@ elements:
         dynamic_testid: false
       - testid: error-alert-retry
         type: button
+        dynamic_testid: false
+      - testid: org-hitl-review-window-skeleton
+        type: element
         dynamic_testid: false
       - testid: org-hitl-review-window-load-error
         type: element
@@ -2091,6 +2118,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: org-hitl-review-window-status
+        type: element
+        dynamic_testid: false
+      - testid: org-mcp-authority-skeleton
         type: element
         dynamic_testid: false
       - testid: org-mcp-authority-load-error
