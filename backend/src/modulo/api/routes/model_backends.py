@@ -746,8 +746,8 @@ async def create_model_backend_endpoint(
         # FAR-1825: the create transaction bounds its first row lock (the
         # same-name uniqueness SELECT ... FOR UPDATE), so 55P03 is reachable
         # here and must be a 409 conflict, not the generic 503 below.
-        raise_session_contract_error(exc, "model_backends.create_model_backend_endpoint")
-        raise_lock_timeout_conflict_if(exc, "model_backends.create_model_backend_endpoint")
+        raise_session_contract_error(exc, _CODE_MODEL_BACKENDS_CREATE_MODEL)
+        raise_lock_timeout_conflict_if(exc, _CODE_MODEL_BACKENDS_CREATE_MODEL)
         logger.exception(_CODE_MODEL_BACKENDS_CREATE_MODEL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

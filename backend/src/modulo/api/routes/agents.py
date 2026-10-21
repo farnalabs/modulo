@@ -69,6 +69,7 @@ _CODE_AGENTS_CREATE_AGENT_ENDPOINT = "agents.create_agent_endpoint"
 _CODE_AGENTS_APPLY_OPTIMIZED_PROMPT = "agents.apply_optimized_prompt"
 _CODE_AGENTS_ROLLBACK_PROMPT = "agents.rollback_prompt"
 _CODE_AGENTS_DELETE_AGENT_ENDPOINT = "agents.delete_agent_endpoint"
+_CODE_AGENTS_REPLACE_BINDINGS_ENDPOINT = "agents.replace_bindings_endpoint"
 
 
 _log = logging.getLogger(__name__)
@@ -1222,7 +1223,7 @@ async def list_bindings_endpoint(
     "/{agent_id}/bindings",
     dependencies=[Depends(audited("agent_bindings_replaced", "agent", principal_dep=get_current_tenant_user))],
 )
-@handle_db_errors("agents.replace_bindings_endpoint")
+@handle_db_errors(_CODE_AGENTS_REPLACE_BINDINGS_ENDPOINT)
 async def replace_bindings_endpoint(
     agent_id: uuid.UUID,
     req: BindingsReplaceRequest,
@@ -1281,7 +1282,7 @@ async def replace_bindings_endpoint(
                 },
             )
     except IntegrityError:
-        _log.exception("agents.replace_bindings_endpoint")
+        _log.exception(_CODE_AGENTS_REPLACE_BINDINGS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
@@ -1296,8 +1297,8 @@ async def replace_bindings_endpoint(
         # FAR-1825: ``replace_agent_bindings`` bounds the agent-row lock, so
         # 55P03 is reachable here — a busy row is a 409 conflict, not the 503
         # below.
-        raise_session_contract_error(exc, "agents.replace_bindings_endpoint")
-        raise_lock_timeout_conflict_if(exc, "agents.replace_bindings_endpoint")
+        raise_session_contract_error(exc, _CODE_AGENTS_REPLACE_BINDINGS_ENDPOINT)
+        raise_lock_timeout_conflict_if(exc, _CODE_AGENTS_REPLACE_BINDINGS_ENDPOINT)
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

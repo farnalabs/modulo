@@ -954,8 +954,8 @@ async def accept_invite(
         # FAR-1825: the accept-invite transaction's first row lock is bounded
         # (``get_valid_by_token_hash``), so 55P03 is reachable here — a busy
         # invitation row is a 409 conflict, not the 503 below.
-        raise_session_contract_error(exc, "auth.accept_invite")
-        raise_lock_timeout_conflict_if(exc, "auth.accept_invite")
+        raise_session_contract_error(exc, _CODE_AUTH_ACCEPT_INVITE)
+        raise_lock_timeout_conflict_if(exc, _CODE_AUTH_ACCEPT_INVITE)
         _log.exception(_CODE_AUTH_ACCEPT_INVITE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

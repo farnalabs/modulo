@@ -728,8 +728,8 @@ async def import_lifecycle_map_endpoint(
         # FAR-1825: the lifecycle-map version lock is bounded in the service
         # helper, so 55P03 is reachable here — a busy map row is a 409
         # conflict, not the 503 below.
-        raise_session_contract_error(exc, "lifecycle_maps.import_lifecycle_map_endpoint")
-        raise_lock_timeout_conflict_if(exc, "lifecycle_maps.import_lifecycle_map_endpoint")
+        raise_session_contract_error(exc, _CODE_LIFECYCLE_MAPS_IMPORT_LIFECYCLE)
+        raise_lock_timeout_conflict_if(exc, _CODE_LIFECYCLE_MAPS_IMPORT_LIFECYCLE)
         _log.exception(_CODE_LIFECYCLE_MAPS_IMPORT_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -906,8 +906,8 @@ async def update_lifecycle_map_endpoint(
         # FAR-1825: the lifecycle-map version lock is bounded in the service
         # helper, so 55P03 is reachable here — a busy map row is a 409
         # conflict, not the 503 below.
-        raise_session_contract_error(exc, "lifecycle_maps.update_lifecycle_map_endpoint")
-        raise_lock_timeout_conflict_if(exc, "lifecycle_maps.update_lifecycle_map_endpoint")
+        raise_session_contract_error(exc, _CODE_LIFECYCLE_MAPS_UPDATE_LIFECYCLE)
+        raise_lock_timeout_conflict_if(exc, _CODE_LIFECYCLE_MAPS_UPDATE_LIFECYCLE)
         # Dialect backstop: the same check for a driver that surfaces 42501
         # as a plain DBAPI error rather than ProgrammingError (asyncpg maps it
         # to ProgrammingError, which the arm above already handles).

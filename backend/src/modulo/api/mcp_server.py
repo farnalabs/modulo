@@ -279,6 +279,10 @@ _MSG_DB_ERROR_TRY_AGAIN = "Database error occurred. Please try again."
 _MSG_UNEXPECTED_ERROR = "An unexpected error occurred"
 _MSG_MCP_AUTH_DB_UNAVAILABLE = "mcp.auth.db_unavailable"
 _CODE_PERMISSION_API_KEY_ROLE_CAP = "permission.api_key_role_cap"
+# FAR-1825: the tool keys for the two bounded parameter CRUD paths, hoisted so
+# the contract / lock-timeout / failure classifiers share one declaration.
+_CODE_MCP_UPDATE_PARAMETER_SCHEMA = "mcp.update_parameter_schema"
+_CODE_MCP_UPDATE_PARAMETER_SET = "mcp.update_parameter_set"
 _JSON_AUTH_DB_UNAVAILABLE = '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}'
 _JSON_FORBIDDEN_ORG_MEMBERSHIP = '{"error":"forbidden","detail":"Organisation membership required"}'
 _BASIC_PREFIX = "Basic "
@@ -2096,9 +2100,10 @@ def _tool_lock_timeout_error(exc: SQLAlchemyError, log_key: str) -> dict[str, An
       mapper every tool's backstop runs, so a bounded tool whose error escapes
       its narrower arms still classifies (e.g. ``set_hitl_email_alerts``, which
       reaches C8 ``_get_account_locked`` through the generic arm);
-    * the explicit ``except SQLAlchemyError`` arms of the two MCP tools whose
-      CRUD helper a request path now bounds — ``update_parameter_schema``
-      (C14 ``update_schema``) and ``update_parameter_set`` (C7 ``update_set``).
+    * the shared ``_tool_sqlalchemy_error`` mapper behind the explicit
+      ``except SQLAlchemyError`` arms of the two MCP tools whose CRUD helper a
+      request path now bounds — ``update_parameter_schema`` (C14
+      ``update_schema``) and ``update_parameter_set`` (C7 ``update_set``).
 
     Every other MCP tool's CRUD path takes no newly-bounded lock, so an arm
     there would be dead code asserting a reachability it does not have (the
@@ -2113,6 +2118,23 @@ def _tool_lock_timeout_error(exc: SQLAlchemyError, log_key: str) -> dict[str, An
         return None
     _log.warning("%s.lock_timeout", log_key, exc_info=exc)
     return _tool_error(_MSG_LOCK_TIMEOUT, code="lock_timeout")
+
+
+def _tool_sqlalchemy_error(exc: SQLAlchemyError, tool: str, log_key: str) -> dict[str, Any]:
+    """Map an ``SQLAlchemyError`` raised by a bounded tool body to a payload.
+
+    Shared by the two arms whose CRUD helper a request path now bounds
+    (FAR-1825), so the classifier ladder lives in ONE place: the shared
+    session-contract payload first, then the branchable ``lock_timeout``
+    (55P03) conflict, then the ``database_unavailable`` outage fallback.
+    Behaviour is identical to the inline arms it replaces.
+    """
+    if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
+        return contract_error
+    if (lock_timeout_error := _tool_lock_timeout_error(exc, log_key)) is not None:
+        return lock_timeout_error
+    _log_tool_failure(tool)
+    return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
 
 
 def _tool_exception_error(msg: str, exc: BaseException, log_key: str) -> dict[str, Any]:
@@ -11532,16 +11554,11 @@ async def update_parameter_schema(
         _log_tool_failure("update_parameter_schema")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError as exc:
-        if (contract_error := _tool_session_contract_error(exc, "mcp.update_parameter_schema")) is not None:
-            return contract_error
         # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict.
-        if (lock_timeout_error := _tool_lock_timeout_error(exc, "mcp.update_parameter_schema")) is not None:
-            return lock_timeout_error
-        _log_tool_failure("update_parameter_schema")
-        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+        return _tool_sqlalchemy_error(exc, "update_parameter_schema", _CODE_MCP_UPDATE_PARAMETER_SCHEMA)
     except Exception as exc:
         _log_tool_failure("update_parameter_schema")
-        return _tool_exception_error("Failed to update parameter schema", exc, "mcp.update_parameter_schema")
+        return _tool_exception_error("Failed to update parameter schema", exc, _CODE_MCP_UPDATE_PARAMETER_SCHEMA)
 
 
 @mcp.tool(
@@ -11954,16 +11971,11 @@ async def update_parameter_set(
         _log_tool_failure("update_parameter_set")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError as exc:
-        if (contract_error := _tool_session_contract_error(exc, "mcp.update_parameter_set")) is not None:
-            return contract_error
         # FAR-1825: a bounded row-lock wait (55P03) is a busy-row conflict.
-        if (lock_timeout_error := _tool_lock_timeout_error(exc, "mcp.update_parameter_set")) is not None:
-            return lock_timeout_error
-        _log_tool_failure("update_parameter_set")
-        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+        return _tool_sqlalchemy_error(exc, "update_parameter_set", _CODE_MCP_UPDATE_PARAMETER_SET)
     except Exception as exc:
         _log_tool_failure("update_parameter_set")
-        return _tool_exception_error("Failed to update parameter set", exc, "mcp.update_parameter_set")
+        return _tool_exception_error("Failed to update parameter set", exc, _CODE_MCP_UPDATE_PARAMETER_SET)
 
 
 @mcp.tool(
