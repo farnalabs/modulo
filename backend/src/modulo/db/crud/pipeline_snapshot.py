@@ -877,9 +877,11 @@ async def _load_policy_gate_rows_for_pipeline(
 def _build_policy_gate_pins(rows: list[PolicyGate]) -> list[dict[str, Any]]:
     """Serialize PolicyGate rows into snapshot pin entries (§3.2).
 
-    Each entry carries ``policy_gate_id``, ``eval_id``, ``action``, and
-    ``node_id`` — enough identity to reconstruct the gate's evaluation
-    context and detect accidental corruption of the action field.
+    Each entry carries ``policy_gate_id``, ``eval_id``, ``action``,
+    ``node_id``, and ``evaluation_mode`` — enough identity to reconstruct the
+    gate's evaluation context, detect accidental corruption of the action
+    field, and freeze the run's evaluation mode for the gate's whole
+    start-time universe (FAR-1749).
 
     A newly created snapshot ALWAYS stores a list: zero live/enabled gates
     produces ``[]`` (+ its digest), never ``NULL``.  ``NULL`` is reserved
@@ -895,6 +897,15 @@ def _build_policy_gate_pins(rows: list[PolicyGate]) -> list[dict[str, Any]]:
             "eval_id": str(row.eval_id),
             "action": row.action,
             "node_id": str(row.node_id),
+            # FAR-1749: carry the gate's evaluation mode so a run-time gate
+            # (not just an already-fired one) keeps the mode the run started
+            # with. The column is NOT NULL with a CHECK on the closed
+            # vocabulary, but normalise defensively — a legacy/pre-0316
+            # stand-in without the attribute reads as today's default.
+            # Mirrors ``_governed_evaluation_mode`` in the executor WITHOUT
+            # importing core into the db layer (layering: db must not depend
+            # on pipeline_engine).
+            "evaluation_mode": "human" if getattr(row, "evaluation_mode", None) == "human" else "automatic",
         }
         for row in rows
     ]

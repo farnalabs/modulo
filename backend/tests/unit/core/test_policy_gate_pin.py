@@ -111,12 +111,14 @@ def _policy_gate_row(
     *,
     node_id: uuid.UUID | None = None,
     action: str = "block",
+    evaluation_mode: str = "automatic",
 ) -> MagicMock:
     row = MagicMock()
     row.id = gate_id
     row.eval_id = uuid.uuid4()
     row.node_id = node_id if node_id is not None else uuid.uuid4()
     row.action = action
+    row.evaluation_mode = evaluation_mode
     return row
 
 
@@ -694,7 +696,8 @@ async def test_intercept_non_replay_legacy_snapshot_falls_back_to_live(
 def test_build_policy_gate_pins_serialises_entry_fields() -> None:
     """C1: each pin entry carries policy_gate_id, eval_id, action, node_id —
     enough identity to reconstruct the gate's evaluation context and detect
-    corruption of the action field."""
+    corruption of the action field. FAR-1749 adds ``evaluation_mode`` so the
+    run-start mode is frozen for the gate's whole universe."""
     gate_id = uuid.uuid4()
     node_id = uuid.uuid4()
     row = _policy_gate_row(gate_id, node_id=node_id, action="block")
@@ -705,8 +708,51 @@ def test_build_policy_gate_pins_serialises_entry_fields() -> None:
             "eval_id": str(row.eval_id),
             "action": "block",
             "node_id": str(node_id),
+            "evaluation_mode": "automatic",
         }
     ]
+
+
+def test_build_policy_gate_pins_carries_human_evaluation_mode() -> None:
+    """FAR-1749: a ``human`` live mode is copied into the pin so a resume
+    keeps the mode the run started with instead of re-reading the live row."""
+    row = _policy_gate_row(uuid.uuid4(), evaluation_mode="human")
+
+    pins = _build_policy_gate_pins([row])
+
+    assert pins[0]["evaluation_mode"] == "human"
+
+
+def test_build_policy_gate_pins_carries_automatic_evaluation_mode() -> None:
+    """The other direction: an ``automatic`` live mode is pinned verbatim."""
+    row = _policy_gate_row(uuid.uuid4(), evaluation_mode="automatic")
+
+    pins = _build_policy_gate_pins([row])
+
+    assert pins[0]["evaluation_mode"] == "automatic"
+
+
+def test_build_policy_gate_pins_missing_evaluation_mode_reads_automatic() -> None:
+    """Defensive normalisation: a legacy/pre-0316 stand-in without the
+    attribute pins today's default (``automatic``) rather than crashing the
+    snapshot write or persisting an out-of-vocabulary value."""
+    row = _policy_gate_row(uuid.uuid4())
+    del row.evaluation_mode
+
+    pins = _build_policy_gate_pins([row])
+
+    assert pins[0]["evaluation_mode"] == "automatic"
+
+
+def test_build_policy_gate_pins_normalises_out_of_vocabulary_mode() -> None:
+    """Only an exact ``human`` is carried; anything else normalises to
+    ``automatic`` — the CHECK-constrained vocabulary the snapshot must
+    respect even if a malformed stand-in supplies junk."""
+    row = _policy_gate_row(uuid.uuid4(), evaluation_mode="HUMAN")
+
+    pins = _build_policy_gate_pins([row])
+
+    assert pins[0]["evaluation_mode"] == "automatic"
 
 
 def test_build_policy_gate_pins_empty_list_when_no_rows() -> None:
@@ -806,13 +852,17 @@ async def test_creation_writes_policy_gate_pins_and_fingerprint_to_snapshot() ->
     from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 
     pipeline, edge = _simple_pipeline_and_edge()
-    gate_rows = [_policy_gate_row(uuid.uuid4()), _policy_gate_row(uuid.uuid4())]
+    gate_rows = [
+        _policy_gate_row(uuid.uuid4(), evaluation_mode="human"),
+        _policy_gate_row(uuid.uuid4(), evaluation_mode="automatic"),
+    ]
     expected_pins = [
         {
             "policy_gate_id": str(row.id),
             "eval_id": str(row.eval_id),
             "action": row.action,
             "node_id": str(row.node_id),
+            "evaluation_mode": row.evaluation_mode,
         }
         for row in gate_rows
     ]
