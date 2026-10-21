@@ -225,7 +225,7 @@
               class="flex items-center gap-1"
               data-testid="pipeline-editor-circuit-breaker-tripped"
             >
-              <span class="badge badge-status-destructive whitespace-nowrap" role="status" :title="$t('views.PipelineEditorView.circuit_breaker_tripped_help')">{{ $t('views.PipelineEditorView.circuit_breaker_tripped') }}</span>
+              <output class="badge badge-status-destructive whitespace-nowrap" :title="$t('views.PipelineEditorView.circuit_breaker_tripped_help')">{{ $t('views.PipelineEditorView.circuit_breaker_tripped') }}</output>
               <button
                 v-if="canResetCircuitBreaker"
                 type="button"
@@ -350,12 +350,11 @@
                 :title="environmentProfileError"
                 data-testid="pipeline-editor-environment-profile-error"
               >{{ environmentProfileError }}</span>
-              <span
+              <output
                 v-else-if="environmentProfileStatus"
-                role="status"
                 class="max-w-56 truncate text-[10px] text-muted-foreground"
                 data-testid="pipeline-editor-environment-profile-status"
-              >{{ environmentProfileStatus }}</span>
+              >{{ environmentProfileStatus }}</output>
             </div>
             <!-- FAR-1257: per-pipeline HITL review window override. Empty =
                  clear the override (inherit the org default); the value is
