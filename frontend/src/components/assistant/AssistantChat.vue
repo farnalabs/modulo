@@ -18,6 +18,8 @@
               fill="none"
               stroke="currentColor"
               stroke-width="2"
+              aria-hidden="true"
+              focusable="false"
             >
               <path
                 d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"
@@ -118,6 +120,8 @@
                 fill="none"
                 stroke="currentColor"
                 stroke-width="2"
+                aria-hidden="true"
+                focusable="false"
               >
                 <path
                   d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"
@@ -154,6 +158,8 @@
                   fill="none"
                   stroke="currentColor"
                   stroke-width="2"
+                  aria-hidden="true"
+                  focusable="false"
                 >
                   <rect x="9" y="9" width="13" height="13" rx="2" />
                   <path
@@ -176,6 +182,8 @@
               fill="none"
               stroke="currentColor"
               stroke-width="2"
+              aria-hidden="true"
+              focusable="false"
             >
               <path
                 d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"
@@ -281,6 +289,8 @@
             fill="none"
             stroke="currentColor"
             stroke-width="2"
+            aria-hidden="true"
+            focusable="false"
           >
             <line x1="22" y1="2" x2="11" y2="13" />
             <polygon points="22 2 15 22 11 13 2 9 22 2" />
