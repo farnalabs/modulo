@@ -13,9 +13,11 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from modulo.core.model_backend_hub import (
+    BASE_URL_CAPABLE_PROVIDERS,
     _backend_class,
     _build_backend,
     _build_custom_stub_backend,
+    supports_custom_base_url,
 )
 from modulo.model_backends.base import HealthResult
 
@@ -411,3 +413,14 @@ def test_build_backend_warns_when_custom_base_url_cannot_be_applied(caplog) -> N
             {},
         )
     assert "Ignoring custom base_url" in caplog.text
+
+
+def test_capability_map_is_the_single_source_of_truth() -> None:
+    """Only providers routed through the OpenAI-compatible path can take a base_url."""
+    assert "openai" in BASE_URL_CAPABLE_PROVIDERS
+    assert "ollama" in BASE_URL_CAPABLE_PROVIDERS
+    assert "vllm" in BASE_URL_CAPABLE_PROVIDERS
+    assert "opencode" in BASE_URL_CAPABLE_PROVIDERS
+    for provider in ("anthropic", "azure_openai", "cohere", "gemini", "mistral", "bedrock", "vertexai", "watsonx"):
+        assert provider not in BASE_URL_CAPABLE_PROVIDERS
+        assert not supports_custom_base_url(provider)

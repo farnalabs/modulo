@@ -179,6 +179,29 @@ def viewer_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def runner_client() -> Generator[TestClient, None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="runneruser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="runner"
+    )
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
+        username="runneruser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="runner"
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
 _CREATE_BODY = {
     "name": "Test Backend",
     "display_name": "GPT-4",
@@ -1463,6 +1486,32 @@ def test_update_model_backend_resolves_secretref_api_key(client: TestClient) -> 
 # ---------------------------------------------------------------------------
 
 _CUSTOM_BASE_URL = "https://gateway.internal.example/v1"
+_LEGACY_BASE_URL = "https://legacy.internal.example/v1"
+
+
+class _StubSecretsBackend:
+    """In-memory vault double recording reads/writes."""
+
+    def __init__(self, values: dict[str, str]) -> None:
+        self._values = values
+        self.get_calls: list[str] = []
+        self.set_calls: list[tuple[str, str]] = []
+
+    async def get_secret(self, key: str) -> str:
+        self.get_calls.append(key)
+        if key not in self._values:
+            raise KeyError(key)
+        return self._values[key]
+
+    async def set_secret(self, key: str, value: str) -> None:
+        self.set_calls.append((key, value))
+
+    async def delete_secret(self, key: str) -> None:
+        return None
+
+
+def _secrets_with(payload: dict[str, object] | None) -> _StubSecretsBackend:
+    return _StubSecretsBackend({} if payload is None else {str(_BACKEND_ID): json.dumps(payload)})
 
 
 def test_create_persists_base_url_beside_api_key_and_returns_it(client: TestClient) -> None:
@@ -1496,14 +1545,31 @@ def test_create_persists_base_url_beside_api_key_and_returns_it(client: TestClie
         "http://[fd00:ec2::254]/v1",
         "http://100.100.100.200/v1",
         "https://metadata.google.internal/v1",
+        "http://2852039166/latest/meta-data",
+        "http://0x7f000001/v1",
+        "http://2130706433/v1",
+        "http://017700000001/v1",
+    ],
+    ids=[
+        "ipv4-link-local",
+        "ipv6-link-local",
+        "aws-imds-ipv6",
+        "aliyun-metadata",
+        "gcp-metadata-hostname",
+        "decimal-integer",
+        "hex-integer",
+        "decimal-127",
+        "octal-127",
     ],
 )
-def test_create_rejects_cloud_metadata_base_url(client: TestClient, blocked: str) -> None:
-    """Cloud metadata endpoints are a hard deny, on every scheme."""
+def test_create_rejects_metadata_and_noncanonical_hosts(client: TestClient, blocked: str) -> None:
+    """Cloud metadata (incl. non-canonical literal encodings) is a hard deny."""
     with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
-        resp = client.post("/api/v1/model-backends", json={**_CREATE_BODY, "base_url": blocked})
+        resp = client.post(
+            "/api/v1/model-backends",
+            json={**_CREATE_BODY, "base_url": blocked, "allow_insecure_http": True},
+        )
     assert resp.status_code == 422
-    assert "cloud metadata" in str(resp.json()["detail"])
     create_mock.assert_not_awaited()
 
 
@@ -1515,76 +1581,131 @@ def test_create_rejects_cloud_metadata_base_url(client: TestClient, blocked: str
         "https://example.com/v1?token=leak",
         "https://example.com/v1#fragment",
         "not-a-url",
-        "http://example.com/v1",
+        "https://example.com:99999/v1",
     ],
 )
 def test_create_rejects_invalid_base_url(client: TestClient, invalid: str) -> None:
-    """Scheme/userinfo/query/fragment and non-private http URLs are rejected."""
     with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
         resp = client.post("/api/v1/model-backends", json={**_CREATE_BODY, "base_url": invalid})
     assert resp.status_code == 422
     create_mock.assert_not_awaited()
 
 
+@pytest.mark.parametrize("host", ["http://10.0.0.5:8000/v1", "http://llm-gateway:8080/v1", "http://example.com/v1"])
+def test_create_requires_explicit_opt_in_for_plain_http(client: TestClient, host: str) -> None:
+    """Hostname shape never decides privacy — plain HTTP needs the explicit flag."""
+    with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
+        resp = client.post("/api/v1/model-backends", json={**_CREATE_BODY, "base_url": host})
+    assert resp.status_code == 422
+    assert "allow_insecure_http" in str(resp.json()["detail"])
+    create_mock.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
-    "allowed",
-    [
-        "http://10.0.0.5:8000/v1",
-        "http://llm-gateway:8080/v1",
-        "http://localhost:11434/v1",
-        "https://models.example.com/v1",
-    ],
+    "host", ["http://10.0.0.5:8000/v1", "http://llm-gateway:8080/v1", "https://models.example.com/v1"]
 )
-def test_create_allows_private_http_and_public_https_base_url(client: TestClient, allowed: str) -> None:
-    """Plain http is allowed only for loopback/private/internal hosts."""
+def test_create_accepts_http_with_explicit_opt_in(client: TestClient, host: str) -> None:
     backend = _make_backend()
     with (
         patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
     ):
-        resp = client.post("/api/v1/model-backends", json={**_CREATE_BODY, "base_url": allowed})
+        resp = client.post(
+            "/api/v1/model-backends",
+            json={**_CREATE_BODY, "base_url": host, "allow_insecure_http": True},
+        )
     assert resp.status_code == 201
-    assert resp.json()["base_url"] == allowed
+    assert resp.json()["base_url"] == host
 
 
-def _secrets_stub_with_url(url: str) -> _StubSecretsBackend:
-    return _StubSecretsBackend({str(_BACKEND_ID): json.dumps({"api_key": "sk-test", "base_url": url})})
+@pytest.mark.parametrize("provider", ["anthropic", "azure_openai"])
+def test_create_rejects_base_url_for_incapable_provider(client: TestClient, provider: str) -> None:
+    """The hub capability map is the single source of truth — fail closed."""
+    with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
+        resp = client.post(
+            "/api/v1/model-backends",
+            json={**_CREATE_BODY, "provider": provider, "base_url": _CUSTOM_BASE_URL},
+        )
+    assert resp.status_code == 422
+    assert "does not support a custom base_url" in str(resp.json()["detail"])
+    create_mock.assert_not_awaited()
 
 
-def test_list_returns_full_base_url_to_operator_and_host_only_to_viewer(viewer_client: TestClient) -> None:
-    """Full endpoint for a manager; redacted to the host for a read-only caller."""
-    page_result = MagicMock(items=[_make_backend()], total=1, page=1, page_size=20)
-    stub = _secrets_stub_with_url(_CUSTOM_BASE_URL)
-    with (
-        patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
-    ):
-        resp = viewer_client.get("/api/v1/model-backends")
-    assert resp.status_code == 200
-    assert resp.json()["items"][0]["base_url"] == "gateway.internal.example"
-
-
-def test_get_returns_full_base_url_to_operator(client: TestClient) -> None:
-    stub = _secrets_stub_with_url(_CUSTOM_BASE_URL)
-    with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
-    ):
-        resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
-    assert resp.status_code == 200
-    assert resp.json()["base_url"] == _CUSTOM_BASE_URL
-
-
-def test_update_base_url_only_merges_beside_the_existing_api_key(client: TestClient) -> None:
-    """An endpoint-only PATCH never drops the stored api_key, and stores no column."""
+def test_create_folds_legacy_default_params_base_url_and_strips_it(client: TestClient) -> None:
+    """A legacy default_params.base_url is migrated into the validated credential field."""
     backend = _make_backend()
+    stub = _StubSecretsBackend({})
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.post(
+            "/api/v1/model-backends",
+            json={**_CREATE_BODY, "default_params": {"base_url": _LEGACY_BASE_URL, "temperature": 0.2}},
+        )
+    assert resp.status_code == 201
+    assert resp.json()["base_url"] == _LEGACY_BASE_URL
+    assert "base_url" not in resp.json()["default_params"]
+    assert stub.set_calls == [(str(_BACKEND_ID), json.dumps({"api_key": "sk-test", "base_url": _LEGACY_BASE_URL}))]
+
+
+def test_create_rejects_conflicting_base_url_and_legacy_value(client: TestClient) -> None:
+    with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
+        resp = client.post(
+            "/api/v1/model-backends",
+            json={**_CREATE_BODY, "base_url": _CUSTOM_BASE_URL, "default_params": {"base_url": _LEGACY_BASE_URL}},
+        )
+    assert resp.status_code == 422
+    assert "base_url_conflict" in str(resp.json()["detail"])
+    create_mock.assert_not_awaited()
+
+
+def test_create_rejects_legacy_http_without_opt_in(client: TestClient) -> None:
+    with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
+        resp = client.post(
+            "/api/v1/model-backends",
+            json={**_CREATE_BODY, "default_params": {"base_url": "http://example.com/v1"}},
+        )
+    assert resp.status_code == 422
+    assert "allow_insecure_http" in str(resp.json()["detail"])
+    create_mock.assert_not_awaited()
+
+
+def test_presets_surface_the_hub_capability_map(client: TestClient) -> None:
+    resp = client.get("/api/v1/model-backends/presets")
+    assert resp.status_code == 200
+    providers = set(resp.json()["base_url_providers"])
+    assert {"openai", "ollama", "vllm", "openrouter"} <= providers
+    assert "anthropic" not in providers
+    assert "azure_openai" not in providers
+
+
+def test_update_endpoint_change_without_api_key_is_rejected(client: TestClient) -> None:
+    """A stored key must never be sent to a new host without re-supplying it."""
+    stub = _secrets_with({"api_key": "sk-ORG-SECRET"})
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"base_url": "https://attacker.example/v1"},
+        )
+    assert resp.status_code == 422
+    assert "base_url_change_requires_credential" in str(resp.json()["detail"])
+    update_mock.assert_not_awaited()
+    assert not stub.set_calls
+
+
+def test_update_endpoint_change_with_api_key_rebinds_and_health_checks_new_host(client: TestClient) -> None:
+    backend = _make_backend()
+    stub = _secrets_with({"api_key": "sk-old"})
     captured: dict[str, object] = {}
-    stub = _StubSecretsBackend({str(_BACKEND_ID): json.dumps({"api_key": "sk-existing"})})
 
     async def fake_update(session: object, backend_id: object, updates: dict[str, object]) -> MagicMock:
         captured["updates"] = updates
@@ -1595,32 +1716,194 @@ def test_update_base_url_only_merges_beside_the_existing_api_key(client: TestCli
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
         patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch(
+            "modulo.api.routes.model_backends._run_health_check_on_save_and_persist",
+            new=AsyncMock(return_value=("ok", None)),
+        ) as health_mock,
+        patch("modulo.api.routes.model_backends.append_audit_event_isolated", new=AsyncMock()) as audit_mock,
     ):
         resp = client.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
-            json={"base_url": _CUSTOM_BASE_URL},
+            json={"base_url": _CUSTOM_BASE_URL, "api_key": "sk-fresh"},
         )
 
     assert resp.status_code == 200
     assert resp.json()["base_url"] == _CUSTOM_BASE_URL
-    updates = captured["updates"]
-    assert isinstance(updates, dict)
-    assert "base_url" not in updates
-    assert "credentials_ciphertext" not in updates
-    assert stub.set_calls == [(str(_BACKEND_ID), json.dumps({"api_key": "sk-existing", "base_url": _CUSTOM_BASE_URL}))]
+    assert stub.set_calls == [(str(_BACKEND_ID), json.dumps({"api_key": "sk-fresh", "base_url": _CUSTOM_BASE_URL}))]
+    assert health_mock.await_args is not None
+    assert health_mock.await_args.kwargs["base_url"] == _CUSTOM_BASE_URL
+    assert health_mock.await_args.args[4] == "sk-fresh"
+    # Audit records hosts only, plus whether the credential was re-supplied.
+    updated_payloads = [
+        call.kwargs["payload"]
+        for call in audit_mock.await_args_list
+        if call.kwargs["event_type"] == "model_backend.updated"
+    ]
+    assert updated_payloads
+    change = updated_payloads[-1]["changed_fields"]["base_url"]
+    assert change["from_host"] is None
+    assert change["to_host"] == "gateway.internal.example"
+    assert change["credential_resupplied"] is True
+    assert "sk-fresh" not in json.dumps(updated_payloads)
 
 
-def test_update_null_base_url_clears_it(client: TestClient) -> None:
-    backend = _make_backend()
-    stub = _StubSecretsBackend({str(_BACKEND_ID): json.dumps({"api_key": "sk-existing", "base_url": _CUSTOM_BASE_URL})})
+def test_update_unchanged_legacy_endpoint_is_migrated_without_losing_the_key(client: TestClient) -> None:
+    """A legacy row's key comes from the ciphertext; never write a base_url-only secret."""
+    legacy_backend = _make_backend(credentials_ciphertext=Fernet(_FERNET_KEY.encode()).encrypt(b"sk-legacy"))
+    legacy_backend.default_params = {"base_url": _LEGACY_BASE_URL}
+    stub = _StubSecretsBackend({})
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=legacy_backend),
+        patch("modulo.api.routes.model_backends.update_model_backend", return_value=legacy_backend),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
         patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
     ):
-        resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"base_url": None})
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"base_url": _LEGACY_BASE_URL},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["base_url"] == _LEGACY_BASE_URL
+    assert stub.set_calls == [(str(_BACKEND_ID), json.dumps({"api_key": "sk-legacy", "base_url": _LEGACY_BASE_URL}))]
+
+
+def test_update_replacing_default_params_preserves_a_legacy_endpoint(client: TestClient) -> None:
+    """Editing another field must migrate the legacy endpoint, never silently reset it."""
+    legacy_backend = _make_backend(credentials_ciphertext=Fernet(_FERNET_KEY.encode()).encrypt(b"sk-legacy"))
+    legacy_backend.default_params = {"base_url": _LEGACY_BASE_URL, "temperature": 0.1}
+    stub = _StubSecretsBackend({})
+    captured: dict[str, object] = {}
+
+    async def fake_update(session: object, backend_id: object, updates: dict[str, object]) -> MagicMock:
+        captured["updates"] = updates
+        if "default_params" in updates:
+            legacy_backend.default_params = updates["default_params"]
+        return legacy_backend
+
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=legacy_backend),
+        patch("modulo.api.routes.model_backends.update_model_backend", new=fake_update),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"default_params": {"temperature": 0.5}},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["base_url"] == _LEGACY_BASE_URL
+    updates = captured["updates"]
+    assert isinstance(updates, dict)
+    assert "base_url" not in updates["default_params"]
+    assert stub.set_calls == [(str(_BACKEND_ID), json.dumps({"api_key": "sk-legacy", "base_url": _LEGACY_BASE_URL}))]
+
+
+def test_update_null_base_url_clears_credential_and_legacy_locations(client: TestClient) -> None:
+    legacy_backend = _make_backend()
+    legacy_backend.default_params = {"base_url": _LEGACY_BASE_URL}
+    stub = _secrets_with({"api_key": "sk-existing", "base_url": _CUSTOM_BASE_URL})
+    captured: dict[str, object] = {}
+
+    async def fake_update(session: object, backend_id: object, updates: dict[str, object]) -> MagicMock:
+        captured["updates"] = updates
+        if "default_params" in updates:
+            legacy_backend.default_params = updates["default_params"]
+        return legacy_backend
+
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=legacy_backend),
+        patch("modulo.api.routes.model_backends.update_model_backend", new=fake_update),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"base_url": None, "api_key": "sk-fresh"},
+        )
 
     assert resp.status_code == 200
     assert resp.json()["base_url"] is None
-    assert stub.set_calls == [(str(_BACKEND_ID), json.dumps({"api_key": "sk-existing"}))]
+    assert stub.set_calls == [(str(_BACKEND_ID), json.dumps({"api_key": "sk-fresh"}))]
+    updates = captured["updates"]
+    assert isinstance(updates, dict)
+    assert "base_url" not in updates["default_params"]
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "azure_openai"])
+def test_update_rejects_base_url_for_incapable_provider(client: TestClient, provider: str) -> None:
+    backend = _make_backend()
+    backend.provider = provider
+    stub = _secrets_with({"api_key": "sk-existing"})
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"base_url": _CUSTOM_BASE_URL, "api_key": "sk-fresh"},
+        )
+    assert resp.status_code == 422
+    assert "does not support a custom base_url" in str(resp.json()["detail"])
+    update_mock.assert_not_awaited()
+
+
+def test_update_rejects_legacy_http_endpoint_without_opt_in(client: TestClient) -> None:
+    stub = _secrets_with({"api_key": "sk-existing"})
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"default_params": {"base_url": "http://example.com/v1"}, "api_key": "sk-fresh"},
+        )
+    assert resp.status_code == 422
+    assert "allow_insecure_http" in str(resp.json()["detail"])
+    update_mock.assert_not_awaited()
+
+
+@pytest.mark.parametrize("client_fixture", ["client", "viewer_client", "runner_client"])
+@pytest.mark.parametrize("route", ["list", "get"])
+def test_base_url_masking_by_audience(
+    client_fixture: str,
+    route: str,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Full endpoint for operator+; host only for viewer/runner, on list and get."""
+    api_client: TestClient = request.getfixturevalue(client_fixture)
+    backend = _make_backend()
+    backend.default_params = {"base_url": _LEGACY_BASE_URL}
+    stub = _secrets_with({"api_key": "sk-existing", "base_url": _CUSTOM_BASE_URL})
+    page_result = MagicMock(items=[backend], total=1, page=1, page_size=20)
+    with (
+        patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result),
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        if route == "list":
+            resp = api_client.get("/api/v1/model-backends")
+            item = resp.json()["items"][0]
+        else:
+            resp = api_client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
+            item = resp.json()
+
+    assert resp.status_code == 200
+    expected = _CUSTOM_BASE_URL if client_fixture == "client" else "gateway.internal.example"
+    assert item["base_url"] == expected
+    legacy = item["default_params"].get("base_url")
+    if client_fixture == "client":
+        assert legacy == _LEGACY_BASE_URL
+    else:
+        assert legacy == "legacy.internal.example"
