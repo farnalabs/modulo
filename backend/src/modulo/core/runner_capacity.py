@@ -472,6 +472,210 @@ class RunnerDispatchSlot:
     marker_set: bool
 
 
+async def _apply_capacity_lock_timeout(session: AsyncSession, lock_timeout_ms: int) -> None:
+    """Bound this transaction's row-lock waits before its first lock (FAR-1601)."""
+    await session.execute(
+        text("SELECT set_config('lock_timeout', :val, true)"),
+        {"val": f"{lock_timeout_ms}ms"},
+    )
+
+
+async def _lock_dispatch_run_row(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: str,
+    claim_token: str,
+) -> Any | None:
+    """Claim-token-fenced ``FOR UPDATE`` on the run's own row; None = fenced."""
+    return (
+        await session.execute(
+            text(
+                "SELECT claim_count FROM runs "
+                "WHERE id = :rid AND organisation_id = :oid "
+                "AND claim_token = :tok AND status = 'running' "
+                "FOR UPDATE"
+            ),
+            {"rid": run_id, "oid": str(org_id), "tok": claim_token},
+        )
+    ).fetchone()
+
+
+def _parse_run_uuid(run_id: str) -> uuid.UUID | None:
+    """Parse the run id for the own-marker exclusion; None on a non-UUID id."""
+    try:
+        return uuid.UUID(str(run_id))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _acquire_capacity_advisory_lock(session: AsyncSession, org_id: uuid.UUID) -> None:
+    """Per-org advisory lock — reserved-prefix derivation."""
+    k1, k2 = runner_capacity_lock_keys(org_id)
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(:k1, :k2)"),
+        {"k1": k1, "k2": k2},
+    )
+
+
+def _reject_at_capacity(
+    decision: RunnerCapacityDecision,
+    *,
+    provider: str,
+    run_id: str,
+    org_id: uuid.UUID,
+    node_id: str,
+) -> None:
+    """Raise the retryable denial when the tier-scoped cap is reached."""
+    if decision.cap is None or decision.active < decision.cap:
+        return
+    # The Docker-tier default (absent key) gates ONLY host-resource
+    # dispatches: the skip condition mirrors the count scope — any provider
+    # NOT counted into the host-resource bucket (e2b, and unknown future
+    # tiers) is neither counted into that bucket nor denied by it. Legacy
+    # tier-less dispatchers normalise to Docker above and stay gated.
+    docker_default_skips_gate = decision.host_resource_only and provider not in HOST_RESOURCE_PROVIDERS
+    if docker_default_skips_gate:
+        return
+    _log.warning(
+        "runner.capacity.denied",
+        extra={
+            "run_id": run_id,
+            "org_id": str(org_id),
+            "node_id": node_id,
+            "active": decision.active,
+            "cap": decision.cap,
+            "host_resource_only": decision.host_resource_only,
+        },
+    )
+    raise RunnerCapacityDeniedError(
+        f"Runner dispatch denied: org {org_id} at capacity ({decision.active}/{decision.cap} active runner dispatches)"
+    )
+
+
+async def _write_dispatch_reservation(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: str,
+    claim_token: str,
+    attempt_key: str,
+    provider: str,
+    via_provider: bool | None,
+) -> bool:
+    """Fenced marker UPDATE; False when the claim rotated mid-transaction."""
+    marker_result = await session.execute(
+        text(
+            "UPDATE runs SET sandbox_dispatch_state = :marker "
+            "WHERE id = :rid AND organisation_id = :oid "
+            "AND claim_token = :tok AND status = 'running' "
+            "RETURNING id"
+        ),
+        {
+            "rid": run_id,
+            "oid": str(org_id),
+            "tok": claim_token,
+            "marker": build_dispatch_marker(attempt_key, provider, via_provider=via_provider),
+        },
+    )
+    return marker_result.fetchone() is not None
+
+
+async def _reserve_runner_dispatch_slot(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: str,
+    claim_token: str,
+    node_id: str,
+    provider: str,
+    via_provider: bool | None,
+    lock_timeout_ms: int,
+    flag_on: bool,
+) -> RunnerDispatchSlot:
+    """The gate body, run INSIDE the caller's transaction (uniform lock order)."""
+    await _apply_capacity_lock_timeout(session, lock_timeout_ms)
+    row = await _lock_dispatch_run_row(session, org_id=org_id, run_id=run_id, claim_token=claim_token)
+    if row is None:
+        return RunnerDispatchSlot("fenced", None, False)
+    attempt_key = f"run:{run_id}:node:{node_id}:{int(row[0])}"
+    # The count excludes the run's OWN marker. A non-UUID run_id can never
+    # match a runs.id (the own-row SELECT above would have fenced first), so
+    # a parse failure degrades to no-exclusion rather than failing the gate.
+    run_uuid = _parse_run_uuid(run_id)
+    if flag_on:
+        await _acquire_capacity_advisory_lock(session, org_id)
+    # The SINGLE decision path for both flag states: the count body owns the
+    # flag-dependent population (flag-off = the pre-D8 ACTIVE_RUN_STATUSES
+    # population, no advisory lock — the pre-D8 racy check-then-act count
+    # semantics exactly; only the row-lock bound above is unconditional,
+    # FAR-1601).
+    decision = await resolve_runner_capacity_decision(session, org_id, exclude_run_id=run_uuid)
+    _reject_at_capacity(
+        decision,
+        provider=provider,
+        run_id=run_id,
+        org_id=org_id,
+        node_id=node_id,
+    )
+    # The UPDATE re-checks the same fenced WHERE; a zero-row result (the
+    # claim rotated mid-transaction — unreachable in production under the
+    # FOR UPDATE row lock, defensive for non-transactional fakes) = fenced.
+    reserved = await _write_dispatch_reservation(
+        session,
+        org_id=org_id,
+        run_id=run_id,
+        claim_token=claim_token,
+        attempt_key=attempt_key,
+        provider=provider,
+        via_provider=via_provider,
+    )
+    if not reserved:
+        return RunnerDispatchSlot("fenced", None, False)
+    return RunnerDispatchSlot("acquired", attempt_key, True)
+
+
+def _handle_capacity_gate_error(
+    exc: Exception,
+    *,
+    lock_timeout_ms: int,
+    run_id: str,
+    org_id: uuid.UUID,
+    node_id: str,
+) -> RunnerDispatchSlot:
+    """Translate a DB failure: retryable denial on 55P03/40P01, else fail open."""
+    sqlstate = sqlstate_of(exc)
+    if sqlstate == "55P03":
+        # lock_not_available — what SET LOCAL lock_timeout actually raises.
+        # Designed degradation: retryable denial + the distinct event the
+        # on-call dashboard keys on.
+        _log.warning(
+            "runner.capacity.lock_degraded",
+            extra={"run_id": run_id, "org_id": str(org_id), "node_id": node_id},
+            exc_info=True,
+        )
+        raise RunnerCapacityDeniedError(
+            f"Runner capacity lock degraded (lock_timeout={lock_timeout_ms}ms) for org {org_id}"
+        ) from exc
+    if sqlstate == "40P01":
+        # Deadlock — expected impossible under the uniform row→advisory
+        # ordering; a separate alarm, not the routine degradation path.
+        _log.error(
+            "runner.capacity.deadlock_degraded",
+            extra={"run_id": run_id, "org_id": str(org_id), "node_id": node_id},
+            exc_info=True,
+        )
+        raise RunnerCapacityDeniedError(f"Runner capacity gate deadlocked for org {org_id}") from exc
+    # Every other DB error fails OPEN (matching the pre-D8 behaviour) — the
+    # caller still writes the marker best-effort in its own tx.
+    _log.warning(
+        "runner.capacity.gate_error",
+        extra={"run_id": run_id, "org_id": str(org_id), "node_id": node_id},
+        exc_info=True,
+    )
+    return RunnerDispatchSlot("fail_open", None, False)
+
+
 async def acquire_runner_dispatch_slot(
     session_factory: Any,
     *,
@@ -532,139 +736,30 @@ async def acquire_runner_dispatch_slot(
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
             # FAR-1601: bound this transaction's row-lock waits BEFORE its
-            # first lock, UNCONDITIONALLY. The own-row ``FOR UPDATE`` below
-            # runs in BOTH flag states, but this ``set_config`` used to sit
-            # inside ``if flag_on:`` — with ``runner_capacity_gate_enabled``
-            # OFF the hot ``runs`` row lock waited with no ceiling at all (the
-            # FAR-1524 O11 class: a silent wait past the Fly HAProxy
-            # 30-minute session window, which is what got prod connections
-            # culled mid-operation). ``set_config`` takes no lock, so it
-            # cannot disturb the uniform row→advisory ordering; only the
-            # ADVISORY lock below stays flag-gated.
-            await session.execute(
-                text("SELECT set_config('lock_timeout', :val, true)"),
-                {"val": f"{lock_timeout_ms}ms"},
+            # first lock, UNCONDITIONALLY (see _reserve_runner_dispatch_slot).
+            return await _reserve_runner_dispatch_slot(
+                session,
+                org_id=org_id,
+                run_id=run_id,
+                claim_token=claim_token,
+                node_id=node_id,
+                provider=provider,
+                via_provider=via_provider,
+                lock_timeout_ms=lock_timeout_ms,
+                flag_on=flag_on,
             )
-            # (2) own-row lock FIRST — claim-token-fenced, status-guarded.
-            row = (
-                await session.execute(
-                    text(
-                        "SELECT claim_count FROM runs "
-                        "WHERE id = :rid AND organisation_id = :oid "
-                        "AND claim_token = :tok AND status = 'running' "
-                        "FOR UPDATE"
-                    ),
-                    {"rid": run_id, "oid": str(org_id), "tok": claim_token},
-                )
-            ).fetchone()
-            if row is None:
-                return RunnerDispatchSlot("fenced", None, False)
-            attempt_key = f"run:{run_id}:node:{node_id}:{int(row[0])}"
-            # The count excludes the run's OWN marker. A non-UUID run_id can
-            # never match a runs.id (the own-row SELECT above would have
-            # fenced first), so a parse failure degrades to no-exclusion
-            # rather than failing the gate.
-            try:
-                run_uuid: uuid.UUID | None = uuid.UUID(str(run_id))
-            except (TypeError, ValueError):
-                run_uuid = None
-            if flag_on:
-                # (3) per-org advisory lock — reserved-prefix derivation.
-                k1, k2 = runner_capacity_lock_keys(org_id)
-                await session.execute(
-                    text("SELECT pg_advisory_xact_lock(:k1, :k2)"),
-                    {"k1": k1, "k2": k2},
-                )
-            # (4) lock-free count + tier-scoped cap (own marker excluded —
-            # a re-dispatch of a run still carrying a fence-carrying stale
-            # marker cannot self-block). The SINGLE decision path for both
-            # flag states: the count body owns the flag-dependent population
-            # (flag-off = the pre-D8 ACTIVE_RUN_STATUSES population, no
-            # advisory lock — the pre-D8 racy check-then-act count semantics
-            # exactly; only the row-lock bound above is unconditional,
-            # FAR-1601).
-            decision = await resolve_runner_capacity_decision(session, org_id, exclude_run_id=run_uuid)
-            if decision.cap is not None and decision.active >= decision.cap:
-                # The Docker-tier default (absent key) gates ONLY host-resource
-                # dispatches: the skip condition mirrors the count scope — any
-                # provider NOT counted into the host-resource bucket (e2b, and
-                # unknown future tiers) is neither counted into that bucket nor
-                # denied by it. Legacy tier-less dispatchers normalise to
-                # Docker above and stay gated.
-                docker_default_skips_gate = decision.host_resource_only and provider not in HOST_RESOURCE_PROVIDERS
-                if not docker_default_skips_gate:
-                    _log.warning(
-                        "runner.capacity.denied",
-                        extra={
-                            "run_id": run_id,
-                            "org_id": str(org_id),
-                            "node_id": node_id,
-                            "active": decision.active,
-                            "cap": decision.cap,
-                            "host_resource_only": decision.host_resource_only,
-                        },
-                    )
-                    raise RunnerCapacityDeniedError(
-                        f"Runner dispatch denied: org {org_id} at capacity "
-                        f"({decision.active}/{decision.cap} active runner dispatches)"
-                    )
-            # (5) fenced marker UPDATE — commit persists the reservation. The
-            # UPDATE re-checks the same fenced WHERE; a zero-row result (the
-            # claim rotated mid-transaction — unreachable in production under
-            # the FOR UPDATE row lock, defensive for non-transactional fakes)
-            # means fenced.
-            marker_result = await session.execute(
-                text(
-                    "UPDATE runs SET sandbox_dispatch_state = :marker "
-                    "WHERE id = :rid AND organisation_id = :oid "
-                    "AND claim_token = :tok AND status = 'running' "
-                    "RETURNING id"
-                ),
-                {
-                    "rid": run_id,
-                    "oid": str(org_id),
-                    "tok": claim_token,
-                    "marker": build_dispatch_marker(attempt_key, provider, via_provider=via_provider),
-                },
-            )
-            if marker_result.fetchone() is None:
-                return RunnerDispatchSlot("fenced", None, False)
-        return RunnerDispatchSlot("acquired", attempt_key, True)
     except RunnerCapacityDeniedError:
         raise
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        sqlstate = sqlstate_of(exc)
-        if sqlstate == "55P03":
-            # lock_not_available — what SET LOCAL lock_timeout actually raises.
-            # Designed degradation: retryable denial + the distinct event the
-            # on-call dashboard keys on.
-            _log.warning(
-                "runner.capacity.lock_degraded",
-                extra={"run_id": run_id, "org_id": str(org_id), "node_id": node_id},
-                exc_info=True,
-            )
-            raise RunnerCapacityDeniedError(
-                f"Runner capacity lock degraded (lock_timeout={lock_timeout_ms}ms) for org {org_id}"
-            ) from exc
-        if sqlstate == "40P01":
-            # Deadlock — expected impossible under the uniform row→advisory
-            # ordering; a separate alarm, not the routine degradation path.
-            _log.error(
-                "runner.capacity.deadlock_degraded",
-                extra={"run_id": run_id, "org_id": str(org_id), "node_id": node_id},
-                exc_info=True,
-            )
-            raise RunnerCapacityDeniedError(f"Runner capacity gate deadlocked for org {org_id}") from exc
-        # Every other DB error fails OPEN (matching the pre-D8 behaviour) —
-        # the caller still writes the marker best-effort in its own tx.
-        _log.warning(
-            "runner.capacity.gate_error",
-            extra={"run_id": run_id, "org_id": str(org_id), "node_id": node_id},
-            exc_info=True,
+        return _handle_capacity_gate_error(
+            exc,
+            lock_timeout_ms=lock_timeout_ms,
+            run_id=run_id,
+            org_id=org_id,
+            node_id=node_id,
         )
-        return RunnerDispatchSlot("fail_open", None, False)
 
 
 async def mark_runner_dispatch_cleared_at_hitl(
@@ -883,6 +978,63 @@ def sweep_heartbeat_reference(
     return heartbeat_at or started_at or created_at
 
 
+def _classify_terminal_sweep_row(
+    *,
+    error_code: str | None,
+    marker_json: str | None,
+    stale_reference: datetime | None,
+    now: datetime,
+    stale_seconds: int,
+) -> str:
+    """Terminal-row rules: anomaly (c), crash-leaked fence, or clear (d1)."""
+    from modulo.core.rollback_thresholds import SCRIPT_ANOMALY_ERROR_CODES
+
+    if error_code in SCRIPT_ANOMALY_ERROR_CODES:
+        return "keep_anomaly"
+    if not marker_is_fence_component(marker_json):
+        return "clear_terminal"
+    if stale_reference is None:
+        return "keep_live"
+    if (now - stale_reference).total_seconds() <= stale_seconds:
+        return "keep_live"
+    return "clear_terminal"
+
+
+def _classify_node_started_sweep_row(
+    *,
+    stale_reference: datetime | None,
+    now: datetime,
+    node_started_stale_seconds: int | None,
+    heartbeat_fresh: bool,
+) -> str:
+    """FAR-1808 two-condition reclaim rule for a node-STARTED running row."""
+    if node_started_stale_seconds is None or stale_reference is None:
+        return "keep_live"
+    beyond_node_window = (now - stale_reference).total_seconds() > node_started_stale_seconds
+    if beyond_node_window and not heartbeat_fresh:
+        return "transition_stale_running"
+    return "keep_live"
+
+
+def _classify_stale_sweep_row(
+    *,
+    status: str,
+    stale_reference: datetime | None,
+    now: datetime,
+    stale_seconds: int,
+    heartbeat_fresh: bool,
+) -> str:
+    """Non-terminal staleness rules: clear (d3) or transition (d2)/keep (e)."""
+    if stale_reference is None:
+        return "keep_live"
+    age = (now - stale_reference).total_seconds()
+    if age <= stale_seconds:
+        return "keep_live"
+    if status == "running" and not heartbeat_fresh:
+        return "transition_stale_running"
+    return "clear_stale"
+
+
 def classify_sweep_action(
     *,
     status: str,
@@ -941,20 +1093,13 @@ def classify_sweep_action(
         # Terminal rows: anomaly exemption BEFORE the fence rule (qa F14) —
         # a crash-leaked fence on a terminal non-anomaly run must not pin its
         # marker forever.
-        from modulo.core.rollback_thresholds import SCRIPT_ANOMALY_ERROR_CODES
-
-        if error_code in SCRIPT_ANOMALY_ERROR_CODES:
-            return "keep_anomaly"
-        if marker_is_fence_component(marker_json):
-            # Crash-leaked fence on a terminal non-anomaly run: clear only
-            # past the staleness cap (the longer age cap), never immediately —
-            # the teardown may legitimately still be writing the lease.
-            if stale_reference is None:
-                return "keep_live"
-            if (now - stale_reference).total_seconds() <= stale_seconds:
-                return "keep_live"
-            return "clear_terminal"
-        return "clear_terminal"
+        return _classify_terminal_sweep_row(
+            error_code=error_code,
+            marker_json=marker_json,
+            stale_reference=stale_reference,
+            now=now,
+            stale_seconds=stale_seconds,
+        )
     if marker_is_fence_component(marker_json):
         return "keep_fence"
     if recoverable:
@@ -962,12 +1107,12 @@ def classify_sweep_action(
     # FAR-1808: the node-STARTED running shape uses its own two-condition
     # reclaim rule (see the docstring) INSTEAD of the single staleness cap.
     if status == "running" and node_started:
-        if node_started_stale_seconds is None or stale_reference is None:
-            return "keep_live"
-        beyond_node_window = (now - stale_reference).total_seconds() > node_started_stale_seconds
-        if beyond_node_window and not heartbeat_fresh:
-            return "transition_stale_running"
-        return "keep_live"
+        return _classify_node_started_sweep_row(
+            stale_reference=stale_reference,
+            now=now,
+            node_started_stale_seconds=node_started_stale_seconds,
+            heartbeat_fresh=heartbeat_fresh,
+        )
     # Non-terminal: only a STALE non-fence marker is cleared. A stale clear on
     # a RUNNING run also transitions it terminal (no zombie) — unless the run's
     # heartbeat is FRESH (a freshly-resumed long-parked run: its tombstone /
@@ -975,14 +1120,13 @@ def classify_sweep_action(
     # sweep clears only the marker. The other non-terminal statuses keep their
     # lifecycle (a parked/waiting run is not killed over a stale marker) — the
     # marker clear alone makes them capacity-neutral.
-    if stale_reference is None:
-        return "keep_live"
-    age = (now - stale_reference).total_seconds()
-    if age <= stale_seconds:
-        return "keep_live"
-    if status == "running" and not heartbeat_fresh:
-        return "transition_stale_running"
-    return "clear_stale"
+    return _classify_stale_sweep_row(
+        status=status,
+        stale_reference=stale_reference,
+        now=now,
+        stale_seconds=stale_seconds,
+        heartbeat_fresh=heartbeat_fresh,
+    )
 
 
 def _sweep_recoverability_predicate() -> tuple[Any, Any]:
@@ -1418,6 +1562,165 @@ async def _record_marker_sweep_terminalisations(
         _log.exception("runner.capacity.marker_sweep_audit_failed entries=%d", len(entries))
 
 
+def _resolve_sweep_windows(settings: Any, stale_seconds: int | None) -> tuple[int, int, float]:
+    """Resolve the sweep's staleness/node-started/freshness windows."""
+    from modulo.core.cron_helpers import RECONCILE_STALE_HEARTBEAT_FACTOR
+
+    stale_window = stale_seconds if stale_seconds is not None else settings.runner_marker_stale_seconds
+    # FAR-1808: the node-started reclaim bound. The authoritative value is the
+    # Settings knob; a double that does not expose it falls back to the module
+    # default so the sweep still runs (the fallback equals the shipped default).
+    node_started_stale_seconds = int(
+        getattr(settings, "node_started_stale_seconds", DEFAULT_NODE_STARTED_STALE_SECONDS)
+    )
+    # The heartbeat-freshness window for the d2 exemption AND the FAR-1808
+    # liveness condition: a run whose heartbeat (falling back to
+    # started_at/created_at) is more recent than the reconciler's
+    # stale-heartbeat window is alive — the sweep clears its stale marker but
+    # never terminalises over it. Mirrors ``reconcile_pipeline_slots``'s
+    # reference; keyed on ``heartbeat_at`` (NOT the static ``updated_at``).
+    fresh_window = RECONCILE_STALE_HEARTBEAT_FACTOR * int(settings.saq_job_heartbeat)
+    return stale_window, node_started_stale_seconds, float(fresh_window)
+
+
+async def _fetch_sweep_org_ids(factory: async_sessionmaker[AsyncSession]) -> list[uuid.UUID]:
+    """The org-id index for the sweep; raises a partial-count sweep error on failure."""
+    try:
+        # FAR-1202: both production factories (``saq_worker._make_session_factory``
+        # and ``cron_helpers._open_factory``) are ``autobegin=False`` (the DI
+        # convention), so the org-index query must run inside an explicit
+        # transaction — a bare ``session.execute`` raises ``InvalidRequestError:
+        # Autobegin is disabled on this Session`` and the sweep fails on every
+        # tick (observed via the advisory /healthz/ready runner_marker_sweep
+        # check). Matches the per-org pass below, which already begins explicitly.
+        async with factory() as org_index_session, org_index_session.begin():
+            org_result = await org_index_session.execute(text("SELECT id FROM organisations"))
+            return [row[0] for row in org_result.all()]
+    except asyncio.CancelledError:
+        raise
+    except Exception as org_index_exc:
+        _log.exception("runner.capacity.marker_sweep_org_index_failed")
+        raise RunnerMarkerSweepError(
+            scanned=0,
+            cleared=0,
+            transitioned=0,
+            org_failures=0,
+            detail=f"org index query failed: {org_index_exc!r}",
+        ) from org_index_exc
+
+
+def _log_org_sweep_failure(exc: Exception, org_id: uuid.UUID, org_failure_details: list[str]) -> None:
+    """Record + log one failed org pass (FAR-767 lock-timeout distinct event)."""
+    # FAR-767: a lock_timeout (SQLSTATE 55P03) means a sandbox-run transaction
+    # holds a conflicting row lock. Log at warning level with a distinctive
+    # event name so the sweep is visible in prod logs without the noisy
+    # traceback of a genuine org failure; the 60s cadence retries the org next
+    # tick (fail-open, self-healing).
+    sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
+    org_failure_details.append(f"org={org_id}: {type(exc).__name__}: {exc}"[:200])
+    if sqlstate == "55P03":
+        _log.warning(
+            "runner.capacity.marker_sweep_org_lock_timeout org=%s",
+            org_id,
+        )
+    else:
+        _log.exception("runner.capacity.marker_sweep_org_failed org=%s", org_id)
+
+
+@dataclass(frozen=True)
+class _OrgSweepResult:
+    """One org pass's committed outcomes (or its partial scan count on failure)."""
+
+    scanned: int
+    cleared: int
+    transitioned: int
+    terminalised: list[tuple[uuid.UUID, uuid.UUID]]
+    breach: bool
+    failed: bool
+
+
+async def _sweep_org(
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+    *,
+    settings: Any,
+    recovery_or: Any,
+    exclusion: Any,
+    now: datetime,
+    fresh_window: float,
+    stale_window: int,
+    node_started_stale_seconds: int | None,
+    org_failure_details: list[str],
+) -> _OrgSweepResult:
+    """Run one org's sweep pass, isolating (and logging) its failure."""
+    from modulo.core.cron_helpers import _bound_org
+
+    org_scanned_slot: list[int] = [0]
+    # FAR-1501: bind this org so per-org failures logged below
+    # (marker_sweep_org_failed, capacity violations) are attributed
+    # by ErrorTrackingLogHandler instead of dropped as no_org_context.
+    async with _bound_org(org_id):
+        try:
+            org_scanned, org_breach, committed_outcomes = await _scan_org_markers(
+                factory,
+                org_id,
+                settings=settings,
+                recovery_or=recovery_or,
+                exclusion=exclusion,
+                now=now,
+                fresh_window=fresh_window,
+                stale_window=stale_window,
+                node_started_stale_seconds=node_started_stale_seconds,
+                scanned_slot=org_scanned_slot,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # qa F5: a failed org pass still reports the PARTIAL scan count —
+            # the rows it had already classified before the failure must not
+            # be silently dropped to zero on the raised RunnerMarkerSweepError.
+            _log_org_sweep_failure(exc, org_id, org_failure_details)
+            return _OrgSweepResult(
+                scanned=org_scanned_slot[0],
+                cleared=0,
+                transitioned=0,
+                terminalised=[],
+                breach=False,
+                failed=True,
+            )
+    # The org transaction COMMITTED — emit the outcomes + the breach verdict
+    # now (post-commit, never phantom).
+    org_cleared, org_transitioned, org_terminalised = _emit_sweep_outcomes(org_id, committed_outcomes)
+    return _OrgSweepResult(
+        scanned=org_scanned,
+        cleared=org_cleared,
+        transitioned=org_transitioned,
+        terminalised=org_terminalised,
+        breach=org_breach,
+        failed=False,
+    )
+
+
+def _raise_sweep_org_failures(
+    *,
+    orgs_failed: int,
+    scanned: int,
+    cleared: int,
+    transitioned: int,
+    org_failure_details: list[str],
+) -> None:
+    """Raise the partial-count sweep error when any org pass failed."""
+    if not orgs_failed:
+        return
+    raise RunnerMarkerSweepError(
+        scanned=scanned,
+        cleared=cleared,
+        transitioned=transitioned,
+        org_failures=orgs_failed,
+        detail="; ".join(org_failure_details)[:400],
+    )
+
+
 async def reconcile_runner_dispatch_markers(
     factory: async_sessionmaker[AsyncSession],
     *,
@@ -1459,22 +1762,7 @@ async def reconcile_runner_dispatch_markers(
     index fails or any org pass fails (carrying the partial counts).
     """
     settings = get_settings()
-    stale_window = stale_seconds if stale_seconds is not None else settings.runner_marker_stale_seconds
-    # FAR-1808: the node-started reclaim bound. The authoritative value is the
-    # Settings knob; a double that does not expose it falls back to the module
-    # default so the sweep still runs (the fallback equals the shipped default).
-    node_started_stale_seconds = int(
-        getattr(settings, "node_started_stale_seconds", DEFAULT_NODE_STARTED_STALE_SECONDS)
-    )
-    # The heartbeat-freshness window for the d2 exemption AND the FAR-1808
-    # liveness condition: a run whose heartbeat (falling back to
-    # started_at/created_at) is more recent than the reconciler's
-    # stale-heartbeat window is alive — the sweep clears its stale marker but
-    # never terminalises over it. Mirrors ``reconcile_pipeline_slots``'s
-    # reference; keyed on ``heartbeat_at`` (NOT the static ``updated_at``).
-    from modulo.core.cron_helpers import RECONCILE_STALE_HEARTBEAT_FACTOR, _bound_org
-
-    fresh_window = RECONCILE_STALE_HEARTBEAT_FACTOR * int(settings.saq_job_heartbeat)
+    stale_window, node_started_stale_seconds, fresh_window = _resolve_sweep_windows(settings, stale_seconds)
     now = datetime.now(UTC)
     scanned = 0
     cleared = 0
@@ -1504,81 +1792,29 @@ async def reconcile_runner_dispatch_markers(
 
     try:
         recovery_or, exclusion = _sweep_recoverability_predicate()
-
-        try:
-            # FAR-1202: both production factories (``saq_worker._make_session_factory``
-            # and ``cron_helpers._open_factory``) are ``autobegin=False`` (the DI
-            # convention), so the org-index query must run inside an explicit
-            # transaction — a bare ``session.execute`` raises ``InvalidRequestError:
-            # Autobegin is disabled on this Session`` and the sweep fails on every
-            # tick (observed via the advisory /healthz/ready runner_marker_sweep
-            # check). Matches the per-org pass below, which already begins explicitly.
-            async with factory() as org_index_session, org_index_session.begin():
-                org_result = await org_index_session.execute(text("SELECT id FROM organisations"))
-                org_ids: list[uuid.UUID] = [row[0] for row in org_result.all()]
-        except asyncio.CancelledError:
-            raise
-        except Exception as org_index_exc:
-            _log.exception("runner.capacity.marker_sweep_org_index_failed")
-            raise RunnerMarkerSweepError(
-                scanned=scanned,
-                cleared=cleared,
-                transitioned=transitioned,
-                org_failures=orgs_failed,
-                detail=f"org index query failed: {org_index_exc!r}",
-            ) from org_index_exc
+        org_ids = await _fetch_sweep_org_ids(factory)
 
         for org_id in org_ids:
-            org_scanned_slot: list[int] = [0]
-            # FAR-1501: bind this org so per-org failures logged below
-            # (marker_sweep_org_failed, capacity violations) are attributed
-            # by ErrorTrackingLogHandler instead of dropped as no_org_context.
-            async with _bound_org(org_id):
-                try:
-                    org_scanned, org_breach, committed_outcomes = await _scan_org_markers(
-                        factory,
-                        org_id,
-                        settings=settings,
-                        recovery_or=recovery_or,
-                        exclusion=exclusion,
-                        now=now,
-                        fresh_window=fresh_window,
-                        stale_window=stale_window,
-                        node_started_stale_seconds=node_started_stale_seconds,
-                        scanned_slot=org_scanned_slot,
-                    )
-                    scanned += org_scanned
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    orgs_failed += 1
-                    # qa F5: a failed org pass still reports the PARTIAL scan count —
-                    # the rows it had already classified before the failure must not
-                    # be silently dropped to zero on the raised RunnerMarkerSweepError.
-                    scanned += org_scanned_slot[0]
-                    # FAR-767: a lock_timeout (SQLSTATE 55P03) means a sandbox-run
-                    # transaction holds a conflicting row lock.  Log at warning level
-                    # with a distinctive event name so the sweep is visible in prod
-                    # logs without the noisy traceback of a genuine org failure; the
-                    # 60s cadence retries the org next tick (fail-open, self-healing).
-                    sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
-                    org_failure_details.append(f"org={org_id}: {type(exc).__name__}: {exc}"[:200])
-                    if sqlstate == "55P03":
-                        _log.warning(
-                            "runner.capacity.marker_sweep_org_lock_timeout org=%s",
-                            org_id,
-                        )
-                    else:
-                        _log.exception("runner.capacity.marker_sweep_org_failed org=%s", org_id)
-                    continue
-                # The org transaction COMMITTED — emit the outcomes + the breach
-                # verdict now (post-commit, never phantom).
-                org_cleared, org_transitioned, org_terminalised = _emit_sweep_outcomes(org_id, committed_outcomes)
-                cleared += org_cleared
-                transitioned += org_transitioned
-                terminalised_entries.extend(org_terminalised)
-                if org_breach:
-                    violations += 1
+            result = await _sweep_org(
+                factory,
+                org_id,
+                settings=settings,
+                recovery_or=recovery_or,
+                exclusion=exclusion,
+                now=now,
+                fresh_window=fresh_window,
+                stale_window=stale_window,
+                node_started_stale_seconds=node_started_stale_seconds,
+                org_failure_details=org_failure_details,
+            )
+            scanned += result.scanned
+            cleared += result.cleared
+            transitioned += result.transitioned
+            terminalised_entries.extend(result.terminalised)
+            if result.failed:
+                orgs_failed += 1
+            if result.breach:
+                violations += 1
         # FAR-1549: record the stale-RUNNING terminalisations. Runs AFTER the
         # per-org loop so a later org's failure cannot lose the earlier orgs'
         # records (and BEFORE the sweep-error raise, for the same reason).
@@ -1589,14 +1825,13 @@ async def reconcile_runner_dispatch_markers(
             cleared,
             transitioned,
         )
-        if orgs_failed:
-            raise RunnerMarkerSweepError(
-                scanned=scanned,
-                cleared=cleared,
-                transitioned=transitioned,
-                org_failures=orgs_failed,
-                detail="; ".join(org_failure_details)[:400],
-            )
+        _raise_sweep_org_failures(
+            orgs_failed=orgs_failed,
+            scanned=scanned,
+            cleared=cleared,
+            transitioned=transitioned,
+            org_failure_details=org_failure_details,
+        )
         return {
             "scanned": scanned,
             "cleared": cleared,
