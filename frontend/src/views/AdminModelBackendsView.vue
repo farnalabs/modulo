@@ -138,11 +138,12 @@
                 <label for="adminmodelbackendsview-field-11" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.base_url') }}</label>
                 <input id="adminmodelbackendsview-field-11"
                   v-model="formData.base_url"
-                  type="text"
+                  type="url"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                   :placeholder="$t('views.AdminModelBackendsView.base_url_placeholder')"
                   data-testid="admin-model-backends-base-url-input"
                 />
+                <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.AdminModelBackendsView.base_url_help') }}</p>
               </div>
               <div>
                 <label for="adminmodelbackendsview-field-10" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</label>
@@ -413,6 +414,17 @@
                   data-testid="admin-model-backends-edit-model-id"
                 />
               </div>
+              <div v-if="showBaseUrl">
+                <label for="adminmodelbackendsview-field-15" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.base_url') }}</label>
+                <input id="adminmodelbackendsview-field-15"
+                  v-model="formData.base_url"
+                  type="url"
+                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                  :placeholder="$t('views.AdminModelBackendsView.base_url_placeholder')"
+                  data-testid="admin-model-backends-edit-base-url"
+                />
+                <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.AdminModelBackendsView.base_url_help') }}</p>
+              </div>
               <div>
                 <label for="adminmodelbackendsview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.api_key_leave_blank_to_keep_existing') }}</label>
                 <input id="adminmodelbackendsview-field-3"
@@ -535,9 +547,104 @@ interface BackendFormState {
   visibility: string
 }
 
-const variableBaseProviders = new Set(['azure_openai', 'ollama', 'openrouter', 'custom'])
+// Providers whose endpoint can be pointed at a self-hosted / OpenAI-compatible
+// gateway (FAR-2046). The backend also accepts the field for other built-in
+// providers, but only these route through the OpenAI-compatible client.
+const baseUrlProviders = new Set([
+  'ai21',
+  'azure_openai',
+  'custom',
+  'deepseek',
+  'fireworks',
+  'grok',
+  'groq',
+  'jan',
+  'llamacpp',
+  'lm_studio',
+  'localai',
+  'ollama',
+  'openai',
+  'opencode',
+  'openrouter',
+  'perplexity',
+  'qwen',
+  'tgi',
+  'togetherai',
+  'vllm',
+])
 
-const showBaseUrl = computed(() => variableBaseProviders.has(formData.provider))
+const showBaseUrl = computed(() => baseUrlProviders.has(formData.provider))
+
+const metadataHostNames = new Set([
+  'metadata',
+  'metadata.google.internal',
+  'instance-data',
+  'instance-data.ec2.internal',
+])
+
+function normalizeHost(host: string): string {
+  return host.replace(/^\[|\]$/g, '').toLowerCase()
+}
+
+function isMetadataHost(host: string): boolean {
+  const normalized = normalizeHost(host)
+  if (metadataHostNames.has(normalized)) return true
+  if (normalized.startsWith('169.254.')) return true
+  if (normalized === '100.100.100.200' || normalized === 'fd00:ec2::254') return true
+  if (normalized.startsWith('::ffff:169.254.')) return true
+  // IPv6 link-local (fe80::/10)
+  return /^fe[89ab][0-9a-f]:/.test(normalized)
+}
+
+function isLocalOrPrivateHost(host: string): boolean {
+  const normalized = normalizeHost(host)
+  if (['localhost', 'host.docker.internal'].includes(normalized)) return true
+  if (['.localhost', '.local', '.internal', '.home.arpa'].some(suffix => normalized.endsWith(suffix))) return true
+  if (normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd')) return true
+  if (!normalized.includes('.')) return true
+  const octets = normalized.split('.')
+  if (octets.length !== 4 || !octets.every((octet) => /^\d{1,3}$/.test(octet))) return false
+  const [first, second] = octets.map(Number)
+  if (octets.some((octet) => Number(octet) > 255)) return false
+  return (
+    first === 10 ||
+    first === 127 ||
+    (first === 192 && second === 168) ||
+    (first === 172 && second >= 16 && second <= 31)
+  )
+}
+
+/**
+ * Mirror the server-side base_url rules (FAR-2046): http(s) only, no embedded
+ * credentials, no query/fragment, cloud-metadata targets refused, and https
+ * required unless the host is loopback/private/internal.
+ */
+function validateBaseUrl(raw: string): string | null {
+  const value = raw.trim()
+  if (!value) return null
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    return t('views.AdminModelBackendsView.base_url_invalid')
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return t('views.AdminModelBackendsView.base_url_invalid')
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    return t('views.AdminModelBackendsView.base_url_invalid')
+  }
+  if (!parsed.hostname) {
+    return t('views.AdminModelBackendsView.base_url_invalid')
+  }
+  if (isMetadataHost(parsed.hostname)) {
+    return t('views.AdminModelBackendsView.base_url_metadata_blocked')
+  }
+  if (parsed.protocol === 'http:' && !isLocalOrPrivateHost(parsed.hostname)) {
+    return t('views.AdminModelBackendsView.base_url_https_required')
+  }
+  return null
+}
 
 function emptyForm(): BackendFormState {
   return {
@@ -681,7 +788,7 @@ function openEditForm(backend: ModelBackendItem) {
   deleteConfirmBackendId.value = null
   formError.value = null
   const params = (backend.default_params ?? {}) as Record<string, unknown>
-  const baseUrl = typeof params.base_url === 'string' ? params.base_url : ''
+  const baseUrl = backend.base_url ?? ''
   Object.assign(formData, {
     name: backend.name,
     display_name: backend.display_name,
@@ -719,19 +826,27 @@ function buildDefaultParams(): Record<string, unknown> {
       console.warn('Failed to parse JSON default params', e)
     }
   }
-  if (formData.base_url.trim()) {
-    params.base_url = formData.base_url.trim()
-  }
+  // FAR-2046: base_url is endpoint configuration, not a model parameter — it
+  // travels as a top-level field and is persisted beside the API key.
+  delete params.base_url
   return params
 }
 
+function baseUrlField(): string | undefined {
+  if (!showBaseUrl.value) return undefined
+  const value = formData.base_url.trim()
+  return value || undefined
+}
+
 function buildCreateBody() {
+  const baseUrl = baseUrlField()
   return {
     name: formData.name.trim(),
     display_name: formData.display_name.trim(),
     provider: formData.provider,
     model_id: formData.model_id.trim(),
     api_key: formData.api_key.trim(),
+    ...(baseUrl ? { base_url: baseUrl } : {}),
     default_params: buildDefaultParams(),
     visibility: formData.visibility,
     tier: 'native' as const,
@@ -746,14 +861,29 @@ function buildUpdateBody(): components['schemas']['ModelBackendUpdate'] {
     default_params: buildDefaultParams(),
     visibility: formData.visibility,
   }
+  if (showBaseUrl.value) {
+    // An explicit null clears a stored endpoint; the field is only sent for
+    // providers that can actually use one.
+    body.base_url = formData.base_url.trim() || null
+  }
   if (formData.api_key.trim()) {
     body.api_key = formData.api_key.trim()
   }
   return body
 }
 
+function checkBaseUrl(): boolean {
+  const error = showBaseUrl.value ? validateBaseUrl(formData.base_url) : null
+  if (error) {
+    formError.value = error
+    return false
+  }
+  return true
+}
+
 async function createBackend() {
   if (!formData.name.trim() || !formData.display_name.trim() || !formData.model_id.trim() || !formData.api_key.trim()) return
+  if (!checkBaseUrl()) return
   saving.value = true
   formError.value = null
   try {
@@ -776,6 +906,7 @@ async function createBackend() {
 
 async function updateBackend() {
   if (!editBackendId.value || !formData.name.trim() || !formData.display_name.trim() || !formData.model_id.trim()) return
+  if (!checkBaseUrl()) return
   saving.value = true
   formError.value = null
   try {

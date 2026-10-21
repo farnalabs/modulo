@@ -1791,6 +1791,9 @@ elements:
       - testid: admin-model-backends-edit-model-id
         type: input
         dynamic_testid: false
+      - testid: admin-model-backends-edit-base-url
+        type: input
+        dynamic_testid: false
       - testid: admin-model-backends-edit-api-key
         type: input
         dynamic_testid: false
