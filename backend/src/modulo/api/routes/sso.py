@@ -533,7 +533,20 @@ async def oidc_login(
     return response
 
 
-@router.get("/oidc/{provider}/callback")
+@router.get(
+    "/oidc/{provider}/callback",
+    status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+    response_class=RedirectResponse,
+    responses={
+        303: {
+            "description": (
+                "Redirect to the frontend login page with a whitelisted ``sso_error`` "
+                "code when the callback cannot complete (invalid state/PKCE binding, "
+                "failed code exchange, or a denied/unavailable provider)."
+            )
+        },
+    },
+)
 @handle_db_errors("sso.oidc_callback")
 async def oidc_callback(
     provider: str,
@@ -728,6 +741,17 @@ async def _read_acs_form(request: Request) -> FormData:
 # resolves, then rebound to the provider's org. An SSO sign-in -> fail closed.
 @router.post(
     "/saml/acs/{provider_id}",
+    status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+    response_class=RedirectResponse,
+    responses={
+        303: {
+            "description": (
+                "Redirect to the frontend login page with a whitelisted ``sso_error`` "
+                "code when the callback cannot complete (invalid state/PKCE binding, "
+                "failed code exchange, or a denied/unavailable provider)."
+            )
+        },
+    },
     dependencies=[
         Depends(
             audited_system("saml_acs_attempted", "session", actor_source="pre_auth", fail_closed=True),
@@ -959,6 +983,17 @@ async def saml_login(
 # audited(principal_dep=...) to resolve. Actor-less variant, SYSTEM actor.
 @router.post(
     "/saml/acs",
+    status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+    response_class=RedirectResponse,
+    responses={
+        303: {
+            "description": (
+                "Redirect to the frontend login page with a whitelisted ``sso_error`` "
+                "code when the callback cannot complete (invalid state/PKCE binding, "
+                "failed code exchange, or a denied/unavailable provider)."
+            )
+        },
+    },
     dependencies=[
         Depends(
             audited_system("saml_acs_attempted", "session", actor_source="pre_auth", fail_closed=True),

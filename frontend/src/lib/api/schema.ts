@@ -26259,14 +26259,19 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description Redirect to the frontend login page with a whitelisted ``sso_error`` code when the callback cannot complete (invalid state/PKCE binding, failed code exchange, or a denied/unavailable provider). */
+            303: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": unknown;
+                content?: never;
+            };
+            /** @description Successful Response */
+            307: {
+                headers: {
+                    [name: string]: unknown;
                 };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -26292,14 +26297,19 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description Redirect to the frontend login page with a whitelisted ``sso_error`` code when the callback cannot complete (invalid state/PKCE binding, failed code exchange, or a denied/unavailable provider). */
+            303: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": unknown;
+                content?: never;
+            };
+            /** @description Successful Response */
+            307: {
+                headers: {
+                    [name: string]: unknown;
                 };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -26420,14 +26430,19 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description Redirect to the frontend login page with a whitelisted ``sso_error`` code when the callback cannot complete (invalid state/PKCE binding, failed code exchange, or a denied/unavailable provider). */
+            303: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": unknown;
+                content?: never;
+            };
+            /** @description Successful Response */
+            307: {
+                headers: {
+                    [name: string]: unknown;
                 };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
