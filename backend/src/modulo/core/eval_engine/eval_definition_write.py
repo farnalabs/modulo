@@ -21,7 +21,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -31,6 +31,9 @@ from modulo.core.eval_engine.policy_gate import (
     validate_binding,
 )
 from modulo.core.eval_engine.typed_judge import JudgeConfigWriteError, reject_legacy_judge_write
+
+if TYPE_CHECKING:
+    from modulo.db.models.eval import Eval
 
 _log = logging.getLogger(__name__)
 
@@ -162,16 +165,21 @@ async def _enforce_judge_config_write(
     eval_type: str,
     config_json: dict[str, Any],
     existing_eval_id: uuid.UUID | None,
-) -> None:
+) -> Eval | None:
     """Require the typed dialect on create; freeze a stored legacy config.
 
     ``create_or_update_eval`` is the single chokepoint for every write path, so
     enforcing here covers REST, MCP, feedback publish and config-as-code at
     once. No backfill: a stored legacy config stays byte-identical and is
     executable as today; editing it is a typed 422 (ADR 066 D8).
+
+    Returns the ``Eval`` row loaded for ``existing_eval_id`` (or ``None`` when
+    there is no update id / no such row) so the caller reuses it for the update
+    rather than issuing the same SELECT twice.
     """
     stored_config: Any = None
     stored_eval_type: str | None = None
+    existing_row: Eval | None = None
     if existing_eval_id is not None:
         from modulo.db.models.eval import Eval
 
@@ -191,7 +199,7 @@ async def _enforce_judge_config_write(
     # legacy judge (changing its type away would otherwise discard the config
     # without a migration).
     if eval_type != "model_judge" and stored_eval_type != "model_judge":
-        return
+        return existing_row
     try:
         reject_legacy_judge_write(
             config_json=config_json,
@@ -213,6 +221,7 @@ async def _enforce_judge_config_write(
                 "hint": exc.hint,
             },
         ) from None
+    return existing_row
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +365,7 @@ async def create_or_update_eval(
 
     # --- Judge dialect gate (ADR 066 D8) — every write path lands here ---
 
-    await _enforce_judge_config_write(
+    existing_row = await _enforce_judge_config_write(
         session,
         org_id=org_id,
         eval_type=eval_type,
@@ -399,15 +408,9 @@ async def create_or_update_eval(
     # --- Eval row persistence ---
 
     if existing_eval_id is not None:
-        # UPDATE path — load existing, snapshot, bump version
-        existing = (
-            await session.execute(
-                select(Eval).where(
-                    Eval.id == existing_eval_id,
-                    Eval.organisation_id == org_id,
-                )
-            )
-        ).scalar_one_or_none()
+        # UPDATE path — reuse the row the judge gate already loaded, snapshot,
+        # bump version
+        existing = existing_row
         if existing is not None:
             # Eval row exists (backfilled) — update it
             existing.pre_version_raw = {"config_json": existing.config_json}
