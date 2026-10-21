@@ -628,6 +628,7 @@ class TestUpdateEvalDefinition:
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(scalar_one_value=eval_def),  # Eval lookup (chunk 3b: reads from evals)
+            _make_result(scalar_one_value=None),  # judge chokepoint: stored eval-type lookup
             _make_result(scalar_one_value=None),  # PolicyGate lookup for current failure_behaviour
             _make_result(scalar_one_value=eval_def),  # create_or_update_eval: existing Eval lookup
             _make_result(scalar_one_value=None),  # create_or_update_eval: PolicyGate lookup
