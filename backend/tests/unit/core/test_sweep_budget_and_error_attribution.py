@@ -27,6 +27,15 @@ the org's transaction is rolled back, its in-memory counts are unwound to
 match, the tick records a truthful ``status='timeout'`` marker naming the
 org, and the loop CONTINUES to the remaining orgs, ``record_facts`` and the
 compensating sweeps.
+
+FAR-1643: The 30s per-org cut in prod turned out to be time spent PROCESSING
+ROWS (``during stage=reconcile_org:<id>/row_loop:13/15`` at ~2s/row), not a
+pool/connect/statement/lock wait — so a cut there rolled back every row and
+terminalizer the pass had already repaired and raised a readiness alert. The
+per-row loop is now deadline-aware: it stops starting rows with
+``_RECONCILE_ROW_DEFER_MARGIN_SECONDS`` of the slice left, counts the
+unprocessed rows in ``rows_deferred`` and returns normally so the processed
+prefix COMMITS. The caller's ``asyncio.timeout`` stays as the hard backstop.
 """
 
 from __future__ import annotations
@@ -34,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Self
@@ -733,8 +743,17 @@ def _budget_tuning() -> ch.ReconcileTuning:
     )
 
 
-async def _run_org(rows: list[Any], row_budget: int | None) -> tuple[dict[str, Any], _BudgetSession, Any]:
-    """Drive the REAL ``_reconcile_org`` with *row_budget* applied."""
+async def _run_org(
+    rows: list[Any],
+    row_budget: int | None,
+    *,
+    org_deadline_monotonic: float | None = None,
+) -> tuple[dict[str, Any], _BudgetSession, Any]:
+    """Drive the REAL ``_reconcile_org`` with *row_budget* applied.
+
+    ``org_deadline_monotonic`` is forwarded verbatim so the FAR-1643 row-loop
+    deferral can be exercised without a wall-clock sleep.
+    """
     session = _BudgetSession(rows)
     summary: dict[str, Any] = {"scanned": 0}
     with (
@@ -753,6 +772,7 @@ async def _run_org(rows: list[Any], row_budget: int | None) -> tuple[dict[str, A
             summary=summary,
             terminalized_run_ids=[],
             limits=ch._ReconcileOrgLimits(row_budget=row_budget),
+            org_deadline_monotonic=org_deadline_monotonic,
         )
     return summary, session, one_row
 
@@ -1053,3 +1073,128 @@ class TestPerOrgTimeBound:
         assert summary["status"] == "ok"
         assert sweeps.await_count == 1
         assert stage.get("op") == "compensating_sweeps"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1643: the org row loop defers before the slice cuts the transaction
+# ---------------------------------------------------------------------------
+
+
+async def _slow_row(*_args: Any, **_kwargs: Any) -> int:
+    """A row that outlives any slice the regression test below grants.
+
+    It is what the OLD code ran into: with no deadline-aware deferral the
+    per-row loop started this row and the caller's ``asyncio.timeout`` cut the
+    whole org transaction mid-row.
+    """
+    await asyncio.sleep(10)
+    return 0
+
+
+async def _drive_attempt_reconcile_org(
+    *,
+    rows: list[Any],
+    org_slice_seconds: float,
+    summary: dict[str, Any],
+    enqueue_failed_redispatched: int,
+) -> tuple[int | None, Any]:
+    """Drive the REAL ``_attempt_reconcile_org`` (the per-org slice wrapper).
+
+    Returns the outcome plus the recording ``_reconcile_one_row`` double, so a
+    caller-level test can assert both the bounded-failure contract and whether
+    a row was started at all.
+    """
+    session = _BudgetSession(rows)
+    ctx = ch._ReconcileContext(
+        factory=MagicMock(return_value=session),
+        q=MagicMock(),
+        redis_client=MagicMock(),
+        re_dispatch_predicate=ch.text("1 = 1"),
+        tuning=_budget_tuning(),
+        terminalize_max=25,
+        early_detect_minutes=None,
+        max_rows=500,
+        summary=summary,
+        terminalized_run_ids=[],
+        age_gate_run_ids=[],
+        outer_budget_seconds=95,
+        org_budget_seconds=30,
+    )
+    with (
+        patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+        patch.object(ch, "_BATCH_TERMINALIZER_SPECS", ()),
+        patch.object(ch, "_reconcile_one_row", new_callable=AsyncMock, side_effect=_slow_row) as one_row,
+    ):
+        outcome = await ch._attempt_reconcile_org(
+            ctx=ctx,
+            org_id=uuid.uuid4(),
+            enqueue_failed_redispatched=enqueue_failed_redispatched,
+            row_budget=500,
+            stage=None,
+            org_slice_seconds=org_slice_seconds,
+        )
+    return outcome, one_row
+
+
+class TestRowLoopTimeDeferral:
+    """FAR-1643: prod attributed the 30s per-org cut to ROW PROCESSING —
+    ``status=timeout ... during stage=reconcile_org:<id>/row_loop:13/15`` with
+    every pool/connect/statement/lock counter at 0. The loop now stops
+    STARTING rows with a margin to spare, so the processed prefix COMMITS
+    instead of the whole org transaction rolling back."""
+
+    @pytest.mark.asyncio
+    async def test_deadline_inside_the_margin_starts_no_row_and_defers_all(self) -> None:
+        """A deadline already inside ``_RECONCILE_ROW_DEFER_MARGIN_SECONDS``
+        processes nothing, counts every unprocessed row, and RETURNS CLEANLY
+        (no raise — the caller's hard bound never has to fire)."""
+        rows = [object() for _ in range(5)]
+        summary, _session, one_row = await _run_org(
+            rows,
+            row_budget=None,
+            org_deadline_monotonic=time.monotonic() + 1.0,
+        )
+
+        assert one_row.await_count == 0
+        assert summary["scanned"] == 0
+        assert summary["rows_deferred"] == len(rows)
+
+    @pytest.mark.asyncio
+    async def test_far_future_deadline_processes_every_row(self) -> None:
+        """Control: an ample deadline is not a tripwire — every row runs and
+        the time-deferral contributes nothing to ``rows_deferred``."""
+        rows = [object() for _ in range(4)]
+        summary, _session, one_row = await _run_org(
+            rows,
+            row_budget=10,
+            org_deadline_monotonic=time.monotonic() + 3600.0,
+        )
+
+        assert one_row.await_count == 4
+        assert summary["scanned"] == 4
+        assert summary.get("rows_deferred", 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_per_org_slice_defers_rows_instead_of_timing_out(self) -> None:
+        """REGRESSION: under the old code the slow row started and the
+        caller's ``asyncio.timeout`` cut the org (outcome ``None``,
+        ``org_timeouts == 1``). With the deadline-aware loop the same slice
+        defers the rows and returns the carried counter normally."""
+        summary = ch._dispatcher_summary()
+        rows = [object() for _ in range(5)]
+
+        outcome, one_row = await _drive_attempt_reconcile_org(
+            rows=rows,
+            org_slice_seconds=0.2,
+            summary=summary,
+            enqueue_failed_redispatched=3,
+        )
+
+        # The bounded-failure arm did NOT fire: the pass returned its counter.
+        assert outcome == 3
+        assert summary["org_timeouts"] == 0
+        assert summary["status"] == "ok"
+        # Every unprocessed row is counted, visible rather than silently lost.
+        assert summary["rows_deferred"] == len(rows)
+        # The slow row was never started — that is what avoided the cut.
+        assert one_row.await_count == 0

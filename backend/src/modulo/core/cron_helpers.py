@@ -6821,6 +6821,16 @@ _RECONCILE_POST_ORGS_RESERVE_SECONDS = 15
 # Smallest org slice worth starting: below this the remaining budget goes to
 # record_facts / the compensating sweeps and the org is deferred, not cut.
 _RECONCILE_ORG_MIN_SECONDS = 1.0
+# FAR-1643: headroom kept for the per-row loop to exit CLEANLY before the
+# caller's per-org slice cuts the whole transaction. The prod episodes show
+# ~2s/row (15 rows inside a 30s slice, last observed stage
+# ``row_loop:13/15``), so a new row is not started once less than this margin
+# remains: the rows already processed COMMIT and the remainder drains on the
+# next 60s tick, instead of the lot rolling back and raising a readiness
+# alert. A single row that itself overruns the margin is still caught by the
+# CALLER's ``asyncio.timeout`` backstop — this is a clean-exit improvement,
+# never a replacement for the hard bound.
+_RECONCILE_ROW_DEFER_MARGIN_SECONDS = 5.0
 # FAR-1644 (M2): the per-org-cut discriminator is the slice ITSELF — see the
 # ``except TimeoutError`` arm in ``_dispatcher_reconcile_body``. It used to
 # subtract a 0.5s ``_RECONCILE_ORG_CUT_SLACK_SECONDS`` first, on the theory
@@ -8766,6 +8776,10 @@ async def _attempt_reconcile_org(
     terminalized_len_before = len(ctx.terminalized_run_ids)
     age_gate_len_before = len(ctx.age_gate_run_ids)
     org_pass_started = time.monotonic()
+    # FAR-1643: the same slice expressed as an absolute deadline so the row
+    # loop can stop STARTING rows with margin to spare. The ``asyncio.timeout``
+    # below stays armed as the hard backstop for a single row that overruns it.
+    org_deadline_monotonic = time.monotonic() + org_slice_seconds
     try:
         async with asyncio.timeout(org_slice_seconds):
             return await _reconcile_org(
@@ -8785,6 +8799,7 @@ async def _attempt_reconcile_org(
                     row_budget=row_budget,
                 ),
                 stage=stage,
+                org_deadline_monotonic=org_deadline_monotonic,
             )
     except TimeoutError:
         # FAR-1525: the org's pass raised a builtin TimeoutError. The
@@ -9184,6 +9199,7 @@ async def _reconcile_org(
     age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
     limits: _ReconcileOrgLimits = _ReconcileOrgLimits(),
     stage: dict[str, str] | None = None,
+    org_deadline_monotonic: float | None = None,
 ) -> int:
     """Run one org's reconcile pass (terminalizers + row select + per-row loop).
 
@@ -9207,12 +9223,31 @@ async def _reconcile_org(
     exercising one specific branch) means unbounded, exactly as before
     FAR-1425.
 
-    TIME: this pass is bounded by the CALLER (FAR-1525) — the reconcile body
-    wraps the call in ``asyncio.timeout`` at
+    TIME: this pass is still bounded by the CALLER (FAR-1525) — the reconcile
+    body wraps the call in ``asyncio.timeout`` at
     ``dispatcher_reconcile_org_budget_seconds``. On expiry the transaction
     above rolls back at its safe boundary and the caller unwinds the counts
     and terminalizer ids this pass recorded; direct callers (tests) remain
     unbounded, exactly as before.
+
+    ROW-LOOP DEFERRAL (FAR-1643): the prod ``dispatcher_reconcile`` alert
+    episodes attributed the 30s org bound to time spent PROCESSING ROWS, not
+    waiting — ``last_error`` carried
+    ``during stage=reconcile_org:<id>/row_loop:13/15`` with
+    ``org_pool_timeouts`` / ``org_connect_timeouts`` /
+    ``org_statement_timeouts`` / ``org_lock_timeouts`` all at 0. A cut there
+    discards the WHOLE org transaction, including every terminalizer and row
+    this pass had already repaired. When the caller supplies
+    ``org_deadline_monotonic`` (the absolute end of this org's slice), the
+    per-row loop therefore stops STARTING a new row once less than
+    ``_RECONCILE_ROW_DEFER_MARGIN_SECONDS`` remains, counts the unprocessed
+    rows in ``summary["rows_deferred"]`` (the same counter the FAR-1425 row
+    budget feeds, so the cap is visible rather than reported as a clean tick),
+    and RETURNS NORMALLY so the processed prefix commits. The remainder drains
+    on the next 60s tick. The caller's ``asyncio.timeout`` is untouched and
+    remains the hard backstop for a single row that overruns the margin.
+    ``org_deadline_monotonic=None`` (a direct caller such as a test) means
+    unbounded in exactly the pre-FAR-1643 sense.
 
     LOCK BOUND (FAR-1601): this transaction is the ONE boundary for every
     periodic-sweep write this module makes on the hot ``runs`` table, so the
@@ -9508,11 +9543,34 @@ async def _reconcile_org(
             )
             return enqueue_failed_redispatched
 
+        row_loop_started = time.monotonic()
         for row_index, row in enumerate(rows):
             # FAR-1425: defence in depth — the LIMIT already caps the fetch,
             # but the loop must never be able to exceed the budget the
             # inner-deadline message advertises (``max_rows=...``).
             if row_budget is not None and row_index >= row_budget:
+                break
+            # FAR-1643: stop STARTING rows with margin to spare, so the work
+            # already done commits instead of the caller's slice rolling the
+            # whole org transaction back (the prod row_loop:13/15 cut). The
+            # unprocessed rows are counted — never silently dropped — and drain
+            # on the next 60s tick. Checked AFTER the row budget so the
+            # FAR-1425 path above keeps its exact semantics, and BEFORE the
+            # stage mark so a deferral never looks like a row in flight.
+            if (
+                org_deadline_monotonic is not None
+                and time.monotonic() >= org_deadline_monotonic - _RECONCILE_ROW_DEFER_MARGIN_SECONDS
+            ):
+                deferred_rows = len(rows) - row_index
+                summary["rows_deferred"] = summary.get("rows_deferred", 0) + deferred_rows
+                _log.info(
+                    "dispatcher_reconcile.row_loop_time_deferred org=%s deferred_rows=%d "
+                    "elapsed_seconds=%.1f (row loop stopped before the per-org slice cut the "
+                    "whole transaction; the remainder drains on the next 60s tick)",
+                    org_id,
+                    deferred_rows,
+                    time.monotonic() - row_loop_started,
+                )
                 break
             _mark(f"row_loop:{row_index}/{len(rows)}")
             summary["scanned"] += 1
