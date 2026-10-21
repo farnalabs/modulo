@@ -499,55 +499,91 @@ def _swept_helper_calls(
     return hits
 
 
+def _swept_callers_in_module(rel: str, module: ast.Module) -> dict[tuple[str, str], set[str]]:
+    """``(rel, function)`` -> the swept helpers attributed to *function*, for ONE module.
+
+    Split out of ``_direct_swept_callers`` so import resolution AND the helper-hop
+    attribution can be pinned against synthetic source: a discovery regression is
+    otherwise invisible, because the derived set simply shrinks and the only
+    tripwire is the known-caller superset assertion in the sweep test.
+
+    Import-resolution cost is bounded per MODULE: the import tables are resolved
+    once and shared by every function scan (2026-10-21: resolving them inside the
+    per-function scan re-walked the module AST once per function and pushed the CI
+    runner past the 120s pytest-timeout cap).
+    """
+    imported_symbols = _imported_symbols(module)
+    module_aliases = _imported_module_aliases(module)
+    functions = _iter_functions(module)
+    hits_by_function: dict[str, set[str]] = {}
+    for function in functions:
+        hits = _swept_helper_calls(function, module, imported_symbols, module_aliases)
+        if hits:
+            hits_by_function[function.name] = hits
+    attributed = _attribute_same_file_helper_hops(functions, hits_by_function)
+    return {(rel, function_name): hits for function_name, hits in attributed.items()}
+
+
+def _attribute_same_file_helper_hops(
+    functions: list[ast.FunctionDef | ast.AsyncFunctionDef],
+    hits_by_function: dict[str, set[str]],
+) -> dict[str, set[str]]:
+    """Attribute swept-helper hits along SAME-FILE helper calls, to a fixpoint.
+
+    A request arm that calls a module-local helper which itself reaches a swept
+    helper is attributed that helper's hits: a function-extraction refactor must
+    not blind the discovery to the arm. If, say, an arm's body were extracted
+    into a hypothetical ``_persist_provider`` helper calling the swept
+    ``update_provider``, the arm would still be discovered — it is the same
+    bounded transaction under the same except arm.
+
+    The loop repeats until no new attribution appears, so a CHAIN of same-file
+    hops (arm -> helper1 -> helper2 -> swept helper) is followed too. A single
+    pass would leave such an arm undiscovered: the sweeper map is mutated during
+    the pass, so a helper attributed late in the pass is never consulted as a
+    sweeper by the arm. Each pass adds at least one entry or stops, and the
+    function count is fixed, so the loop is bounded by the module's size; a
+    recursive cycle with no swept hit never enters the map and cannot loop.
+
+    Only a direct named call into a same-module function is followed: an
+    attribute/receiver call is not, and cross-file transitive callers stay out
+    (the accepted residual recorded in ``_MAPPING_EXCEPTION_REASONS``).
+    """
+    attributed: dict[str, set[str]] = {name: set(hits) for name, hits in hits_by_function.items()}
+    changed = True
+    while changed:
+        changed = False
+        for function in functions:
+            if function.name in attributed:
+                continue
+            hits: set[str] = set()
+            for node in ast.walk(function):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in attributed:
+                    hits |= attributed[node.func.id]
+            if hits:
+                attributed[function.name] = hits
+                changed = True
+    return attributed
+
+
 def _direct_swept_callers() -> dict[tuple[str, str], set[str]]:
-    """``(route file, function)`` -> the swept helpers that function calls directly.
+    """``(route file, function)`` -> the swept helpers attributed to that function.
 
     Scans ``api/routes/*.py`` (excluding underscore-prefixed shared helpers,
     which own no request arm). This is the mechanically derived caller set the
     enumerated ``_MAPPED_55P03_ROUTE_ARMS`` list cannot provide.
 
-    Import-resolution cost is bounded per FILE: the module's import tables are
-    resolved once and shared by every function scan (2026-10-21: resolving them
-    inside the per-function scan re-walked the module AST once per function and
-    pushed the CI runner past the 120s pytest-timeout cap).
-
-    Attribution covers ONE same-file hop: a request arm that calls a
-    module-local helper which ITSELF directly calls a swept helper is
-    attributed that helper's hits (a function-extraction refactor must not
-    blind the discovery to the arm — its redirected swept surface, e.g.
-    ``update_provider_endpoint`` -> ``_persist_provider_update`` ->
-    ``update_provider``, is the same bounded transaction under the same
-    except arm). Only a direct named call into a same-module function counts,
-    and only one hop: cross-file transitive callers stay out (the accepted
-    residual recorded in ``_MAPPING_EXCEPTION_REASONS``).
+    Import resolution is bounded per file and same-file helper hops are followed
+    to a fixpoint; see ``_swept_callers_in_module`` and
+    ``_attribute_same_file_helper_hops``.
     """
     routes_dir = _SRC / "api" / "routes"
     discovered: dict[tuple[str, str], set[str]] = {}
     for path in sorted(routes_dir.glob("*.py")):
         if path.name.startswith("_"):
             continue
-        module = ast.parse(path.read_text(encoding="utf-8"))
         rel = path.relative_to(_SRC).as_posix()
-        imported_symbols = _imported_symbols(module)
-        module_aliases = _imported_module_aliases(module)
-        functions = _iter_functions(module)
-        hits_by_function: dict[str, set[str]] = {}
-        for function in functions:
-            hits = _swept_helper_calls(function, module, imported_symbols, module_aliases)
-            if hits:
-                hits_by_function[function.name] = hits
-        sweeper_names = set(hits_by_function)
-        for function in functions:
-            if function.name in hits_by_function:
-                continue
-            attributed: set[str] = set()
-            for node in ast.walk(function):
-                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in sweeper_names:
-                    attributed |= hits_by_function[node.func.id]
-            if attributed:
-                hits_by_function[function.name] = attributed
-        for function_name, hits in hits_by_function.items():
-            discovered[(rel, function_name)] = hits
+        discovered.update(_swept_callers_in_module(rel, ast.parse(path.read_text(encoding="utf-8"))))
     return discovered
 
 
@@ -587,6 +623,15 @@ def _is_route_handler(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     ``api/routes/*.py`` is mostly module-local helpers as well as endpoints; a
     helper is only reachable through a request arm that calls it, so it owns no
     response of its own. Only a router-decorated function answers a request.
+
+    The decorator NAME is matched receiver-agnostically (``@router.put(...)``
+    and a hypothetical ``@something.put(...)`` both count). That is deliberate:
+    the receiver is an arbitrary ``APIRouter`` alias and inspecting it would need
+    binding analysis. The assumption is that no same-file decorator is
+    coincidentally named ``get``/``post``/``delete``/``route``/... — true for
+    today's inventory (only ``@router.*``, ``@classmethod``, ``@dataclass``,
+    ``@field_validator``/``@model_validator``), so a helper cannot be
+    misclassified. A collision would need renaming here, not a weaker match.
     """
     for decorator in function.decorator_list:
         target = decorator.func if isinstance(decorator, ast.Call) else decorator
@@ -605,6 +650,52 @@ def _is_handle_db_errors_decorated(function: ast.FunctionDef | ast.AsyncFunction
         if isinstance(target, ast.Attribute) and target.attr == _HANDLE_DB_ERRORS_NAME:
             return True
     return False
+
+
+def _mapping_failure(
+    rel: str,
+    function_name: str,
+    helpers: set[str],
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> str | None:
+    """The 55P03 mapping failure for one discovered caller, or ``None`` when it passes.
+
+    Extracted from the sweep test so each verdict rule — including the
+    ``_is_route_handler`` skip, whose deletion would otherwise leave the suite
+    green — is pinned against synthetic source.
+
+    * the function calls the classifier itself → passes;
+    * it is a recorded exception → passes;
+    * it has a local ``except SQLAlchemyError`` arm → FAILS (the arm answers
+      without the classifier, so a contended row answers 503/500 not 409);
+    * it is NOT a request arm → passes: a module-local helper owns no response,
+      so 55P03 propagates to the arm that called it, whose own arm is checked;
+    * it is a request arm with the ``@handle_db_errors`` backstop → passes;
+    * otherwise → FAILS (no classifier and no backstop).
+    """
+    if _calls_classifier(function):
+        return None
+    if (rel, function_name) in _MAPPING_EXCEPTION_REASONS:
+        return None
+    if _local_sqlalchemy_arms(function):
+        return (
+            f"{rel}::{function_name} directly calls {sorted(helpers)} and its local "
+            f"except SQLAlchemyError arm never calls {_CLASSIFIER_NAME} — a contended row "
+            "would answer 503/500 instead of a 409 conflict"
+        )
+    if not _is_route_handler(function):
+        # A module-local helper owns no response: with no local except arm the
+        # exception propagates to the request arm that called it, whose own arm
+        # this sweep checks (same-file helper hops are attributed). Failing the
+        # helper would make every body-extraction refactor red without any
+        # change in the response a contended request actually receives.
+        return None
+    if not _is_handle_db_errors_decorated(function):
+        return (
+            f"{rel}::{function_name} directly calls {sorted(helpers)} but has neither "
+            f"{_CLASSIFIER_NAME} nor the @{_HANDLE_DB_ERRORS_NAME} backstop"
+        )
+    return None
 
 
 def test_category_c_site_counts_match_the_inventory() -> None:
@@ -870,6 +961,144 @@ def test_swept_helper_resolver_handles_every_import_shape() -> None:
     assert not _swept_helper_calls(function, module)
 
 
+def test_same_file_helper_hops_still_attribute_the_request_arm() -> None:
+    """One hop, and a chain of hops, must not blind discovery to the arm.
+
+    A function-extraction refactor moves an arm's body into a module-local
+    helper. Discovery attributes such helpers back to the arm; without that the
+    derived caller set silently loses the arm, and the known-caller superset
+    only protects arms known TODAY — a newly extracted arm would go unchecked.
+
+    The chain case pins the FIXPOINT: the arms are declared first, so a single
+    attribution pass — which snapshots the sweeper set before the pass — leaves
+    ``arm_two_hops`` undiscovered.
+    """
+    source = textwrap.dedent(
+        """
+        from modulo.db.crud.account import update_account_preferences
+
+        @router.put("/providers/{provider_id}")
+        async def arm_one_hop(session):
+            await _persist(session)
+
+        @router.put("/accounts/{account_id}")
+        async def arm_two_hops(session):
+            await _load(session)
+
+        async def _persist(session):
+            await update_account_preferences(session)
+
+        async def _load(session):
+            await _persist(session)
+
+        async def unrelated(session):
+            await something_else(session)
+        """
+    )
+    discovered = _swept_callers_in_module("api/routes/synthetic.py", ast.parse(source))
+    swept = {"modulo.db.crud.account.update_account_preferences"}
+
+    assert discovered[("api/routes/synthetic.py", "arm_one_hop")] == swept
+    assert discovered[("api/routes/synthetic.py", "arm_two_hops")] == swept
+    assert discovered[("api/routes/synthetic.py", "_load")] == swept
+    assert ("api/routes/synthetic.py", "unrelated") not in discovered
+
+
+def test_is_route_handler_classifies_only_router_decorated_functions() -> None:
+    """Only a router-decorated function is a request arm.
+
+    The sweep skips a discovered function with no local except arm when it is
+    NOT an arm, because the 55P03 escapes to the arm that called it. If
+    ``_is_route_handler`` wrongly said True for a helper, every extracted helper
+    would be failed for lacking the classifier/backstop; wrongly False for an
+    arm would silently skip the response the client actually receives.
+    """
+    source = textwrap.dedent(
+        """
+        @router.put("/providers/{provider_id}")
+        async def put_arm(session):
+            return None
+
+        @router.get("/providers")
+        async def get_arm():
+            return []
+
+        @router.api_route("/x", methods=["POST"])
+        async def api_route_arm():
+            return None
+
+        @classmethod
+        def classmethod_helper(cls):
+            return None
+
+        @field_validator("name")
+        def validated_helper(cls, value):
+            return value
+
+        async def plain_helper(session):
+            return None
+        """
+    )
+    module = ast.parse(source)
+    for name in ("put_arm", "get_arm", "api_route_arm"):
+        assert _is_route_handler(_function_node(module, name)), name
+    for name in ("classmethod_helper", "validated_helper", "plain_helper"):
+        assert not _is_route_handler(_function_node(module, name)), name
+
+
+def test_mapping_verdict_pins_the_helper_skip_and_the_local_arm_rule() -> None:
+    """Pin each verdict rule of the derived-caller sweep.
+
+    Deleting the ``_is_route_handler`` skip fails every extracted helper;
+    deleting the local-arm rule lets a 503 arm answer a contended lock again.
+    Neither was exercised before: no real route file has an extracted arm with a
+    swept helper, so the whole attribution/scoping machinery was deletable with
+    the suite still green.
+    """
+    source = textwrap.dedent(
+        """
+        from modulo.db.crud.account import update_account_preferences
+
+        @router.put("/providers/{provider_id}")
+        async def arm_without_classifier(session):
+            await update_account_preferences(session)
+
+        @router.put("/providers/{provider_id}")
+        @handle_db_errors
+        async def arm_with_backstop(session):
+            await update_account_preferences(session)
+
+        @router.put("/providers/{provider_id}")
+        async def arm_with_classifier(session):
+            try:
+                await update_account_preferences(session)
+            except SQLAlchemyError as exc:
+                raise_lock_timeout_conflict_if(exc)
+
+        async def plain_helper(session):
+            await update_account_preferences(session)
+
+        async def helper_with_bad_local_arm(session):
+            try:
+                await update_account_preferences(session)
+            except SQLAlchemyError:
+                return _unavailable_error("db")
+        """
+    )
+    module = ast.parse(source)
+    rel = "api/routes/synthetic.py"
+    swept = {"modulo.db.crud.account.update_account_preferences"}
+
+    def verdict(name: str) -> str | None:
+        return _mapping_failure(rel, name, swept, _function_node(module, name))
+
+    assert verdict("arm_with_classifier") is None
+    assert verdict("arm_with_backstop") is None
+    assert verdict("plain_helper") is None, "a non-arm helper with no local arm owns no response"
+    assert "has neither" in (verdict("arm_without_classifier") or ""), "an arm needs the classifier or the backstop"
+    assert "409 conflict" in (verdict("helper_with_bad_local_arm") or ""), "a local 503 arm must fail"
+
+
 def test_every_direct_route_caller_of_a_swept_helper_classifies_55p03() -> None:
     """Derive the route callers of every swept helper and require a 55P03 mapping.
 
@@ -902,11 +1131,12 @@ def test_every_direct_route_caller_of_a_swept_helper_classifies_55p03() -> None:
     service-level caller — e.g. ``library.py`` reaching C20 through
     ``materialize_map_from_primitive``. That arm is recorded explicitly.
 
-    Attribution is import-aware and resolves ONE same-file helper hop: a
-    request arm calling a module-local wrapper that directly calls a swept
-    helper is attributed that wrapper's hits, so a function-extraction refactor
-    (e.g. ``update_provider_endpoint`` -> ``_persist_provider_update``) cannot
-    blind the discovery to the arm.
+    Attribution is import-aware and follows same-file helper hops to a
+    FIXPOINT: a request arm calling a module-local wrapper that reaches a swept
+    helper — directly or through further same-file helpers — is attributed the
+    wrapper's hits, so a function-extraction refactor (if, say, an arm's body
+    were moved into a hypothetical ``_persist_provider`` helper) cannot blind
+    the discovery to the arm.
     """
     callers = _direct_swept_callers()
 
@@ -922,30 +1152,9 @@ def test_every_direct_route_caller_of_a_swept_helper_classifies_55p03() -> None:
 
     failures: list[str] = []
     for (rel, function_name), helpers in sorted(callers.items()):
-        function = _function_node(_parse(rel), function_name)
-        if _calls_classifier(function):
-            continue
-        if (rel, function_name) in _MAPPING_EXCEPTION_REASONS:
-            continue
-        if _local_sqlalchemy_arms(function):
-            failures.append(
-                f"{rel}::{function_name} directly calls {sorted(helpers)} and its local "
-                f"except SQLAlchemyError arm never calls {_CLASSIFIER_NAME} — a contended row "
-                "would answer 503/500 instead of a 409 conflict"
-            )
-            continue
-        if not _is_route_handler(function):
-            # A module-local helper owns no response: with no local except arm
-            # the exception propagates to the request arm that called it, whose
-            # own arm this loop checks (one same-file hop is attributed). Failing
-            # the helper would make every body-extraction refactor red without
-            # any change in the response a contended request actually receives.
-            continue
-        if not _is_handle_db_errors_decorated(function):
-            failures.append(
-                f"{rel}::{function_name} directly calls {sorted(helpers)} but has neither "
-                f"{_CLASSIFIER_NAME} nor the @{_HANDLE_DB_ERRORS_NAME} backstop"
-            )
+        failure = _mapping_failure(rel, function_name, helpers, _function_node(_parse(rel), function_name))
+        if failure is not None:
+            failures.append(failure)
     assert not failures, "\n".join(failures)
 
 
