@@ -57,7 +57,10 @@ from __future__ import annotations
 
 import ast
 import textwrap
+import unicodedata
 import uuid
+import weakref
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -295,19 +298,155 @@ _NODE_COMPOSITE_MODULE = "modulo.db.crud.node_composite"
 _SET_PARENT_SYMBOL = "set_parent_node"
 
 
+# ---------------------------------------------------------------------------
+# Source / AST caches.
+#
+# Every helper below used to pay for its own read, parse and full-module walk,
+# and several were called once per FUNCTION of the same module. On this tree
+# (1021 source files, 408k lines) that made ``test_every_direct_route_caller_of_
+# a_swept_helper_classifies_55p03`` quadratic: 67s of its 71s was re-executing
+# TWO module-wide ``ast.walk()`` passes inside ``_swept_helper_calls`` for each
+# of the 93 route modules' functions, even though a module's import table cannot
+# change between functions.
+#
+# The fix is to index each module ONCE and reuse it:
+#
+# * source text is cached per path (the whole tree is ~27MB - cheap to hold and
+#   both repo-wide scans read every file);
+# * a module's import table and function table are built in a single walk and
+#   memoised against the module object itself (``WeakKeyDictionary``, so
+#   synthetic modules parsed inside a test are not retained);
+# * ``_parse`` memoises the parsed AST for the NAMED files the structural checks
+#   revisit. The two repo-wide scans deliberately do NOT memoise ASTs - they
+#   parse a prefiltered subset and discard it, because holding every module's
+#   AST for the whole tree would cost hundreds of MB.
+#
+# None of this changes what is scanned or asserted: each cached builder is a
+# pure function of the source, and its result is identical to the uncached walk
+# it replaces.
+# ---------------------------------------------------------------------------
+_SOURCE_TEXT: dict[Path, str] = {}
+_PARSED: dict[Path, ast.Module] = {}
+_SOURCE_PATHS: list[Path] | None = None
+_MODULE_INDEX: weakref.WeakKeyDictionary[ast.Module, _ModuleIndex] = weakref.WeakKeyDictionary()
+
+
+@dataclass(frozen=True)
+class _ModuleIndex:
+    """Everything the checks need from ONE module, derived in a single walk."""
+
+    imported_symbols: dict[str, tuple[str, str]]
+    module_aliases: dict[str, str]
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef]
+    function_list: tuple[ast.FunctionDef | ast.AsyncFunctionDef, ...]
+
+
+def _source_text(path: Path) -> str:
+    text = _SOURCE_TEXT.get(path)
+    if text is None:
+        text = path.read_text(encoding="utf-8")
+        _SOURCE_TEXT[path] = text
+    return text
+
+
 def _read(rel: str) -> str:
-    return (_SRC / rel).read_text(encoding="utf-8")
+    return _source_text(_SRC / rel)
 
 
 def _parse(rel: str) -> ast.Module:
-    return ast.parse(_read(rel))
+    path = _SRC / rel
+    module = _PARSED.get(path)
+    if module is None:
+        module = ast.parse(_source_text(path))
+        _PARSED[path] = module
+    return module
+
+
+def _source_paths() -> list[Path]:
+    """Every source file under ``src/modulo`` (both repo-wide scans use this)."""
+    global _SOURCE_PATHS
+    if _SOURCE_PATHS is None:
+        _SOURCE_PATHS = sorted(_SRC.rglob("*.py"))
+    return _SOURCE_PATHS
+
+
+def _mentions(path: Path, token: str) -> bool:
+    """Whether *path*'s text can possibly contain an AST node naming *token*.
+
+    This is a SOUND prefilter, not a text scanner standing in for one: the AST
+    shapes both repo-wide scans accept are an attribute/keyword named *token*,
+    and an identifier only reaches the AST through its spelling in the source.
+    Python NFKC-normalises identifiers when it parses, so a fullwidth or
+    compatibility spelling would still normalise to *token* - testing the
+    NFKC-normalised text is therefore still a NECESSARY condition for a match.
+    A file that fails this test cannot yield a matching node, so skipping its
+    parse cannot skip a finding; a mention inside a comment or string only
+    costs a surplus parse, and the AST check still rejects it.
+    """
+    return token in unicodedata.normalize("NFKC", _source_text(path))
+
+
+def _module_index(module: ast.Module) -> _ModuleIndex:
+    """The module's import tables and functions, built in ONE walk (memoised).
+
+    ``imported_symbols`` maps a local name to ``(defining module, original
+    symbol)`` for ``from X import y``. ``module_aliases`` maps a local binding to
+    a module path for every module-shaped import:
+
+    * ``import a.b.c`` binds the ROOT package (``a``), so ``a.b.c.f()`` is
+      root ``a`` + rest ``b.c``. Mapping ``a -> a`` (not ``a -> a.b.c``) is
+      what keeps the dotted receiver from being double-prefixed.
+    * ``import a.b.c as m`` binds ``m -> a.b.c``.
+    * ``from a.b import m`` (where ``a.b.m`` is a module) binds
+      ``m -> a.b.m``. Registering every imported name as a candidate is safe:
+      a resolved path only becomes a hit when it is EXACTLY a swept module AND
+      the attribute is a swept helper, so a plain symbol import never matches.
+
+    (A ``from X import *`` is kept in ``imported_symbols``, as before, and
+    excluded from ``module_aliases``.) The two dicts reproduce the separate
+    ``ast.walk`` passes they replace: each is written in the same walk order, so
+    duplicate bindings resolve to the same final entry.
+    """
+    index = _MODULE_INDEX.get(module)
+    if index is not None:
+        return index
+    imported_symbols: dict[str, tuple[str, str]] = {}
+    module_aliases: dict[str, str] = {}
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    function_list: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    for node in ast.walk(module):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            for name in node.names:
+                imported_symbols[name.asname or name.name] = (node.module, name.name)
+                if name.name != "*":
+                    module_aliases[name.asname or name.name] = f"{node.module}.{name.name}"
+        elif isinstance(node, ast.Import):
+            for name in node.names:
+                if name.asname:
+                    module_aliases[name.asname] = name.name
+                else:
+                    root = name.name.split(".")[0]
+                    module_aliases[root] = root
+        elif isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
+            # setdefault keeps the FIRST match in ast.walk order, which is the
+            # node the previous linear search returned.
+            functions.setdefault(node.name, node)
+            function_list.append(node)
+    index = _ModuleIndex(
+        imported_symbols=imported_symbols,
+        module_aliases=module_aliases,
+        functions=functions,
+        function_list=tuple(function_list),
+    )
+    _MODULE_INDEX[module] = index
+    return index
 
 
 def _function_node(module: ast.Module, function_name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
-    for node in ast.walk(module):
-        if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef) and node.name == function_name:
-            return node
-    raise AssertionError(f"{function_name} not found")
+    function = _module_index(module).functions.get(function_name)
+    if function is None:
+        raise AssertionError(f"{function_name} not found")
+    return function
 
 
 def _bound_aliases(module: ast.Module) -> set[str]:
@@ -348,8 +487,13 @@ def _first_bound_line(node: ast.AST, aliases: set[str]) -> int | None:
 
 def _row_lock_file_set() -> set[str]:
     discovered: set[str] = set()
-    for path in _SRC.rglob("*.py"):
-        if _row_lock_calls(ast.parse(path.read_text(encoding="utf-8"))):
+    for path in _source_paths():
+        # Sound prefilter (see _mentions): a row-lock AST node must spell the
+        # identifier, so a file without it cannot be a finding. Every file is
+        # still scanned; only the impossible ones skip the PARSE.
+        if not _mentions(path, _LOCK_ATTR):
+            continue
+        if _row_lock_calls(ast.parse(_source_text(path))):
             discovered.add(path.relative_to(_SRC).as_posix())
     return discovered
 
@@ -366,12 +510,20 @@ def _dotted_name(node: ast.expr) -> str | None:
 def _set_parent_node_call_sites() -> list[str]:
     """Production call sites of ``set_parent_node`` (import-alias aware)."""
     sites: list[str] = []
-    for path in _SRC.rglob("*.py"):
+    for path in _source_paths():
         if path.name == "node_composite.py":
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        # Sound prefilter (see _mentions): a site is only recognised through an
+        # import from ``modulo.db.crud.node_composite``, so a file that never
+        # spells that module cannot contribute one.
+        if not _mentions(path, "node_composite"):
+            continue
+        tree = ast.parse(_source_text(path))
+        # ONE walk collects both the import bindings and the calls; the import
+        # bindings still apply module-wide, exactly as the two-pass version did.
         imported_symbols: set[str] = set()
         imported_modules: set[str] = set()
+        calls: list[ast.Call] = []
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module == _NODE_COMPOSITE_MODULE:
                 for imported in node.names:
@@ -379,9 +531,9 @@ def _set_parent_node_call_sites() -> list[str]:
                         imported_symbols.add(imported.asname or imported.name)
                     elif imported.name == "node_composite":
                         imported_modules.add(imported.asname or imported.name)
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
+            elif isinstance(node, ast.Call):
+                calls.append(node)
+        for node in calls:
             func = node.func
             if isinstance(func, ast.Name) and func.id in imported_symbols:
                 sites.append(path.relative_to(_SRC).as_posix())
@@ -396,48 +548,7 @@ def _set_parent_node_call_sites() -> list[str]:
 
 def _iter_functions(module: ast.Module) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
     """Every function/method defined in *module* (routes may nest handlers)."""
-    return [node for node in ast.walk(module) if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef)]
-
-
-def _imported_symbols(module: ast.Module) -> dict[str, tuple[str, str]]:
-    """Local name -> (defining module, original symbol) for ``from X import y``."""
-    imported: dict[str, tuple[str, str]] = {}
-    for node in ast.walk(module):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            for name in node.names:
-                imported[name.asname or name.name] = (node.module, name.name)
-    return imported
-
-
-def _imported_module_aliases(module: ast.Module) -> dict[str, str]:
-    """Local binding -> module path for every module-shaped import.
-
-    Three shapes bind a MODULE in the local namespace:
-
-    * ``import a.b.c`` binds the ROOT package (``a``), so ``a.b.c.f()`` is
-      root ``a`` + rest ``b.c``. Mapping ``a -> a`` (not ``a -> a.b.c``) is
-      what keeps the dotted receiver from being double-prefixed.
-    * ``import a.b.c as m`` binds ``m -> a.b.c``.
-    * ``from a.b import m`` (where ``a.b.m`` is a module) binds
-      ``m -> a.b.m``. Registering every imported name as a candidate is safe:
-      a resolved path only becomes a hit when it is EXACTLY a swept module AND
-      the attribute is a swept helper, so a plain symbol import never matches.
-    """
-    aliases: dict[str, str] = {}
-    for node in ast.walk(module):
-        if isinstance(node, ast.Import):
-            for name in node.names:
-                if name.asname:
-                    aliases[name.asname] = name.name
-                else:
-                    root = name.name.split(".")[0]
-                    aliases[root] = root
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            for name in node.names:
-                if name.name == "*":
-                    continue
-                aliases[name.asname or name.name] = f"{node.module}.{name.name}"
-    return aliases
+    return list(_module_index(module).function_list)
 
 
 def _resolve_attribute_owner(attribute: ast.Attribute, module_aliases: dict[str, str]) -> str | None:
@@ -468,8 +579,11 @@ def _swept_helper_calls(function: ast.AST, module: ast.Module) -> set[str]:
       from at least one swept module (the receiver's concrete type is not
       inferable without type analysis, and these method names are unique).
     """
-    imported_symbols = _imported_symbols(module)
-    module_aliases = _imported_module_aliases(module)
+    # The module's import tables are indexed once per module and reused across
+    # every function in it (they cannot differ per function).
+    index = _module_index(module)
+    imported_symbols = index.imported_symbols
+    module_aliases = index.module_aliases
     imports_a_swept_module = any(dotted[0] in _SWEPT_HELPER_MODULES for dotted in imported_symbols.values())
     hits: set[str] = set()
     for call in (node for node in ast.walk(function) if isinstance(node, ast.Call)):
@@ -500,8 +614,11 @@ def _direct_swept_callers() -> dict[tuple[str, str], set[str]]:
     for path in sorted(routes_dir.glob("*.py")):
         if path.name.startswith("_"):
             continue
-        module = ast.parse(path.read_text(encoding="utf-8"))
         rel = path.relative_to(_SRC).as_posix()
+        # Parsed once per module and used for every function in it; NOT added to
+        # the cross-test AST cache - each route module is visited exactly once
+        # here, so retaining 93 large trees (measured +113MB) buys nothing.
+        module = ast.parse(_source_text(path))
         for function in _iter_functions(module):
             hits = _swept_helper_calls(function, module)
             if hits:
