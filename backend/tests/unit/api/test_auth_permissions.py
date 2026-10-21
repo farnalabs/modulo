@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.api.routes.auth import _SYSTEM_ONLY_PERMISSIONS
+from modulo.api.routes.auth import _SYSTEM_ONLY_PERMISSIONS, _effective_permission_names
 from modulo.api.routes.auth import router as auth_router
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.permissions import PERMISSIONS
@@ -293,6 +293,45 @@ def test_unknown_live_role_fails_closed_with_an_empty_list(app: FastAPI) -> None
             new=AsyncMock(return_value="wizard"),
         ),
     ):
+        resp = client.get("/api/v1/auth/permissions")
+
+    assert resp.status_code == 200, resp.text
+    assert not resp.json()["permissions"]
+
+
+def test_no_org_role_and_not_system_admin_resolves_no_permissions() -> None:
+    """The fail-closed arm: absent role, non-system-admin, NOT a permissive default.
+
+    ``_effective_permission_names`` has three level sources. A system admin
+    resolves at the admin floor and a present org role through the hierarchy;
+    the third arm — no org role at all — must yield the empty list. Anything
+    else hands a caller with no membership the floor of some implicit role.
+    """
+    assert not _effective_permission_names(None, is_system_admin=False)
+
+
+def test_org_role_present_and_absent_are_both_resolved_through_the_registry() -> None:
+    """The ``elif org_role:`` decision is exercised in BOTH directions.
+
+    Present: the role is resolved through ``org_role_level`` exactly as the
+    registry comparison does. Absent: the fall-through is the empty list — the
+    two outcomes a single-sided test leaves half-covered.
+    """
+    assert _effective_permission_names("viewer", is_system_admin=False) == _registry_names_for("viewer")
+    assert not _effective_permission_names(None, is_system_admin=False)
+
+
+def test_principal_with_no_org_claim_is_served_the_empty_list(app: FastAPI) -> None:
+    """Fail closed end-to-end: no org claim means no membership, so no permissions.
+
+    ``_resolve_live_org_role`` answers ``None`` when the token carries no org
+    claim, so the route must report an empty list even though the token itself
+    claims ``admin`` — the claim is never substituted for the live role, and an
+    absent live role must not resolve to a hierarchy floor.
+    """
+    principal = _principal(org_role="admin", is_system_admin=False, organisation_id=None)
+
+    with _client_with_principal(app, principal) as client:
         resp = client.get("/api/v1/auth/permissions")
 
     assert resp.status_code == 200, resp.text
