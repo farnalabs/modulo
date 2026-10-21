@@ -140,16 +140,20 @@ Evidence: `docs/product-map/auth/oidc-integration.md`;
 
 **Q: How is authorisation enforced?**
 
-A: A central permission registry maps every authenticated REST route and every
-MCP tool to a minimum organisation role (viewer, runner, operator, admin). An
-unknown or misspelt permission key fails closed at import. Tenant isolation is
-enforced by PostgreSQL row-level security keyed to the principal's organisation.
+A: A central permission registry maps every authenticated REST route that reads
+or mutates organisation data, and every MCP tool, to a minimum organisation role
+(viewer, runner, operator, admin). An unknown or misspelt permission key fails
+closed at import. Tenant isolation is enforced by PostgreSQL row-level security
+keyed to the principal's organisation.
 
-Two scoping notes. First, the pre-authentication entry points (local login,
-OIDC/SAML callback and metadata) and `GET /api/v1/deployment` run before a
-principal exists, so they deliberately carry no permission key. Second, team
-RBAC is a **Team-tier** feature (`team_rbac`); the four-level organisation role
-hierarchy and row-level security themselves are always active.
+Two scoping notes. First, the routes that carry no permission key are deliberate
+and named: the pre-authentication entry points (local login, OIDC/SAML callback
+and metadata) and `GET /api/v1/deployment` run before a principal exists, and
+`GET /api/v1/auth/me` and `GET /api/v1/auth/csrf-token` are authenticated but
+self-scoped - they return only the caller's own identity, or a CSRF token, and
+read no other party's data. Second, team RBAC is a **Team-tier** feature
+(`team_rbac`); the four-level organisation role hierarchy and row-level security
+themselves are always active.
 
 Evidence: `backend/src/modulo/auth/permissions.py`; `docs/architecture.md`
 ("Row-Level Security").
@@ -191,16 +195,17 @@ Evidence: `docs/product-map/auth/oidc-integration.md`;
 
 A: Pipeline changes are versioned and every run executes against an immutable
 snapshot (frozen graph, models, prompts, schemas, guardrails and policy gates)
-recorded on the run. At the `manual_approval` autonomy level a human-in-the-loop
-gate halts the run until a decision is recorded; a gate marked `human_only`
-(the default for every gate) rejects API keys and programmatic tokens over REST
-and MCP. Two conditions must be stated with that answer. (1) A browser session
-may decide a `human_only` gate, and so may a consent-derived, human-linked OAuth
-credential over MCP while the org-wide `mcp_human_linked_hitl_authority` flag is
-on - which is the default on every tier; `deliver_manual` stays browser-only.
-(2) The halt depends on the pipeline's autonomy level: `notify_on_complete`
-auto-approves the gate at run time and `fully_autonomous` skips it entirely, so
-only `manual_approval` pipelines produce a human decision.
+recorded on the run. A human-in-the-loop gate marked `human_only` - the default
+for every gate - interrupts the run until a decision is recorded, and it does so
+at **every** autonomy level: `human_only` overrides autonomy. Such a gate rejects
+API keys and programmatic tokens over REST and MCP. Two conditions must be
+stated with that answer. (1) A browser session may decide a `human_only` gate,
+and so may a consent-derived, human-linked OAuth credential over MCP while the
+org-wide `mcp_human_linked_hitl_authority` flag is on - which is the default on
+every tier; `deliver_manual` stays browser-only. (2) Autonomy only changes the
+outcome for a gate that explicitly opts out with `human_only: false`:
+`notify_on_complete` auto-approves it at run time and `fully_autonomous` skips
+it entirely. The default gate is never skipped.
 
 Evidence: `docs/product-map/pipelines/snapshot-versioning.md`;
 `docs/product-map/hitl/hitl-gates.md`;

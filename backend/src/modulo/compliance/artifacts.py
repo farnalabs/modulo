@@ -119,9 +119,10 @@ ARTIFACT_TYPES: Final[dict[str, ArtifactTypeSpec]] = {
             "MCP; a browser session may decide them, and so may a consent-derived, "
             "human-linked OAuth credential over MCP while the default-on "
             "mcp_human_linked_hitl_authority flag is enabled. deliver_manual stays "
-            "browser-only. A gate is only reached at all when the pipeline's autonomy "
-            "level is manual_approval - notify_on_complete auto-approves it and "
-            "fully_autonomous skips it."
+            "browser-only. A human_only gate interrupts at every autonomy level - "
+            "human_only overrides autonomy - so only a gate that explicitly opts out "
+            "with human_only: false depends on the pipeline's level, where "
+            "notify_on_complete auto-approves it and fully_autonomous skips it."
         ),
         indexed=True,
         instance_observable=True,

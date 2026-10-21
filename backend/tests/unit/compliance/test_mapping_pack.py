@@ -15,6 +15,7 @@ import pytest
 
 import modulo.compliance.pack as pack_module
 from modulo.compliance.artifacts import (
+    ARTIFACT_CUSTOMER_RECORDS,
     COVERAGE_CUSTOMER_RESPONSIBILITY,
     COVERAGE_GAP,
     COVERAGE_SATISFIED,
@@ -182,29 +183,47 @@ class TestShippedPackContent:
         total_satisfied = sum(counts[COVERAGE_SATISFIED] for counts in pack.coverage_counts().values())
         assert total_satisfied < total_rows
 
-    def test_every_framework_names_a_capability_modulo_does_not_provide(self) -> None:
-        """The pack must not read as universally satisfied.
+    def test_every_framework_owns_a_clause_no_modulo_artifact_can_evidence(self) -> None:
+        """A framework must keep at least one clause only the customer can evidence.
 
-        A `gap` row is specifically "neither Modulo nor the shipped
-        documentation provides the capability". Zero gap rows is a legitimate
-        outcome when the shipped documentation does cover a clause (EU AI Act
-        Article 73 ships incident-report templates, so it is
-        `customer-responsibility`, not `gap`); what must never happen is a
-        framework that claims every clause as met.
+        The row class that claims "Modulo provides nothing" is the one whose
+        evidence is ``customer_records`` - material Modulo never sees. The
+        honesty that used to rest on "there is at least one ``gap`` row
+        somewhere" is enforced here as label discipline instead, because a
+        ``grep`` for zero ``gap`` rows can be made green by relabelling a
+        genuine gap:
+
+        * every ``customer_records`` row must be attributed
+          ``customer-responsibility`` (never ``gap``, and never a coverage
+          value that claims Modulo provides the evidence) and must state, in a
+          sentence, what remains the customer's responsibility;
+        * every framework must still contain at least one such row, so a
+          framework cannot be relabelled into universal self-coverage.
         """
         pack = load_mapping_pack()
+        offenders: list[str] = []
+        for framework in pack.frameworks.values():
+            customer_rows = [row for row in framework.rows if row.artifact_type == ARTIFACT_CUSTOMER_RECORDS]
+            # A framework whose every clause is evidenced by an artefact
+            # Modulo itself produces is a framework that has stopped admitting
+            # anything. One customer-owned row is the floor.
+            if not customer_rows:
+                offenders.append(f"{framework.id}: no customer_records row")
+                continue
+            for row in customer_rows:
+                if row.coverage != COVERAGE_CUSTOMER_RESPONSIBILITY:
+                    offenders.append(f"{row.id}: customer_records row labelled {row.coverage!r}")
+                if not row.responsibility.strip():
+                    offenders.append(f"{row.id}: customer_records row states no responsibility")
+        assert not offenders, offenders
 
+        # And the pack as a whole must never read as universally satisfied.
         unqualified = [
             framework_id
             for framework_id, framework in pack.frameworks.items()
             if not any(row.coverage in NON_SELF_COVERAGE_VALUES for row in framework.rows)
         ]
         assert not unqualified, unqualified
-        # A gap row must still be genuinely uncovered where one exists - none
-        # of them may rest on customer-supplied material presented as ours.
-        for row in pack.rows:
-            if row.coverage == COVERAGE_GAP:
-                assert row.provenance == PROVENANCE_CUSTOMER_SUPPLIED
 
     def test_satisfied_rows_never_rest_on_customer_material(self) -> None:
         pack = load_mapping_pack()

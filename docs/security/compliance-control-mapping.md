@@ -136,8 +136,8 @@ Those are the row classes the customer must evidence themselves; each row's
 `responsibility` field says what is owed, and each row's `customer_location`
 says where to look. The customer-facing rows are:
 
-- **SOC 2** CC6.6, CC6.7 (perimeter/host hardening, encryption at rest and
-  backup media), CC7.4 (incident response), CC7.5 (backup and restore).
+- **SOC 2** CC6.6 (perimeter/host hardening), CC6.7 (encryption in transit and
+  at rest), CC7.4 (incident response), CC7.5 (backup and restore).
 - **ISO/IEC 42001** 8.2 (AI risk assessment), 9.2 (internal audit).
 - **EU AI Act** Article 9 (risk-management system), Article 17
   (quality-management system), Article 72 (post-market monitoring), Article 73
@@ -207,11 +207,14 @@ deployed at the time.
 ## Using it in an audit
 
 1. Deploy the release under audit and record `GET /api/v1/deployment`.
-2. Prove the audit chain in place with `GET /api/v1/admin/audit/verify`. It
-   checks at most **10,000** events per call and returns `truncated: true` with
-   `valid: false` on a larger trail - that is an incomplete check, not
-   tampering. On a mature instance, verify a bounded period rather than
-   treating `valid: false` as an integrity failure.
+2. Prove the audit chain in place with `GET /api/v1/admin/audit/verify`. The
+   endpoint accepts no query parameters and is not period-scoped: it checks the
+   first **10,000** events in created-at order and returns `truncated: true`
+   with `valid: false` when the organisation's trail is larger. That is an
+   incomplete check, not evidence of tampering. Where the trail exceeds that
+   cap, verify through the chain export instead (step 3), which carries the
+   events under a signature the auditor checks offline - do not read
+   `valid: false` alone as an integrity failure.
 3. If the export is required, license the Team tier (`audit_viewer`) and
    configure `MODULO_EVIDENCE_SIGNING_KEY`, then take the evidence pack
    (`GET /api/v1/admin/audit/evidence-pack`) and the verification key
@@ -232,9 +235,10 @@ deployed at the time.
 
 - The audit chain proves what Modulo recorded and that the record is
   internally consistent. It does not prove that the recorded facts are true.
-- The chain verifier checks at most 10,000 events per call and reports
-  `valid: false` when it truncates. A `false` therefore means "not proven
-  complete", not "tampered".
+- The chain verifier checks at most 10,000 events per call, always the first
+  10,000 in created-at order, and reports `valid: false` when it truncates. It
+  takes no date range, so there is no date-bounded verification to fall back on.
+  A `false` therefore means "not proven complete", not "tampered".
 - The offline-verifiable export is not on by default. It needs the Team-tier
   `audit_viewer` feature (`GET /api/v1/admin/audit/evidence-pack` and
   `/verification-key` answer 402 without it) and a configured
