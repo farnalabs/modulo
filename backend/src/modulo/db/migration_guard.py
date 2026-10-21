@@ -18,8 +18,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from modulo.db.health_checks import resolve_alembic_ini
+
+if TYPE_CHECKING:
+    from alembic.script import ScriptDirectory
 
 _log = logging.getLogger(__name__)
 
@@ -41,6 +45,41 @@ class DivergenceCheckResult:
     detail: str
 
 
+def _script_directory() -> ScriptDirectory:
+    """Build the Alembic ``ScriptDirectory`` for the repo's migration tree."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    alembic_ini = resolve_alembic_ini()
+    alembic_cfg = Config(str(alembic_ini))
+    alembic_cfg.set_main_option(
+        "script_location",
+        str(alembic_ini.parent / "src" / "modulo" / "db" / "migrations"),
+    )
+    return ScriptDirectory.from_config(alembic_cfg)
+
+
+def _add_down_revisions(all_revisions: set[str], down_revision: Any) -> None:
+    """Add a revision's ``down_revision`` (a string or a merge tuple) to the set."""
+    if not down_revision:
+        return
+    if isinstance(down_revision, (list, tuple)):
+        for dr in down_revision:
+            if dr:
+                all_revisions.add(dr)
+        return
+    all_revisions.add(down_revision)
+
+
+def _revision_ids_from_script(script: ScriptDirectory) -> set[str]:
+    """Every revision id (plus each ``down_revision``) Alembic can walk."""
+    all_revisions: set[str] = set()
+    for walk in script.walk_revisions():
+        all_revisions.add(walk.revision)
+        _add_down_revisions(all_revisions, walk.down_revision)
+    return all_revisions
+
+
 def _load_repo_revisions() -> set[str]:
     """Load all revision IDs from the repo's migration tree.
 
@@ -55,27 +94,7 @@ def _load_repo_revisions() -> set[str]:
         return set(_REPO_REVISIONS)
 
     try:
-        from alembic.config import Config
-        from alembic.script import ScriptDirectory
-
-        alembic_ini = resolve_alembic_ini()
-        alembic_cfg = Config(str(alembic_ini))
-        alembic_cfg.set_main_option(
-            "script_location",
-            str(alembic_ini.parent / "src" / "modulo" / "db" / "migrations"),
-        )
-        script = ScriptDirectory.from_config(alembic_cfg)
-        all_revisions: set[str] = set()
-        for walk in script.walk_revisions():
-            all_revisions.add(walk.revision)
-            if walk.down_revision:
-                # down_revision can be a tuple (merge migrations) or a string.
-                if isinstance(walk.down_revision, (list, tuple)):
-                    for dr in walk.down_revision:
-                        if dr:
-                            all_revisions.add(dr)
-                else:
-                    all_revisions.add(walk.down_revision)
+        all_revisions = _revision_ids_from_script(_script_directory())
         if all_revisions:
             _REPO_REVISIONS = all_revisions
         return set(all_revisions)
