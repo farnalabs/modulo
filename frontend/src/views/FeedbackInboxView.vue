@@ -47,25 +47,22 @@
       </template>
     </FilterBar>
     <ErrorAlert v-if="pipelinesError" :message="pipelinesError" :on-retry="loadPipelines" />
-    <output
-      v-if="loading"
-      class="block space-y-2"
-      aria-busy="true"
-      :aria-label="$t('views.FeedbackInboxView.loading_feedback')"
-      data-testid="feedback-inbox-loading"
-    >
-      <div
-        v-for="n in 3"
-        :key="`feedback-inbox-skeleton-${n}`"
-        class="rounded-lg border bg-card p-4"
-      >
-        <div class="space-y-2">
-          <SkeletonBlock height-class="h-4 w-48" />
-          <SkeletonBlock height-class="h-3 w-72" />
-          <SkeletonBlock height-class="h-3 w-40" />
+    <div v-if="loading" data-testid="feedback-inbox-loading">
+      <output class="sr-only" aria-live="polite">{{ $t('views.FeedbackInboxView.loading_feedback') }}</output>
+      <div class="space-y-2" aria-busy="true">
+        <div
+          v-for="n in 3"
+          :key="`feedback-inbox-skeleton-${n}`"
+          class="rounded-lg border bg-card p-4"
+        >
+          <div class="space-y-2">
+            <SkeletonBlock height-class="h-4 w-48" />
+            <SkeletonBlock height-class="h-3 w-72" />
+            <SkeletonBlock height-class="h-3 w-40" />
+          </div>
         </div>
       </div>
-    </output>
+    </div>
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadFeedback" />
     <template v-else>
       <EmptyState

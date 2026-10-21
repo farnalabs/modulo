@@ -73,6 +73,20 @@ describe('SettingsSsoView — provider list', () => {
     expect(wrapper.text()).toContain('cid-1')
   })
 
+  it('opens the edit form from the provider row keyboard handlers', async () => {
+    const wrapper = mountView()
+    await nextTick()
+
+    const row = wrapper.find('[data-testid="settings-sso-provider-row"]')
+    await row.trigger('keydown.enter')
+    await nextTick()
+    expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
+
+    await row.trigger('keydown.space')
+    await nextTick()
+    expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
+  })
+
   it('shows the empty state when no providers are configured (fe-003)', async () => {
     ;(api.GET as Mock).mockResolvedValue({ data: [], error: undefined })
     const wrapper = mountView()
@@ -381,7 +395,8 @@ describe('SettingsSsoView — toggle provider', () => {
     await nextTick()
 
     expect(api.PUT).toHaveBeenCalledTimes(2)
-    // The .stop modifier keeps the row's keydown handler from opening edit.
+    // The row is no longer a keyboard-controlled button; the switch's own
+    // handlers stop the row's mouse-click convenience from opening edit.
     expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(false)
   })
 
@@ -704,33 +719,38 @@ describe('SettingsSsoView — row click opens edit (FAR-974 #2)', () => {
     expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
   })
 
-  it('the row has cursor-pointer and role=button for keyboard accessibility', async () => {
+  it('the row is clickable and exposes a native button for keyboard accessibility', async () => {
     const wrapper = mountView()
     await nextTick()
 
     const row = wrapper.find('[data-testid="settings-sso-provider-row"]')
     expect(row.classes()).toContain('cursor-pointer')
-    expect(row.attributes('role')).toBe('button')
-    expect(row.attributes('tabindex')).toBe('0')
+    // Web:S6819: no custom button role/tabindex on the row itself.
+    expect(row.attributes('role')).toBeUndefined()
+    expect(row.attributes('tabindex')).toBeUndefined()
+    expect(row.find('button').exists()).toBe(true)
   })
 
-  it('pressing Enter on the focused row opens the edit form', async () => {
+  it('the row primary button opens the edit form (click, as produced by Enter/Space)', async () => {
     const wrapper = mountView()
     await nextTick()
 
     const row = wrapper.find('[data-testid="settings-sso-provider-row"]')
-    await row.trigger('keydown.enter')
+    const primary = row.find('button')
+    // In the natural tab order: no tabindex override, not disabled.
+    expect(primary.attributes('tabindex')).toBeUndefined()
+    expect((primary.element as HTMLButtonElement).disabled).toBe(false)
+    await primary.trigger('click')
     await nextTick()
 
     expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
   })
 
-  it('pressing Space on the focused row opens the edit form', async () => {
+  it('clicking the row itself still opens the edit form for mouse users', async () => {
     const wrapper = mountView()
     await nextTick()
 
-    const row = wrapper.find('[data-testid="settings-sso-provider-row"]')
-    await row.trigger('keydown.space')
+    await wrapper.find('[data-testid="settings-sso-provider-row"]').trigger('click')
     await nextTick()
 
     expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)

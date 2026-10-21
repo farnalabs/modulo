@@ -79,7 +79,7 @@ async function openAndNavigate(page: Page, mode: 'rail' | 'drawer'): Promise<voi
   await trigger.click()
 
   const panel = mode === 'rail'
-    ? page.locator('aside[role="dialog"]')
+    ? page.locator("#mobile-nav-panel")
     : page.locator('#mobile-sidebar')
   await expect(panel, `the ${mode}-mode nav panel must open on tap`).toBeVisible()
 

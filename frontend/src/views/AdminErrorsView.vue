@@ -9,10 +9,9 @@
     <!-- Instance scope (FAR-1547): system admins can switch the dashboard to
          the SYSTEM_ORG_ID sentinel partition (instance-level / unattributed
          errors). Hidden entirely for tenant users — they can never read it. -->
-    <div
+    <fieldset
       v-if="isSystemAdmin"
-      class="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2"
-      role="group"
+      class="m-0 mb-4 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-0 p-0"
       :aria-label="$t('views.AdminErrorsView.scope_group_label')"
       data-testid="admin-errors-scope"
     >
@@ -47,7 +46,7 @@
       >
         {{ $t('views.AdminErrorsView.scope_instance_hint') }}
       </p>
-    </div>
+    </fieldset>
 
     <div
       v-if="!isInstanceScope && starvationItems.length > 0"

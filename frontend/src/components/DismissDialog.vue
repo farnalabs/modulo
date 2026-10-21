@@ -9,10 +9,10 @@
       <!-- Backdrop -->
       <div class="fixed inset-0 bg-black/20" aria-hidden="true" />
       <!-- Popover panel -->
-      <div
+      <dialog
         ref="panelRef"
-        class="fixed z-50 flex flex-col rounded-lg border bg-background p-4 shadow-lg min-w-[300px] max-w-[400px]"
-        role="dialog"
+        open
+        class="fixed z-50 m-0 flex flex-col rounded-lg border bg-background p-4 text-foreground shadow-lg min-w-[300px] max-w-[400px]"
         :aria-label="$t('components.DismissDialog.dismiss_this_notification')"
         :style="panelStyle"
       >
@@ -44,7 +44,7 @@
             {{ $t('components.DismissDialog.dismiss') }}
           </Button>
         </div>
-      </div>
+      </dialog>
     </div>
   </Teleport>
 </template>

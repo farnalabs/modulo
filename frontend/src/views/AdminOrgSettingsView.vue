@@ -87,12 +87,11 @@
           role="alert"
           data-testid="org-hitl-review-window-error"
         >{{ hitlWindowError }}</p>
-        <p
+        <output
           v-else-if="hitlWindowSaved"
-          class="mt-2 text-sm text-success-text"
-          role="status"
+          class="mt-2 block text-sm text-success-text"
           data-testid="org-hitl-review-window-saved"
-        >{{ $t('views.AdminOrgSettingsView.hitl_review_window_saved') }}</p>
+        >{{ $t('views.AdminOrgSettingsView.hitl_review_window_saved') }}</output>
 
         <div class="mt-4 rounded-lg border border-input bg-muted/30 p-3" data-testid="org-hitl-review-window-status">
           <p class="text-xs font-medium">{{ hitlWindowStatus }}</p>

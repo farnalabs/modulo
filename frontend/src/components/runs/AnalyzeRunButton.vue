@@ -29,12 +29,11 @@
         class="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 max-w-[260px] -translate-x-1/2 rounded-md bg-foreground px-2 py-1 text-center text-xs font-normal leading-snug text-background opacity-0 shadow-md transition-opacity duration-150 group-focus-within:opacity-100 group-hover:opacity-100"
       >{{ disabledReason }}</span>
     </span>
-    <span
-      role="status"
+    <output
       aria-live="polite"
       class="ml-3 align-middle text-xs text-muted-foreground"
       data-testid="run-detail-analyze-status"
-    >{{ statusMessage }}</span>
+    >{{ statusMessage }}</output>
   </div>
 </template>
 

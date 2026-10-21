@@ -251,11 +251,31 @@ describe('FolderTree rendering and selection', () => {
     expect(wrapper.emitted('select-folder')![1]).toEqual([null])
   })
 
-  it('selects a folder with keyboard enter and space', async () => {
+  it('selects a folder from the row keyboard handlers', async () => {
     const wrapper = await mountTreeWithFolders([makeFolder()])
-    await wrapper.find('[data-testid="folder-tree-item-f1"]').trigger('keydown.enter')
-    await wrapper.find('[data-testid="folder-tree-item-f1"]').trigger('keydown.space')
-    expect(wrapper.emitted('select-folder')).toHaveLength(2)
+    const item = wrapper.find('[data-testid="folder-tree-item-f1"]')
+    await item.trigger('keydown', { key: 'Enter' })
+    await item.trigger('keydown', { key: ' ' })
+    expect(wrapper.emitted('select-folder')).toEqual([['f1'], ['f1']])
+  })
+
+  it('selects a folder from its native button in the tab order', async () => {
+    const wrapper = await mountTreeWithFolders([makeFolder()])
+    const item = wrapper.find('[data-testid="folder-tree-item-f1"]')
+    // Web:S6819: the row itself carries no custom button role/tabindex; the
+    // native button is the keyboard-activatable target.
+    expect(item.attributes('role')).toBeUndefined()
+    expect(item.attributes('tabindex')).toBeUndefined()
+    const button = item.find('button')
+    expect(button.exists()).toBe(true)
+    // In the natural tab order: no tabindex override, not disabled.
+    expect(button.attributes('tabindex')).toBeUndefined()
+    expect((button.element as HTMLButtonElement).disabled).toBe(false)
+    // A native button's Enter/Space activation produces a click, so the button
+    // needs no bespoke keydown handler of its own.
+    await button.trigger('click')
+    expect(wrapper.emitted('select-folder')).toHaveLength(1)
+    expect(wrapper.emitted('select-folder')![0]).toEqual(['f1'])
   })
 
   it('highlights the selected folder', async () => {

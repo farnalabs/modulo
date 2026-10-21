@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, onMounted, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import { useApi } from "../../../composables/useApi";
 import type { ParameterPort } from "../../../types/pipeline";
@@ -108,14 +108,40 @@ function portRef(port: { name: string }) {
 function goToLibrary() {
   router.push({ name: "library" });
 }
+
+const dialogRef = ref<HTMLDialogElement | null>(null);
+
+// The flow is mounted only while the parent wants it open, so opening as a
+// real modal is a mount-time action. showModal() gives viewport-size layout,
+// real inertness, focus containment and native Escape — none of which a bare
+// `<dialog open>` has. Guarded because a second showModal() on an open dialog
+// throws InvalidStateError.
+onMounted(async () => {
+  await nextTick();
+  const dialog = dialogRef.value;
+  if (dialog && !dialog.open) dialog.showModal();
+});
+
+function closeDialog() {
+  dialogRef.value?.close();
+}
 </script>
 
 <template>
-  <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-    @click.self="emit('close')"
+  <dialog
+    ref="dialogRef"
+    aria-labelledby="publish-composite-title"
+    class="w-full max-w-lg border-0 bg-transparent p-0 text-foreground backdrop:bg-black/50"
+    @click.self="closeDialog"
+    @keydown.escape="closeDialog"
+    @close="emit('close')"
   >
     <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
+      <!-- A stable, non-step-varying name for the modal (WCAG 4.1.2). The step
+           indicator below changes per step and must not name the dialog. -->
+      <h2 id="publish-composite-title" class="sr-only">
+        {{ $t('components.pipeline.composite.PublishCompositeFlow.publish_composite') }}
+      </h2>
       <!-- Step indicator -->
       <div class="mb-6 flex items-center justify-between">
         <div v-for="s in steps" :key="s.num" class="flex items-center">
@@ -310,5 +336,5 @@ function goToLibrary() {
         </button>
       </div>
     </div>
-  </div>
+  </dialog>
 </template>

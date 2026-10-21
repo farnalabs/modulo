@@ -58,7 +58,8 @@ test.describe('Real-stack journeys: lifecycle map lifecycle', { tag: '@regressio
       // CREATE through the real list-page dialog.
       await page.goto('/lifecycle-maps')
       await page.getByTestId('lifecycle-map-list-new').click()
-      const dialog = page.locator('div.fixed.inset-0 div.w-full.max-w-md')
+      // Native <dialog> opened with showModal(), named by its heading.
+      const dialog = page.getByRole('dialog', { name: 'Create Lifecycle Map' })
       await expect(dialog).toBeVisible({ timeout: 30_000 })
       await dialog.locator('#lifecyclemaplist-field-2').fill(mapName)
       await dialog.locator('#lifecyclemaplist-field-1').fill('Created by the FAR-1242 real-stack e2e journey')
