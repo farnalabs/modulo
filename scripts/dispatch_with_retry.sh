@@ -98,8 +98,6 @@ parse_retry_after() {
   # unparseable. Never emits a negative value.
   case "$1" in
     '') return 0 ;;
-  esac
-  case "$1" in
     *[!0-9]*) ;;
     *) printf '%s\n' "$1"; return 0 ;;
   esac
