@@ -246,9 +246,9 @@ async def _pump_events(
                 yield f"event: resource_changed\ndata: {json.dumps(event)}\n\n"
             except TimeoutError:
                 yield ": heartbeat\n\n"
-    except asyncio.CancelledError:
-        raise
     except Exception:
+        # CancelledError is a BaseException, so ASGI cancellation is never
+        # caught here - it propagates and the ``finally`` below still cleans up.
         _log.warning("sse.event_loop_error", exc_info=True)
     finally:
         await event_bus.unsubscribe(org_id, queue)

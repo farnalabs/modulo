@@ -269,8 +269,9 @@ def _handle_unexpected_error(_exc: Exception, log_prefix: str) -> NoReturn:
 #: ``InvalidRequestError`` -> 500, ``SQLAlchemyError`` -> 503,
 #: ``pydantic.ValidationError`` -> 422, ``ManualNodeOutputSchemaError`` -> 422,
 #: ``PipelineNotRunnableError`` -> 409, ``TriggersPausedError`` -> 409,
-#: ``OrgDeletedError`` -> 409/404, and ``Exception`` -> 500. Passthrough arms
-#: re-raise for ``CancelledError`` / ``StorageExhaustedError`` / ``HTTPException``.
+#: ``OrgDeletedError`` -> 409/404. Passthrough arms re-raise for
+#: ``CancelledError`` / ``StorageExhaustedError`` / ``HTTPException``; anything
+#: unmatched falls through to the ``Exception`` -> 500 backstop.
 #: The classifier walks this in sequence, so the ``isinstance`` semantics and the
 #: arm order are exactly those of the original chain - never reorder it.
 _EXCEPTION_HANDLERS: tuple[tuple[type[BaseException], _ExcHandler], ...] = (
@@ -287,7 +288,6 @@ _EXCEPTION_HANDLERS: tuple[tuple[type[BaseException], _ExcHandler], ...] = (
     (PipelineNotRunnableError, _handle_pipeline_not_runnable),
     (TriggersPausedError, _handle_triggers_paused),
     (OrgDeletedError, _handle_org_deleted),
-    (Exception, _handle_unexpected_error),
 )
 
 
@@ -313,7 +313,10 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
         for exc_type, handler in _EXCEPTION_HANDLERS:
             if isinstance(exc, exc_type):
                 handler(exc, log_prefix)
-        raise
+        # No arm matched: the ``Exception`` -> 500 backstop. Every caller passes
+        # an ``Exception`` (the type contract above), so this is always reached
+        # for an unclassified failure.
+        _handle_unexpected_error(exc, log_prefix)
 
 
 async def prime_stream[T](
