@@ -825,6 +825,51 @@ async def test_node_deadline_triage_failure_never_fails_the_kill(caplog: pytest.
     assert "pipeline_execution.node_deadline_triage_failed" in caplog.text
 
 
+async def test_node_deadline_triage_swallows_a_write_failure(caplog: pytest.LogCaptureFixture) -> None:
+    """Best-effort at the boundary: a raising write body is logged with its
+    traceback and swallowed, never surfaced to the caller whose terminalisation
+    already committed.
+
+    The sibling test above drives a failure from inside the real write body;
+    this one pins the ``except Exception`` handler itself by raising from the
+    body directly, so a future reshuffle of the body cannot silently drop the
+    handler's coverage.
+    """
+    caplog.set_level(logging.WARNING, logger="modulo.core.pipeline_execution")
+    writer = AsyncMock(side_effect=RuntimeError("simulated write failure"))
+    with patch.object(pe, "_write_node_deadline_triage_marker", writer):
+        result = await pe._persist_node_deadline_triage(MagicMock(), str(_RUN), str(_ORG), redispatched=False)
+
+    writer.assert_awaited_once()
+    assert result is None
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "modulo.core.pipeline_execution"
+        and "pipeline_execution.node_deadline_triage_failed" in record.getMessage()
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.levelno == logging.WARNING
+    assert record.exc_info is not None
+    assert str(record.exc_info[1]) == "simulated write failure"
+    assert str(_RUN) in record.getMessage()
+    assert "redispatched=False" in record.getMessage()
+
+
+async def test_node_deadline_triage_propagates_cancellation() -> None:
+    """Worker shutdown is not a triage failure: ``CancelledError`` raised by the
+    marker write must propagate, never be swallowed as a best-effort miss."""
+    writer = AsyncMock(side_effect=asyncio.CancelledError)
+    with (
+        patch.object(pe, "_write_node_deadline_triage_marker", writer),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await pe._persist_node_deadline_triage(MagicMock(), str(_RUN), str(_ORG), redispatched=True)
+
+    writer.assert_awaited_once()
+
+
 async def test_node_deadline_triage_is_bounded_by_the_persist_timeout() -> None:
     """A contended run row cannot stall the kill: the whole write is bounded."""
 
