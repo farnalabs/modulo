@@ -6582,7 +6582,11 @@ class PipelineExecutor:
             # while its code resolves to ``node.cancelled`` — that marker
             # keeps the generic code.
             if isinstance(exc, SandboxNodeFailedError) and "likely hung" not in error_detail:
-                error_code = _CODE_SANDBOX_NO_OUTPUT_JSON
+                # FAR-1887: use the exception's own canonical code via
+                # LEGACY_ALIASES so subclasses like SandboxQueueTimeoutError
+                # surface as sandbox.queue_timeout instead of collapsing to
+                # sandbox.no_output_json.
+                error_code = map_legacy_code(type(exc).__name__)
             # FAR-734: scan the retained stdout (embedded in the
             # exception message) for terminal provider-error
             # signatures.  When a signature matches, upgrade the
