@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.unit.api.mock_session import configure_mock_session
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
@@ -60,7 +61,12 @@ def _make_template(**overrides: object) -> MagicMock:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # ``configure_mock_session`` gives the session contract-correct children:
+    # sync ``in_transaction``/``add``/``get_bind`` and an ``execute`` whose
+    # result is a plain ``MagicMock``. A bare ``AsyncMock`` here made the
+    # authz-enforce read (``result.scalar_one_or_none()``, a SYNC call on a real
+    # SQLAlchemy Result) orphan a never-awaited coroutine on every request.
+    session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
