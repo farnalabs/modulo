@@ -16936,7 +16936,7 @@ export interface components {
         NotificationPreferencesResponse: {
             /**
              * Dashboard Level
-             * @default warning
+             * @default info
              */
             dashboard_level: string;
             /** Notification Opt Outs */

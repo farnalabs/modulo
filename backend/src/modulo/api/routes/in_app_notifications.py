@@ -55,6 +55,23 @@ _CODE_APP_NOTIFICATIONS_DISMISS_ENDPOINT = "in_app_notifications.dismiss_endpoin
 _CODE_APP_NOTIFICATIONS_GET_PREFERENCES = "in_app_notifications.get_preferences"
 _CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES = "in_app_notifications.update_preferences"
 
+# The dashboard level an account gets when it has never stored one. This is the
+# single source of truth for the default WITHIN this module:
+# ``NotificationPreferencesResponse``'s declared default (which is the published
+# OpenAPI contract) and ``_load_dashboard_level``'s fallback both read this
+# constant, so the contract and the behaviour cannot drift apart (FAR-2024: the
+# model declared "warning" while every real GET returned "info", publishing an
+# unreachable contract).
+#
+# It is not a process-wide source of truth: the crud read helpers in
+# ``db/crud/notifications.py`` (``get_dashboard_notifications`` and
+# ``get_unread_count``) keep ``min_level="warning"`` signature defaults. Every
+# production caller here passes ``min_level`` explicitly from
+# ``_load_dashboard_level``, so those defaults never decide the user-facing
+# default. Imports flow api -> db, so the crud module cannot read this constant
+# without a cycle.
+_DEFAULT_DASHBOARD_LEVEL = "info"
+
 
 _log = logging.getLogger(__name__)
 
@@ -92,7 +109,11 @@ class DashboardNotificationResponse(BaseModel):
 
 
 class NotificationPreferencesResponse(BaseModel):
-    dashboard_level: str = "warning"
+    # The declared default IS the behaviour, not a placeholder: every GET
+    # returns ``_load_dashboard_level``'s value, which falls back to the same
+    # constant. A default stated here independently would be unreachable at
+    # runtime yet still published as the contract in the OpenAPI schema.
+    dashboard_level: str = _DEFAULT_DASHBOARD_LEVEL
     notification_opt_outs: dict[str, bool] = Field(default_factory=dict)
 
 
@@ -102,6 +123,10 @@ class NotificationPreferencesUpdate(BaseModel):
     # ``{"opt_outs": {...}}`` (a typo'd key), answered 200 and stored nothing.
     model_config = ConfigDict(extra="forbid")
 
+    # ``None`` here means "the request did not carry a level" (leave the stored
+    # one untouched) — it is NOT the dashboard default. Do not "align" it with
+    # ``_DEFAULT_DASHBOARD_LEVEL``: that would turn every opt-out-only PUT into
+    # an explicit level write and break the no-op detection below.
     dashboard_level: str | None = None
     notification_opt_outs: dict[str, bool] | None = None
 
@@ -141,11 +166,19 @@ _NOTIFICATION_STATUS_VALUES: frozenset[str] = frozenset({"active", "dismissed_se
 
 
 async def _load_dashboard_level(session: AsyncSession, account_id: uuid.UUID) -> str:
+    """Resolve the caller's dashboard severity floor.
+
+    Falls back to ``_DEFAULT_DASHBOARD_LEVEL`` both when the account row is
+    missing and when the account has never stored a level. This is the value
+    every real GET returns, and it is the same constant
+    ``NotificationPreferencesResponse`` declares as its default, so the
+    published contract matches observed behaviour (FAR-2024).
+    """
     account = await get_account_by_id(session, account_id)
     if account is None:
-        return "info"
+        return _DEFAULT_DASHBOARD_LEVEL
     prefs = account.preferences if isinstance(account.preferences, dict) else {}
-    return cast(str, prefs.get(_DASHBOARD_LEVEL_KEY, "info"))
+    return cast(str, prefs.get(_DASHBOARD_LEVEL_KEY, _DEFAULT_DASHBOARD_LEVEL))
 
 
 def _preference_change_is_noop(
