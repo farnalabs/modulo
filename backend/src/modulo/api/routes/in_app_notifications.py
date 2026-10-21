@@ -66,11 +66,12 @@ _CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES = "in_app_notifications.update_prefer
 #
 # It is not a process-wide source of truth: the crud read helpers in
 # ``db/crud/notifications.py`` (``get_dashboard_notifications`` and
-# ``get_unread_count``) keep ``min_level="warning"`` signature defaults. Every
-# production caller here passes ``min_level`` explicitly from
-# ``_load_dashboard_level``, so those defaults never decide the user-facing
-# default. Imports flow api -> db, so the crud module cannot read this constant
-# without a cycle.
+# ``get_unread_count``) declare their own ``min_level`` signature defaults, and
+# cannot read this constant — imports flow api -> db, so that would be a cycle.
+# The two layers can therefore drift apart silently, and keeping them in step is
+# a manual discipline rather than something the code enforces. Every production
+# caller here passes ``min_level`` explicitly from ``_load_dashboard_level``, so
+# the helper defaults never decide the user-facing default.
 _DEFAULT_DASHBOARD_LEVEL = "info"
 
 
