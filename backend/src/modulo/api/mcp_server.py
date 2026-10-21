@@ -6019,9 +6019,12 @@ async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
         # qa F10: parked runs are the awaiting_human class after expiry)
         # runs NO finalize (§4.2). A STREAMED running run cancelled
         # cross-process is routed through finalize_cost, re-reading the
-        # STORED cumulative sets; a NEVER-PAUSED in-flight run has none and
-        # forfeits its accrued cost (cost_components_partial_spend_lost
-        # log).
+        # STORED cumulative sets; a NEVER-PAUSED in-flight run has none on
+        # THIS request path (cost_components_partial_spend_lost log) — its
+        # docket is NOT forfeited: after the executor settles,
+        # pipeline_execution._salvage_cancelled_run_cost attributes
+        # marker-provable spend from its persisted attempt marker
+        # (FAR-1914 C2).
         was_paused = run.status in ("awaiting_human", "claimed", "hitl_parked")
         # FAR-1233: this is the AGENT-initiated cancel leg (the MCP tool), so
         # the reason distinguishes it from an operator clicking Cancel in the

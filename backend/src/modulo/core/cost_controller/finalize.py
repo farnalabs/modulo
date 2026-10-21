@@ -29,7 +29,6 @@ imports ``modulo.api`` or ``modulo.db.crud.run``'s caller graph.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import math
 import uuid
@@ -45,6 +44,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.agent_event_evidence import heartbeat_liveness_seconds, parse_step_finish_evidence
 from modulo.core.analytics import record_run_facts
 from modulo.core.cost_controller import check_and_record_spend, check_pipeline_circuit_breaker
 from modulo.core.cost_controller.breakdown.aggregate import build_cost_breakdown, clamp_reported
@@ -150,6 +150,7 @@ __all__ = [
     "finalize_cost",
     "finalize_failed_run",
     "load_live_components",
+    "salvage_cancelled_run_cost",
 ]
 
 
@@ -3054,13 +3055,18 @@ async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, or
     cumulative sets (``run.outputs_json`` + ``run.node_token_usage`` +
     ``run.node_telemetry_json``) and passes THOSE to ``finalize_cost`` (§4.2
     DATA SOURCE PINNED). A streamed run that HAS PAUSED at least once has
-    stored sets → a partial breakdown + ONE ledger row. A NEVER-PAUSED in-flight
-    run has NO stored sets → FAR-1914 B1 salvages what the killed attempt left
-    behind: its retained raw-output marker's per-step agent cost (reported,
-    non-billable) plus a derived sandbox duration from the run's last-liveness
-    window. A run with NO retained evidence at all still forfeits its accrued
-    cost and only the ``cost_components_partial_spend_lost`` diagnostic log
-    fires — nothing is fabricated.
+    stored sets → a partial breakdown + ONE ledger row.
+
+    A NEVER-PAUSED in-flight run has NO stored sets. FAR-1914 B1 does NOT
+    attribute anything on this REQUEST path: the executor has not observed the
+    cancellation yet (it notices on its next heartbeat), so its retained
+    attempt marker does not exist at this point — reading markers here finds
+    nothing and would record $0 as though no work happened. This path keeps the
+    pre-existing diagnostic (``cost_components_partial_spend_lost``). The
+    salvage lives in :func:`salvage_cancelled_run_cost`, which the executor
+    wrapper calls AFTER the cancelled executor task has settled and its marker
+    is persisted. If that executor never settles (the job is dead), no cost is
+    attributed — nothing is fabricated.
 
     Both stored output columns are re-fed (FAR-125 P1b): the reassembled
     outputs as the segment and the reassembled telemetry as the split signal
@@ -3076,28 +3082,11 @@ async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, or
     # for the re-feed decision + the segment payload below.
     stored_blobs = await read_run_blobs(session, run_id=run_id, organisation_id=run.organisation_id)
     if not (stored_blobs.outputs or run.node_token_usage or stored_blobs.telemetry):
-        # FAR-1914 B1: the never-paused in-flight run has no stored cumulative
-        # sets, but the KILLED attempt's retained marker may carry the agent's
-        # own ``step_finish`` cost/tokens — the only surviving spend evidence
-        # for a sandbox node that never wrote ``output.json``. Attribute it
-        # instead of forfeiting it. Requires actual evidence (a recovered cost
-        # or a PR url); a marker with none keeps the old no-fabrication path.
-        salvage = _salvage_from_markers(stored_blobs.markers)
-        if not salvage.has_evidence:
-            _log.warning("cost_components_partial_spend_lost", extra={"run_id": str(run_id)})
-            return
-        await _write_derived_deadline_terminal(
-            session,
-            run=run,
-            run_id=run_id,
-            org_id=org_id,
-            status="cancelled",
-            error_code=getattr(run, "error_code", None),
-            error_detail=getattr(run, "error_detail", None),
-            wall_hours=_cancel_liveness_wall_hours(run),
-            derived_from="cancel_liveness_window",
-            salvage=salvage,
-        )
+        # The request path cannot see the killed attempt's marker yet (the
+        # executor writes it only after it observes the cancellation) — so
+        # there is nothing to attribute HERE. Never fabricate; the post-settle
+        # path owns the salvage.
+        _log.warning("cost_components_partial_spend_lost", extra={"run_id": str(run_id)})
         return
     node_type_map = await _load_node_type_map(session, run.snapshot_id)
     await finalize_cost(
@@ -3113,150 +3102,130 @@ async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, or
     )
 
 
+def _attributed_cost_present(run: Run) -> bool:
+    """True when the run already carries an attributed cost (salvage is a no-op).
+
+    The post-settle salvage is a COMPENSATING write; it must never overwrite or
+    duplicate a cost the normal finalize (or an earlier salvage) already
+    recorded. A zero-total with no breakdown means the run was finalised as an
+    empty segment (the pre-FAR-1914 "$0" outcome) — that IS salvageable.
+    """
+    total = getattr(run, "total_cost_usd", None)
+    if total is not None:
+        try:
+            if Decimal(str(total)) > 0:
+                return True
+        except (ArithmeticError, TypeError, ValueError):
+            return True
+    breakdown = getattr(run, "cost_breakdown", None)
+    return bool(breakdown)
+
+
+async def salvage_cancelled_run_cost(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> None:
+    """Attribute a SETTLED cancelled run's retained spend evidence (FAR-1914).
+
+    Called by the executor wrapper only AFTER the cancelled executor task has
+    settled (``_await_executor_task`` awaits it in its ``finally``) and the
+    sandbox node has persisted its cancellation marker. That ordering is the
+    whole point: the API/MCP cancel REQUEST runs before the executor observes
+    the cancel, so a request-path read finds no marker and would record $0.
+
+    Guards, in order:
+
+    * run exists and is terminal ``cancelled`` (a superseded executor whose run
+      continues is left to its successor);
+    * no cost is already attributed (never overwrite/duplicate a real
+      finalize);
+    * a retained sandbox attempt marker exists (the proof the attempt ran);
+    * the marker carries an agent-reported COST or a delivery sentinel — token
+      counters alone are not attributable and are never collected (FAR-1914
+      M4: the former implementation collected tokens then discarded them).
+
+    The derived sandbox line is written ONLY when the run has a retained
+    sandbox attempt AND its ``heartbeat_at`` proves a positive liveness window
+    (``started_at < heartbeat_at``; see
+    :func:`modulo.core.agent_event_evidence.heartbeat_liveness_seconds`). A
+    missing heartbeat means NO sandbox duration — never ``completed_at`` or
+    ``now()``. Nothing provable ⇒ nothing written.
+    """
+    run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
+    if run is None:
+        return
+    if getattr(run, "status", None) != "cancelled":
+        return
+    if _attributed_cost_present(run):
+        return
+    stored_blobs = await read_run_blobs(session, run_id=run_id, organisation_id=run.organisation_id)
+    salvage = _salvage_from_markers(stored_blobs.markers)
+    if not salvage.has_evidence:
+        return
+    has_sandbox_attempt = _has_sandbox_attempt_evidence(stored_blobs.markers)
+    wall_hours = _cancel_liveness_wall_hours(run) if has_sandbox_attempt else None
+    await _write_derived_deadline_terminal(
+        session,
+        run=run,
+        run_id=run_id,
+        org_id=org_id,
+        status="cancelled",
+        error_code=getattr(run, "error_code", None),
+        error_detail=getattr(run, "error_detail", None),
+        wall_hours=wall_hours,
+        derived_from="cancel_liveness_window",
+        salvage=salvage,
+    )
+
+
 @dataclass(frozen=True)
 class _SalvagedAttemptEvidence:
-    """Agent-reported spend/evidence recovered from retained attempt markers.
+    """Agent-reported spend recovered from retained attempt markers.
 
     FAR-1914 B1: a killed sandbox node never writes ``output.json``, so the
     normal self-report (``cost_estimate_usd`` / ``model_cost_usd``) never
-    exists. Its retained raw-output marker does hold the opencode
-    ``step_finish`` events, each carrying the agent's own ``tokens`` and
-    ``cost``. This is the ONLY surviving record of the work the attempt did.
+    exists. Its retained raw-output marker may hold the opencode
+    ``step_finish`` events, each carrying the agent's own ``cost``.
 
     ``agent_cost_usd`` is ``None`` when no usable per-step cost was found —
-    never coerced to zero. ``has_evidence`` gates the salvage: a marker with
-    no recovered cost and no delivery fact must not invent spend.
+    never coerced to zero. Token counters are deliberately NOT carried
+    (FAR-1914 M4): they are display-only and the salvage cannot persist them
+    consistently, so collecting them would be collect-and-drop.
+
+    ``has_evidence`` gates the salvage: a recovered COST, or the full-line
+    delivery sentinel (which proves the side effect happened). A bare PR url
+    does NOT gate — it is non-gating evidence (FAR-1914 C1).
     """
 
     node_ids: tuple[str, ...]
     agent_cost_usd: Decimal | None
-    token_usage: dict[str, int]
-    pr_url: str | None
     delivery_done: bool
 
     @property
     def has_evidence(self) -> bool:
-        return self.agent_cost_usd is not None or bool(self.token_usage) or bool(self.pr_url) or self.delivery_done
-
-
-#: The opencode JSONL event type that closes one model step and carries the
-#: per-step ``tokens`` and ``cost`` (mirrors node_runner's FAR-1994 reader).
-_STEP_FINISH_EVENT = "step_finish"
-_STEP_FINISH_CACHE_KEYS: tuple[tuple[str, str], ...] = (("read", "cache_read"), ("write", "cache_write"))
-
-
-@dataclass(frozen=True)
-class _RetainedStepEvidence:
-    """One retained raw stream's recovered per-step tokens + cost."""
-
-    token_usage: dict[str, int]
-    cost_usd: Decimal | None
-
-
-def _recover_step_cost(event: dict[str, Any]) -> Decimal | None:
-    """The per-step model cost an opencode ``step_finish`` event carries, or ``None``.
-
-    The CLI emits it as ``cost`` (and mirrors it at ``part.cost``); accept the
-    first plausible non-negative finite value. An implausible value is REJECTED
-    (``None``), never coerced to 0 — a present-but-unusable report must stay
-    distinguishable from a genuine zero.
-    """
-    candidates = [event.get("cost")]
-    part = event.get("part")
-    if isinstance(part, dict):
-        candidates.append(part.get("cost"))
-    for raw in candidates:
-        if isinstance(raw, bool):
-            continue
-        try:
-            value = Decimal(str(raw))
-        except (TypeError, ValueError, ArithmeticError):
-            continue
-        if value.is_finite() and value >= 0:
-            return value
-    return None
-
-
-def _recover_retained_step_evidence(raw_output: str | None) -> _RetainedStepEvidence:
-    """Recover the agent's OWN per-step tokens + cost from a retained stream.
-
-    A killed sandbox node never writes ``output.json``, so the normal
-    ``cost_estimate_usd`` / ``model_cost_usd`` self-report never exists. The
-    retained raw-output marker still holds the opencode JSONL ``step_finish``
-    events — the only place the agent's own spend survives the kill.
-
-    Deliberately a LOCAL copy of the node_runner event-shape reader rather than
-    an import: ``finalize`` is reachable from the API layer
-    (``api.routes.runs`` → ``finalize_cancelled_run``) and importing
-    ``node_runner`` would drag ``langgraph`` into ``modulo.api``, breaking the
-    pinned import-linter contract.
-
-    BOUNDED and fail-open: one linear pass, line by line; non-JSON lines, other
-    event types and invalid counters/costs are skipped; ANY failure degrades to
-    empty evidence — this never raises and never changes the run's failure
-    semantics. An empty ``token_usage`` / ``None`` cost means "no usable
-    ``step_finish`` event found", distinct from a genuine zero report.
-    """
-    empty = _RetainedStepEvidence(token_usage={}, cost_usd=None)
-    if not isinstance(raw_output, str) or not raw_output:
-        return empty
-    totals: dict[str, int] = {"input": 0, "output": 0, "total": 0, "cache_read": 0, "cache_write": 0}
-    seen: set[str] = set()
-    cost_total = Decimal(0)
-    found_event = False
-    found_cost = False
-    for line in raw_output.splitlines():
-        # Cheap pre-filter: only a line naming the event type can be a candidate.
-        if _STEP_FINISH_EVENT not in line:
-            continue
-        try:
-            event = json.loads(line)
-        except (TypeError, ValueError):
-            continue
-        if not isinstance(event, dict) or event.get("type") != _STEP_FINISH_EVENT:
-            continue
-        found_event = True
-        tokens = event.get("tokens")
-        if isinstance(tokens, dict):
-            for key in ("input", "output", "total"):
-                coerced = coerce_reported_token(tokens.get(key))
-                if coerced is not None:
-                    totals[key] += coerced
-                    seen.add(key)
-            cache = tokens.get("cache")
-            if isinstance(cache, dict):
-                for source_key, target_key in _STEP_FINISH_CACHE_KEYS:
-                    coerced = coerce_reported_token(cache.get(source_key))
-                    if coerced is not None:
-                        totals[target_key] += coerced
-                        seen.add(target_key)
-        event_cost = _recover_step_cost(event)
-        if event_cost is not None:
-            cost_total += event_cost
-            found_cost = True
-    token_usage = {key: value for key, value in totals.items() if key in seen} if found_event else {}
-    return _RetainedStepEvidence(token_usage=token_usage, cost_usd=cost_total if found_cost else None)
+        return self.agent_cost_usd is not None or self.delivery_done
 
 
 def _salvage_from_markers(markers: dict[str, Any] | None) -> _SalvagedAttemptEvidence:
-    """Recover the killed attempt's own spend + delivery facts from markers.
+    """Recover the killed attempt's own spend from retained markers.
 
-    Every retained marker's ``raw_output`` is scanned with the local
-    ``step_finish`` reader, so the recovered figures keep the agent-reported
-    provenance class by construction. Costs and tokens are SUMMED across
-    attempts: each attempt really did burn them.
+    Every retained marker's ``raw_output`` is parsed by the SHARED, langgraph-free
+    :func:`modulo.core.agent_event_evidence.parse_step_finish_evidence` — the
+    same reader the node runner uses, reading the ``part``-nested shape the
+    shipped CLI emits. Costs are SUMMED across attempts: each attempt really
+    did burn them. Tokens are intentionally discarded (see the dataclass).
 
     Fail-open: a non-dict ``markers`` value, a marker without ``raw_output``,
     or a malformed line yields nothing — never an exception on the terminal
     path.
     """
     if not isinstance(markers, dict):
-        return _SalvagedAttemptEvidence((), None, {}, None, False)
+        return _SalvagedAttemptEvidence((), None, False)
     node_ids: list[str] = []
-    token_totals: dict[str, int] = {}
     cost_total = Decimal(0)
     found_cost = False
-    pr_url: str | None = None
     delivery_done = False
     for marker in markers.values():
         if not isinstance(marker, dict):
@@ -3265,51 +3234,55 @@ def _salvage_from_markers(markers: dict[str, Any] | None) -> _SalvagedAttemptEvi
         if isinstance(node_id, str) and node_id and node_id not in node_ids:
             node_ids.append(node_id)
         raw_output = marker.get("raw_output")
-        evidence = _recover_retained_step_evidence(raw_output if isinstance(raw_output, str) else None)
-        if evidence.cost_usd is not None:
-            cost_total += evidence.cost_usd
+        _tokens, cost = parse_step_finish_evidence(raw_output if isinstance(raw_output, str) else None)
+        if cost is not None:
+            cost_total += cost
             found_cost = True
-        for key, value in evidence.token_usage.items():
-            token_totals[key] = token_totals.get(key, 0) + int(value)
-        marker_pr_url = marker.get("pr_url")
-        if pr_url is None and isinstance(marker_pr_url, str) and marker_pr_url:
-            pr_url = marker_pr_url
         if marker.get("delivery_done") is True:
             delivery_done = True
     accepted = clamp_reported(cost_total) if found_cost else None
     return _SalvagedAttemptEvidence(
         node_ids=tuple(node_ids),
         agent_cost_usd=accepted[0] if accepted is not None else None,
-        token_usage=token_totals,
-        pr_url=pr_url,
         delivery_done=delivery_done,
     )
 
 
-def _cancel_liveness_wall_hours(run: Run) -> float | None:
-    """The proven liveness window for a cancelled run, in hours (FAR-1914 B1).
+def _has_sandbox_attempt_evidence(markers: dict[str, Any] | None) -> bool:
+    """True when the run retains a sandbox ATTEMPT marker.
 
-    Same basis the FAR-1993 reconcile age gate uses: ``started_at`` to the
-    LAST liveness proof (``heartbeat_at``, else ``completed_at``). It is NOT an
-    arbitrary bound — a running run's heartbeat is refreshed while the
-    executor is alive, so a row whose executor died long ago credits only to
-    its last heartbeat. Returns ``None`` when there is no usable window (no
-    ``started_at``, non-positive, or non-finite), so no duration is fabricated.
+    FAR-1914 M3: the derived sandbox line is BILLABLE, so it may only be
+    written when the run proves a sandbox attempt actually existed. A retained
+    cancellation marker (``_modulo_marker`` / ``deadline_triage``) is that
+    proof; a run with no marker has no sandbox evidence and must not be billed
+    wall-clock time.
+    """
+    if not isinstance(markers, dict):
+        return False
+    for marker in markers.values():
+        if not isinstance(marker, dict):
+            continue
+        if marker.get("_modulo_marker") is True or marker.get("deadline_triage") is True:
+            return True
+    return False
+
+
+def _cancel_liveness_wall_hours(run: Run) -> float | None:
+    """The PROVEN liveness window for a cancelled run, in hours (FAR-1914 B1).
+
+    Shares the age gate's proof (``agent_event_evidence.heartbeat_liveness_seconds``):
+    ``started_at`` to the LAST liveness proof (``min(heartbeat_at,
+    completed_at)``). ``heartbeat_at`` MUST be present and strictly past
+    ``started_at`` — the pre-FAR-1914 implementation fell back to
+    ``completed_at``/``now()``, which credits wall-clock time the run never
+    proved it was alive for. Returns ``None`` when the window is not provable,
+    so no duration is fabricated.
     """
     started = getattr(run, "started_at", None)
-    if not isinstance(started, datetime):
-        return None
-    completed = getattr(run, "completed_at", None)
-    end = completed if isinstance(completed, datetime) else datetime.now(UTC)
     heartbeat = getattr(run, "heartbeat_at", None)
-    if isinstance(heartbeat, datetime) and heartbeat < end:
-        end = heartbeat
-    if started.tzinfo is None:
-        started = started.replace(tzinfo=UTC)
-    if end.tzinfo is None:
-        end = end.replace(tzinfo=UTC)
-    seconds = (end - started).total_seconds()
-    if not math.isfinite(seconds) or seconds <= 0:
+    completed = getattr(run, "completed_at", None)
+    seconds = heartbeat_liveness_seconds(started, heartbeat, completed)
+    if seconds is None:
         return None
     return seconds / 3600.0
 
@@ -3330,8 +3303,6 @@ def _salvage_breakdown_entry(salvage: _SalvagedAttemptEvidence) -> dict[str, Any
         "node_count": len(salvage.node_ids),
         "salvaged_from": "retained_raw_output_step_finish",
     }
-    if salvage.token_usage:
-        basis["tokens_reported"] = {key: int(value) for key, value in salvage.token_usage.items()}
     return {
         "component": "model_tokens",
         "display_name": "Model cost (self-reported, salvaged from retained output)",

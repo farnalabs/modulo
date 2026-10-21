@@ -1370,3 +1370,104 @@ async def test_deadline_kill_waits_for_cancel_cleanup_before_terminalising():
         with contextlib.suppress(asyncio.CancelledError):
             await exec_task
     assert order == ["cleanup", "terminal"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-1914 C2 — the salvage runs AFTER the executor task settles
+# ---------------------------------------------------------------------------
+
+
+async def _wrapper_outcome(
+    *,
+    run_id: str,
+    org_id: str,
+    read_status: str,
+    salvage: AsyncMock,
+    fail: AsyncMock,
+):
+    """Drive the watchdog wrapper to its outcome with the run row re-read as
+    ``read_status``; return the wrapper's outcome dict (the salvage seam is
+    ``salvage``, the terminal-fail seam is ``fail``)."""
+    executor = _make_executor_mock(attempt_count=1)
+    hang = asyncio.Event()
+
+    async def _hang() -> None:
+        await hang.wait()
+
+    with contextlib.ExitStack() as stack:
+        for seam in _watchdog_wrapper_seams({}):
+            stack.enter_context(seam)
+        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("modulo.core.pipeline_execution.heartbeat_loop", AsyncMock()))
+        stack.enter_context(
+            patch("modulo.core.pipeline_execution._read_run_status", AsyncMock(return_value=read_status))
+        )
+        stack.enter_context(patch("modulo.core.pipeline_execution._salvage_cancelled_run_cost", salvage))
+        stack.enter_context(
+            patch(
+                "modulo.core.pipeline_execution.get_settings",
+                lambda: MagicMock(saq_setup_grace_seconds=0.01, saq_node_default_timeout_seconds=1200),
+            )
+        )
+        return await run_executor_with_watchdog(
+            MagicMock(),
+            run_id=run_id,
+            org_id=org_id,
+            executor=executor,
+            job=MagicMock(function="execute_run"),
+            execute_fn=_hang,
+        )
+
+
+async def test_settled_cancelled_run_is_salvaged():
+    """FAR-1914 C2 prove-the-fix: when the executor task has settled and the
+    run row re-reads ``cancelled``, the wrapper hands the SAME engine/run/org
+    identity it resolved to ``_salvage_cancelled_run_cost`` — the shakeout
+    gate observed the salvage missing entirely because the wiring did not
+    exist; delete the ``_salvage_cancelled_run_cost`` call in
+    ``run_executor_with_watchdog`` and this fails with ``salvage`` never
+    awaited.
+
+    Shipped outcome mapping: ``_executor_status_response`` has no ``cancelled``
+    arm, so a cancelled run still reports the fail-shaped outcome dict — the
+    salvage attribution is the point, not the wrapper's summary dict.
+    """
+    salvage = AsyncMock()
+    fail = AsyncMock(return_value=True)
+    run_id = str(uuid.uuid4())
+    org_id = str(uuid.uuid4())
+
+    result = await _wrapper_outcome(
+        run_id=run_id,
+        org_id=org_id,
+        read_status="cancelled",
+        salvage=salvage,
+        fail=fail,
+    )
+
+    salvage.assert_awaited_once()
+    assert salvage.await_args.args == (ANY, run_id, org_id)
+    assert result == {"status": "failed"}
+
+
+async def test_failed_run_status_is_not_salvaged():
+    """The gate is on the re-read status: a watchdog terminal-fail lands here
+    with the run already ``failed`` and its deadline cost owned by
+    ``_record_derived_deadline_cost`` — no salvage may fire, and the
+    terminal-fail itself still runs."""
+    salvage = AsyncMock()
+    fail = AsyncMock(return_value=True)
+    run_id = str(uuid.uuid4())
+    org_id = str(uuid.uuid4())
+
+    result = await _wrapper_outcome(
+        run_id=run_id,
+        org_id=org_id,
+        read_status="failed",
+        salvage=salvage,
+        fail=fail,
+    )
+
+    salvage.assert_not_awaited()
+    fail.assert_awaited_once()
+    assert result == {"status": "failed"}

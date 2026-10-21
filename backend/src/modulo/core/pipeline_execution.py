@@ -741,12 +741,13 @@ _WATCHDOG_AWAIT_BOUND_SECONDS = 5.0
 
 #: FAR-1914 B2: how long the node-deadline watchdog lets the CANCELLED executor
 #: run its cancellation cleanup before terminalising the run. The cleanup is
-#: the sandbox node's bounded retention pass — a short delivery grace plus a
-#: log-tail fetch and a marker persist, each bounded to 5s — so 12s covers the
-#: worst case with headroom. Without this wait the terminal write can land
-#: BEFORE the marker, and a run killed seconds after opening its PR is recorded
-#: as a bare failure.
-_EXECUTOR_CANCEL_SETTLE_SECONDS = 12.0
+#: the sandbox node's bounded retention pass: a first drain (5s) + the
+#: cancel-delivery grace (0.5s) + the second/final drain (5s) + a log-tail
+#: fetch (5s) + a marker persist (5s) — 20.5s worst case, so 25s covers it
+#: with headroom. Without this wait the terminal write can land BEFORE the
+#: marker, and a run killed seconds after opening its PR is recorded as a bare
+#: failure.
+_EXECUTOR_CANCEL_SETTLE_SECONDS = 25.0
 
 
 class ClaimSupersededError(Exception):
@@ -2031,6 +2032,49 @@ async def _record_derived_deadline_cost(
         )
 
 
+async def _salvage_cancelled_run_cost(aengine: AsyncEngine, run_id: str, org_id: str) -> None:
+    """Attribute a settled CANCELLED run's marker-provable spend (FAR-1914 C2).
+
+    Called from ``run_executor_with_watchdog`` only AFTER the executor task has
+    settled and the run row has been re-read: the cancelled executor's sandbox
+    node has already run its bounded retention pass and persisted its attempt
+    marker (the API/MCP cancel REQUEST path cannot see that marker — it runs in
+    a separate process and re-records nothing the executor has not yet written;
+    see ``finalize_cancelled_run``). Salvaging here is the ONLY point where a
+    never-paused cancelled run's spend can be attributed honestly.
+
+    Gated on the re-read status being ``cancelled``: a watchdog terminal-fail
+    path lands here with the run already ``failed`` (its deadline cost is
+    handled by ``_record_derived_deadline_cost``), a superseded run is owned by
+    its successor and a re-dispatched run is ``pending`` — all delegated to
+    finalize's own unloadable-status guard, so this is the one benign call-site
+    gate on top.
+
+    Fail-open: any failure logs and is swallowed so the already-terminal
+    cancelled run is never turned into a raised error. ``asyncio.CancelledError``
+    is re-raised (worker shutdown is not ours to swallow).
+    """
+    from modulo.core.cost_controller.finalize import salvage_cancelled_run_cost
+
+    try:
+        factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
+        async with factory() as session, session.begin():
+            await set_rls_org(session, uuid.UUID(org_id))
+            await salvage_cancelled_run_cost(
+                session,
+                run_id=uuid.UUID(run_id),
+                org_id=uuid.UUID(org_id),
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "pipeline_execution.cancel_cost_salvage_failed run=%s",
+            run_id,
+            exc_info=True,
+        )
+
+
 async def _fail_overdue_node(
     aeng: AsyncEngine,
     run_id: str,
@@ -2506,6 +2550,14 @@ async def run_executor_with_watchdog(
     # and the run row status. A watchdog/supersession/heartbeat cancellation
     # leaves exec_result None — fall back to the run row.
     result_status = await _resolve_result_status(aeng, run_id, org_id, exec_result, rid)
+    if result_status == "cancelled":
+        # FAR-1914 C2: the executor task is settled at this point, so its
+        # cancelled sandbox node has persisted the retention marker. Salvage
+        # the marker-provable spend now (an API-path finalize cannot see this
+        # marker). finalize's own guards make every non-attributable case a
+        # no-op; a failed/pending/superseded run is filtered here before the
+        # session even opens.
+        await _salvage_cancelled_run_cost(aeng, run_id, org_id)
     return _executor_status_response(result_status)
 
 

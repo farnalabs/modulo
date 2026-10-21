@@ -2027,10 +2027,15 @@ async def _cancel_run(session: AsyncSession, principal: TenantPrincipal, run_id:
     """Request cancellation for a run, finalizing cost for non-paused runs.
 
     Runs inside the caller's transaction (RLS already set). PAUSED-then-
-    cancelled class (awaiting_human/claimed) runs NO finalize (§4.2). A STREAMED
-    running run cancelled cross-process is routed through finalize_cost,
-    re-reading the STORED cumulative sets; a NEVER-PAUSED in-flight run has none
-    and forfeits its accrued cost (cost_components_partial_spend_lost log).
+    cancelled class (awaiting_human/claimed/hitl_parked) runs NO finalize (§4.2).
+    A STREAMED running run cancelled cross-process is routed through
+    finalize_cancelled_run, re-reading the STORED cumulative sets; a
+    NEVER-PAUSED in-flight run has none on THIS request path, so it logs
+    ``cost_components_partial_spend_lost`` here — but its docket is NOT
+    forfeited: after the executor settles (it observes the cancellation on its
+    next heartbeat), ``pipeline_execution._salvage_cancelled_run_cost`` reads
+    the executor's persisted attempt marker and attributes marker-provable
+    spend (FAR-1914 C2).
 
     FAR-1610 lock bound: this is a REQUEST path on the hot ``runs`` row, and the
     FIRST lock in the caller's transaction is ``request_cancellation``'s

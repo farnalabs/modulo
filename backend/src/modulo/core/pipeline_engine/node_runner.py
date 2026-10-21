@@ -90,6 +90,7 @@ if TYPE_CHECKING:
 
 import typing
 
+from modulo.core.agent_event_evidence import parse_step_finish_evidence
 from modulo.core.capability_scope import filter_run_context_scope
 from modulo.core.cost_controller.breakdown.constants import (
     MAX_REPORTABLE_BAND_USD,
@@ -1068,11 +1069,6 @@ def _build_token_usage_fields(output_json: Any) -> dict[str, Any]:
     return fields
 
 
-#: FAR-1994: the opencode JSONL event type that closes one model step and
-#: carries the authoritative token counters (``tokens.total`` / ``input`` /
-#: ``output`` / ``cache.read`` / ``cache.write``).
-_OPENCODE_STEP_FINISH_EVENT = "step_finish"
-
 #: FAR-1994: provenance class of token counters recovered from a retained
 #: agent raw-output stream. The numbers are parsed from the AGENT'S OWN
 #: opencode event stream — agent-reported, never server-measured — so they
@@ -1088,73 +1084,6 @@ RECOVERED_TOKEN_USAGE_PROVENANCE: str = PROVENANCE_REPORTED
 RECOVERED_TOKEN_USAGE_ATTR: str = "recovered_token_usage"
 
 
-def _coerce_event_token(value: Any) -> int | None:
-    """A plausible non-negative opencode token counter, or ``None``.
-
-    Reuses the shared reported-token coercion (accepts an integral float,
-    rejects bool / negative / non-numeric / above the plausibility ceiling) so
-    a recovered count obeys the SAME trust-boundary rule as a producer
-    ``token_usage`` report.
-    """
-    return coerce_reported_token(value)
-
-
-#: FAR-1994: a ``step_finish`` event's ``tokens`` keys that map to the producer
-#: ``token_usage`` shape unchanged, and its ``cache`` sub-object keys that map
-#: onto the ``cache_*`` producer keys.
-_STEP_FINISH_TOKEN_PAIRS: tuple[tuple[str, str], ...] = (
-    ("input", "input"),
-    ("output", "output"),
-    ("total", "total"),
-)
-_STEP_FINISH_CACHE_PAIRS: tuple[tuple[str, str], ...] = (("read", "cache_read"), ("write", "cache_write"))
-
-#: FAR-1994: every producer ``token_usage`` key the recovery can emit, in the
-#: canonical order. Only keys an event actually carried are returned.
-_RECOVERED_TOKEN_KEYS: tuple[str, ...] = ("input", "output", "total", "cache_read", "cache_write")
-
-
-def _parse_step_finish_tokens(line: str) -> dict[str, Any] | None:
-    """The ``tokens`` object of one opencode ``step_finish`` JSONL line, or ``None``.
-
-    Cheap pre-filter first: only a line that even mentions the event type can be
-    a candidate, so a 512KB blob of ordinary text is not JSON-parsed. Non-JSON
-    lines, non-dict payloads and other event types yield ``None``.
-    """
-    if _OPENCODE_STEP_FINISH_EVENT not in line:
-        return None
-    try:
-        event = json.loads(line)
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(event, dict) or event.get("type") != _OPENCODE_STEP_FINISH_EVENT:
-        return None
-    tokens = event.get("tokens")
-    return tokens if isinstance(tokens, dict) else None
-
-
-def _accumulate_token_counters(
-    totals: dict[str, int],
-    seen: set[str],
-    source: dict[str, Any],
-    key_pairs: tuple[tuple[str, str], ...],
-) -> None:
-    """Add every plausible *source* counter into *totals*, recording *seen* keys."""
-    for source_key, producer_key in key_pairs:
-        coerced = _coerce_event_token(source.get(source_key))
-        if coerced is not None:
-            totals[producer_key] += coerced
-            seen.add(producer_key)
-
-
-def _seen_token_totals(totals: dict[str, int], seen: set[str]) -> dict[str, int]:
-    """Project *totals* onto the canonical key order, keeping only *seen* keys.
-
-    A key an event never carried must not masquerade as a reported zero.
-    """
-    return {key: totals[key] for key in _RECOVERED_TOKEN_KEYS if key in seen}
-
-
 def _recover_token_usage_from_raw_output(raw_output: str | None) -> dict[str, int]:
     """Sum opencode ``step_finish`` token counters from a retained raw stream.
 
@@ -1164,6 +1093,12 @@ def _recover_token_usage_from_raw_output(raw_output: str | None) -> dict[str, in
     normally carries ``token_usage`` never exists, so the run records zero.
     The retained raw output (up to the node's retention cap) holds those events;
     this recovers them.
+
+    FAR-1914 M2: the parse itself lives in the langgraph-free leaf
+    :func:`modulo.core.agent_event_evidence.parse_step_finish_evidence` — ONE
+    implementation shared with the cost finalizer (which is reachable from the
+    API and must not import this module). The shipped CLI nests both ``tokens``
+    and ``cost`` under ``part``; the leaf reads that shape only.
 
     Returns the PRODUCER ``token_usage`` shape
     ``{"input", "output", "total", "cache_read"?, "cache_write"?}`` — the same
@@ -1180,25 +1115,8 @@ def _recover_token_usage_from_raw_output(raw_output: str | None) -> dict[str, in
     run. An EMPTY dict means "no step_finish event found", which is distinct
     from a genuine zero report (a present event with zero counters).
     """
-    if not isinstance(raw_output, str) or not raw_output:
-        return {}
-    totals: dict[str, int] = dict.fromkeys(_RECOVERED_TOKEN_KEYS, 0)
-    seen: set[str] = set()
-    found_event = False
-    for line in raw_output.splitlines():
-        tokens = _parse_step_finish_tokens(line)
-        if tokens is None:
-            continue
-        found_event = True
-        _accumulate_token_counters(totals, seen, tokens, _STEP_FINISH_TOKEN_PAIRS)
-        cache = tokens.get("cache")
-        if isinstance(cache, dict):
-            _accumulate_token_counters(totals, seen, cache, _STEP_FINISH_CACHE_PAIRS)
-    if not found_event:
-        return {}
-    # Only emit a key an event actually carried — a missing ``total`` must not
-    # masquerade as a reported zero.
-    return _seen_token_totals(totals, seen)
+    tokens, _cost = parse_step_finish_evidence(raw_output)
+    return tokens
 
 
 def _attach_recovered_token_usage(exc: BaseException, raw_output: str | None) -> None:
@@ -12901,14 +12819,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 delivery_sentinel and _source_contains_delivery_sentinel(_drained_tail, delivery_sentinel)
             )
             _cancel_pr_url = _extract_pr_url(_drained_tail)
-            # FAR-1914 B2: a created PR IS a delivered side effect. The agent
-            # may never print the configured full-line sentinel (the live
-            # node's is ``PR_CREATED``) but ``gh pr create`` emits the PR URL —
-            # treating that as delivery evidence is what makes "killed after
-            # delivering" machine-readable instead of a bare failure. The
-            # marker's ``delivery_done`` is the existing API surface
-            # (``deadline_triage[].delivery_done`` / ``gate_fired``).
-            _cancel_delivery_observed = _cancel_sentinel_hit or bool(_cancel_pr_url)
+            # FAR-1914 B2 / C1: the PR url is EVIDENCE, never a gate. Only the
+            # configured full-line sentinel may set ``delivery_done`` — the
+            # idempotency gate suppresses a retry on that field alone, so
+            # arming it from ANY url in the tail (a ``gh pr list --json url``
+            # payload, a quoted url) could turn a false positive into a MISSED
+            # delivery. The url is retained on the marker's existing
+            # non-gating ``pr_url`` field for human/analytics evidence.
             _cancel_no_output_reason = (
                 stall_reason
                 or "Sandbox attempt cancelled before a terminal node envelope was produced "
@@ -12922,8 +12839,8 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     "delivery_done retained (idempotency gate)"
                     if _cancel_sentinel_hit
                     else (
-                        "Sandbox agent cancelled after delivery evidence observed — delivery_done retained (PR url)"
-                        if _cancel_delivery_observed
+                        "Sandbox agent cancelled after a PR url was observed — pr_url retained as non-gating evidence"
+                        if _cancel_pr_url
                         else "Sandbox agent cancelled — triage evidence retained (FAR-704)"
                     )
                 ),
@@ -12941,7 +12858,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 "no_output_reason": sanitize_error_text(_cancel_no_output_reason),
                 "sandbox_log_tail": sanitize_error_text(_redact_raw_output(_cancel_log_tail)),
             }
-            if _cancel_delivery_observed:
+            if _cancel_sentinel_hit:
                 _cancel_marker["delivery_done"] = True
             try:
                 await _sandbox_cancel_retention_persist(

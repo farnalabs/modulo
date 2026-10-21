@@ -27,7 +27,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import math
 import threading
 import time
 import uuid
@@ -49,7 +48,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.connectors.base import ConnectorPermissionError
-from modulo.core.dispatch import SAQ_QUEUED_JOB_TTL, SAQ_RUN_TIMEOUT, _apply_queued_ttl
 
 # FAR-1649: the durable "first node STARTED" phase label. It lives in the
 # dependency-free leaf ``modulo.core.dispatch_phases`` (a module import with NO
@@ -58,6 +56,8 @@ from modulo.core.dispatch import SAQ_QUEUED_JOB_TTL, SAQ_RUN_TIMEOUT, _apply_que
 # and would otherwise need an import-linter whitelist edge here (the lazy shim
 # it replaced did exactly that, coupling the runner-capacity safety sweep to
 # langgraph).
+from modulo.core.agent_event_evidence import heartbeat_liveness_seconds as _shared_heartbeat_liveness_seconds
+from modulo.core.dispatch import SAQ_QUEUED_JOB_TTL, SAQ_RUN_TIMEOUT, _apply_queued_ttl
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
 
@@ -7799,14 +7799,14 @@ def _heartbeat_liveness_seconds(
     proof. (Several runs can share one ``heartbeat_at`` when a single worker
     died holding a batch — that is still each run's own last-liveness stamp,
     not a shared synthetic value.)
+
+    FAR-1914: the implementation now lives in the langgraph-free leaf
+    :mod:`modulo.core.agent_event_evidence` so the cancel path (reachable from
+    ``modulo.api`` via ``cost_controller.finalize``) can share ONE definition
+    without importing this module (which transits LangGraph). Behaviour is
+    unchanged; this name remains the cron-side entry point.
     """
-    if started_at is None or heartbeat_at is None or heartbeat_at <= started_at:
-        return None
-    end = heartbeat_at if completed_at is None else min(heartbeat_at, completed_at)
-    seconds = (end - started_at).total_seconds()
-    if not math.isfinite(seconds) or seconds <= 0:
-        return None
-    return seconds
+    return _shared_heartbeat_liveness_seconds(started_at, heartbeat_at, completed_at)
 
 
 async def _attribute_age_gate_derived_cost(run_id: uuid.UUID, org_id: uuid.UUID) -> None:

@@ -23,7 +23,6 @@ the retryable raise into a terminal ``node_timeout``.
 import asyncio
 import logging
 import re
-import time
 import uuid
 from types import SimpleNamespace
 from typing import Any, Self
@@ -890,14 +889,16 @@ async def test_cancelled_node_without_sentinel_retains_triage_marker():
     assert "triage evidence retained" in marker["summary"]
 
 
-async def test_cancelled_node_treats_pr_url_as_delivery_evidence():
-    """FAR-1914 B2: a created PR is a delivered side effect.
+async def test_cancelled_node_records_pr_url_without_stamping_delivery_done():
+    """FAR-1914 C1: a PR url is retained as evidence, but NEVER gates delivery.
 
-    The live Prompt-to-PR node's ``delivery_sentinel`` is ``PR_CREATED``, but
-    the agent often only echoes the ``gh pr create`` URL — no full-line
-    sentinel. Treating that URL as delivery evidence is what makes
-    "killed after delivering" machine-readable on the existing
-    ``delivery_done`` surface instead of recording a bare failure.
+    The idempotency gate suppresses a retry on ``delivery_done is True``
+    alone, so that field must arm ONLY from the configured full-line
+    sentinel — any url-shaped text in the tail (a ``gh pr list --json url``
+    payload, a quoted url) could otherwise turn a false positive into a
+    MISSED delivery. The url lands on the marker's existing non-gating
+    ``pr_url`` field for human/analytics evidence; the summary states that
+    explicitly.
     """
     log_content = f"opened the PR\n{_PR_456}\n"
     sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
@@ -916,26 +917,31 @@ async def test_cancelled_node_treats_pr_url_as_delivery_evidence():
         await fn(_run_state())
 
     marker = _single_marker(row)
-    assert marker["delivery_done"] is True
+    assert not marker.get("delivery_done")
     assert marker["pr_url"] == _PR_456
-    assert "delivery evidence observed" in marker["summary"]
+    assert "pr_url retained as non-gating evidence" in marker["summary"]
 
 
-async def test_cancelled_node_captures_a_pr_url_flushed_during_the_grace():
-    """FAR-1914 B2: the bounded post-cancel grace catches a late-flushed URL.
+async def test_cancelled_node_capture_of_delivery_sentinel_flushed_during_the_grace():
+    """FAR-1914 M5 (stateful): the bounded post-cancel grace catches LATE
+    content — the first final drain sees only the prior tail, the second look
+    (after the grace) sees what the sandbox flushed in between.
 
-    A delivered-then-killed attempt can write its ``gh pr create`` output just
-    AFTER the cancellation lands. The first final drain sees only the prior
-    content; the second look (after the grace) must capture the delivery.
+    The read mock is STATEFUL, not wall-clock-gated: the FIRST log read
+    returns ``early``; every LATER log read returns ``late`` (sentinel + url).
+    A marker carrying the late sentinel + url therefore PROVES the second
+    drain ran — delete the grace block or the second drain and this test
+    fails, because the tail it would build is the late content's predecessor.
     """
     early = "agent working\n"
-    late = f"{early}{_PR_777}\n"
-    started = time.monotonic()
+    late = f"{early}EMAIL_SENT\n{_PR_777}\n"
+    reads: list[str] = []
 
     async def _read(path: Any, format: str = "text", **kwargs: Any) -> Any:
         if str(path).endswith("output.json"):
             return '{"summary": "done"}'
-        return late if time.monotonic() - started >= 0.02 else early
+        reads.append(str(path))
+        return late if len(reads) > 1 else early
 
     sandbox = _make_sandbox_mock()
     sandbox.files.read = AsyncMock(side_effect=_read)
@@ -946,7 +952,10 @@ async def test_cancelled_node_captures_a_pr_url_flushed_during_the_grace():
     sandbox.commands.run = AsyncMock(return_value=handle)
     row = _FakeRunRow()
 
-    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel="EMAIL_SENT"),
+        session_factory=lambda: _RetentionSession(row),
+    )
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
@@ -956,8 +965,12 @@ async def test_cancelled_node_captures_a_pr_url_flushed_during_the_grace():
         await fn(_run_state())
 
     marker = _single_marker(row)
-    assert marker["delivery_done"] is True
+    # Both late-drain facts travel: the sentinel arms the gate, the url stays
+    # non-gating evidence. Neither exists in ``early`` — only the second drain
+    # could have produced them.
+    assert marker.get("delivery_done") is True
     assert marker["pr_url"] == _PR_777
+    assert len(reads) >= 2
 
 
 async def test_cancelled_during_provisioning_reraises_cleanly():
