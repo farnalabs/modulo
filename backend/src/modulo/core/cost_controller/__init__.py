@@ -322,6 +322,85 @@ async def get_or_create_daily_count(
         raise
 
 
+async def _check_org_daily_limit(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    cost_usd: Decimal,
+    day_start: datetime,
+    run_id: uuid.UUID | None,
+) -> bool:
+    """True when the org-level daily limit would be exceeded (NULL = no limit)."""
+    org_limit_result = await session.execute(select(Organisation.daily_spend_limit).where(Organisation.id == org_id))
+    org_limit = org_limit_result.scalar_one_or_none()
+    if org_limit is None:
+        return False
+    org_sum = await _sum_created_at_day(session, org_id=org_id, day_start=day_start, _run_id=run_id)
+    return org_sum + cost_usd > org_limit
+
+
+async def _check_team_daily_limit(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    team_id: uuid.UUID | None,
+    cost_usd: Decimal,
+    day_start: datetime,
+    run_id: uuid.UUID | None,
+) -> bool:
+    """True when the team-level daily limit would be exceeded (NULL = no limit)."""
+    if team_id is None:
+        return False
+    team_limit_result = await session.execute(select(Team.daily_spend_limit).where(Team.id == team_id))
+    team_limit = team_limit_result.scalar_one_or_none()
+    if team_limit is None:
+        return False
+    team_sum = await _sum_created_at_day(session, org_id=org_id, day_start=day_start, _run_id=run_id, team_id=team_id)
+    return team_sum + cost_usd > team_limit
+
+
+async def _record_daily_refusal(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    team_id: uuid.UUID | None,
+    run_date: date,
+    cost_usd: Decimal,
+    refuse_org: bool,
+    refuse_team: bool,
+) -> str:
+    """Write the refused amount to both day rows and build the refusal reason."""
+    org_refused = await get_or_create_daily_count(session, org_id=org_id, run_date=run_date, team_id=None)
+    _accumulate_refused(org_refused, cost_usd)
+    if team_id is not None:
+        team_refused = await get_or_create_daily_count(session, org_id=org_id, run_date=run_date, team_id=team_id)
+        _accumulate_refused(team_refused, cost_usd)
+    await session.flush()
+    scopes: list[str] = []
+    if refuse_org:
+        scopes.append("organisation")
+    if refuse_team:
+        scopes.append("team")
+    return f"daily_limit_exceeded: {', '.join(scopes)}"
+
+
+async def _record_daily_spend(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    team_id: uuid.UUID | None,
+    run_date: date,
+    cost_usd: Decimal,
+) -> None:
+    """Write the approved spend to the org row, then the team row."""
+    org_count = await get_or_create_daily_count(session, org_id=org_id, run_date=run_date, team_id=None)
+    _add_spend(org_count, cost_usd)
+    if team_id is not None:
+        team_count = await get_or_create_daily_count(session, org_id=org_id, run_date=run_date, team_id=team_id)
+        _add_spend(team_count, cost_usd)
+    await session.flush()
+
+
 async def check_and_record_spend(
     session: AsyncSession,
     *,
@@ -373,51 +452,46 @@ async def check_and_record_spend(
     day_start = created_at_day_start()
 
     # --- check BOTH limits BEFORE writing either spend row (§4.6) ---
-    refuse_org = False
-    org_limit = None
-    org_limit_result = await session.execute(select(Organisation.daily_spend_limit).where(Organisation.id == org_id))
-    org_limit = org_limit_result.scalar_one_or_none()
-    if org_limit is not None:
-        org_sum = await _sum_created_at_day(session, org_id=org_id, day_start=day_start, _run_id=run_id)
-        refuse_org = org_sum + cost_usd > org_limit
-
-    refuse_team = False
-    team_limit: Decimal | None = None
-    if team_id is not None:
-        team_limit_result = await session.execute(select(Team.daily_spend_limit).where(Team.id == team_id))
-        team_limit = team_limit_result.scalar_one_or_none()
-        if team_limit is not None:
-            team_sum = await _sum_created_at_day(
-                session, org_id=org_id, day_start=day_start, _run_id=run_id, team_id=team_id
-            )
-            refuse_team = team_sum + cost_usd > team_limit
+    refuse_org = await _check_org_daily_limit(
+        session,
+        org_id=org_id,
+        cost_usd=cost_usd,
+        day_start=day_start,
+        run_id=run_id,
+    )
+    refuse_team = await _check_team_daily_limit(
+        session,
+        org_id=org_id,
+        team_id=team_id,
+        cost_usd=cost_usd,
+        day_start=day_start,
+        run_id=run_id,
+    )
 
     if refuse_org or refuse_team:
         # PERMANENT refusal — write the refused amount to the day rows'
         # refused_spend_usd (org + team). A first-of-day refusal creates a
         # refused-only row (total_spend_usd 0, run_count 0) — the limit checks
         # ran BEFORE get_or_create_daily_count, so no 0-spend row is created.
-        org_refused = await get_or_create_daily_count(session, org_id=org_id, run_date=run_date, team_id=None)
-        _accumulate_refused(org_refused, cost_usd)
-        if team_id is not None:
-            team_refused = await get_or_create_daily_count(session, org_id=org_id, run_date=run_date, team_id=team_id)
-            _accumulate_refused(team_refused, cost_usd)
-        await session.flush()
-        scopes: list[str] = []
-        if refuse_org:
-            scopes.append("organisation")
-        if refuse_team:
-            scopes.append("team")
-        return False, f"daily_limit_exceeded: {', '.join(scopes)}"
+        reason = await _record_daily_refusal(
+            session,
+            org_id=org_id,
+            team_id=team_id,
+            run_date=run_date,
+            cost_usd=cost_usd,
+            refuse_org=refuse_org,
+            refuse_team=refuse_team,
+        )
+        return False, reason
 
     # --- both limits pass — write the org row then the team row ---
-    org_count = await get_or_create_daily_count(session, org_id=org_id, run_date=run_date, team_id=None)
-    _add_spend(org_count, cost_usd)
-    if team_id is not None:
-        team_count = await get_or_create_daily_count(session, org_id=org_id, run_date=run_date, team_id=team_id)
-        _add_spend(team_count, cost_usd)
-
-    await session.flush()
+    await _record_daily_spend(
+        session,
+        org_id=org_id,
+        team_id=team_id,
+        run_date=run_date,
+        cost_usd=cost_usd,
+    )
     return True, None
 
 
@@ -973,6 +1047,118 @@ async def _cost_export_by_model(
     ]
 
 
+def _serialize_component_bucket(
+    bucket: dict[str, Decimal],
+    limit: int = _REPORT_COMPONENT_LIMIT,
+) -> tuple[list[dict[str, str]], bool]:
+    """Sort a component bucket (amount desc, name asc) and serialize 6dp values."""
+    entries = sorted(bucket.items(), key=lambda kv: (-kv[1], kv[0]))
+    truncated = len(entries) > limit
+    return [{"name": name, "amount_usd": _report_amount(amount)} for name, amount in entries[:limit]], truncated
+
+
+async def _load_team_component_buckets(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    since: date,
+) -> dict[uuid.UUID | None, dict[str, Decimal]]:
+    """Per-(owner team, component) amounts, aggregated in Postgres."""
+    component_result = await session.execute(text(_SQL_COST_COMPONENT_BUCKETS), {"org_id": org_id, "since": since})
+    # GROUP BY (owner_team_id, component) guarantees row uniqueness, so each
+    # fetched row lands in exactly one bucket slot — no accumulation needed.
+    team_components: dict[uuid.UUID | None, dict[str, Decimal]] = {}
+    for row in component_result.all():
+        team_id: uuid.UUID | None = row.team_id
+        bucket = team_components.setdefault(team_id, {})
+        bucket[row.component] = Decimal(str(row.amount_usd))
+    return team_components
+
+
+def _build_components_by_team(
+    team_components: dict[uuid.UUID | None, dict[str, Decimal]],
+) -> tuple[dict[str, list[dict[str, str]]], bool]:
+    """Serialize each team's component bucket, reporting any truncation."""
+    components_by_team: dict[str, list[dict[str, str]]] = {}
+    has_more = False
+    for team_id, bucket in team_components.items():
+        key = str(team_id) if team_id is not None else "__org__"
+        comps, truncated = _serialize_component_bucket(bucket)
+        components_by_team[key] = comps
+        if truncated:
+            has_more = True
+    return components_by_team, has_more
+
+
+async def _load_annotations_by_team(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    since: date,
+) -> dict[str, dict[str, float | None]]:
+    """Per-key refused/clamped annotation totals (omitted when non-positive)."""
+    annotation_result = await session.execute(
+        select(
+            OrgDailyRunCount.team_id,
+            func.sum(OrgDailyRunCount.refused_spend_usd).label("refused_total"),
+            func.sum(
+                case(
+                    (OrgDailyRunCount.clamped.is_(True), OrgDailyRunCount.total_spend_usd),
+                    else_=Decimal(0),
+                )
+            ).label("clamped_total"),
+        )
+        .where(
+            OrgDailyRunCount.organisation_id == org_id,
+            OrgDailyRunCount.run_date >= since,
+        )
+        .group_by(OrgDailyRunCount.team_id)
+    )
+    annotations_by_team: dict[str, dict[str, float | None]] = {}
+    for row in annotation_result.all():
+        key = str(row.team_id) if row.team_id is not None else "__org__"
+        refused = _safe_float(row.refused_total)
+        clamped = _safe_float(row.clamped_total)
+        annotations_by_team[key] = {
+            "refused_total_usd": refused if refused > 0 else None,
+            "clamped_total_usd": clamped if clamped > 0 else None,
+        }
+    return annotations_by_team
+
+
+async def _load_org_run_count(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    since: date,
+) -> int:
+    """The org-level ledger run count over the report window."""
+    org_run_count_result = await session.execute(
+        select(func.sum(OrgDailyRunCount.run_count)).where(
+            OrgDailyRunCount.organisation_id == org_id,
+            OrgDailyRunCount.run_date >= since,
+            org_level_predicate(),
+        )
+    )
+    org_run_count_value = org_run_count_result.scalar_one_or_none()
+    return int(org_run_count_value) if org_run_count_value is not None else 0
+
+
+def _split_component_totals(
+    team_components: dict[uuid.UUID | None, dict[str, Decimal]],
+) -> tuple[Decimal, Decimal]:
+    """Split component amounts into (org-unassigned, assigned-team) totals."""
+    org_unassigned = Decimal(0)
+    team_sum = Decimal(0)
+    for team_id, bucket in team_components.items():
+        bucket_total = sum(bucket.values(), Decimal(0))
+        if team_id is None:
+            org_unassigned += bucket_total
+        else:
+            team_sum += bucket_total
+    return org_unassigned, team_sum
+
+
 async def build_cost_report_buckets(
     session: AsyncSession,
     *,
@@ -1023,80 +1209,15 @@ async def build_cost_report_buckets(
 
     since = _report_since(datetime.now(UTC).date(), period)
 
-    component_result = await session.execute(text(_SQL_COST_COMPONENT_BUCKETS), {"org_id": org_id, "since": since})
-    # GROUP BY (owner_team_id, component) guarantees row uniqueness, so each
-    # fetched row lands in exactly one bucket slot — no accumulation needed.
-    team_components: dict[uuid.UUID | None, dict[str, Decimal]] = {}
-    for row in component_result.all():
-        team_id: uuid.UUID | None = row.team_id
-        bucket = team_components.setdefault(team_id, {})
-        bucket[row.component] = Decimal(str(row.amount_usd))
+    team_components = await _load_team_component_buckets(session, org_id=org_id, since=since)
 
     legacy_result = await session.execute(text(_SQL_COST_LEGACY_TOTAL), {"org_id": org_id, "since": since})
     legacy_total = Decimal(str(legacy_result.scalar_one()))
 
-    def _serialized(
-        bucket: dict[str, Decimal],
-        limit: int = _REPORT_COMPONENT_LIMIT,
-    ) -> tuple[list[dict[str, str]], bool]:
-        entries = sorted(bucket.items(), key=lambda kv: (-kv[1], kv[0]))
-        truncated = len(entries) > limit
-        return [{"name": name, "amount_usd": _report_amount(amount)} for name, amount in entries[:limit]], truncated
-
-    components_by_team: dict[str, list[dict[str, str]]] = {}
-    has_more = False
-    for team_id, bucket in team_components.items():
-        key = str(team_id) if team_id is not None else "__org__"
-        comps, truncated = _serialized(bucket)
-        components_by_team[key] = comps
-        if truncated:
-            has_more = True
-
-    annotation_result = await session.execute(
-        select(
-            OrgDailyRunCount.team_id,
-            func.sum(OrgDailyRunCount.refused_spend_usd).label("refused_total"),
-            func.sum(
-                case(
-                    (OrgDailyRunCount.clamped.is_(True), OrgDailyRunCount.total_spend_usd),
-                    else_=Decimal(0),
-                )
-            ).label("clamped_total"),
-        )
-        .where(
-            OrgDailyRunCount.organisation_id == org_id,
-            OrgDailyRunCount.run_date >= since,
-        )
-        .group_by(OrgDailyRunCount.team_id)
-    )
-    annotations_by_team: dict[str, dict[str, float | None]] = {}
-    for row in annotation_result.all():
-        key = str(row.team_id) if row.team_id is not None else "__org__"
-        refused = _safe_float(row.refused_total)
-        clamped = _safe_float(row.clamped_total)
-        annotations_by_team[key] = {
-            "refused_total_usd": refused if refused > 0 else None,
-            "clamped_total_usd": clamped if clamped > 0 else None,
-        }
-
-    org_run_count_result = await session.execute(
-        select(func.sum(OrgDailyRunCount.run_count)).where(
-            OrgDailyRunCount.organisation_id == org_id,
-            OrgDailyRunCount.run_date >= since,
-            org_level_predicate(),
-        )
-    )
-    org_run_count_value = org_run_count_result.scalar_one_or_none()
-    org_run_count = int(org_run_count_value) if org_run_count_value is not None else 0
-
-    org_unassigned = Decimal(0)
-    team_sum = Decimal(0)
-    for team_id, bucket in team_components.items():
-        for amount in bucket.values():
-            if team_id is None:
-                org_unassigned += amount
-            else:
-                team_sum += amount
+    components_by_team, has_more = _build_components_by_team(team_components)
+    annotations_by_team = await _load_annotations_by_team(session, org_id=org_id, since=since)
+    org_run_count = await _load_org_run_count(session, org_id=org_id, since=since)
+    org_unassigned, team_sum = _split_component_totals(team_components)
 
     return {
         "components_by_team": components_by_team,
