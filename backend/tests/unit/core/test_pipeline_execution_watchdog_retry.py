@@ -39,6 +39,7 @@ from modulo.core.pipeline_engine.watchdog_retry import WatchdogRetryOutcome
 from modulo.core.pipeline_execution import (
     _fail_overdue_node,
     _record_derived_deadline_cost,
+    _salvage_cancelled_run_cost,
     _sweep_org_stale_runs,
     _watchdog_retry_enabled_for_job,
     run_executor_with_watchdog,
@@ -290,6 +291,10 @@ async def test_deadline_kill_books_derived_cost_after_successful_terminal_write(
     assert derived.await_args.args[1] == "run-1"
     assert derived.await_args.args[2] == "org-1"
     assert derived.await_args.kwargs["derived_sandbox_wall_hours"] == 300 / 3600.0
+    # Round-3 M1: the killed node travels so finalize can scope the sandbox
+    # proof to THIS node (a run-scoped marker for another node must not license
+    # crediting this node's deadline).
+    assert derived.await_args.kwargs["killed_node_id"] == "n1"
     assert "n1" in derived.await_args.kwargs["error_detail"]
     assert "300s" in derived.await_args.kwargs["error_detail"]
 
@@ -364,7 +369,89 @@ async def test_record_derived_deadline_cost_rereises_cancelled_error() -> None:
             "org-1",
             error_detail="node 'n1' exceeded its deadline",
             derived_sandbox_wall_hours=300 / 3600.0,
+            killed_node_id="n1",
         )
+
+
+# ---------------------------------------------------------------------------
+# FAR-1914 round-2 C — the compensating cost writers bound the row lock FIRST
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _acm(obj: Any):
+    yield obj
+
+
+def _begin_bound_session() -> AsyncMock:
+    """Session double whose ``begin()`` is an async context manager."""
+    session = AsyncMock()
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    return session
+
+
+def _session_factory(session: AsyncMock) -> MagicMock:
+    return MagicMock(side_effect=lambda: _acm(session))
+
+
+async def test_record_derived_deadline_cost_bounds_the_row_lock_before_finalize() -> None:
+    """Round-2 C (prove-the-fix): bound the hot ``runs`` row lock first.
+
+    The finalizing write takes ``update_run_status``'s ``SELECT ... FOR
+    UPDATE``. Without the entry-point ``set_mutation_row_lock_timeout`` the
+    wait is unbounded on a contended row. Order is asserted so a bound placed
+    AFTER the lock cannot pass.
+    """
+    order: list[str] = []
+    session = _begin_bound_session()
+
+    async def _bound(_session: Any) -> None:
+        order.append("bound")
+
+    async def _finalize(*_a: Any, **_k: Any) -> None:
+        order.append("finalize")
+
+    with (
+        patch("modulo.core.pipeline_execution.async_sessionmaker", return_value=_session_factory(session)),
+        patch("modulo.core.pipeline_execution.set_rls_org", new=AsyncMock()),
+        patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=_bound),
+        patch("modulo.core.cost_controller.finalize.finalize_failed_run", new=_finalize),
+    ):
+        await _record_derived_deadline_cost(
+            MagicMock(),
+            str(uuid.uuid4()),
+            str(uuid.uuid4()),
+            error_detail="node 'n1' exceeded its deadline",
+            derived_sandbox_wall_hours=300 / 3600.0,
+            killed_node_id="n1",
+        )
+
+    assert order == ["bound", "finalize"]
+
+
+async def test_salvage_cancelled_run_cost_bounds_the_row_lock_before_salvage() -> None:
+    """Round-2 C: the post-settle salvage bounds the row lock first too."""
+    order: list[str] = []
+    session = _begin_bound_session()
+
+    async def _bound(_session: Any) -> None:
+        order.append("bound")
+
+    async def _salvage(*_a: Any, **_k: Any) -> None:
+        order.append("salvage")
+
+    with (
+        patch("modulo.core.pipeline_execution.async_sessionmaker", return_value=_session_factory(session)),
+        patch("modulo.core.pipeline_execution.set_rls_org", new=AsyncMock()),
+        patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=_bound),
+        patch("modulo.core.cost_controller.finalize.salvage_cancelled_run_cost", new=_salvage),
+    ):
+        await _salvage_cancelled_run_cost(MagicMock(), str(uuid.uuid4()), str(uuid.uuid4()))
+
+    assert order == ["bound", "salvage"]
 
 
 # ---------------------------------------------------------------------------
@@ -1321,3 +1408,212 @@ def test_capacity_retry_budget_setting_default_and_override(monkeypatch: pytest.
     assert Settings().saq_capacity_retry_budget == 3
     monkeypatch.setenv("SAQ_CAPACITY_RETRY_BUDGET", "7")
     assert Settings().saq_capacity_retry_budget == 7
+
+
+# ---------------------------------------------------------------------------
+# FAR-1914 B2 — the deadline kill waits for the executor's cancel cleanup
+# ---------------------------------------------------------------------------
+
+
+async def test_deadline_kill_waits_for_cancel_cleanup_before_terminalising():
+    """The cancelled executor's cleanup must run BEFORE the terminal write.
+
+    The cleanup is what persists the delivery/triage marker (including the
+    ``pr_url`` a run opened seconds before it was killed). Without the bounded
+    settle wait the terminal write races it — the c4222006 shape, recorded as a
+    bare failure even though the PR was created.
+    """
+    order: list[str] = []
+
+    async def _exec_body() -> None:
+        try:
+            await asyncio.sleep(999)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0)
+            order.append("cleanup")
+            raise
+
+    async def _fail(*args: Any, **kwargs: Any) -> bool:
+        order.append("terminal")
+        return True
+
+    exec_task = asyncio.create_task(_exec_body())
+    # Let the executor task actually START before the watchdog cancels it. A
+    # never-scheduled task is cancelled before its body runs, so its
+    # cancellation cleanup would never execute — that is a test artefact, not
+    # the production shape (the node has been in flight for its full deadline).
+    await asyncio.sleep(0)
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    done = asyncio.Event()
+    stall = asyncio.Event()
+    with (
+        patch("modulo.core.pipeline_execution.fail_run_terminal", _fail),
+        patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new=AsyncMock()),
+        patch("modulo.core.pipeline_execution._record_derived_deadline_cost", new=AsyncMock()),
+    ):
+        await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall)
+    if not exec_task.done():
+        exec_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await exec_task
+    assert order == ["cleanup", "terminal"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-1914 C2 — the salvage runs AFTER the executor task settles
+# ---------------------------------------------------------------------------
+
+
+async def _wrapper_outcome(
+    *,
+    run_id: str,
+    org_id: str,
+    read_status: str,
+    salvage: AsyncMock,
+    fail: AsyncMock,
+):
+    """Drive the watchdog wrapper to its outcome with the run row re-read as
+    ``read_status``; return the wrapper's outcome dict (the salvage seam is
+    ``salvage``, the terminal-fail seam is ``fail``)."""
+    executor = _make_executor_mock(attempt_count=1)
+    hang = asyncio.Event()
+
+    async def _hang() -> None:
+        await hang.wait()
+
+    with contextlib.ExitStack() as stack:
+        for seam in _watchdog_wrapper_seams({}):
+            stack.enter_context(seam)
+        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("modulo.core.pipeline_execution.heartbeat_loop", AsyncMock()))
+        stack.enter_context(
+            patch("modulo.core.pipeline_execution._read_run_status", AsyncMock(return_value=read_status))
+        )
+        stack.enter_context(patch("modulo.core.pipeline_execution._salvage_cancelled_run_cost", salvage))
+        stack.enter_context(
+            patch(
+                "modulo.core.pipeline_execution.get_settings",
+                lambda: MagicMock(saq_setup_grace_seconds=0.01, saq_node_default_timeout_seconds=1200),
+            )
+        )
+        return await run_executor_with_watchdog(
+            MagicMock(),
+            run_id=run_id,
+            org_id=org_id,
+            executor=executor,
+            job=MagicMock(function="execute_run"),
+            execute_fn=_hang,
+        )
+
+
+async def test_settled_cancelled_run_is_salvaged():
+    """FAR-1914 C2 prove-the-fix: when the executor task has settled and the
+    run row re-reads ``cancelled``, the wrapper hands the SAME engine/run/org
+    identity it resolved to ``_salvage_cancelled_run_cost`` — the shakeout
+    gate observed the salvage missing entirely because the wiring did not
+    exist; delete the ``_salvage_cancelled_run_cost`` call in
+    ``run_executor_with_watchdog`` and this fails with ``salvage`` never
+    awaited.
+
+    Shipped outcome mapping: ``_executor_status_response`` has no ``cancelled``
+    arm, so a cancelled run still reports the fail-shaped outcome dict — the
+    salvage attribution is the point, not the wrapper's summary dict.
+    """
+    salvage = AsyncMock()
+    fail = AsyncMock(return_value=True)
+    run_id = str(uuid.uuid4())
+    org_id = str(uuid.uuid4())
+
+    result = await _wrapper_outcome(
+        run_id=run_id,
+        org_id=org_id,
+        read_status="cancelled",
+        salvage=salvage,
+        fail=fail,
+    )
+
+    salvage.assert_awaited_once()
+    assert salvage.await_args.args == (ANY, run_id, org_id)
+    assert result == {"status": "failed"}
+
+
+async def test_failed_run_status_is_not_salvaged():
+    """The gate is on the re-read status: a watchdog terminal-fail lands here
+    with the run already ``failed`` and its deadline cost owned by
+    ``_record_derived_deadline_cost`` — no salvage may fire, and the
+    terminal-fail itself still runs."""
+    salvage = AsyncMock()
+    fail = AsyncMock(return_value=True)
+    run_id = str(uuid.uuid4())
+    org_id = str(uuid.uuid4())
+
+    result = await _wrapper_outcome(
+        run_id=run_id,
+        org_id=org_id,
+        read_status="failed",
+        salvage=salvage,
+        fail=fail,
+    )
+
+    salvage.assert_not_awaited()
+    fail.assert_awaited_once()
+    assert result == {"status": "failed"}
+
+
+async def test_salvage_cancelled_run_cost_rereises_cancelled_error() -> None:
+    """FAR-1914 C2: worker shutdown is not ours to swallow.
+
+    The post-settle salvage is fail-open for ordinary failures (the run is
+    already terminal), but a ``CancelledError`` from the compensating write
+    must propagate so the SAQ job is actually cancelled.
+    """
+    with (
+        patch(
+            "modulo.core.pipeline_execution.async_sessionmaker",
+            side_effect=asyncio.CancelledError(),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _salvage_cancelled_run_cost(MagicMock(), "run-1", "org-1")
+
+
+async def test_salvage_cancelled_run_cost_fails_open(caplog: pytest.LogCaptureFixture) -> None:
+    """An ordinary write failure must never turn a terminal cancelled run into
+    a raised error — the run stays cancelled and the failure is logged."""
+    with (
+        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_execution"),
+        patch(
+            "modulo.core.pipeline_execution.async_sessionmaker",
+            side_effect=RuntimeError("db down"),
+        ),
+    ):
+        await _salvage_cancelled_run_cost(MagicMock(), "run-1", "org-1")
+
+    assert "pipeline_execution.cancel_cost_salvage_failed" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# FAR-1914 M1 — the settle bound covers the whole retention budget
+# ---------------------------------------------------------------------------
+
+
+def test_executor_cancel_settle_covers_the_retention_worst_case():
+    """FAR-1914 M1 prove-the-fix: the deadline watchdog's pre-terminal wait must
+    cover the FULL bounded cancel-retention budget.
+
+    Worst case is four bounded 5s steps — first drain + second/final drain +
+    log-tail fetch + marker persist — plus the 0.5s delivery grace = 20.5s.
+    The pre-rework 12s under-covered it, so a delivered-then-killed run could
+    be terminalised BEFORE its marker (and therefore its cost/delivery
+    evidence) landed. 25-30s is the accepted headroom band.
+    """
+    from modulo.core.pipeline_engine.node_runner import (
+        _CANCEL_DELIVERY_GRACE_SECONDS,
+        _IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT,
+    )
+    from modulo.core.pipeline_execution import _EXECUTOR_CANCEL_SETTLE_SECONDS
+
+    retention_worst_case = 4 * _IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT + _CANCEL_DELIVERY_GRACE_SECONDS
+    assert retention_worst_case == 20.5
+    assert retention_worst_case <= _EXECUTOR_CANCEL_SETTLE_SECONDS
+    assert _EXECUTOR_CANCEL_SETTLE_SECONDS <= 30.0

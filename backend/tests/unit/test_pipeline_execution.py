@@ -537,6 +537,40 @@ class TestTerminalWriteRetry:
         wrapper.assert_awaited_once()
         assert wrapper.await_args.kwargs["error_code"] == "executor_heartbeat_lost"
 
+    @pytest.mark.asyncio
+    async def test_shutdown_cancellation_logs_the_skipped_salvage_and_reraises(self) -> None:
+        """An UNCLASSIFIED cancellation is a worker shutdown: no salvage runs.
+
+        The post-settle cost salvage is only reached after a cancelled executor
+        task settles, so a genuine shutdown (which re-raises for SAQ to retry)
+        skips it. That must be logged — otherwise a ``$0`` cancelled run looks
+        like the salvage silently failed — and the ``CancelledError`` must
+        still propagate.
+        """
+        watchdog_task = asyncio.create_task(asyncio.sleep(0))
+        node_deadline_task = asyncio.create_task(asyncio.sleep(0))
+        await asyncio.gather(watchdog_task, node_deadline_task)
+
+        with (
+            patch.object(pe._log, "warning") as warn,
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await pe._resolve_cancel_outcome(
+                watchdog_task=watchdog_task,
+                node_deadline_task=node_deadline_task,
+                stall_requested=asyncio.Event(),
+                health_failed=asyncio.Event(),
+                superseded=asyncio.Event(),
+                aeng=MagicMock(),  # type: ignore[arg-type]
+                run_id=str(uuid.uuid4()),
+                org_id=str(uuid.uuid4()),
+                claim_token="tok-a",
+                rid=uuid.uuid4(),
+            )
+
+        logged = [str(c) for c in warn.call_args_list]
+        assert any("cancel_cost_salvage_skipped" in line for line in logged)
+
 
 # ---------------------------------------------------------------------------
 # Heartbeat

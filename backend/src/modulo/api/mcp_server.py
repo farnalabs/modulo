@@ -5235,9 +5235,12 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
         "masked run input_payload (the original run input, sensitive fields "
         "redacted), and deadline_triage[] — the retained triage envelopes "
         "(attempt_key, no_output_reason, sandbox_log_tail, raw_output_tail, "
-        "stdout_length, run_attempt_count) that explain what the run's "
+        "stdout_length, pr_url, run_attempt_count) that explain what the run's "
         "terminaliser observed. Sandbox nodes carry a per-attempt output/log "
-        "tail; run-level entries (age gate, stranded pending, node-deadline "
+        "tail and a non-gating pr_url — a PR URL observed in the retained tail "
+        "(heuristic; not anchored to `gh pr create`); delivery_done stays "
+        "sentinel-only; "
+        "run-level entries (age gate, stranded pending, node-deadline "
         "reaper, worker handoff) carry no per-attempt tail. The "
         "input_payload is size-bounded: strings over 8000 characters and "
         "collections beyond 500 total entries/items are truncated with a "
@@ -6061,9 +6064,12 @@ async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
         # qa F10: parked runs are the awaiting_human class after expiry)
         # runs NO finalize (§4.2). A STREAMED running run cancelled
         # cross-process is routed through finalize_cost, re-reading the
-        # STORED cumulative sets; a NEVER-PAUSED in-flight run has none and
-        # forfeits its accrued cost (cost_components_partial_spend_lost
-        # log).
+        # STORED cumulative sets; a NEVER-PAUSED in-flight run has none on
+        # THIS request path (cost_components.cancel_salvage_deferred log) —
+        # its docket is NOT forfeited: after the executor settles,
+        # pipeline_execution._salvage_cancelled_run_cost attributes
+        # marker-provable spend from its persisted attempt marker
+        # (FAR-1914 C2).
         was_paused = run.status in ("awaiting_human", "claimed", "hitl_parked")
         # FAR-1233: this is the AGENT-initiated cancel leg (the MCP tool), so
         # the reason distinguishes it from an operator clicking Cancel in the

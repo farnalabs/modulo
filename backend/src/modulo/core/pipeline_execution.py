@@ -739,6 +739,16 @@ _TRANSIENT_DBAPI_ORIG_CLASSES = frozenset(
 # is capped.
 _WATCHDOG_AWAIT_BOUND_SECONDS = 5.0
 
+#: FAR-1914 B2: how long the node-deadline watchdog lets the CANCELLED executor
+#: run its cancellation cleanup before terminalising the run. The cleanup is
+#: the sandbox node's bounded retention pass: a first drain (5s) + the
+#: cancel-delivery grace (0.5s) + the second/final drain (5s) + a log-tail
+#: fetch (5s) + a marker persist (5s) — 20.5s worst case, so 25s covers it
+#: with headroom. Without this wait the terminal write can land BEFORE the
+#: marker, and a run killed seconds after opening its PR is recorded as a bare
+#: failure.
+_EXECUTOR_CANCEL_SETTLE_SECONDS = 25.0
+
 
 class ClaimSupersededError(Exception):
     """A fenced heartbeat/lease write matched zero rows — this executor must abort.
@@ -1975,6 +1985,7 @@ async def _record_derived_deadline_cost(
     *,
     error_detail: str,
     derived_sandbox_wall_hours: float,
+    killed_node_id: str,
 ) -> None:
     """Book the DERIVED sandbox cost for a node-deadline-killed run (FAR-1993).
 
@@ -1989,6 +2000,11 @@ async def _record_derived_deadline_cost(
     fired because the node ran to its deadline, so the node really did occupy
     the sandbox for approximately that long.
 
+    Round-3 M1: *killed_node_id* travels with the duration so finalize can
+    require a sandbox-attempt marker for THAT node. A run-scoped marker (some
+    earlier sandbox node) must not license crediting the killed
+    connector/HTTP/agent node's timeout as sandbox spend.
+
     Called only AFTER ``fail_run_terminal`` returned ``True``: the terminal
     write actually landed, so this is a compensating write on an already-failed
     run. Never on the re-dispatch branch — that run continues and will be
@@ -1997,12 +2013,18 @@ async def _record_derived_deadline_cost(
     Fail-open: any failure logs and is swallowed so a completed terminal
     failure is never turned into a raised error. ``asyncio.CancelledError`` is
     re-raised (worker shutdown is not ours to swallow).
+
+    FAR-1313 lock bound: the FINALIZING write takes the hot ``runs`` row lock
+    (``update_run_status``) inside this transaction, so the transaction-scoped
+    ``set_mutation_row_lock_timeout`` is issued FIRST, before any lock.
     """
     from modulo.core.cost_controller.finalize import finalize_failed_run
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 
     try:
         factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
         async with factory() as session, session.begin():
+            await set_mutation_row_lock_timeout(session)
             await set_rls_org(session, uuid.UUID(org_id))
             await finalize_failed_run(
                 session,
@@ -2011,12 +2033,79 @@ async def _record_derived_deadline_cost(
                 error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
                 error_detail=error_detail,
                 derived_sandbox_wall_hours=derived_sandbox_wall_hours,
+                killed_node_id=killed_node_id,
             )
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.warning(
             "pipeline_execution.deadline_cost_record_failed run=%s",
+            run_id,
+            exc_info=True,
+        )
+
+
+async def _salvage_cancelled_run_cost(aengine: AsyncEngine, run_id: str, org_id: str) -> None:
+    """Attribute a settled CANCELLED run's marker-provable spend (FAR-1914 C2).
+
+    Called from ``run_executor_with_watchdog`` only AFTER the executor task has
+    settled and the run row has been re-read: the cancelled executor's sandbox
+    node has already run its bounded retention pass and persisted its attempt
+    marker (the API/MCP cancel REQUEST path cannot see that marker — it runs in
+    a separate process and re-records nothing the executor has not yet written;
+    see ``finalize_cancelled_run``). Salvaging here is the ONLY point where a
+    never-paused cancelled run's spend can be attributed honestly.
+
+    Gated on the re-read status being ``cancelled``: a watchdog terminal-fail
+    path lands here with the run already ``failed`` (its deadline cost is
+    handled by ``_record_derived_deadline_cost``), a superseded run is owned by
+    its successor and a re-dispatched run is ``pending`` — all delegated to
+    finalize's own unloadable-status guard, so this is the one benign call-site
+    gate on top.
+
+    TWO PATHS NEVER REACH THIS CALL (round-3 M6) — both leave a $0 cancelled
+    run by design, with no fabricated spend:
+
+    * a genuine WORKER-SHUTDOWN cancellation — ``_resolve_cancel_outcome``
+      re-raises ``CancelledError`` so SAQ retries the job, and the wrapper
+      returns before the post-settle salvage. It emits
+      ``pipeline_execution.cancel_cost_salvage_skipped`` so the $0 outcome is
+      explainable;
+    * a GENERIC EXECUTOR FAILURE — ``_handle_executor_failure`` writes the
+      terminal ``failed`` status via a raw writer with no cost columns and does
+      not call this salvage.
+
+    :func:`modulo.core.cost_controller.finalize.finalize_cancelled_run` names
+    the same two skip points on the request-path side.
+
+    Fail-open: any failure logs and is swallowed so the already-terminal
+    cancelled run is never turned into a raised error. ``asyncio.CancelledError``
+    is re-raised (worker shutdown is not ours to swallow).
+
+    FAR-1313 lock bound: the salvage write takes the hot ``runs`` row lock
+    (``update_run_status``) inside this transaction, so the transaction-scoped
+    ``set_mutation_row_lock_timeout`` is issued FIRST, before any lock — a
+    contended row then surfaces as a bounded 55P03 rather than an unbounded
+    wall-clock wait on a shutdown path.
+    """
+    from modulo.core.cost_controller.finalize import salvage_cancelled_run_cost
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    try:
+        factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
+        async with factory() as session, session.begin():
+            await set_mutation_row_lock_timeout(session)
+            await set_rls_org(session, uuid.UUID(org_id))
+            await salvage_cancelled_run_cost(
+                session,
+                run_id=uuid.UUID(run_id),
+                org_id=uuid.UUID(org_id),
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "pipeline_execution.cancel_cost_salvage_failed run=%s",
             run_id,
             exc_info=True,
         )
@@ -2081,6 +2170,16 @@ async def _fail_overdue_node(
         retry_hook, run_id, final_status="failed", error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE
     ):
         return
+    # FAR-1914 B2: on the TERMINAL branch only, give the cancelled executor a
+    # SHORT BOUNDED window to run its cancellation cleanup before the run is
+    # terminalised — node_runner drains the sandbox tail one final time and
+    # persists the delivery/triage marker (including a ``pr_url`` opened
+    # seconds before the kill). ``asyncio.wait`` (never ``await exec_task``) so
+    # the expected CancelledError is not re-raised here; a cleanup failure or a
+    # timed-out cleanup must not stop the terminal write below. This is placed
+    # AFTER the retry consult on purpose: the consult stands down on
+    # ``exec_task.done()``, so settling first would disable re-dispatch.
+    await asyncio.wait({exec_task}, timeout=_EXECUTOR_CANCEL_SETTLE_SECONDS)
     error_detail = (
         f"Node '{node_id}' did not complete within its configured timeout_seconds "
         f"({_timeout}s) — node-deadline watchdog ended the dispatch. The cause is "
@@ -2106,6 +2205,7 @@ async def _fail_overdue_node(
             org_id,
             error_detail=error_detail,
             derived_sandbox_wall_hours=_timeout / 3600.0,
+            killed_node_id=node_id,
         )
 
 
@@ -2487,6 +2587,14 @@ async def run_executor_with_watchdog(
     # and the run row status. A watchdog/supersession/heartbeat cancellation
     # leaves exec_result None — fall back to the run row.
     result_status = await _resolve_result_status(aeng, run_id, org_id, exec_result, rid)
+    if result_status == "cancelled":
+        # FAR-1914 C2: the executor task is settled at this point, so its
+        # cancelled sandbox node has persisted the retention marker. Salvage
+        # the marker-provable spend now (an API-path finalize cannot see this
+        # marker). finalize's own guards make every non-attributable case a
+        # no-op; a failed/pending/superseded run is filtered here before the
+        # session even opens.
+        await _salvage_cancelled_run_cost(aeng, run_id, org_id)
     return _executor_status_response(result_status)
 
 
@@ -2856,6 +2964,15 @@ async def _resolve_cancel_outcome(
             rid,
         )
     else:
+        # FAR-1914 round-3 M6: a genuine worker-shutdown cancellation re-raises
+        # so SAQ retries the job — which means the post-settle cost salvage is
+        # skipped. Say so, so a $0 cancelled run is explainable rather than
+        # looking like the salvage silently failed.
+        _log.warning(
+            "pipeline_execution.cancel_cost_salvage_skipped run=%s reason=worker_shutdown "
+            "— post-settle marker salvage is not reached; no cost fabricated",
+            rid,
+        )
         raise asyncio.CancelledError
 
 

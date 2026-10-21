@@ -74,11 +74,24 @@ class TestHeartbeatLivenessSeconds:
 
 
 class _FakeSession:
-    """Minimal AsyncSession double: context manager + one select + begin()."""
+    """Minimal AsyncSession double: context manager + one select + begin().
+
+    ``get_bind()`` reports the SQLite dialect so the REAL
+    ``set_mutation_row_lock_timeout`` dialect gate skips its Postgres-only
+    statement instead of the helper failing open on an ``AttributeError`` and
+    silently skipping attribution (round-3 critical: without the bind the
+    bound raised before the read and every attribution test went green for the
+    wrong reason).
+    """
 
     def __init__(self, row: Any) -> None:
         self._row = row
         self.executed: list[Any] = []
+
+    def get_bind(self) -> MagicMock:
+        bind = MagicMock()
+        bind.dialect.name = "sqlite"
+        return bind
 
     async def __aenter__(self) -> Self:
         return self
@@ -141,6 +154,41 @@ class TestAttributeAgeGateDerivedCost:
         # The gate's OWN code/detail are re-read and passed through verbatim.
         assert kwargs["error_code"] == ch._NO_PROGRESS_ERROR_CODE
         assert kwargs["error_detail"].startswith("No node progress within the 135m age bound")
+
+    @pytest.mark.asyncio
+    async def test_bounds_the_row_lock_before_the_attribution_read(self) -> None:
+        """Round-3 critical: the FAR-1313 bound is issued BEFORE the read.
+
+        The sibling compensating writers pin the same ordering. Placed after
+        the read the bound would be pointless — the SELECT (and the attributed
+        write) could already be queued on a contended ``runs`` row with no
+        timeout. A fake session that reports SQLite makes the REAL helper a
+        no-op (its dialect gate), so this test pins the call order, not the
+        statement's text.
+        """
+        order: list[str] = []
+
+        class _RecordingSession(_FakeSession):
+            async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+                order.append("read")
+                return await super().execute(stmt, params)
+
+        session = _RecordingSession(_row())
+
+        async def _bound(_session: Any) -> None:
+            order.append("bound")
+
+        finalize = AsyncMock()
+        with (
+            patch.object(ch, "_open_factory", lambda: lambda: session),
+            patch.object(ch, "_set_rls_org", new=AsyncMock()),
+            patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=_bound),
+            patch("modulo.core.cost_controller.finalize.finalize_failed_run", new=finalize),
+        ):
+            await ch._attribute_age_gate_derived_cost(RUN, ORG)
+
+        assert order == ["bound", "read"]
+        finalize.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_null_heartbeat_skips_and_writes_no_cost(self) -> None:
