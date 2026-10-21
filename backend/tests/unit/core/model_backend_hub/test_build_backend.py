@@ -393,3 +393,21 @@ def test_build_backend_opencode_honours_custom_base_url() -> None:
             {},
         )
     assert result.kwargs["base_url"] == "https://zen.internal.example/v1"
+
+
+def test_build_backend_warns_when_custom_base_url_cannot_be_applied(caplog) -> None:
+    """A stored endpoint on a provider that cannot use one is loud, not silent."""
+    import logging
+
+    with (
+        patch("modulo.core.model_backend_hub._backend_class") as klass,
+        caplog.at_level(logging.WARNING, logger="modulo.core.model_backend_hub"),
+    ):
+        klass.side_effect = lambda *_a, **_k: _DummyBackend
+        _build_backend(
+            "anthropic",
+            "claude-3",
+            {"api_key": "k", "base_url": "https://gateway.internal.example/v1"},
+            {},
+        )
+    assert "Ignoring custom base_url" in caplog.text

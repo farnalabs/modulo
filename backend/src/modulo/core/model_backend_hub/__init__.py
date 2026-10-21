@@ -608,6 +608,14 @@ def _build_backend(
     creds: dict[str, Any],
     default_params: dict[str, Any],
 ) -> ModelBackendBase:
+    # FAR-2046: a custom endpoint is honoured by the OpenAI-compatible path
+    # below. For a provider with its own endpoint semantics (azure_endpoint,
+    # watsonx url, bedrock/vertexai, non-OpenAI-compatible adapters) the stored
+    # value cannot be applied — make that loud rather than silently ignoring it.
+    if _credential_base_url(creds, default_params) is not None and (
+        provider not in _OPENAI_COMPATIBLE_BACKENDS and provider != "openai"
+    ):
+        logger.warning("Ignoring custom base_url for provider %r: its endpoint is not configurable this way", provider)
     if provider == "bedrock":
         if "aws_access_key_id" not in creds:
             raise ValueError("Missing 'aws_access_key_id' in credentials for provider 'bedrock'")
