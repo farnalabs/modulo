@@ -338,7 +338,7 @@ class TestSsoAuthGating:
         assert resp.status_code == 200
         assert resp.json() == {"oidc": [], "saml": False}
 
-    async def test_sso_providers_anonymous_plan_fallback_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_anonymous_plan_resolution_failure_fails_closed(self, caplog: pytest.LogCaptureFixture) -> None:
         """A resolver failure must FAIL CLOSED — it must never yield an allow.
 
         Regression guard for the security review's MAJOR-1: the old fallback
