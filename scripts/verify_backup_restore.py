@@ -470,7 +470,7 @@ def _seed_data(database_url: str) -> dict[str, uuid.UUID]:
                     id=ids["account"],
                     email=f"backup-gate-{ids['account'].hex[:8]}@example.com",
                     display_name="Backup Gate Admin",
-                    password_hash="not-a-real-hash",
+                    password_hash="!",  # restore fixture sentinel — not a credential
                     auth_provider="local",
                     active=True,
                 )

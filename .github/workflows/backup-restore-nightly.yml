@@ -66,9 +66,9 @@ jobs:
           pg_dump --version
           psql --version
       - name: Install backend dependencies
-        run: uv sync --frozen --project backend
+        run: uv sync --frozen --project backend --no-build
       - name: Run the backup / restore / upgrade gate
         timeout-minutes: 20
         env:
           DATABASE_URL: postgresql+asyncpg://modulo_test:modulo_test@localhost:5432/modulo_test
-        run: uv run --project backend --no-sync python scripts/verify_backup_restore.py
+        run: uv run --project backend --no-sync --no-build python scripts/verify_backup_restore.py
