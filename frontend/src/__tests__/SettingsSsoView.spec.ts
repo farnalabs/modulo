@@ -73,6 +73,20 @@ describe('SettingsSsoView — provider list', () => {
     expect(wrapper.text()).toContain('cid-1')
   })
 
+  it('opens the edit form from the provider row keyboard handlers', async () => {
+    const wrapper = mountView()
+    await nextTick()
+
+    const row = wrapper.find('[data-testid="settings-sso-provider-row"]')
+    await row.trigger('keydown.enter')
+    await nextTick()
+    expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
+
+    await row.trigger('keydown.space')
+    await nextTick()
+    expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
+  })
+
   it('shows the empty state when no providers are configured (fe-003)', async () => {
     ;(api.GET as Mock).mockResolvedValue({ data: [], error: undefined })
     const wrapper = mountView()

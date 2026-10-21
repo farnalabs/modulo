@@ -696,6 +696,14 @@ describe('DashboardView branches — team expansion', () => {
     await flushPromises()
     expect(toggle.attributes('aria-expanded')).toBe('true')
 
+    // Its keyboard handlers toggle the same row.
+    await teamRow.trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    await teamRow.trigger('keydown', { key: ' ' })
+    await flushPromises()
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+
     wrapper.unmount()
   })
 })

@@ -178,6 +178,30 @@ describe('LifecycleMapList', () => {
     await card.trigger('click')
     expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
   })
+
+  it('opens the map detail from the card keyboard handlers', async () => {
+    const wrapper = mount(LifecycleMapList, {
+      global: {
+        plugins: [i18n],
+        stubs: {
+          PageHeader: true,
+          FilterBar: true,
+          ErrorAlert: true,
+          EmptyState: true,
+          Button: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    const card = wrapper.find('[data-testid="lifecycle-map-list-card"]')
+    await card.trigger('keydown', { key: 'Enter' })
+    expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
+
+    routerPushMock.mockClear()
+    await card.trigger('keydown', { key: ' ' })
+    expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
+  })
 })
 
 describe('LifecycleMapList responsive layout (FAR-635)', () => {

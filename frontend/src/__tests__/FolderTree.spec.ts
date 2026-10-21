@@ -251,6 +251,14 @@ describe('FolderTree rendering and selection', () => {
     expect(wrapper.emitted('select-folder')![1]).toEqual([null])
   })
 
+  it('selects a folder from the row keyboard handlers', async () => {
+    const wrapper = await mountTreeWithFolders([makeFolder()])
+    const item = wrapper.find('[data-testid="folder-tree-item-f1"]')
+    await item.trigger('keydown', { key: 'Enter' })
+    await item.trigger('keydown', { key: ' ' })
+    expect(wrapper.emitted('select-folder')).toEqual([['f1'], ['f1']])
+  })
+
   it('selects a folder from its native button in the tab order', async () => {
     const wrapper = await mountTreeWithFolders([makeFolder()])
     const item = wrapper.find('[data-testid="folder-tree-item-f1"]')

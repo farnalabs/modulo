@@ -63,7 +63,11 @@
     >
       <!-- The live region carries only the selection status text; the action
            bar is layout, not phrasing content, so it is a sibling. -->
-      <output class="sr-only" aria-live="polite">
+      <output
+        class="sr-only"
+        aria-live="polite"
+        :aria-label="$t('views.SettingsHitlReviewView.bulk_selected', { count: selectedCount })"
+      >
         {{ $t('views.SettingsHitlReviewView.bulk_selected', { count: selectedCount }) }}
       </output>
       <span class="flex flex-wrap items-center gap-3">
@@ -745,6 +749,21 @@ function bulkClaimSkip(gate: GateItem): BulkOutcome | null {
   return null
 }
 
+/**
+ * Runs `task` over `items` one at a time, preserving order.
+ *
+ * Bulk HITL actions must be sequential, not concurrent: each gate's claim
+ * token and the server's claim/expiry bookkeeping must not race, so the
+ * sequence is a promise chain rather than `Promise.all`.
+ */
+async function mapSequentially<T, R>(items: readonly T[], task: (item: T) => Promise<R>): Promise<R[]> {
+  return items.reduce<Promise<R[]>>(async (previous, item) => {
+    const results = await previous
+    results.push(await task(item))
+    return results
+  }, Promise.resolve([]))
+}
+
 /** Claims one gate. Null means "no result" (no error and no data returned). */
 async function claimOne(gate: GateItem): Promise<BulkOutcome | null> {
   const skipped = bulkClaimSkip(gate)
@@ -771,11 +790,8 @@ async function bulkClaim() {
   const selected = filteredGates.value.filter(g => selectedKeys.value.has(gateKey(g)))
   // Sequential, not concurrent: a bulk claim writes a per-gate claim token and
   // the server's claim/expiry bookkeeping must not race across gates.
-  const outcomes: BulkOutcome[] = []
-  for (const gate of selected) {
-    const outcome = await claimOne(gate)
-    if (outcome !== null) outcomes.push(outcome)
-  }
+  const claims = await mapSequentially(selected, claimOne)
+  const outcomes = claims.filter((outcome): outcome is BulkOutcome => outcome !== null)
   bulkOutcomes.value = outcomes
   bulkClaiming.value = false
 
@@ -847,10 +863,7 @@ async function confirmBulkReject() {
   const reason = bulkRejectReason.value.trim() || t('hitl.gate.rejected_by_reviewer')
   // Sequential: each reject consumes its gate's claim token and must land in
   // order, not race the other requests.
-  const outcomes: BulkOutcome[] = []
-  for (const gate of selected) {
-    outcomes.push(await rejectOne(gate, reason))
-  }
+  const outcomes = await mapSequentially(selected, gate => rejectOne(gate, reason))
 
   bulkOutcomes.value = outcomes
   bulkRejecting.value = false
