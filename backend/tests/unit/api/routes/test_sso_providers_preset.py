@@ -100,10 +100,9 @@ class TestSsoProvidersDiscovery:
         mock_plan.feature_enabled.return_value = True
 
         with (
-            patch("modulo.api.routes.sso._anonymous_plan_context", new=AsyncMock(return_value=mock_plan)),
             patch(
-                "modulo.api.routes.sso._single_login_active_org",
-                new=AsyncMock(return_value=MagicMock(id="00000000-0000-0000-0000-000000000001")),
+                "modulo.api.routes.sso.resolve_anonymous_plan_with_tenant",
+                new=AsyncMock(return_value=(mock_plan, MagicMock(id="00000000-0000-0000-0000-000000000001"))),
             ),
             patch("modulo.api.routes.sso._list_enabled_oidc_for_org", new=AsyncMock(return_value=[provider])),
             patch("modulo.api.routes.sso._get_enabled_saml_global", new=AsyncMock(return_value=None)),
@@ -128,10 +127,9 @@ class TestSsoProvidersDiscovery:
         mock_plan.feature_enabled.return_value = True
 
         with (
-            patch("modulo.api.routes.sso._anonymous_plan_context", new=AsyncMock(return_value=mock_plan)),
             patch(
-                "modulo.api.routes.sso._single_login_active_org",
-                new=AsyncMock(return_value=MagicMock(id="00000000-0000-0000-0000-000000000001")),
+                "modulo.api.routes.sso.resolve_anonymous_plan_with_tenant",
+                new=AsyncMock(return_value=(mock_plan, MagicMock(id="00000000-0000-0000-0000-000000000001"))),
             ),
             patch("modulo.api.routes.sso._list_enabled_oidc_for_org", new=AsyncMock(return_value=[provider])),
             patch("modulo.api.routes.sso._get_enabled_saml_global", new=AsyncMock(return_value=None)),
@@ -151,7 +149,10 @@ class TestSsoProvidersDiscovery:
         mock_plan = MagicMock()
         mock_plan.feature_enabled.return_value = False
 
-        with patch("modulo.api.routes.sso._anonymous_plan_context", new=AsyncMock(return_value=mock_plan)):
+        with patch(
+            "modulo.api.routes.sso.resolve_anonymous_plan_with_tenant",
+            new=AsyncMock(return_value=(mock_plan, None)),
+        ):
             resp = http.get("/api/v1/auth/sso/providers")
 
         assert resp.status_code == 200
@@ -169,10 +170,9 @@ class TestSsoProvidersDiscovery:
         mock_plan.feature_enabled.return_value = True
 
         with (
-            patch("modulo.api.routes.sso._anonymous_plan_context", new=AsyncMock(return_value=mock_plan)),
             patch(
-                "modulo.api.routes.sso._single_login_active_org",
-                new=AsyncMock(return_value=MagicMock(id="00000000-0000-0000-0000-000000000001")),
+                "modulo.api.routes.sso.resolve_anonymous_plan_with_tenant",
+                new=AsyncMock(return_value=(mock_plan, MagicMock(id="00000000-0000-0000-0000-000000000001"))),
             ),
             patch("modulo.api.routes.sso._list_enabled_oidc_for_org", new=AsyncMock(return_value=[provider])),
             patch("modulo.api.routes.sso._get_enabled_saml_global", new=AsyncMock(return_value=None)),

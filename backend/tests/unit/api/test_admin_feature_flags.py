@@ -1312,6 +1312,9 @@ def _settings(license_key: str = "") -> MagicMock:
 
 def _org(plan_id: str, settings_json: dict | None = None) -> MagicMock:
     org = MagicMock()
+    # FAR-2060: an org-scoped key's ``org_id`` claim must match the tenant it is
+    # applied to; ``_license_data`` claims "test-org".
+    org.id = "test-org"
     org.settings_json = settings_json if settings_json is not None else {}
     org.plan_id = plan_id
     return org

@@ -18,6 +18,7 @@ from modulo.api.dependencies import (
     get_system_db_session,
 )
 from modulo.api.main import app
+from modulo.api.models.problem import ProblemException
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
@@ -29,6 +30,36 @@ _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _PROVIDER_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 
 
+def _signed_licence(*, tier: str, features: list[str], org_id: str = "", days: int = 30) -> tuple[str, str]:
+    """Return ``(licence_key, public_key)`` signed by a throwaway Ed25519 keypair.
+
+    Lets a test drive the REAL ``resolve_plan_context`` (signature verification
+    included) instead of hand-building a plan double — the gap the security
+    review's MAJOR-5 identified.
+    """
+    import base64
+    from datetime import timedelta
+
+    from modulo.core.registry.crypto import generate_keypair, sign_primitive
+
+    keypair = generate_keypair()
+    payload = {
+        "tier": tier,
+        "features": features,
+        "expires_at": (datetime.now(UTC) + timedelta(days=days)).isoformat(),
+        "org_id": org_id,
+    }
+    payload_b64 = (
+        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
+        .decode()
+        .rstrip("=")
+    )
+    sig_b64 = (
+        base64.urlsafe_b64encode(bytes.fromhex(sign_primitive(payload, keypair["private_key"]))).decode().rstrip("=")
+    )
+    return f"{payload_b64}.{sig_b64}", keypair["public_key"]
+
+
 def _settings_without_license() -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
@@ -36,6 +67,12 @@ def _settings_without_license() -> Settings:
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
         modulo_license_key="",
+        # These fixtures model an instance with NO tenant row (the mock session
+        # returns an empty organisations list). Under the ADR 005 single-org
+        # invariant that is "single-org, tenant unidentifiable", which the
+        # pre-auth resolver now FAILS CLOSED on (503). Multi-org mode is the
+        # honest way to model "no tenant to bind" -> system scope.
+        modulo_multi_org_enabled=True,
     )
 
 
@@ -46,6 +83,7 @@ def _settings_with_license() -> Settings:
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
         modulo_license_key="valid-license-key",
+        modulo_multi_org_enabled=True,
     )
 
 
@@ -226,6 +264,9 @@ def _env_oidc_settings(*, license_key: str = "") -> Settings:
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
         modulo_license_key=license_key,
+        # No tenant row in the mock session -> model "no tenant to bind" as
+        # multi-org (system scope) rather than the fail-closed single-org state.
+        modulo_multi_org_enabled=True,
         modulo_oidc_providers=json.dumps(
             [
                 {
@@ -298,17 +339,17 @@ class TestSsoAuthGating:
         assert resp.json() == {"oidc": [], "saml": False}
 
     async def test_sso_providers_anonymous_plan_fallback_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
-        """A session that cannot run the anonymous plan resolution (TypeError
-        from ``session.begin()``, as with test-double sessions) degrades to
-        CommunityTier AND logs a warning — the fallback must not be silent
-        (mirrors get_plan_context's warning in dependencies.py).
+        """A resolver failure must FAIL CLOSED — it must never yield an allow.
 
-        Exercised at the resolver (the unit under test), not through the route:
-        a broken session cannot serve the provider listing either, so driving
-        the route would conflate the plan fallback with a second failure.
+        Regression guard for the security review's MAJOR-1: the old fallback
+        returned ``CommunityTier()``, whose ``has_license_key() is False`` made
+        the degraded-authentication branch ALLOW — turning a malformed
+        ``tier_catalog`` row into an authentication bypass. A resolution
+        failure is now a 5xx (deny), distinct from "no licence resolved".
         """
+        from fastapi import HTTPException
+
         from modulo.api.dependencies import resolve_anonymous_plan_context
-        from modulo.core.feature_flags import CommunityTier
 
         broken_session = MagicMock()
 
@@ -317,17 +358,62 @@ class TestSsoAuthGating:
 
         broken_session.begin.side_effect = _begin_raises
 
-        with caplog.at_level("WARNING", logger="modulo.api.dependencies"):
-            ctx = await resolve_anonymous_plan_context(_settings_without_license(), broken_session)
+        with (
+            caplog.at_level("ERROR", logger="modulo.api.dependencies"),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await resolve_anonymous_plan_context(_settings_without_license(), broken_session)
 
-        fallback_warnings = [
-            rec
-            for rec in caplog.records
-            if "anonymous_plan_context_fallback" in rec.message
-            or "returning CommunityTier" in getattr(rec, "reason", "")
-        ]
-        assert fallback_warnings, "anonymous plan fallback must log a warning, not degrade silently"
-        assert isinstance(ctx, CommunityTier)
+        assert excinfo.value.status_code == 503
+        assert any("anonymous_plan_context_resolution_failed" in rec.message for rec in caplog.records), (
+            "a resolution failure must be logged, not swallowed"
+        )
+
+    async def test_single_org_with_no_identifiable_tenant_fails_closed(self) -> None:
+        """Single-org invariant + ambiguous tenant -> 5xx, never system scope."""
+        from fastapi import HTTPException
+
+        from modulo.api.dependencies import resolve_anonymous_plan_context
+
+        app.dependency_overrides.clear()
+        session = _make_mock_session()
+        settings = _settings_without_license().model_copy(update={"modulo_multi_org_enabled": False})
+
+        with pytest.raises(HTTPException) as excinfo:
+            await resolve_anonymous_plan_context(settings, session)
+
+        assert excinfo.value.status_code == 503
+
+    def test_resolution_failure_is_never_an_allow_at_the_route(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """MAJOR-1 end-to-end: a resolution bug must not open an auth route.
+
+        A malformed ``tier_catalog`` row raises ``TypeError`` deep inside
+        ``_load_catalog``. The old fallback turned that into ``CommunityTier``
+        with ``has_license_key() == False``, which the degraded-authentication
+        branch read as "no licence" and ALLOWED. The route must now 5xx.
+        """
+        app.dependency_overrides.clear()
+        mock_session = _make_mock_session()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        async def _malformed_catalog(*_args: object, **_kwargs: object) -> object:
+            raise TypeError("string indices must be integers")
+
+        app.dependency_overrides[get_settings] = _settings_without_license
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[get_system_db_session] = override_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        monkeypatch.setattr("modulo.core.feature_flags.resolve_plan_context", _malformed_catalog)
+        try:
+            client = TestClient(app, follow_redirects=False)
+            resp = client.get("/api/v1/auth/oidc/google/login")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code >= 500, resp.text
+        assert resp.status_code != 402, "a resolution failure is NOT a licence verdict"
 
     def test_sso_providers_lists_env_providers_when_enabled(self, client_with_sso: TestClient) -> None:
         """SSO licensed/enabled -> 200 with the configured OIDC providers."""
@@ -337,6 +423,7 @@ class TestSsoAuthGating:
             fernet_key=_VALID_32,
             modulo_admin_password="testpass",
             modulo_license_key="valid-license-key",
+            modulo_multi_org_enabled=True,
             modulo_oidc_providers=json.dumps(
                 [
                     {
@@ -392,6 +479,28 @@ class TestSsoAuthGating:
         assert resp.status_code != 402, resp.text
         assert resp.status_code == 400
 
+    # FAR-2059: the three PER-PROVIDER SAML routes each carry their own
+    # ``allow_degraded_authentication`` opt-in. They previously had no
+    # assertion either way, so deleting the opt-in from any one of them
+    # failed no test. Drive all three.
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("post", "/api/v1/auth/saml/acs/provider-x"),
+            ("get", "/api/v1/auth/saml/provider-x/metadata"),
+            ("get", "/api/v1/auth/saml/provider-x/login"),
+        ],
+    )
+    def test_per_provider_saml_routes_proceed_when_unlicensed(
+        self, client_no_sso: TestClient, method: str, path: str
+    ) -> None:
+        resp = (
+            client_no_sso.post(path, data={"SAMLResponse": "dGVzdA=="}) if method == "post" else client_no_sso.get(path)
+        )
+        assert resp.status_code not in (401, 402), (
+            f"{path} must not licence-gate an unauthenticated sign-in: {resp.status_code} {resp.text}"
+        )
+
     # ── FAR-2060: a determinate refusal still 402s and names the scope ──────
 
     @pytest.mark.parametrize(
@@ -402,6 +511,19 @@ class TestSsoAuthGating:
             ("get", "/api/v1/auth/saml/login"),
             ("post", "/api/v1/auth/saml/acs"),
             ("get", "/api/v1/auth/saml/metadata"),
+            ("post", "/api/v1/auth/saml/acs/provider-x"),
+            ("get", "/api/v1/auth/saml/provider-x/metadata"),
+            ("get", "/api/v1/auth/saml/provider-x/login"),
+        ],
+        ids=[
+            "oidc-login",
+            "oidc-callback",
+            "saml-login",
+            "saml-acs",
+            "saml-metadata",
+            "saml-acs-provider",
+            "saml-metadata-provider",
+            "saml-login-provider",
         ],
     )
     def test_licensed_without_sso_still_402_names_scope(self, method: str, path: str) -> None:
@@ -451,6 +573,83 @@ class TestSsoAuthGating:
             app.dependency_overrides.clear()
         assert resp.status_code == 200
         assert resp.json() == {"oidc": [], "saml": False}
+
+
+# ── MAJOR-5: prove the gate through the REAL resolution ladder ────────────
+
+
+class TestRealLicenceResolution:
+    """The central property must hold against real signature verification.
+
+    The other gate tests use a hand-built ``_DeterminatePlan`` double, so a
+    regression inside ``_resolve_paid_plan`` (e.g. treating a valid Community
+    key as "no licence") would pass silently. These drive the real
+    ``resolve_plan_context`` with a real signed key.
+    """
+
+    async def test_real_community_key_without_sso_still_402s(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A valid-but-SSO-less key is a DETERMINATE refusal, never degraded.
+
+        The FAR-2059 carve-out is "no licence resolved". A signed Community key
+        resolves but does not grant ``sso``, so the gate must still 402 — and
+        the boundary is left exactly as-is (a policy question for Duncan).
+        """
+        from modulo.api.dependencies import require_feature_anonymous, resolve_anonymous_plan_context
+        from modulo.core import license as license_mod
+        from modulo.core.feature_flags import FeatureFlagRegistry
+
+        key, public_key = _signed_licence(tier="community", features=[])
+        monkeypatch.setattr(license_mod, "_configured_public_key_hex", public_key)
+        monkeypatch.setattr(license_mod, "_current_license", None)
+        monkeypatch.setattr(FeatureFlagRegistry, "_overrides", {})
+
+        settings = Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key=_VALID_32,
+            fernet_key=_VALID_32,
+            modulo_admin_password="testpass",
+            modulo_license_key=key,
+            # Empty org list models "no tenant to bind"; multi-org is the
+            # honest representation of that state (system scope).
+            modulo_multi_org_enabled=True,
+        )
+
+        ctx = await resolve_anonymous_plan_context(settings, _make_mock_session())
+
+        assert ctx.has_license_key() is True
+        assert ctx.feature_enabled("sso") is False
+
+        gate = require_feature_anonymous("sso", allow_degraded_authentication=True)
+        with pytest.raises(ProblemException) as excinfo:
+            gate.dependency(ctx=ctx)
+        assert excinfo.value.status_code == 402
+
+    async def test_real_team_key_grants_the_feature(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Control: the same real ladder with SSO in the claims PASSES the gate."""
+        from modulo.api.dependencies import require_feature_anonymous, resolve_anonymous_plan_context
+        from modulo.core import license as license_mod
+        from modulo.core.feature_flags import FeatureFlagRegistry
+
+        key, public_key = _signed_licence(tier="team", features=["sso"])
+        monkeypatch.setattr(license_mod, "_configured_public_key_hex", public_key)
+        monkeypatch.setattr(license_mod, "_current_license", None)
+        monkeypatch.setattr(FeatureFlagRegistry, "_overrides", {})
+
+        settings = Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key=_VALID_32,
+            fernet_key=_VALID_32,
+            modulo_admin_password="testpass",
+            modulo_license_key=key,
+            modulo_multi_org_enabled=True,
+        )
+
+        ctx = await resolve_anonymous_plan_context(settings, _make_mock_session())
+
+        assert ctx.has_license_key() is True
+        assert ctx.feature_enabled("sso") is True
+        gate = require_feature_anonymous("sso", allow_degraded_authentication=True)
+        assert gate.dependency(ctx=ctx) is None
 
 
 # ── Non-SSO endpoints should be unaffected ──

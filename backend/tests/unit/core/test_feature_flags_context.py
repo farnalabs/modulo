@@ -180,6 +180,8 @@ class TestResolvePlanContext:
 
     async def test_org_license_key_wins(self) -> None:
         org = MagicMock()
+        # FAR-2060: the fixture licence claims "org-1"; the tenant must match.
+        org.id = "org-1"
         org.settings_json = {"license_key": "org-key"}
         org.plan_id = "fallback-plan"
         result, from_db, session = await self._resolve(

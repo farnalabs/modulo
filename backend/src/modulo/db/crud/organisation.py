@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import ARRAY, Text, TextClause, bindparam, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy.orm.util import identity_key
 
@@ -24,6 +25,7 @@ from modulo.db.models.organisation import (
     Organisation,
 )
 from modulo.db.seed import seed_system_schemas
+from modulo.settings import Settings
 
 _log = logging.getLogger(__name__)
 
@@ -789,15 +791,36 @@ def is_login_active_org(org: Organisation) -> bool:
     return org.status == "active" and org.deleted_at is None and org.id not in _SENTINEL_ORG_IDS
 
 
-async def list_login_active_orgs(session: AsyncSession) -> list[Organisation]:
-    """Return every login-active organisation (for login-context resolution).
+# The only columns the tenant decision and the licence ladder read. Loading
+# just these keeps the anonymous login surface from materialising whole rows
+# (``otel_config_json`` and friends) — FAR-2060 amplification fix.
+_LOGIN_TENANT_COLUMNS = (
+    Organisation.id,
+    Organisation.slug,
+    Organisation.name,
+    Organisation.settings_json,
+    Organisation.plan_id,
+)
+
+
+async def list_login_active_orgs(
+    session: AsyncSession,
+    *,
+    limit: int | None = None,
+) -> list[Organisation]:
+    """Return login-active organisations, loading only tenant-decision columns.
 
     The query applies the same predicate as ``is_login_active_org`` at the
     SQL level so the DB does the filtering — the ORM-level predicate is a
     second safety net, not the primary filter.
+
+    Prefer :func:`resolve_login_tenant` for the login-context / pre-auth tenant
+    answer: it is the canonical decision and bounds this read to the two rows
+    needed to distinguish "exactly one" from "more than one".
     """
     stmt = (
         select(Organisation)
+        .options(load_only(*_LOGIN_TENANT_COLUMNS))
         .where(
             Organisation.status == "active",
             Organisation.deleted_at.is_(None),
@@ -805,8 +828,50 @@ async def list_login_active_orgs(session: AsyncSession) -> list[Organisation]:
         )
         .order_by(Organisation.created_at)
     )
+    if limit is not None:
+        stmt = stmt.limit(limit)
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+async def resolve_login_tenant(
+    session: AsyncSession,
+    settings: Settings,
+) -> tuple[bool, Organisation | None]:
+    """THE canonical pre-auth tenant answer: ``(is_single_org, org)``.
+
+    Single-sourced so the login-surface, the pre-auth plan resolver and the
+    SSO discovery route cannot disagree about what this instance is (FAR-2060).
+    ``is_single_org`` is exactly the negation of ``login-context``'s
+    ``multi_org`` answer:
+
+    * ``modulo_multi_org_enabled is False`` (the ADR 005 single-org invariant,
+      and the default) -> always single-org. ``org`` is the identified tenant
+      when there is exactly one login-active org, otherwise ``None``.
+    * multi-org enabled -> single-org only when there is exactly one
+      login-active org; ``org`` is that org. Zero or more than one -> not
+      single-org, ``org=None``.
+
+    ``org is None`` while ``is_single_org`` is True means "single-org, but the
+    tenant cannot be identified" (zero, or a stray extra, login-active org).
+    That is NOT the same state as multi-org/zero-org system scope: callers
+    resolving an entitlement MUST fail closed on it rather than silently
+    dropping to system scope.
+
+    The read is bounded to ``LIMIT 2`` — enough to distinguish exactly-one from
+    more-than-one — and pulls only the columns the tenant decision and the
+    licence ladder need, never the whole row (FAR-2060 amplification fix).
+    """
+    rows = await list_login_active_orgs(session, limit=2)
+
+    if settings.modulo_multi_org_enabled is False:
+        # ADR 005: single-org invariant — report single-org regardless of how
+        # many rows exist, but only identify a tenant when it is unambiguous.
+        return True, rows[0] if len(rows) == 1 else None
+
+    if len(rows) == 1:
+        return True, rows[0]
+    return False, None
 
 
 async def get_login_active_org_by_slug(session: AsyncSession, slug: str) -> Organisation | None:

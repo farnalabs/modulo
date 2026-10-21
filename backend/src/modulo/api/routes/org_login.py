@@ -33,7 +33,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.db.crud.organisation import (
     get_login_active_org_by_slug,
-    list_login_active_orgs,
+    resolve_login_tenant,
 )
 from modulo.db.crud.sso_provider import (
     list_enabled_oidc_providers,
@@ -109,13 +109,18 @@ async def login_context(
     Exactly ONE login-active org → ``multi_org=false, org={slug, name}``
     (powers the single-org auto-skip on the frontend).
 
-    Zero or more than one → ``multi_org=true, org=null``.
+    Zero or more than one → ``multi_org=true, org=null`` (and, under the ADR 005
+    single-org invariant, ``multi_org=false, org=null``).
+
+    The single-org predicate is :func:`resolve_login_tenant` — the SAME helper
+    the pre-auth plan resolver and SSO discovery use, so this endpoint and the
+    entitlement decision can never disagree (FAR-2060).
 
     Never returns a list of orgs, and never any data about a non-single org.
     """
     try:
         async with session.begin():
-            orgs = await list_login_active_orgs(session)
+            is_single_org, org = await resolve_login_tenant(session, settings)
     except Exception:
         _log.exception("auth.login_context.db_error")
         raise HTTPException(
@@ -123,24 +128,14 @@ async def login_context(
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
-    if settings.modulo_multi_org_enabled is False:
-        # ADR 005: single-org invariant. Always report single-org regardless
-        # of how many orgs exist in the DB. The login-context response drives
-        # the frontend's org-selection flow — returning multi_org=false means
-        # the frontend skips the org picker and goes straight to login.
-        if len(orgs) == 1:
-            org = orgs[0]
-            return LoginContextResponse(
-                multi_org=False,
-                org=OrgInfo(slug=org.slug, name=org.name),
-            )
-        # Zero or multiple login-active orgs: still report single-org.
-        # The login handler (auth.py) rejects org_slug when multi-org is
-        # disabled, so the session always binds to memberships[0].
-        return LoginContextResponse(multi_org=False, org=None)
-
-    if len(orgs) == 1:
-        org = orgs[0]
+    # ADR 005: with multi-org disabled the invariant is single-org regardless
+    # of how many orgs exist in the DB. The login-context response drives the
+    # frontend's org-selection flow — ``multi_org=false`` means the frontend
+    # skips the org picker and goes straight to login. ``org`` is only named
+    # when the tenant is unambiguous (see ``resolve_login_tenant``).
+    if is_single_org:
+        if org is None:
+            return LoginContextResponse(multi_org=False, org=None)
         return LoginContextResponse(
             multi_org=False,
             org=OrgInfo(slug=org.slug, name=org.name),

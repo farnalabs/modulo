@@ -329,12 +329,17 @@ class TestAnonymousPlanTenantScope:
     """FAR-2060: the anonymous resolver binds the trusted tenant, not system scope only."""
 
     @staticmethod
-    def _session() -> MagicMock:
+    def _session(rows: list[object] | None = None) -> MagicMock:
+        """Session whose login-tenant read returns ``rows`` (the only query
+        ``resolve_login_tenant`` issues)."""
         session = MagicMock()
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         session.begin = MagicMock(return_value=begin_cm)
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = rows or []
+        session.execute = AsyncMock(return_value=result)
         return session
 
     async def test_binds_the_single_login_active_org(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -342,10 +347,6 @@ class TestAnonymousPlanTenantScope:
         from modulo.core import feature_flags as ff
 
         org = MagicMock()
-        monkeypatch.setattr(
-            "modulo.db.crud.organisation.list_login_active_orgs",
-            AsyncMock(return_value=[org]),
-        )
         captured: dict[str, object] = {}
 
         async def _fake_resolve(settings: object, session: object, org: object = None) -> object:
@@ -353,17 +354,13 @@ class TestAnonymousPlanTenantScope:
             return ff.CommunityTier()
 
         monkeypatch.setattr(ff, "resolve_plan_context", _fake_resolve)
-        await deps.resolve_anonymous_plan_context(MagicMock(), self._session())
+        await deps.resolve_anonymous_plan_context(MagicMock(), self._session([org]))
         assert captured["org"] is org
 
     async def test_zero_or_multi_org_falls_back_to_system_scope(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from modulo.api import dependencies as deps
         from modulo.core import feature_flags as ff
 
-        monkeypatch.setattr(
-            "modulo.db.crud.organisation.list_login_active_orgs",
-            AsyncMock(return_value=[MagicMock(), MagicMock()]),
-        )
         captured: dict[str, object] = {}
 
         async def _fake_resolve(settings: object, session: object, org: object = None) -> object:
@@ -371,24 +368,34 @@ class TestAnonymousPlanTenantScope:
             return ff.CommunityTier()
 
         monkeypatch.setattr(ff, "resolve_plan_context", _fake_resolve)
-        await deps.resolve_anonymous_plan_context(MagicMock(), self._session())
+        await deps.resolve_anonymous_plan_context(MagicMock(), self._session([MagicMock(), MagicMock()]))
         assert captured["org"] is None
+
+    async def test_single_org_with_no_identified_tenant_fails_closed(self) -> None:
+        """A single-org instance with zero rows must NOT drop to system scope."""
+        from fastapi import HTTPException
+
+        from modulo.api import dependencies as deps
+
+        settings = MagicMock()
+        settings.modulo_multi_org_enabled = False
+        with pytest.raises(HTTPException) as excinfo:
+            await deps.resolve_anonymous_plan_context(settings, self._session([]))
+        assert excinfo.value.status_code == 503
 
     async def test_org_scoped_team_key_enables_sso_for_the_tenant(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The paying customer's org-level key is what the anonymous gate now sees."""
         from modulo.api import dependencies as deps
         from modulo.core import feature_flags as ff
-        from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, set_public_key
+        from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
 
         key, public_key = _signed_team_licence()
         set_public_key(public_key)
+        clear_license()
 
         org = MagicMock()
+        org.id = "tenant-org"  # matches the signed key's org_id claim (FAR-2060)
         org.settings_json = {"license_key": key}
-        monkeypatch.setattr(
-            "modulo.db.crud.organisation.list_login_active_orgs",
-            AsyncMock(return_value=[org]),
-        )
         captured: dict[str, object] = {}
 
         async def _real_plan(settings: object, session: object, org: object = None) -> object:
@@ -399,13 +406,32 @@ class TestAnonymousPlanTenantScope:
 
         monkeypatch.setattr(ff, "resolve_plan_context", _real_plan)
         try:
-            ctx = await deps.resolve_anonymous_plan_context(MagicMock(), self._session())
+            ctx = await deps.resolve_anonymous_plan_context(MagicMock(), self._session([org]))
         finally:
             set_public_key(_LICENSE_PUBLIC_KEY_HEX)
 
         assert captured["org"] is org
         assert ctx.has_license_key() is True
         assert ctx.feature_enabled("sso") is True
+
+    def test_org_scoped_key_for_another_org_is_not_applied(self) -> None:
+        """FAR-2060: a key whose ``org_id`` claim names a different org must not
+        license this tenant — the claim is load-bearing at resolution time."""
+        from modulo.core import feature_flags as ff
+        from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
+
+        key, public_key = _signed_team_licence(org_id="some-other-tenant")
+        set_public_key(public_key)
+        clear_license()
+        org = MagicMock()
+        org.id = "tenant-org"
+        org.settings_json = {"license_key": key}
+        settings = MagicMock()
+        settings.modulo_license_key = ""
+        try:
+            assert ff.resolve_effective_license(settings, org) is None
+        finally:
+            set_public_key(_LICENSE_PUBLIC_KEY_HEX)
 
     async def test_system_level_licence_still_works_without_a_tenant(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-2060 acceptance: the system-scope key must keep enabling SSO.
@@ -422,10 +448,6 @@ class TestAnonymousPlanTenantScope:
         clear_license()
         settings = MagicMock()
         settings.modulo_license_key = key
-        monkeypatch.setattr(
-            "modulo.db.crud.organisation.list_login_active_orgs",
-            AsyncMock(return_value=[]),
-        )
 
         async def _real_plan(_settings: object, session: object, org: object = None) -> object:
             assert org is None
@@ -435,7 +457,7 @@ class TestAnonymousPlanTenantScope:
 
         monkeypatch.setattr(ff, "resolve_plan_context", _real_plan)
         try:
-            ctx = await deps.resolve_anonymous_plan_context(settings, self._session())
+            ctx = await deps.resolve_anonymous_plan_context(settings, self._session([]))
         finally:
             set_public_key(_LICENSE_PUBLIC_KEY_HEX)
             clear_license()
