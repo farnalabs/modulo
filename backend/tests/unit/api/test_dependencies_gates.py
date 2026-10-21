@@ -83,6 +83,30 @@ def _make_failing_begin_session() -> MagicMock:
     return session
 
 
+def _signed_team_licence(*, org_id: str = "tenant-org", expires_days: int = 30) -> tuple[str, str]:
+    """Return ``(licence_key, public_key)`` for a throwaway Ed25519 keypair."""
+    import base64
+    import json
+    from datetime import UTC, datetime, timedelta
+
+    from modulo.core.registry.crypto import generate_keypair, sign_primitive
+
+    kp = generate_keypair()
+    payload = {
+        "tier": "team",
+        "features": ["sso"],
+        "expires_at": (datetime.now(UTC) + timedelta(days=expires_days)).isoformat(),
+        "org_id": org_id,
+    }
+    payload_b64 = (
+        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
+        .decode()
+        .rstrip("=")
+    )
+    sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sign_primitive(payload, kp["private_key"]))).decode().rstrip("=")
+    return f"{payload_b64}.{sig_b64}", kp["public_key"]
+
+
 @pytest.fixture(autouse=True)
 def _reset_authz_ctx() -> None:
     """Guarantee no kill-switch ContextVar leaks between tests."""
@@ -238,6 +262,186 @@ class TestRequireFeature:
         ctx.feature_enabled.return_value = True
         dep.dependency(ctx=ctx)
         ctx.feature_enabled.assert_called_once_with("audit_viewer")
+
+
+class TestRequireFeatureAnonymous:
+    """Pre-auth gate: fail-closed by default, degrade-only for authentication.
+
+    FAR-2059: ``allow_degraded_authentication`` opts an AUTHENTICATION entry
+    point out of the licence lockout when NO valid licence resolves. It must not
+    become a blanket bypass: without the opt-in, or when a licence DOES resolve
+    but lacks the feature, the gate still returns 402 (FAR-2060).
+    """
+
+    @staticmethod
+    def _check(dep: object, *, feature_enabled: bool, has_license_key: bool):
+        ctx = MagicMock()
+        ctx.feature_enabled.return_value = feature_enabled
+        ctx.has_license_key.return_value = has_license_key
+        return dep.dependency(ctx=ctx)  # type: ignore[attr-defined]
+
+    def test_enabled_feature_passes(self) -> None:
+        from modulo.api.dependencies import require_feature_anonymous
+
+        dep = require_feature_anonymous("sso", allow_degraded_authentication=True)
+        assert self._check(dep, feature_enabled=True, has_license_key=False) is None
+
+    def test_unlicensed_authentication_entry_point_degrades(self, caplog: pytest.LogCaptureFixture) -> None:
+        """No valid licence at any scope -> the gate lets authentication through."""
+        from modulo.api.dependencies import require_feature_anonymous
+
+        dep = require_feature_anonymous("sso", allow_degraded_authentication=True)
+        with caplog.at_level("WARNING", logger="modulo.api.dependencies"):
+            assert self._check(dep, feature_enabled=False, has_license_key=False) is None
+        assert any("anonymous_degraded_authentication" in rec.message for rec in caplog.records)
+
+    def test_unlicensed_without_opt_in_still_402(self) -> None:
+        """The default gate is NOT weakened — no opt-in means no degrade."""
+        from modulo.api.dependencies import require_feature_anonymous
+
+        dep = require_feature_anonymous("sso")
+        with pytest.raises(ProblemException) as excinfo:
+            self._check(dep, feature_enabled=False, has_license_key=False)
+        assert excinfo.value.status_code == 402
+
+    def test_resolved_licence_without_feature_still_402_names_scope(self) -> None:
+        """A determinate downgrade refuses even on an authentication entry point."""
+        from modulo.api.dependencies import require_feature_anonymous
+
+        dep = require_feature_anonymous("sso", allow_degraded_authentication=True)
+        with pytest.raises(ProblemException) as excinfo:
+            self._check(dep, feature_enabled=False, has_license_key=True)
+        exc = excinfo.value
+        assert exc.status_code == 402
+        assert "system or organisation scope" in exc.problem.detail
+
+    def test_authenticated_gate_names_scope_too(self) -> None:
+        """FAR-2060: the operator-facing 402 says which licence scope works."""
+        dep = require_feature("sso")
+        ctx = MagicMock()
+        ctx.feature_enabled.return_value = False
+        with pytest.raises(ProblemException) as excinfo:
+            dep.dependency(ctx=ctx)
+        assert "system or organisation scope" in excinfo.value.problem.detail
+
+
+class TestAnonymousPlanTenantScope:
+    """FAR-2060: the anonymous resolver binds the trusted tenant, not system scope only."""
+
+    @staticmethod
+    def _session() -> MagicMock:
+        session = MagicMock()
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        return session
+
+    async def test_binds_the_single_login_active_org(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api import dependencies as deps
+        from modulo.core import feature_flags as ff
+
+        org = MagicMock()
+        monkeypatch.setattr(
+            "modulo.db.crud.organisation.list_login_active_orgs",
+            AsyncMock(return_value=[org]),
+        )
+        captured: dict[str, object] = {}
+
+        async def _fake_resolve(settings: object, session: object, org: object = None) -> object:
+            captured["org"] = org
+            return ff.CommunityTier()
+
+        monkeypatch.setattr(ff, "resolve_plan_context", _fake_resolve)
+        await deps.resolve_anonymous_plan_context(MagicMock(), self._session())
+        assert captured["org"] is org
+
+    async def test_zero_or_multi_org_falls_back_to_system_scope(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api import dependencies as deps
+        from modulo.core import feature_flags as ff
+
+        monkeypatch.setattr(
+            "modulo.db.crud.organisation.list_login_active_orgs",
+            AsyncMock(return_value=[MagicMock(), MagicMock()]),
+        )
+        captured: dict[str, object] = {}
+
+        async def _fake_resolve(settings: object, session: object, org: object = None) -> object:
+            captured["org"] = org
+            return ff.CommunityTier()
+
+        monkeypatch.setattr(ff, "resolve_plan_context", _fake_resolve)
+        await deps.resolve_anonymous_plan_context(MagicMock(), self._session())
+        assert captured["org"] is None
+
+    async def test_org_scoped_team_key_enables_sso_for_the_tenant(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The paying customer's org-level key is what the anonymous gate now sees."""
+        from modulo.api import dependencies as deps
+        from modulo.core import feature_flags as ff
+        from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, set_public_key
+
+        key, public_key = _signed_team_licence()
+        set_public_key(public_key)
+
+        org = MagicMock()
+        org.settings_json = {"license_key": key}
+        monkeypatch.setattr(
+            "modulo.db.crud.organisation.list_login_active_orgs",
+            AsyncMock(return_value=[org]),
+        )
+        captured: dict[str, object] = {}
+
+        async def _real_plan(settings: object, session: object, org: object = None) -> object:
+            captured["org"] = org
+            data = ff.resolve_effective_license(settings, org)
+            assert data is not None
+            return ff.LicenseKeyTier(data)
+
+        monkeypatch.setattr(ff, "resolve_plan_context", _real_plan)
+        try:
+            ctx = await deps.resolve_anonymous_plan_context(MagicMock(), self._session())
+        finally:
+            set_public_key(_LICENSE_PUBLIC_KEY_HEX)
+
+        assert captured["org"] is org
+        assert ctx.has_license_key() is True
+        assert ctx.feature_enabled("sso") is True
+
+    async def test_system_level_licence_still_works_without_a_tenant(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-2060 acceptance: the system-scope key must keep enabling SSO.
+
+        With no single login-active org the ladder runs at system scope; the
+        env-var key rung is verified and resolves the plan.
+        """
+        from modulo.api import dependencies as deps
+        from modulo.core import feature_flags as ff
+        from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
+
+        key, public_key = _signed_team_licence()
+        set_public_key(public_key)
+        clear_license()
+        settings = MagicMock()
+        settings.modulo_license_key = key
+        monkeypatch.setattr(
+            "modulo.db.crud.organisation.list_login_active_orgs",
+            AsyncMock(return_value=[]),
+        )
+
+        async def _real_plan(_settings: object, session: object, org: object = None) -> object:
+            assert org is None
+            data = ff.resolve_effective_license(settings, None)
+            assert data is not None
+            return ff.LicenseKeyTier(data)
+
+        monkeypatch.setattr(ff, "resolve_plan_context", _real_plan)
+        try:
+            ctx = await deps.resolve_anonymous_plan_context(settings, self._session())
+        finally:
+            set_public_key(_LICENSE_PUBLIC_KEY_HEX)
+            clear_license()
+
+        assert ctx.has_license_key() is True
+        assert ctx.feature_enabled("sso") is True
 
 
 class TestSystemEngineIsFallback:

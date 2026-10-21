@@ -324,11 +324,17 @@ async def sso_providers(
     Pre-auth discovery endpoint: the login page fetches it BEFORE any user is
     authenticated, so it must never require a user and must never surface an
     auth error. Plan/feature resolution is anonymous (via
-    ``_anonymous_plan_context``); when the SSO feature is not enabled /
-    unlicensed the endpoint answers a normal 200 with an EMPTY provider list
-    (no 401/402) so the login page simply renders no SSO options. The
-    anonymous path resolves system-level licenses only — org-level licenses
-    are unreachable pre-auth.
+    ``_anonymous_plan_context``) and resolves over the trusted tenant, so an
+    organisation-scoped Team key enables SSO for the organisation it belongs to
+    (FAR-2060).
+
+    FAR-2059 — degrade, never strand: when NO valid licence resolves at any
+    scope (an expired key is cleared and reads as absent), the endpoint still
+    advertises the configured providers so an SSO-only deployment can sign in;
+    entitlement is enforced post-auth (Community plan -> Team features off). The
+    provider list is suppressed only when a licence DOES resolve but does not
+    grant SSO — the auth gate refuses that case (402) and a button that cannot
+    complete sign-in is worse than no button.
 
     FAR-1978 — the response is SCOPED. ``display_name`` is admin-chosen free
     text and can name a tenant, so an anonymous caller must never read a
@@ -346,7 +352,12 @@ async def sso_providers(
     metadata); on the multi-org path only the env-var configuration counts.
     """
     plan = await _anonymous_plan_context(settings, session)
-    if not plan.feature_enabled("sso"):
+    # FAR-2060: the plan resolves over the trusted tenant (the single login-active
+    # org), so an org-scoped Team key enables the listing for its own org.
+    # FAR-2059: only a DETERMINATE refusal hides the providers. With no valid
+    # licence at all the listing stays visible so SSO-only users can still reach
+    # sign-in; Team features are off post-auth.
+    if not plan.feature_enabled("sso") and plan.has_license_key():
         return SsoProvidersResponse(oidc=[], saml=False)
 
     try:
@@ -509,7 +520,7 @@ def _read_oidc_flow_cookie(request: Request, state: str, settings: Settings) -> 
 async def oidc_login(
     provider: str,
     _request: Request,
-    _: object = require_feature_anonymous("sso"),
+    _: object = require_feature_anonymous("sso", allow_degraded_authentication=True),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -538,7 +549,7 @@ async def oidc_login(
 async def oidc_callback(
     provider: str,
     request: Request,
-    _: object = require_feature_anonymous("sso"),
+    _: object = require_feature_anonymous("sso", allow_degraded_authentication=True),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -739,7 +750,7 @@ async def _read_acs_form(request: Request) -> FormData:
 async def saml_acs_provider(
     provider_id: str,
     request: Request,
-    _: object = require_feature_anonymous("sso"),
+    _: object = require_feature_anonymous("sso", allow_degraded_authentication=True),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -844,7 +855,7 @@ async def saml_acs_provider(
 async def saml_metadata_provider(
     provider_id: str,
     _request: Request,
-    _: object = require_feature_anonymous("sso"),
+    _: object = require_feature_anonymous("sso", allow_degraded_authentication=True),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -895,7 +906,7 @@ async def saml_metadata_provider(
 async def saml_login_provider(
     provider_id: str,
     _request: Request,
-    _: object = require_feature_anonymous("sso"),
+    _: object = require_feature_anonymous("sso", allow_degraded_authentication=True),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -936,7 +947,7 @@ async def saml_login_provider(
 @handle_db_errors("sso.saml_login")
 async def saml_login(
     _request: Request,
-    _: object = require_feature_anonymous("sso"),
+    _: object = require_feature_anonymous("sso", allow_degraded_authentication=True),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -969,7 +980,7 @@ async def saml_login(
 @handle_db_errors("sso.saml_acs")
 async def saml_acs(
     request: Request,
-    _: object = require_feature_anonymous("sso"),
+    _: object = require_feature_anonymous("sso", allow_degraded_authentication=True),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -1025,7 +1036,7 @@ async def saml_acs(
 @handle_db_errors("sso.saml_metadata")
 async def saml_metadata(
     _request: Request,
-    _: object = require_feature_anonymous("sso"),
+    _: object = require_feature_anonymous("sso", allow_degraded_authentication=True),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),

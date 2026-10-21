@@ -21,6 +21,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.plan_stubs import PlanStub
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -89,11 +90,12 @@ def _build_client(settings_fn, sso_enabled: bool = True) -> Generator[TestClient
         account_id=_USER_ID,
         org_role="admin",
     )
-    mock_plan = MagicMock()
-    mock_plan.feature_enabled.return_value = sso_enabled
+    # An unlicensed Community plan has NO licence key; a licensed plan does.
+    # The distinction drives the FAR-2059 degraded-authentication carve-out.
+    mock_plan = PlanStub(enabled=sso_enabled, tier="team" if sso_enabled else "community")
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_anonymous_plan_context] = lambda: mock_plan
-    yield TestClient(app)
+    yield TestClient(app, follow_redirects=False)
     app.dependency_overrides.clear()
 
 
@@ -182,16 +184,80 @@ class TestAdminSsoGating:
 #
 # NOTE: /api/v1/auth/sso/providers is a PRE-AUTH discovery endpoint (the login
 # page fetches it before any user exists). It no longer sits behind
-# require_feature/get_current_user: when the SSO feature is disabled or
-# unlicensed it answers a normal 200 with an EMPTY provider list, so the
-# pre-auth call never surfaces an auth error in the browser console. The other
-# auth endpoints (login flows) keep the 402 gate — they are only reached by
-# users clicking a provider button that this endpoint advertised.
+# require_feature/get_current_user, and on an unlicensed instance it advertises
+# the configured providers so an SSO-only deployment can still sign in
+# (FAR-2059). The listing is suppressed only when a licence resolves but does
+# not grant SSO — a determinate downgrade, where the auth gate would 402.
+#
+# FAR-2059: the login flows are authentication entry points. With no valid
+# licence they proceed in degraded mode instead of returning 402; entitlement
+# is enforced post-auth (Community plan -> Team features off).
+
+
+class _DeterminatePlan:
+    """Plan double with separate feature and licence-key state.
+
+    A licence that RESOLVES but does not grant a feature is a determinate
+    entitlement decision (402). An unlicensed plan has no key at all and opts
+    authentication entry points into degraded mode.
+    """
+
+    def __init__(self, *, enabled: bool, has_license_key: bool) -> None:
+        self._enabled = enabled
+        self._has_license_key = has_license_key
+
+    def feature_enabled(self, name: str) -> bool:
+        return self._enabled
+
+    def list_enabled_features(self) -> list[str]:
+        return []
+
+    def tier(self) -> str:
+        return "team" if self._has_license_key else "community"
+
+    def has_license_key(self) -> bool:
+        return self._has_license_key
+
+
+def _env_oidc_settings(*, license_key: str = "") -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key=_VALID_32,
+        fernet_key=_VALID_32,
+        modulo_admin_password="testpass",
+        modulo_license_key=license_key,
+        modulo_oidc_providers=json.dumps(
+            [
+                {
+                    "provider_id": "google",
+                    "client_id": "cid",
+                    "client_secret": "secret",
+                    "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
+                }
+            ]
+        ),
+    )
+
+
+def _client_with_anonymous_plan(settings: Settings, plan: object) -> TestClient:
+    """TestClient with a mock session and the given anonymous plan override."""
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides.clear()
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_system_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_anonymous_plan_context] = lambda: plan
+    return TestClient(app, follow_redirects=False)
 
 
 class TestSsoAuthGating:
-    def test_sso_providers_returns_200_empty_when_disabled(self, client_no_sso: TestClient) -> None:
-        """SSO unlicensed -> normal 200 with an empty providers list (no 402/401)."""
+    def test_sso_providers_returns_200_empty_when_no_providers_configured(self, client_no_sso: TestClient) -> None:
+        """Nothing configured -> normal 200 with an empty providers list (no 402/401)."""
         with (
             patch("modulo.core.license.get_license", return_value=None),
             patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
@@ -231,12 +297,19 @@ class TestSsoAuthGating:
         assert resp.status_code == 200
         assert resp.json() == {"oidc": [], "saml": False}
 
-    def test_sso_providers_anonymous_plan_fallback_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_sso_providers_anonymous_plan_fallback_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """A session that cannot run the anonymous plan resolution (TypeError
         from ``session.begin()``, as with test-double sessions) degrades to
         CommunityTier AND logs a warning — the fallback must not be silent
-        (mirrors get_plan_context's warning in dependencies.py)."""
-        app.dependency_overrides.clear()
+        (mirrors get_plan_context's warning in dependencies.py).
+
+        Exercised at the resolver (the unit under test), not through the route:
+        a broken session cannot serve the provider listing either, so driving
+        the route would conflate the plan fallback with a second failure.
+        """
+        from modulo.api.dependencies import resolve_anonymous_plan_context
+        from modulo.core.feature_flags import CommunityTier
+
         broken_session = MagicMock()
 
         def _begin_raises() -> None:
@@ -244,23 +317,9 @@ class TestSsoAuthGating:
 
         broken_session.begin.side_effect = _begin_raises
 
-        async def override_session() -> AsyncGenerator[MagicMock, None]:
-            yield broken_session
+        with caplog.at_level("WARNING", logger="modulo.api.dependencies"):
+            ctx = await resolve_anonymous_plan_context(_settings_without_license(), broken_session)
 
-        app.dependency_overrides[get_settings] = _settings_without_license
-        app.dependency_overrides[get_db_session] = override_session
-        app.dependency_overrides[get_system_db_session] = override_session
-        app.dependency_overrides[_get_engine] = lambda: MagicMock()
-        try:
-            client = TestClient(app)
-            with (
-                caplog.at_level("WARNING", logger="modulo.api.dependencies"),
-                patch("modulo.core.license.get_license", return_value=None),
-                patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
-            ):
-                resp = client.get("/api/v1/auth/sso/providers")
-        finally:
-            app.dependency_overrides.clear()
         fallback_warnings = [
             rec
             for rec in caplog.records
@@ -268,8 +327,7 @@ class TestSsoAuthGating:
             or "returning CommunityTier" in getattr(rec, "reason", "")
         ]
         assert fallback_warnings, "anonymous plan fallback must log a warning, not degrade silently"
-        assert resp.status_code == 200
-        assert resp.json() == {"oidc": [], "saml": False}
+        assert isinstance(ctx, CommunityTier)
 
     def test_sso_providers_lists_env_providers_when_enabled(self, client_with_sso: TestClient) -> None:
         """SSO licensed/enabled -> 200 with the configured OIDC providers."""
@@ -301,25 +359,98 @@ class TestSsoAuthGating:
         body = resp.json()
         assert "google" in [p["provider_id"] for p in body["oidc"]]
 
-    def test_oidc_login_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+    # ── FAR-2059: no licence -> authentication proceeds (degraded) ──────────
+    #
+    # These replace the old "unlicensed -> 402" assertions: that 402 WAS the
+    # lockout. The contract is now "the gate does not block sign-in"; the route
+    # fails only on its own configuration state.
+
+    def test_oidc_login_proceeds_when_unlicensed(self, client_no_sso: TestClient) -> None:
         resp = client_no_sso.get("/api/v1/auth/oidc/google/login")
-        assert resp.status_code == 402
+        assert resp.status_code != 402, resp.text
+        # The gate let it through; no IdP is configured in this fixture.
+        assert resp.status_code == 400
 
-    def test_oidc_callback_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+    def test_oidc_callback_proceeds_when_unlicensed(self, client_no_sso: TestClient) -> None:
         resp = client_no_sso.get("/api/v1/auth/oidc/google/callback?code=abc&state=def")
-        assert resp.status_code == 402
+        assert resp.status_code != 402, resp.text
+        # Browser-facing failure -> login page, never a licence gate.
+        assert resp.status_code == 303
 
-    def test_saml_login_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+    def test_saml_login_proceeds_when_unlicensed(self, client_no_sso: TestClient) -> None:
         resp = client_no_sso.get("/api/v1/auth/saml/login")
-        assert resp.status_code == 402
+        assert resp.status_code != 402, resp.text
+        assert resp.status_code == 400
 
-    def test_saml_acs_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+    def test_saml_acs_proceeds_when_unlicensed(self, client_no_sso: TestClient) -> None:
         resp = client_no_sso.post("/api/v1/auth/saml/acs", data={"SAMLResponse": "dGVzdA=="})
-        assert resp.status_code == 402
+        assert resp.status_code != 402, resp.text
+        assert resp.status_code == 303
 
-    def test_saml_metadata_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+    def test_saml_metadata_proceeds_when_unlicensed(self, client_no_sso: TestClient) -> None:
         resp = client_no_sso.get("/api/v1/auth/saml/metadata")
-        assert resp.status_code == 402
+        assert resp.status_code != 402, resp.text
+        assert resp.status_code == 400
+
+    # ── FAR-2060: a determinate refusal still 402s and names the scope ──────
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("get", "/api/v1/auth/oidc/google/login"),
+            ("get", "/api/v1/auth/oidc/google/callback?code=abc&state=def"),
+            ("get", "/api/v1/auth/saml/login"),
+            ("post", "/api/v1/auth/saml/acs"),
+            ("get", "/api/v1/auth/saml/metadata"),
+        ],
+    )
+    def test_licensed_without_sso_still_402_names_scope(self, method: str, path: str) -> None:
+        """A licence that RESOLVES but lacks sso is a determinate refusal.
+
+        The 402 detail must tell the operator which licence scope is required,
+        instead of the old unexplained "not available on your plan".
+        """
+        plan = _DeterminatePlan(enabled=False, has_license_key=True)
+        client = _client_with_anonymous_plan(_settings_with_license(), plan)
+        try:
+            resp = client.post(path, data={"SAMLResponse": "dGVzdA=="}) if method == "post" else client.get(path)
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 402, resp.text
+        assert "system or organisation scope" in resp.text
+
+    # ── FAR-2059/2060: discovery visibility ────────────────────────────────
+
+    def test_sso_providers_listed_when_unlicensed(self) -> None:
+        """No valid licence -> configured providers stay visible so SSO-only login works.
+
+        The discovery route resolves the REAL anonymous plan (it calls the
+        resolver directly, not the DI dependency), so this drives the real
+        unlicensed fallback with an env-configured provider.
+        """
+        client = _client_with_anonymous_plan(_env_oidc_settings(), PlanStub(enabled=False, tier="community"))
+        try:
+            with (
+                patch("modulo.core.license.get_license", return_value=None),
+                patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+            ):
+                resp = client.get("/api/v1/auth/sso/providers")
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 200
+        assert "google" in [p["provider_id"] for p in resp.json()["oidc"]]
+
+    def test_sso_providers_hidden_when_licensed_without_sso(self) -> None:
+        """A licence that resolves without sso hides the listing (the gate would 402)."""
+        determinate = _DeterminatePlan(enabled=False, has_license_key=True)
+        client = _client_with_anonymous_plan(_env_oidc_settings(license_key="valid-key"), determinate)
+        try:
+            with patch("modulo.core.feature_flags.resolve_plan_context", AsyncMock(return_value=determinate)):
+                resp = client.get("/api/v1/auth/sso/providers")
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 200
+        assert resp.json() == {"oidc": [], "saml": False}
 
 
 # ── Non-SSO endpoints should be unaffected ──
@@ -347,13 +478,19 @@ class TestNonSsoEndpoints:
 
 
 class TestPreAuthSsoNoAuthRequired:
-    """Pre-auth SSO routes must NOT return 401 when no Authorization header is present.
+    """Pre-auth SSO routes must never 401 AND never licence-lock-out sign-in.
+
+    FAR-847: these are authentication entry points, so they must not require a
+    bearer token. FAR-2059: on an instance with NO valid licence they must not
+    answer 402 either — the gate lets authentication proceed in degraded mode
+    (Team features stay off post-auth). The route then fails only on its own
+    configuration state: no IdP configured -> 400, browser-facing callback
+    failures -> a 303 redirect to the login page.
 
     These tests exercise the REAL dependency chain (no get_current_user or
-    get_plan_context overrides) with a mock session so resolve_anonymous_plan_context
-    can run.  The anonymous plan resolves to CommunityTier (sso disabled), so the
-    expected response is 402 (feature unavailable) — the important property is
-    that the response is NOT 401 "Not authenticated".
+    get_plan_context overrides) with a mock session so
+    resolve_anonymous_plan_context can run and resolve to the unlicensed
+    Community plan.
     """
 
     def _build_anon_client(self) -> TestClient:
@@ -361,6 +498,7 @@ class TestPreAuthSsoNoAuthRequired:
 
         Does NOT override get_current_user or get_plan_context: those
         dependencies must never be consulted by the pre-auth routes.
+        ``follow_redirects=False`` keeps the browser-facing 303 observable.
         """
         mock_session = _make_mock_session()
 
@@ -373,61 +511,63 @@ class TestPreAuthSsoNoAuthRequired:
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
         # get_current_user deliberately NOT overridden — if the route
         # consults it, the request will 401 and the test fails.
-        return TestClient(app)
+        return TestClient(app, follow_redirects=False)
 
-    def test_oidc_login_no_auth_not_401(self) -> None:
-        """GET /oidc/{provider}/login without Authorization must not 401."""
+    def test_oidc_login_no_auth_not_401_or_402(self) -> None:
+        """GET /oidc/{provider}/login: no auth (not 401), no licence (not 402)."""
         try:
             client = self._build_anon_client()
             resp = client.get("/api/v1/auth/oidc/google/login")
         finally:
             app.dependency_overrides.clear()
         assert resp.status_code != 401, f"Pre-auth OIDC login must not require authentication, got 401: {resp.text}"
-        # SSO is disabled on CommunityTier, so expect 402 (feature unavailable)
-        assert resp.status_code == 402
+        assert resp.status_code != 402, f"An unlicensed instance must not lock SSO sign-in out, got 402: {resp.text}"
+        # No IdP is configured in this fixture, so the handler's own check fires.
+        assert resp.status_code == 400
 
-    def test_oidc_callback_no_auth_not_401(self) -> None:
-        """GET /oidc/{provider}/callback without Authorization must not 401.
-
-        A missing code/state should give 400 (if SSO enabled) or 402
-        (feature unavailable) — never 401.
-        """
+    def test_oidc_callback_no_auth_not_401_or_402(self) -> None:
+        """GET /oidc/{provider}/callback: browser-facing failure -> 303, never 401/402."""
         try:
             client = self._build_anon_client()
             resp = client.get("/api/v1/auth/oidc/google/callback")
         finally:
             app.dependency_overrides.clear()
         assert resp.status_code != 401, f"Pre-auth OIDC callback must not require authentication, got 401: {resp.text}"
+        assert resp.status_code != 402, f"An unlicensed instance must not lock SSO sign-in out, got 402: {resp.text}"
+        assert resp.status_code == 303
 
-    def test_saml_login_no_auth_not_401(self) -> None:
-        """GET /saml/login without Authorization must not 401."""
+    def test_saml_login_no_auth_not_401_or_402(self) -> None:
+        """GET /saml/login: no auth (not 401), no licence (not 402)."""
         try:
             client = self._build_anon_client()
             resp = client.get("/api/v1/auth/saml/login")
         finally:
             app.dependency_overrides.clear()
         assert resp.status_code != 401, f"Pre-auth SAML login must not require authentication, got 401: {resp.text}"
-        assert resp.status_code == 402
+        assert resp.status_code != 402, f"An unlicensed instance must not lock SSO sign-in out, got 402: {resp.text}"
+        assert resp.status_code == 400
 
-    def test_saml_acs_no_auth_not_401(self) -> None:
-        """POST /saml/acs without Authorization must not 401."""
+    def test_saml_acs_no_auth_not_401_or_402(self) -> None:
+        """POST /saml/acs: browser-facing failure -> 303, never 401/402."""
         try:
             client = self._build_anon_client()
             resp = client.post("/api/v1/auth/saml/acs", data={"SAMLResponse": "dGVzdA=="})
         finally:
             app.dependency_overrides.clear()
         assert resp.status_code != 401, f"Pre-auth SAML ACS must not require authentication, got 401: {resp.text}"
-        assert resp.status_code == 402
+        assert resp.status_code != 402, f"An unlicensed instance must not lock SSO sign-in out, got 402: {resp.text}"
+        assert resp.status_code == 303
 
-    def test_saml_metadata_no_auth_not_401(self) -> None:
-        """GET /saml/metadata without Authorization must not 401."""
+    def test_saml_metadata_no_auth_not_401_or_402(self) -> None:
+        """GET /saml/metadata: no auth (not 401), no licence (not 402)."""
         try:
             client = self._build_anon_client()
             resp = client.get("/api/v1/auth/saml/metadata")
         finally:
             app.dependency_overrides.clear()
         assert resp.status_code != 401, f"Pre-auth SAML metadata must not require authentication, got 401: {resp.text}"
-        assert resp.status_code == 402
+        assert resp.status_code != 402, f"An unlicensed instance must not lock SSO sign-in out, got 402: {resp.text}"
+        assert resp.status_code == 400
 
 
 class TestAuthenticatedRoutesStillGuarded:

@@ -400,12 +400,18 @@ class TestSsoProvidersEndpoint:
         assert resp.status_code == 200
         assert resp.json()["saml"] is True
 
-    def test_sso_providers_disabled_returns_200_empty(self, client: TestClient) -> None:
-        """Unlicensed/feature-disabled -> normal 200 with an EMPTY providers list.
+    def test_sso_providers_unlicensed_still_lists_configured_providers(self, client: TestClient) -> None:
+        """FAR-2059: an unlicensed instance still advertises its configured providers.
 
         The endpoint is fetched by the login page BEFORE authentication, so it
-        must never raise an auth/plan error (the old 402 behaviour put a console
-        error on every login).
+        must never raise an auth/plan error. It must ALSO not hide the only
+        sign-in method: suppressing the listing on a lapsed key stranded every
+        SSO-only deployment (the login page rendered no SSO option at all).
+        Suppression is reserved for a licence that RESOLVES but does not grant
+        sso — a determinate downgrade where the auth gate would 402.
+
+        Env-var SAML stays unavailable without a verified key (FAR-1733), so
+        ``saml`` is still False here.
         """
         _override_settings(modulo_license_key="", modulo_saml_enabled=True)
         with (
@@ -414,7 +420,9 @@ class TestSsoProvidersEndpoint:
         ):
             resp = client.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 200
-        assert resp.json() == {"oidc": [], "saml": False}
+        body = resp.json()
+        assert {"google", "github"} <= {p["provider_id"] for p in body["oidc"]}
+        assert body["saml"] is False
 
 
 # ---------------------------------------------------------------------------
