@@ -277,6 +277,14 @@ _MAPPING_EXCEPTION_REASONS: dict[tuple[str, str], str] = {
         "-> save_map_version -> get_lifecycle_map_for_update; the lock is on a row inserted in the "
         "SAME transaction, so 55P03 is not practically reachable and the 503 arm is accepted"
     ),
+    (
+        "api/routes/admin_sso.py",
+        "_persist_provider_update",
+    ): (
+        "module-local PATCH helper (FAR-366 refactor extraction, no request arm): it owns no except "
+        "arm, so its C20 55P03 surfaces at the calling update_provider_endpoint's SQLAlchemyError "
+        "arm, which calls the classifier — the 409 mapping lives there, not in the helper"
+    ),
 }
 
 # C5/C6 are bounded one level up: the shared org JSON-column patch calls
@@ -452,7 +460,12 @@ def _resolve_attribute_owner(attribute: ast.Attribute, module_aliases: dict[str,
     return root if not rest else f"{root}.{rest}"
 
 
-def _swept_helper_calls(function: ast.AST, module: ast.Module) -> set[str]:
+def _swept_helper_calls(
+    function: ast.AST,
+    module: ast.Module,
+    imported_symbols: dict[str, tuple[str, str]] | None = None,
+    module_aliases: dict[str, str] | None = None,
+) -> set[str]:
     """Swept helpers *function* calls DIRECTLY, resolved through the module's imports.
 
     Every import shape that can put a swept helper in reach is resolved:
@@ -467,9 +480,15 @@ def _swept_helper_calls(function: ast.AST, module: ast.Module) -> set[str]:
       accepted when the attribute name is a swept helper AND the module imports
       from at least one swept module (the receiver's concrete type is not
       inferable without type analysis, and these method names are unique).
+
+    The module-wide import tables may be passed in by bulk callers
+    (``_direct_swept_callers`` resolves them once per file; re-walking the
+    module AST for every function blew past the CI pytest-timeout cap).
     """
-    imported_symbols = _imported_symbols(module)
-    module_aliases = _imported_module_aliases(module)
+    if imported_symbols is None:
+        imported_symbols = _imported_symbols(module)
+    if module_aliases is None:
+        module_aliases = _imported_module_aliases(module)
     imports_a_swept_module = any(dotted[0] in _SWEPT_HELPER_MODULES for dotted in imported_symbols.values())
     hits: set[str] = set()
     for call in (node for node in ast.walk(function) if isinstance(node, ast.Call)):
@@ -494,6 +513,21 @@ def _direct_swept_callers() -> dict[tuple[str, str], set[str]]:
     Scans ``api/routes/*.py`` (excluding underscore-prefixed shared helpers,
     which own no request arm). This is the mechanically derived caller set the
     enumerated ``_MAPPED_55P03_ROUTE_ARMS`` list cannot provide.
+
+    Import-resolution cost is bounded per FILE: the module's import tables are
+    resolved once and shared by every function scan (2026-10-21: resolving them
+    inside the per-function scan re-walked the module AST once per function and
+    pushed the CI runner past the 120s pytest-timeout cap).
+
+    Attribution covers ONE same-file hop: a request arm that calls a
+    module-local helper which ITSELF directly calls a swept helper is
+    attributed that helper's hits (a function-extraction refactor must not
+    blind the discovery to the arm — its redirected swept surface, e.g.
+    ``update_provider_endpoint`` -> ``_persist_provider_update`` ->
+    ``update_provider``, is the same bounded transaction under the same
+    except arm). Only a direct named call into a same-module function counts,
+    and only one hop: cross-file transitive callers stay out (the accepted
+    residual recorded in ``_MAPPING_EXCEPTION_REASONS``).
     """
     routes_dir = _SRC / "api" / "routes"
     discovered: dict[tuple[str, str], set[str]] = {}
@@ -502,10 +536,26 @@ def _direct_swept_callers() -> dict[tuple[str, str], set[str]]:
             continue
         module = ast.parse(path.read_text(encoding="utf-8"))
         rel = path.relative_to(_SRC).as_posix()
-        for function in _iter_functions(module):
-            hits = _swept_helper_calls(function, module)
+        imported_symbols = _imported_symbols(module)
+        module_aliases = _imported_module_aliases(module)
+        functions = _iter_functions(module)
+        hits_by_function: dict[str, set[str]] = {}
+        for function in functions:
+            hits = _swept_helper_calls(function, module, imported_symbols, module_aliases)
             if hits:
-                discovered[(rel, function.name)] = hits
+                hits_by_function[function.name] = hits
+        sweeper_names = set(hits_by_function)
+        for function in functions:
+            if function.name in hits_by_function:
+                continue
+            attributed: set[str] = set()
+            for node in ast.walk(function):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in sweeper_names:
+                    attributed |= hits_by_function[node.func.id]
+            if attributed:
+                hits_by_function[function.name] = attributed
+        for function_name, hits in hits_by_function.items():
+            discovered[(rel, function_name)] = hits
     return discovered
 
 
@@ -836,6 +886,12 @@ def test_every_direct_route_caller_of_a_swept_helper_classifies_55p03() -> None:
     Not covered (accepted residual, see the module docstring): a TRANSITIVE
     service-level caller — e.g. ``library.py`` reaching C20 through
     ``materialize_map_from_primitive``. That arm is recorded explicitly.
+
+    Attribution is import-aware and resolves ONE same-file helper hop: a
+    request arm calling a module-local wrapper that directly calls a swept
+    helper is attributed that wrapper's hits, so a function-extraction refactor
+    (e.g. ``update_provider_endpoint`` -> ``_persist_provider_update``) cannot
+    blind the discovery to the arm.
     """
     callers = _direct_swept_callers()
 
