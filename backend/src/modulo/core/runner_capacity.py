@@ -883,6 +883,63 @@ def sweep_heartbeat_reference(
     return heartbeat_at or started_at or created_at
 
 
+def _classify_terminal_sweep_row(
+    *,
+    error_code: str | None,
+    marker_json: str | None,
+    stale_reference: datetime | None,
+    now: datetime,
+    stale_seconds: int,
+) -> str:
+    """Terminal-row rules: anomaly (c), crash-leaked fence, or clear (d1)."""
+    from modulo.core.rollback_thresholds import SCRIPT_ANOMALY_ERROR_CODES
+
+    if error_code in SCRIPT_ANOMALY_ERROR_CODES:
+        return "keep_anomaly"
+    if not marker_is_fence_component(marker_json):
+        return "clear_terminal"
+    if stale_reference is None:
+        return "keep_live"
+    if (now - stale_reference).total_seconds() <= stale_seconds:
+        return "keep_live"
+    return "clear_terminal"
+
+
+def _classify_node_started_sweep_row(
+    *,
+    stale_reference: datetime | None,
+    now: datetime,
+    node_started_stale_seconds: int | None,
+    heartbeat_fresh: bool,
+) -> str:
+    """FAR-1808 two-condition reclaim rule for a node-STARTED running row."""
+    if node_started_stale_seconds is None or stale_reference is None:
+        return "keep_live"
+    beyond_node_window = (now - stale_reference).total_seconds() > node_started_stale_seconds
+    if beyond_node_window and not heartbeat_fresh:
+        return "transition_stale_running"
+    return "keep_live"
+
+
+def _classify_stale_sweep_row(
+    *,
+    status: str,
+    stale_reference: datetime | None,
+    now: datetime,
+    stale_seconds: int,
+    heartbeat_fresh: bool,
+) -> str:
+    """Non-terminal staleness rules: clear (d3) or transition (d2)/keep (e)."""
+    if stale_reference is None:
+        return "keep_live"
+    age = (now - stale_reference).total_seconds()
+    if age <= stale_seconds:
+        return "keep_live"
+    if status == "running" and not heartbeat_fresh:
+        return "transition_stale_running"
+    return "clear_stale"
+
+
 def classify_sweep_action(
     *,
     status: str,
@@ -941,20 +998,13 @@ def classify_sweep_action(
         # Terminal rows: anomaly exemption BEFORE the fence rule (qa F14) —
         # a crash-leaked fence on a terminal non-anomaly run must not pin its
         # marker forever.
-        from modulo.core.rollback_thresholds import SCRIPT_ANOMALY_ERROR_CODES
-
-        if error_code in SCRIPT_ANOMALY_ERROR_CODES:
-            return "keep_anomaly"
-        if marker_is_fence_component(marker_json):
-            # Crash-leaked fence on a terminal non-anomaly run: clear only
-            # past the staleness cap (the longer age cap), never immediately —
-            # the teardown may legitimately still be writing the lease.
-            if stale_reference is None:
-                return "keep_live"
-            if (now - stale_reference).total_seconds() <= stale_seconds:
-                return "keep_live"
-            return "clear_terminal"
-        return "clear_terminal"
+        return _classify_terminal_sweep_row(
+            error_code=error_code,
+            marker_json=marker_json,
+            stale_reference=stale_reference,
+            now=now,
+            stale_seconds=stale_seconds,
+        )
     if marker_is_fence_component(marker_json):
         return "keep_fence"
     if recoverable:
@@ -962,12 +1012,12 @@ def classify_sweep_action(
     # FAR-1808: the node-STARTED running shape uses its own two-condition
     # reclaim rule (see the docstring) INSTEAD of the single staleness cap.
     if status == "running" and node_started:
-        if node_started_stale_seconds is None or stale_reference is None:
-            return "keep_live"
-        beyond_node_window = (now - stale_reference).total_seconds() > node_started_stale_seconds
-        if beyond_node_window and not heartbeat_fresh:
-            return "transition_stale_running"
-        return "keep_live"
+        return _classify_node_started_sweep_row(
+            stale_reference=stale_reference,
+            now=now,
+            node_started_stale_seconds=node_started_stale_seconds,
+            heartbeat_fresh=heartbeat_fresh,
+        )
     # Non-terminal: only a STALE non-fence marker is cleared. A stale clear on
     # a RUNNING run also transitions it terminal (no zombie) — unless the run's
     # heartbeat is FRESH (a freshly-resumed long-parked run: its tombstone /
@@ -975,14 +1025,13 @@ def classify_sweep_action(
     # sweep clears only the marker. The other non-terminal statuses keep their
     # lifecycle (a parked/waiting run is not killed over a stale marker) — the
     # marker clear alone makes them capacity-neutral.
-    if stale_reference is None:
-        return "keep_live"
-    age = (now - stale_reference).total_seconds()
-    if age <= stale_seconds:
-        return "keep_live"
-    if status == "running" and not heartbeat_fresh:
-        return "transition_stale_running"
-    return "clear_stale"
+    return _classify_stale_sweep_row(
+        status=status,
+        stale_reference=stale_reference,
+        now=now,
+        stale_seconds=stale_seconds,
+        heartbeat_fresh=heartbeat_fresh,
+    )
 
 
 def _sweep_recoverability_predicate() -> tuple[Any, Any]:
