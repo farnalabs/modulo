@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
@@ -43,11 +44,15 @@ def _make_settings() -> Settings:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct session double: the authz kill-switch read and
+    # ``set_rls_*`` touch SYNC session/result members, which a bare AsyncMock
+    # turns into never-awaited coroutines (PytestUnraisableException noise).
+    session = configure_rls_preamble(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    session.execute = AsyncMock(return_value=make_empty_execute_result())
     return session
 
 
