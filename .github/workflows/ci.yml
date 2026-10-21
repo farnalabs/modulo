@@ -1142,10 +1142,19 @@ jobs:
     # gate. A PR that introduces one or two new smells still passes every
     # rating condition - which is how 74 reliability-impact issues (mostly
     # python:S7503) accumulated on main. This gate closes that hole: query the
-    # SonarCloud API for THIS PR's analysis and fail on ANY new unresolved
-    # issue. Fail-closed by design: an API error, an unexpected HTTP status,
+    # SonarCloud API for THIS PR's analysis and fail on the blocking subset
+    # below. Fail-closed by design: an API error, an unexpected HTTP status,
     # or a response without a numeric .total fails the job - it never passes
     # on unknown state, and it carries no continue-on-error.
+    #
+    # Gated issue types/severities (policy):
+    # - BUG and VULNERABILITY at ANY severity
+    # - CODE_SMELL only at BLOCKER or CRITICAL
+    # All other CODE_SMELL (INFO, MINOR, MAJOR) pass. Rationale: a 15-run
+    # sample of 61 blocked issues contained zero bugs and zero vulnerabilities;
+    # they were MINOR TypeScript style rules and MAJOR parameter-count rules,
+    # while CRITICAL python:S3776 cognitive complexity is the smell class that
+    # predicts defects.
     #
     # PR-analysis-only: there is no pullRequest analysis on push to main, so
     # the job runs on pull_request events only. The path gate is STEP-level
@@ -1163,7 +1172,7 @@ jobs:
     runs-on: ubicloud-standard-2
     timeout-minutes: 5
     steps:
-      - name: Fail on any new SonarCloud issue in this PR
+      - name: Fail on new SonarCloud bugs, vulnerabilities, and critical smells
         if: needs.changes.outputs.sonar == 'true'
         shell: bash
         env:
@@ -1184,13 +1193,12 @@ jobs:
           BODY="$(mktemp)"
           CURL_ERR="$(mktemp)"
           trap 'rm -f "$BODY" "$CURL_ERR"' EXIT
-          API="${SONAR_HOST}/api/issues/search?componentKeys=${SONAR_COMPONENT}&pullRequest=${PR_NUMBER}&resolved=false&ps=1"
-          # Basic auth: the token is the username, the password is empty.
-          # Capture the HTTP status explicitly (no -f): a guard must distinguish
-          # "API failed" from "no issues", and every non-200 fails closed below.
+
+          # Query 1: BUG + VULNERABILITY at ANY severity
+          API_BV="${SONAR_HOST}/api/issues/search?componentKeys=${SONAR_COMPONENT}&pullRequest=${PR_NUMBER}&resolved=false&types=BUG,VULNERABILITY&ps=1"
           set +e
           HTTP_CODE=$(curl -sS --max-time 30 -u "${SONAR_TOKEN}:" \
-            -o "$BODY" -w '%{http_code}' "$API" 2>"$CURL_ERR")
+            -o "$BODY" -w '%{http_code}' "$API_BV" 2>"$CURL_ERR")
           CURL_RC=$?
           set -e
           if [ "$CURL_RC" -ne 0 ]; then
@@ -1201,20 +1209,70 @@ jobs:
             echo "::error::SonarCloud issues API returned HTTP ${HTTP_CODE} (expected 200); failing closed. Body: $(head -c 500 "$BODY")"
             exit 1
           fi
-          TOTAL=$(jq -r '.total' "$BODY" 2>/dev/null || echo "unparsed")
-          if ! [[ "$TOTAL" =~ ^[0-9]+$ ]]; then
-            echo "::error::Unexpected SonarCloud API response (no numeric .total); failing closed. Body: $(head -c 500 "$BODY")"
+          TOTAL_BV=$(jq -r '.total' "$BODY" 2>/dev/null || echo "unparsed")
+          if ! [[ "$TOTAL_BV" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unexpected SonarCloud API response (no numeric .total for BUG/VULNERABILITY); failing closed. Body: $(head -c 500 "$BODY")"
             exit 1
           fi
-          if [ "$TOTAL" -gt 0 ]; then
-            echo "::error::PR ${PR_NUMBER} introduces ${TOTAL} new SonarCloud issue(s) (unresolved on this PR's analysis). The free Sonar way gate has no issue-count condition, so this CI gate is what blocks them."
-            # Best-effort detail listing; the job already fails either way.
-            curl -sS --max-time 30 -u "${SONAR_TOKEN}:" \
-              "${SONAR_HOST}/api/issues/search?componentKeys=${SONAR_COMPONENT}&pullRequest=${PR_NUMBER}&resolved=false&ps=100" \
-              | jq -r '.issues[]? | "- \(.severity) [\(.rule)] \(.component): \(.message)"' 2>/dev/null || true
+
+          # Query 2: CODE_SMELL at BLOCKER or CRITICAL
+          API_CS="${SONAR_HOST}/api/issues/search?componentKeys=${SONAR_COMPONENT}&pullRequest=${PR_NUMBER}&resolved=false&types=CODE_SMELL&severities=BLOCKER,CRITICAL&ps=1"
+          set +e
+          HTTP_CODE=$(curl -sS --max-time 30 -u "${SONAR_TOKEN}:" \
+            -o "$BODY" -w '%{http_code}' "$API_CS" 2>"$CURL_ERR")
+          CURL_RC=$?
+          set -e
+          if [ "$CURL_RC" -ne 0 ]; then
+            echo "::error::SonarCloud issues API request failed (curl exit ${CURL_RC}): $(cat "$CURL_ERR" 2>/dev/null || echo 'no stderr'); failing closed."
             exit 1
           fi
-          echo "No new SonarCloud issues on PR ${PR_NUMBER}."
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::SonarCloud issues API returned HTTP ${HTTP_CODE} (expected 200); failing closed. Body: $(head -c 500 "$BODY")"
+            exit 1
+          fi
+          TOTAL_CS=$(jq -r '.total' "$BODY" 2>/dev/null || echo "unparsed")
+          if ! [[ "$TOTAL_CS" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unexpected SonarCloud API response (no numeric .total for CODE_SMELL BLOCKER/CRITICAL); failing closed. Body: $(head -c 500 "$BODY")"
+            exit 1
+          fi
+
+          BLOCKING_TOTAL=$((TOTAL_BV + TOTAL_CS))
+          if [ "$BLOCKING_TOTAL" -gt 0 ]; then
+            echo "::error::PR ${PR_NUMBER} introduces ${BLOCKING_TOTAL} blocking SonarCloud issue(s) (BUG/VULNERABILITY: ${TOTAL_BV}, CODE_SMELL BLOCKER/CRITICAL: ${TOTAL_CS}) (unresolved on this PR's analysis). The free Sonar way gate has no issue-count condition, so this CI gate is what blocks them."
+            # Best-effort detail listing for blocking issues
+            echo "--- Blocking issues ---"
+            # BUG + VULNERABILITY
+            if [ "$TOTAL_BV" -gt 0 ]; then
+              curl -sS --max-time 30 -u "${SONAR_TOKEN}:" \
+                "${SONAR_HOST}/api/issues/search?componentKeys=${SONAR_COMPONENT}&pullRequest=${PR_NUMBER}&resolved=false&types=BUG,VULNERABILITY&ps=100" \
+                | jq -r '.issues[]? | "BUG/VULN: \(.severity) [\(.rule)] \(.component): \(.message)"' 2>/dev/null || true
+            fi
+            # CODE_SMELL BLOCKER/CRITICAL
+            if [ "$TOTAL_CS" -gt 0 ]; then
+              curl -sS --max-time 30 -u "${SONAR_TOKEN}:" \
+                "${SONAR_HOST}/api/issues/search?componentKeys=${SONAR_COMPONENT}&pullRequest=${PR_NUMBER}&resolved=false&types=CODE_SMELL&severities=BLOCKER,CRITICAL&ps=100" \
+                | jq -r '.issues[]? | "SMELL: \(.severity) [\(.rule)] \(.component): \(.message)"' 2>/dev/null || true
+            fi
+            exit 1
+          fi
+
+          # Non-blocking count (INFO/MINOR/MAJOR code smells) - visible but never failing
+          API_NB="${SONAR_HOST}/api/issues/search?componentKeys=${SONAR_COMPONENT}&pullRequest=${PR_NUMBER}&resolved=false&types=CODE_SMELL&severities=INFO,MINOR,MAJOR&ps=1"
+          set +e
+          HTTP_CODE=$(curl -sS --max-time 30 -u "${SONAR_TOKEN}:" \
+            -o "$BODY" -w '%{http_code}' "$API_NB" 2>"$CURL_ERR")
+          CURL_RC=$?
+          set -e
+          if [ "$CURL_RC" -eq 0 ] && [ "$HTTP_CODE" = "200" ]; then
+            TOTAL_NB=$(jq -r '.total' "$BODY" 2>/dev/null || echo "unparsed")
+            if [[ "$TOTAL_NB" =~ ^[0-9]+$ ]] && [ "$TOTAL_NB" -gt 0 ]; then
+              echo "::notice::PR ${PR_NUMBER} introduces ${TOTAL_NB} non-blocking code smell(s) (INFO/MINOR/MAJOR) - not gated."
+            fi
+          else
+            echo "::warning::SonarCloud non-blocking code smell query failed (curl exit ${CURL_RC}, HTTP ${HTTP_CODE}); not failing the gate."
+          fi
+
+          echo "No blocking SonarCloud issues on PR ${PR_NUMBER}."
 
   coverage-gate:
     # Enforces a coverage threshold on the lines each PR actually changes
