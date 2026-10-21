@@ -778,15 +778,38 @@ class TestDeliveryDoneClassification:
         assert result.reason == REASON_DELIVERED
         assert result.delivered_pr_urls == (_PR,)
 
-    def test_failed_with_delivery_done_marker_is_still_no_delivery(self) -> None:
-        """The email verdict only applies to the complete bucket — a failed run
-        remains countable no_delivery (mirrors the pr_url rule)."""
+    def test_failed_with_delivery_done_marker_is_delivered_then_failed(self) -> None:
+        """FAR-1914 round-3 M4: a sentinel-proven delivery excludes the run from
+        the no-delivery streak even though the run later failed.
+
+        ``delivery_done`` is armed ONLY by the configured full-line sentinel, so
+        it is the side effect HAPPENED — the node then died/retried. Counting
+        that as a no-delivery miss would drive ``max_no_delivery_streak`` on a
+        trigger that is demonstrably delivering.
+        """
         result = classify_run(
             "failed",
             "node.cancelled",
             outputs_json={},
             telemetry_json={},
             raw_output_markers=_email_markers("run:run-1:node:n1:1"),
+        )
+        assert result.value == RunClassificationValue.delivered
+        assert result.reason == REASON_DELIVERED_EMAIL
+
+    def test_failed_with_only_a_pr_url_marker_is_still_no_delivery(self) -> None:
+        """Round-3 M4 guard: the unanchored ``pr_url`` never suppresses the
+        streak — only the sentinel-proven ``delivery_done`` field does.
+
+        A ``pr_url`` in a retained tail can be a quoted or ``gh pr list`` URL,
+        not a delivery; the streak keeps counting it.
+        """
+        result = classify_run(
+            "failed",
+            "node.cancelled",
+            outputs_json={},
+            telemetry_json={},
+            raw_output_markers=_markers(_PR),
         )
         assert result.value == RunClassificationValue.no_delivery
 
