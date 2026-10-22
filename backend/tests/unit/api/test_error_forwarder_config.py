@@ -18,7 +18,7 @@ from modulo.api.routes.error_forwarder_config import _is_configured, validate_fo
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
-from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.api.mock_session import configure_mock_session, make_empty_execute_result
 
 _ORG_UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_UUID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -455,7 +455,9 @@ class TestConfigureForwarder:
 
     def test_configure_invalid_config_does_not_touch_db(self, client: TestClient) -> None:
         mock_session = _make_mock_session()
-        mock_session.execute = AsyncMock()
+        # A bare AsyncMock result would leave the route's sync
+        # ``result.scalar_one_or_none()`` read as a never-awaited coroutine.
+        mock_session.execute = AsyncMock(return_value=make_empty_execute_result())
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
@@ -564,7 +566,9 @@ class TestConfigureForwarder:
     def test_configure_loki_push_url_metadata_ip_rejected(self, client: TestClient) -> None:
         """SSRF-fail-closed: push_url pointing at the cloud metadata endpoint is 422."""
         mock_session = _make_mock_session()
-        mock_session.execute = AsyncMock()
+        # A bare AsyncMock result would leave the route's sync
+        # ``result.scalar_one_or_none()`` read as a never-awaited coroutine.
+        mock_session.execute = AsyncMock(return_value=make_empty_execute_result())
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
@@ -583,7 +587,9 @@ class TestConfigureForwarder:
     def test_configure_sentry_dsn_loopback_rejected(self, client: TestClient) -> None:
         """The DSN hostname becomes the API base, so a loopback DSN is 422."""
         mock_session = _make_mock_session()
-        mock_session.execute = AsyncMock()
+        # A bare AsyncMock result would leave the route's sync
+        # ``result.scalar_one_or_none()`` read as a never-awaited coroutine.
+        mock_session.execute = AsyncMock(return_value=make_empty_execute_result())
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session

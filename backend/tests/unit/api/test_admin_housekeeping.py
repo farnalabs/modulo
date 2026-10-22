@@ -15,6 +15,7 @@ from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.housekeeping import Candidate, CategoryResult, Scanner
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -51,7 +52,10 @@ def _authz_result() -> MagicMock:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct double: the RLS preamble reads ``in_transaction()`` /
+    # ``get_bind()`` / ``add()`` synchronously, so those must be sync mocks —
+    # a bare AsyncMock turns each call into a never-awaited coroutine.
+    session = configure_rls_preamble(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -329,7 +333,7 @@ class TestPerformCleanup:
         with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
             session = _make_mock_session()
             session.begin_nested = MagicMock(return_value=_make_begin_nested())
-            session.execute = AsyncMock()
+            session.execute = AsyncMock(return_value=make_empty_execute_result())
             obj = MagicMock()
             session.execute.return_value.scalar_one_or_none = MagicMock(return_value=obj)
 
@@ -356,7 +360,7 @@ class TestPerformCleanup:
         with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
             session = _make_mock_session()
             session.begin_nested = MagicMock(return_value=_make_begin_nested())
-            session.execute = AsyncMock()
+            session.execute = AsyncMock(return_value=make_empty_execute_result())
             session.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
 
             async def override_session() -> AsyncGenerator[AsyncMock, None]:

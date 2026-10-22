@@ -29,6 +29,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, create_access_token
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -68,7 +69,11 @@ def _make_account(*, is_break_glass: bool = True, live: bool = True) -> MagicMoc
 
 
 def _make_session(account: object | None, *, raise_on_get: bool = False) -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct double: the permission dependency's authz-enforce read
+    # calls ``result.scalar_one_or_none()`` (SYNC on a real Result) and the RLS
+    # preamble reads ``in_transaction()``/``get_bind()``/``add()`` synchronously;
+    # a bare AsyncMock turns each into a never-awaited coroutine.
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
