@@ -126,11 +126,6 @@ def _db_seams(
         patch("modulo.db.rls.set_rls_org", AsyncMock()),
         patch("modulo.db.rls.set_rls_execution_context", AsyncMock()),
         patch("modulo.core.pipeline_engine.watchdog_retry.async_sessionmaker", return_value=factory),
-        # FAR-2053: the stall veto reads the run's delivery markers before the
-        # retry decision. These tests exercise the retry/terminal path with a
-        # mock engine, so the marker reader is stubbed to "no markers" — the
-        # same no-veto outcome a genuinely marker-less run produces.
-        patch("modulo.core.pipeline_execution._read_delivery_markers", AsyncMock(return_value=None)),
     )
 
 
