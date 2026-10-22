@@ -167,6 +167,15 @@ def fire_cron_trigger(request, client):
     )
 
     session = AsyncMock()
+    # set_rls_*/scanners read these AsyncSession members synchronously; a
+    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+    session.add_all = MagicMock()
+    session.expunge = MagicMock()
+    # set_rls_* reads these AsyncSession members synchronously; a bare
+    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+    session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
+    session.info = {}
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

@@ -450,6 +450,18 @@ def _drive_model_backend_crud(
         return MagicMock()
 
     mock_session = AsyncMock()
+    # set_rls_*/scanners read these AsyncSession members synchronously; a
+    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+    mock_session.add_all = MagicMock()
+    mock_session.expunge = MagicMock()
+    _bdd_nested_cm = AsyncMock()
+    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
+    # set_rls_* reads these AsyncSession members synchronously; a bare
+    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+    mock_session.in_transaction = MagicMock(return_value=True)
+    mock_session.info = {}
     configure_mock_session(mock_session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
@@ -1003,6 +1015,19 @@ def _submit_model_backend_save(ctx: dict, *, method: str, body: dict) -> None:
     mb.last_health_check_error = None
 
     mock_session = AsyncMock()
+    # set_rls_*/scanners read these AsyncSession members synchronously; a
+    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+    mock_session.add_all = MagicMock()
+    mock_session.expunge = MagicMock()
+    _bdd_nested_cm = AsyncMock()
+    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
+    # set_rls_* reads these AsyncSession members synchronously; a bare
+    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+    mock_session.in_transaction = MagicMock(return_value=True)
+    mock_session.add = MagicMock()
+    mock_session.info = {}
     configure_mock_session(mock_session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)

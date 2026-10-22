@@ -443,7 +443,11 @@ def step_wrong_api_key_request(request: Any, ctx: dict[str, Any]) -> None:
 
     def shaped_factory() -> MagicMock:
         shaped = MagicMock()
-        shaped.in_transaction = AsyncMock(return_value=False)
+        # in_transaction() is a SYNCHRONOUS AsyncSession member: an AsyncMock
+        # child returns a never-awaited coroutine (PytestUnraisableException),
+        # not a bool. The key-row read is refused before any RLS preamble runs,
+        # so the transaction state is immaterial here.
+        shaped.in_transaction = MagicMock(return_value=True)
         shaped.get_bind = MagicMock(return_value=MagicMock(dialect=MagicMock(name="sqlite")))
         # The key-row read must report NO row so the credential is refused.
         _shaped_execute(shaped, [MagicMock(scalar_one_or_none=MagicMock(return_value=None))])

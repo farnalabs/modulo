@@ -152,6 +152,19 @@ def batch_run_triggered(ctx: dict[str, Any]) -> None:
 
     async def _run():
         session = AsyncMock()
+        # set_rls_*/scanners read these AsyncSession members synchronously; a
+        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+        session.add_all = MagicMock()
+        session.expunge = MagicMock()
+        _bdd_nested_cm = AsyncMock()
+        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
+        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
+        # set_rls_* reads these AsyncSession members synchronously; a bare
+        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+        session.in_transaction = MagicMock(return_value=True)
+        session.add = MagicMock()
+        session.info = {}
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -213,6 +226,19 @@ def sequential_run_triggered(ctx: dict[str, Any]) -> None:
 
     async def _run():
         session = AsyncMock()
+        # set_rls_*/scanners read these AsyncSession members synchronously; a
+        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+        session.add_all = MagicMock()
+        session.expunge = MagicMock()
+        _bdd_nested_cm = AsyncMock()
+        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
+        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
+        # set_rls_* reads these AsyncSession members synchronously; a bare
+        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+        session.in_transaction = MagicMock(return_value=True)
+        session.add = MagicMock()
+        session.info = {}
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -274,6 +300,19 @@ def coverage_gap_signal_computed(ctx: dict[str, Any]) -> None:
     scalar_result = MagicMock()
     scalar_result.scalars.return_value = [eval_def]
     session = AsyncMock()
+    # set_rls_*/scanners read these AsyncSession members synchronously; a
+    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+    session.add_all = MagicMock()
+    session.expunge = MagicMock()
+    _bdd_nested_cm = AsyncMock()
+    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
+    # set_rls_* reads these AsyncSession members synchronously; a bare
+    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+    session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
+    session.info = {}
     session.execute = AsyncMock(return_value=scalar_result)
 
     async def _run():
@@ -290,6 +329,19 @@ def single_run_triggered(ctx: dict[str, Any]) -> None:
 
     async def _run():
         session = AsyncMock()
+        # set_rls_*/scanners read these AsyncSession members synchronously; a
+        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+        session.add_all = MagicMock()
+        session.expunge = MagicMock()
+        _bdd_nested_cm = AsyncMock()
+        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
+        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
+        # set_rls_* reads these AsyncSession members synchronously; a bare
+        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+        session.in_transaction = MagicMock(return_value=True)
+        session.add = MagicMock()
+        session.info = {}
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -500,6 +552,19 @@ def batch_comparison_computed(ctx: dict[str, Any]) -> None:
 
     async def _run():
         session = AsyncMock()
+        # set_rls_*/scanners read these AsyncSession members synchronously; a
+        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+        session.add_all = MagicMock()
+        session.expunge = MagicMock()
+        _bdd_nested_cm = AsyncMock()
+        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
+        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
+        # set_rls_* reads these AsyncSession members synchronously; a bare
+        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+        session.in_transaction = MagicMock(return_value=True)
+        session.add = MagicMock()
+        session.info = {}
 
         def _rows(stmt, *args: Any, **kwargs: Any) -> Any:
             # get_batch_runs select(Run) → .scalars().all()

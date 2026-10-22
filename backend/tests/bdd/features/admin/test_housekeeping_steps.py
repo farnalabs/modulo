@@ -47,6 +47,23 @@ def _sample_results() -> list[CategoryResult]:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    # A SQLAlchemy result object is SYNC; an AsyncMock session's default
+    # execute return_value is another AsyncMock, so result readers
+    # (scalar_one_or_none/scalars/first) return never-awaited coroutines.
+    session.execute.return_value = MagicMock()
+    # set_rls_*/scanners read these AsyncSession members synchronously; a
+    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+    session.add_all = MagicMock()
+    session.expunge = MagicMock()
+    _bdd_nested_cm = AsyncMock()
+    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
+    # set_rls_* reads these AsyncSession members synchronously; a bare
+    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+    session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
+    session.info = {}
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

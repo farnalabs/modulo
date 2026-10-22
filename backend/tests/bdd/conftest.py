@@ -151,6 +151,10 @@ def make_settings() -> Settings:
 
 def make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    # set_rls_*/scanners read these AsyncSession members synchronously; a
+    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+    session.add_all = MagicMock()
+    session.expunge = MagicMock()
     # FAR-1639 (FAR-1629 sweep): in_transaction() and add() are SYNC AsyncSession
     # methods. Bare-AsyncMock children type them as async, so production code
     # reaching set_rls_* (db/rls.py::_ensure_active_transaction) passes the
@@ -187,7 +191,11 @@ def make_mock_session() -> AsyncMock:
     team_mock.email = "testuser@example.com"
     team_mock.is_system_admin = True
     team_mock.active = True
-    hitl_result = AsyncMock()
+    # A SQLAlchemy ``Result`` is a SYNC object. It must be a plain MagicMock:
+    # an AsyncMock result makes any reader not explicitly configured below
+    # (``one()``, ``fetchone()``, ...) return a never-awaited coroutine, which
+    # surfaces later as ``PytestUnraisableExceptionWarning``.
+    hitl_result = MagicMock()
     hitl_result.scalar_one_or_none = MagicMock(return_value=team_mock)
     hitl_result.scalar_one = MagicMock(return_value=0)
     hitl_result.scalar = MagicMock(return_value=0)
@@ -340,7 +348,7 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 def unauth_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     from unittest.mock import AsyncMock, patch
 
-    from modulo.api.dependencies import _get_engine, get_db_session, get_system_db_session
+    from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_system_db_session
     from modulo.api.main import app
     from modulo.settings import get_settings
 
@@ -351,6 +359,7 @@ def unauth_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[get_system_db_session] = _system_session_override
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[_get_session_factory] = lambda: mock_session_factory(mock_session)
 
     sso_patches = [
         patch(
@@ -493,6 +502,27 @@ def none_scalar_result() -> MagicMock:
     return result
 
 
+def mock_session_factory(session: AsyncMock) -> MagicMock:
+    """A ``async_sessionmaker`` double whose ``factory()`` yields *session*.
+
+    ``factory()`` must return an ASYNC CONTEXT MANAGER. A bare
+    ``MagicMock()`` is not one: ``async with MagicMock()`` binds the result of
+    ``AsyncMock.__aenter__``, which is another ASYNC mock, so the first
+    ``session.begin()`` on it returns a never-awaited coroutine and
+    ``async with`` raises ``TypeError: 'coroutine' object does not support the
+    asynchronous context manager protocol`` - leaking the coroutine as a
+    ``PytestUnraisableExceptionWarning``. Yield the real session double instead.
+    """
+
+    def _make_cm() -> MagicMock:
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=session)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        return cm
+
+    return MagicMock(side_effect=_make_cm)
+
+
 @contextlib.contextmanager
 def session_client(
     role: str = "admin",
@@ -508,6 +538,7 @@ def session_client(
     """
     from modulo.api.dependencies import (
         _get_engine,
+        _get_session_factory,
         get_anonymous_plan_context,
         get_db_session,
         get_plan_context,
@@ -538,6 +569,11 @@ def session_client(
         get_settings: make_settings,
         get_db_session: override_session,
         _get_engine: lambda: MagicMock(),
+        # Routes that open their OWN session (run detail's triage/workspace
+        # reads, MCP-style factories) must receive a real async-CM factory that
+        # yields this scenario's session double - a bare MagicMock() factory
+        # binds an AsyncMock as its session and leaks a coroutine per call.
+        _get_session_factory: lambda: mock_session_factory(mock_session),
         get_current_user: lambda: AuthenticatedPrincipal(**principal_kwargs),
         get_current_tenant_user: lambda: TenantPrincipal(**principal_kwargs),
         get_current_tenant_user_or_api_key: lambda: TenantPrincipal(**principal_kwargs),
@@ -797,7 +833,7 @@ def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Gener
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[get_system_db_session] = _system_session_override
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[_get_session_factory] = lambda: MagicMock()
+    app.dependency_overrides[_get_session_factory] = lambda: mock_session_factory(mock_session)
     app.dependency_overrides[get_plan_context] = all_features_plan_context
     app.dependency_overrides[get_anonymous_plan_context] = all_features_plan_context
     if principal_kwargs:

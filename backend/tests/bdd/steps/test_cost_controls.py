@@ -59,6 +59,19 @@ def _enforce_token_budget(tokens: int, ctx: dict[str, Any]) -> None:
     usage = {node_id: {"input_tokens": tokens, "output_tokens": 0, "total_tokens": tokens}}
 
     mock_session = AsyncMock()
+    # set_rls_*/scanners read these AsyncSession members synchronously; a
+    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+    mock_session.add_all = MagicMock()
+    mock_session.expunge = MagicMock()
+    _bdd_nested_cm = AsyncMock()
+    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
+    # set_rls_* reads these AsyncSession members synchronously; a bare
+    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+    mock_session.in_transaction = MagicMock(return_value=True)
+    mock_session.add = MagicMock()
+    mock_session.info = {}
     graph_result = MagicMock()
     graph_result.scalar_one_or_none.return_value = graph_json
     agent_result = MagicMock()
@@ -238,6 +251,23 @@ def _check_spend(cost: str, ctx: dict[str, Any]) -> None:
     mock_team_count.run_count = 3
 
     mock_session = AsyncMock()
+    # A SQLAlchemy result object is SYNC; an AsyncMock session's default
+    # execute return_value is another AsyncMock, so result readers
+    # (scalar_one_or_none/scalars/first) return never-awaited coroutines.
+    mock_session.execute.return_value = MagicMock()
+    # set_rls_*/scanners read these AsyncSession members synchronously; a
+    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+    mock_session.add_all = MagicMock()
+    mock_session.expunge = MagicMock()
+    _bdd_nested_cm = AsyncMock()
+    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
+    # set_rls_* reads these AsyncSession members synchronously; a bare
+    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+    mock_session.in_transaction = MagicMock(return_value=True)
+    mock_session.add = MagicMock()
+    mock_session.info = {}
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -359,6 +389,23 @@ def _check_circuit_breaker(amount: str, ctx: dict[str, Any]) -> None:
     monthly_result.scalar_one.return_value = ctx.get("pipeline_monthly_spend", Decimal(0))
 
     mock_session = AsyncMock()
+    # A SQLAlchemy result object is SYNC; an AsyncMock session's default
+    # execute return_value is another AsyncMock, so result readers
+    # (scalar_one_or_none/scalars/first) return never-awaited coroutines.
+    mock_session.execute.return_value = MagicMock()
+    # set_rls_*/scanners read these AsyncSession members synchronously; a
+    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+    mock_session.add_all = MagicMock()
+    mock_session.expunge = MagicMock()
+    _bdd_nested_cm = AsyncMock()
+    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
+    # set_rls_* reads these AsyncSession members synchronously; a bare
+    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+    mock_session.in_transaction = MagicMock(return_value=True)
+    mock_session.add = MagicMock()
+    mock_session.info = {}
     mock_session.flush = AsyncMock()
 
     dispatch_mock = AsyncMock()
@@ -469,6 +516,23 @@ def admin_reenables_pipeline(pipeline_name: str, ctx: dict[str, Any]) -> None:
     pipeline_result.scalar_one_or_none.return_value = pipeline
 
     mock_session = AsyncMock()
+    # A SQLAlchemy result object is SYNC; an AsyncMock session's default
+    # execute return_value is another AsyncMock, so result readers
+    # (scalar_one_or_none/scalars/first) return never-awaited coroutines.
+    mock_session.execute.return_value = MagicMock()
+    # set_rls_*/scanners read these AsyncSession members synchronously; a
+    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+    mock_session.add_all = MagicMock()
+    mock_session.expunge = MagicMock()
+    _bdd_nested_cm = AsyncMock()
+    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
+    # set_rls_* reads these AsyncSession members synchronously; a bare
+    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+    mock_session.in_transaction = MagicMock(return_value=True)
+    mock_session.add = MagicMock()
+    mock_session.info = {}
     mock_session.flush = AsyncMock()
     update_mock = MagicMock()
 
@@ -825,6 +889,21 @@ def _run_ledger_block(cost: str, ctx: dict[str, Any]) -> None:
         return result
 
     session = AsyncMock()
+    # set_rls_*/scanners read these AsyncSession members synchronously; a
+    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+    session.add_all = MagicMock()
+    session.expunge = MagicMock()
+    # NB: ``begin_nested`` stays a bare AsyncMock here on purpose. This block
+    # drives the REAL ``_ledger_block`` savepoint path, and a working savepoint
+    # CM makes that path attempt the full ledger write, which this deliberately
+    # minimal mock does not stub - the accrual then never rides it and the
+    # scenario asserts 0 awaits. The savepoint coroutine is never awaited in
+    # this shape, so it does not surface as an unraisable warning either.
+    # set_rls_* reads these AsyncSession members synchronously; a bare
+    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+    session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
+    session.info = {}
     session.execute = AsyncMock(side_effect=_execute)
     session.flush = AsyncMock()
 

@@ -853,6 +853,18 @@ def step_feedback_human_provides(ctx, request):
     from modulo.core.feedback_manager import FeedbackManager
 
     mock_session = AsyncMock()
+    # set_rls_*/scanners read these AsyncSession members synchronously; a
+    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+    mock_session.add_all = MagicMock()
+    mock_session.expunge = MagicMock()
+    _bdd_nested_cm = AsyncMock()
+    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
+    # set_rls_* reads these AsyncSession members synchronously; a bare
+    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+    mock_session.in_transaction = MagicMock(return_value=True)
+    mock_session.info = {}
     mock_session.add = MagicMock()
     mock_session.flush = AsyncMock()
 
@@ -887,6 +899,19 @@ def step_feedback_change_status(new_status, ctx, request):
     from modulo.core.feedback_manager import FeedbackManager, InvalidTransitionError
 
     mock_session = AsyncMock()
+    # set_rls_*/scanners read these AsyncSession members synchronously; a
+    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+    mock_session.add_all = MagicMock()
+    mock_session.expunge = MagicMock()
+    _bdd_nested_cm = AsyncMock()
+    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
+    # set_rls_* reads these AsyncSession members synchronously; a bare
+    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+    mock_session.in_transaction = MagicMock(return_value=True)
+    mock_session.add = MagicMock()
+    mock_session.info = {}
     mock_session.get = AsyncMock()
 
     mgr = FeedbackManager(mock_session, ORG_ID)
@@ -927,6 +952,23 @@ def step_feedback_detect_eval_gap(ctx, request):
     from modulo.core.feedback_manager import FeedbackManager
 
     mock_session = AsyncMock()
+    # A SQLAlchemy result object is SYNC; an AsyncMock session's default
+    # execute return_value is another AsyncMock, so result readers
+    # (scalar_one_or_none/scalars/first) return never-awaited coroutines.
+    mock_session.execute.return_value = MagicMock()
+    # set_rls_*/scanners read these AsyncSession members synchronously; a
+    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+    mock_session.add_all = MagicMock()
+    mock_session.expunge = MagicMock()
+    _bdd_nested_cm = AsyncMock()
+    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
+    # set_rls_* reads these AsyncSession members synchronously; a bare
+    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+    mock_session.in_transaction = MagicMock(return_value=True)
+    mock_session.add = MagicMock()
+    mock_session.info = {}
     mock_session.get = AsyncMock()
 
     # Mock a feedback record
@@ -968,6 +1010,19 @@ def step_feedback_spawn_correction(ctx, request):
     from modulo.core.feedback_manager import FeedbackManager
 
     mock_session = AsyncMock()
+    # set_rls_*/scanners read these AsyncSession members synchronously; a
+    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+    mock_session.add_all = MagicMock()
+    mock_session.expunge = MagicMock()
+    _bdd_nested_cm = AsyncMock()
+    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
+    # set_rls_* reads these AsyncSession members synchronously; a bare
+    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+    mock_session.in_transaction = MagicMock(return_value=True)
+    mock_session.add = MagicMock()
+    mock_session.info = {}
     fake_run_id = uuid.uuid4()
 
     # Mock get_run to return a fake run

@@ -119,6 +119,14 @@ def _make_session(
     busy: bool,
 ) -> AsyncMock:
     session = AsyncMock()
+    # set_rls_*/scanners read these AsyncSession members synchronously; a
+    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+    session.add_all = MagicMock()
+    session.expunge = MagicMock()
+    # set_rls_* reads these AsyncSession members synchronously; a bare
+    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
+    session.in_transaction = MagicMock(return_value=True)
+    session.info = {}
     lock_result = MagicMock()
     lock_result.scalar_one.return_value = not busy
     trigger_result = MagicMock()
