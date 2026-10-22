@@ -152,6 +152,7 @@ class _EntrypointHarness:
         self.log_path = self.run_dir / "entrypoint.log"
         self.run_pid_file = self.run_dir / "run-worker.pid"
         self.system_pid_file = self.run_dir / "system-worker.pid"
+        self.term_armed_path = self.run_dir / "workers-term-armed"
         self.deadline_s = deadline_s
         self.ignore_term = ignore_term
         self._write_stubs()
@@ -166,14 +167,29 @@ class _EntrypointHarness:
         # too: falling through to the no-op branch would make it exit
         # immediately and re-register a new PID every second, leaving the
         # drain loop racing a churning (sometimes dead) PID file.
-        saq_command = "exec bash -c 'trap \"\" TERM; exec sleep 300'" if self.ignore_term else "exec sleep 300"
+        #
+        # The TERM-ignoring stub arms its trap and THEN records the fact, in a
+        # single process (``exec`` keeps the PID the wrapper wrote to the PID
+        # file, and an ignored disposition survives it). The marker is what
+        # makes signalling deterministic: the PID file only says "spawned",
+        # which is true well before ``trap "" TERM`` has run.
+        if self.ignore_term:
+            saq_body = "\n".join(
+                (
+                    '      trap "" TERM',
+                    '      printf \'%s\\n\' "$$" >> "$WORKER_TERM_ARMED"',
+                    "      exec sleep 300;;",
+                )
+            )
+        else:
+            saq_body = "      exec sleep 300;;"
         python_stub = f"""#!/bin/bash
 if [ "$1" = "-m" ]; then
   case "$2" in
     modulo.launcher.policy)
       echo "SLIDING_WINDOW_S=300"; echo "SLIDING_CRASH_LIMIT=5"; echo "SLIDING_RESTART_SLEEP_S=1"; exit 0;;
     saq|modulo.core.saq_worker)
-      {saq_command};;
+{saq_body}
     *) exit 0;;
   esac
 fi
@@ -195,6 +211,7 @@ exit 0
             "RUN_WORKER_PID_FILE": str(self.run_pid_file),
             "SYSTEM_WORKER_PID_FILE": str(self.system_pid_file),
             "WORKER_DRAIN_FLAG": str(self.run_dir / "worker-draining"),
+            "WORKER_TERM_ARMED": str(self.term_armed_path),
             "POLICY_ENV_FILE": str(self.run_dir / "policy.env"),
             "FLY_PROCESS_GROUP": "worker",
             "WORKER_HEALTH_PORT": "18082",
@@ -202,6 +219,8 @@ exit 0
         }
 
     def start(self) -> None:
+        # A marker left behind by an earlier run must never satisfy the gate.
+        self.term_armed_path.unlink(missing_ok=True)
         self._log_handle = self.log_path.open("w")
         self.proc = _popen(
             [BASH, str(ENTRYPOINT)],
@@ -211,24 +230,41 @@ exit 0
             start_new_session=True,
         )
 
-    def wait_ready(self, timeout_s: float = 20.0) -> bool:
-        """Wait for the drain trap AND both workers' PID files to be live.
+    def wait_ready(self, timeout_s: float = 20.0, *, poll_s: float = 0.02) -> bool:
+        """Wait until it is genuinely SAFE to signal the workers.
 
-        ``WORKER_READY`` is printed as soon as the trap is installed, but the
-        restart wrappers write the PID files asynchronously. Signalling before
-        they exist makes the drain correctly find nothing to wait for (it takes
-        the ``complete`` branch), so the deadline path under test never runs —
-        the race that made this suite fail intermittently under parallel CI
-        load.
+        ``WORKER_READY`` is printed as soon as the entrypoint's drain trap is
+        installed, but that only covers the parent. The two stub workers must
+        also (a) have been spawned (the PID files) and — when they are supposed
+        to IGNORE SIGTERM — (b) have armed that disposition (the arming marker).
+
+        A PID file becomes visible as soon as the restart wrapper forks the
+        stub, but the stub's ``trap "" TERM`` has not necessarily executed yet.
+        A signal landing in that window kills the stub with SIGTERM, the drain
+        correctly finds nothing to wait for, takes the ``complete`` branch, and
+        the deadline path under test never runs — the race that made this suite
+        fail intermittently under parallel CI load. The PID file says
+        "spawned"; the marker says "SIGTERM is now ignored", and only the
+        latter makes signalling safe.
+
+        ``poll_s`` lets a caller tighten the readiness sampling loop: the
+        default 20 ms samples the PID files several milliseconds after they
+        appear, which is usually already past the trap-arming window —
+        fine for the passivity contract, but far too coarse to *provoke* the
+        race deliberately (see the immediate-signal regression test).
         """
         assert self.proc is not None
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            if "WORKER_READY" in self.log_path.read_text(encoding="utf-8") and self._workers_registered():
+            if (
+                "WORKER_READY" in self.log_path.read_text(encoding="utf-8")
+                and self._workers_registered()
+                and (not self.ignore_term or self._term_traps_armed())
+            ):
                 return True
             if self.proc.poll() is not None:
                 return False
-            time.sleep(0.02)
+            time.sleep(poll_s)
         return False
 
     def _workers_registered(self) -> bool:
@@ -237,6 +273,36 @@ exit 0
                 pid = int(path.read_text(encoding="utf-8").strip())
             except (OSError, ValueError):
                 return False
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return False
+        return True
+
+    def _term_traps_armed(self) -> bool:
+        """True once both TERM-ignoring stubs have recorded an installed trap.
+
+        Matched against the marker the stub writes AFTER ``trap "" TERM``, so
+        an alive-but-not-yet-armed stub cannot satisfy it. Two distinct live
+        PIDs are required because there are two SAQ workers (runs + system).
+        """
+        try:
+            raw = self.term_armed_path.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        pids: set[int] = set()
+        for line in raw.splitlines():
+            entry = line.strip()
+            if not entry:
+                continue
+            try:
+                pids.add(int(entry))
+            except ValueError:
+                # A torn append: treat as not-yet-ready and retry.
+                return False
+        if len(pids) < 2:
+            return False
+        for pid in pids:
             try:
                 os.kill(pid, 0)
             except OSError:
@@ -310,3 +376,42 @@ def test_entrypoint_drain_is_bounded_when_a_worker_ignores_sigterm(tmp_path: Pat
         assert "deadline (2s) reached" in log, log
     finally:
         harness.cleanup()
+
+
+@needs_bash
+def test_immediate_sigterm_after_readiness_always_reaches_the_drain_deadline(tmp_path: Path) -> None:
+    """Repeat the ready→SIGTERM race across cycles: the deadline must always win.
+
+    The single-shot test above passes even when the harness signals inside the
+    window where a stub is alive but has not yet run ``trap "" TERM``: both
+    stubs die from SIGTERM, the drain takes the ``complete`` branch, and the
+    assertion would fail only intermittently (under parallel CI load). This
+    test makes that window the common case by signalling the instant
+    ``wait_ready()`` returns, ten times over, with fresh harnesses each cycle.
+
+    It fails against the old ``exec bash -c 'trap "" TERM; exec sleep 300'``
+    stub whenever the signal lands before the inner shell arms the trap, and is
+    deterministic once readiness also requires the arming marker.
+
+    ``wait_ready`` is driven with a 1 ms poll: the default 20 ms samples the
+    PID files several milliseconds after they appear — by which time the trap
+    has usually armed, so the signal would land harmlessly and the race would
+    stay unexercised. Sampling tight to the stub's spawn puts the signal inside
+    the fork→`trap` window whenever one exists.
+    """
+    for cycle in range(10):
+        cycle_dir = tmp_path / f"cycle-{cycle}"
+        cycle_dir.mkdir()
+        harness = _EntrypointHarness(cycle_dir, deadline_s=2, ignore_term=True)
+        try:
+            harness.start()
+            assert harness.wait_ready(poll_s=0.001), f"cycle {cycle}: entrypoint never became ready:\n{harness.log()}"
+            rc = harness.stop(timeout_s=20)
+            log = harness.log()
+            assert rc == 0, f"cycle {cycle}: entrypoint exited {rc}:\n{log}"
+            assert "deadline (2s) reached" in log, (
+                f"cycle {cycle}: a worker was killed by the signal before it armed its TERM trap, so the "
+                f"drain took the `complete` branch instead of the deadline branch:\n{log}"
+            )
+        finally:
+            harness.cleanup()
