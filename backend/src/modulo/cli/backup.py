@@ -110,11 +110,16 @@ __all__ = ["MANIFEST_VERSION", "backup", "cli", "restore"]
 
 # ── URL helpers ──────────────────────────────────────────────────────────────
 
+# SQLAlchemy asyncpg driver scheme, shared by the URL normalisers below
+# (kept module-local to match settings.py / db/url_utils.py, which each own
+# the same private constant).
+_POSTGRES_ASYNC_PREFIX = "postgresql+asyncpg://"
+
 
 def _resolve_url(db_url: str | None) -> str:
     """Resolve a raw PostgreSQL connection string from --db-url or settings."""
     raw = db_url or get_settings().database_url
-    for prefix in ("postgresql+asyncpg://", "postgresql+psycopg://"):
+    for prefix in (_POSTGRES_ASYNC_PREFIX, "postgresql+psycopg://"):
         if raw.startswith(prefix):
             raw = "postgresql://" + raw[len(prefix) :]
     return raw
@@ -1149,7 +1154,7 @@ def _url_role(url: str) -> str:
     return urllib.parse.unquote(urllib.parse.urlsplit(url).username or "")
 
 
-_APP_URL_PREFIXES = ("postgresql+asyncpg://", "postgresql+psycopg://", "postgresql://", "postgres://")
+_APP_URL_PREFIXES = (_POSTGRES_ASYNC_PREFIX, "postgresql+psycopg://", "postgresql://", "postgres://")
 
 
 def _url_display(url: str) -> str:
@@ -1172,7 +1177,7 @@ def _as_asyncpg_url(url: str) -> str:
     """Normalise a Postgres URL to the ``postgresql+asyncpg://`` SQLAlchemy form."""
     for prefix in _APP_URL_PREFIXES:
         if url.startswith(prefix):
-            return "postgresql+asyncpg://" + url[len(prefix) :]
+            return _POSTGRES_ASYNC_PREFIX + url[len(prefix) :]
     raise click.ClickException(
         f"Cannot use {_url_display(url)} as the application connection URL — expected a "
         "postgresql:// URL. Pass --app-db-url with the app role's Postgres URL."
