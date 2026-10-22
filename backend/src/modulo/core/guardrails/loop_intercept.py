@@ -375,6 +375,20 @@ async def _evaluate_event(
     return fired, None
 
 
+def _should_pass_without_evaluation(
+    config: LoopInterceptConfig,
+    definitions: Sequence[EvalDefinition],
+    tool_name: str,
+    direction: str,
+) -> bool:
+    if not config.enabled or not definitions:
+        return True
+    if not tool_matches_patterns(tool_name, config.intercepted_tool_patterns):
+        # Read-only/local-only calls pass through (ADR 044 amendment).
+        return True
+    return direction == "after" and not config.intercept_tool_results
+
+
 def _redaction_policies(definitions: Sequence[EvalDefinition]) -> tuple[list[Any], str]:
     """Collect static redaction policies from redact-action guardrails.
 
@@ -432,12 +446,7 @@ async def run_loop_interception(
 
     start = time.monotonic()
 
-    if not config.enabled or not definitions:
-        return _pass_outcome(tool_name, direction, start), []
-    if not tool_matches_patterns(tool_name, config.intercepted_tool_patterns):
-        # Read-only/local-only calls pass through (ADR 044 amendment).
-        return _pass_outcome(tool_name, direction, start), []
-    if direction == "after" and not config.intercept_tool_results:
+    if _should_pass_without_evaluation(config, definitions, tool_name, direction):
         return _pass_outcome(tool_name, direction, start), []
 
     payload = serialize_tool_event(tool_name, args, direction, result_summary)
