@@ -11,7 +11,7 @@ from modulo.model_backends.base import (
     ModelBackendBase,
     openai_compatible_health_check,
     serialize_structured_output,
-    validate_backend_endpoint,
+    validate_custom_endpoint,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,8 +40,16 @@ class AnthropicBackend(ModelBackendBase):
         anthropic_api_url: str | None = None,
         **default_params: Any,
     ) -> None:
+        if anthropic_api_url:
+            # FAR-2046 / FAR-512: a custom endpoint must never bypass the SSRF
+            # gate. ChatAnthropic constructs its own httpx clients internally
+            # and exposes no http_client/http_async_client hook, so the pinned
+            # transport cannot be injected — resolve and validate the host here
+            # and fail closed on a private/internal target (see
+            # ``validate_custom_endpoint`` for the documented rebinding
+            # residual). Do not replace this with a bare URL pass-through.
+            validate_custom_endpoint(anthropic_api_url)
         self._base_url = anthropic_api_url or ANTHROPIC_BASE_URL
-        validate_backend_endpoint(anthropic_api_url)
         model_kwargs: dict[str, Any] = dict(default_params)
         if anthropic_api_url:
             model_kwargs["anthropic_api_url"] = anthropic_api_url

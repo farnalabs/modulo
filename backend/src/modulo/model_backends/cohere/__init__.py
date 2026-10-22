@@ -9,7 +9,7 @@ from modulo.model_backends.base import (
     LangChainChatForwardingMixin,
     ModelBackendBase,
     openai_compatible_health_check,
-    validate_backend_endpoint,
+    validate_custom_endpoint,
 )
 
 COHERE_BASE_URL = "https://api.cohere.ai/v1"
@@ -28,11 +28,22 @@ class CohereBackend(LangChainChatForwardingMixin, ModelBackendBase):
         base_url: str | None = None,
         **default_params: Any,
     ) -> None:
+        if base_url:
+            # FAR-2046 / FAR-512: a custom endpoint must never bypass the SSRF
+            # gate. ChatCohere's validator builds its own cohere.Client /
+            # cohere.AsyncClient and offers no HTTP-client injection point, so
+            # the pinned transport cannot be attached — resolve and validate
+            # the host here and fail closed on a private/internal target (see
+            # ``validate_custom_endpoint`` for the documented rebinding
+            # residual). Do not replace this with a bare URL pass-through.
+            validate_custom_endpoint(base_url)
         self._base_url = base_url or COHERE_BASE_URL
-        validate_backend_endpoint(base_url)
         model_kwargs: dict[str, Any] = dict(default_params)
         if base_url:
             model_kwargs["base_url"] = base_url
+        # FAR-2046: ``cohere_api_key`` is the field ChatCohere reads; the
+        # previous ``api_key=`` spelling was not a ChatCohere field and left the
+        # key unset (the SDK then raised / read CO_API_KEY).
         self._model = ChatCohere(model=model_id, cohere_api_key=api_key, **model_kwargs)
         self._backend_id = f"cohere/{model_id}"
         self._api_key = api_key
