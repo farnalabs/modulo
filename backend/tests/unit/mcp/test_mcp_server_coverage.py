@@ -812,6 +812,42 @@ class TestToolDbShell:
         result = await handler()
         assert result["error"] == "validation_failed"
 
+    async def test_starlette_http_with_a_structured_detail(self) -> None:
+        """The judge-write freeze's code + hint must reach the MCP caller."""
+        detail = {
+            "error": "judge_config_legacy_read_only",
+            "message": "frozen legacy config",
+            "hint": "migrate it",
+        }
+
+        @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail", handle_http_exception=True)
+        async def handler() -> dict[str, Any]:
+            raise StarletteHTTPException(status_code=422, detail=detail)
+
+        result = await handler()
+        assert result["error"] == "validation_failed"
+        assert result["code"] == "judge_config_legacy_read_only"
+        assert result["detail"] == "frozen legacy config"
+        assert result["hint"] == "migrate it"
+
+    async def test_starlette_http_structured_detail_accepts_the_code_key(self) -> None:
+        @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="failed", handle_http_exception=True)
+        async def handler() -> dict[str, Any]:
+            raise StarletteHTTPException(status_code=422, detail={"code": "legacy_read_only"})
+
+        result = await handler()
+        assert result["code"] == "legacy_read_only"
+        assert result["detail"] == "failed"
+
+    async def test_a_structured_detail_keeps_the_shells_validation_code(self) -> None:
+        @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="failed", handle_http_exception=True)
+        async def handler() -> dict[str, Any]:
+            raise StarletteHTTPException(status_code=500, detail={"error": "x", "detail": "boom"})
+
+        result = await handler()
+        assert result["error"] == "validation_failed"
+        assert result["code"] == "x"
+
     async def test_integrity_error_with_detail(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail="constraint violated: {orig}", fallback="fail")
         async def handler() -> dict[str, Any]:
@@ -900,6 +936,29 @@ class TestToolDbShell:
 
 
 # ─── Validate sandbox nodes ────────────────────────────────────────
+
+
+class TestToolExceptionError:
+    def test_a_structured_http_detail_is_preserved(self) -> None:
+        exc = StarletteHTTPException(
+            status_code=422,
+            detail={"error": "judge_config_legacy_read_only", "detail": "frozen", "hint": "migrate"},
+        )
+
+        result = ms._tool_exception_error("fallback", exc, "mcp.tool")
+
+        assert result["error"] == "validation_failed"
+        assert result["code"] == "judge_config_legacy_read_only"
+        assert result["detail"] == "frozen"
+        assert result["hint"] == "migrate"
+
+    def test_a_plain_http_detail_uses_the_tool_error(self) -> None:
+        exc = StarletteHTTPException(status_code=400, detail="plain")
+
+        result = ms._tool_exception_error("fallback", exc, "mcp.tool")
+
+        assert result["error"] == "validation_failed"
+        assert result["detail"] == "fallback"
 
 
 class TestValidateSandboxNodes:
