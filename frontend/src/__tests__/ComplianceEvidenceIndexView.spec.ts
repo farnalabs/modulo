@@ -122,9 +122,8 @@ describe('ComplianceEvidenceIndexView', () => {
     const wrapper = mountView()
     await settle()
 
-    expect(wrapper.text()).toContain('Unknown status')
+    expect(wrapper.text()).toContain('Unknown (future_status)')
     expect(wrapper.text()).toContain('Unknown (future_source)')
-    expect(wrapper.text()).not.toContain('future_status')
   })
 
   it('renders a permission-restricted state instead of a generic retry error', async () => {
