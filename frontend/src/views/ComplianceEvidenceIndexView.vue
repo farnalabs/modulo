@@ -63,8 +63,8 @@
         <p class="mt-2 font-mono text-xs">{{ lowerBoundArtifacts.join(', ') }}</p>
       </div>
 
+      <h2 id="evidence-index-pack-heading" class="sr-only">{{ $t('views.ComplianceEvidenceIndex.pack_heading') }}</h2>
       <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-labelledby="evidence-index-pack-heading">
-        <h2 id="evidence-index-pack-heading" class="sr-only">{{ $t('views.ComplianceEvidenceIndex.pack_heading') }}</h2>
         <div class="card p-4" data-testid="compliance-evidence-index-pack-version">
           <dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{{ $t('views.ComplianceEvidenceIndex.pack_version') }}</dt>
           <dd class="mt-1 font-mono text-sm">{{ indexData.pack_version }}</dd>
@@ -238,7 +238,9 @@ function statusClass(status: string): string {
 function statusLabel(status: string): string {
   const key = `views.ComplianceEvidenceIndex.status_${status}`
   const translated = $t(key)
-  return translated === key ? $t('views.ComplianceEvidenceIndex.status_unknown') : translated
+  return translated === key
+    ? $t('views.ComplianceEvidenceIndex.unknown_value', { value: status })
+    : translated
 }
 
 function provenanceLabel(provenance: string): string {
