@@ -36,6 +36,7 @@ from modulo.api.routes import product_analytics as pa_module
 from modulo.api.routes.admin import _run_admin_rls_txn
 from modulo.api.routes.product_analytics import post_consent
 from modulo.auth.jwt import TenantPrincipal
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -143,6 +144,7 @@ def _principal() -> TenantPrincipal:
 
 def _failing_session(exc: Exception) -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
 
     @asynccontextmanager
     async def _begin() -> AsyncGenerator[None, None]:

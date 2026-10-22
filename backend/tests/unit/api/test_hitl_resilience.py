@@ -25,7 +25,7 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.hitl_manager import NotTeamMemberError, RunNotAwaitingError
 from modulo.db.crud.hitl_review_config import EVENT_HUMAN_ONLY_DENIED, MSG_HUMAN_ONLY_DENY, MSG_HUMAN_ONLY_UNRESOLVED
 from modulo.settings import Settings, get_settings
-from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -1957,6 +1957,7 @@ class TestPendingRollbackErrorIs503Not500:
 
 def _decision_session_double() -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = MagicMock(__aenter__=AsyncMock(return_value=None), __aexit__=AsyncMock(return_value=False))
     session.begin = MagicMock(return_value=begin_cm)
     return session
