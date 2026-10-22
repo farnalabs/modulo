@@ -18,12 +18,18 @@ class GeminiBackend(LangChainChatForwardingMixin, ModelBackendBase):
     supports_tools: bool = True
     supports_native_structured_output: bool = False
 
-    def __init__(self, api_key: str, model_id: str, **default_params: Any) -> None:
-        self._model = ChatGoogleGenerativeAI(
-            model=model_id,
-            api_key=api_key,
-            **default_params,
-        )
+    def __init__(
+        self,
+        api_key: str,
+        model_id: str,
+        base_url: str | None = None,
+        **default_params: Any,
+    ) -> None:
+        self._base_url = base_url or GEMINI_BASE_URL
+        model_kwargs: dict[str, Any] = dict(default_params)
+        if base_url:
+            model_kwargs["base_url"] = base_url
+        self._model = ChatGoogleGenerativeAI(model=model_id, api_key=api_key, **model_kwargs)
         self._backend_id = f"gemini/{model_id}"
         self._api_key = api_key
 
@@ -36,7 +42,7 @@ class GeminiBackend(LangChainChatForwardingMixin, ModelBackendBase):
 
     async def health_check(self) -> HealthResult:
         return await openai_compatible_health_check(
-            base_url=GEMINI_BASE_URL,
+            base_url=self._base_url,
             api_key=None,
             extra_headers={"x-goog-api-key": self._api_key},
         )

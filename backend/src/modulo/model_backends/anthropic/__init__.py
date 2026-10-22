@@ -32,8 +32,18 @@ class AnthropicBackend(ModelBackendBase):
     supports_native_structured_output: bool = True
     _status_error_types: ClassVar[tuple[type[Exception], ...]] = (AnthropicStatusError,)
 
-    def __init__(self, api_key: str, model_id: str, **default_params: Any) -> None:
-        self._model = ChatAnthropic(model=model_id, api_key=api_key, **default_params)
+    def __init__(
+        self,
+        api_key: str,
+        model_id: str,
+        anthropic_api_url: str | None = None,
+        **default_params: Any,
+    ) -> None:
+        self._base_url = anthropic_api_url or ANTHROPIC_BASE_URL
+        model_kwargs: dict[str, Any] = dict(default_params)
+        if anthropic_api_url:
+            model_kwargs["anthropic_api_url"] = anthropic_api_url
+        self._model = ChatAnthropic(model=model_id, api_key=api_key, **model_kwargs)
         self._backend_id = f"anthropic/{model_id}"
         self._api_key = api_key
 
@@ -46,7 +56,7 @@ class AnthropicBackend(ModelBackendBase):
 
     async def health_check(self) -> HealthResult:
         return await openai_compatible_health_check(
-            base_url=ANTHROPIC_BASE_URL,
+            base_url=self._base_url,
             api_key=None,
             extra_headers={"x-api-key": self._api_key, "anthropic-version": "2023-06-01"},
         )
