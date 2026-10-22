@@ -26362,14 +26362,23 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description Handled sign-in failure: redirect to the frontend login page with a whitelisted ``sso_error`` code; there is no response body. */
+            303: {
                 headers: {
+                    /** @description URL the browser is redirected to. */
+                    Location?: string;
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": unknown;
+                content?: never;
+            };
+            /** @description Success: redirect to the frontend callback URL. The access token is carried in the URL fragment; there is no response body. */
+            307: {
+                headers: {
+                    /** @description URL the browser is redirected to. */
+                    Location?: string;
+                    [name: string]: unknown;
                 };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -26379,6 +26388,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ProblemDetail"];
                 };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -26395,14 +26411,23 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description Handled sign-in failure: redirect to the frontend login page with a whitelisted ``sso_error`` code; there is no response body. */
+            303: {
                 headers: {
+                    /** @description URL the browser is redirected to. */
+                    Location?: string;
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": unknown;
+                content?: never;
+            };
+            /** @description Success: redirect to the frontend callback URL. The access token is carried in the URL fragment; there is no response body. */
+            307: {
+                headers: {
+                    /** @description URL the browser is redirected to. */
+                    Location?: string;
+                    [name: string]: unknown;
                 };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -26412,6 +26437,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ProblemDetail"];
                 };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -26523,14 +26555,23 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description Handled sign-in failure: redirect to the frontend login page with a whitelisted ``sso_error`` code; there is no response body. */
+            303: {
                 headers: {
+                    /** @description URL the browser is redirected to. */
+                    Location?: string;
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": unknown;
+                content?: never;
+            };
+            /** @description Success: redirect to the frontend callback URL. The access token is carried in the URL fragment; there is no response body. */
+            307: {
+                headers: {
+                    /** @description URL the browser is redirected to. */
+                    Location?: string;
+                    [name: string]: unknown;
                 };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -26540,6 +26581,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ProblemDetail"];
                 };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
