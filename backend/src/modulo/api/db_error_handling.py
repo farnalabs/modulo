@@ -309,7 +309,12 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
     """
     try:
         raise exc
-    except BaseException:
+    except Exception:  # NOSONAR - installs exc so _log.exception keeps the traceback; arm classifies, never swallows
+        # ``Exception``, not ``BaseException`` (S5754): every caller of the
+        # classifier passes an ``Exception`` instance (all of them catch
+        # ``Exception``), and the passthrough arms' action IS to re-raise
+        # unchanged - so an exception that is not an ``Exception`` escapes
+        # here identically to how the ``_reraise`` arm would return it.
         for exc_type, handler in _EXCEPTION_HANDLERS:
             if isinstance(exc, exc_type):
                 handler(exc, log_prefix)
