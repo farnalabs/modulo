@@ -30,7 +30,7 @@ from modulo.core.graph_validator._types import ValidationResult
 from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied
 from modulo.db.crud.pipeline_folder import create_folder, update_folder
 from modulo.settings import Settings, get_settings
-from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -2789,6 +2789,7 @@ def _folder_parent_chain_session(parent_chain: dict[uuid.UUID, uuid.UUID | None]
     ``"parent_id" in compiled.string`` discrimination here.
     """
     session = AsyncMock()
+    configure_rls_preamble(session)
 
     def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
         compiled = stmt.compile()  # type: ignore[attr-defined]

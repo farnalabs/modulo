@@ -40,7 +40,7 @@ from modulo.db.crud.pipeline import (
     update_pipeline,
 )
 from modulo.settings import Settings, get_settings
-from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -126,6 +126,7 @@ class TestThresholdChangeAllowed:
 
 def _crud_session(pipeline: object | None = None) -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.add = MagicMock()
     # FAR-1639: the RLS preamble calls ``session.in_transaction()`` with a
     # SYNC call site; a bare AsyncMock child returns an un-awaited coroutine
