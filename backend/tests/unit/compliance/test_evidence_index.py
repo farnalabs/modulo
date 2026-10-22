@@ -803,7 +803,13 @@ class TestHitlScanBoundary:
         assert entry.record_count == self._LIMIT + 1
         assert entry.detail["human_only_scan_truncated"] is True
         assert entry.detail["human_only_counts_are_lower_bounds"] is True
-        assert entry.detail["human_only_gate_decisions"] <= self._LIMIT
+        # The 4-row window holds exactly three human-only decisions and two
+        # approvals under EITHER sort direction. Dropping the ``.limit()``
+        # clause or an off-by-one window size yields 4 decisions here, so a
+        # ``<=`` bound would absorb the very mutations this boundary exists
+        # to catch.
+        assert entry.detail["human_only_gate_decisions"] == 3
+        assert entry.detail["human_only_gate_approvals"] == 2
 
 
 class TestCollectorQueryScoping:
