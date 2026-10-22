@@ -1374,16 +1374,16 @@ class TestRollingAnomalyDetection:
         """The rule is strictly ``> 2x`` — a day at exactly 2x stays quiet."""
         from modulo.api.routes.costs import _build_rolling_anomalies
 
-        assert _build_rolling_anomalies(self._series([100.0] * 7 + [200.0])) == []
+        assert not _build_rolling_anomalies(self._series([100.0] * 7 + [200.0]))
 
     def test_zero_baseline_never_flags(self) -> None:
         """A week of zero spend gives no ratio to compare against (no division by zero)."""
         from modulo.api.routes.costs import _build_rolling_anomalies
 
-        assert _build_rolling_anomalies(self._series([0.0] * 7 + [50.0])) == []
+        assert not _build_rolling_anomalies(self._series([0.0] * 7 + [50.0]))
 
     def test_first_seven_days_have_no_baseline_and_are_skipped(self) -> None:
         """Days without a full prior week cannot be judged, however large they are."""
         from modulo.api.routes.costs import _build_rolling_anomalies
 
-        assert _build_rolling_anomalies(self._series([1000.0] * 7)) == []
+        assert not _build_rolling_anomalies(self._series([1000.0] * 7))
