@@ -956,6 +956,20 @@ class TestExportOrgData:
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
+        # Track whether the snapshot export ran before the premise re-check.
+        snapshot_ran = {"value": False}
+
+        # Wrap _collect_org_export_in_snapshot to mark that it ran.
+        import modulo.db.crud.org_deletion as org_deletion_mod
+
+        original_collect = org_deletion_mod._collect_org_export_in_snapshot
+
+        async def _track_snapshot(*args: Any, **kwargs: Any) -> Any:
+            snapshot_ran["value"] = True
+            return await original_collect(*args, **kwargs)
+
+        monkeypatch.setattr(org_deletion_mod, "_collect_org_export_in_snapshot", _track_snapshot)
+
         # Start request_org_deletion in one session — we'll intercept it
         # between snapshot and FSM lock by monkeypatching the lock acquisition.
         deletion_session = factory()
@@ -997,6 +1011,9 @@ class TestExportOrgData:
         with pytest.raises(ValueError, match=r"Organisation not found|already deleted"):
             await request_org_deletion(deletion_session, org_id, user_id)
 
+        # Assert that the snapshot export collection ran before the premise re-check.
+        assert snapshot_ran["value"], "snapshot export did not run before premise re-check"
+
         await deletion_session.rollback()
         await deletion_session.close()
 
@@ -1006,9 +1023,9 @@ class TestExportOrgData:
         """Snapshot isolation pinned: assert the live-capture path actually runs
         REPEATABLE READ READ ONLY on its own connection.
 
-        We probe the transaction isolation level from inside the collector by
-        monkeypatching _collect_org_export to run a query that returns the
-        current transaction isolation level.
+        We probe the transaction isolation level and read-only status from inside
+        the collector by monkeypatching _collect_org_export to run queries that
+        return the current transaction isolation level and read-only state.
         """
         from modulo.db.crud.org_deletion import export_org_data
 
@@ -1016,8 +1033,9 @@ class TestExportOrgData:
         user_id = await _create_user(db_engine, org_id, "snapshot@test.com")
         await _create_pipeline(db_engine, org_id, "Live Pipeline", user_id)
 
-        # Capture the isolation level observed inside the snapshot.
+        # Capture the isolation level and read-only status observed inside the snapshot.
         captured_isolation: dict[str, str] = {}
+        captured_read_only: dict[str, str] = {}
 
         import modulo.db.crud.org_deletion as org_deletion_mod
 
@@ -1027,6 +1045,9 @@ class TestExportOrgData:
             # Query the current transaction isolation level.
             result = await session.execute(text("SHOW transaction_isolation"))
             captured_isolation["level"] = result.scalar_one()
+            # Query the current transaction read-only status.
+            result_ro = await session.execute(text("SHOW transaction_read_only"))
+            captured_read_only["status"] = result_ro.scalar_one()
             return await original_collect(session, org)
 
         monkeypatch.setattr(org_deletion_mod, "_collect_org_export", _probe_isolation)
@@ -1039,6 +1060,11 @@ class TestExportOrgData:
         # Postgres reports "repeatable read" for REPEATABLE READ isolation.
         assert captured_isolation.get("level", "").lower() == "repeatable read", (
             f"expected REPEATABLE READ isolation, got {captured_isolation.get('level')!r}"
+        )
+        # The snapshot must be READ ONLY.
+        # Postgres reports "on" for READ ONLY transactions.
+        assert captured_read_only.get("status", "").lower() == "on", (
+            f"expected READ ONLY transaction, got {captured_read_only.get('status')!r}"
         )
 
 

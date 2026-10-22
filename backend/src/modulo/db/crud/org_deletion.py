@@ -23,7 +23,7 @@ from typing import Any
 
 from sqlalchemy import bindparam, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.db.crud.run import batch_delete_old_terminal_runs
 from modulo.db.models.audit_event import AuditEvent
@@ -464,17 +464,13 @@ async def _collect_org_export_in_snapshot(org_id: uuid.UUID, engine: AsyncEngine
     if engine is None:
         engine = get_shared_engine()
 
-    # Create a connection and set REPEATABLE READ isolation via execution_options
-    # BEFORE starting the transaction. execution_options returns an AsyncConnection
-    # coroutine that must be awaited to get the configured connection wrapper.
-    from sqlalchemy.ext.asyncio import AsyncConnection
-
+    # Configure REPEATABLE READ before starting the transaction on PostgreSQL.
+    # execution_options returns the same AsyncConnection after configuring it.
     async with engine.connect() as base_conn:
-        conn: AsyncConnection = await base_conn.execution_options(isolation_level="REPEATABLE READ")
-
-        # SET TRANSACTION READ ONLY is Postgres-specific; skip on SQLite/MariaDB.
-        dialect = conn.dialect.name
+        dialect = base_conn.dialect.name
+        conn: AsyncConnection = base_conn
         if dialect == "postgresql":
+            conn = await base_conn.execution_options(isolation_level="REPEATABLE READ")
             await conn.execute(text("SET TRANSACTION READ ONLY"))
 
         # Bind a session to this connection for ORM queries.

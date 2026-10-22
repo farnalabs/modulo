@@ -275,16 +275,16 @@ unrelated writer or is held across non-lock work.
 | A – pipeline/trigger serialisation | 19 | 1 (R2) | **20** |
 | B – credential rotation | 10 | 0 | **10** |
 | C – entity CRUD | 20 | 0 | **20** |
-| D – operational/other | 12 | 1 (R1) | **13** |
-| **Total** | **61** | **2** | **63** |
+| D – operational/other | 14 | 1 (R1) | **15** |
+| **Total** | **63** | **2** | **65** |
 
 These are the §3 counts as they stand on this branch: the FAR-1801 authoring snapshot
 with D7 retired by FAR-1822, C1/C2/C3/D14 removed by FAR-1832, D9 retired by
 FAR-1833, **D4's row lock removed by FAR-1823**, and the four post-cutover sites added by other work (A19
 `_replace_pipeline_graph_txn`, D15 `_fail_node_deadline_run`, D16
 `_write_terminal_triage_marker`, D17 `_terminalize_aged_nodeless_zombies`).
-FAR-1825 re-ran §1's commands against the branch tip and reads the same **62**
-SQLAlchemy sites (58 `.with_for_update(` + 4 `with_for_update=`), so the inventory
+FAR-1825 re-ran §1's commands against the branch tip and reads the same **63**
+SQLAlchemy sites (59 `.with_for_update(` + 4 `with_for_update=`), so the inventory
 and the measurement agree when D4's removed lock is accounted for; see §9 and §10.
 
 Distinct **locked tables** (by frequency): `runs` (heaviest – A5, A6, A7, A14, A15, A18, R2, D10, D15, D16, D17, R1), `organisations` (C5, C6-generic-fallback, **D1–D3**; D4 is now "none"), `pipelines` (A1–A4, A10–A13, A16, A17, A19), `accounts` (B9, C8), `token_families` (B4–B6), `ScheduledReport` (D8), plus
