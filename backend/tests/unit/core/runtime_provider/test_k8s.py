@@ -344,6 +344,36 @@ class TestCreateWorkspace:
         assert "enforcing CNI" in record.prerequisite
         assert record.organisation_id
 
+    async def test_egress_deny_all_logs_the_declared_posture_and_prerequisite(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """FAR-2068: the canonical ``deny_all`` dialect must warn as well.
+
+        :func:`resolve_egress` canonicalises the profile dialect ``none`` to
+        ``deny_all``, and the pipeline-engine dispatch path carries that
+        canonical value into ``WorkspaceSpec.egress_policy``. Keying the
+        warning on ``none`` alone therefore provisioned a K8s deny-all with
+        no warning at all — exactly the silent posture the warning exists to
+        prevent.
+        """
+        core = AsyncMock()
+        core.read_namespaced_pod.return_value = _pod("Running")
+        provider = _provider(core=core)
+        with caplog.at_level("WARNING", logger="modulo.core.runtime_provider.k8s"):
+            ref = await provider.create_workspace(_spec(egress_policy="deny_all"))
+
+        # The declaration is ACCEPTED: the pod is still created.
+        assert ref.startswith("modulo-ws-")
+        core.create_namespaced_pod.assert_awaited_once()
+
+        records = [r for r in caplog.records if r.message == "k8s.egress.declared_posture"]
+        assert len(records) == 1
+        record = records[0]
+        assert record.levelname == "WARNING"
+        assert record.egress_posture == "declared"
+        assert "workspaceNetworkPolicy.enabled" in record.prerequisite
+        assert "enforcing CNI" in record.prerequisite
+
     async def test_selected_egress_is_refused_at_provisioning(self) -> None:
         """FAR-2068: a direct caller cannot create a pod for ``selected``.
 

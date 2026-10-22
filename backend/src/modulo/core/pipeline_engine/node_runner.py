@@ -11248,11 +11248,16 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # ``spec.egress_policy`` into the SDK's ``allow_internet_access``
         # (deny_all/selected/none -> False; default/None -> True), and the
         # selected-mode allowlist rides the spec's ``workspace_metadata``
-        # under the same key the legacy create stamps. A restrictive
-        # policy is therefore ENFORCED at provision time on this path, so
-        # the earlier "cannot express egress yet — refuse" stopgap is
-        # gone. ``_egress_resolved.refusal`` above still fires for a
-        # genuine tier refusal (e.g. an unrecognised policy).
+        # under the same key the legacy create stamps. On the e2b and docker
+        # tiers a restrictive policy is therefore ENFORCED at provision time,
+        # so the earlier "cannot express egress yet — refuse" stopgap is
+        # gone. It is NOT enforced on kubernetes: that tier provisions under
+        # a DECLARED posture (Modulo authors the Helm NetworkPolicy, the
+        # customer's CNI enforces it) and ``KubernetesRuntimeProvider`` logs
+        # ``k8s.egress.declared_posture`` — accepted, never enforced in-pod.
+        # ``_egress_resolved.refusal`` above still fires for a genuine tier
+        # refusal (e.g. ``selected`` on kubernetes, or an unrecognised
+        # policy).
         _dispatch_spec = WorkspaceSpec(
             environment_profile_id=_runner_binding_env_profile_id() or uuid.UUID(int=0),
             organisation_id=_parse_uuid_opt(org_id) or uuid.UUID(int=0),

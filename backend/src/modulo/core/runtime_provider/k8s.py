@@ -548,11 +548,18 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         DIRECT caller cannot provision a pod for a policy this tier refuses
         before isolation runs:
 
-        - ``none`` is ACCEPTED as a DECLARED posture: Modulo authors the
-          NetworkPolicy rendered from ``deploy/helm/modulo``, the customer's
-          CNI enforces it, and nothing is enforced inside the pod here. A
-          WARNING records that the posture is declared and its prerequisite
-          (``workspaceNetworkPolicy.enabled`` + an enforcing CNI).
+        - BOTH deny-all dialects — ``none`` (the bundled-runner / profile-test
+          spelling) and ``deny_all`` (the canonical value
+          :func:`~modulo.core.pipeline_engine.egress.resolve_egress` resolves
+          to, and the one the pipeline-engine dispatch carries into
+          ``WorkspaceSpec.egress_policy``) — are ACCEPTED as a DECLARED
+          posture: Modulo authors the NetworkPolicy rendered from
+          ``deploy/helm/modulo``, the customer's CNI enforces it, and nothing
+          is enforced inside the pod here. A WARNING records that the posture
+          is declared and its prerequisite
+          (``workspaceNetworkPolicy.enabled`` + an enforcing CNI). Keying that
+          warning on ``none`` alone would provision the far more common
+          ``deny_all`` case silently.
         - ``selected`` is REFUSED at provisioning with the same typed
           :class:`ProviderCapabilityUnsupportedError` that
           :meth:`apply_isolation` raises — the rendered policy's allowlist is
@@ -568,11 +575,17 @@ class KubernetesRuntimeProvider(RuntimeProvider):
                 "that enforces NetworkPolicy; FAR-1051). Configure it there and use a policy "
                 "this tier can enforce."
             )
-        if egress == "none":
+        if egress in ("none", "deny_all"):
             # Fail-loudly-with-a-log (best-effort posture, never a silent
             # downgrade): the deny-all is a DECLARED posture the customer's
             # substrate must enforce, so an operator reading logs is told the
             # prerequisite instead of assuming Modulo enforced it.
+            #
+            # BOTH dialects are treated as the declaration. ``resolve_egress``
+            # canonicalises the profile spelling ``none`` to ``deny_all`` and
+            # the pipeline-engine dispatch carries that canonical value into
+            # the spec, so recognising only ``none`` left the common path
+            # warning-free.
             _log.warning(
                 "k8s.egress.declared_posture",
                 extra={
@@ -1193,12 +1206,13 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         :class:`ProviderCapabilityUnsupportedError` naming the remediation.
         Never a silent downgrade.
 
-        An egress ``none`` claim is NOT enforced here either, but it is a
-        DECLARED posture rather than a refusal: Modulo authors the
-        NetworkPolicy from ``deploy/helm/modulo``, the customer's CNI enforces
-        it, and no in-pod step is attempted. ``selected`` is refused here too
-        (defence-in-depth after :meth:`create_workspace`'s provisioning-time
-        refusal) so a direct caller can never reach an unenforced claim.
+        An egress deny-all claim (``none`` / ``deny_all``) is NOT enforced
+        here either, but it is a DECLARED posture rather than a refusal:
+        Modulo authors the NetworkPolicy from ``deploy/helm/modulo``, the
+        customer's CNI enforces it, and no in-pod step is attempted.
+        ``selected`` is refused here too (defence-in-depth after
+        :meth:`create_workspace`'s provisioning-time refusal) so a direct
+        caller can never reach an unenforced claim.
         """
         egress = (policy.egress_policy or "").strip().lower()
         if egress == "selected":

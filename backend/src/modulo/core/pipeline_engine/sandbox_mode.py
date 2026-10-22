@@ -116,11 +116,17 @@ def derive_sandbox_capabilities(
     ``{capability: bool | None}`` with the RAW mechanical polarity:
 
       ``sandbox.egress``
-          False when the resolved egress policy is ``"deny_all"`` or
-          ``"selected"`` — node_runner maps both to
-          ``allow_internet_access=False``; True when the policy is absent
-          (default) or ``"default"``; None when the declared value is
-          unrecognised.
+          False only when the resolved restrictive policy is genuinely
+          enforced by the tier on its refusal-contract path
+          (``EgressPosture.ENFORCED_BY_SUBSTRATE`` — e.g. a ``deny_all`` on
+          e2b/docker, whose provider maps it to
+          ``allow_internet_access=False``). True for the unrestricted default
+          (no policy, or ``"default"``). None (unknown / fail-closed) when the
+          posture is ``DECLARED`` / ``METADATA_ONLY`` / ``NONE`` — e.g. a
+          Kubernetes ``deny_all``, where Modulo authors the Helm NetworkPolicy
+          and the customer's CNI enforces it, so Modulo never observes that
+          enforcement — or when the value is unrecognised. A block guardrail
+          therefore never certifies a deny the substrate did not prove.
 
           FAR-1085: the resolution now considers BOTH the node's
           ``egress_policy`` AND the profile's ``network_policy`` (via
