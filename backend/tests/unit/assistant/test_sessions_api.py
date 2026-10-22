@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.unit.api.mock_session import configure_mock_session
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.main import app
@@ -66,12 +67,17 @@ def client():
         org_role="admin",
     )
 
-    mock_session = AsyncMock()
+    # Contract-correct double: the route's RLS preamble reads
+    # ``in_transaction()`` / ``get_bind()`` synchronously and the request path
+    # calls ``add()`` synchronously; on a bare AsyncMock each returns a
+    # never-awaited coroutine, surfacing at GC as
+    # PytestUnraisableExceptionWarning (the 2026-10-21 terminal-writer outage
+    # class). ``execute`` is overridden below to model the max() read.
+    mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     mock_session.begin = MagicMock(return_value=begin_cm)
-    mock_session.add = MagicMock()
     scalar_result = MagicMock()
     scalar_result.scalar = MagicMock(return_value=None)
     scalar_result.scalar_one_or_none = MagicMock(return_value=None)
