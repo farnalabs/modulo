@@ -349,7 +349,17 @@ def test_dumped_snapshot_restores_end_to_end(tmp_path: Path, monkeypatch: pytest
 
     with contextlib.ExitStack() as stack:
         stack.enter_context(
-            patch("modulo.cli.backup.get_settings", **{"return_value.fernet_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+            patch(
+                "modulo.cli.backup.get_settings",
+                **{
+                    "return_value.fernet_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    # The restore resolves the APPLICATION role from
+                    # DATABASE_URL (never from --db-url), so the patched
+                    # settings must carry a real string — a bare MagicMock
+                    # attribute is rejected and fails the restore.
+                    "return_value.database_url": "postgresql+asyncpg://modulo:pw@127.0.0.1:15432/modulo",
+                },
+            )
         )
         stack.enter_context(
             patch("modulo.cli.backup._get_schema_versions", return_value=restore_manifest["schema_versions"])
@@ -1890,16 +1900,28 @@ class TestTerminateBootProcessGroup:
         # every call - never a finite list that a call-count change exhausts).
         mock_process.wait.side_effect = subprocess.TimeoutExpired("pg", 30)
 
+        # The POSIX path is simulated on every host by patching sys.platform.
+        # A Windows interpreter has no `signal.SIGKILL` at all, so there the
+        # constant is supplied (and restored) by the patch itself; on POSIX the
+        # REAL constant stays in play and nothing is substituted.
+        real_sigkill = getattr(upgrade_module.signal, "SIGKILL", None)
+        expected_sigkill = real_sigkill if real_sigkill is not None else object()
+        patch_sigkill = (
+            patch.object(upgrade_module.signal, "SIGKILL", expected_sigkill, create=True)
+            if real_sigkill is None
+            else contextlib.nullcontext()
+        )
         with (
             patch.object(upgrade_module.os, "getpgid", return_value=12345, create=True),
             patch.object(upgrade_module.os, "killpg", create=True) as mock_killpg,
             patch.object(upgrade_module.sys, "platform", "linux"),
+            patch_sigkill,
         ):
             upgrade_module._terminate_boot_process_group(mock_process)
         # The FULL ordered escalation: SIGTERM -> wait(30) -> SIGKILL -> wait(10).
         assert mock_killpg.call_args_list == [
             call(12345, upgrade_module.signal.SIGTERM),
-            call(12345, upgrade_module.signal.SIGKILL),
+            call(12345, expected_sigkill),
         ]
         mock_process.wait.assert_any_call(timeout=30)
         mock_process.wait.assert_any_call(timeout=10)

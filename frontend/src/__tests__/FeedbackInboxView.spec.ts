@@ -126,15 +126,17 @@ describe('FeedbackInboxView', () => {
 
   it('falls back to the raw status and the em-dash placeholder for unknown/null fields', async () => {
     // statusLabel() unknown-status fallback: an unrecognized status renders its
-    // raw value rather than a translation key; the null pipeline_name fallback
-    // renders the em-dash placeholder.
+    // raw value rather than a translation key; the null pipeline_name and
+    // feedback_handler_type fallbacks render the em-dash placeholder.
     const wrapper = await mountWithList([
-      record({ id: 'rec-unknown', pipeline_name: null, feedback_status: 'mystery' }),
+      record({ id: 'rec-unknown', pipeline_name: null, feedback_status: 'mystery', feedback_handler_type: null }),
     ])
     const badge = wrapper.findAll('span').find((s) => s.classes().includes('badge'))
     expect(badge?.text()).toBe('mystery')
     const pipelineCell = wrapper.findAll('span').find((s) => s.text() === '—')
     expect(pipelineCell).toBeTruthy()
+    const handlerBadge = wrapper.findAll('span').find((s) => s.classes().includes('rounded-full'))
+    expect(handlerBadge?.text()).toBe('—')
     wrapper.unmount()
   })
 

@@ -14,6 +14,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 ORG_ID = uuid4()
 USER_ID = uuid4()
@@ -68,13 +69,15 @@ def _make_settings() -> Settings:
 
 @pytest.fixture
 def mock_session():
-    session = AsyncMock()
+    # Contract-correct double: the RLS preamble reads ``in_transaction()`` /
+    # ``get_bind()`` / ``add()`` synchronously. The execute result is a plain
+    # ``MagicMock`` (never a child of the AsyncMock) so the route's SYNC
+    # ``result.scalar_one_or_none()`` reads do not orphan a coroutine.
+    session = configure_rls_preamble(AsyncMock())
     session.begin = MagicMock()
     session.begin.return_value.__aenter__.return_value = session
     session.begin.return_value.__aexit__.return_value = None
-    session.execute.return_value.scalar_one_or_none.return_value = None
-    session.execute.return_value.scalar_one.return_value = 0
-    session.execute.return_value.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(return_value=make_empty_execute_result(scalar_value=0))
     session.flush.return_value = None
     return session
 

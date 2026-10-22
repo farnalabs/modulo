@@ -35,8 +35,14 @@ Feature: SSO OIDC Integration
     Then the response status is 303
     And the login redirect reports SSO error "auth_failed"
 
-  Scenario: Team gate blocks OIDC on Community tier
+  Scenario: Community tier still allows OIDC sign-in (degraded authentication)
     Given I do not have a Team license
+    When I initiate OIDC login with "google"
+    Then the response status is 307
+    And I am redirected to the OIDC provider
+
+  Scenario: Team gate blocks OIDC when a licence does not grant SSO
+    Given I have a licence that does not grant SSO
     When I initiate OIDC login with "google"
     Then the response status is 402
     And the error detail mentions "sso"

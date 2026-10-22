@@ -19,6 +19,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
+from tests.unit.api.mock_session import configure_rls_preamble
 
 from modulo.api.dependencies import get_db_session, get_system_db_session
 from modulo.api.main import app
@@ -37,6 +38,10 @@ def _make_settings() -> Any:
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
         modulo_auth_rate_limit_enabled=False,
+        # These are multi-org scoping tests: the canonical tenant predicate
+        # (FAR-2060) only treats >1 login-active org as multi-org when the
+        # instance is actually configured multi-org.
+        modulo_multi_org_enabled=True,
         redis_url="",
     )
 
@@ -76,6 +81,7 @@ def _make_session(*, orgs: list[MagicMock] | None = None, providers: list[MagicM
     selected per statement rather than per call order.
     """
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -119,7 +125,7 @@ def _anonymous_client(app_session: AsyncMock, system_session: AsyncMock) -> Test
 def _get_providers(client: TestClient, *, env_providers: list[dict[str, str]] | None = None) -> Any:
     try:
         with (
-            patch("modulo.api.routes.sso._anonymous_plan_context", new=AsyncMock(return_value=_plan())),
+            patch("modulo.core.feature_flags.resolve_plan_context", new=AsyncMock(return_value=_plan())),
             patch("modulo.api.routes.sso.parse_oidc_providers", return_value=env_providers or []),
         ):
             return client.get(_SSO_PROVIDERS_URL)

@@ -60,7 +60,7 @@ import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -78,6 +78,9 @@ from modulo.core.guardrails.redaction_mode import (
     destroy_token,
     resolve_guardrail_destroy_pepper,
 )
+
+if TYPE_CHECKING:
+    from modulo.db.models.policy_gate import PolicyGate
 
 _log = logging.getLogger(__name__)
 
@@ -700,80 +703,18 @@ def evaluate_guardrails(
     authority for guardrails with a gate row. Guardrails without a gate row
     (observe/redact) fall back to the direct ``config_json.action`` check.
     """
-    from modulo.core.eval_engine.policy_gate import (
-        EvalPolicySnapshot,
-        EvalResultView,
-        EvalView,
-        PolicyGateView,
-        resolve_policy_gate,
-    )
-
     results: list[EvalResult] = []
     violations: list[tuple[EvalDefinition, EvalResult]] = []
     for eval_def in definitions:
         result = _detect_one(engine, payload, eval_def)
         results.append(result)
         detection_type, _ = _resolve_detection(eval_def)
-        is_violation = _interpret_violation(detection_type, result)
-
-        if not is_violation:
+        if not _interpret_violation(detection_type, result):
             continue
 
         gate_row = (policy_gates or {}).get(eval_def.id)
         if gate_row is not None:
-            # Resolver is the enforcement authority (chunk 8).
-            pg_view = PolicyGateView(
-                id=gate_row.id,
-                organisation_id=gate_row.organisation_id,
-                version=gate_row.version,
-                node_id=gate_row.node_id,
-                action=gate_row.action,
-            )
-            ev_view = EvalView(
-                id=eval_def.id,
-                organisation_id=eval_def.org_id,
-                node_id=uuid.UUID(str(eval_def.node_id)) if eval_def.node_id else None,
-                eval_type=str(eval_def.eval_type),
-                deleted_at=None,
-            )
-            # The snapshot's ``passed`` must reflect violation semantics, not
-            # the raw result.passed.  For regex detection, a hit (violation)
-            # produces passed=True — but the resolver needs passed=False to
-            # recognise a violation.  _interpret_violation translates
-            # hit-semantics into violation-semantics.
-            er_view = EvalResultView(id=result.id, passed=not is_violation)
-            snapshot = EvalPolicySnapshot(
-                policy_gate=pg_view,
-                eval=ev_view,
-                eval_result=er_view,
-            )
-            outcome = resolve_policy_gate(snapshot)
-
-            if outcome.result is None:
-                # Undefined resolution (§5.2.1).
-                if outcome.action == "block":
-                    # Fail closed — raise with error code in detail.
-                    raise GuardrailBlockedError(
-                        eval_def.name,
-                        f"guardrail_undefined_resolution: {outcome.error}",
-                    )
-                # Fail open — log warning and continue.
-                _log.warning(
-                    "guardrails.resolver_undefined",
-                    extra={
-                        "gate_id": str(gate_row.id),
-                        "error_source": outcome.error,
-                        "guardrail": eval_def.name,
-                    },
-                )
-            elif outcome.action == "block":
-                violations.append((eval_def, result))
-            elif outcome.action == "warn":
-                _log.warning(
-                    "guardrails.resolver_warn",
-                    extra={"guardrail": eval_def.name, "detail": result.detail},
-                )
-            # outcome.action == "continue" → no action (passing result)
+            _record_gated_violation(eval_def, result, gate_row, violations)
         # No gate row — fall back to direct config_json.action check.
         elif eval_def.config.get("action") == GuardrailAction.BLOCK:
             violations.append((eval_def, result))
@@ -782,6 +723,90 @@ def evaluate_guardrails(
         first_def, first_result = violations[0]
         raise GuardrailBlockedError(first_def.name, first_result.detail)
     return results
+
+
+def _record_gated_violation(
+    eval_def: EvalDefinition,
+    result: EvalResult,
+    gate_row: PolicyGate,
+    violations: list[tuple[EvalDefinition, EvalResult]],
+) -> None:
+    """Resolve one gate-owning violation and record the enforcement outcome."""
+    from modulo.core.eval_engine.policy_gate import (
+        EvalPolicySnapshot,
+        EvalResultView,
+        EvalView,
+        PolicyGateView,
+        resolve_policy_gate,
+    )
+
+    # Resolver is the enforcement authority (chunk 8).
+    pg_view = PolicyGateView(
+        id=gate_row.id,
+        organisation_id=gate_row.organisation_id,
+        version=gate_row.version,
+        node_id=gate_row.node_id,
+        action=gate_row.action,
+    )
+    ev_view = EvalView(
+        id=eval_def.id,
+        organisation_id=eval_def.org_id,
+        node_id=uuid.UUID(str(eval_def.node_id)) if eval_def.node_id else None,
+        eval_type=str(eval_def.eval_type),
+        deleted_at=None,
+    )
+    # The snapshot's ``passed`` must reflect violation semantics, not the raw
+    # result.passed.  For regex detection, a hit (violation) produces
+    # passed=True — but the resolver needs passed=False to recognise a
+    # violation.  _interpret_violation already translated hit-semantics into
+    # violation-semantics, so this call site is always a violation.
+    er_view = EvalResultView(id=result.id, passed=False)
+    snapshot = EvalPolicySnapshot(
+        policy_gate=pg_view,
+        eval=ev_view,
+        eval_result=er_view,
+    )
+    outcome = resolve_policy_gate(snapshot)
+    _apply_gate_outcome(outcome, gate_row, eval_def, result, violations)
+
+
+def _apply_gate_outcome(
+    outcome: Any,
+    gate_row: Any,
+    eval_def: EvalDefinition,
+    result: EvalResult,
+    violations: list[tuple[EvalDefinition, EvalResult]],
+) -> None:
+    """Apply one Policy Gate outcome (undefined / block / warn / continue)."""
+    if outcome.result is None:
+        _handle_undefined_outcome(outcome, gate_row, eval_def)
+    elif outcome.action == "block":
+        violations.append((eval_def, result))
+    elif outcome.action == "warn":
+        _log.warning(
+            "guardrails.resolver_warn",
+            extra={"guardrail": eval_def.name, "detail": result.detail},
+        )
+    # outcome.action == "continue" → no action (passing result)
+
+
+def _handle_undefined_outcome(outcome: Any, gate_row: Any, eval_def: EvalDefinition) -> None:
+    """Fail closed on a block gate, log-and-continue otherwise (§5.2.1)."""
+    if outcome.action == "block":
+        # Fail closed — raise with error code in detail.
+        raise GuardrailBlockedError(
+            eval_def.name,
+            f"guardrail_undefined_resolution: {outcome.error}",
+        )
+    # Fail open — log warning and continue.
+    _log.warning(
+        "guardrails.resolver_undefined",
+        extra={
+            "gate_id": str(gate_row.id),
+            "error_source": outcome.error,
+            "guardrail": eval_def.name,
+        },
+    )
 
 
 def _resolve_action(eval_def: EvalDefinition) -> GuardrailAction:

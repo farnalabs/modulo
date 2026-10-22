@@ -36,6 +36,7 @@ from modulo.api.mcp_server import (
 )
 from modulo.auth.permissions import reset_authz_enforce, set_authz_enforce
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -50,7 +51,10 @@ def _make_session_context(session: AsyncMock) -> AsyncMock:
 
 
 def _mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct children: ``in_transaction()`` / ``add()`` /
+    # ``get_bind()`` are SYNC on AsyncSession, and an ``execute()`` that returns
+    # an AsyncMock leaks the SYNC result reads (``scalar_one_or_none``).
+    session = configure_mock_session(AsyncMock())
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=None)
@@ -345,6 +349,9 @@ class TestJwtAndOauthPaths:
         with (
             patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
             patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+            # The client's team boundary is a second DB read on the same
+            # round-trip; the double must answer it explicitly (org-wide client).
+            patch.object(ms, "get_oauth_client_team_id", new=AsyncMock(return_value=None)),
             patch.object(ms, "clamp_oauth_role", new=MagicMock(return_value="admin")),
             patch.object(ms, "_set_authz_enforce", new=AsyncMock()),
         ):

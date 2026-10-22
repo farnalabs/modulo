@@ -1,0 +1,28 @@
+{
+  "samples": [
+    {
+      "connector_id": "66666666-6666-6666-6666-666666666666",
+      "connector_type": "jira",
+      "resource": "issues",
+      "records": [
+        {
+          "id": "PROJ-1",
+          "key": "PROJ-1",
+          "fields": {"status": {"name": "Backlog"}, "summary": "Initial requirements gathering"}
+        },
+        {
+          "id": "PROJ-2",
+          "key": "PROJ-2",
+          "fields": {"status": {"name": "Ready for Development"}, "summary": "API design review"}
+        },
+        {
+          "id": "PROJ-3",
+          "key": "PROJ-3",
+          "fields": {"status": {"name": "In Progress"}, "summary": "Database schema design"}
+        }
+      ],
+      "sample_count": 3,
+      "error": null
+    }
+  ]
+}

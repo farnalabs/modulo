@@ -421,47 +421,61 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", help="bridge config JSON path (default: $MODULO_BRIDGE_CONFIG)")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="the wrapped command (after --)")
     args = parser.parse_args(argv)
+    client = _build_cli_client(args)
 
+    if args.wrap:
+        return _wrap_command(_strip_double_dash(args.command), client)
+    if args.notify:
+        return _notify_once(client, args.notify)
+    parser.print_help()
+    return 2
+
+
+def _build_cli_client(args: argparse.Namespace) -> BridgeClient:
+    """Build the bridge client from the CLI flags / environment."""
     if args.config:
         config = _load_config(args.config)
         endpoint = args.endpoint or os.environ.get("MODULO_BRIDGE_ENDPOINT") or DEFAULT_ENDPOINT
-        client = BridgeClient(endpoint, patterns=config.get("patterns", DEFAULT_PATTERNS))
-    elif args.endpoint:
-        client = BridgeClient(args.endpoint)
-    else:
-        client, _ = _build_client()
-    if args.wrap:
-        command = args.command
-        if command and command[0] == "--":
-            command = command[1:]
-        return _wrap_command(command, client)
-    if args.notify:
-        try:
-            event = json.loads(args.notify)
-        except ValueError:
-            event = {}
-        if isinstance(event, dict):
-            tool_name = str(event.get("tool_name") or "")
-            raw_args = event.get("args")
-            args_dict = raw_args if isinstance(raw_args, dict) else {}
-            direction = "after" if event.get("direction") == "after" else "before"
-            result_summary = str(event.get("result_summary") or "")
-            decision = client.notify(tool_name, args_dict, direction, result_summary)
-            _out(json.dumps(decision))
-            # An escalate is always a stop; emit the typed marker + dedicated
-            # code so the host can distinguish it from a block (FAR-1694 S2).
-            if decision.get("action") == "escalate":
-                _out(f"{ESCALATED_MARKER}{json.dumps(_escalation_payload(tool_name, args_dict, decision, direction))}")
-                return ESCALATED_EXIT_CODE
-            # Refuse only on an actual refusal (action=block AND blocked=true);
-            # a block_on_guardrail:false downgrade (action=block, blocked=false)
-            # is record-only and must NOT exit non-zero.
-            blocked = bool(decision.get("blocked"))
-            return 0 if decision.get("action") != "block" or not blocked else BLOCKED_EXIT_CODE
+        return BridgeClient(endpoint, patterns=config.get("patterns", DEFAULT_PATTERNS))
+    if args.endpoint:
+        return BridgeClient(args.endpoint)
+    client, _ = _build_client()
+    return client
+
+
+def _strip_double_dash(command: list[str]) -> list[str]:
+    """Drop the ``--`` separator argparse leaves on the wrapped command."""
+    if command and command[0] == "--":
+        return command[1:]
+    return command
+
+
+def _notify_once(client: BridgeClient, notify: str) -> int:
+    """Evaluate a single ``--notify`` event and return the process exit code."""
+    try:
+        event = json.loads(notify)
+    except ValueError:
+        event = {}
+    if not isinstance(event, dict):
         _err("error: --notify requires a JSON object")
         return 2
-    parser.print_help()
-    return 2
+    tool_name = str(event.get("tool_name") or "")
+    raw_args = event.get("args")
+    args_dict = raw_args if isinstance(raw_args, dict) else {}
+    direction = "after" if event.get("direction") == "after" else "before"
+    result_summary = str(event.get("result_summary") or "")
+    decision = client.notify(tool_name, args_dict, direction, result_summary)
+    _out(json.dumps(decision))
+    # An escalate is always a stop; emit the typed marker + dedicated
+    # code so the host can distinguish it from a block (FAR-1694 S2).
+    if decision.get("action") == "escalate":
+        _out(f"{ESCALATED_MARKER}{json.dumps(_escalation_payload(tool_name, args_dict, decision, direction))}")
+        return ESCALATED_EXIT_CODE
+    # Refuse only on an actual refusal (action=block AND blocked=true);
+    # a block_on_guardrail:false downgrade (action=block, blocked=false)
+    # is record-only and must NOT exit non-zero.
+    blocked = bool(decision.get("blocked"))
+    return 0 if decision.get("action") != "block" or not blocked else BLOCKED_EXIT_CODE
 
 
 if __name__ == "__main__":

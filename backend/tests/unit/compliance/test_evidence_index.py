@@ -405,6 +405,14 @@ class TestSeededOrganisation:
             assert entry.mapping_row_ids
             assert entry.mapping_row_ids == pack.mapping_row_ids_for_artifact(entry.artifact_type)
 
+        # The comparison above only proves the index stores what the pack's
+        # OWN lookup returns - it cannot catch a lookup that is wrong for both
+        # sides. Pin one artefact type's ids to values read from the shipped
+        # YAML (mappings/soc2.yaml, mappings/iso-42001.yaml, in pack order) so
+        # the lookup itself is grounded in the pack content.
+        run_snapshot = _by_type(index)[ARTIFACT_RUN_SNAPSHOT]
+        assert run_snapshot.mapping_row_ids == ("soc2-cc8.1b", "iso-42001-8.1", "iso-42001-8.3")
+
     async def test_seeded_org_index_is_complete(self, session: AsyncSession) -> None:
         seeded = await _seed_full_org(session)
         await session.commit()
@@ -560,7 +568,7 @@ class TestMissingArtefactsAreLoud:
 class TestTenantIsolation:
     async def test_another_orgs_artefacts_are_not_counted(self, session: AsyncSession) -> None:
         mine = await _seed_full_org(session, slug="mine")
-        other = await _seed_full_org(session, slug="other")
+        await _seed_full_org(session, slug="other")
         await session.commit()
 
         my_index = await build_evidence_index(session, mine["org_id"])
@@ -570,7 +578,13 @@ class TestTenantIsolation:
         assert entries[ARTIFACT_HITL_DECISION].record_count == 4
         assert entries[ARTIFACT_EVAL_RESULT].record_count == 3
         assert entries[ARTIFACT_RUN_SNAPSHOT].record_count == 1
-        assert mine["snapshot_id"] != other["snapshot_id"]
+
+        # Both orgs were fully seeded, so the "other" org's run snapshot is in
+        # the very table this scan reads. A random-UUID inequality ("mine is
+        # not theirs") proves nothing; the real isolation claim is that my
+        # index's run_snapshot identifiers name ONLY my snapshot.
+        run_snapshot = entries[ARTIFACT_RUN_SNAPSHOT]
+        assert run_snapshot.identifiers == (f"pipeline-snapshot:{mine['snapshot_id']}@v1",)
 
     async def test_org_with_no_rows_sees_none_of_another_orgs_data(self, session: AsyncSession) -> None:
         await _seed_full_org(session, slug="populated")
@@ -735,6 +749,69 @@ class TestHitlScanCorrectness:
         assert hitl_scans, statements
         assert any("NULLS LAST" in sql for sql in hitl_scans), hitl_scans
         assert _by_type(index)[ARTIFACT_HITL_DECISION].detail["latest_decision_at"] is not None
+
+
+class TestHitlScanBoundary:
+    """The scan limit is an inclusive cap: ``total <= limit`` is exact; one past it truncates.
+
+    Seeding 10,000 real rows would exercise the same code path at prohibitive
+    cost, so the limit is patched down to 4 and the boundary is walked from
+    both sides. ``_seed_full_org`` seeds exactly 4 decided gates, which is the
+    exact-boundary side.
+    """
+
+    _LIMIT = 4
+
+    async def test_exactly_at_the_limit_the_counts_are_exact_and_untagged(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(evidence_index_module, "_HITL_SCAN_LIMIT", self._LIMIT)
+        seeded = await _seed_full_org(session, slug="boundary-exact")
+        await session.commit()
+
+        index = await build_evidence_index(session, seeded["org_id"])
+        entry = _by_type(index)[ARTIFACT_HITL_DECISION]
+
+        assert entry.record_count == self._LIMIT
+        assert entry.detail["human_only_scan_truncated"] is False
+        assert entry.detail["human_only_counts_are_lower_bounds"] is False
+        assert entry.detail["human_only_gate_decisions"] == 3
+        assert entry.detail["human_only_gate_approvals"] == 2
+
+    async def test_one_past_the_limit_truncates_and_reports_lower_bounds(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(evidence_index_module, "_HITL_SCAN_LIMIT", self._LIMIT)
+        seeded = await _seed_full_org(session, slug="boundary-plus-one")
+        await _make_hitl(
+            session,
+            org_id=seeded["org_id"],
+            run_id=seeded["run_id"],
+            pipeline_id=seeded["pipeline_id"],
+            account_id=seeded["account_id"],
+            review_id="review-boundary-overflow",
+            decision="approved",
+            gate_config={"human_only": True},
+            decided_at=_BASE_TIME + timedelta(hours=12),
+        )
+        await session.commit()
+
+        index = await build_evidence_index(session, seeded["org_id"])
+        entry = _by_type(index)[ARTIFACT_HITL_DECISION]
+
+        # The COUNT itself is not windowed - it still counts every decided
+        # gate - while the per-decision counts come from the truncated window
+        # and must never be presented as exact.
+        assert entry.record_count == self._LIMIT + 1
+        assert entry.detail["human_only_scan_truncated"] is True
+        assert entry.detail["human_only_counts_are_lower_bounds"] is True
+        # The 4-row window holds exactly three human-only decisions and two
+        # approvals under EITHER sort direction. Dropping the ``.limit()``
+        # clause or an off-by-one window size yields 4 decisions here, so a
+        # ``<=`` bound would absorb the very mutations this boundary exists
+        # to catch.
+        assert entry.detail["human_only_gate_decisions"] == 3
+        assert entry.detail["human_only_gate_approvals"] == 2
 
 
 class TestCollectorQueryScoping:

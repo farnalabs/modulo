@@ -26,7 +26,7 @@ from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookPayload
 from modulo.settings import Settings, get_settings
 from tests.unit.api.conftest import make_system_session_mock
-from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -73,6 +73,7 @@ def _make_mock_run() -> MagicMock:
 
 def _make_mock_session(*, trigger_config: dict | None = None, stored_payload: bool = True) -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -408,6 +409,7 @@ def _make_org_aware_app_session(*, payload_org_id: uuid.UUID) -> AsyncMock:
     exactly like the real RLS-scoped lookup.
     """
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

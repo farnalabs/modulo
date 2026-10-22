@@ -26,6 +26,7 @@ from modulo.core.license import (
 )
 from modulo.core.registry.crypto import generate_keypair, sign_primitive
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _TEST_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -83,6 +84,8 @@ def _make_valid_payload(**overrides: object) -> dict[str, object]:
 
 def _mock_org(settings_json: dict[str, object] | None = None) -> MagicMock:
     org = MagicMock()
+    # FAR-2060: the signed payload claims "test-org"; the tenant must match it.
+    org.id = "test-org"
     org.settings_json = settings_json
     return org
 
@@ -96,7 +99,11 @@ def _reset_license_state() -> Generator[None, None, None]:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct double: the permission dependency's authz-enforce read
+    # calls ``result.scalar_one_or_none()`` (SYNC on a real Result) and the RLS
+    # preamble reads ``in_transaction()``/``get_bind()``/``add()`` synchronously;
+    # a bare AsyncMock turns each into a never-awaited coroutine.
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

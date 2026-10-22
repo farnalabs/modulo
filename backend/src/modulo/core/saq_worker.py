@@ -426,15 +426,11 @@ async def execute_run(
     """
     from modulo.core.pipeline_execution import (
         DISPATCH_TRACKER_ATTR,
-        EXECUTOR_SETUP_FAILED_ERROR_CODE,
         PHASE_CLAIMED,
-        PHASE_LOADING_SETUP,
         PHASE_SETUP_COMPLETE,
         DispatchPhaseTracker,
         DispatchPhaseWriter,
         claim_run_async,
-        fail_run_terminal,
-        load_and_setup,
         mark_complete,
         run_executor_with_watchdog,
     )
@@ -485,64 +481,20 @@ async def execute_run(
         # Stamp the claim token into the job hash so the after_process task_failure
         # hook can fence its terminal write: a failed job must not mark the run
         # failed when a successor already re-claimed it (dist/runtime-core A1).
-        if job is not None:
-            try:
-                job_kwargs = getattr(job, "kwargs", None)
-                merged_kwargs = {**(job_kwargs if isinstance(job_kwargs, dict) else {}), "claim_token": claim_token}
-                await job.update(kwargs=merged_kwargs)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.warning("SAQ execute_run: job kwargs stamp failed for run %s", rid, exc_info=True)
+        await _stamp_claim_token(job, claim_token, rid)
 
         settings = get_settings()
-        tracker.enter_phase(PHASE_LOADING_SETUP)
-        try:
-            run, executor = await asyncio.wait_for(
-                load_and_setup(aeng, rid, oid),
-                timeout=settings.saq_setup_grace_seconds,
-            )
-        except TimeoutError:
-            _log.exception("SAQ execute_run: load_and_setup timed out for run %s", rid)
-            await fail_run_terminal(
-                aeng,
-                run_id,
-                org_id,
-                error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
-                error_detail=(
-                    f"load_and_setup (pre-node setup) exceeded setup grace "
-                    f"({settings.saq_setup_grace_seconds}s) — likely DB connection "
-                    "exhaustion or a wedged worker; was riding to the 35-min "
-                    "agent.stall backstop"
-                ),
-            )
-            return {"status": "setup_failed"}
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("SAQ execute_run: load_and_setup failed for run %s", rid)
-            await fail_run_terminal(
-                aeng,
-                run_id,
-                org_id,
-                error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
-                error_detail="load_and_setup failed before any node could run",
-            )
-            return {"status": "setup_failed"}
-        if run is None:
-            # The claim succeeded (status=running + heartbeat), but the row is now
-            # invisible to load_and_setup — terminalize so the claimed row is not
-            # left running with a frozen heartbeat until dispatcher_reconcile
-            # collects it (~35-min zombie backstop).
-            _log.warning("SAQ execute_run: run %s not found after claim — terminalizing", rid)
-            await fail_run_terminal(
-                aeng,
-                run_id,
-                org_id,
-                error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
-                error_detail="run row not found during load_and_setup after a successful claim",
-            )
-            return {"status": "missing"}
+        run, executor, early_result = await _load_run_for_execution(
+            aeng,
+            rid=rid,
+            oid=oid,
+            run_id=run_id,
+            org_id=org_id,
+            tracker=tracker,
+            setup_grace_seconds=settings.saq_setup_grace_seconds,
+        )
+        if early_result is not None:
+            return early_result
 
         tracker.enter_phase(PHASE_SETUP_COMPLETE)
         _log.info(
@@ -582,6 +534,92 @@ async def execute_run(
         if outcome.get("status") == "complete":
             await mark_complete(aeng, run_id, org_id, claim_token=claim_token)
         return outcome
+
+
+async def _stamp_claim_token(job: Any, claim_token: str, rid: uuid.UUID) -> None:
+    """Stamp the fresh claim token into the SAQ job kwargs (best-effort)."""
+    if job is None:
+        return
+    try:
+        job_kwargs = getattr(job, "kwargs", None)
+        merged_kwargs = {**(job_kwargs if isinstance(job_kwargs, dict) else {}), "claim_token": claim_token}
+        await job.update(kwargs=merged_kwargs)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("SAQ execute_run: job kwargs stamp failed for run %s", rid, exc_info=True)
+
+
+async def _load_run_for_execution(
+    aeng: Any,
+    *,
+    rid: uuid.UUID,
+    oid: uuid.UUID,
+    run_id: str,
+    org_id: str,
+    tracker: Any,
+    setup_grace_seconds: int,
+) -> tuple[Any, Any, dict[str, Any] | None]:
+    """Load and set up the run, returning ``(run, executor, early_result)``.
+
+    A setup timeout/failure or a vanished row is terminal-failed here and
+    returned as ``early_result`` so the caller can stop without executing.
+    """
+    from modulo.core.pipeline_execution import (
+        EXECUTOR_SETUP_FAILED_ERROR_CODE,
+        PHASE_LOADING_SETUP,
+        fail_run_terminal,
+        load_and_setup,
+    )
+
+    tracker.enter_phase(PHASE_LOADING_SETUP)
+    try:
+        run, executor = await asyncio.wait_for(
+            load_and_setup(aeng, rid, oid),
+            timeout=setup_grace_seconds,
+        )
+    except TimeoutError:
+        _log.exception("SAQ execute_run: load_and_setup timed out for run %s", rid)
+        await fail_run_terminal(
+            aeng,
+            run_id,
+            org_id,
+            error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
+            error_detail=(
+                f"load_and_setup (pre-node setup) exceeded setup grace "
+                f"({setup_grace_seconds}s) — likely DB connection "
+                "exhaustion or a wedged worker; was riding to the 35-min "
+                "agent.stall backstop"
+            ),
+        )
+        return None, None, {"status": "setup_failed"}
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("SAQ execute_run: load_and_setup failed for run %s", rid)
+        await fail_run_terminal(
+            aeng,
+            run_id,
+            org_id,
+            error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
+            error_detail="load_and_setup failed before any node could run",
+        )
+        return None, None, {"status": "setup_failed"}
+    if run is None:
+        # The claim succeeded (status=running + heartbeat), but the row is now
+        # invisible to load_and_setup — terminalize so the claimed row is not
+        # left running with a frozen heartbeat until dispatcher_reconcile
+        # collects it (~35-min zombie backstop).
+        _log.warning("SAQ execute_run: run %s not found after claim — terminalizing", rid)
+        await fail_run_terminal(
+            aeng,
+            run_id,
+            org_id,
+            error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
+            error_detail="run row not found during load_and_setup after a successful claim",
+        )
+        return None, None, {"status": "missing"}
+    return run, executor, None
 
 
 async def resume_run(

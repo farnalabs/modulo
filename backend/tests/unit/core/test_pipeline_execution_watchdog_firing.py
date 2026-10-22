@@ -52,7 +52,7 @@ def _watchdog_retry_executor() -> MagicMock:
     """Executor double exposing exactly the seams the shared hook reuses."""
     executor = MagicMock()
     executor._claim_token = "tok-far-1423"
-    executor._read_retry_attempt_state = AsyncMock(return_value=(1, "tok-far-1423"))
+    executor._read_retry_attempt_state = AsyncMock(return_value=(1, "tok-far-1423", None))
     executor._probe_script_lease = AsyncMock(return_value=True)
     executor._fenced_pending_reset = AsyncMock(return_value=1)
     return executor

@@ -259,6 +259,27 @@ class TestGraphResponseNever422:
         assert len(resp.validation_issues) == 1
         assert resp.validation_issues[0].code == "pre_existing"
 
+    def test_explicit_schema_translation_report_is_returned_verbatim(self) -> None:
+        """An explicit report (write path) is returned without recomputation."""
+        report = [{"node_id": "n1", "keyword": "k", "path": "p", "message": "m"}]
+        resp = _graph_response([], [], schema_translation_report=report)
+        assert resp.schema_translation_report == report
+
+    def test_include_schema_warnings_computes_the_report(self) -> None:
+        """The opt-in flag computes the report from the validated nodes."""
+        resp = _graph_response([], [], include_schema_warnings=True)
+        assert not resp.schema_translation_report
+
+    def test_unconstructable_edge_is_dropped_with_a_warning_issue(self) -> None:
+        """An edge that even the passthrough cannot construct is dropped, but
+        the read still succeeds and the failure is surfaced as an issue."""
+        edge = _minimal_edge(uuid.uuid4(), uuid.uuid4())
+        edge["edge_type"] = "invalid_type"
+        edge["source_node_id"] = "not-a-uuid"
+        resp = _graph_response([], [edge])
+        assert not resp.edges
+        assert any(i.code == "edge_validation_failed" for i in resp.validation_issues)
+
     def test_raw_dict_passthrough_preserves_id(self) -> None:
         """Even when a node fails validation, its ID is preserved in the
         fallback passthrough."""

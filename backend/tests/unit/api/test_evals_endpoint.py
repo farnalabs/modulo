@@ -19,7 +19,7 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
 from modulo.settings import Settings, get_settings
-from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.api.mock_session import configure_mock_session, make_empty_execute_result
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -44,10 +44,14 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
-    session.execute = AsyncMock()
+    session.execute = AsyncMock(return_value=make_empty_execute_result(scalar_value=0))
     bind_mock = MagicMock()
     bind_mock.dialect.name = "postgresql"
-    session.get_bind = AsyncMock(return_value=bind_mock)
+    # ``_ensure_active_transaction`` (db/rls.py) reads ``get_bind()``
+    # synchronously for a sync Session and awaits a coroutine only when the
+    # returned value IS a coroutine — a plain MagicMock keeps it on the sync
+    # path instead of leaving an un-awaited coroutine behind.
+    session.get_bind = MagicMock(return_value=bind_mock)
     return session
 
 

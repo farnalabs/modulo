@@ -2485,6 +2485,207 @@ def _build_schema_translation_report(
     return report
 
 
+def _validated_graph_node(
+    raw_entry: Any,
+    issues: list[GraphValidationIssue],
+) -> PipelineGraphNode | None:
+    """Validate one stored node entry, never raising (FAR-874).
+
+    Returns ``None`` only when the entry is not a dict or even the lenient /
+    ``model_construct`` fallback failed; every failure is recorded in *issues*
+    so the read stays total without silently dropping evidence.
+    """
+    if not isinstance(raw_entry, dict):
+        logger.warning("Graph read: skipping non-dict node entry: %r", type(raw_entry).__name__)
+        return None
+    # FAR-1181: the graph read masks credential-bearing node fields
+    # (env_vars / context_files / composite_parameter_values /
+    # parameter_overrides) before serialization, reusing the shipped maskers.
+    # Masking is applied to a copy — the stored data is untouched.
+    node_dict = mask_pipeline_graph_node(raw_entry)
+    raw_node_id = node_dict.get("id")
+    node_id = str(raw_node_id) if raw_node_id is not None else "unknown"
+    try:
+        # First attempt: strict validation (write-path quality).
+        return PipelineGraphNode.model_validate(node_dict)
+    except ValidationError:
+        return _read_legacy_graph_node(node_dict, node_id, issues)
+
+
+def _read_legacy_graph_node(
+    node_dict: dict[str, Any],
+    node_id: str,
+    issues: list[GraphValidationIssue],
+) -> PipelineGraphNode | None:
+    """Second attempt: lenient validation (FAR-874).
+
+    Skips type-specific validators that may have been tightened since the data
+    was saved; a value that passes here but fails strict is included with a
+    ``node_legacy_data`` warning.
+    """
+    try:
+        node = PipelineGraphNode.model_validate(node_dict, context=LEGACY_READ_CONTEXT)
+    except ValidationError as exc:
+        return _recover_graph_node(node_dict, node_id, _safe_validation_errors(exc), issues)
+    logger.info(
+        "Graph read: node %s has legacy data that passes lenient validation but fails strict; including with warning.",
+        node_id,
+    )
+    issues.append(
+        GraphValidationIssue(
+            severity="warning",
+            code="node_legacy_data",
+            message=(
+                f"Node {node_id} has legacy data that passes lenient read validation but would fail write validation."
+            ),
+            node_id=node_id,
+        )
+    )
+    return node
+
+
+def _recover_graph_node(
+    node_dict: dict[str, Any],
+    node_id: str,
+    safe_errors: list[dict[str, Any]],
+    issues: list[GraphValidationIssue],
+) -> PipelineGraphNode | None:
+    """Third tier: ``model_construct`` passthrough so the read never 422s."""
+    logger.warning(
+        "Graph read: node %s failed all validation (%s); including raw data with warning.",
+        node_id,
+        safe_errors,
+    )
+    issues.append(
+        GraphValidationIssue(
+            severity="warning",
+            code="node_validation_failed",
+            message=(f"Node {node_id} failed validation: {safe_errors}"),
+            node_id=node_id,
+        )
+    )
+    try:
+        # Preserve all stored fields so the read never silently truncates node
+        # data (CRITICAL data-loss fix); only id and position are coerced.
+        return _construct_graph_node(node_dict)
+    except Exception:
+        logger.warning(
+            "Graph read: could not construct fallback for node %s",
+            node_id,
+        )
+        return None
+
+
+def _construct_graph_node(node_dict: dict[str, Any]) -> PipelineGraphNode:
+    """Build a node from raw stored fields, coercing only id and position.
+
+    Every key the model declares is kept as-is from the raw dict; unknown keys
+    (future schema additions) are dropped.
+    """
+    fallback_fields = {k: v for k, v in node_dict.items() if k in PipelineGraphNode.model_fields}
+    fallback_fields["id"] = uuid.UUID(str(node_dict["id"])) if node_dict.get("id") else uuid.uuid4()
+    pos_raw = node_dict.get("position") or {}
+    fallback_fields["position"] = GraphPosition(x=pos_raw.get("x", 0), y=pos_raw.get("y", 0))
+    return PipelineGraphNode.model_construct(**fallback_fields)
+
+
+def _validated_graph_edge(
+    edge_dict: Any,
+    issues: list[GraphValidationIssue],
+) -> PipelineGraphEdge | None:
+    """Validate one stored edge entry, never raising (FAR-874).
+
+    Stored edges arrive as either plain dicts (write path / JSON) or
+    ``PipelineEdge`` ORM rows. A malformed scalar entry (str/int/None from
+    corrupt data) has neither a mapping interface nor edge attributes and is
+    skipped with an ``edge_invalid_entry`` warning rather than raising.
+    """
+    if not isinstance(edge_dict, dict) and not hasattr(edge_dict, "source_node_id"):
+        logger.warning("Graph read: skipping malformed edge entry: %r", type(edge_dict).__name__)
+        issues.append(
+            GraphValidationIssue(
+                severity="warning",
+                code="edge_invalid_entry",
+                message=(f"Skipped malformed edge entry of type {type(edge_dict).__name__}."),
+            )
+        )
+        return None
+    raw_edge_id = edge_dict.get("id") if isinstance(edge_dict, dict) else getattr(edge_dict, "id", None)
+    edge_id = str(raw_edge_id) if raw_edge_id is not None else "unknown"
+    try:
+        return PipelineGraphEdge.model_validate(edge_dict, context=LEGACY_READ_CONTEXT)
+    except ValidationError as exc:
+        return _recover_graph_edge(edge_dict, edge_id, _safe_validation_errors(exc), issues)
+
+
+def _recover_graph_edge(
+    edge_dict: Any,
+    edge_id: str,
+    safe_errors: list[dict[str, Any]],
+    issues: list[GraphValidationIssue],
+) -> PipelineGraphEdge | None:
+    """Fallback passthrough so an edge the current schema rejects is preserved."""
+    logger.warning(
+        "Graph read: edge %s failed Pydantic validation (%s); including raw data with warning.",
+        edge_id,
+        safe_errors,
+    )
+    issues.append(
+        GraphValidationIssue(
+            severity="warning",
+            code="edge_validation_failed",
+            message=(f"Edge {edge_id} failed validation: {safe_errors}"),
+        )
+    )
+    try:
+        return _construct_graph_edge(edge_dict)
+    except Exception:
+        logger.warning(
+            "Graph read: could not construct fallback for edge %s",
+            edge_id,
+        )
+        return None
+
+
+def _construct_graph_edge(edge_dict: Any) -> PipelineGraphEdge:
+    """Build an edge from raw stored fields, preserving declared fields.
+
+    Same approach as the node fallback: filter to model-declared fields, coerce
+    only the IDs, and ``model_construct`` the rest. Must work for dicts AND
+    attribute objects (ORM rows) — a legacy edge whose ``hitl_review_config``
+    fails the current schema is still evidence worth preserving.
+    """
+    if isinstance(edge_dict, dict):
+        fallback_fields = {k: v for k, v in edge_dict.items() if k in PipelineGraphEdge.model_fields}
+    else:
+        fallback_fields = {
+            name: getattr(edge_dict, name) for name in PipelineGraphEdge.model_fields if hasattr(edge_dict, name)
+        }
+    raw_id = _edge_field(edge_dict, "id")
+    fallback_fields["id"] = uuid.UUID(str(raw_id)) if raw_id else uuid.uuid4()
+    fallback_fields["source_node_id"] = uuid.UUID(str(_edge_field(edge_dict, "source_node_id")))
+    fallback_fields["target_node_id"] = uuid.UUID(str(_edge_field(edge_dict, "target_node_id")))
+    return PipelineGraphEdge.model_construct(**fallback_fields)
+
+
+def _graph_schema_translation_report(
+    valid_nodes: list[PipelineGraphNode],
+    provider_by_node: Mapping[str, str | None] | None,
+    schema_translation_report: list[dict[str, Any]] | None,
+    include_schema_warnings: bool,
+) -> list[dict[str, Any]]:
+    """Select the schema-translation report: explicit, opt-in computed, or empty.
+
+    FAR-900: compute the report only when the opt-in flag is set or an explicit
+    report was provided (e.g. from a write path).
+    """
+    if schema_translation_report is not None:
+        return schema_translation_report
+    if include_schema_warnings:
+        return _build_schema_translation_report(valid_nodes, provider_by_node)
+    return []
+
+
 def _graph_response(
     nodes: list[dict[str, Any]],
     edges: list[Any],
@@ -2508,77 +2709,9 @@ def _graph_response(
     # --- nodes: validate per-node; never fail the read ---
     valid_nodes: list[PipelineGraphNode] = []
     for raw_entry in nodes:
-        if not isinstance(raw_entry, dict):
-            logger.warning("Graph read: skipping non-dict node entry: %r", type(raw_entry).__name__)
-            continue
-        # FAR-1181: the graph read masks credential-bearing node fields
-        # (env_vars / context_files / composite_parameter_values /
-        # parameter_overrides) before serialization, reusing the shipped
-        # maskers. Masking is applied to a copy — the stored data is untouched.
-        node_dict = mask_pipeline_graph_node(raw_entry)
-        raw_node_id = node_dict.get("id")
-        node_id = str(raw_node_id) if raw_node_id is not None else "unknown"
-        try:
-            # First attempt: strict validation (write-path quality).
-            valid_nodes.append(PipelineGraphNode.model_validate(node_dict))
-        except ValidationError:
-            # Second attempt: lenient validation (FAR-874) — skip type-specific
-            # validators that may have been tightened since the data was saved.
-            try:
-                lenient = PipelineGraphNode.model_validate(node_dict, context=LEGACY_READ_CONTEXT)
-                valid_nodes.append(lenient)
-                logger.info(
-                    "Graph read: node %s has legacy data that passes lenient "
-                    "validation but fails strict; including with warning.",
-                    node_id,
-                )
-                issues.append(
-                    GraphValidationIssue(
-                        severity="warning",
-                        code="node_legacy_data",
-                        message=(
-                            f"Node {node_id} has legacy data that passes "
-                            "lenient read validation but would fail write "
-                            "validation."
-                        ),
-                        node_id=node_id,
-                    )
-                )
-            except ValidationError as exc:
-                # Even lenient validation failed — use model_construct
-                # passthrough so the read never 422s.
-                safe_errors = _safe_validation_errors(exc)
-                logger.warning(
-                    "Graph read: node %s failed all validation (%s); including raw data with warning.",
-                    node_id,
-                    safe_errors,
-                )
-                issues.append(
-                    GraphValidationIssue(
-                        severity="warning",
-                        code="node_validation_failed",
-                        message=(f"Node {node_id} failed validation: {safe_errors}"),
-                        node_id=node_id,
-                    )
-                )
-                try:
-                    # Preserve all stored fields so the read never silently
-                    # truncates node data (CRITICAL data-loss fix).  Only coerce
-                    # the fields that genuinely need type coercion (id, position);
-                    # every other key the model declares is kept as-is from the
-                    # raw dict.  Unknown keys (future schema additions) are
-                    # dropped and logged.
-                    fallback_fields = {k: v for k, v in node_dict.items() if k in PipelineGraphNode.model_fields}
-                    fallback_fields["id"] = uuid.UUID(str(node_dict["id"])) if node_dict.get("id") else uuid.uuid4()
-                    pos_raw = node_dict.get("position") or {}
-                    fallback_fields["position"] = GraphPosition(x=pos_raw.get("x", 0), y=pos_raw.get("y", 0))
-                    fallback = PipelineGraphNode.model_construct(**fallback_fields)
-                    valid_nodes.append(fallback)
-                except Exception:
-                    logger.warning(
-                        "Graph read: could not construct fallback for node %s",
-                        node_id,
-                    )
+        node = _validated_graph_node(raw_entry, issues)
+        if node is not None:
+            valid_nodes.append(node)
 
     # --- edges: validate per-edge; never fail the read ---
     # Gate-description enforcement must stay write-scoped (FAR-613) — legacy
@@ -2587,86 +2720,26 @@ def _graph_response(
     # no per-type validators — unlike nodes, where each node_type runs a
     # dedicated validator that may have been tightened since the data was saved.
     valid_edges: list[PipelineGraphEdge] = []
-    for edge_dict in edges:
-        # Stored edges arrive as either plain dicts (write path / JSON) or
-        # ``PipelineEdge`` ORM rows (the DB read path validates them through
-        # ``from_attributes``).  A malformed scalar entry (str/int/None from
-        # corrupt data) has neither a mapping interface nor edge attributes and
-        # would raise AttributeError on ``.get`` -> HTTP 500, so skip it instead.
-        if not isinstance(edge_dict, dict) and not hasattr(edge_dict, "source_node_id"):
-            logger.warning("Graph read: skipping malformed edge entry: %r", type(edge_dict).__name__)
-            issues.append(
-                GraphValidationIssue(
-                    severity="warning",
-                    code="edge_invalid_entry",
-                    message=(f"Skipped malformed edge entry of type {type(edge_dict).__name__}."),
-                )
-            )
-            continue
-        raw_edge_id = edge_dict.get("id") if isinstance(edge_dict, dict) else getattr(edge_dict, "id", None)
-        edge_id = str(raw_edge_id) if raw_edge_id is not None else "unknown"
-        try:
-            valid_edges.append(PipelineGraphEdge.model_validate(edge_dict, context=LEGACY_READ_CONTEXT))
-        except ValidationError as exc:
-            safe_errors = _safe_validation_errors(exc)
-            logger.warning(
-                "Graph read: edge %s failed Pydantic validation (%s); including raw data with warning.",
-                edge_id,
-                safe_errors,
-            )
-            issues.append(
-                GraphValidationIssue(
-                    severity="warning",
-                    code="edge_validation_failed",
-                    message=(f"Edge {edge_id} failed validation: {safe_errors}"),
-                )
-            )
-            try:
-                # Preserve all stored fields (hitl_review_config,
-                # condition_expression, etc.) — same approach as the node
-                # fallback: filter to model-declared fields, coerce only the
-                # IDs, and model_construct the rest.  Must work for dicts AND
-                # attribute objects (ORM rows): a legacy edge whose
-                # hitl_review_config fails the current schema is still evidence
-                # worth preserving rather than silently dropping.
-                if isinstance(edge_dict, dict):
-                    fallback_fields = {k: v for k, v in edge_dict.items() if k in PipelineGraphEdge.model_fields}
-                else:
-                    fallback_fields = {
-                        name: getattr(edge_dict, name)
-                        for name in PipelineGraphEdge.model_fields
-                        if hasattr(edge_dict, name)
-                    }
-                raw_id = _edge_field(edge_dict, "id")
-                fallback_fields["id"] = uuid.UUID(str(raw_id)) if raw_id else uuid.uuid4()
-                fallback_fields["source_node_id"] = uuid.UUID(str(_edge_field(edge_dict, "source_node_id")))
-                fallback_fields["target_node_id"] = uuid.UUID(str(_edge_field(edge_dict, "target_node_id")))
-                fallback_edge = PipelineGraphEdge.model_construct(**fallback_fields)
-                valid_edges.append(fallback_edge)
-            except Exception:
-                logger.warning(
-                    "Graph read: could not construct fallback for edge %s",
-                    edge_id,
-                )
+    for edge_entry in edges:
+        edge = _validated_graph_edge(edge_entry, issues)
+        if edge is not None:
+            valid_edges.append(edge)
 
     # Use model_construct to bypass the PipelineGraphUpdate
     # ``reject_database_conflicts`` validator — on reads we only need the
     # per-node/per-edge validation already performed above, and fallback
     # nodes constructed via ``model_construct`` (no Pydantic field validation)
     # would fail re-validation here.
-    # FAR-900: compute schema_translation_report only when opt-in flag is set
-    # or when an explicit report was provided (e.g. from a write path).
-    if schema_translation_report is not None:
-        report = schema_translation_report
-    elif include_schema_warnings:
-        report = _build_schema_translation_report(valid_nodes, provider_by_node)
-    else:
-        report = []
     return PipelineGraphResponse.model_construct(
         nodes=valid_nodes,
         edges=valid_edges,
         validation_issues=issues,
-        schema_translation_report=report,
+        schema_translation_report=_graph_schema_translation_report(
+            valid_nodes,
+            provider_by_node,
+            schema_translation_report,
+            include_schema_warnings,
+        ),
     )
 
 

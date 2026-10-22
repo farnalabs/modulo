@@ -2123,6 +2123,7 @@ export default {
       "deadline_triage_delivery_done": "delivery observed before kill",
       "deadline_triage_log_tail": "Sandbox log tail",
       "deadline_triage_output_tail": "Agent output tail",
+      "deadline_triage_output_head": "Agent output head",
       "rerun": "Re-run",
       "rerun_confirm": "Confirm re-run?",
       "rerunning": "Re-running...",

@@ -109,6 +109,10 @@ def _override(**kwargs: str | bool) -> Settings:
         "database_url": "postgresql+asyncpg://localhost/test",
         "secret_key": _VALID_32,
         "fernet_key": _VALID_32,
+        # The mock session returns no organisations; multi-org is the honest
+        # representation of "no tenant to bind" now that the single-org
+        # invariant fails closed on an unidentifiable tenant (FAR-2060).
+        "modulo_multi_org_enabled": True,
         "modulo_license_key": _VALID_LICENSE_KEY,
         "modulo_oidc_providers": json.dumps(
             [
@@ -400,12 +404,18 @@ class TestSsoProvidersEndpoint:
         assert resp.status_code == 200
         assert resp.json()["saml"] is True
 
-    def test_sso_providers_disabled_returns_200_empty(self, client: TestClient) -> None:
-        """Unlicensed/feature-disabled -> normal 200 with an EMPTY providers list.
+    def test_sso_providers_unlicensed_still_lists_configured_providers(self, client: TestClient) -> None:
+        """FAR-2059: an unlicensed instance still advertises its configured providers.
 
         The endpoint is fetched by the login page BEFORE authentication, so it
-        must never raise an auth/plan error (the old 402 behaviour put a console
-        error on every login).
+        must never raise an auth/plan error. It must ALSO not hide the only
+        sign-in method: suppressing the listing on a lapsed key stranded every
+        SSO-only deployment (the login page rendered no SSO option at all).
+        Suppression is reserved for a licence that RESOLVES but does not grant
+        sso — a determinate downgrade where the auth gate would 402.
+
+        Env-var SAML stays unavailable without a verified key (FAR-1733), so
+        ``saml`` is still False here.
         """
         _override_settings(modulo_license_key="", modulo_saml_enabled=True)
         with (
@@ -414,7 +424,9 @@ class TestSsoProvidersEndpoint:
         ):
             resp = client.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 200
-        assert resp.json() == {"oidc": [], "saml": False}
+        body = resp.json()
+        assert {"google", "github"} <= {p["provider_id"] for p in body["oidc"]}
+        assert body["saml"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -1865,11 +1877,13 @@ class TestSsoProvidersEndpointDb:
             patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
             # FAR-1978: DB providers are only advertised on the single-org login
             # path, so the fixture must resolve exactly one login-active org.
-            patch("modulo.api.routes.sso.list_login_active_orgs", new_callable=AsyncMock) as mock_orgs,
+            # FAR-2060: the tenant answer is the ONE shared helper
+            # (``resolve_login_tenant``), imported at call time by the resolver.
+            patch("modulo.db.crud.organisation.resolve_login_tenant", new_callable=AsyncMock) as mock_tenant,
             patch("modulo.api.routes.sso.list_enabled_oidc_providers", new_callable=AsyncMock) as mock_list,
             patch("modulo.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock) as mock_saml,
         ):
-            mock_orgs.return_value = [SimpleNamespace(id=org_id)]
+            mock_tenant.return_value = (True, SimpleNamespace(id=org_id, slug="org", name="Org"))
             mock_list.return_value = [db_provider]
             mock_saml.return_value = None
             resp = client.get("/api/v1/auth/sso/providers")

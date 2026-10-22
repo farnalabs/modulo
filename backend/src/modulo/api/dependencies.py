@@ -54,7 +54,7 @@ from modulo.auth.permissions import (
 )
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 from modulo.core.feature_flags import PlanContext
-from modulo.db.models.organisation import SYSTEM_ORG_ID
+from modulo.db.models.organisation import SYSTEM_ORG_ID, Organisation
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import Settings, get_settings
@@ -62,6 +62,11 @@ from modulo.settings import Settings, get_settings
 _CODE_PERMISSION_DENIED = "permission.denied"
 
 _CODE_DEPENDENCIES_CHECK = "dependencies._check"
+
+# Pre-auth plan resolution failure (fail-closed). Deliberately generic: the
+# anonymous surface must not reveal licence state or tenant ambiguity, and a
+# 5xx (never a 402/allow) is the only safe answer.
+MSG_PLAN_UNAVAILABLE = "The instance plan could not be resolved. Try again later."
 
 
 def _enforce_key_grant(principal: TenantPrincipal, permission: str) -> None:
@@ -623,62 +628,164 @@ def _team_membership_or_admin_dep(
     )
 
 
+async def resolve_anonymous_plan_with_tenant(
+    settings: Settings,
+    session: AsyncSession,
+) -> tuple[PlanContext, Organisation | None]:
+    """Resolve the pre-auth plan context AND the trusted tenant, once.
+
+    Shared by :func:`resolve_anonymous_plan_context` (the gate dependency) and
+    the SSO discovery route, which needs the SAME tenant the plan decision used
+    (FAR-2060). Resolving both in one transaction closes the TOCTOU window where
+    the plan was decided over one org read and the provider listing over another.
+
+    The tenant is :func:`modulo.db.crud.organisation.resolve_login_tenant`'s
+    canonical answer — derived server-side from the database, never from
+    anything the caller supplies (body, header, query or path).
+
+    Two DISTINCT states, never collapsed:
+
+    * **no tenant to bind** (multi-org, or an unconfigured instance with zero
+      login-active orgs) -> the licence ladder runs at system scope
+      (``org=None``). This is a determinate answer.
+    * **single-org but the tenant cannot be identified** (zero rows, or a stray
+      extra row, on an instance whose invariant says it is one org) -> FAIL
+      CLOSED with a 503. Falling through to system scope here would widen the
+      entitlement lookup on an instance that cannot say which tenant it is.
+
+    A failure to resolve the plan at all (e.g. a malformed ``tier_catalog`` row
+    raising ``TypeError``) is also a 503 — NEVER a Community fallback. A
+    Community context reports ``has_license_key() == False``, which the
+    degraded-authentication carve-out would read as "no licence resolved" and
+    ALLOW, turning a resolution bug into an authentication bypass (FAR-2059).
+    "Resolution failed" and "no licence resolved" are therefore separate
+    states: failed re-raises; only a genuinely resolved plan can return.
+
+    Security note: these are authentication entry-point routes — they must be
+    reachable before a session exists. Never make a route anonymous that
+    previously required a user unless it is one of the documented pre-auth SSO
+    login/callback/SAML routes. Resolving the tenant's licence here changes only
+    WHETHER the gate passes — licence state and tenant identity are never
+    written into an anonymous response.
+    """
+    from modulo.core.feature_flags import resolve_plan_context as _resolve
+    from modulo.db.crud.organisation import resolve_login_tenant
+
+    try:
+        async with session.begin():
+            is_single_org, org = await resolve_login_tenant(session, settings)
+            if is_single_org and org is None:
+                # Single-org invariant with no unambiguous tenant: fail closed.
+                logger.error(
+                    "api.dependencies.anonymous_plan_tenant_unresolved",
+                    extra={"reason": ("Single-org instance with no uniquely identifiable tenant")},
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=MSG_PLAN_UNAVAILABLE,
+                )
+            return await _resolve(settings, session, org=org), org
+    except HTTPException:
+        raise
+    except (TypeError, AttributeError):
+        # A malformed catalog row or a session that cannot run the resolution is
+        # an operational failure, NOT "no licence". Surfacing it as a 5xx keeps
+        # the gate fail-closed and distinguishes it from the deliberate
+        # degraded-authentication path.
+        logger.exception("api.dependencies.anonymous_plan_context_resolution_failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_PLAN_UNAVAILABLE,
+        ) from None
+
+
 async def resolve_anonymous_plan_context(settings: Settings, session: AsyncSession) -> PlanContext:
     """Resolve the plan context WITHOUT a user (pre-auth login-page surface).
 
     Shared by ``require_feature_anonymous`` and the SSO discovery route
     (``/auth/sso/providers``). Mirrors :func:`get_plan_context` minus the
-    ``get_current_user`` dependency: with no organisation context the plan
-    resolves from the system-level license (in-memory store, then env var),
-    falling back to ``CommunityTier``.
+    ``get_current_user`` dependency.
 
-    The ``TypeError``/``AttributeError`` fallback matches ``get_plan_context``'s
-    handling of test-double sessions.
+    FAR-2060 — tenant scope: the licence is NOT resolved from system scope
+    alone. When the instance has exactly one login-active org, that org is the
+    trusted tenant and the full ladder runs over it (org-level key -> system
+    in-memory -> system env var), so an organisation-scoped Team key enables
+    SSO for the organisation it belongs to. With zero or multiple login-active
+    orgs there is no single tenant to bind, so the ladder runs with ``org=None``
+    (system scope). The org is NEVER taken from caller input.
 
-    Security note: these are authentication entry-point routes — they must be
-    reachable before a session exists. The gate must remain fail-closed: when
-    the plan/license cannot be resolved, deny (402) rather than allow. Never
-    make a route anonymous that previously required a user unless it is one of
-    the documented pre-auth SSO login/callback/SAML routes.
+    A resolution failure raises a 503 (fail closed); there is no
+    ``CommunityTier`` fallback, because that would be indistinguishable from
+    "no licence resolved" and would let the degraded-authentication carve-out
+    ALLOW. See :func:`resolve_anonymous_plan_with_tenant`.
     """
-    from modulo.core.feature_flags import CommunityTier
-    from modulo.core.feature_flags import resolve_plan_context as _resolve
-
-    try:
-        async with session.begin():
-            return await _resolve(settings, session, org=None)
-    except (TypeError, AttributeError):
-        logger.warning(
-            "api.dependencies.anonymous_plan_context_fallback",
-            extra={"reason": ("Session does not support anonymous plan resolution — returning CommunityTier")},
-        )
-        return CommunityTier()
+    ctx, _org = await resolve_anonymous_plan_with_tenant(settings, session)
+    return ctx
 
 
-def require_feature_anonymous(feature_name: str) -> DependsParameter:
+def _feature_required_detail(feature_name: str) -> str:
+    """Operator-facing 402 detail naming the licence scope a feature needs.
+
+    FAR-2060: a bare "not available on your plan" reads as an IdP bug. Name the
+    scope so the operator knows an org-scoped key is accepted too.
+    """
+    return (
+        f"{feature_name} is not available on your plan — it requires a Team licence "
+        "installed at system or organisation scope"
+    )
+
+
+def require_feature_anonymous(
+    feature_name: str,
+    *,
+    allow_degraded_authentication: bool = False,
+) -> DependsParameter:
     """Pre-auth feature gate — resolves the plan WITHOUT a user.
 
     Use on authentication entry-point routes (SSO login, callback, SAML
-    ACS/metadata) that must be reachable before any session exists. The plan
-    is resolved from the system-level license only (no org context), falling
-    back to ``CommunityTier``.
+    ACS/metadata) that must be reachable before any session exists. The plan is
+    resolved over the trusted tenant (see
+    :func:`resolve_anonymous_plan_context`). There is NO ``CommunityTier``
+    fallback: a resolution failure is a 503, never an allow.
+
+    ``allow_degraded_authentication`` (FAR-2059) opts an AUTHENTICATION entry
+    point into the degrade-never-strand policy: when NO valid licence resolves
+    at any scope (an expired key is cleared by ``get_license`` and is therefore
+    indistinguishable from an absent one here), the request is allowed through
+    so the user can sign in; entitlement is enforced post-auth, where the plan
+    resolves to Community and every Team feature stays off. A licence that DOES
+    resolve but does not grant the feature is a determinate entitlement
+    decision, so it keeps returning 402 with a scope-naming detail.
 
     Returns 402 Payment Required when the feature is unavailable — never 401.
-    The gate is fail-closed: if plan resolution itself fails, the route is
-    denied (402) rather than permitted.
+    The gate is fail-closed: if plan resolution itself fails, the resolver
+    raises a 5xx and the route is DENIED — never permitted. "Resolution failed"
+    is deliberately not encoded as ``has_license_key() == False``, because the
+    degraded-authentication branch would read that as "no licence" and allow.
 
     .. code-block:: python
 
        _: object = require_feature_anonymous("sso")  # route parameter
+
+    FAR-2059 / FAR-2060: authentication is not an entitlement, so an SSO-only
+    deployment keeps signing users in on a lapsed key — but the pre-auth gate is
+    NOT a blanket bypass: it still refuses a determinate unlicensed feature.
     """
 
     def _check(ctx: PlanContext = Depends(get_anonymous_plan_context)) -> None:
-        if not ctx.feature_enabled(feature_name):
-            raise ProblemException(
-                ProblemType.FEATURE_REQUIRED,
-                detail=f"{feature_name} is not available on your plan",
-                instance=feature_name,
+        if ctx.feature_enabled(feature_name):
+            return
+        if allow_degraded_authentication and not ctx.has_license_key():
+            logger.warning(
+                "feature.anonymous_degraded_authentication",
+                extra={"feature": feature_name},
             )
+            return
+        raise ProblemException(
+            ProblemType.FEATURE_REQUIRED,
+            detail=_feature_required_detail(feature_name),
+            instance=feature_name,
+        )
 
     return cast("DependsParameter", Depends(_check))
 
@@ -699,7 +806,7 @@ def require_feature(feature_name: str) -> DependsParameter:
         if not ctx.feature_enabled(feature_name):
             raise ProblemException(
                 ProblemType.FEATURE_REQUIRED,
-                detail=f"{feature_name} is not available on your plan",
+                detail=_feature_required_detail(feature_name),
                 instance=feature_name,
             )
 
@@ -936,8 +1043,11 @@ async def get_anonymous_plan_context(
 ) -> PlanContext:
     """DI-overridable anonymous plan context for pre-auth routes.
 
-    Resolves the plan WITHOUT a user: system-level license -> CommunityTier
-    fallback.  Mirrors :func:`get_plan_context` minus ``get_current_user``.
+    Resolves the plan WITHOUT a user over the trusted tenant: an org-scoped
+    licence for the single login-active org, then the system-level licence
+    (FAR-2060). Mirrors :func:`get_plan_context` minus ``get_current_user``.
+    A resolution failure raises a 5xx rather than falling back to Community —
+    see :func:`resolve_anonymous_plan_with_tenant`.
 
     Tests can override this via
     ``app.dependency_overrides[get_anonymous_plan_context]`` to control

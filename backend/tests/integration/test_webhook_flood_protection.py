@@ -14,9 +14,10 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from modulo.core.run_admission import has_in_flight_ci_failure_run
 from modulo.core.trigger_engine import (
     ConcurrentRunLimitError,
     DuplicateWebhookError,
@@ -25,6 +26,8 @@ from modulo.core.trigger_engine import (
     TriggerEngine,
 )
 from modulo.core.trigger_engine.pre_guardrail import canonical_payload_hash
+from modulo.db.crud.run import CI_FAILURE_COALESCE_KEY_FIELD
+from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
@@ -551,3 +554,99 @@ class TestWebhookFullPipeline:
             row = result.fetchone()
             assert row is not None, "Dedup hash should exist"
             assert row.expires_at is not None
+
+
+# ---------------------------------------------------------------------------
+# FAR-1034 CI-failure coalesce identity — round-trip through ingestion
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture(scope="module")
+async def ci_failure_mapped_trigger(
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_user: uuid.UUID,
+) -> tuple[uuid.UUID, str]:
+    """A webhook trigger whose ``payload_mapping`` REPLACES the payload wholesale.
+
+    ``prNumber`` / ``headSha`` are renamed away, which is exactly the config that
+    made the in-flight leg silently inert before the engine-stamped key: the
+    stored payload no longer carries the fields the leg used to re-derive from.
+    """
+    trigger_id = uuid.uuid4()
+    hmac_secret = "whsec_ci_mapping_secret_1234567890"
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+                "trigger_type, active, max_concurrent_runs, config_json, account_id) "
+                "VALUES (:id, :oid, :pid, 'webhook', true, 20, (:config)::json, :uid)",
+            ),
+            {
+                "id": str(trigger_id),
+                "oid": str(test_org),
+                "pid": str(test_pipeline),
+                "config": json.dumps(
+                    {
+                        "hmac_secret": hmac_secret,
+                        "payload_mapping": {"pr": "prNumber", "sha": "headSha"},
+                    }
+                ),
+                "uid": str(test_user),
+            },
+        )
+    return trigger_id, hmac_secret
+
+
+class TestCiFailureKeySurvivesPayloadMapping:
+    async def test_stored_row_key_matches_incoming_key(
+        self,
+        db_engine: AsyncEngine,
+        test_org: uuid.UUID,
+        test_pipeline: uuid.UUID,
+        test_snapshot: uuid.UUID,
+        ci_failure_mapped_trigger: tuple[uuid.UUID, str],
+    ) -> None:
+        trigger_id, hmac_secret = ci_failure_mapped_trigger
+        raw_payload = {
+            "branchName": "prompt-pr-777",
+            "prNumber": 777,
+            "headSha": "abc123",
+            "runUrl": "https://github.com/farnalabs/modulo/actions/runs/1",
+            "failureDescription": "CI checks failed on PR #777",
+        }
+        body = json.dumps(raw_payload).encode()
+        ts = _valid_timestamp()
+        sig = _hmac_sign(body, hmac_secret, int(ts))
+        ci_key = "ci-failure:pr:777:sha:abc123"
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session, session.begin():
+            await set_rls_org(session, test_org)
+            run, event, input_payload = await TriggerEngine().handle_webhook(
+                session,
+                trigger_id=trigger_id,
+                org_id=test_org,
+                raw_body=body,
+                raw_payload=raw_payload,
+                hmac_signature=sig,
+                modulo_timestamp=ts,
+                snapshot_id=test_snapshot,
+            )
+            assert event.validation_result == "accepted"
+
+            # The mapping replaced the payload: the raw CI fields are gone.
+            assert input_payload == {"pr": 777, "sha": "abc123"}
+
+            # ...but the run carries the engine-stamped identity.
+            stored = (await session.execute(select(Run.input_payload).where(Run.id == run.id))).scalar_one()
+            assert "prNumber" not in stored
+            assert stored[CI_FAILURE_COALESCE_KEY_FIELD] == ci_key
+
+            # The in-flight leg matches the incoming key off the STORED row.
+            assert await has_in_flight_ci_failure_run(
+                session,
+                pipeline_id=test_pipeline,
+                coalesce_key=ci_key,
+            )

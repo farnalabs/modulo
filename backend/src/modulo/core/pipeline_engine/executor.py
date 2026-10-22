@@ -31,7 +31,7 @@ import random
 import socket
 import uuid
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -2025,14 +2025,111 @@ def _can_fenced_requeue(
     return node_attempt_count < retries and not superseded and not stalled and script_lease_ok and graph_idempotent
 
 
+# FAR-2025: a retry must not re-run an attempt that has already consumed the
+# graph's whole node-budget allowance. Such an attempt is an OVER-BUDGET TASK,
+# not a transient failure: the retry re-runs the identical workload against the
+# same per-node budgets, so it is guaranteed to end the same way and only
+# multiplies slot occupancy (measured: 12 of 69 Branch Fixer deadline runs over
+# 30h were a retry that re-consumed the budget, 24.8 of 77 slot-hours).
+#
+# The slack absorbs everything that legitimately happens inside a node's wall
+# clock other than the agent's own work: sandbox provisioning, the post-node
+# envelope write / cost self-report merge, and a task's OWN end-of-budget
+# reserve (a sandbox command that hands itself a timeout a little under the
+# node budget so it can still write its envelope). An attempt within this
+# window of its ceiling has spent the allowance for retry purposes.
+_NODE_BUDGET_RETRY_SLACK_SECONDS = 300
+
+
+def _as_utc_datetime(value: Any) -> datetime | None:
+    """Coerce a driver value to a timezone-aware datetime, or None.
+
+    Only a real ``datetime`` is accepted — a string or a test double's bare Mock
+    is "unknown", never a crash. A naive timestamp is treated as UTC.
+    """
+    if not isinstance(value, datetime):
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
+def _attempt_started_at(run: Any) -> datetime | None:
+    """This attempt's start time from a run row, or None when it cannot be known.
+
+    ``started_at`` is set once, when the FIRST attempt begins executing, while
+    ``dispatched_at`` is rewritten on every claim / re-claim. So the LATER of the
+    two is the current attempt's start: for attempt 1 that is ``started_at``
+    (which excludes any queue wait before the worker claimed the run — using
+    ``dispatched_at`` there would count the wait as consumed budget, a false
+    positive); for a re-dispatch it is the rewritten ``dispatched_at`` (the
+    original ``started_at`` would otherwise make every retry look exhausted).
+    """
+    candidates = [
+        value
+        for value in (
+            _as_utc_datetime(getattr(run, "dispatched_at", None)),
+            _as_utc_datetime(getattr(run, "started_at", None)),
+        )
+        if value is not None
+    ]
+    return max(candidates) if candidates else None
+
+
+def _attempt_elapsed_seconds(started_at: datetime | None, *, now: datetime | None = None) -> float | None:
+    """Seconds since this execution attempt was dispatched, or None if unknown.
+
+    Pure (``now`` is injectable for tests). A naive timestamp is treated as UTC
+    so a driver that hands back a naive datetime cannot raise here — the retry
+    decision must never be the reason a run cannot reach a terminal state.
+    """
+    if started_at is None:
+        return None
+    reference = now if now is not None else datetime.now(UTC)
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=UTC)
+    return max(0.0, (reference - started_at).total_seconds())
+
+
+def _attempt_consumed_node_budget(elapsed_seconds: float | None, node_timeouts: Iterable[int]) -> bool:
+    """True when the finished attempt already used its node-budget allowance.
+
+    ``node_timeouts`` are the graph's resolved per-node budgets. Their SUM is
+    the most a single attempt of this graph could legitimately spend, so it is
+    the safe upper bound for "this attempt is over budget"; using the maximum
+    would refuse a legitimate retry of a multi-node graph that spent its
+    allowance across several nodes.
+
+    Fail OPEN (return False) when either input is unknown — a missing elapsed
+    time, or no resolved node budget (``_node_timeouts`` is only populated once
+    the executor prepares the stream, so a PRE-node hang has no allowance to
+    check and must keep its retry). A retry decision must never be the reason a
+    run cannot reach a terminal state, and today's behaviour is to allow it.
+    """
+    if elapsed_seconds is None:
+        return False
+    budget_seconds = sum(t for t in node_timeouts if isinstance(t, int) and t > 0)
+    if budget_seconds <= 0:
+        return False
+    return elapsed_seconds >= budget_seconds - _NODE_BUDGET_RETRY_SLACK_SECONDS
+
+
 def _can_retry_after_policy(
     node_attempt_count: int,
     retry_budget: int,
     superseded: bool,
     script_retry_probe_ok: bool,
+    *,
+    attempt_consumed_budget: bool = False,
 ) -> bool:
-    """Can the retry_policy re-dispatch this run (FAR-136 / FAR-296 Phase 2)?"""
-    return node_attempt_count <= retry_budget and not superseded and script_retry_probe_ok
+    """Can the retry_policy re-dispatch this run (FAR-136 / FAR-296 Phase 2)?
+
+    ``attempt_consumed_budget`` (FAR-2025) refuses the retry when the attempt
+    that just finished already spent the graph's whole node-budget allowance —
+    an over-budget task, whose retry is a guaranteed repeat. False by default
+    so every caller that has not been taught the guard keeps today's behaviour.
+    """
+    return (
+        node_attempt_count <= retry_budget and not superseded and script_retry_probe_ok and not attempt_consumed_budget
+    )
 
 
 def _retry_policy_applies(
@@ -6624,10 +6721,19 @@ class PipelineExecutor:
         self,
         org_id: uuid.UUID,
         run_id: uuid.UUID,
-    ) -> tuple[int, str | None]:
-        """Read the run's attempt count + current claim token for the retry check."""
+    ) -> tuple[int, str | None, datetime | None]:
+        """Read the run's attempt count, claim token, and THIS attempt's start.
+
+        ``attempt_started_at`` is the LATER of ``dispatched_at`` (rewritten on
+        every claim / re-claim, so it marks the current attempt's start) and
+        ``started_at`` (set once when the first attempt began executing) — see
+        ``_attempt_started_at`` for why the max, not a fallback, is correct. It
+        is the input to the FAR-2025 over-budget retry guard: an attempt that
+        consumed the graph's node-budget allowance must not be re-dispatched.
+        """
         node_attempt_count = 0
         current_claim_token: str | None = None
+        attempt_started_at: datetime | None = None
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
@@ -6635,7 +6741,8 @@ class PipelineExecutor:
             if current_run is not None:
                 node_attempt_count = int(current_run.node_attempt_count or 0)
                 current_claim_token = current_run.claim_token
-        return node_attempt_count, current_claim_token
+                attempt_started_at = _attempt_started_at(current_run)
+        return node_attempt_count, current_claim_token, attempt_started_at
 
     async def _probe_script_lease(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> bool:
         """FAR-296 Phase 2 stale-claim lease probe before ANY requeue of script mode.
@@ -6799,12 +6906,33 @@ class PipelineExecutor:
         # narrowing keeps mypy strict-clean without introducing an ``assert``.
         if retry_budget is None:
             return "none"
-        node_attempt_count, current_claim_token = await self._read_retry_attempt_state(org_id, run_id)
+        node_attempt_count, current_claim_token, attempt_started_at = await self._read_retry_attempt_state(
+            org_id, run_id
+        )
         superseded = (
             self._claim_token is not None
             and current_claim_token is not None
             and current_claim_token != self._claim_token
         )
+        # FAR-2025: an attempt that already consumed the graph's whole node-budget
+        # allowance is an over-budget TASK, not a transient failure — re-running it
+        # re-consumes the same budgets and ends the same way. Refuse the retry so the
+        # ladder cannot multiply occupancy for no chance of success.
+        attempt_consumed_budget = _attempt_consumed_node_budget(
+            _attempt_elapsed_seconds(attempt_started_at),
+            self._node_timeouts.values(),
+        )
+        if attempt_consumed_budget:
+            _log.warning(
+                "pipeline.retry_policy_budget_exhausted",
+                extra={
+                    "run_id": str(run_id),
+                    "error_code": error_code,
+                    "attempt": node_attempt_count,
+                    "budget": retry_budget,
+                    "node_budget_seconds": sum(t for t in self._node_timeouts.values() if isinstance(t, int) and t > 0),
+                },
+            )
         # ``node_attempt_count`` is incremented to 1 on the FIRST real
         # execution attempt (above), so ``<= retry_budget`` means the
         # budget counts actual RETRIES: budget=1 retries attempt 1
@@ -6817,7 +6945,13 @@ class PipelineExecutor:
         script_retry_probe_ok = True
         if _graph_has_script_mode(graph_json):
             script_retry_probe_ok = await self._probe_script_lease(run_id=run_id, org_id=org_id)
-        if _can_retry_after_policy(node_attempt_count, retry_budget, superseded, script_retry_probe_ok):
+        if _can_retry_after_policy(
+            node_attempt_count,
+            retry_budget,
+            superseded,
+            script_retry_probe_ok,
+            attempt_consumed_budget=attempt_consumed_budget,
+        ):
             await self._redispatch_after_policy(
                 run_id=run_id,
                 org_id=org_id,

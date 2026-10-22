@@ -29,7 +29,7 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.settings import Settings, get_settings
-from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _FERNET_KEY = Fernet.generate_key().decode()
 _VALID_32 = "a" * 32
@@ -75,6 +75,7 @@ def _fake_key(role: str = "operator", team_id: uuid.UUID | None = None) -> Simpl
 def _make_auth_session() -> AsyncMock:
     """Session for get_current_tenant_user_or_api_key's internal org lookups."""
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

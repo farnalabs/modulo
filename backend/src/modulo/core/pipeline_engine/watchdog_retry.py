@@ -47,11 +47,13 @@ a re-dispatch re-executes the graph from the start, so a run whose marker rows
 already record a completed delivery (``classify._any_marker_delivery_done`` —
 the SAME FAR-228 ``delivery_done`` sentinel the node-level gate reads) must not
 be re-dispatched: the side effect already happened and re-running can produce
-it twice. The stall/zombie watchdog passes the flag; the node-deadline
-watchdog does not (its behaviour is unchanged). The veto reads through the
-SAME repo reader the executor's gate uses (``read_run_markers``), so this path
-can never disagree with it about what the run recorded — there is no second
-definition of "delivered" and no new bookkeeping.
+it twice. BOTH in-process watchdog call sites pass the flag — the stall/zombie
+watchdog (FAR-2053) and the node-deadline watchdog (FAR-2071) — because both
+kills can be reached on an attempt that follows one which delivered. The veto
+reads through the SAME repo reader the executor's gate uses
+(``read_run_markers``), so this path can never disagree with it about what the
+run recorded — there is no second definition of "delivered" and no new
+bookkeeping.
 
 Fail-closed by design: any hook failure (DB error, missing executor, lost
 claim token) returns ``False`` and the watchdog terminal-fails the run
@@ -95,6 +97,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.core.pipeline_engine import retry_compensation as rc
 from modulo.core.pipeline_engine.executor import (
+    _attempt_consumed_node_budget,
+    _attempt_elapsed_seconds,
     _can_retry_after_policy,
     _graph_has_script_mode,
     _graph_is_idempotent,
@@ -260,6 +264,8 @@ async def _attempt_count_if_retryable(
     claim_token: Any,
     claim_count: int,
     retry_budget: int,
+    final_status: str,
+    error_code: str,
 ) -> int | None:
     """Apply the shared gates + bookkeeping; return the effective attempt count.
 
@@ -281,13 +287,42 @@ async def _attempt_count_if_retryable(
     graph_idempotent = _graph_is_idempotent(graph_json)
     if is_correction_run or not graph_idempotent:
         return None
-    node_attempt_count, current_claim_token = await executor._read_retry_attempt_state(org_id, run_id)
+    node_attempt_count, current_claim_token, attempt_started_at = await executor._read_retry_attempt_state(
+        org_id, run_id
+    )
     attempt_count: int = max(node_attempt_count, claim_count - 1)
     superseded = claim_token is not None and current_claim_token is not None and current_claim_token != claim_token
     script_retry_probe_ok = True
     if _graph_has_script_mode(graph_json):
         script_retry_probe_ok = await executor._probe_script_lease(run_id=run_id, org_id=org_id)
-    if not _can_retry_after_policy(attempt_count, retry_budget, superseded, script_retry_probe_ok):
+    # FAR-2025: refuse the re-dispatch when the killed attempt already consumed the
+    # graph's whole node-budget allowance (a watchdog deadline kill always has). An
+    # over-budget task cannot be rescued by spending the same budgets again, so the
+    # retry is a pure occupancy multiplier. ``_node_timeouts`` is empty before the
+    # first node starts, so a PRE-node hang (the zombie watchdog's sites) is not
+    # affected — it consumed no node budget and stays retryable.
+    node_timeouts = getattr(executor, "_node_timeouts", None)
+    timeouts = node_timeouts.values() if isinstance(node_timeouts, dict) else ()
+    attempt_consumed_budget = _attempt_consumed_node_budget(
+        _attempt_elapsed_seconds(attempt_started_at),
+        timeouts,
+    )
+    if attempt_consumed_budget:
+        _log.warning(
+            "pipeline.watchdog_retry_budget_exhausted run=%s status=%s error_code=%s attempt=%s budget=%s",
+            run_id,
+            final_status,
+            error_code,
+            attempt_count,
+            retry_budget,
+        )
+    if not _can_retry_after_policy(
+        attempt_count,
+        retry_budget,
+        superseded,
+        script_retry_probe_ok,
+        attempt_consumed_budget=attempt_consumed_budget,
+    ):
         return None
     return attempt_count
 
@@ -416,16 +451,17 @@ async def watchdog_retry_after_policy(
     behaviour is byte-for-byte unchanged: nodes may have executed there, so a
     failure carve-out is not safe without an explicit zero-node criterion.
 
-    FAR-2053 delivery veto — ``veto_if_delivered=True`` ONLY (the stall/zombie
-    watchdog passes it): once the retry policy would re-dispatch, the run's
-    marker rows are read and, if ANY of them records ``delivery_done``, the
-    re-dispatch is REFUSED and the watchdog terminal-fails instead. A
-    re-dispatch re-executes the graph from the start, so re-running a run that
-    already delivered can repeat its side effect; the FAR-228 node-level gate
-    only bounds that for single-sandbox-node graphs on the transient-failure
-    path. The probe fails CLOSED — an unreadable delivery record vetoes. The
-    node-deadline watchdog does not pass the flag, so its behaviour is
-    unchanged.
+    FAR-2053 delivery veto — ``veto_if_delivered=True`` ONLY, and passed by
+    BOTH in-process watchdog call sites: the stall/zombie watchdog (FAR-2053)
+    and the node-deadline watchdog (FAR-2071). Once the retry policy would
+    re-dispatch, the run's marker rows are read and, if ANY of them records
+    ``delivery_done``, the re-dispatch is REFUSED and the watchdog
+    terminal-fails instead. A re-dispatch re-executes the graph from the start,
+    so re-running a run that already delivered can repeat its side effect; the
+    FAR-228 node-level gate only bounds that for single-sandbox-node graphs on
+    the transient-failure path, and neither watchdog kill has any other
+    delivery guard. The probe fails CLOSED — an unreadable delivery record
+    vetoes.
     """
     box = outcome if outcome is not None else WatchdogRetryOutcome()
     if executor is None:
@@ -485,6 +521,8 @@ async def watchdog_retry_after_policy(
         claim_token=claim_token,
         claim_count=claim_count,
         retry_budget=retry_budget,
+        final_status=final_status,
+        error_code=error_code,
     )
     if attempt_count is None:
         return False

@@ -20,6 +20,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -38,6 +39,7 @@ def _make_settings(**overrides: Any) -> Settings:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -688,7 +690,11 @@ class TestTemplatePipelineCreateReadInsideTxn:
 
         mock_get_primitive.return_value = None  # primitive deleted concurrently
 
-        mock_session = AsyncMock()
+        # The permission dependency reads ``result.scalar_one_or_none()`` (a
+        # SYNC Result method) off ``session.execute``; a bare AsyncMock hands
+        # back an AsyncMock whose child call orphans a coroutine.
+        mock_session = configure_rls_preamble(AsyncMock())
+        mock_session.execute = AsyncMock(return_value=make_empty_execute_result())
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -735,7 +741,11 @@ class TestTemplatePipelineCreateReadInsideTxn:
         prim.primitive_type = "workflow"  # wrong type
         mock_get_primitive.return_value = prim
 
-        mock_session = AsyncMock()
+        # The permission dependency reads ``result.scalar_one_or_none()`` (a
+        # SYNC Result method) off ``session.execute``; a bare AsyncMock hands
+        # back an AsyncMock whose child call orphans a coroutine.
+        mock_session = configure_rls_preamble(AsyncMock())
+        mock_session.execute = AsyncMock(return_value=make_empty_execute_result())
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)

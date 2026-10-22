@@ -153,6 +153,7 @@ def test_projection_carries_run_attempt_count_as_data() -> None:
     assert "last_output_age_seconds" not in entry
     # Same envelope keys as a per-attempt deadline marker.
     assert entry["attempt_key"] == f"terminal-triage:{_RUN}"
+    assert not entry["raw_output_head"]
     assert not entry["raw_output_tail"]
     assert entry["stdout_length"] == 0
 

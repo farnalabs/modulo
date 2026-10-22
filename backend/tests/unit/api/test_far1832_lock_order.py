@@ -33,6 +33,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = "00000000-0000-0000-0000-000000000001"
 _USER_ID = "00000000-0000-0000-0000-000000000002"
@@ -52,6 +53,7 @@ def _make_settings() -> Settings:
 def _make_session(events: list[str]) -> AsyncMock:
     """Mock session whose ``begin()`` records enter/exit around the handler body."""
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.in_transaction = MagicMock(return_value=True)
     session.info = {}
 
