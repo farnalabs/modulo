@@ -13,6 +13,7 @@ with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/licensing/license_management.feature")
 
 from modulo.core.license import (
+    LICENCE_GRACE_DAYS,
     clear_license,
     parse_and_verify,
     set_public_key,
@@ -195,7 +196,9 @@ def tampered_license_key(ctx: dict[str, Any]) -> None:
 
 @given("I have an expired license key")
 def expired_license_key(ctx: dict[str, Any]) -> None:
-    payload = _valid_payload(expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat())
+    # FAR-2059: capability expiry is expires_at + the fixed delivery grace, so
+    # "expired" for this scenario means lapsed PAST the grace window.
+    payload = _valid_payload(expires_at=(datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 1)).isoformat())
     ctx["license_key"] = _sign_license_payload(payload)
 
 

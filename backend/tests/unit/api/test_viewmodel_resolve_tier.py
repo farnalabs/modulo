@@ -26,6 +26,7 @@ import pytest
 from modulo.api.routes.viewmodel import _resolve_tier
 from modulo.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
+    LICENCE_GRACE_DAYS,
     LicenseData,
     clear_license,
     set_public_key,
@@ -109,8 +110,15 @@ class TestResolveTierEnvKeyVerification:
         assert _resolve_tier(_settings(modulo_license_key="not-a-valid-key")) == "community"
 
     def test_expired_env_key_is_not_trusted(self) -> None:
-        """An expired but correctly signed key falls through to community."""
-        key = _sign_license_payload(_valid_payload(expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat()))
+        """A correctly signed key lapsed PAST the delivery grace falls through to community.
+
+        FAR-2059: an expiry inside ``LICENCE_GRACE_DAYS`` still resolves its
+        tier (capability expiry is ``expires_at + LICENCE_GRACE_DAYS``); only a
+        key past that window is untrusted.
+        """
+        key = _sign_license_payload(
+            _valid_payload(expires_at=(datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 1)).isoformat())
+        )
         assert _resolve_tier(_settings(modulo_license_key=key)) == "community"
 
     def test_valid_env_key_reports_its_tier(self) -> None:

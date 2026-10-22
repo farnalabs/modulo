@@ -4,11 +4,13 @@ Two behaviours, both driven at the REAL HTTP boundary over real Postgres and
 the real anonymous plan resolver (no ``get_anonymous_plan_context`` override —
 that would bypass the code under test):
 
-FAR-2059 — degrade, never strand. A single-org instance whose users sign in
-only through SSO must keep advertising its provider and keep reaching the login
-leg when its licence has EXPIRED. Entitlement then degrades post-auth: the
-org's plan resolves to Community, so Team features (including the admin SSO
-surface) are off — but nobody is locked out.
+FAR-2059 — degrade, never strand, but do not give Team away. A self-hosted
+licence is an offline signed key delivered by email, so capability survives a
+FIXED 14-day grace after ``expires_at`` (key delivery, not free use). Inside
+the grace the instance keeps full Team capability; past it, Team falls off
+(the plan resolves to Community) — while authentication itself is never
+blocked, and an administrator can still log in and reach the licence screen to
+install a new key.
 
 FAR-2060 — tenant scope. A Team key installed at the ORGANISATION level must
 be recognised by the pre-auth resolver: the org is the trusted tenant (the
@@ -76,6 +78,7 @@ def _settings(*, env_licence: str = "", multi_org: bool = False) -> Settings:
         modulo_license_key=env_licence,
         modulo_multi_org_enabled=multi_org,
         modulo_auth_rate_limit_enabled=False,
+        modulo_csrf_enabled=False,
         redis_url="",
         modulo_admin_password="",
     )
@@ -173,6 +176,52 @@ async def _create_oidc_provider(engine: AsyncEngine, *, org_id: uuid.UUID, provi
     return row_id
 
 
+_PASSWORD = "far-2059-password-123"
+
+
+async def _create_account(engine: AsyncEngine, *, email: str) -> uuid.UUID:
+    from modulo.auth.passwords import hash_password
+
+    account_id = uuid.uuid4()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
+                "VALUES (:id, :email, :name, :hash, 'local', true)"
+            ),
+            {
+                "id": str(account_id),
+                "email": email,
+                "name": f"FAR-2059 {account_id.hex[:8]}",
+                "hash": hash_password(_PASSWORD),
+            },
+        )
+    return account_id
+
+
+async def _create_membership(engine: AsyncEngine, *, org_id: uuid.UUID, account_id: uuid.UUID, role: str) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role, joined_at) "
+                "VALUES (:id, :aid, :oid, :role, :joined)"
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "aid": str(account_id),
+                "oid": str(org_id),
+                "role": role,
+                "joined": datetime.now(UTC),
+            },
+        )
+
+
+async def _login(client: AsyncClient, email: str) -> str:
+    resp = await client.post("/api/v1/auth/login", json={"email": email, "password": _PASSWORD})
+    assert resp.status_code == 200, resp.text
+    return str(resp.json()["access_token"])
+
+
 @asynccontextmanager
 async def _sso_client_for(app_engine: AsyncEngine, settings: Settings) -> AsyncGenerator[AsyncClient, None]:
     """ASGI client on the REAL app + real anonymous resolver, over real Postgres."""
@@ -237,34 +286,74 @@ async def _post_auth_plan(app_engine: AsyncEngine, org_id: uuid.UUID) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# FAR-2059 — expired licence degrades instead of locking out
+# FAR-2059 — the fixed delivery grace, and the post-grace degrade
 # ---------------------------------------------------------------------------
 
 
-async def test_expired_org_licence_still_lets_sso_users_reach_sign_in(
+async def test_expiry_inside_the_delivery_grace_keeps_team_capability(
     sso_client: AsyncClient, db_engine: AsyncEngine, app_engine: AsyncEngine
 ) -> None:
-    """An EXPIRED org-scoped Team key must not hide or gate the SSO entry point."""
+    """A key that expired 1 day ago is inside the 14-day grace: Team is retained.
+
+    The grace covers key DELIVERY (a self-hosted renewal is minted at the
+    charge date and emailed), so an expiry inside it must not downgrade the
+    instance.
+    """
+    from modulo.core.license import LICENCE_GRACE_DAYS
+
+    assert LICENCE_GRACE_DAYS == 14
     org_id = uuid.uuid4()
-    expired_key = _sign_licence(
+    in_grace_key = _sign_licence(
         tier="team",
         features=["sso"],
         expires_at=datetime.now(UTC) - timedelta(days=1),
         org_id=str(org_id),
     )
-    await _create_org(db_engine, org_id=org_id, settings_json={"license_key": expired_key})
+    await _create_org(db_engine, org_id=org_id, settings_json={"license_key": in_grace_key})
     provider_id = f"oidc-{org_id.hex[:8]}"
     await _create_oidc_provider(db_engine, org_id=org_id, provider_id=provider_id)
     await _make_only_login_active_org(db_engine, org_id)
 
-    # The login page still advertises the only sign-in method…
+    # The login page advertises the sign-in method and the login leg is open.
     assert provider_id in await _provider_ids(sso_client)
-    # …and the login leg is not licence-gated.
     await _assert_login_leg_not_gated(sso_client, provider_id)
 
-    # Post-auth entitlement degrades to Community: Team features stay off.
+    # Full Team capability is retained during the grace.
+    plan = await _post_auth_plan(app_engine, org_id)
+    assert plan.tier() == "team"
+    assert plan.has_license_key() is True
+    assert plan.feature_enabled("sso") is True
+
+
+async def test_expiry_past_the_delivery_grace_degrades_but_does_not_strand(
+    sso_client: AsyncClient, db_engine: AsyncEngine, app_engine: AsyncEngine
+) -> None:
+    """A key that expired 15 days ago is past the grace: Team is off, sign-in is not.
+
+    The other side of the boundary. Authentication is NOT the paid capability,
+    so the login page still advertises the provider and the login leg is not
+    licence-gated; the org's plan is Community with every Team feature off.
+    """
+    from modulo.core.license import LICENCE_GRACE_DAYS
+
+    org_id = uuid.uuid4()
+    past_grace_key = _sign_licence(
+        tier="team",
+        features=["sso"],
+        expires_at=datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 1),
+        org_id=str(org_id),
+    )
+    await _create_org(db_engine, org_id=org_id, settings_json={"license_key": past_grace_key})
+    provider_id = f"oidc-{org_id.hex[:8]}"
+    await _create_oidc_provider(db_engine, org_id=org_id, provider_id=provider_id)
+    await _make_only_login_active_org(db_engine, org_id)
+
+    assert provider_id in await _provider_ids(sso_client)
+    await _assert_login_leg_not_gated(sso_client, provider_id)
+
     plan = await _post_auth_plan(app_engine, org_id)
     assert plan.tier() == "community"
+    assert plan.has_license_key() is False
     assert plan.feature_enabled("sso") is False
 
 
@@ -288,6 +377,76 @@ async def test_absent_licence_still_lets_sso_users_reach_sign_in(
     await _assert_login_leg_not_gated(sso_client, provider_id)
     plan = await _post_auth_plan(app_engine, org_id)
     assert plan.tier() == "community"
+
+
+# ---------------------------------------------------------------------------
+# FAR-2059 — the lapse invariant: admin reachable, non-admin without Team
+# ---------------------------------------------------------------------------
+
+
+async def test_admin_can_log_in_and_reach_the_licence_screen_past_grace(
+    sso_client: AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """INVARIANT: a lapsed licence never locks an administrator out.
+
+    There is no licence state in which no administrator can reach the licence
+    screen. A past-grace key resolves to Community, but the admin still obtains
+    a real session through the password login and ``GET /api/v1/admin/license``
+    answers 200 (Community) so a new key can be installed. This test fails if a
+    future change makes lapse a lockout — e.g. a licence gate on login or on
+    the licence endpoint itself.
+    """
+    from modulo.core.license import LICENCE_GRACE_DAYS
+
+    org_id = uuid.uuid4()
+    past_grace_key = _sign_licence(
+        tier="team",
+        features=["sso"],
+        expires_at=datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 1),
+        org_id=str(org_id),
+    )
+    await _create_org(db_engine, org_id=org_id, settings_json={"license_key": past_grace_key})
+    await _make_only_login_active_org(db_engine, org_id)
+    admin_email = f"far2059-admin-{uuid.uuid4().hex[:12]}@example.com"
+    admin_id = await _create_account(db_engine, email=admin_email)
+    await _create_membership(db_engine, org_id=org_id, account_id=admin_id, role="admin")
+
+    token = await _login(sso_client, admin_email)
+    resp = await sso_client.get("/api/v1/admin/license", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["has_license"] is False
+    assert body["tier"] == "community"
+
+
+async def test_non_admin_past_grace_gets_no_team_capability(sso_client: AsyncClient, db_engine: AsyncEngine) -> None:
+    """Past grace a non-admin can sign in but receives Community, not Team.
+
+    The identity exchange is not the paid capability, so login succeeds; a
+    Team-gated route (``view_modes``) still answers 402, which is the settled
+    non-admin experience (the interstitial/messaging is a separate ticket).
+    """
+    from modulo.core.license import LICENCE_GRACE_DAYS
+
+    org_id = uuid.uuid4()
+    past_grace_key = _sign_licence(
+        tier="team",
+        features=["sso"],
+        expires_at=datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 1),
+        org_id=str(org_id),
+    )
+    await _create_org(db_engine, org_id=org_id, settings_json={"license_key": past_grace_key})
+    await _make_only_login_active_org(db_engine, org_id)
+    viewer_email = f"far2059-viewer-{uuid.uuid4().hex[:12]}@example.com"
+    viewer_id = await _create_account(db_engine, email=viewer_email)
+    await _create_membership(db_engine, org_id=org_id, account_id=viewer_id, role="viewer")
+
+    token = await _login(sso_client, viewer_email)
+    resp = await sso_client.get("/api/v1/views", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 402, resp.text
+    assert "not available on your plan" in resp.text.lower()
 
 
 # ---------------------------------------------------------------------------

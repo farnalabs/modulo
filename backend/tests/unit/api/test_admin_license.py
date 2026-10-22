@@ -18,6 +18,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.license import (
+    LICENCE_GRACE_DAYS,
     clear_license,
     get_license,
     parse_and_verify,
@@ -195,7 +196,9 @@ class TestParseAndVerify:
         assert "Signature" in (result.error or "")
 
     def test_rejects_expired_license(self) -> None:
-        payload = _make_valid_payload(expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat())
+        payload = _make_valid_payload(
+            expires_at=(datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 1)).isoformat()
+        )
         key = _sign_license_payload(payload)
         result = parse_and_verify(key)
         assert result.valid is False
@@ -373,7 +376,9 @@ class TestUploadLicense:
         assert "Signature" in resp.json()["detail"]
 
     def test_rejects_expired_license(self, client: TestClient) -> None:
-        payload = _make_valid_payload(expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat())
+        payload = _make_valid_payload(
+            expires_at=(datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 1)).isoformat()
+        )
         key = _sign_license_payload(payload)
         resp = client.post(self.URL, json={"license_key": key})
         assert resp.status_code == 422

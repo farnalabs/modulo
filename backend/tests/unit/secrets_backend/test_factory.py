@@ -53,20 +53,86 @@ def test_unknown_backend_raises_value_error():
 
 
 @pytest.mark.parametrize("backend_name", ["vault", "aws"])
-def test_external_backend_falls_back_to_fernet_without_license(backend_name):
-    """Without a license permitting external secrets, the factory must fall back to fernet."""
-    with patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=False):
+def test_configured_external_backend_is_not_downgraded_when_unlicensed(
+    monkeypatch: pytest.MonkeyPatch, backend_name: str
+) -> None:
+    """FAR-2059: a licence lapse must not switch a configured backend to fernet.
+
+    The entitlement gates CHANGING the configuration, never the runtime
+    resolution path. ``_check_external_secrets_licensed`` is patched to False
+    (the lapsed state) to prove the factory ignores it for construction.
+    """
+    if backend_name == "vault":
+        from modulo.core.secrets_backend.vault import VaultSecretsBackend
+
+        monkeypatch.setenv("VAULT_ADDR", "http://vault:8200")
+        monkeypatch.setenv("VAULT_TOKEN", "x")
+        with (
+            patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=False),
+            patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
+            patch("modulo.core.secrets_backend.vault._hvac"),
+        ):
+            backend = create_secrets_backend(fernet_key=_KEY, backend_name=backend_name)
+        assert isinstance(backend, VaultSecretsBackend)
+        return
+
+    from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
+
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "x")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "y")
+    with (
+        patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=False),
+        patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True),
+        patch("modulo.core.secrets_backend.aws._boto3"),
+    ):
         backend = create_secrets_backend(fernet_key=_KEY, backend_name=backend_name)
-    assert isinstance(backend, FernetSecretsBackend), f"Expected fernet fallback for {backend_name}"
+    assert isinstance(backend, AWSSecretsManagerBackend)
 
 
 @pytest.mark.parametrize("backend_name", ["vault", "aws"])
-def test_external_backend_fallback_requires_fernet_key(backend_name):
+def test_external_backend_does_not_require_a_fernet_key(monkeypatch: pytest.MonkeyPatch, backend_name: str) -> None:
+    """No fernet fallback exists any more, so the external path needs no fernet key."""
+    if backend_name == "vault":
+        from modulo.core.secrets_backend.vault import VaultSecretsBackend
+
+        monkeypatch.setenv("VAULT_ADDR", "http://vault:8200")
+        monkeypatch.setenv("VAULT_TOKEN", "x")
+        with (
+            patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=False),
+            patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
+            patch("modulo.core.secrets_backend.vault._hvac"),
+        ):
+            backend = create_secrets_backend(fernet_key=None, backend_name=backend_name)
+        assert isinstance(backend, VaultSecretsBackend)
+        return
+
+    from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
+
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
     with (
         patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=False),
-        pytest.raises(ValueError, match="fernet_key is required"),
+        patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True),
+        patch("modulo.core.secrets_backend.aws._boto3"),
     ):
-        create_secrets_backend(fernet_key=None, backend_name=backend_name)
+        backend = create_secrets_backend(fernet_key=None, backend_name=backend_name)
+    assert isinstance(backend, AWSSecretsManagerBackend)
+
+
+def test_unconfigured_vault_backend_fails_hard_not_silently(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A genuinely unconfigured external backend fails in its constructor.
+
+    The factory warns about the missing configuration but never substitutes a
+    different backend: a silent switch is exactly the failure this ticket
+    removes.
+    """
+    monkeypatch.delenv("VAULT_ADDR", raising=False)
+    with (
+        patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
+        patch("modulo.core.secrets_backend.vault._hvac"),
+        pytest.raises(ValueError, match="VAULT_ADDR is not set"),
+    ):
+        create_secrets_backend(fernet_key=_KEY, backend_name="vault")
 
 
 def _team_license() -> LicenseData:
