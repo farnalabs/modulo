@@ -57,6 +57,7 @@ from modulo.core.cost_controller.finalize import (
     salvage_cancelled_run_cost,
 )
 from modulo.db.crud.run_node_outputs import RunBlobs
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -831,7 +832,7 @@ def _make_run(**kw: Any) -> MagicMock:
 async def test_finalize_cost_pre_component_read_writes_zero_total() -> None:
     """A run with NO accumulated sets finalizes total 0, breakdown NULL, no ledger."""
     run = _make_run(started_at=None)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs:
         await finalize_cost(
@@ -855,7 +856,7 @@ async def test_finalize_cost_stalled_persists_stalled_status() -> None:
     (not 'complete'). Coupled with the persistence-layer test that drives the
     real update_run_status, this covers the full stalled write path."""
     run = _make_run(started_at=None)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs:
         await finalize_cost(
@@ -882,7 +883,7 @@ async def test_finalize_cost_fallback_de_trusts_cost_estimate_usd() -> None:
     stored_outputs = {"node-a": {"summary": "did the thing"}}
     stored_telemetry = {"node-a": {"wall_clock_time_ms": 3_600_000, "cost_estimate_usd": 99999.0}}
     run = _make_run(outputs_json=stored_outputs, node_telemetry_json=stored_telemetry)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
@@ -933,7 +934,7 @@ async def test_finalize_cost_fallback_runs_ledger_block() -> None:
     run = _make_run(outputs_json=stored_outputs, node_telemetry_json=stored_telemetry)
     run.owner_team_id = uuid.uuid4()
     run.cancellation_requested = False
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
@@ -987,7 +988,7 @@ async def test_finalize_cost_sandbox_reported_tokens_populate_run_counters() -> 
     )
     run.cancellation_requested = False
     run.pipeline_id = None
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
@@ -1036,7 +1037,7 @@ async def test_finalize_cancelled_run_never_paused_defers_salvage_not_forfeits()
     distinguishable in the log stream.
     """
     run = _make_run(node_token_usage=None, outputs_json=None)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with patch("modulo.core.cost_controller.finalize._log") as mock_log:
         await finalize_cancelled_run(session, run_id=run.id, org_id=_ORG_ID)
@@ -1061,7 +1062,7 @@ async def test_finalize_cancelled_run_streamed_with_prior_pause_finalizes() -> N
         node_telemetry_json=stored_telemetry,
         snapshot_id=uuid.uuid4(),
     )
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(
         side_effect=[
             MagicMock(scalar_one_or_none=MagicMock(return_value=run)),  # the run row
@@ -1102,7 +1103,7 @@ async def test_finalize_failed_run_derived_hours_book_run_level_cost() -> None:
     analytics fact — otherwise the controls the ticket names stay blind.
     """
     run = _make_run(node_token_usage=None, outputs_json=None)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
@@ -1154,7 +1155,7 @@ async def test_finalize_failed_run_empty_segment_without_derived_hours_invents_n
     unchanged and no synthetic cost is invented.
     """
     run = _make_run(node_token_usage=None, outputs_json=None)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
@@ -1193,7 +1194,7 @@ async def test_finalize_failed_run_with_real_segment_ignores_derived_hours() -> 
         node_telemetry_json=stored_telemetry,
         snapshot_id=uuid.uuid4(),
     )
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(
         side_effect=[
             MagicMock(scalar_one_or_none=MagicMock(return_value=run)),  # the run row
@@ -1250,7 +1251,7 @@ async def test_finalize_failed_run_threads_supplied_derived_from() -> None:
     label would misattribute that spend.
     """
     run = _make_run(node_token_usage=None, outputs_json=None)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
@@ -1286,7 +1287,7 @@ class _SqlstateError(Exception):
 
 def _empty_derived_session(run: MagicMock | None) -> AsyncMock:
     """A session whose single execute returns *run* (or None for a missing row)."""
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     return session
 
@@ -2339,7 +2340,7 @@ def test_legacy_sandbox_cost_skips_nan_wall_clock() -> None:
 
 async def test_finalize_cost_run_not_found() -> None:
     """finalize_cost returns early when the run row is missing."""
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
     with patch("modulo.core.cost_controller.finalize._log") as mock_log:
         await finalize_cost(
@@ -2460,7 +2461,7 @@ async def test_finalize_failed_run_salvages_agent_cost_from_retained_marker() ->
     with it the agent-reported cost is visible with ``reported`` provenance.
     """
     run = _make_run(node_token_usage=None, outputs_json=None)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker()}
     with (
@@ -2592,7 +2593,7 @@ async def test_salvage_cancelled_run_cost_does_not_write_for_tokens_only_markers
     run.heartbeat_at = run.completed_at
     run.total_cost_usd = None
     run.cost_breakdown = None
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(cost=None)}
     with (
@@ -2651,7 +2652,7 @@ async def test_finalize_failed_run_marker_without_cost_evidence_keeps_one_entry(
     nothing is fabricated from the marker's mere presence.
     """
     run = _make_run(node_token_usage=None, outputs_json=None)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(raw_output="no events")}
     with (
@@ -2694,7 +2695,7 @@ async def test_finalize_failed_run_withholds_sandbox_cost_without_sandbox_eviden
     """
     run = _make_run(node_token_usage=None, outputs_json=None)
     run.completed_at = datetime(2026, 10, 20, 11, 0, tzinfo=UTC)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     markers = {"terminal-triage:00000000-0000-0000-0000-000000000002": _run_level_triage_marker()}
     with (
@@ -2734,7 +2735,7 @@ async def test_finalize_failed_run_withholds_sandbox_cost_when_the_marker_is_for
     """
     run = _make_run(node_token_usage=None, outputs_json=None)
     run.completed_at = datetime(2026, 10, 20, 11, 0, tzinfo=UTC)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     # A real per-attempt SANDBOX marker — but for node n1, not the killed n2.
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(cost=None, node_id="n1")}
@@ -2772,7 +2773,7 @@ async def test_finalize_failed_run_still_attributes_sandbox_cost_with_attempt_ma
     """
     run = _make_run(node_token_usage=None, outputs_json=None)
     run.completed_at = datetime(2026, 10, 20, 11, 0, tzinfo=UTC)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     # Tokens only (no agent-reported cost): the ONLY entry is the sandbox line.
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(cost=None)}
@@ -2818,7 +2819,7 @@ async def test_finalize_cancelled_run_does_not_salvage_on_the_request_path() -> 
     run.started_at = datetime(2026, 10, 20, 10, 0, tzinfo=UTC)
     run.completed_at = datetime(2026, 10, 20, 11, 0, tzinfo=UTC)
     run.heartbeat_at = run.completed_at
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     markers = {
         "run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(
@@ -2856,7 +2857,7 @@ async def test_finalize_cancelled_run_without_marker_evidence_forfeits() -> None
     the marker-provable spend).
     """
     run = _make_run(node_token_usage=None, outputs_json=None)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
@@ -2890,7 +2891,7 @@ async def test_salvage_cancelled_run_cost_attributes_settled_marker_spend() -> N
     run.heartbeat_at = run.completed_at
     run.total_cost_usd = None
     run.cost_breakdown = None
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker()}
     with (
@@ -2919,7 +2920,7 @@ async def test_salvage_cancelled_run_cost_attributes_settled_marker_spend() -> N
 
 async def test_salvage_cancelled_run_cost_skips_when_the_run_is_missing() -> None:
     """A settle race may leave no row to salvage — a quiet no-op, never a raise."""
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
     with patch("modulo.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs:
         await salvage_cancelled_run_cost(session, run_id=uuid.uuid4(), org_id=_ORG_ID)
@@ -2939,7 +2940,7 @@ async def test_salvage_cancelled_run_cost_skips_when_status_is_not_cancelled() -
     run.status = "failed"
     run.total_cost_usd = None
     run.cost_breakdown = None
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch("modulo.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
@@ -2965,7 +2966,7 @@ async def test_salvage_cancelled_run_cost_attributes_a_zero_total_empty_segment_
     run.heartbeat_at = run.completed_at
     run.total_cost_usd = Decimal("0.0")
     run.cost_breakdown = None
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker()}
     with (
@@ -2989,7 +2990,7 @@ async def test_salvage_cancelled_run_cost_skips_when_cost_already_attributed() -
     run.status = "cancelled"
     run.total_cost_usd = Decimal("0.065")
     run.cost_breakdown = [{"component": "sandbox_infra"}]
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch("modulo.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
@@ -3007,7 +3008,7 @@ async def test_salvage_cancelled_run_cost_skips_without_marker_evidence() -> Non
     run.status = "cancelled"
     run.total_cost_usd = None
     run.cost_breakdown = None
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
@@ -3043,7 +3044,7 @@ async def test_salvage_cancelled_run_cost_attributes_cost_without_a_liveness_pro
     run.heartbeat_at = None  # no liveness proof
     run.total_cost_usd = None
     run.cost_breakdown = None
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker()}
     with (
@@ -3118,7 +3119,7 @@ async def test_salvage_cancelled_run_cost_does_not_bill_a_connector_only_run() -
     run.heartbeat_at = run.completed_at
     run.total_cost_usd = None
     run.cost_breakdown = None
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     markers = {"connector:c1": _connector_delivered_marker()}
     with (
@@ -3152,7 +3153,7 @@ async def test_salvage_cancelled_run_cost_bounds_the_row_lock_first() -> None:
     run.total_cost_usd = None
     run.cost_breakdown = None
     order: list[str] = []
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
 
     async def _execute(*_args: Any, **_kwargs: Any) -> MagicMock:
         order.append("select")
@@ -3195,7 +3196,7 @@ async def test_salvage_cancelled_run_cost_preserves_the_recorded_terminal_time()
     run.heartbeat_at = recorded
     run.total_cost_usd = None
     run.cost_breakdown = None
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
 
     async def _restamping_update(*_args: Any, **_kwargs: Any) -> Any:
