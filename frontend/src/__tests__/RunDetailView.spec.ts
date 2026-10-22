@@ -298,7 +298,7 @@ describe('RunDetailView', () => {
         salvage_evidence: {
           pr_url: 'https://github.com/farnalabs/modulo/pull/42',
           branch: 'prompt-pr-1234567890',
-          provenance: 'observed',
+          provenance: 'self_reported',
           confidence: 'heuristic',
         },
       },
@@ -321,7 +321,7 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
-  it('renders salvage evidence as inert text when the PR url is not http(s) (FAR-1914 C1)', async () => {
+  it('renders salvage evidence as inert text unless the PR url is https (FAR-1914 C1)', async () => {
     mockRunStatus = 'failed'
     mockErrorCode = 'node_deadline_exceeded'
     mockDeadlineTriage = [
@@ -334,6 +334,15 @@ describe('RunDetailView', () => {
           branch: '<img src=x onerror=alert(1)>',
         },
       },
+      {
+        node_id: 'n2',
+        delivery_done: false,
+        salvageable: true,
+        salvage_evidence: {
+          pr_url: 'http://github.com/farnalabs/modulo/pull/7',
+          branch: 'feat/plain-http',
+        },
+      },
     ]
     router.push('/runs/test-run-id')
     await router.isReady()
@@ -343,11 +352,13 @@ describe('RunDetailView', () => {
 
     const callout = wrapper.find('[data-testid="run-detail-salvage"]')
     expect(callout.exists()).toBe(true)
-    // No anchor is created for a non-http(s) url, and no markup is injected
-    // from either field — both render as escaped text.
+    // No anchor is created for a non-https url (including plain http, which is
+    // never upgraded), and no markup is injected from either field — both
+    // render as escaped text.
     expect(callout.find('a').exists()).toBe(false)
     expect(callout.find('img').exists()).toBe(false)
     expect(callout.text()).toContain('javascript:alert(1)')
+    expect(callout.text()).toContain('http://github.com/farnalabs/modulo/pull/7')
     expect(callout.text()).toContain('<img src=x onerror=alert(1)>')
     wrapper.unmount()
   })

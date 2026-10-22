@@ -389,11 +389,13 @@ def _deadline_triage_from_markers(
     work (the FAR-1760 re-delivery). ``salvageable`` is true only when there
     is evidence AND ``delivery_done`` is not true: a sentinel-confirmed
     delivery is already handled by the idempotency gate, not "salvage".
-    ``salvage_evidence`` names the evidence (``provenance: "observed"`` — the
-    tail showed it, we did not confirm it against an SCM — and
-    ``confidence: "heuristic"``). This is EVIDENCE, never a gate: it never
-    changes the run status, error code, classification, retry/idempotency or
-    cost, and nothing consumes it to make a decision.
+    ``salvage_evidence`` names the evidence. Its provenance is
+    ``"self_reported"`` because an AGENT's stdout claimed it — Modulo did not
+    observe the branch/PR against an SCM (``observed`` would overstate it), and
+    ``confidence`` stays ``"heuristic"``. This is EVIDENCE, never a gate: it
+    never changes the run status, error code, classification,
+    retry/idempotency or cost, and nothing consults it for status,
+    classification, retry, idempotency or cost (only the run detail renders it).
     """
     if not isinstance(markers, dict):
         return []
@@ -404,8 +406,12 @@ def _deadline_triage_from_markers(
             continue
         raw_output = str(marker.get("raw_output") or "")
         log_tail = str(marker.get("sandbox_log_tail") or "")
-        pr_url = marker.get("pr_url")
-        branch = marker.get("branch")
+        # Only a real string is evidence: a malformed marker value (a dict, a
+        # list, a number) must never ride into the response or the callout.
+        raw_pr_url = marker.get("pr_url")
+        raw_branch = marker.get("branch")
+        pr_url = raw_pr_url if isinstance(raw_pr_url, str) and raw_pr_url else None
+        branch = raw_branch if isinstance(raw_branch, str) and raw_branch else None
         delivery_done = marker.get("delivery_done") is True
         salvageable = bool(pr_url or branch) and not delivery_done
         entries.append(
@@ -428,9 +434,11 @@ def _deadline_triage_from_markers(
                 "salvageable": salvageable,
                 "salvage_evidence": (
                     {
-                        "pr_url": pr_url or None,
-                        "branch": branch or None,
-                        "provenance": "observed",
+                        "pr_url": pr_url,
+                        "branch": branch,
+                        # An agent's stdout claimed this; Modulo did not observe
+                        # the branch/PR against an SCM — never "observed".
+                        "provenance": "self_reported",
                         "confidence": "heuristic",
                     }
                     if salvageable
@@ -1167,6 +1175,14 @@ class RunResponse(BaseModel):
     # retained tail (heuristic; not anchored to ``gh pr create``) and
     # NON-GATING evidence (``delivery_done`` stays sentinel-only, so a url can
     # never suppress a retry or license a cost).
+    #
+    # FAR-1914 C1: entries also carry ``salvageable`` (a branch and/or PR URL
+    # was observed and ``delivery_done`` is not true) and ``salvage_evidence``
+    # (``{pr_url, branch, provenance: "self_reported", confidence:
+    # "heuristic"}``, or null). A branch/PR named in an agent's stdout is
+    # SELF-REPORTED — never ``observed``, because Modulo did not confirm it
+    # against an SCM. Display-only evidence: nothing consults it for status,
+    # classification, retry, idempotency or cost.
     #
     # FAR-1886 B1: entries also carry ``run_attempt_count`` (the run's
     # ``runs.node_attempt_count``, read from the run row), and every

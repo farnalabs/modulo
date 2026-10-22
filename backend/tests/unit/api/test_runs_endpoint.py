@@ -3372,7 +3372,7 @@ def test_deadline_triage_projects_salvageable_evidence() -> None:
     assert by_node["n1"]["salvage_evidence"] == {
         "pr_url": "https://github.com/farnalabs/modulo/pull/42",
         "branch": "prompt-pr-1234567890",
-        "provenance": "observed",
+        "provenance": "self_reported",
         "confidence": "heuristic",
     }
     assert by_node["n2"]["salvageable"] is True
@@ -3383,6 +3383,40 @@ def test_deadline_triage_projects_salvageable_evidence() -> None:
     # The pre-existing keys are unchanged by the additive fields.
     assert by_node["n1"]["pr_url"] == "https://github.com/farnalabs/modulo/pull/42"
     assert by_node["n1"]["delivery_done"] is False
+
+
+def test_deadline_triage_only_strings_become_salvage_evidence() -> None:
+    """Minor 3: a malformed marker value (a dict, a list, a number) is not
+    evidence — it must never ride into the response or the callout."""
+    markers = {
+        "run:r1:node:n1:1": {
+            "deadline_triage": True,
+            "node_id": "n1",
+            "pr_url": {"unexpected": "shape"},
+            "branch": ["not", "a", "branch"],
+            "delivery_done": False,
+        },
+        "run:r1:node:n2:1": {
+            "deadline_triage": True,
+            "node_id": "n2",
+            "pr_url": "https://github.com/farnalabs/modulo/pull/42",
+            "branch": 17,
+        },
+    }
+    by_node = {entry["node_id"]: entry for entry in runs_module._deadline_triage_from_markers(markers)}
+
+    assert by_node["n1"]["salvageable"] is False
+    assert by_node["n1"]["salvage_evidence"] is None
+    assert by_node["n1"]["pr_url"] is None
+    # A valid string beside a non-string still yields salvage, with the
+    # non-string field omitted rather than passed through.
+    assert by_node["n2"]["salvageable"] is True
+    assert by_node["n2"]["salvage_evidence"] == {
+        "pr_url": "https://github.com/farnalabs/modulo/pull/42",
+        "branch": None,
+        "provenance": "self_reported",
+        "confidence": "heuristic",
+    }
 
 
 def test_deadline_triage_delivery_done_disables_salvage_evidence() -> None:

@@ -197,7 +197,7 @@ class TestRunStatusDetailParityFields:
         assert mcp_entries[1]["salvage_evidence"] == {
             "pr_url": "https://github.com/farnalabs/modulo/pull/42",
             "branch": "feat/salvage-me",
-            "provenance": "observed",
+            "provenance": "self_reported",
             "confidence": "heuristic",
         }
 

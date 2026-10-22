@@ -400,7 +400,7 @@
               <span class="font-mono font-semibold">{{ entry.node_id }}</span>
               <span v-if="entry.salvage_evidence?.branch" class="ml-2">
                 {{ $t('views.RunDetailView.deadline_triage_salvage_branch') }}:
-                <code data-testid="run-detail-salvage-branch" class="font-mono">{{ entry.salvage_evidence.branch }}</code>
+                <code data-testid="run-detail-salvage-branch" class="font-mono break-all">{{ entry.salvage_evidence.branch }}</code>
               </span>
               <span v-if="entry.salvage_evidence?.pr_url" class="ml-2">
                 {{ $t('views.RunDetailView.deadline_triage_salvage_pr') }}:
@@ -1060,12 +1060,6 @@ interface ChildRunRef {
   pipeline_name?: string | null
 }
 
-// FAR-704: one cancelled sandbox attempt's retained triage evidence
-// (RunResponse.deadline_triage). All strings arrive pre-redacted from the
-// backend marker store.
-// FAR-1886 B1: run-level entries (age gate, stranded pending, node-deadline
-// reaper, worker handoff) have no per-attempt tail; every entry carries the
-// run's node-attempt counter as data. It is not a cause.
 // FAR-1914 C1: salvageable / salvage_evidence project a branch and/or PR URL
 // observed in the retained tail before the kill. Display-only heuristic
 // evidence — never fetched, verified, or treated as a decision.
@@ -1076,6 +1070,13 @@ interface SalvageEvidence {
   confidence?: string
 }
 
+// FAR-704: one cancelled sandbox attempt's retained triage evidence
+// (RunResponse.deadline_triage). All strings arrive pre-redacted from the
+// backend marker store.
+// FAR-1886 B1: run-level entries (age gate, stranded pending, node-deadline
+// reaper, worker handoff) have no per-attempt tail; every entry carries the
+// run's node-attempt counter as data. It is not a cause.
+// FAR-1914 C1: each entry also carries ``salvageable`` / ``salvage_evidence``.
 interface DeadlineTriageEntry {
   node_id?: string | null
   attempt_key?: string | null
@@ -1831,11 +1832,12 @@ const salvageableEntries = computed<DeadlineTriageEntry[]>(() =>
   ),
 )
 
-// A PR URL is rendered as a link ONLY for an http(s) URL; any other string in
-// agent output stays inert text, so the callout has no injection path.
+// A PR URL is rendered as a link ONLY for an https URL; any other string in
+// agent output (including plain http) stays inert text, so the callout has no
+// injection or downgrade path.
 function salvageLinkHref(url: string | null | undefined): string | null {
   if (!url) return null
-  return /^https?:\/\//i.test(url) ? url : null
+  return /^https:\/\//i.test(url) ? url : null
 }
 
 function nodeStatusBadgeClass(node: NodeEntry): string {

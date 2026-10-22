@@ -2233,18 +2233,55 @@ def _extract_pr_url(raw_text: str) -> str:
 # It is therefore EVIDENCE ONLY — it never arms ``delivery_done`` (sentinel
 # only), never changes the run status, error code, classification, retry or
 # cost.
-# Ordered: the FIRST pattern with a match wins. Prompt-to-PR's own branch name
-# is the most specific signal, then git's checkout switch message, then an
-# explicit create command. Every arm bounds the captured name to 200 chars of
-# the branch-safe charset and refuses to match a prefix of a longer token.
-# The name arms are POSSESSIVE (`{1,200}+`) so a pathological run of allowed
-# characters in a multi-hundred-KB tail costs one linear pass, never
-# backtracking — and an over-long name simply does not match.
+# Ordered: git's own decision message is AUTHORITATIVE and comes first; then an
+# explicit create command, then a loose mention. The ``prompt-pr-*`` prefix is a
+# common dogfood convention (Prompt-to-PR's own pipelines), NOT a product
+# contract, so it is the weakest arm and deliberately last — a quoted mention
+# must never beat the branch git actually reported switching to.
+# The command arms use ``[ \t]+`` (never ``\s+``) between tokens: a newline
+# separates commands, so ``\s+`` would let a capture cross into the next line.
+# Every arm bounds the captured name to 200 chars of the branch-safe charset and
+# refuses to match a prefix of a longer token. The name arms are POSSESSIVE
+# (`{1,200}+`) so a pathological run of allowed characters in a multi-hundred-KB
+# tail costs one linear pass, never backtracking — and an over-long name simply
+# does not match.
 _BRANCH_PATTERNS: tuple[_re.Pattern[str], ...] = (
-    _re.compile(r"(?<![A-Za-z0-9._/-])(prompt-pr-\d+)(?![A-Za-z0-9._/-])"),
     _re.compile(r"Switched to a new branch '([A-Za-z0-9._/-]{1,200}+)'"),
-    _re.compile(r"\bgit\s+(?:checkout\s+-b|switch\s+-c)\s+([A-Za-z0-9._/-]{1,200}+)(?![A-Za-z0-9._/-])"),
+    _re.compile(
+        r"\bgit[ \t]+(?:checkout[ \t]+-b|switch[ \t]+-c)[ \t]+"
+        r"([A-Za-z0-9._/-]{1,200}+)(?![A-Za-z0-9._/-])"
+    ),
+    _re.compile(r"(?<![A-Za-z0-9._/-])(prompt-pr-\d{1,200}+)(?![A-Za-z0-9._/-])"),
 )
+
+# A captured name whose next character starts a shell substitution / quote was
+# not followed by a real argument terminator — the branch name was DYNAMIC
+# (``git checkout -b prompt-pr-$(date +%s)``) or unterminated, so the captured
+# prefix is not the branch that was created.
+_BRANCH_REJECT_FOLLOWING = frozenset("$('\"")
+_BRANCH_REJECT_TRAILING = ("-", "/", ".")
+
+
+def _branch_candidate_is_usable(candidate: str, following: str) -> bool:
+    """Reject a capture that is credential-shaped or not a real ref name.
+
+    FAR-1914 C1 security: the evidence is extracted from the FULL UNREDACTED
+    tail, so a token-shaped name (``ghp_...``, ``github_pat_...``) would ride
+    back out through the run-detail surface while ``raw_output`` is scrubbed.
+    A candidate that ``_redact_raw_output`` would alter is DROPPED rather than
+    stored partially masked — evidence is better absent than leaked.
+
+    The trailing/following guards reject a truncated capture: a dynamic branch
+    (``prompt-pr-$(date +%s)``), an unterminated ref (``feat/x. Then push``) or
+    a quoted substitution never yields a plausible-but-wrong name.
+    """
+    if not candidate or len(candidate) > 200:
+        return False
+    if candidate.endswith(_BRANCH_REJECT_TRAILING):
+        return False
+    if "$" in candidate or following in _BRANCH_REJECT_FOLLOWING:
+        return False
+    return _redact_raw_output(candidate) == candidate
 
 
 def _extract_branch(raw_text: str) -> str:
@@ -2256,6 +2293,11 @@ def _extract_branch(raw_text: str) -> str:
     non-gating: the name is whatever the tail shows, the marker stores it only
     when found, and nothing consults it for status, classification, retry,
     idempotency or cost.
+
+    A capture is REJECTED (never partially normalised) when it is
+    credential-shaped, truncated, or dynamically generated — see
+    ``_branch_candidate_is_usable``. An invalid higher-priority match falls
+    through to the next arm rather than returning a bad name.
     """
     if not raw_text:
         return ""
@@ -2264,7 +2306,8 @@ def _extract_branch(raw_text: str) -> str:
         if match is None:
             continue
         candidate = match.group(1)
-        if 0 < len(candidate) <= 200:
+        following = raw_text[match.end() : match.end() + 1]
+        if _branch_candidate_is_usable(candidate, following):
             return candidate
     return ""
 
@@ -2546,14 +2589,10 @@ async def _retain_raw_output_marker(
         "attempt_key": request.attempt_key,
         "node_id": request.node_id,
     }
-    # FAR-1914 C1: branch evidence rides the SAME dedicated marker store, only
-    # when the retained text actually shows one — a heuristic, non-gating
-    # companion to ``pr_url`` (never consulted for status/classification/retry/
-    # cost, and never arming ``delivery_done``).
-    branch = _extract_branch(text)
-    if branch:
-        marker["branch"] = branch
-
+    # FAR-1914 C1: branch evidence is written by the CANCELLATION marker path
+    # only (``_sandbox_agent_impl``). These retention markers never carry
+    # ``deadline_triage``, so the run-detail projection ignores them — writing
+    # a branch here would be unwired state, not evidence.
     if _source_contains_delivery_sentinel(text, request.delivery_sentinel):
         marker["delivery_done"] = True
     if request.stdout_artifact is not None:
@@ -2876,10 +2915,11 @@ def _merge_existing_raw_output_marker(
 ) -> dict[str, Any]:
     """Monotone preservation: a prior attempt's evidence is never wiped by a retry.
 
-    A prior marker's non-empty ``pr_url`` and an OR'd ``delivery_done`` are
-    retained; all other marker fields come from the new ``marker`` unchanged
-    (pr_url is preserved as-is so a retry's empty pr_url never wipes
-    attempt-1's evidence).
+    A prior marker's non-empty ``pr_url`` / ``branch`` and an OR'd
+    ``delivery_done`` are retained; all other marker fields come from the new
+    ``marker`` unchanged (both evidence fields are preserved as-is so a retry's
+    missing value never wipes attempt-1's evidence). ``branch`` follows the
+    exact same contract as ``pr_url`` (FAR-1914 C1).
 
     ``promote_newest_key`` (FAR-458 connector path) inverts the
     ``idempotency_key`` handling: instead of pinning the marker to the first /
@@ -2918,6 +2958,11 @@ def _merge_existing_raw_output_marker(
     preserved: dict[str, Any] = {}
     if existing.get("pr_url"):
         preserved["pr_url"] = existing["pr_url"]
+    # FAR-1914 C1: same monotone contract for branch salvage evidence — a
+    # same-key retry whose tail shows no branch must not erase the branch an
+    # earlier attempt already reported.
+    if existing.get("branch"):
+        preserved["branch"] = existing["branch"]
     marker_key = marker.get("idempotency_key")
     same_derived_key = marker_key is not None and existing.get("idempotency_key") == marker_key
     if (preserve_delivery_done or same_derived_key) and (existing.get("delivery_done") or marker.get("delivery_done")):
@@ -12995,7 +13040,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     else (
                         "Sandbox agent cancelled after a PR url was observed — pr_url retained as non-gating evidence"
                         if _cancel_pr_url
-                        else "Sandbox agent cancelled — triage evidence retained (FAR-704)"
+                        else (
+                            "Sandbox agent cancelled after a branch was observed — "
+                            "branch retained as non-gating evidence"
+                            if _cancel_branch
+                            else "Sandbox agent cancelled — triage evidence retained (FAR-704)"
+                        )
                     )
                 ),
                 "raw_output": _redact_raw_output(_drained_tail)[:_stdout_cap],

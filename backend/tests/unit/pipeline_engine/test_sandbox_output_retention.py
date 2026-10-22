@@ -35,6 +35,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _BoundedFinalDrain,
     _extract_branch,
     _marker_delivery_done_for_node,
+    _merge_existing_raw_output_marker,
     _persist_raw_output_marker,
     _RawOutputMarkerRequest,
     _retain_raw_output_marker,
@@ -2270,13 +2271,51 @@ async def test_marker_carries_both_stream_artifact_pointers_when_present():
 
 
 def test_extract_branch_reads_the_checkout_message_and_bounds_the_name():
-    """The three accepted shapes, in priority order, with the branch-safe
-    charset and 200-char bound enforced."""
+    """The three accepted shapes, with the branch-safe charset and 200-char
+    bound enforced."""
     assert _extract_branch("Switched to a new branch 'prompt-pr-1234567890'\n") == "prompt-pr-1234567890"
     assert _extract_branch("Switched to a new branch 'fix/FAR-1-thing'\n") == "fix/FAR-1-thing"
     assert _extract_branch("$ git checkout -b feat/new_thing\n") == "feat/new_thing"
     assert _extract_branch("$ git switch -c chore/cleanup\n") == "chore/cleanup"
     assert not _extract_branch("no branch signal here\n")
+
+
+def test_extract_branch_prefers_gits_own_message_over_a_quoted_mention():
+    """M3: the authoritative ``Switched to a new branch`` arm must win over a
+    lower-priority ``prompt-pr-*`` mention appearing elsewhere in the tail
+    (e.g. echoed prompt text), whichever order they appear in."""
+    live_first = "$ git checkout -b prompt-pr-1234567890\nSwitched to a new branch 'feat/real'\n"
+    assert _extract_branch(live_first) == "feat/real"
+    mention_first = "prompt-pr-1234567890 mention\nSwitched to a new branch 'feat/real'\n"
+    assert _extract_branch(mention_first) == "feat/real"
+
+
+def test_extract_branch_rejects_dynamic_and_truncated_names():
+    """M3: the live Prompt-to-PR command is ``git checkout -b
+    prompt-pr-$(date +%s)`` — the raw text shows ``prompt-pr-`` followed by a
+    substitution, so no branch exists yet and nothing may be captured. An
+    unterminated ref (``feat/x. Then push``) is a truncated echo, not a branch."""
+    assert not _extract_branch("$ git checkout -b prompt-pr-$(date +%s)\n")
+    assert not _extract_branch("$ git checkout -b prompt-pr-$RANDOM\n")
+    assert not _extract_branch("$ git checkout -b feat/x. Then push\n")
+    assert not _extract_branch("$ git checkout -b feat/x$(date +%s)\n")
+    assert not _extract_branch("$ git checkout -b feat/x'quoted\n")
+    assert not _extract_branch('$ git checkout -b feat/x"quoted\n')
+    # Trailing punctuation that cannot end a ref name.
+    assert not _extract_branch("$ git checkout -b feat/\n")
+    assert not _extract_branch("$ git checkout -b feat-\n")
+
+
+def test_extract_branch_never_returns_a_credential_shaped_name():
+    """M2 security: the capture runs over the FULL UNREDACTED tail while the
+    stored ``raw_output`` is scrubbed. A token-shaped name would survive as a
+    served credential, so a candidate that redaction would alter is DROPPED —
+    never returned, never persisted."""
+    assert not _extract_branch("$ git checkout -b ghp_0123456789abcdefABCDEF\n")
+    assert not _extract_branch("$ git checkout -b github_pat_11ABCDEFG0123456789\n")
+    assert not _extract_branch("Switched to a new branch 'ghp_0123456789abcdefABCDEF'\n")
+    # A normal branch is unaffected by the redaction guard.
+    assert _extract_branch("$ git checkout -b feat/normal-branch\n") == "feat/normal-branch"
 
 
 def test_extract_branch_rejects_a_hostile_over_long_name():
@@ -2287,6 +2326,8 @@ def test_extract_branch_rejects_a_hostile_over_long_name():
     long_name = "a" * 400
     assert not _extract_branch(f"$ git checkout -b {long_name}\n")
     assert not _extract_branch(f"Switched to a new branch '{long_name}'\n")
+    # The loose prompt-pr arm is bounded too (digits only, <= 200).
+    assert not _extract_branch(f"prompt-pr-{'9' * 400}\n")
     for tail in (
         "$ git checkout -b evil;rm -rf /\n",
         "$ git checkout -b evil&&whoami\n",
@@ -2296,15 +2337,37 @@ def test_extract_branch_rejects_a_hostile_over_long_name():
         assert not branch or re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", branch)
 
 
-async def test_retention_marker_captures_branch_and_pr_url_when_both_observed():
-    """FAR-1914 C1: a retention marker retains the branch beside the PR URL, so
-    a killed run can be inspected for salvage before a re-run."""
-    source = f"Switched to a new branch 'prompt-pr-1234567890'\n{_PR_456}\n"
+def test_merge_marker_preserves_an_existing_branch_against_a_same_key_retry():
+    """M1: the merge is monotone for branch evidence exactly as it is for
+    ``pr_url`` — a same-key retry whose tail shows no branch must not erase the
+    branch an earlier attempt reported."""
+    retry_marker = {"status": "failed", "branch": ""}
+    existing = {
+        "branch": "feat/salvage-me",
+        "idempotency_key": "k",
+        "delivery_done": True,
+    }
+    merged = _merge_existing_raw_output_marker(retry_marker, existing)
+
+    assert merged["branch"] == "feat/salvage-me"
+    assert merged["delivery_done"] is True
+    # The SAME contract as pr_url: the first observation is the evidence of
+    # record, so a later same-key value never replaces it either.
+    newer = _merge_existing_raw_output_marker({"branch": "feat/newer"}, existing)
+    assert newer["branch"] == "feat/salvage-me"
+
+
+async def test_retention_marker_does_not_write_branch_evidence():
+    """Minor 1: the retention helper's branch write was UNWIRED — those markers
+    never carry ``deadline_triage``, so the run-detail projection ignores them.
+    Branch evidence is written only by the cancellation marker path, which is
+    what the projection reads; this test pins that the dead write is gone."""
+    source = f"Switched to a new branch 'feat/salvage-me'\n{_PR_456}\n"
     row = _FakeRunRow()
     await _retain(row, source=source, sentinel=None)
 
     marker = _single_marker(row)
-    assert marker["branch"] == "prompt-pr-1234567890"
+    assert "branch" not in marker
     assert marker["pr_url"] == _PR_456
 
 
@@ -2343,3 +2406,29 @@ async def test_cancelled_node_records_branch_without_stamping_delivery_done():
     assert marker["branch"] == "feat/salvage-me"
     assert marker["pr_url"] == _PR_456
     assert marker.get("delivery_done") is not True
+
+
+async def test_cancelled_node_with_only_a_branch_gets_the_branch_summary_arm():
+    """Minor 6: a branch-only observation has its own summary arm — it must not
+    fall into the generic triage text, which gives an operator no hint that
+    salvage evidence exists."""
+    log_content = "$ git checkout -b feat/salvage-only\n"
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    row = _FakeRunRow()
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["branch"] == "feat/salvage-only"
+    assert "branch was observed" in marker["summary"]
+    assert "triage evidence retained" not in marker["summary"]
