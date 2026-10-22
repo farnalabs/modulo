@@ -19898,6 +19898,10 @@ export interface components {
             guardrail_summary?: {
                 [key: string]: number;
             } | null;
+            /** Guardrail Coverage */
+            guardrail_coverage?: {
+                [key: string]: string;
+            } | null;
             /** Trigger Type */
             trigger_type?: string | null;
             /** Execution Origin */
