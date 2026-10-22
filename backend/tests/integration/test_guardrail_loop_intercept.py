@@ -22,11 +22,13 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from modulo.core.eval_engine import EvalEngine
+from modulo.core.guardrails.coverage import LoopCoverage, LoopCoverageProvenance, LoopCoverageState
 from modulo.core.guardrails.loop_intercept import (
     LoopInterceptCallbackServer,
     LoopInterceptConfig,
     load_loop_intercept_guardrails,
     persist_loop_interception_audit,
+    persist_loop_interception_coverage,
 )
 from modulo.core.guardrails.sandbox_bridge import BridgeClient
 from tests.integration.conftest import EvalFixture, insert_eval
@@ -190,6 +192,46 @@ async def test_load_loop_intercept_guardrails_zero_guardrails_returns_empty(
 # ---------------------------------------------------------------------------
 # 2. Stub agent bridge outcomes (blocked / warned / redacted) + audit
 # ---------------------------------------------------------------------------
+
+
+async def test_loop_coverage_persists_and_reads_from_runs(
+    db_engine: AsyncEngine,
+    app_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+):
+    """The real org-scoped persistence function writes typed coverage to runs."""
+    run_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, status, trigger_type, "
+                "run_number, input_hash, langgraph_thread_id) VALUES (:id, :oid, :pid, :sid, 'pending', "
+                "'manual', 9001, :hash, :thread)"
+            ),
+            {
+                "id": str(run_id),
+                "oid": str(test_org),
+                "pid": str(test_pipeline),
+                "sid": str(test_snapshot),
+                "hash": "1" * 64,
+                "thread": f"{test_org}:coverage-{run_id}",
+            },
+        )
+    factory = await _make_session_factory(app_engine)
+    coverage = LoopCoverage(
+        state=LoopCoverageState.ENFORCED,
+        reason="runtime_tool_event_observed",
+        provenance=LoopCoverageProvenance.OBSERVED,
+    )
+    await persist_loop_interception_coverage(factory, org_id=test_org, run_id=run_id, coverage=coverage)
+    async with db_engine.connect() as conn:
+        stored = (
+            await conn.execute(text("SELECT guardrail_coverage_json FROM runs WHERE id = :id"), {"id": str(run_id)})
+        ).scalar_one()
+    assert stored == coverage.model_dump(mode="json")
 
 
 async def test_stub_agent_blocked_outcome_persists_audit(

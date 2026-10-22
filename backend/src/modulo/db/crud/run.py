@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from operator import attrgetter
-from typing import Any, TypeGuard
+from typing import Any, Literal, TypedDict, TypeGuard
 
 from sqlalchemy import Date, and_, bindparam, case, cast, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
@@ -1082,6 +1082,20 @@ async def _enforce_pause_gate(
     await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type=trigger_type)
 
 
+class _LoopCoverageDict(TypedDict):
+    state: Literal["enforced", "degraded", "not_applicable"]
+    reason: str
+    provenance: Literal["observed", "derived"]
+
+
+def _loop_coverage(*, configured: bool) -> _LoopCoverageDict:
+    return {
+        "state": "degraded" if configured else "not_applicable",
+        "reason": "runtime_tool_event_source_unobserved" if configured else "no_runtime_loop_guardrail_bound",
+        "provenance": "derived",
+    }
+
+
 @dataclass
 class _GuardrailInterception:
     """Carried state from the ingestion-edge guardrail interception pass."""
@@ -1094,7 +1108,7 @@ class _GuardrailInterception:
     blocking_eval_name: str
     observed_by_eval: dict[uuid.UUID, bool]
     summary_json: dict[str, int] | None
-    coverage_json: dict[str, str] | None = None
+    coverage_json: _LoopCoverageDict | None = None
 
 
 @dataclass
@@ -1108,6 +1122,7 @@ class _InterceptionRequest:
     is_replay: bool | None
     snapshot_id: uuid.UUID
     guardrails_kill_switch: bool
+    runtime_loop_intercept_configured: bool
 
 
 def _has_guardrail_work(
@@ -1850,11 +1865,7 @@ async def _intercept_guardrails(
         blocking_eval_name="",
         observed_by_eval={},
         summary_json=None,
-        coverage_json={
-            "state": "not_applicable",
-            "reason": "no_runtime_loop_guardrail_bound",
-            "provenance": "derived",
-        },
+        coverage_json=_loop_coverage(configured=False),
     )
 
 
@@ -2296,6 +2307,17 @@ async def create_run(
     # alter the run's hash, and the STRIPPED payload is what gets stored.
     stored_payload = _strip_reserved_keys(input_payload)
 
+    # The runtime-source applicability signal comes from the frozen snapshot
+    # graph, never from guardrail telemetry. This is read before the ingestion
+    # guard so the persisted initial coverage is honest even when the gate blocks.
+    snapshot_graph = (
+        await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
+    ).scalar_one_or_none()
+    snapshot_nodes = snapshot_graph.get("nodes", []) if isinstance(snapshot_graph, dict) else []
+    runtime_loop_intercept_configured = any(
+        isinstance(node, dict) and bool(node.get("loop_intercept")) for node in snapshot_nodes
+    )
+
     # Guardrail interception (FAR-208 item 2) — the ingestion edge. The
     # two-phase pass runs BEFORE the run's input_payload is persisted, so
     # persisted state is post-redaction. A block outcome creates the run as a
@@ -2312,6 +2334,7 @@ async def create_run(
             is_replay=is_replay,
             snapshot_id=snapshot_id,
             guardrails_kill_switch=guardrails_kill_switch,
+            runtime_loop_intercept_configured=runtime_loop_intercept_configured,
         ),
     )
     stored_payload = interception.payload
@@ -2321,15 +2344,7 @@ async def create_run(
     guardrail_blocking_eval_name = interception.blocking_eval_name
     guardrail_observed_by_eval = interception.observed_by_eval
     guardrail_summary_dict = interception.summary_json
-    guardrail_coverage_dict = interception.coverage_json
-    if guardrail_coverage_dict is None:
-        guardrail_coverage_dict = {
-            "state": "degraded" if guardrail_summary_dict else "not_applicable",
-            "reason": (
-                "runtime_tool_event_source_unobserved" if guardrail_summary_dict else "no_runtime_loop_guardrail_bound"
-            ),
-            "provenance": "derived",
-        }
+    guardrail_coverage_dict = interception.coverage_json or _loop_coverage(configured=runtime_loop_intercept_configured)
 
     stored_payload = _inject_engine_payload_keys(
         stored_payload,
@@ -2415,9 +2430,6 @@ async def create_run(
     # (no silent failure path): it fails run creation loudly instead of
     # persisting a run whose externally-executed work would read as
     # Modulo-executed.
-    snapshot_graph = (
-        await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
-    ).scalar_one_or_none()
     execution_origin = EXECUTION_ORIGIN_DISPATCHED if graph_contains_dispatch(snapshot_graph) else None
 
     run = Run(

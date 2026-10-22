@@ -16412,6 +16412,26 @@ export interface components {
             /** Org Slug */
             org_slug?: string | null;
         };
+        /**
+         * LoopCoverage
+         * @description Persisted and API-visible loop interception coverage.
+         */
+        LoopCoverage: {
+            state: components["schemas"]["LoopCoverageState"];
+            /** Reason */
+            reason: string;
+            provenance: components["schemas"]["LoopCoverageProvenance"];
+        };
+        /**
+         * LoopCoverageProvenance
+         * @enum {string}
+         */
+        LoopCoverageProvenance: "observed" | "derived";
+        /**
+         * LoopCoverageState
+         * @enum {string}
+         */
+        LoopCoverageState: "enforced" | "degraded" | "not_applicable";
         /** MachineProbeResponse */
         MachineProbeResponse: {
             /** Machine Id */
@@ -19898,10 +19918,7 @@ export interface components {
             guardrail_summary?: {
                 [key: string]: number;
             } | null;
-            /** Guardrail Coverage */
-            guardrail_coverage?: {
-                [key: string]: string;
-            } | null;
+            guardrail_coverage?: components["schemas"]["LoopCoverage"] | null;
             /** Trigger Type */
             trigger_type?: string | null;
             /** Execution Origin */

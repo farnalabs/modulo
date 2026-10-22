@@ -19,6 +19,7 @@ import pytest
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType
 from modulo.core.guardrails import FieldRedactionMode, FieldRedactionPolicy
 from modulo.core.guardrails import loop_intercept as li
+from modulo.core.guardrails.coverage import LoopCoverage, LoopCoverageState
 from modulo.core.guardrails.loop_intercept import (
     DEFAULT_LOOP_INTERCEPT_PATTERNS,
     MAX_LOOP_INTERCEPT_ARGS_BYTES,
@@ -432,10 +433,10 @@ async def test_callback_server_redact_round_trip():
         await server.close()
 
 
-async def test_callback_server_source_probe_marks_coverage_enforced():
-    coverage: list[dict[str, str]] = []
+async def test_callback_server_source_probe_does_not_mark_coverage_enforced():
+    coverage: list[LoopCoverage] = []
 
-    async def _coverage_sink(value: dict[str, str]) -> None:
+    async def _coverage_sink(value: LoopCoverage) -> None:
         coverage.append(value)
 
     server = li.LoopInterceptCallbackServer(
@@ -450,13 +451,66 @@ async def test_callback_server_source_probe_marks_coverage_enforced():
         assert await asyncio.to_thread(client.notify_source_status)
         await asyncio.sleep(0.05)
         assert not coverage
+        await asyncio.sleep(0.05)
+        assert not coverage
+        decision = await asyncio.to_thread(client.decide_before, "git push", _event()["args"])
+        assert decision[2] == "block"
+        await asyncio.sleep(0.05)
+        assert coverage[-1].state is LoopCoverageState.ENFORCED
+        assert coverage[-1].reason == "runtime_tool_event_observed"
+        assert coverage[-1].provenance.value == "observed"
+    finally:
+        await server.close()
+
+
+async def test_callback_server_rejects_malformed_and_unrelated_events():
+    server = li.LoopInterceptCallbackServer(EvalEngine(), [_guardrail()], _cfg())
+    port = await server.start()
+    try:
+        import urllib.error
+        import urllib.request
+
+        def _post(body: bytes) -> tuple[int, dict]:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/intercept",
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310
+                    return response.status, json.loads(response.read())
+            except urllib.error.HTTPError as exc:
+                return exc.code, json.loads(exc.read())
+
+        malformed_status, malformed = await asyncio.to_thread(_post, b"{}")
+        assert malformed_status == 400
+        assert malformed["reason"] == "invalid_tool_event"
+        assert server.coverage.state is LoopCoverageState.DEGRADED
+
+        unrelated_status, unrelated = await asyncio.to_thread(
+            _post,
+            json.dumps({"tool_name": "git status", "args": {}, "direction": "before"}).encode(),
+        )
+        assert unrelated_status == 400
+        assert unrelated["reason"] == "unrelated_tool_event"
+        assert server.coverage.state is LoopCoverageState.DEGRADED
+    finally:
+        await server.close()
+
+
+async def test_callback_server_coverage_persistence_failure_degrades():
+    async def _failing_sink(_coverage: LoopCoverage) -> None:
+        raise RuntimeError("storage unavailable")
+
+    server = li.LoopInterceptCallbackServer(EvalEngine(), [_guardrail()], _cfg(), coverage_sink=_failing_sink)
+    port = await server.start()
+    try:
+        client = BridgeClient(f"http://127.0.0.1:{port}", timeout=5.0)
         await asyncio.to_thread(client.decide_before, "git push", _event()["args"])
         await asyncio.sleep(0.05)
-        assert coverage[-1] == {
-            "state": "enforced",
-            "reason": "runtime_tool_event_observed",
-            "provenance": "observed",
-        }
+        assert server.coverage.state is LoopCoverageState.DEGRADED
+        assert server.coverage.reason == "runtime_tool_event_coverage_persistence_failed"
     finally:
         await server.close()
 

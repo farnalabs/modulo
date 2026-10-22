@@ -51,6 +51,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import update
+from sqlalchemy.exc import SQLAlchemyError
 
 from modulo.core.audit_logger.labels import SYSTEM_ACTOR
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult
@@ -69,6 +70,13 @@ from modulo.core.guardrails import (
 # written into the sandbox and therefore cannot import from Modulo). The host
 # imports them so the marker string and the escalation exit code have a single
 # definition on both sides of the bridge (FAR-1694 S2).
+from modulo.core.guardrails.coverage import (
+    LoopCoverage,
+    LoopCoverageProvenance,
+    LoopCoverageState,
+    RuntimeToolEvent,
+    initial_loop_coverage,
+)
 from modulo.core.guardrails.sandbox_bridge import (
     ESCALATED_EXIT_CODE,
     ESCALATED_MARKER,
@@ -114,11 +122,11 @@ MAX_LOOP_INTERCEPT_ARGS_BYTES = 100_000
 # decision to the sandbox bridge.
 _CALLBACK_HANDLER_GRACE_SECONDS = 10.0
 
-LOOP_COVERAGE_ENFORCED = "enforced"
-LOOP_COVERAGE_DEGRADED = "degraded"
-LOOP_COVERAGE_NOT_APPLICABLE = "not_applicable"
-LOOP_COVERAGE_PROVENANCE_OBSERVED = "observed"
-LOOP_COVERAGE_PROVENANCE_DERIVED = "derived"
+LOOP_COVERAGE_ENFORCED = LoopCoverageState.ENFORCED
+LOOP_COVERAGE_DEGRADED = LoopCoverageState.DEGRADED
+LOOP_COVERAGE_NOT_APPLICABLE = LoopCoverageState.NOT_APPLICABLE
+LOOP_COVERAGE_PROVENANCE_OBSERVED = LoopCoverageProvenance.OBSERVED
+LOOP_COVERAGE_PROVENANCE_DERIVED = LoopCoverageProvenance.DERIVED
 
 
 class LoopInterceptConfigError(ValueError):
@@ -745,19 +753,35 @@ class _BridgeHTTPHandler(BaseHTTPRequestHandler):
             length = 0
         body = self.rfile.read(length) if length > 0 else b""
         try:
-            event = json.loads(body.decode("utf-8", "replace") or "{}")
-        except json.JSONDecodeError:
-            event = {}
-        if not isinstance(event, dict):
-            event = {}
-        future = asyncio.run_coroutine_threadsafe(owner.evaluate(event), loop)
+            raw_event = json.loads(body.decode("utf-8", "replace"))
+            event = RuntimeToolEvent.model_validate(raw_event)
+        except (json.JSONDecodeError, ValidationError) as exc:
+            self._respond(
+                {"action": "pass", "blocked": False, "masked_args": None, "reason": "invalid_tool_event"},
+                400,
+            )
+            _log.warning("guardrail.loop_callback_invalid_event", extra={"detail": str(exc)})
+            return
+        if not tool_matches_patterns(event.tool_name, owner._config.intercepted_tool_patterns):
+            self._respond(
+                {"action": "pass", "blocked": False, "masked_args": None, "reason": "unrelated_tool_event"},
+                400,
+            )
+            return
+        if event.direction == "after" and not owner._config.intercept_tool_results:
+            self._respond(
+                {"action": "pass", "blocked": False, "masked_args": None, "reason": "unconfigured_tool_event"},
+                400,
+            )
+            return
+        future = asyncio.run_coroutine_threadsafe(owner.evaluate(event.model_dump(mode="json")), loop)
         max_wait = owner.max_wait_seconds
         try:
             decision = future.result(timeout=max_wait)
         except Exception:
             _log.exception(
                 "guardrail.loop_callback_eval_failed",
-                extra={"tool": str(event.get("tool_name") or "")},
+                extra={"tool": event.tool_name},
             )
             decision = {"action": "pass", "blocked": False, "masked_args": None, "reason": "server_eval_error"}
         self._respond(decision, 200)
@@ -806,7 +830,7 @@ class LoopInterceptCallbackServer:
         config: LoopInterceptConfig,
         *,
         audit_sink: Callable[[Sequence[LoopInterceptAuditRecord]], Awaitable[None]] | None = None,
-        coverage_sink: Callable[[dict[str, str]], Awaitable[None]] | None = None,
+        coverage_sink: Callable[[LoopCoverage], Awaitable[None]] | None = None,
         host: str = "127.0.0.1",
         port: int = 0,
     ) -> None:
@@ -815,11 +839,7 @@ class LoopInterceptCallbackServer:
         self._config = config
         self._audit_sink = audit_sink
         self._coverage_sink = coverage_sink
-        self._coverage: dict[str, str] = {
-            "state": LOOP_COVERAGE_DEGRADED,
-            "reason": "runtime_tool_event_source_unobserved",
-            "provenance": LOOP_COVERAGE_PROVENANCE_DERIVED,
-        }
+        self._coverage = initial_loop_coverage(configured=True)
         self._host = host
         self._port = port
         self.loop: asyncio.AbstractEventLoop | None = None
@@ -834,9 +854,9 @@ class LoopInterceptCallbackServer:
         return
 
     @property
-    def coverage(self) -> dict[str, str]:
+    def coverage(self) -> LoopCoverage:
         """Return the current observed/derived runtime-source coverage."""
-        return dict(self._coverage)
+        return self._coverage.model_copy(deep=True)
 
     @property
     def port(self) -> int | None:
@@ -878,41 +898,47 @@ class LoopInterceptCallbackServer:
         if thread is not None and thread.is_alive():
             await asyncio.to_thread(thread.join, 5)
 
-    async def _set_coverage(self, coverage: dict[str, str]) -> None:
+    async def _set_coverage(self, coverage: LoopCoverage) -> None:
         if coverage == self._coverage:
             return
-        self._coverage = dict(coverage)
+        self._coverage = coverage
         if self._coverage_sink is not None:
             try:
-                await self._coverage_sink(dict(self._coverage))
+                await self._coverage_sink(self._coverage.model_copy(deep=True))
             except asyncio.CancelledError:
                 raise
             except Exception:
+                self._coverage = LoopCoverage(
+                    state=LoopCoverageState.DEGRADED,
+                    reason="runtime_tool_event_coverage_persistence_failed",
+                    provenance=LoopCoverageProvenance.DERIVED,
+                )
                 _log.exception("guardrail.loop_coverage_persist_failed")
 
     async def evaluate(self, event: dict[str, Any]) -> dict[str, Any]:
         """Evaluate a tool-call event; persists audit records best-effort."""
+        validated_event = RuntimeToolEvent.model_validate(event)
         outcome, records = await run_loop_interception(
             self._engine,
             self._definitions,
-            event,
+            validated_event.model_dump(mode="json"),
             config=self._config,
         )
         if outcome.bridge_failed:
             await self._set_coverage(
-                {
-                    "state": LOOP_COVERAGE_DEGRADED,
-                    "reason": outcome.reason or "runtime_tool_event_source_evaluation_failed",
-                    "provenance": LOOP_COVERAGE_PROVENANCE_DERIVED,
-                }
+                LoopCoverage(
+                    state=LoopCoverageState.DEGRADED,
+                    reason=outcome.reason or "runtime_tool_event_source_evaluation_failed",
+                    provenance=LoopCoverageProvenance.DERIVED,
+                )
             )
-        else:
+        elif self._coverage.state is not LoopCoverageState.ENFORCED:
             await self._set_coverage(
-                {
-                    "state": LOOP_COVERAGE_ENFORCED,
-                    "reason": "runtime_tool_event_observed",
-                    "provenance": LOOP_COVERAGE_PROVENANCE_OBSERVED,
-                }
+                LoopCoverage(
+                    state=LoopCoverageState.ENFORCED,
+                    reason="runtime_tool_event_observed",
+                    provenance=LoopCoverageProvenance.OBSERVED,
+                )
             )
         if records and self._audit_sink is not None:
             self._spawn_audit(records)
@@ -999,7 +1025,7 @@ async def persist_loop_interception_coverage(
     *,
     org_id: Any,
     run_id: Any,
-    coverage: dict[str, str],
+    coverage: LoopCoverage,
 ) -> None:
     """Persist the run-level in-loop coverage state and its provenance."""
     if session_factory is None:
@@ -1012,17 +1038,21 @@ async def persist_loop_interception_coverage(
         from modulo.db.models.run import Run
         from modulo.db.rls import set_rls_org
 
+        validated = LoopCoverage.model_validate(coverage)
         async with session_factory() as session, session.begin():
             await set_rls_org(session, org_uuid)
-            await session.execute(
+            result = await session.execute(
                 update(Run)
                 .where(Run.id == run_uuid, Run.organisation_id == org_uuid)
-                .values(guardrail_coverage_json=dict(coverage))
+                .values(guardrail_coverage_json=validated.model_dump(mode="json"))
             )
+            if result.rowcount != 1:
+                raise SQLAlchemyError("run coverage update affected no run row")
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("guardrail.loop_coverage_persist_failed", extra={"org_id": str(org_uuid)})
+        raise
 
 
 async def persist_loop_interception_audit(
@@ -1092,11 +1122,15 @@ __all__ = [
     "LOOP_COVERAGE_PROVENANCE_OBSERVED",
     "MAX_LOOP_INTERCEPT_ARGS_BYTES",
     "BridgeEscalation",
+    "LoopCoverage",
+    "LoopCoverageProvenance",
+    "LoopCoverageState",
     "LoopInterceptAuditRecord",
     "LoopInterceptCallbackServer",
     "LoopInterceptConfig",
     "LoopInterceptConfigError",
     "LoopInterceptOutcome",
+    "RuntimeToolEvent",
     "bridge_client_source",
     "load_loop_intercept_guardrails",
     "parse_bridge_escalation_marker",
