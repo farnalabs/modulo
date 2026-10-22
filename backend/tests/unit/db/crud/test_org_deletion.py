@@ -263,8 +263,8 @@ class TestCollectOrgExportInSnapshot:
         ):
             assert await org_deletion._collect_org_export_in_snapshot(_ORG_ID, engine=engine) == export
 
-        assert conn.execution_options_calls == []
-        assert conn.executed == []
+        assert not conn.execution_options_calls
+        assert not conn.executed
 
     async def test_defaults_to_shared_engine(self) -> None:
         from modulo.db.crud import org_deletion
