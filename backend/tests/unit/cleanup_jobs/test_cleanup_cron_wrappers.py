@@ -132,7 +132,7 @@ class TestCleanupCronAutobeginTransaction:
 
         mock_factory.assert_called()
         assert result == {"deleted": 1}
-        assert await _select_all(autobegin_false_factory) == []
+        assert not await _select_all(autobegin_false_factory)
 
     @pytest.mark.parametrize("case", JOB_CASES)
     async def test_keeps_recent_rows(self, case: JobCase, autobegin_false_factory) -> None:
@@ -192,4 +192,4 @@ class TestCleanupCronAutobeginTransaction:
             result = await case.cron_fn({})
 
         assert result == {"deleted": 3}
-        assert await _select_all(autobegin_false_factory) == []
+        assert not await _select_all(autobegin_false_factory)
