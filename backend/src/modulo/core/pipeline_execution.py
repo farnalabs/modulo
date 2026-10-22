@@ -37,7 +37,7 @@ from typing import Any
 from langgraph.errors import NodeCancelledError
 from sqlalchemy import bindparam, text
 from sqlalchemy.exc import DBAPIError, OperationalError
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
 
 # FAR-1649: the ``PHASE_*`` label values themselves live in the
 # dependency-free leaf ``modulo.core.dispatch_phases``. They moved there so
@@ -64,6 +64,7 @@ from modulo.core.dispatch_phases import (
 )
 from modulo.core.pipeline_engine.classify import _any_marker_delivery_done
 from modulo.db.crud.run import get_run
+from modulo.db.crud.run_node_outputs import read_run_markers
 from modulo.db.models.run import ACTIVE_RUN_STATUSES
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 
@@ -3025,45 +3026,59 @@ async def _cancel_and_await_tasks(
             await heartbeat_task
 
 
+async def _read_delivery_markers(
+    aeng: AsyncEngine,
+    *,
+    run_uuid: uuid.UUID,
+    org_uuid: uuid.UUID,
+) -> dict[str, Any] | None:
+    """Read a run's markers through the ``run_node_outputs`` repo reader.
+
+    ``runs.raw_output_markers`` was DROPPED by migration 0215 (FAR-583
+    B1/B2), so the marker leg MUST go through the repo reader — the same call
+    ``api/routes/runs.py::_run_gate_fired`` makes. Opened in its own
+    RLS-scoped transaction because ``zombie_watchdog`` holds no session.
+    """
+    async with AsyncSession(aeng, autobegin=False) as session, session.begin():
+        await set_rls_org(session, org_uuid)
+        return await read_run_markers(session, run_id=run_uuid, organisation_id=org_uuid)
+
+
 async def _run_delivery_veto(
     aeng: AsyncEngine,
     run_id: str,
     org_id: str,
 ) -> bool:
-    """Check if the run has any marker with delivery_done=True.
+    """Check if the run has any marker with ``delivery_done=True``.
 
-    If True, the run must NOT be re-dispatched (delivery already happened).
-    Fail-closed: DB read failure -> True (block re-dispatch).
+    If True, the run must NOT be re-dispatched — the side effect already
+    happened and a retry risks delivering twice.
+
+    Fail-closed: any marker-read failure (other than ``CancelledError``)
+    returns True (block re-dispatch), because re-dispatching a
+    possibly-delivered run is worse than terminal-failing it.
     """
     try:
         run_uuid = uuid.UUID(run_id)
+        org_uuid = uuid.UUID(org_id)
     except (ValueError, AttributeError):
-        # Invalid UUID format (e.g. test fake IDs like "run-1") -> no veto
+        # A non-UUID id identifies no persistable run: nothing can be marked
+        # delivered, so there is nothing to veto.
         return False
 
     try:
-        async with aeng.connect() as c:
-            await c.execute(
-                text(_SQL_SET_ORG_ID),
-                {"val": org_id},
-            )
-            result = await c.execute(
-                text("SELECT raw_output_markers FROM runs WHERE id=:rid"),
-                {"rid": run_uuid},
-            )
-            row = result.first()
-            if not row or not row[0]:
-                return False
-            return _any_marker_delivery_done(row[0])
+        markers = await _read_delivery_markers(aeng, run_uuid=run_uuid, org_uuid=org_uuid)
     except asyncio.CancelledError:
         raise
-    except (Exception, TypeError) as e:
-        # Fail-closed for real DB errors; TypeError indicates mock engine in tests
-        # In test context with improperly mocked engine, return False (no veto)
-        if isinstance(e, TypeError):
-            return False
-        _log.warning("delivery_veto.read_failed run=%s org=%s err=%s", run_id, org_id, e)
+    except Exception:
+        _log.warning(
+            "delivery_veto.read_failed run=%s org=%s — failing closed (blocking re-dispatch)",
+            run_id,
+            org_id,
+            exc_info=True,
+        )
         return True
+    return bool(_any_marker_delivery_done(markers))
 
 
 async def _resolve_result_status(
