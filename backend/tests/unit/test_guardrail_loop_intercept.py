@@ -605,38 +605,38 @@ def test_runtime_plugin_source_emits_authenticated_tool_events():
     assert "fetch(`${base}/intercept`" in source
 
 
-def test_runtime_plugin_source_produces_event_in_real_node_subprocess(tmp_path: Path):
+async def test_runtime_plugin_source_produces_event_in_real_node_subprocess(tmp_path: Path):
     node = shutil.which("node")
     if node is None:
         pytest.skip("node runtime is required for the production plugin proof")
-    plugin = tmp_path / "bridge-plugin.mjs"
-    plugin.write_text(bridge_plugin_source(), encoding="utf-8")
-    probe = tmp_path / "probe.mjs"
-    probe.write_text(
-        """import plugin from './bridge-plugin.mjs';
-const calls = [];
-globalThis.fetch = async (_url, options) => {
-  calls.push(JSON.parse(options.body));
-  return { json: async () => ({ action: 'pass', blocked: false }) };
-};
+    server = li.LoopInterceptCallbackServer(EvalEngine(), [_guardrail(action="warn")], _cfg())
+    port = await server.start()
+    try:
+        plugin = tmp_path / "bridge-plugin.mjs"
+        plugin.write_text(bridge_plugin_source(), encoding="utf-8")
+        probe = tmp_path / "probe.mjs"
+        probe.write_text(
+            """import plugin from './bridge-plugin.mjs';
 const hooks = plugin({});
 await hooks['tool.execute.before']({tool: 'git push', args: {ref: 'main'}});
 await hooks['tool.execute.after']({tool: 'git push', args: {ref: 'main'}}, {ok: true});
-process.stdout.write(JSON.stringify(calls));
+process.stdout.write('runtime-hooks-complete');
 """,
-        encoding="utf-8",
-    )
-    result = subprocess.run(  # noqa: S603 — node is resolved from PATH and probe is a test-owned file
-        [node, str(probe)],
-        capture_output=True,
-        text=True,
-        check=True,
-        env={**os.environ, "MODULO_BRIDGE_ENDPOINT": "http://127.0.0.1:8765"},
-        timeout=30,
-    )
-    events = json.loads(result.stdout)
-    assert [event["direction"] for event in events] == ["before", "after"]
-    assert events[0]["tool_name"] == "git push"
+            encoding="utf-8",
+        )
+        result = await asyncio.to_thread(
+            subprocess.run,
+            [node, str(probe)],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, "MODULO_BRIDGE_ENDPOINT": f"http://127.0.0.1:{port}"},
+            timeout=30,
+        )
+        assert result.stdout == "runtime-hooks-complete"
+        assert server.coverage.state is LoopCoverageState.ENFORCED
+    finally:
+        await server.close()
 
 
 async def test_callback_server_returns_pass_for_unknown_path():
