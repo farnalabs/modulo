@@ -23,6 +23,11 @@
       <span>{{ $t('views.ComplianceEvidenceIndex.loading') }}</span>
     </div>
 
+    <div v-else-if="permissionDenied" aria-live="assertive" data-testid="compliance-evidence-index-permission-denied" class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm">
+      <p class="font-semibold">{{ $t('views.ComplianceEvidenceIndex.permission_denied_title') }}</p>
+      <p class="mt-1">{{ $t('views.ComplianceEvidenceIndex.permission_denied_description') }}</p>
+    </div>
+
     <div v-else-if="loadError" aria-live="assertive" data-testid="compliance-evidence-index-error">
       <ErrorAlert :message="loadError" :on-retry="load" />
     </div>
@@ -58,7 +63,7 @@
         <p class="mt-2 font-mono text-xs">{{ lowerBoundArtifacts.join(', ') }}</p>
       </div>
 
-      <section class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-labelledby="evidence-index-pack-heading">
+      <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-labelledby="evidence-index-pack-heading">
         <h2 id="evidence-index-pack-heading" class="sr-only">{{ $t('views.ComplianceEvidenceIndex.pack_heading') }}</h2>
         <div class="card p-4" data-testid="compliance-evidence-index-pack-version">
           <dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{{ $t('views.ComplianceEvidenceIndex.pack_version') }}</dt>
@@ -76,7 +81,15 @@
           <dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{{ $t('views.ComplianceEvidenceIndex.frameworks') }}</dt>
           <dd class="mt-1 text-sm">{{ indexData.framework_ids.join(', ') }}</dd>
         </div>
-      </section>
+        <div class="card p-4" data-testid="compliance-evidence-index-pack-published-at">
+          <dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{{ $t('views.ComplianceEvidenceIndex.pack_published_at') }}</dt>
+          <dd class="mt-1 text-sm">{{ formatTimestamp(indexData.pack_published_at) }}</dd>
+        </div>
+        <div class="card p-4" data-testid="compliance-evidence-index-generated-at">
+          <dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{{ $t('views.ComplianceEvidenceIndex.generated_at') }}</dt>
+          <dd class="mt-1 text-sm">{{ formatTimestamp(indexData.generated_at) }}</dd>
+        </div>
+      </dl>
 
       <section class="space-y-3" aria-labelledby="evidence-index-coverage-heading" data-testid="compliance-evidence-index-coverage">
         <h2 id="evidence-index-coverage-heading" class="text-lg font-semibold">{{ $t('views.ComplianceEvidenceIndex.coverage_heading') }}</h2>
@@ -128,9 +141,9 @@
                   <span
                     class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium"
                     :class="statusClass(artifact.status)"
-                    :aria-label="$t('views.ComplianceEvidenceIndex.status_label', { status: artifact.status })"
+                    :aria-label="$t('views.ComplianceEvidenceIndex.status_label', { status: statusLabel(artifact.status) })"
                   >
-                    {{ artifact.status }}
+                    {{ statusLabel(artifact.status) }}
                   </span>
                   <p v-if="artifact.absence_reason" class="mt-1 max-w-xs text-xs text-destructive-text">{{ artifact.absence_reason }}</p>
                   <p v-if="artifact.record_count !== null" class="mt-1 text-xs text-muted-foreground">
@@ -143,7 +156,7 @@
                     <li v-for="identifier in artifact.identifiers" :key="identifier">{{ identifier }}</li>
                   </ul>
                 </td>
-                <td class="px-3 py-3">{{ artifact.provenance }}</td>
+                <td class="px-3 py-3">{{ provenanceLabel(artifact.provenance) }}</td>
                 <td class="px-3 py-3 font-mono text-xs">
                   <span v-if="artifact.mapping_row_ids.length > 0">{{ artifact.mapping_row_ids.join(', ') }}</span>
                   <span v-else class="text-muted-foreground">{{ $t('views.ComplianceEvidenceIndex.not_available') }}</span>
@@ -168,6 +181,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -179,6 +193,8 @@ import { useDataFetch } from '../composables/useDataFetch'
 type EvidenceIndex = components['schemas']['EvidenceIndex']
 
 type CoverageRow = { framework: string; category: string; count: number }
+
+const { t: $t } = useI18n()
 
 const {
   data: indexData,
@@ -193,6 +209,11 @@ const {
   },
   { initialValue: null as EvidenceIndex | null },
 )
+
+const permissionDenied = computed(() => {
+  const error = loadError.value
+  return typeof error === 'string' && /forbidden|permission|not allowed|access denied/i.test(error)
+})
 
 const coverageRows = computed<CoverageRow[]>(() => {
   if (!indexData.value) return []
@@ -212,6 +233,26 @@ function statusClass(status: string): string {
   if (status === 'present') return 'border-success/40 bg-success/10 text-success-text'
   if (status === 'customer_supplied') return 'border-primary/40 bg-primary/10 text-primary'
   return 'border-warning/50 bg-warning/10 text-warning-text'
+}
+
+function statusLabel(status: string): string {
+  const key = `views.ComplianceEvidenceIndex.status_${status}`
+  const translated = $t(key)
+  return translated === key ? $t('views.ComplianceEvidenceIndex.status_unknown') : translated
+}
+
+function provenanceLabel(provenance: string): string {
+  const key = `views.ComplianceEvidenceIndex.provenance_${provenance}`
+  const translated = $t(key)
+  return translated === key
+    ? $t('views.ComplianceEvidenceIndex.unknown_value', { value: provenance })
+    : translated
+}
+
+function formatTimestamp(value: string): string {
+  const timestamp = new Date(value)
+  if (Number.isNaN(timestamp.getTime())) return value
+  return timestamp.toLocaleString()
 }
 
 void load()
