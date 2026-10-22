@@ -120,6 +120,17 @@ def test_ci_cd_node_connected_after_development() -> None:
     assert edge.hitl_review is False
 
 
+def test_ci_only_draft_connects_from_start() -> None:
+    """A CI/CD-only draft has no prior stage, so the edge must originate at start."""
+    samples = [make_sample("repos", [{"description": "uses .github/workflows"}])]
+    draft = draft_for(samples)
+    assert {n.id for n in draft.nodes} == {"start", "ci_cd", "end"}
+    assert draft.edges == [
+        DraftEdge(source="start", target="ci_cd"),
+        DraftEdge(source="ci_cd", target="end"),
+    ]
+
+
 def test_development_node_has_required_capabilities() -> None:
     samples = [make_sample("repos", [{"name": "repo-a"}])]
     draft = draft_for(samples)
