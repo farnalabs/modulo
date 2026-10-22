@@ -23,7 +23,7 @@ from typing import Any
 
 from sqlalchemy import bindparam, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.db.crud.run import batch_delete_old_terminal_runs
 from modulo.db.models.audit_event import AuditEvent
@@ -39,6 +39,7 @@ from modulo.db.models.primitive_abuse_report import PrimitiveAbuseReport
 from modulo.db.models.primitive_rating import PrimitiveRating
 from modulo.db.models.publisher import Publisher
 from modulo.db.models.run import TERMINAL_STATUSES, Run
+from modulo.db.session import get_shared_engine
 from modulo.db.soft_delete import include_soft_deleted
 
 _log = logging.getLogger(__name__)
@@ -262,20 +263,38 @@ async def request_org_deletion(
 ) -> dict[str, Any]:
     """Initiate the soft-delete workflow for an organisation.
 
-    1. Validates org is active.
-    2. Generates confirmation token (24 h TTL).
-    3. Captures export bundle.
-    4. Sets org deleted_at + status='deleted'.
-    5. Soft-marks child rows.
-    6. Records ``org_deletion_requested`` audit event.
+    1. Pre-lock read (no FOR UPDATE, include_soft_deleted) to validate the org
+       exists and status != "deleted".
+    2. Collect the export via a read-only REPEATABLE READ snapshot on a SEPARATE
+       connection (BEFORE any lock).
+    3. Take the FSM FOR UPDATE re-read of the org row and RE-VALIDATE the
+       premises under the lock (org still exists, still not deleted) — a
+       concurrent confirm/cancel may have landed between snapshot and lock.
+    4. Transition (status/deleted_at/token/expiry), persist export_bundle_json,
+       flush — all under the short lock.
 
-    Returns a dict with ``token``, ``token_expires_at``, and ``export`` keys.
+    Returns a dict with `token`, `token_expires_at`, and `export` keys.
     """
-    # FAR-1624 org-lock audit: intentionally `FOR UPDATE`, NOT `FOR NO KEY
-    # UPDATE`. This site acquires the org lock FIRST (no pre-held FK `KEY SHARE`
-    # on the org), so it cannot hit the KEY-SHARE->FOR-UPDATE upgrade cycle; the
-    # strongest lock is kept so org deletion blocks concurrent child inserts
-    # before the hard delete.
+    # Step 1: Pre-lock validation read (no lock, include_soft_deleted).
+    result = await session.execute(include_soft_deleted(select(Organisation).where(Organisation.id == org_id)))
+    org = result.scalar_one_or_none()
+    if org is None:
+        raise ValueError(_ERR_ORG_NOT_FOUND)
+    if org.status == "deleted":
+        raise ValueError("Organisation is already deleted")
+
+    # Step 2: Collect the export in a read-only REPEATABLE READ snapshot
+    # on a SEPARATE connection — BEFORE taking the FSM lock.
+    export = await _collect_org_export_in_snapshot(org_id)
+
+    # Step 3: FSM FOR UPDATE re-read and premise re-check under the lock.
+    # FAR-1624 org-lock audit (updated FAR-1823): intentionally `FOR UPDATE`,
+    # NOT `FOR NO KEY UPDATE`. This site acquires the org lock for the SHORT
+    # FSM transition only (snapshot was collected BEFORE the lock). The lock
+    # is kept so the deletion transition blocks concurrent child inserts
+    # (FOR KEY SHARE) before the hard delete. Premises are RE-VALIDATED under
+    # the lock because a concurrent confirm/cancel may have changed the org
+    # state between the snapshot and this lock acquisition.
     result = await session.execute(
         include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
     )
@@ -285,11 +304,10 @@ async def request_org_deletion(
     if org.status == "deleted":
         raise ValueError("Organisation is already deleted")
 
+    # Step 4: Transition under the short lock.
     token = _generate_deletion_token()
     expires_at = datetime.now(UTC) + timedelta(hours=CONFIRMATION_WINDOW_HOURS)
-    export = await _collect_org_export(session, org)
 
-    # Soft-delete org
     org.status = "deleted"
     org.deleted_at = datetime.now(UTC)
     org.deletion_token = token
@@ -412,20 +430,78 @@ async def cancel_org_deletion(
     return {"status": "active"}
 
 
+async def _collect_org_export_in_snapshot(org_id: uuid.UUID) -> dict[str, Any]:
+    """Collect the org export bundle in a read-only REPEATABLE READ snapshot.
+
+    This runs on a SEPARATE connection/session from the caller's transaction.
+    Postgres rejects SET TRANSACTION ISOLATION LEVEL mid-transaction, so the
+    isolation must be established on a fresh connection before its first
+    statement. We use the shared engine to create a connection with
+    REPEATABLE READ isolation via execution_options, set it to READ ONLY,
+    then bind a session to it.
+
+    The snapshot session only reads by org_id; it never attaches the caller's
+    ORM object. This ensures the export reflects a consistent point-in-time
+    view without blocking concurrent writers.
+    """
+    engine: AsyncEngine = get_shared_engine()
+
+    # Create a connection and set REPEATABLE READ isolation via execution_options
+    # BEFORE starting the transaction. The context manager manages the connection
+    # lifecycle; execution_options returns a wrapper around the same connection.
+    async with engine.connect() as base_conn:
+        conn = await base_conn.execution_options(isolation_level="REPEATABLE READ")
+        async with conn.begin():
+            await conn.execute(text("SET TRANSACTION READ ONLY"))
+
+            # Bind a session to this connection for ORM queries.
+            # Use autobegin=True (default) so the session joins the existing transaction.
+            snapshot_factory = async_sessionmaker(
+                bind=conn,
+                class_=AsyncSession,
+                expire_on_commit=False,
+                autocommit=False,
+                autoflush=False,
+                # autobegin=True by default - session will join the connection's transaction
+            )
+
+            async with snapshot_factory() as session:
+                # The connection already has an active REPEATABLE READ READ ONLY transaction.
+                # The session will participate in this transaction.
+                # Read the org with include_soft_deleted visibility (same as caller).
+                result = await session.execute(
+                    include_soft_deleted(select(Organisation).where(Organisation.id == org_id))
+                )
+                org = result.scalar_one_or_none()
+                if org is None:
+                    raise ValueError(_ERR_ORG_NOT_FOUND)
+
+                # Collect the export using the snapshot session.
+                export = await _collect_org_export(session, org)
+
+            # Transaction committed by the connection context manager.
+
+    # Connection closed by the outer context manager.
+
+    return export
+
+
 async def export_org_data(
     session: AsyncSession,
     org_id: uuid.UUID,
 ) -> dict[str, Any]:
-    """Return the export bundle for an org (captures live data if none exists)."""
-    # FAR-1624 org-lock audit: intentionally `FOR UPDATE`, NOT `FOR NO KEY
-    # UPDATE` — this audited read path acquires the org lock FIRST (no pre-held
-    # FK `KEY SHARE` on the org), so it cannot hit the KEY-SHARE->FOR-UPDATE
-    # upgrade cycle. The bundle is returned as-read: the stored
-    # ``export_bundle_json`` when present, else a live capture via
-    # ``_collect_org_export`` that is not persisted here.
-    result = await session.execute(
-        include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
-    )
+    """Return the export bundle for an org (captures live data if none exists).
+
+    FAR-1624 org-lock audit (updated FAR-1823): the org-row `FOR UPDATE` lock
+    was REMOVED. This read path now uses a read-only REPEATABLE READ snapshot
+    on a separate connection for live captures. The stored
+    `export_bundle_json` is returned directly when present (no snapshot needed).
+    The org-row lock never gave cross-table consistency because child-row
+    UPDATEs were never blocked by it — the export reads multiple child tables
+    that the org lock does not protect.
+    """
+    # Read the org WITHOUT a lock, but with include_soft_deleted visibility.
+    result = await session.execute(include_soft_deleted(select(Organisation).where(Organisation.id == org_id)))
     org = result.scalar_one_or_none()
     if org is None:
         raise ValueError(_ERR_ORG_NOT_FOUND)
@@ -433,7 +509,8 @@ async def export_org_data(
     if org.export_bundle_json is not None:
         return org.export_bundle_json
 
-    return await _collect_org_export(session, org)
+    # Live capture: use a read-only REPEATABLE READ snapshot on a separate connection.
+    return await _collect_org_export_in_snapshot(org_id)
 
 
 async def _checkpoint_created_at_present(session: AsyncSession) -> bool:

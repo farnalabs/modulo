@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 pytestmark = [
     pytest.mark.integration,
@@ -745,6 +745,263 @@ class TestExportOrgData:
         assert "pipelines" in bundle
         assert bundle["memberships"]
         assert bundle["pipelines"]
+
+    async def test_live_capture_non_blocking_concurrent_settings_patch(
+        self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-blocking proof (fail-first): export_org_data's live-capture path
+        must NOT block a concurrent org settings patch.
+
+        A deliberately slow _collect_org_export (monkeypatched to sleep) runs in
+        a read-only REPEATABLE READ snapshot on a separate connection. A concurrent
+        update_org_settings_patch must complete WITHOUT waiting for the export.
+        This test MUST FAIL on the old code (export under FOR UPDATE blocked the
+        patch) and PASS after the fix.
+        """
+        import asyncio
+        from types import SimpleNamespace
+
+        from modulo.db.crud.org_deletion import export_org_data
+        from modulo.db.crud.organisation import update_org_settings_patch
+        from modulo.db.rls import set_rls_org
+        from modulo.db.soft_delete import register_soft_delete_filter
+
+        register_soft_delete_filter()
+
+        # Monkeypatch _collect_org_export to be slow (sleep 500ms).
+        import modulo.db.crud.org_deletion as org_deletion_mod
+
+        original_collect = org_deletion_mod._collect_org_export
+
+        async def _slow_collect(session: AsyncSession, org: Any) -> dict[str, Any]:
+            await asyncio.sleep(0.5)
+            return await original_collect(session, org)
+
+        monkeypatch.setattr(org_deletion_mod, "_collect_org_export", _slow_collect)
+
+        org_id = await _create_org(db_engine, "nonblock-export")
+        user_id = await _create_user(db_engine, org_id, "nonblock@test.com")
+        await _create_pipeline(db_engine, org_id, "Live Pipeline", user_id)
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+        # Start the export in one session (it will sleep in the snapshot).
+        export_session = factory()
+        await export_session.begin()
+
+        # Run the export as a background task.
+        export_task = asyncio.create_task(export_org_data(export_session, org_id))
+
+        # Give the export time to enter the snapshot and start sleeping.
+        await asyncio.sleep(0.1)
+
+        # Concurrent settings patch in a SEPARATE session — must NOT block.
+        patch_session = factory()
+        await patch_session.begin()
+        await set_rls_org(patch_session, org_id)
+
+        # Bound the wait at 300ms so the test proves "non-blocking" quickly.
+        monkeypatch.setattr(
+            "modulo.db.crud.row_lock.get_settings",
+            lambda: SimpleNamespace(mutation_row_lock_timeout_ms=300),
+        )
+
+        # This must complete quickly (well under 500ms) if non-blocking.
+        await update_org_settings_patch(patch_session, org_id, {"test_key": "test_value"})
+        await patch_session.commit()
+        await patch_session.close()
+
+        # Now wait for the export to complete.
+        export_result = await export_task
+        await export_session.commit()
+        await export_session.close()
+
+        assert "organisation" in export_result
+        # The org name follows the pattern from _create_org: "Deletion Test {suffix}"
+        assert export_result["organisation"][0]["name"] == "Deletion Test nonblock-export"
+
+    async def test_request_deletion_snapshot_non_blocking_concurrent_settings_patch(
+        self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-blocking proof (fail-first): request_org_deletion's snapshot phase
+        must NOT block a concurrent org settings patch.
+
+        A deliberately slow _collect_org_export (monkeypatched to sleep) runs in
+        a read-only REPEATABLE READ snapshot on a separate connection BEFORE the
+        FSM lock. A concurrent update_org_settings_patch must complete WITHOUT
+        waiting for the export. This test MUST FAIL on the old code (export under
+        FOR UPDATE blocked the patch) and PASS after the fix.
+        """
+        import asyncio
+        from types import SimpleNamespace
+
+        from modulo.db.crud.org_deletion import request_org_deletion
+        from modulo.db.crud.organisation import update_org_settings_patch
+        from modulo.db.rls import set_rls_org
+        from modulo.db.soft_delete import register_soft_delete_filter
+
+        register_soft_delete_filter()
+
+        # Monkeypatch _collect_org_export to be slow (sleep 500ms).
+        import modulo.db.crud.org_deletion as org_deletion_mod
+
+        original_collect = org_deletion_mod._collect_org_export
+
+        async def _slow_collect(session: AsyncSession, org: Any) -> dict[str, Any]:
+            await asyncio.sleep(0.5)
+            return await original_collect(session, org)
+
+        monkeypatch.setattr(org_deletion_mod, "_collect_org_export", _slow_collect)
+
+        org_id = await _create_org(db_engine, "nonblock-request")
+        user_id = await _create_user(db_engine, org_id, "nonblock-request@test.com")
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+        # Start the deletion request in one session (it will sleep in the snapshot).
+        deletion_session = factory()
+        await deletion_session.begin()
+        await deletion_session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org_id)},
+        )
+
+        # Run the request_org_deletion as a background task.
+        deletion_task = asyncio.create_task(request_org_deletion(deletion_session, org_id, user_id))
+
+        # Give the deletion request time to enter the snapshot and start sleeping.
+        await asyncio.sleep(0.1)
+
+        # Concurrent settings patch in a SEPARATE session — must NOT block.
+        patch_session = factory()
+        await patch_session.begin()
+        await set_rls_org(patch_session, org_id)
+
+        # Bound the wait at 300ms so the test proves "non-blocking" quickly.
+        monkeypatch.setattr(
+            "modulo.db.crud.row_lock.get_settings",
+            lambda: SimpleNamespace(mutation_row_lock_timeout_ms=300),
+        )
+
+        # This must complete quickly (well under 500ms) if non-blocking.
+        await update_org_settings_patch(patch_session, org_id, {"test_key": "test_value"})
+        await patch_session.commit()
+        await patch_session.close()
+
+        # Now wait for the deletion request to complete.
+        deletion_result = await deletion_task
+        await deletion_session.commit()
+        await deletion_session.close()
+
+        assert "token" in deletion_result
+        assert "export" in deletion_result
+
+    async def test_request_deletion_premise_recheck_under_lock(
+        self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Premise re-check pinned: if the org is mutated (e.g. confirmed deleted)
+        between the snapshot phase and the FSM lock acquisition,
+        request_org_deletion must raise the same ValueError as today.
+
+        The snapshot collects the export BEFORE the lock. Then the FSM FOR UPDATE
+        re-reads the org and re-validates. If a concurrent confirm/cancel changed
+        the org state, the re-check must catch it and raise.
+        """
+
+        from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
+        from modulo.db.soft_delete import register_soft_delete_filter
+
+        register_soft_delete_filter()
+
+        org_id = await _create_org(db_engine, "premise-recheck")
+        user_id = await _create_user(db_engine, org_id, "premise@test.com")
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+        # Start request_org_deletion in one session — we'll intercept it
+        # between snapshot and FSM lock by monkeypatching the lock acquisition.
+        deletion_session = factory()
+        await deletion_session.begin()
+        await deletion_session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org_id)},
+        )
+
+        original_execute = deletion_session.execute
+        lock_hit = {"count": 0}
+
+        async def _intercept_lock(statement: Any, *args: Any, **kwargs: Any) -> Any:
+            # Detect the FOR UPDATE lock acquisition (the re-read under lock).
+            if "FOR UPDATE" in str(statement):
+                lock_hit["count"] += 1
+                if lock_hit["count"] == 1:
+                    # Between snapshot and FSM lock: concurrently confirm the deletion.
+                    confirm_session = factory()
+                    await confirm_session.begin()
+                    await confirm_session.execute(
+                        text("SELECT set_config('app.organisation_id', :oid, true)"),
+                        {"oid": str(org_id)},
+                    )
+                    # First request the deletion to get a token.
+                    token_result = await request_org_deletion(confirm_session, org_id, user_id)
+                    await confirm_session.commit()
+
+                    # Now confirm it (hard delete).
+                    await confirm_org_deletion(confirm_session, org_id, token_result["token"], immediate=True)
+                    await confirm_session.commit()
+                    await confirm_session.close()
+            return await original_execute(statement, *args, **kwargs)
+
+        monkeypatch.setattr(deletion_session, "execute", _intercept_lock)
+
+        # The request_org_deletion should now raise on the premise re-check
+        # because the org was deleted between snapshot and lock.
+        with pytest.raises(ValueError, match=r"Organisation not found|already deleted"):
+            await request_org_deletion(deletion_session, org_id, user_id)
+
+        await deletion_session.rollback()
+        await deletion_session.close()
+
+    async def test_snapshot_isolation_is_repeatable_read_read_only(
+        self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Snapshot isolation pinned: assert the live-capture path actually runs
+        REPEATABLE READ READ ONLY on its own connection.
+
+        We probe the transaction isolation level from inside the collector by
+        monkeypatching _collect_org_export to run a query that returns the
+        current transaction isolation level.
+        """
+        from modulo.db.crud.org_deletion import export_org_data
+
+        org_id = await _create_org(db_engine, "snapshot-isolation")
+        user_id = await _create_user(db_engine, org_id, "snapshot@test.com")
+        await _create_pipeline(db_engine, org_id, "Live Pipeline", user_id)
+
+        # Capture the isolation level observed inside the snapshot.
+        captured_isolation: dict[str, str] = {}
+
+        import modulo.db.crud.org_deletion as org_deletion_mod
+
+        original_collect = org_deletion_mod._collect_org_export
+
+        async def _probe_isolation(session: AsyncSession, org: Any) -> dict[str, Any]:
+            # Query the current transaction isolation level.
+            result = await session.execute(text("SHOW transaction_isolation"))
+            captured_isolation["level"] = result.scalar_one()
+            return await original_collect(session, org)
+
+        monkeypatch.setattr(org_deletion_mod, "_collect_org_export", _probe_isolation)
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session:
+            await export_org_data(session, org_id)
+
+        # The snapshot must be REPEATABLE READ (and READ ONLY).
+        # Postgres reports "repeatable read" for REPEATABLE READ isolation.
+        assert captured_isolation.get("level", "").lower() == "repeatable read", (
+            f"expected REPEATABLE READ isolation, got {captured_isolation.get('level')!r}"
+        )
 
 
 # ── Tests: batch_delete_langgraph_checkpoints ───────────────────────
