@@ -23,6 +23,23 @@ class TestGetOrCreateEngine:
         deps._engine = None
         session_mod._shared_engine = None
 
+    def teardown_method(self):
+        """Never leak a patched engine singleton into the rest of the suite.
+
+        ``get_or_create_engine`` caches through ``modulo.db.session.get_shared_engine``,
+        so a test that builds an engine while ``create_async_engine`` is patched
+        would otherwise leave that auto ``MagicMock`` in the process-global
+        singleton. A later test that drives the REAL ``create_run`` then runs
+        the DB capacity probe against it: the mock's ``scalar_one()`` returns a
+        never-awaited coroutine, which surfaces as a
+        ``PytestUnraisableExceptionWarning`` failure on an unrelated test.
+        """
+        import modulo.api.dependencies as deps
+        import modulo.db.session as session_mod
+
+        deps._engine = None
+        session_mod._shared_engine = None
+
     def test_engine_with_postgres_pool_config(self):
         """Postgres backends get pool_pre_ping, pool_size, max_overflow, pool_recycle, pool_timeout."""
         from modulo.api.dependencies import get_or_create_engine
