@@ -191,11 +191,17 @@ the workspace-pod ServiceAccount — is in the
 
 On the Kubernetes (T3) tier the runtime provider runs agent workspaces as pods
 and **deliberately does not enforce egress inside them** — the pod's network is
-owned by the cluster CNI, and an in-pod `deny_all`/`selected` request is
-refused with a typed error naming NetworkPolicy as the remediation. The chart
-closes that loop by **authoring** the policy: an optional, namespace-scoped
-`NetworkPolicy` selecting the workspace pods (`modulo.provider: kubernetes`)
-with a deny-by-default egress rule plus an exact-target (CIDR + port) allowlist.
+owned by the cluster CNI. The chart is the enforcement authoring layer: an
+optional, namespace-scoped `NetworkPolicy` selecting the workspace pods
+(`modulo.provider: kubernetes`) with a deny-by-default egress rule plus an
+exact-target (CIDR + port) allowlist.
+
+The app ACCEPTS a deny-all declaration on this tier and records the posture as
+**`declared`** (Modulo authors the manifest; the customer's CNI enforces it;
+Modulo never observes traffic). A `selected`-mode request (a per-node
+allowlist) is still refused with a typed error naming NetworkPolicy as the
+remediation, because this rendered policy's allowlist is cluster-level and
+cannot express a per-node list.
 
 ```yaml
 workspaceNetworkPolicy:
@@ -226,7 +232,8 @@ being silently rejected by the API server.
 
 **Posture and prerequisites.** Modulo authors the manifest and the cluster CNI
 enforces it; Modulo records that as a **`declared`** egress posture (never an
-observation — Modulo does not see network traffic). This requires a CNI that
+observation — Modulo does not see network traffic) and the app accepts a
+deny-all declaration on this basis. This requires a CNI that
 enforces NetworkPolicy (e.g. Calico, Cilium); `kindnet` (kind's default) does
 not, so a policy applied there proves nothing. A NetworkPolicy cannot express a
 hostname — resolve targets to CIDRs before listing them — and some CNIs silently

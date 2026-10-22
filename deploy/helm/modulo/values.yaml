@@ -69,8 +69,12 @@ podSecurity:
 # egress policy plus an exact-target (CIDR + port) allowlist.
 #
 # Off by default. Requires a CNI that enforces NetworkPolicy (e.g. Calico,
-# Cilium) — kindnet does not. Modulo records this posture as `declared` (it
-# authors the policy; it never observes network traffic).
+# Cilium) — kindnet does not. The app ACCEPTS a deny-all declaration on this
+# tier and records the posture as `declared` (Modulo AUTHORS the policy; the
+# customer's CNI enforces it; Modulo never observes network traffic) — this
+# chart remains the enforcement authoring layer, not an in-pod control.
+# A `selected`-mode request (per-node allowlist) is still refused, because the
+# rendered allowlist below is cluster-level.
 workspaceNetworkPolicy:
   enabled: false
   # Permit cluster DNS (UDP/TCP 53) so deny-by-default does not break name

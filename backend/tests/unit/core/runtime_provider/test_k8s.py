@@ -301,12 +301,24 @@ class TestRegistration:
 
 
 class TestCreateWorkspace:
-    async def test_egress_none_refuses_with_typed_capability_error(self) -> None:
-        """An egress 'none' claim this tier cannot enforce fails closed at provision."""
-        provider = _provider(core=AsyncMock())
+    async def test_egress_none_is_accepted_as_a_declared_posture(self) -> None:
+        """FAR-2068: an egress 'none' declaration no longer refuses at provision.
 
-        with pytest.raises(ProviderCapabilityUnsupportedError, match="NetworkPolicy"):
-            await provider.create_workspace(_spec(egress_policy="none"))
+        Modulo AUTHORS the NetworkPolicy from ``deploy/helm/modulo`` and the
+        customer's CNI enforces it, so the pod is provisioned normally and NO
+        in-pod egress enforcement is attempted.
+        """
+        core = AsyncMock()
+        core.read_namespaced_pod.return_value = _pod("Running")
+        ws_core = AsyncMock()
+        provider = _provider(core=core, ws_core=ws_core)
+
+        ref = await provider.create_workspace(_spec(egress_policy="none"))
+
+        assert ref.startswith("modulo-ws-")
+        core.create_namespaced_pod.assert_awaited_once()
+        # Nothing is enforced inside the pod: no exec subresource is opened.
+        ws_core.connect_get_namespaced_pod_exec.assert_not_called()
 
     async def test_create_builds_hardened_pod_and_returns_tracked_ref(self) -> None:
         core = AsyncMock()
@@ -996,11 +1008,21 @@ class TestApplyIsolation:
         with pytest.raises(ProviderCapabilityUnsupportedError, match="NetworkPolicy"):
             await provider.apply_isolation("modulo-ws-abc", _spec(), policy)
 
-    async def test_egress_none_is_refused(self) -> None:
+    async def test_egress_none_is_accepted_without_in_pod_enforcement(self) -> None:
+        """FAR-2068: an egress 'none' claim is a DECLARED posture, not a refusal.
+
+        The Helm-authored NetworkPolicy is the enforcement authoring layer, so
+        isolation proceeds and performs no egress step inside the pod.
+        """
         provider = _provider(core=AsyncMock())
 
-        with pytest.raises(ProviderCapabilityUnsupportedError, match="NetworkPolicy"):
-            await provider.apply_isolation("modulo-ws-abc", _spec(), IsolationPolicy(egress_policy="none"))
+        async def _boom(*_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("an egress 'none' declaration must not run an in-pod enforcement step")
+
+        with patch.object(provider, "exec_command", _boom):
+            status = await provider.apply_isolation("modulo-ws-abc", _spec(), IsolationPolicy(egress_policy="none"))
+
+        assert status is None
 
     async def test_git_scope_and_read_only_seal_run_in_order(self, monkeypatch: pytest.MonkeyPatch) -> None:
         provider = _provider()

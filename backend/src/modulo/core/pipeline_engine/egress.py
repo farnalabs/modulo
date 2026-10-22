@@ -90,11 +90,10 @@ _TIER_RESTRICTIVE_POSTURE: dict[str, EgressPosture] = {
     "e2b": EgressPosture.ENFORCED_BY_SUBSTRATE,
     "docker": EgressPosture.ENFORCED_BY_SUBSTRATE,
     # T3 / Kubernetes: Modulo authors the NetworkPolicy manifest (declared);
-    # the customer's CNI enforces it and Modulo observes nothing. Today the
-    # resolver still REFUSES a restrictive Kubernetes policy (the FAR-1690
-    # K8s-authoring slice and its ADR amendment flip this to a declared
-    # resolution); the mapping is recorded so the posture vocabulary is
-    # complete and the upcoming flip is a one-line change here.
+    # the customer's CNI enforces it and Modulo observes nothing. The
+    # Kubernetes deny-all is accepted as a DECLARED posture on this basis;
+    # `selected` still refuses (the Helm-rendered policy's allowlist is
+    # cluster-level and cannot express a per-node allowlist).
     "t3": EgressPosture.DECLARED,
     "kubernetes": EgressPosture.DECLARED,
     "local": EgressPosture.NONE,
@@ -160,12 +159,15 @@ _TIER_ENFORCEMENT: dict[str, dict[str, bool]] = {
     # Kubernetes (FAR-1051): the pod's network is owned by the cluster CNI and
     # bounded egress is deliberately NOT ours — it is the CUSTOMER's
     # NetworkPolicy on the workspace namespace (opt-in, needs an enforcing
-    # CNI).  The provider therefore enforces nothing itself: only the
-    # unrestricted provider-default posture is supportable, and ``deny_all`` /
-    # ``selected`` return a NAMED refusal here (never a silent downgrade),
-    # matching KubernetesRuntimeProvider's typed
-    # ``ProviderCapabilityUnsupportedError`` for the same two requests.
-    "kubernetes": {"default": True, "deny_all": False, "selected": False},
+    # CNI).  The provider therefore enforces nothing itself.  A ``deny_all``
+    # declaration IS accepted: Modulo AUTHORS the Helm-rendered NetworkPolicy
+    # (deploy/helm/modulo/templates/networkpolicy.yaml) and records the
+    # posture as DECLARED, while the customer's CNI enforces it and Modulo
+    # observes no traffic.  ``selected`` remains a NAMED refusal — the
+    # rendered policy's allowlist is cluster-level and cannot express a
+    # per-node allowlist — never a silent downgrade, matching
+    # KubernetesRuntimeProvider's typed ProviderCapabilityUnsupportedError.
+    "kubernetes": {"default": True, "deny_all": True, "selected": False},
 }
 
 # Per-tier remediation appended to a capability refusal, where the fix is not
@@ -175,7 +177,8 @@ _TIER_ENFORCEMENT: dict[str, dict[str, bool]] = {
 _TIER_REFUSAL_NOTES: dict[str, str] = {
     "kubernetes": (
         "on Kubernetes, bounded egress is the customer's NetworkPolicy on the workspace "
-        "namespace (opt-in, requires an enforcing CNI) — the provider deliberately "
+        "namespace (opt-in, requires an enforcing CNI) — the Helm-authored policy's allowlist "
+        "is cluster-level and cannot express a per-node allowlist; the provider deliberately "
         "enforces nothing inside the pod"
     ),
 }

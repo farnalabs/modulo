@@ -69,17 +69,19 @@ _EGRESS_CASES: list[tuple[str | None, str | None, str, bool, str | None, bool, s
     ("unset", "unset", "local", False, None, False, "local: default posture accepted"),
     ("deny_all", "outbound", "local", False, "deny_all", True, "local: deny_all -> refused"),
     ("selected", "unset", "local", True, "selected", True, "local: selected -> refused"),
-    # Kubernetes (FAR-1051): only the provider-default posture is enforceable —
-    # bounded egress is the CUSTOMER's NetworkPolicy, so deny_all / selected
-    # are named refusals, never a silent downgrade.
+    # Kubernetes (FAR-1051 / FAR-2068): a deny_all declaration is ACCEPTED as a
+    # DECLARED posture — Modulo authors the Helm-rendered NetworkPolicy, the
+    # customer's CNI enforces it, Modulo observes nothing. ``selected`` stays a
+    # NAMED refusal: the rendered policy's allowlist is cluster-level and cannot
+    # express a per-node allowlist.
     ("unset", "unset", "kubernetes", False, None, False, "kubernetes: both unset -> provider default"),
     ("unset", "outbound", "kubernetes", False, None, False, "kubernetes: profile outbound -> provider default"),
     ("default", "unset", "kubernetes", False, None, False, "kubernetes: node default -> provider default"),
-    ("unset", "none", "kubernetes", False, "deny_all", True, "kubernetes: profile none -> refused"),
-    ("deny_all", "outbound", "kubernetes", False, "deny_all", True, "kubernetes: node deny_all -> refused"),
+    ("unset", "none", "kubernetes", False, "deny_all", False, "kubernetes: profile none -> declared deny_all"),
+    ("deny_all", "outbound", "kubernetes", False, "deny_all", False, "kubernetes: node deny_all -> declared"),
     ("selected", "unset", "kubernetes", True, "selected", True, "kubernetes: node selected -> refused"),
     ("unset", "selected", "kubernetes", False, "selected", True, "kubernetes: profile selected -> refused"),
-    ("deny_all", "none", "kubernetes", False, "deny_all", True, "kubernetes: both deny_all -> refused"),
+    ("deny_all", "none", "kubernetes", False, "deny_all", False, "kubernetes: both deny_all -> declared"),
 ]
 
 
@@ -433,18 +435,18 @@ def test_cert_vs_actual_egress_capability(
 # --- FAR-1051: the certificate follows the profile's RESOLVED provider tier ---
 
 
-def test_kubernetes_profile_none_fails_closed_instead_of_certifying_deny_all() -> None:
-    """FAR-1051 regression: profile network_policy='none' on a KUBERNETES
-    profile used to certify ``sandbox.egress=False`` (the e2b reference tier
-    enforces deny_all) while dispatch REFUSES the very same combination. With
-    the profile's provider plumbed, the certificate is unknown (fail-closed) —
-    matching what dispatch actually does."""
+def test_kubernetes_profile_none_certifies_the_declared_deny_all() -> None:
+    """FAR-1051 / FAR-2068: profile network_policy='none' on a KUBERNETES
+    profile used to certify an enforcement the tier refused. Since FAR-2068 the
+    resolver ACCEPTS the deny-all as a DECLARED posture (Modulo authors the
+    Helm NetworkPolicy; the customer's CNI enforces it), so the certificate is
+    a real restrictive ``False`` — matching what dispatch now does."""
     caps = derive_sandbox_capabilities(
         {"node_type": "sandbox_agent"},
         profile_network_policy="none",
         provider_type="kubernetes",
     )
-    assert caps[SANDBOX_CAPABILITY_EGRESS] is None
+    assert caps[SANDBOX_CAPABILITY_EGRESS] is False
 
 
 def test_kubernetes_profile_default_posture_certifies_egress_allowed() -> None:
@@ -622,23 +624,62 @@ def test_spec_egress_for_canonical_selected_is_not_permissive() -> None:
 
 
 def test_kubernetes_tier_is_registered_in_the_enforcement_matrix() -> None:
-    """The kubernetes tier exists and declares exactly one enforceable posture.
+    """The kubernetes tier exists and accepts exactly two of the three postures.
 
     Without this entry a kubernetes profile resolved to ``unknown tier``,
     which reads as a configuration bug instead of the deliberate posture.
+    ``deny_all`` is accepted as a DECLARED posture (FAR-2068); ``selected``
+    stays a named refusal (the rendered policy's allowlist is cluster-level).
     """
     tier_caps = egress_mod._TIER_ENFORCEMENT["kubernetes"]
 
-    assert tier_caps == {"default": True, "deny_all": False, "selected": False}
+    assert tier_caps == {"default": True, "deny_all": True, "selected": False}
+
+
+def test_kubernetes_deny_all_resolves_as_a_declared_posture() -> None:
+    """FAR-2068: a K8s deny-all is accepted as a DECLARED posture.
+
+    Modulo AUTHORS the Helm-rendered NetworkPolicy; the customer's CNI
+    enforces it and Modulo never observes traffic — so the resolution is
+    neither a refusal nor an ENFORCED_BY_SUBSTRATE claim.
+    """
+    result = resolve_egress(
+        node_egress_policy="deny_all",
+        node_egress_allowlist=None,
+        profile_network_policy=None,
+        tier="kubernetes",
+    )
+
+    assert result.refusal is None
+    assert result.policy == "deny_all"
+    assert result.posture is EgressPosture.DECLARED
+
+
+def test_kubernetes_selected_with_allowlist_is_still_refused() -> None:
+    """FAR-2068: ``selected`` stays refused — a non-empty node allowlist does
+    not help, because the Helm-rendered policy's allowlist is cluster-level and
+    cannot express a per-node allowlist. A refusal asserts no posture."""
+    result = resolve_egress(
+        node_egress_policy="selected",
+        node_egress_allowlist=_SAMPLE_ALLOWLIST,
+        profile_network_policy=None,
+        tier="kubernetes",
+    )
+
+    assert result.refusal is not None
+    assert result.posture is EgressPosture.NONE
 
 
 def test_kubernetes_refusal_names_networkpolicy_as_the_remediation() -> None:
     """A refusal must say WHERE the control lives: bounded egress on this tier
-    is the customer's NetworkPolicy, not something the provider enforces."""
+    is the customer's NetworkPolicy, not something the provider enforces.
+
+    ``selected`` is the one posture this tier still refuses (FAR-2068).
+    """
     result = resolve_egress(
-        node_egress_policy=None,
-        node_egress_allowlist=None,
-        profile_network_policy="none",
+        node_egress_policy="selected",
+        node_egress_allowlist=_SAMPLE_ALLOWLIST,
+        profile_network_policy=None,
         tier="kubernetes",
     )
 
@@ -647,9 +688,37 @@ def test_kubernetes_refusal_names_networkpolicy_as_the_remediation() -> None:
     assert "kubernetes" in result.refusal
 
 
+@pytest.mark.parametrize(
+    ("tier", "expected_refusal", "expected_posture"),
+    [
+        pytest.param("e2b", False, EgressPosture.ENFORCED_BY_SUBSTRATE, id="e2b"),
+        pytest.param("docker", False, EgressPosture.ENFORCED_BY_SUBSTRATE, id="docker"),
+        pytest.param("t3", False, EgressPosture.DECLARED, id="t3"),
+        pytest.param("local", True, EgressPosture.NONE, id="local"),
+    ],
+)
+def test_kubernetes_flip_leaves_the_other_tiers_unchanged(
+    tier: str,
+    expected_refusal: bool,
+    expected_posture: EgressPosture,
+) -> None:
+    """FAR-2068 touched only the kubernetes tier: a deny_all declaration keeps
+    every other tier's outcome exactly as before."""
+    result = resolve_egress(
+        node_egress_policy="deny_all",
+        node_egress_allowlist=None,
+        profile_network_policy=None,
+        tier=tier,
+    )
+
+    assert result.policy == "deny_all"
+    assert (result.refusal is not None) is expected_refusal
+    assert result.posture is expected_posture
+
+
 def test_kubernetes_default_posture_is_not_refused() -> None:
     """No silent degradation of a supported configuration: the unrestricted
-    default resolves cleanly on this tier (the tier's only enforceable posture)."""
+    default resolves cleanly on this tier (asserting no posture)."""
     result = resolve_egress(
         node_egress_policy=None,
         node_egress_allowlist=None,
@@ -781,12 +850,11 @@ def test_refused_dispatch_asserts_no_posture() -> None:
 def test_kubernetes_tier_restrictive_posture_target_is_declared() -> None:
     """The Kubernetes tier's restrictive-posture target is DECLARED.
 
-    Today the resolver still REFUSES a restrictive Kubernetes policy (the
-    provider performs no in-pod enforcement); the FAR-1690 K8s-authoring
-    slice flips this to a declared resolution once the Helm-rendered
-    NetworkPolicy is the recognised authoring path. The mapping is pinned
-    so that flip is a one-line change and the vocabulary cannot silently
-    drift.
+    Since FAR-2068 a deny-all K8s descriptor RESOLVES (the Helm-rendered
+    NetworkPolicy is the recognised authoring path), and the established
+    posture is DECLARED — Modulo authors the manifest, the customer's CNI
+    enforces it, Modulo observes nothing. The mapping is pinned so it cannot
+    silently drift to an ENFORCED_BY_SUBSTRATE claim.
     """
     assert egress_mod._TIER_RESTRICTIVE_POSTURE["kubernetes"] is EgressPosture.DECLARED
     assert egress_mod._TIER_RESTRICTIVE_POSTURE["t3"] is EgressPosture.DECLARED
@@ -797,10 +865,9 @@ def test_kubernetes_tier_restrictive_posture_target_is_declared() -> None:
 def _expected_posture(tier: str, expected_policy: str | None, expect_refusal: bool) -> EgressPosture:
     """The posture a case must yield: NONE unless a restrictive policy resolves.
 
-    Today this reaches ``_TIER_RESTRICTIVE_POSTURE`` only for tiers that resolve
-    a restrictive policy; the ``kubernetes``/``t3`` DECLARED row is a TARGET,
-    not a live assertion — the resolver still refuses a restrictive Kubernetes
-    policy until the FAR-1690 authoring slice flips it (see egress.py).
+    A resolved restrictive policy carries its tier's establishment posture
+    (``_TIER_RESTRICTIVE_POSTURE``); the kubernetes/t3 row is DECLARED, and
+    since FAR-2068 a kubernetes deny-all actually resolves on that row.
     """
     if expect_refusal or expected_policy is None:
         return EgressPosture.NONE
