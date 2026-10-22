@@ -1,4 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Use the real router implementation so the permission assertions below cover
+// the navigation guard rather than only the extracted helper.
+vi.mock('vue-router', async () => {
+  const actual = await vi.importActual<typeof import('vue-router')>('vue-router')
+  return actual
+})
+
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import yaml from 'js-yaml'
@@ -16,9 +24,10 @@ const { decodeJwtPayload, usePlanStore } = vi.hoisted(() => ({
 vi.mock('../lib/jwt', () => ({ decodeJwtPayload }))
 vi.mock('../stores/planStore', () => ({ usePlanStore }))
 
-import {
+import router, {
   enforceRoleTierVisibility,
 } from '../router'
+import { clearAccessToken, setAccessToken } from '../lib/api/auth'
 
 function makeRoute(name: string | undefined, meta: Record<string, unknown> = {}): any {
   return { name, meta }
@@ -28,9 +37,11 @@ const planStore = {
   loaded: true,
   features: {} as Record<string, unknown>,
   devMode: false,
+  userPermissions: [] as string[],
   isAtMinimumTier: vi.fn(() => true),
   featureEnabled: vi.fn(() => false),
   fetchPlan: vi.fn(async () => {}),
+  fetchPermissions: vi.fn(async () => {}),
 }
 
 beforeEach(() => {
@@ -38,11 +49,42 @@ beforeEach(() => {
   planStore.loaded = true
   planStore.features = {}
   planStore.devMode = false
+  planStore.userPermissions = []
   planStore.isAtMinimumTier.mockReturnValue(true)
   planStore.featureEnabled.mockReturnValue(false)
   planStore.fetchPlan.mockResolvedValue(undefined)
+  planStore.fetchPermissions.mockResolvedValue(undefined)
+  clearAccessToken()
   usePlanStore.mockReturnValue(planStore)
   decodeJwtPayload.mockReturnValue(null)
+})
+
+function adminToken(): string {
+  const b64url = (obj: Record<string, unknown>) =>
+    btoa(JSON.stringify(obj)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+  return `${b64url({ alg: 'none', typ: 'JWT' })}.${b64url({ org_role: 'admin' })}.test-signature`
+}
+
+describe('router permission navigation guard', () => {
+  it('allows the compliance evidence index route when its permission exists', async () => {
+    setAccessToken(adminToken())
+    planStore.userPermissions = ['compliance.evidence_index.read']
+
+    await router.push({ name: 'admin-compliance-evidence-index' })
+
+    expect(router.currentRoute.value.name).toBe('admin-compliance-evidence-index')
+    expect(planStore.fetchPermissions).toHaveBeenCalled()
+  })
+
+  it('redirects the compliance evidence index route when its permission is missing', async () => {
+    setAccessToken(adminToken())
+    planStore.userPermissions = []
+    await router.push({ name: 'dashboard' })
+
+    await router.push({ name: 'admin-compliance-evidence-index' })
+
+    expect(router.currentRoute.value.name).toBe('dashboard')
+  })
 })
 
 describe('enforceRoleTierVisibility', () => {
