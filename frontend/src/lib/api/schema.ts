@@ -1553,6 +1553,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Permissions
+         * @description Return the CALLER's effective permission names (FAR-2020).
+         *
+         *     The frontend gates nav/route entries on ``required_permissions`` (see
+         *     ``frontend/src/config/navigation.ts``); the access token deliberately
+         *     carries no ``permissions`` claim (honouring one would bloat every request
+         *     and leave it stale after a role change), so the nav resolves them from this
+         *     registry-backed read instead.
+         *
+         *     Authenticated only. The role is the LIVE membership role (ADR 047), not the
+         *     token claim, so a removed or deactivated member is denied outright (401)
+         *     rather than served a stale set. A DEMOTED user does get the reduced set on
+         *     this read, but the SPA caches the answer for the session: the client's nav
+         *     follows the reduction on its next permissions read, not the instant the role
+         *     changes.
+         *
+         *     A system admin is resolved at the admin floor regardless of the org role the
+         *     token carries, and additionally retains the keys only a system admin can
+         *     reach (a non-system-admin's set omits those, so it never over-states what
+         *     their org role can do). When the token carries no org claim there is no
+         *     membership lookup at all; when it does, the lookup still guards removed
+         *     members (401) even though the role it returns no longer narrows the set.
+         */
+        get: operations["permissions_api_v1_auth_permissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/csrf-token": {
         parameters: {
             query?: never;
@@ -17515,6 +17555,18 @@ export interface components {
             /** Action */
             action: string;
         };
+        /**
+         * PermissionsResponse
+         * @description The caller's effective permission names (FAR-2020).
+         *
+         *     Sorted, so a client comparing the set is deterministic and the response is
+         *     diff-stable. Scoped to the CALLER: the route takes no parameters, so there
+         *     is no way to read another account's permissions through it.
+         */
+        PermissionsResponse: {
+            /** Permissions */
+            permissions: string[];
+        };
         /** PipelineCloneRequest */
         PipelineCloneRequest: {
             /**
@@ -26241,6 +26293,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["modulo__api__routes__auth__MeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    permissions_api_v1_auth_permissions_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionsResponse"];
                 };
             };
             /** @description Validation Error */
