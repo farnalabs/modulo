@@ -54,6 +54,7 @@ import pytest
 from fastapi import HTTPException
 
 from modulo.auth.jwt import TenantPrincipal
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -107,6 +108,7 @@ def _enforcement_session(*, connector_visibility: str, connector_owner_team: uui
     cannot silently swap an answer onto the wrong query.
     """
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
