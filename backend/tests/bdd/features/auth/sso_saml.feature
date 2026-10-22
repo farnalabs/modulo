@@ -42,8 +42,14 @@ Feature: SSO SAML 2.0 Integration
     Then the response status is 307
     And the user is added to team "team-1" with role "admin"
 
-  Scenario: Team gate blocks SAML on Community tier
+  Scenario: Community tier still allows the SAML metadata endpoint (degraded authentication)
     Given I do not have a Team license
+    When I request the SAML SP metadata endpoint
+    Then the response status is 200
+    And the response contains valid SAML metadata XML
+
+  Scenario: Team gate blocks SAML when a licence does not grant SSO
+    Given I have a licence that does not grant SSO
     When I request the SAML SP metadata endpoint
     Then the response status is 402
     And the error detail mentions "sso"
