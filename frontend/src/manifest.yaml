@@ -745,7 +745,7 @@ routes:
          sidebar_order:
          type: page
          <<: *community
-         required_roles: [admin, operator]
+         required_roles: [admin]
          deprecated: false
 
     /admin/errors:

@@ -14,12 +14,12 @@
       </template>
     </PageHeader>
 
-    <div v-if="store.isLoading" aria-live="polite" data-testid="evidence-index-loading" class="flex items-center gap-3 text-sm text-muted-foreground">
+    <div v-if="store.isLoading && !store.index" aria-live="polite" data-testid="evidence-index-loading" class="flex items-center gap-3 text-sm text-muted-foreground">
       <LoadingSpinner />
       <span>{{ $t('views.EvidenceIndexView.loading') }}</span>
     </div>
-    <ErrorAlert v-else-if="store.error" :message="store.error" :on-retry="store.fetchIndex" />
-    <template v-else-if="store.index">
+    <ErrorAlert v-if="store.error" :message="store.error" :on-retry="store.fetchIndex" />
+    <template v-if="store.index">
       <section class="grid gap-3 sm:grid-cols-3" :aria-label="$t('views.EvidenceIndexView.summary_label')">
         <div class="rounded-lg border bg-card p-4 shadow-sm"><div class="text-xs text-muted-foreground">{{ $t('views.EvidenceIndexView.pack_version') }}</div><div class="mt-1 font-medium">{{ store.index.pack_version }}</div></div>
         <div class="rounded-lg border bg-card p-4 shadow-sm"><div class="text-xs text-muted-foreground">{{ $t('views.EvidenceIndexView.generated_at') }}</div><div class="mt-1 font-medium">{{ formatDate(store.index.generated_at) }}</div></div>

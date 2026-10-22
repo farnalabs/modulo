@@ -24,7 +24,6 @@ export const useEvidenceStore = defineStore('evidence', () => {
       index.value = data
     } catch (err) {
       error.value = formatApiError(err)
-      index.value = null
     } finally {
       isLoading.value = false
     }
