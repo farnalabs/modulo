@@ -100,6 +100,7 @@ const AdminConnectorsView = () => import('../views/AdminConnectorsView.vue')
 const AdminNodeCategoriesView = () => import('../views/AdminNodeCategoriesView.vue')
 const AdminViewsView = () => import('../views/AdminViewsView.vue')
 const AdminEvidenceRedactionView = () => import('../views/AdminEvidenceRedactionView.vue')
+const ComplianceEvidenceIndexView = () => import('../views/ComplianceEvidenceIndexView.vue')
 const AdminModelBackendsView = () => import('../views/AdminModelBackendsView.vue')
 const AdminOrgSettingsView = () => import('../views/AdminOrgSettingsView.vue')
 const AdminRunRetentionView = () => import('../views/AdminRunRetentionView.vue')
@@ -451,6 +452,11 @@ const router = createRouter({
       path: '/admin/evidence-redaction',
       name: 'admin-evidence-redaction',
       component: AdminEvidenceRedactionView,
+    },
+    {
+      path: '/admin/compliance/evidence-index',
+      name: 'admin-compliance-evidence-index',
+      component: ComplianceEvidenceIndexView,
     },
     {
       path: '/admin/model-backends',
