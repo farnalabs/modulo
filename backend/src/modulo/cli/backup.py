@@ -66,6 +66,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from modulo.cli.apply import register_apply
+from modulo.db.url_utils import _POSTGRES_ASYNC_PREFIX
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -110,10 +111,8 @@ __all__ = ["MANIFEST_VERSION", "backup", "cli", "restore"]
 
 # ── URL helpers ──────────────────────────────────────────────────────────────
 
-# SQLAlchemy asyncpg driver scheme, shared by the URL normalisers below
-# (kept module-local to match settings.py / db/url_utils.py, which each own
-# the same private constant).
-_POSTGRES_ASYNC_PREFIX = "postgresql+asyncpg://"
+# SQLAlchemy asyncpg driver scheme, shared by the URL normalisers below and
+# imported from db/url_utils.py so the contract has a single declaration.
 
 
 def _resolve_url(db_url: str | None) -> str:
