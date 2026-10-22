@@ -146,6 +146,18 @@ set -u
   printf '%s\\n' "====="
 } >> "${STUB_DIR}/gh_args.log"
 if [ -n "${STUB_GH_FAIL:-}" ]; then exit 1; fi
+# Selective failure: fail only the call whose joined argv contains the marker,
+# so one API surface (a label POST/DELETE) can fail while the PR comment still
+# posts — the label/comment failure-handling paths need that distinction.
+if [ -n "${STUB_GH_FAIL_MATCH:-}" ]; then
+  joined=" $* "
+  case "$joined" in
+    *"${STUB_GH_FAIL_MATCH}"*)
+      if [ -n "${STUB_GH_FAIL_MESSAGE:-}" ]; then printf '%s\\n' "${STUB_GH_FAIL_MESSAGE}" >&2; fi
+      exit 1
+      ;;
+  esac
+fi
 exit 0
 """
 
@@ -227,13 +239,29 @@ def _run_dispatch(
 
 
 def _pr_comment_body(gh_args_path: Path) -> str:
-    """The ``--body`` value of the PR comment the step posted, if any."""
+    """The ``--body`` value of the PR comment the step posted, if any.
+
+    The stub logs one argv element per line, so a multi-line body spans
+    several lines: join everything after ``--body`` (the body is the last
+    argument the step passes) to reconstruct it. Reading only the next line
+    silently truncated every body to its first line.
+    """
     sections = gh_args_path.read_text(encoding="utf-8").split("\n=====\n")
     for section in sections:
         args = section.splitlines()
         if len(args) >= 2 and args[0] == "pr" and args[1] == "comment" and "--body" in args:
-            return args[args.index("--body") + 1]
+            return "\n".join(args[args.index("--body") + 1 :])
     return ""
+
+
+def _label_api_calls(run: DispatchRun) -> list[str]:
+    """The ``gh api`` invocations touching the PR's labels, normalised."""
+    calls: list[str] = []
+    for section in run.gh_calls:
+        args = [arg for arg in section.splitlines() if arg]
+        if len(args) >= 2 and args[0] == "api" and any("labels" in arg for arg in args):
+            calls.append(" ".join(args))
+    return calls
 
 
 # ---------------------------------------------------------------------------
@@ -241,16 +269,23 @@ def _pr_comment_body(gh_args_path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_429_capacity_is_retryable_and_honours_retry_after(tmp_path: Path) -> None:
-    """A saturated trigger is retired, not terminal, and the server's delay is used."""
+def test_429_capacity_is_retryable_and_retry_after_is_a_floor(tmp_path: Path) -> None:
+    """A saturated trigger is retried, never terminal; Retry-After is a floor.
+
+    The server's 7s is SHORTER than the first backoff (10s), so the backoff
+    wins. Honouring the short header verbatim is the FAR-2066 defect: every
+    attempt waits the server's value, the attempt cap burns in seconds, and the
+    wall-clock budget never binds.
+    """
     run = _run_dispatch(
         tmp_path,
         [Response("429", f'{{"detail": "{CAPACITY_DETAIL}"}}', retry_after="7"), Response("202", '{"run_id": "abc"}')],
+        {"DISPATCH_JITTER_MAX": "0", "DISPATCH_BASE_DELAY": "10"},
     )
 
     assert run.exit_code == 0, run.output
     assert run.curl_calls == 2, f"429 must be retried exactly once here, saw {run.curl_calls} attempts\n{run.output}"
-    assert run.sleeps == ["7"], f"Retry-After must be honoured verbatim, slept {run.sleeps!r}"
+    assert run.sleeps == ["10"], f"a 7s Retry-After must not shorten a 10s backoff, slept {run.sleeps!r}"
     assert "capacity" in run.output, "the retry warning must name the capacity class"
     assert "accepted" in run.output
 
@@ -471,3 +506,95 @@ def test_unusable_retry_after_falls_back_to_backoff(tmp_path: Path, raw: str) ->
 
     assert run.exit_code == 0, run.output
     assert run.sleeps == ["4"], f"{raw!r} must fall back to the computed backoff, slept {run.sleeps!r}"
+
+
+# ---------------------------------------------------------------------------
+# FAR-2066: the durable `fixer-dispatch-pending` PR label
+# ---------------------------------------------------------------------------
+#
+# A capacity/transient exhaustion means the CI failure is still OWED a fixer
+# run. The PR comment is the hard requirement, but it is a notification: the
+# label is the marker an operator (or a later sweep) can find without reading
+# CI history. A successful dispatch clears it; a terminal rejection is never
+# labelled (a fix, not a pending dispatch); and a label API failure is a
+# warning, never a second hard failure on top of the dispatch failure.
+
+PENDING_LABEL = "fixer-dispatch-pending"
+
+
+def test_capacity_exhaustion_applies_the_pending_label(tmp_path: Path) -> None:
+    run = _run_dispatch(
+        tmp_path,
+        [Response("429", f'{{"detail": "{CAPACITY_DETAIL}"}}')],
+        {"DISPATCH_BUDGET_SECONDS": "0"},
+    )
+
+    assert run.exit_code == 1, run.output
+    label_calls = _label_api_calls(run)
+    assert any(
+        call.startswith("api -X POST")
+        and "repos/farnalabs/modulo/issues/42/labels" in call
+        and f"labels[]={PENDING_LABEL}" in call
+        for call in label_calls
+    ), label_calls
+    assert PENDING_LABEL in run.pr_comment_body, "the failure comment must mention the durable marker"
+
+
+def test_transient_exhaustion_applies_the_pending_label(tmp_path: Path) -> None:
+    run = _run_dispatch(tmp_path, [Response("000", "")], {"DISPATCH_BUDGET_SECONDS": "0"})
+
+    assert run.exit_code == 1, run.output
+    assert "webhook unreachable" in run.output
+    assert any(f"labels[]={PENDING_LABEL}" in call for call in _label_api_calls(run))
+    assert PENDING_LABEL in run.pr_comment_body
+
+
+def test_terminal_rejection_is_never_labelled(tmp_path: Path) -> None:
+    """A credential/payload rejection is a fix, not a pending dispatch."""
+    run = _run_dispatch(tmp_path, [Response("401", '{"detail": "invalid signature"}')])
+
+    assert run.exit_code == 1, run.output
+    assert not _label_api_calls(run)
+    assert PENDING_LABEL not in run.pr_comment_body
+
+
+def test_successful_dispatch_clears_the_pending_label(tmp_path: Path) -> None:
+    run = _run_dispatch(tmp_path, [Response("202", '{"run_id": "abc"}')])
+
+    assert run.exit_code == 0, run.output
+    label_calls = _label_api_calls(run)
+    assert any(
+        call.startswith("api -X DELETE") and f"repos/farnalabs/modulo/issues/42/labels/{PENDING_LABEL}" in call
+        for call in label_calls
+    ), label_calls
+    assert "::warning::" not in run.output
+
+
+def test_clearing_a_label_that_is_not_present_is_tolerated(tmp_path: Path) -> None:
+    """404 on DELETE is the normal case (nothing was pending), not a warning."""
+    run = _run_dispatch(
+        tmp_path,
+        [Response("202", '{"run_id": "abc"}')],
+        {"STUB_GH_FAIL_MATCH": PENDING_LABEL, "STUB_GH_FAIL_MESSAGE": "gh: Not Found (HTTP 404)"},
+    )
+
+    assert run.exit_code == 0, run.output
+    assert "::warning::" not in run.output
+
+
+def test_label_failure_is_a_warning_not_a_second_hard_failure(tmp_path: Path) -> None:
+    """The comment is the hard requirement; a label failure must not exit 2."""
+    run = _run_dispatch(
+        tmp_path,
+        [Response("429", f'{{"detail": "{CAPACITY_DETAIL}"}}')],
+        {
+            "DISPATCH_BUDGET_SECONDS": "0",
+            "STUB_GH_FAIL_MATCH": "issues/42/labels",
+            "STUB_GH_FAIL_MESSAGE": "gh: Resource not accessible by integration (HTTP 403)",
+        },
+    )
+
+    assert run.exit_code == 1, f"a label failure must not upgrade the exit code to 2\n{run.output}"
+    assert "::warning::Could not apply the 'fixer-dispatch-pending' label" in run.output
+    assert run.pr_comment_body, "the dispatch-failure comment must still be posted"
+    assert "could **not** be applied automatically" in run.pr_comment_body
