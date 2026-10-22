@@ -235,20 +235,31 @@ function statusClass(status: string): string {
   return 'border-warning/50 bg-warning/10 text-warning-text'
 }
 
+const statusTranslationKeys: Record<string, string> = {
+  present: 'views.ComplianceEvidenceIndex.status_present',
+  absent: 'views.ComplianceEvidenceIndex.status_absent',
+  customer_supplied: 'views.ComplianceEvidenceIndex.status_customer_supplied',
+}
+
+const provenanceTranslationKeys: Record<string, string> = {
+  observed: 'views.ComplianceEvidenceIndex.provenance_observed',
+  customer_supplied: 'views.ComplianceEvidenceIndex.provenance_customer_supplied',
+  derived: 'views.ComplianceEvidenceIndex.provenance_derived',
+}
+
+function localizedValue(value: string, translationKeys: Record<string, string>): string {
+  const translationKey = translationKeys[value]
+  return translationKey
+    ? $t(translationKey)
+    : $t('views.ComplianceEvidenceIndex.unknown_value', { value })
+}
+
 function statusLabel(status: string): string {
-  const key = `views.ComplianceEvidenceIndex.status_${status}`
-  const translated = $t(key)
-  return translated === key
-    ? $t('views.ComplianceEvidenceIndex.unknown_value', { value: status })
-    : translated
+  return localizedValue(status, statusTranslationKeys)
 }
 
 function provenanceLabel(provenance: string): string {
-  const key = `views.ComplianceEvidenceIndex.provenance_${provenance}`
-  const translated = $t(key)
-  return translated === key
-    ? $t('views.ComplianceEvidenceIndex.unknown_value', { value: provenance })
-    : translated
+  return localizedValue(provenance, provenanceTranslationKeys)
 }
 
 function formatTimestamp(value: string): string {

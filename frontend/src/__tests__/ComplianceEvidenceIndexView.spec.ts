@@ -124,16 +124,19 @@ describe('ComplianceEvidenceIndexView', () => {
     expect(explanation.text()).toContain('cannot list them')
   })
 
-  it('renders unknown future status and provenance values safely', async () => {
+  it('renders unknown future status and provenance values without missing-key warnings', async () => {
     mockGet.mockResolvedValue({
       data: payload({ artifacts: [artifact({ status: 'future_status', provenance: 'future_source' })] }),
       error: undefined,
     })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const wrapper = mountView()
     await settle()
 
     expect(wrapper.text()).toContain('Unknown (future_status)')
     expect(wrapper.text()).toContain('Unknown (future_source)')
+    expect(warn.mock.calls.some(([message]) => String(message).includes('[intlify] Not found'))).toBe(false)
+    warn.mockRestore()
   })
 
   it('renders a permission-restricted state instead of a generic retry error', async () => {
