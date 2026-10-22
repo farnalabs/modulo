@@ -72,12 +72,7 @@ def _system_only_keys_from_the_live_app() -> set[str]:
 
 
 def _make_session() -> AsyncMock:
-    session = configure_mock_session(AsyncMock(spec=AsyncSession))
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=begin_cm)
-    return session
+    return configure_mock_session(AsyncMock(spec=AsyncSession))
 
 
 @pytest.fixture
