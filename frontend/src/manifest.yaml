@@ -4752,6 +4752,18 @@ elements:
       - testid: run-detail-deadline-triage-entry
         type: element
         dynamic_testid: false
+      - testid: run-detail-salvage
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-salvage-entry
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-salvage-branch
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-salvage-pr
+        type: link
+        dynamic_testid: false
     /runs/diff:
       - testid: diff-loading
         type: element

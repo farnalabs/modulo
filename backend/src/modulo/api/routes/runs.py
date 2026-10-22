@@ -381,6 +381,19 @@ def _deadline_triage_from_markers(
     URL-shaped token it finds, which may be a quoted/listed URL). It never
     arms the idempotency gate — ``delivery_done`` remains the sentinel-only
     field — and it is never used as a delivery or cost gate.
+
+    FAR-1914 C1: each entry also carries ``salvageable`` and
+    ``salvage_evidence``. A killed run whose retained tail already showed a
+    branch and/or PR URL is *possibly* salvageable — the operator should
+    inspect that evidence before re-running instead of repeating delivered
+    work (the FAR-1760 re-delivery). ``salvageable`` is true only when there
+    is evidence AND ``delivery_done`` is not true: a sentinel-confirmed
+    delivery is already handled by the idempotency gate, not "salvage".
+    ``salvage_evidence`` names the evidence (``provenance: "observed"`` — the
+    tail showed it, we did not confirm it against an SCM — and
+    ``confidence: "heuristic"``). This is EVIDENCE, never a gate: it never
+    changes the run status, error code, classification, retry/idempotency or
+    cost, and nothing consumes it to make a decision.
     """
     if not isinstance(markers, dict):
         return []
@@ -391,6 +404,10 @@ def _deadline_triage_from_markers(
             continue
         raw_output = str(marker.get("raw_output") or "")
         log_tail = str(marker.get("sandbox_log_tail") or "")
+        pr_url = marker.get("pr_url")
+        branch = marker.get("branch")
+        delivery_done = marker.get("delivery_done") is True
+        salvageable = bool(pr_url or branch) and not delivery_done
         entries.append(
             {
                 "node_id": marker.get("node_id"),
@@ -400,13 +417,25 @@ def _deadline_triage_from_markers(
                 "raw_output_tail": raw_output[-_TRIAGE_RAW_OUTPUT_TAIL_CHARS:] if raw_output else "",
                 "stdout_length": marker.get("stdout_length"),
                 "stderr_length": marker.get("stderr_length"),
-                "delivery_done": marker.get("delivery_done") is True,
+                "delivery_done": delivery_done,
                 # Heuristic, non-gating: the first PR URL observed in the
                 # retained tail — NOT proof this attempt ran `gh pr create`
                 # (a quoted/list URL matches too). Never consulted for
                 # delivery, retry, or cost decisions.
-                "pr_url": marker.get("pr_url"),
+                "pr_url": pr_url,
                 "run_attempt_count": run_attempt_count,
+                # FAR-1914 C1: possible-salvage evidence for display only.
+                "salvageable": salvageable,
+                "salvage_evidence": (
+                    {
+                        "pr_url": pr_url or None,
+                        "branch": branch or None,
+                        "provenance": "observed",
+                        "confidence": "heuristic",
+                    }
+                    if salvageable
+                    else None
+                ),
             }
         )
     return entries

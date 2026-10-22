@@ -332,6 +332,30 @@ class TestPrUrlSources:
         )
         assert result.value == RunClassificationValue.no_delivery
 
+    def test_failed_with_salvageable_branch_evidence_is_still_no_delivery(self) -> None:
+        """FAR-1914 C1: a branch and PR URL observed before the kill are
+        SALVAGE EVIDENCE for display only — a failed run with no sentinel keeps
+        classifying ``no_delivery``. Evidence never changes classification."""
+        markers = {
+            "run:r1:node:n1:1": {
+                "_modulo_marker": True,
+                "status": "failed",
+                "deadline_triage": True,
+                "pr_url": _PR,
+                "branch": "prompt-pr-1234567890",
+                "delivery_done": False,
+            }
+        }
+        result = classify_run(
+            "failed",
+            "node.cancelled",
+            outputs_json=None,
+            telemetry_json=None,
+            raw_output_markers=markers,
+        )
+        assert result.value == RunClassificationValue.no_delivery
+        assert not result.delivered_pr_urls
+
 
 class TestDeliveryProvenance:
     """FAR-1336: the record must stop overstating what we know about delivery.

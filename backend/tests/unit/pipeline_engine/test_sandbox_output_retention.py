@@ -33,6 +33,7 @@ import pytest
 from modulo.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
     _BoundedFinalDrain,
+    _extract_branch,
     _marker_delivery_done_for_node,
     _persist_raw_output_marker,
     _RawOutputMarkerRequest,
@@ -2261,3 +2262,84 @@ async def test_marker_carries_both_stream_artifact_pointers_when_present():
     marker = _single_marker(row)
     assert marker["stdout_artifact"] == stdout_pointer
     assert marker["stderr_artifact"] == stderr_pointer
+
+
+# ---------------------------------------------------------------------------
+# FAR-1914 C1: branch salvage evidence on the retention / cancellation marker
+# ---------------------------------------------------------------------------
+
+
+def test_extract_branch_reads_the_checkout_message_and_bounds_the_name():
+    """The three accepted shapes, in priority order, with the branch-safe
+    charset and 200-char bound enforced."""
+    assert _extract_branch("Switched to a new branch 'prompt-pr-1234567890'\n") == "prompt-pr-1234567890"
+    assert _extract_branch("Switched to a new branch 'fix/FAR-1-thing'\n") == "fix/FAR-1-thing"
+    assert _extract_branch("$ git checkout -b feat/new_thing\n") == "feat/new_thing"
+    assert _extract_branch("$ git switch -c chore/cleanup\n") == "chore/cleanup"
+    assert not _extract_branch("no branch signal here\n")
+
+
+def test_extract_branch_rejects_a_hostile_over_long_name():
+    """A 400-char name is NOT truncated into a plausible branch — the pattern
+    simply does not match, so nothing is stored. Every captured name stays
+    inside the branch-safe charset, so hostile punctuation can never ride
+    along."""
+    long_name = "a" * 400
+    assert not _extract_branch(f"$ git checkout -b {long_name}\n")
+    assert not _extract_branch(f"Switched to a new branch '{long_name}'\n")
+    for tail in (
+        "$ git checkout -b evil;rm -rf /\n",
+        "$ git checkout -b evil&&whoami\n",
+        "Switched to a new branch '<img src=x onerror=alert(1)>'\n",
+    ):
+        branch = _extract_branch(tail)
+        assert not branch or re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", branch)
+
+
+async def test_retention_marker_captures_branch_and_pr_url_when_both_observed():
+    """FAR-1914 C1: a retention marker retains the branch beside the PR URL, so
+    a killed run can be inspected for salvage before a re-run."""
+    source = f"Switched to a new branch 'prompt-pr-1234567890'\n{_PR_456}\n"
+    row = _FakeRunRow()
+    await _retain(row, source=source, sentinel=None)
+
+    marker = _single_marker(row)
+    assert marker["branch"] == "prompt-pr-1234567890"
+    assert marker["pr_url"] == _PR_456
+
+
+async def test_retention_marker_omits_branch_and_pr_url_when_neither_observed():
+    """Neither key is written when the tail shows neither — absence, not a
+    falsy placeholder."""
+    row = _FakeRunRow()
+    await _retain(row, source="agent working, nothing delivered yet\n", sentinel=None)
+
+    marker = _single_marker(row)
+    assert "branch" not in marker
+    assert not marker["pr_url"]
+
+
+async def test_cancelled_node_records_branch_without_stamping_delivery_done():
+    """FAR-1914 C1: a branch observed before the cancellation is retained as
+    non-gating salvage evidence — only the full-line sentinel may arm
+    ``delivery_done``."""
+    log_content = f"$ git checkout -b feat/salvage-me\n{_PR_456}\n"
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    row = _FakeRunRow()
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["branch"] == "feat/salvage-me"
+    assert marker["pr_url"] == _PR_456
+    assert marker.get("delivery_done") is not True

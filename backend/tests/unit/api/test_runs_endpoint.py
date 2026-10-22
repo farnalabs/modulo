@@ -3341,6 +3341,70 @@ def test_deadline_triage_from_markers_projects_signed_markers_only() -> None:
     assert entry["delivery_done"] is False
 
 
+def test_deadline_triage_projects_salvageable_evidence() -> None:
+    """FAR-1914 C1: a branch and/or PR URL observed before the kill marks the
+    entry salvageable and carries the evidence, where nothing consumed it as a
+    gate. An entry with no evidence stays false/null; every pre-existing key is
+    untouched."""
+    markers = {
+        "run:r1:node:n1:1": {
+            "deadline_triage": True,
+            "node_id": "n1",
+            "pr_url": "https://github.com/farnalabs/modulo/pull/42",
+            "branch": "prompt-pr-1234567890",
+            "delivery_done": False,
+        },
+        "run:r1:node:n2:1": {
+            "deadline_triage": True,
+            "node_id": "n2",
+            "branch": "feat/salvage",
+        },
+        "run:r1:node:n3:1": {
+            "deadline_triage": True,
+            "node_id": "n3",
+            "delivery_done": False,
+        },
+    }
+    entries = runs_module._deadline_triage_from_markers(markers)
+    by_node = {entry["node_id"]: entry for entry in entries}
+
+    assert by_node["n1"]["salvageable"] is True
+    assert by_node["n1"]["salvage_evidence"] == {
+        "pr_url": "https://github.com/farnalabs/modulo/pull/42",
+        "branch": "prompt-pr-1234567890",
+        "provenance": "observed",
+        "confidence": "heuristic",
+    }
+    assert by_node["n2"]["salvageable"] is True
+    assert by_node["n2"]["salvage_evidence"]["pr_url"] is None
+    assert by_node["n2"]["salvage_evidence"]["branch"] == "feat/salvage"
+    assert by_node["n3"]["salvageable"] is False
+    assert by_node["n3"]["salvage_evidence"] is None
+    # The pre-existing keys are unchanged by the additive fields.
+    assert by_node["n1"]["pr_url"] == "https://github.com/farnalabs/modulo/pull/42"
+    assert by_node["n1"]["delivery_done"] is False
+
+
+def test_deadline_triage_delivery_done_disables_salvage_evidence() -> None:
+    """A sentinel-confirmed delivery is handled by the idempotency gate, not by
+    salvage: ``salvageable`` is false and ``salvage_evidence`` null even when a
+    branch/PR URL is present."""
+    markers = {
+        "run:r1:node:n1:1": {
+            "deadline_triage": True,
+            "node_id": "n1",
+            "pr_url": "https://github.com/farnalabs/modulo/pull/42",
+            "branch": "prompt-pr-1234567890",
+            "delivery_done": True,
+        }
+    }
+    entry = runs_module._deadline_triage_from_markers(markers)[0]
+
+    assert entry["salvageable"] is False
+    assert entry["salvage_evidence"] is None
+    assert entry["delivery_done"] is True
+
+
 def test_deadline_triage_from_markers_truncates_long_tails() -> None:
     """The retained marker's raw_output can be up to 512KB — the run-detail
     projection carries a bounded display slice, never the full blob."""

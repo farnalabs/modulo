@@ -380,6 +380,43 @@
       >
         <h3 class="text-sm font-semibold mb-1">{{ $t('views.RunDetailView.deadline_triage_title') }}</h3>
         <p class="text-xs text-muted-foreground mb-3">{{ $t('views.RunDetailView.deadline_triage_help') }}</p>
+        <!-- FAR-1914 C1: possible-salvage evidence (branch / PR URL observed in
+             the retained tail before the kill). Heuristic and display-only —
+             never fetched or verified, so the copy says to check it first. -->
+        <div
+          v-if="salvageableEntries.length > 0"
+          data-testid="run-detail-salvage"
+          class="mb-3 rounded border border-warning/40 bg-warning/10 p-3"
+        >
+          <h4 class="text-xs font-semibold">{{ $t('views.RunDetailView.deadline_triage_salvage_title') }}</h4>
+          <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.RunDetailView.deadline_triage_salvage_help') }}</p>
+          <ul class="mt-2 space-y-1">
+            <li
+              v-for="(entry, salvageIndex) in salvageableEntries"
+              :key="entry.attempt_key ?? entry.node_id ?? String(salvageIndex)"
+              data-testid="run-detail-salvage-entry"
+              class="text-xs"
+            >
+              <span class="font-mono font-semibold">{{ entry.node_id }}</span>
+              <span v-if="entry.salvage_evidence?.branch" class="ml-2">
+                {{ $t('views.RunDetailView.deadline_triage_salvage_branch') }}:
+                <code data-testid="run-detail-salvage-branch" class="font-mono">{{ entry.salvage_evidence.branch }}</code>
+              </span>
+              <span v-if="entry.salvage_evidence?.pr_url" class="ml-2">
+                {{ $t('views.RunDetailView.deadline_triage_salvage_pr') }}:
+                <a
+                  v-if="salvageLinkHref(entry.salvage_evidence?.pr_url)"
+                  data-testid="run-detail-salvage-pr"
+                  :href="salvageLinkHref(entry.salvage_evidence?.pr_url) ?? undefined"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="underline break-all"
+                >{{ entry.salvage_evidence?.pr_url }}</a>
+                <span v-else class="break-all">{{ entry.salvage_evidence?.pr_url }}</span>
+              </span>
+            </li>
+          </ul>
+        </div>
         <div
           v-for="(entry, entryIndex) in deadlineTriageEntries"
           :key="entry.attempt_key ?? entry.node_id ?? String(entryIndex)"
@@ -1029,6 +1066,16 @@ interface ChildRunRef {
 // FAR-1886 B1: run-level entries (age gate, stranded pending, node-deadline
 // reaper, worker handoff) have no per-attempt tail; every entry carries the
 // run's node-attempt counter as data. It is not a cause.
+// FAR-1914 C1: salvageable / salvage_evidence project a branch and/or PR URL
+// observed in the retained tail before the kill. Display-only heuristic
+// evidence — never fetched, verified, or treated as a decision.
+interface SalvageEvidence {
+  pr_url?: string | null
+  branch?: string | null
+  provenance?: string
+  confidence?: string
+}
+
 interface DeadlineTriageEntry {
   node_id?: string | null
   attempt_key?: string | null
@@ -1039,6 +1086,8 @@ interface DeadlineTriageEntry {
   stderr_length?: number | null
   delivery_done?: boolean
   run_attempt_count?: number | null
+  salvageable?: boolean
+  salvage_evidence?: SalvageEvidence | null
 }
 
 interface CostBreakdownEntry {
@@ -1772,6 +1821,22 @@ const deadlineTriageEntries = computed<DeadlineTriageEntry[]>(() => {
   const entries = run.value?.deadline_triage
   return Array.isArray(entries) ? (entries as DeadlineTriageEntry[]) : []
 })
+
+// FAR-1914 C1: entries whose killed attempt left observable delivery evidence
+// (a branch and/or PR URL in the retained tail). Display-only — we never fetch
+// or confirm either, and the copy tells the operator to check before re-running.
+const salvageableEntries = computed<DeadlineTriageEntry[]>(() =>
+  deadlineTriageEntries.value.filter(
+    (entry) => entry.salvageable === true && entry.salvage_evidence != null,
+  ),
+)
+
+// A PR URL is rendered as a link ONLY for an http(s) URL; any other string in
+// agent output stays inert text, so the callout has no injection path.
+function salvageLinkHref(url: string | null | undefined): string | null {
+  if (!url) return null
+  return /^https?:\/\//i.test(url) ? url : null
+}
 
 function nodeStatusBadgeClass(node: NodeEntry): string {
   return statusBadgeClassFor(node.status)

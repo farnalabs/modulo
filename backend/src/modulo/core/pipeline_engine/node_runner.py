@@ -2225,6 +2225,50 @@ def _extract_pr_url(raw_text: str) -> str:
     return match.group(0) if match else ""
 
 
+# FAR-1914 C1: a branch name observed in the retained tail is SALVAGE evidence
+# — a killed run that already pushed a branch (and maybe opened a PR) must not
+# read as a bare failure the operator then re-delivers. The capture is
+# heuristic, never anchored to a command's success: the tail is whatever the
+# sandbox flushed before the kill, so any of these strings may be echoed prose.
+# It is therefore EVIDENCE ONLY — it never arms ``delivery_done`` (sentinel
+# only), never changes the run status, error code, classification, retry or
+# cost.
+# Ordered: the FIRST pattern with a match wins. Prompt-to-PR's own branch name
+# is the most specific signal, then git's checkout switch message, then an
+# explicit create command. Every arm bounds the captured name to 200 chars of
+# the branch-safe charset and refuses to match a prefix of a longer token.
+# The name arms are POSSESSIVE (`{1,200}+`) so a pathological run of allowed
+# characters in a multi-hundred-KB tail costs one linear pass, never
+# backtracking — and an over-long name simply does not match.
+_BRANCH_PATTERNS: tuple[_re.Pattern[str], ...] = (
+    _re.compile(r"(?<![A-Za-z0-9._/-])(prompt-pr-\d+)(?![A-Za-z0-9._/-])"),
+    _re.compile(r"Switched to a new branch '([A-Za-z0-9._/-]{1,200}+)'"),
+    _re.compile(r"\bgit\s+(?:checkout\s+-b|switch\s+-c)\s+([A-Za-z0-9._/-]{1,200}+)(?![A-Za-z0-9._/-])"),
+)
+
+
+def _extract_branch(raw_text: str) -> str:
+    """Best-effort branch-name extraction from retained raw sandbox output.
+
+    FAR-1914 C1: the run detail surfaces a "Possible salvage" callout from this
+    evidence so an operator can inspect the branch/PR before re-running instead
+    of repeating delivered work (the FAR-1760 re-delivery). HEURISTIC and
+    non-gating: the name is whatever the tail shows, the marker stores it only
+    when found, and nothing consults it for status, classification, retry,
+    idempotency or cost.
+    """
+    if not raw_text:
+        return ""
+    for pattern in _BRANCH_PATTERNS:
+        match = pattern.search(raw_text)
+        if match is None:
+            continue
+        candidate = match.group(1)
+        if 0 < len(candidate) <= 200:
+            return candidate
+    return ""
+
+
 def _redact_raw_output(raw_text: str) -> str:
     """Best-effort scrub of credentials from retained raw sandbox output.
 
@@ -2502,6 +2546,14 @@ async def _retain_raw_output_marker(
         "attempt_key": request.attempt_key,
         "node_id": request.node_id,
     }
+    # FAR-1914 C1: branch evidence rides the SAME dedicated marker store, only
+    # when the retained text actually shows one — a heuristic, non-gating
+    # companion to ``pr_url`` (never consulted for status/classification/retry/
+    # cost, and never arming ``delivery_done``).
+    branch = _extract_branch(text)
+    if branch:
+        marker["branch"] = branch
+
     if _source_contains_delivery_sentinel(text, request.delivery_sentinel):
         marker["delivery_done"] = True
     if request.stdout_artifact is not None:
@@ -12917,6 +12969,10 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 delivery_sentinel and _source_contains_delivery_sentinel(_drained_tail, delivery_sentinel)
             )
             _cancel_pr_url = _extract_pr_url(_drained_tail)
+            # FAR-1914 C1: the branch observed before the kill rides the same
+            # non-gating marker (only when found), so the run detail can show
+            # what was already delivered for inspection before a re-run.
+            _cancel_branch = _extract_branch(_drained_tail)
             # FAR-1914 B2 / C1: the PR url is EVIDENCE, never a gate. Only the
             # configured full-line sentinel may set ``delivery_done`` — the
             # idempotency gate suppresses a retry on that field alone, so
@@ -12956,6 +13012,8 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 "no_output_reason": sanitize_error_text(_cancel_no_output_reason),
                 "sandbox_log_tail": sanitize_error_text(_redact_raw_output(_cancel_log_tail)),
             }
+            if _cancel_branch:
+                _cancel_marker["branch"] = _cancel_branch
             if _cancel_sentinel_hit:
                 _cancel_marker["delivery_done"] = True
             try:

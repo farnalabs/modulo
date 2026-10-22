@@ -58,6 +58,9 @@ _TRIAGE_MARKERS: dict[str, Any] = {
         "stdout_length": 0,
         "stderr_length": 12,
         "delivery_done": False,
+        # FAR-1914 C1: salvage evidence ride the same marker.
+        "pr_url": "https://github.com/farnalabs/modulo/pull/42",
+        "branch": "feat/salvage-me",
     },
     f"run:{_RUN_ID}:node:alpha:deadline": {
         "deadline_triage": True,
@@ -176,6 +179,27 @@ class TestRunStatusDetailParityFields:
         assert mcp_entries == rest_entries
         assert [entry["run_attempt_count"] for entry in mcp_entries] == [3, 3]
         assert all("last_output_age_seconds" not in entry for entry in mcp_entries)
+
+    def test_deadline_triage_salvage_keys_match_rest(self) -> None:
+        """FAR-1914 C1: MCP projects the SAME ``salvageable`` /
+        ``salvage_evidence`` keys as REST, from the same helper — a consumed
+        read surface cannot drift from the API."""
+        from modulo.api.routes.runs import _deadline_triage_from_markers
+
+        mcp_entries = _run_status_detail(_run_row(), _blobs(markers=_TRIAGE_MARKERS))["deadline_triage"]
+        rest_entries = _deadline_triage_from_markers(_TRIAGE_MARKERS)
+
+        assert mcp_entries == rest_entries
+        # alpha is delivery_done -> not salvageable; zeta carries the evidence.
+        assert mcp_entries[0]["salvageable"] is False
+        assert mcp_entries[0]["salvage_evidence"] is None
+        assert mcp_entries[1]["salvageable"] is True
+        assert mcp_entries[1]["salvage_evidence"] == {
+            "pr_url": "https://github.com/farnalabs/modulo/pull/42",
+            "branch": "feat/salvage-me",
+            "provenance": "observed",
+            "confidence": "heuristic",
+        }
 
     def test_deadline_triage_empty_list_when_no_markers(self) -> None:
         result = _run_status_detail(_run_row(), _blobs(markers=None))

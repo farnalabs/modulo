@@ -279,6 +279,76 @@ describe('RunDetailView', () => {
     const entries = wrapper.findAll('[data-testid="run-detail-deadline-triage-entry"]')
     expect(entries).toHaveLength(3)
     expect(panel.text()).toContain('delivery observed before kill')
+    // FAR-1914 C1: none of these entries carry salvage evidence, so the
+    // possible-salvage callout must not render.
+    expect(wrapper.find('[data-testid="run-detail-salvage"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('renders possible-salvage evidence with a safe PR link and branch (FAR-1914 C1)', async () => {
+    mockRunStatus = 'failed'
+    mockErrorCode = 'node_deadline_exceeded'
+    mockDeadlineTriage = [
+      {
+        node_id: 'n1',
+        attempt_key: 'run:r1:node:n1:1',
+        no_output_reason: 'node-deadline watchdog',
+        delivery_done: false,
+        salvageable: true,
+        salvage_evidence: {
+          pr_url: 'https://github.com/farnalabs/modulo/pull/42',
+          branch: 'prompt-pr-1234567890',
+          provenance: 'observed',
+          confidence: 'heuristic',
+        },
+      },
+    ]
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+
+    const callout = wrapper.find('[data-testid="run-detail-salvage"]')
+    expect(callout.exists()).toBe(true)
+    expect(callout.text()).toContain('Possible salvage')
+    expect(callout.text()).toContain('check it before re-running')
+    const link = callout.find('[data-testid="run-detail-salvage-pr"]')
+    expect(link.attributes('href')).toBe('https://github.com/farnalabs/modulo/pull/42')
+    expect(link.attributes('target')).toBe('_blank')
+    expect(link.attributes('rel')).toBe('noopener noreferrer')
+    expect(callout.find('[data-testid="run-detail-salvage-branch"]').text()).toBe('prompt-pr-1234567890')
+    wrapper.unmount()
+  })
+
+  it('renders salvage evidence as inert text when the PR url is not http(s) (FAR-1914 C1)', async () => {
+    mockRunStatus = 'failed'
+    mockErrorCode = 'node_deadline_exceeded'
+    mockDeadlineTriage = [
+      {
+        node_id: 'n1',
+        delivery_done: false,
+        salvageable: true,
+        salvage_evidence: {
+          pr_url: 'javascript:alert(1)',
+          branch: '<img src=x onerror=alert(1)>',
+        },
+      },
+    ]
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+
+    const callout = wrapper.find('[data-testid="run-detail-salvage"]')
+    expect(callout.exists()).toBe(true)
+    // No anchor is created for a non-http(s) url, and no markup is injected
+    // from either field — both render as escaped text.
+    expect(callout.find('a').exists()).toBe(false)
+    expect(callout.find('img').exists()).toBe(false)
+    expect(callout.text()).toContain('javascript:alert(1)')
+    expect(callout.text()).toContain('<img src=x onerror=alert(1)>')
     wrapper.unmount()
   })
 
