@@ -45,7 +45,11 @@ jobs:
           enable-cache: true
 
       - name: Sync dependencies
-        run: uv sync --frozen
+        # NOSONAR githubactions:S8541: the backend lockfile pins pytest-bdd as a
+        # source archive with no wheel (FAR-791), so `--no-build` hard-fails the
+        # sync. `--frozen` locks the exact revision, so the build is
+        # deterministic and trusted (no untrusted setup scripts execute).
+        run: uv sync --frozen  # NOSONAR
 
       - name: Run determination fixture scorer
         shell: bash
@@ -53,7 +57,7 @@ jobs:
         # pipefail keeps the scorer's exit code rather than tee's.
         run: |
           set -o pipefail
-          uv run --no-sync python scripts/score_determination_fixtures.py 2>&1 | tee determination-scorer-output.txt
+          uv run --no-build --no-sync python scripts/score_determination_fixtures.py 2>&1 | tee determination-scorer-output.txt
 
       - name: Upload scorer output on failure
         if: failure()
