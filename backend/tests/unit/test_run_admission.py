@@ -710,6 +710,21 @@ class TestCiFailureInflightSuppression:
         assert in_flight is False
         assert "ci_failure_coalesce.inflight_check_failed" in caplog.text
 
+    async def test_cancelled_query_propagates_not_falls_open(self) -> None:
+        # ``asyncio.CancelledError`` is a ``BaseException``, not an
+        # ``Exception``: a cancelled read must keep propagating so the task
+        # shutdown is honoured — the fail-open ``except Exception`` arm must
+        # never swallow it and never render a cancelled dispatch check as a
+        # clean "not in flight".
+        cancelled = MagicMock()
+        cancelled.execute = AsyncMock(side_effect=asyncio.CancelledError())
+        with pytest.raises(asyncio.CancelledError):
+            await has_in_flight_ci_failure_run(
+                cancelled,
+                pipeline_id=PIPELINE_ID,
+                coalesce_key="ci-failure:pr:777:sha:abc123",
+            )
+
     # -- the gate (trigger engine seam) ------------------------------------
 
     async def test_repeat_delivery_beyond_the_age_window_is_suppressed(self, session: AsyncSession) -> None:
