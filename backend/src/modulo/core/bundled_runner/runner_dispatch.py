@@ -2261,6 +2261,7 @@ async def _maybe_start_loop_bridge(
         from functools import partial
 
         from modulo.core.eval_engine import EvalEngine
+        from modulo.core.guardrails.coverage import bridge_plugin_source, runtime_supports_tool_events
         from modulo.core.guardrails.loop_intercept import (
             LoopInterceptCallbackServer,
             bridge_client_source,
@@ -2295,8 +2296,12 @@ async def _maybe_start_loop_bridge(
             ),
         )
         bridge_port = await bridge_server.start()
+        if not runtime_supports_tool_events(rendered_command):
+            await bridge_server.mark_runtime_unsupported()
+            raise RuntimeError("runtime does not expose the supported tool-event hook contract")
         state["_loop_intercept_bridge_server"] = bridge_server
         await _write_file_via_exec(provider, provider_ref, "/home/user/modulo_bridge.py", bridge_client_source())
+        await _write_file_via_exec(provider, provider_ref, "/home/user/modulo_bridge_plugin.js", bridge_plugin_source())
         await _write_file_via_exec(
             provider,
             provider_ref,
@@ -2305,7 +2310,8 @@ async def _maybe_start_loop_bridge(
         )
         sandbox_envs["MODULO_BRIDGE_ENDPOINT"] = f"http://host.docker.internal:{bridge_port}"
         sandbox_envs["MODULO_BRIDGE_CONFIG"] = "/home/user/modulo_bridge_config.json"
-        return f"python3 /home/user/modulo_bridge.py --wrap -- {rendered_command}"
+        sandbox_envs["OPENCODE_CONFIG_CONTENT"] = json.dumps({"plugin": ["/home/user/modulo_bridge_plugin.js"]})
+        return rendered_command
     except asyncio.CancelledError:
         raise
     except Exception:

@@ -10484,6 +10484,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
 
     from opentelemetry import trace as _otel_trace
 
+    from modulo.core.guardrails.coverage import bridge_plugin_source, runtime_supports_tool_events
     from modulo.core.guardrails.loop_intercept import (
         LoopInterceptCallbackServer,
         bridge_client_source,
@@ -11901,6 +11902,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             engine=EvalEngine(),
                             definitions=bridge_defs,
                             config=loop_intercept_config,
+                            runtime_command=rendered_agent_command,
                             audit_sink=partial(
                                 persist_loop_interception_audit,
                                 session_factory=session_factory,
@@ -11916,11 +11918,34 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             ),
                         )
                         _bridge_port = await _bridge_server.start()
+                        if not runtime_supports_tool_events(rendered_agent_command):
+                            await _bridge_server.mark_runtime_unsupported()
+                            raise RuntimeError("runtime does not expose the supported tool-event hook contract")
                         await asyncio.wait_for(
                             _write_file_via_provider(
                                 _sandbox_id,
                                 "/home/user/modulo_bridge.py",
                                 bridge_client_source(),
+                                provider_type=_resolved_provider,
+                                borrowed_provider=_dispatch_provider,
+                            ),
+                            timeout=_SANDBOX_IO_TIMEOUT,
+                        )
+                        await asyncio.wait_for(
+                            _write_file_via_provider(
+                                _sandbox_id,
+                                "/home/user/modulo_bridge_plugin.js",
+                                bridge_plugin_source(),
+                                provider_type=_resolved_provider,
+                                borrowed_provider=_dispatch_provider,
+                            ),
+                            timeout=_SANDBOX_IO_TIMEOUT,
+                        )
+                        await asyncio.wait_for(
+                            _write_file_via_provider(
+                                _sandbox_id,
+                                "/home/user/opencode-bridge-config.json",
+                                json.dumps({"plugin": ["/home/user/modulo_bridge_plugin.js"]}),
                                 provider_type=_resolved_provider,
                                 borrowed_provider=_dispatch_provider,
                             ),
@@ -11938,6 +11963,9 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         )
                         sandbox_envs["MODULO_BRIDGE_ENDPOINT"] = f"http://127.0.0.1:{_bridge_port}"
                         sandbox_envs["MODULO_BRIDGE_CONFIG"] = "/home/user/modulo_bridge_config.json"
+                        sandbox_envs["OPENCODE_CONFIG_CONTENT"] = json.dumps(
+                            {"plugin": ["/home/user/modulo_bridge_plugin.js"]}
+                        )
                         # FAR-664 (newline-safe bridge handoff): the rendered
                         # agent command is handed to the bridge via a FILE, not
                         # inline after ``--``. An inline interpolation word-
@@ -11950,19 +11978,10 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         # post-``--`` argv and runs it as a shell command, so
                         # interception semantics are unchanged. Uniform for
                         # single-line and multi-line commands (one code path).
-                        await asyncio.wait_for(
-                            _write_file_via_provider(
-                                _sandbox_id,
-                                "/home/user/.modulo_bridge_cmd.sh",
-                                rendered_agent_command,
-                                provider_type=_resolved_provider,
-                                borrowed_provider=_dispatch_provider,
-                            ),
-                            timeout=_SANDBOX_IO_TIMEOUT,
-                        )
-                        _bridge_wrapped_command = (
-                            "python3 /home/user/modulo_bridge.py --wrap -- bash /home/user/.modulo_bridge_cmd.sh"
-                        )
+                        # The runtime plugin is the event producer. Keep the
+                        # command itself intact; the stdout marker wrapper is
+                        # only a legacy client and cannot observe tool calls.
+                        _bridge_wrapped_command = rendered_agent_command
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -13523,6 +13542,10 @@ def _parse_loop_intercept_config(node_def: dict[str, Any], node_id: str) -> Loop
     )
 
     loop_intercept_raw = node_def.get("loop_intercept")
+    if loop_intercept_raw is None:
+        return None
+    if isinstance(loop_intercept_raw, dict) and loop_intercept_raw.get("enabled", True) is False:
+        return None
     if not loop_intercept_raw:
         return None
     try:

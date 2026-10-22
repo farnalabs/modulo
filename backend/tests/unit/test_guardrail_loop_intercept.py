@@ -10,8 +10,12 @@ sandbox-side bridge client, and summary-only audit payloads.
 
 import asyncio
 import json
+import os
+import shutil
+import subprocess
 import time
 import uuid
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,7 +23,7 @@ import pytest
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType
 from modulo.core.guardrails import FieldRedactionMode, FieldRedactionPolicy
 from modulo.core.guardrails import loop_intercept as li
-from modulo.core.guardrails.coverage import LoopCoverage, LoopCoverageState
+from modulo.core.guardrails.coverage import LoopCoverage, LoopCoverageState, bridge_plugin_source
 from modulo.core.guardrails.loop_intercept import (
     DEFAULT_LOOP_INTERCEPT_PATTERNS,
     MAX_LOOP_INTERCEPT_ARGS_BYTES,
@@ -499,6 +503,32 @@ async def test_callback_server_rejects_malformed_and_unrelated_events():
         await server.close()
 
 
+async def test_callback_server_persistence_failure_cannot_leave_enforced():
+    calls: list[LoopCoverage] = []
+
+    async def _failing_after_enforced(value: LoopCoverage) -> None:
+        calls.append(value)
+        if value.state is LoopCoverageState.DEGRADED:
+            raise RuntimeError("storage unavailable")
+
+    server = li.LoopInterceptCallbackServer(EvalEngine(), [_guardrail()], _cfg(), coverage_sink=_failing_after_enforced)
+    server._coverage = LoopCoverage(
+        state=LoopCoverageState.ENFORCED,
+        reason="runtime_tool_event_observed",
+        provenance="observed",
+    )
+    with pytest.raises(li.LoopCoveragePersistenceError):
+        await server._set_coverage(
+            LoopCoverage(
+                state=LoopCoverageState.DEGRADED,
+                reason="runtime_tool_event_source_evaluation_failed",
+                provenance="derived",
+            )
+        )
+    assert server.coverage.state is LoopCoverageState.DEGRADED
+    assert calls
+
+
 async def test_callback_server_coverage_persistence_failure_degrades():
     async def _failing_sink(_coverage: LoopCoverage) -> None:
         raise RuntimeError("storage unavailable")
@@ -566,6 +596,47 @@ def test_bridge_client_source_reads_sandbox_script():
     source = bridge_client_source()
     assert "class BridgeClient" in source
     assert "MODULO_BRIDGE_EVENT" in source
+
+
+def test_runtime_plugin_source_emits_authenticated_tool_events():
+    source = bridge_plugin_source()
+    assert '"tool.execute.before"' in source
+    assert '"tool.execute.after"' in source
+    assert "fetch(`${base}/intercept`" in source
+
+
+def test_runtime_plugin_source_produces_event_in_real_node_subprocess(tmp_path: Path):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node runtime is required for the production plugin proof")
+    plugin = tmp_path / "bridge-plugin.mjs"
+    plugin.write_text(bridge_plugin_source(), encoding="utf-8")
+    probe = tmp_path / "probe.mjs"
+    probe.write_text(
+        """import plugin from './bridge-plugin.mjs';
+const calls = [];
+globalThis.fetch = async (_url, options) => {
+  calls.push(JSON.parse(options.body));
+  return { json: async () => ({ action: 'pass', blocked: false }) };
+};
+const hooks = plugin({});
+await hooks['tool.execute.before']({tool: 'git push', args: {ref: 'main'}});
+await hooks['tool.execute.after']({tool: 'git push', args: {ref: 'main'}}, {ok: true});
+process.stdout.write(JSON.stringify(calls));
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(  # noqa: S603 — node is resolved from PATH and probe is a test-owned file
+        [node, str(probe)],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, "MODULO_BRIDGE_ENDPOINT": "http://127.0.0.1:8765"},
+        timeout=30,
+    )
+    events = json.loads(result.stdout)
+    assert [event["direction"] for event in events] == ["before", "after"]
+    assert events[0]["tool_name"] == "git push"
 
 
 async def test_callback_server_returns_pass_for_unknown_path():

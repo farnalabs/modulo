@@ -133,6 +133,10 @@ class LoopInterceptConfigError(ValueError):
     """Raised when a ``loop_intercept`` node config is malformed."""
 
 
+class LoopCoveragePersistenceError(RuntimeError):
+    """Raised when coverage cannot be durably reconciled after a transition."""
+
+
 class LoopInterceptConfig(BaseModel):
     """The ``loop_intercept`` config on a ``sandbox_agent`` node (config_json).
 
@@ -778,6 +782,12 @@ class _BridgeHTTPHandler(BaseHTTPRequestHandler):
         max_wait = owner.max_wait_seconds
         try:
             decision = future.result(timeout=max_wait)
+        except LoopCoveragePersistenceError:
+            self._respond(
+                {"action": "pass", "blocked": False, "masked_args": None, "reason": "coverage_persistence_failed"},
+                503,
+            )
+            return
         except Exception:
             _log.exception(
                 "guardrail.loop_callback_eval_failed",
@@ -829,6 +839,7 @@ class LoopInterceptCallbackServer:
         definitions: Sequence[EvalDefinition],
         config: LoopInterceptConfig,
         *,
+        runtime_command: str | None = None,
         audit_sink: Callable[[Sequence[LoopInterceptAuditRecord]], Awaitable[None]] | None = None,
         coverage_sink: Callable[[LoopCoverage], Awaitable[None]] | None = None,
         host: str = "127.0.0.1",
@@ -847,6 +858,16 @@ class LoopInterceptCallbackServer:
         self._server: _BridgeHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._background_tasks: set[asyncio.Task[Any]] = set()
+
+    async def mark_runtime_unsupported(self) -> None:
+        """Record an explicit degradation when the runtime has no hook source."""
+        await self._set_coverage(
+            LoopCoverage(
+                state=LoopCoverageState.DEGRADED,
+                reason="runtime_tool_event_source_unsupported",
+                provenance=LoopCoverageProvenance.DERIVED,
+            )
+        )
 
     def _source_status_received(self) -> None:
         # Connectivity alone is not an observed tool event. Keep the run
@@ -907,12 +928,22 @@ class LoopInterceptCallbackServer:
                 await self._coverage_sink(self._coverage.model_copy(deep=True))
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                self._coverage = LoopCoverage(
+            except Exception as exc:
+                degraded = LoopCoverage(
                     state=LoopCoverageState.DEGRADED,
                     reason="runtime_tool_event_coverage_persistence_failed",
                     provenance=LoopCoverageProvenance.DERIVED,
                 )
+                self._coverage = degraded
+                try:
+                    await self._coverage_sink(degraded.model_copy(deep=True))
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.exception("guardrail.loop_coverage_degraded_persist_failed")
+                    raise LoopCoveragePersistenceError(
+                        "loop coverage persistence failed; durable enforcement state could not be reconciled"
+                    ) from exc
                 _log.exception("guardrail.loop_coverage_persist_failed")
 
     async def evaluate(self, event: dict[str, Any]) -> dict[str, Any]:
@@ -1123,6 +1154,7 @@ __all__ = [
     "MAX_LOOP_INTERCEPT_ARGS_BYTES",
     "BridgeEscalation",
     "LoopCoverage",
+    "LoopCoveragePersistenceError",
     "LoopCoverageProvenance",
     "LoopCoverageState",
     "LoopInterceptAuditRecord",

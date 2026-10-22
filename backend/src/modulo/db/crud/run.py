@@ -2315,7 +2315,10 @@ async def create_run(
     ).scalar_one_or_none()
     snapshot_nodes = snapshot_graph.get("nodes", []) if isinstance(snapshot_graph, dict) else []
     runtime_loop_intercept_configured = any(
-        isinstance(node, dict) and bool(node.get("loop_intercept")) for node in snapshot_nodes
+        isinstance(node, dict)
+        and isinstance(node.get("loop_intercept"), dict)
+        and node["loop_intercept"].get("enabled", True) is True
+        for node in snapshot_nodes
     )
 
     # Guardrail interception (FAR-208 item 2) — the ingestion edge. The

@@ -33,6 +33,7 @@ from modulo.core.pipeline_engine.node_runner import (
     ScriptBudgetKilledError,
     ScriptInvalidOutputError,
     SupersededNodeError,
+    _build_sandbox_node_config,
     _SandboxWatchdog,
     _WatchdogWatchConfig,
     make_connector_fn,
@@ -2885,6 +2886,12 @@ def test_filter_watch_globs_drops_non_strings_and_empties():
 # ---------------------------------------------------------------------------
 
 
+def test_sandbox_node_def_disabled_loop_intercept_is_not_applicable():
+    node_def = _sandbox_node_def(loop_intercept={"enabled": False})
+    config = _build_sandbox_node_config(node_def, session_factory=None, single_sandbox_node=False)
+    assert config.loop_intercept_config is None
+
+
 def test_sandbox_node_def_malformed_loop_intercept_raises():
     node_def = _sandbox_node_def(loop_intercept="not-a-dict")
     with pytest.raises(ValueError, match="malformed loop_intercept config"):
@@ -3522,7 +3529,8 @@ async def test_sandbox_loop_intercept_bridge_wires_files_env_and_wrapped_command
     assert envs["MODULO_BRIDGE_ENDPOINT"] == "http://127.0.0.1:47591"
     assert envs["MODULO_BRIDGE_CONFIG"] == "/home/user/modulo_bridge_config.json"
     wrapped = sandbox.commands.run.call_args.args[0]
-    assert "python3 /home/user/modulo_bridge.py --wrap --" in wrapped
+    assert "opencode run --auto --format json" in wrapped
+    assert "python3 /home/user/modulo_bridge.py --wrap --" not in wrapped
     server.close.assert_awaited_once()
 
 
