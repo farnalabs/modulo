@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from sys import modules as sys_modules
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -38,6 +38,74 @@ def _lookup_result(org: object | None) -> MagicMock:
 
 def _fake_module(**attrs: object) -> SimpleNamespace:
     return SimpleNamespace(**attrs)
+
+
+class _FakeConnectContext:
+    """Async context manager standing in for ``AsyncEngine.connect()``."""
+
+    def __init__(self, connection: "_FakeSnapshotConnection") -> None:
+        self.connection = connection
+
+    async def __aenter__(self) -> "_FakeSnapshotConnection":
+        return self.connection
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+
+class _FakeSnapshotConnection:
+    """Minimal AsyncConnection stand-in for the org-export snapshot helper."""
+
+    def __init__(self, dialect: str) -> None:
+        self.dialect = SimpleNamespace(name=dialect)
+        self.executed: list[object] = []
+        self.execution_options_calls: list[dict[str, Any]] = []
+
+    async def execute(self, statement: object) -> MagicMock:
+        self.executed.append(statement)
+        return MagicMock()
+
+    async def execution_options(self, **kwargs: Any) -> "_FakeSnapshotConnection":
+        self.execution_options_calls.append(kwargs)
+        return self
+
+
+class _FakeSnapshotEngine:
+    """Engine stand-in that hands out one fake connection."""
+
+    def __init__(self, connection: _FakeSnapshotConnection) -> None:
+        self.connection = connection
+        self.connect_count = 0
+
+    def connect(self) -> _FakeConnectContext:
+        self.connect_count += 1
+        return _FakeConnectContext(self.connection)
+
+
+class _FakeSnapshotSession:
+    """AsyncSession stand-in: joins ``begin()`` and yields a configured org."""
+
+    def __init__(self, org: object | None) -> None:
+        self.org = org
+        self.execute_count = 0
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+    def begin(self) -> Self:
+        return self
+
+    async def execute(self, statement: object) -> MagicMock:
+        self.execute_count += 1
+        return MagicMock(scalar_one_or_none=MagicMock(return_value=self.org))
+
+
+def _snapshot_sessionmaker(session: _FakeSnapshotSession) -> MagicMock:
+    """Build an ``async_sessionmaker`` stand-in whose factory yields ``session``."""
+    return MagicMock(return_value=MagicMock(return_value=session))
 
 
 class TestHelpers:
@@ -147,6 +215,93 @@ class TestCollectOrgExport:
         org.__table__ = record.__table__
         summary = await _collect_org_export(mock_session, org)
         assert summary is not None
+
+
+class TestCollectOrgExportInSnapshot:
+    """The snapshot helper configures READ ONLY / REPEATABLE READ before reading."""
+
+    async def test_postgres_uses_read_only_repeatable_read_snapshot(self) -> None:
+        from modulo.db.crud import org_deletion
+
+        org = _make_org()
+        conn = _FakeSnapshotConnection("postgresql")
+        engine = _FakeSnapshotEngine(conn)
+        session = _FakeSnapshotSession(org)
+        export = {"organisation": [], "exported_at": "2026-01-01"}
+        sessionmaker = MagicMock(return_value=MagicMock(return_value=session))
+        set_rls = AsyncMock()
+        collect = AsyncMock(return_value=export)
+
+        with (
+            patch.object(org_deletion, "async_sessionmaker", sessionmaker),
+            patch.object(org_deletion, "set_rls_org", set_rls),
+            patch.object(org_deletion, "_collect_org_export", collect),
+        ):
+            assert await org_deletion._collect_org_export_in_snapshot(_ORG_ID, engine=engine) == export
+
+        assert conn.execution_options_calls == [{"isolation_level": "REPEATABLE READ"}]
+        assert len(conn.executed) == 1
+        assert "SET TRANSACTION READ ONLY" in str(conn.executed[0])
+        assert sessionmaker.call_args.kwargs["bind"] is conn
+        set_rls.assert_awaited_once_with(session, _ORG_ID)
+        collect.assert_awaited_once_with(session, org)
+        assert engine.connect_count == 1
+
+    async def test_non_postgres_skips_isolation_statements(self) -> None:
+        from modulo.db.crud import org_deletion
+
+        org = _make_org()
+        conn = _FakeSnapshotConnection("sqlite")
+        engine = _FakeSnapshotEngine(conn)
+        session = _FakeSnapshotSession(org)
+        export = {"organisation": []}
+
+        with (
+            patch.object(org_deletion, "async_sessionmaker", _snapshot_sessionmaker(session)),
+            patch.object(org_deletion, "set_rls_org", AsyncMock()),
+            patch.object(org_deletion, "_collect_org_export", AsyncMock(return_value=export)),
+        ):
+            assert await org_deletion._collect_org_export_in_snapshot(_ORG_ID, engine=engine) == export
+
+        assert conn.execution_options_calls == []
+        assert conn.executed == []
+
+    async def test_defaults_to_shared_engine(self) -> None:
+        from modulo.db.crud import org_deletion
+
+        org = _make_org()
+        engine = _FakeSnapshotEngine(_FakeSnapshotConnection("sqlite"))
+        session = _FakeSnapshotSession(org)
+        export = {"organisation": []}
+        shared_engine = MagicMock(return_value=engine)
+
+        with (
+            patch.object(org_deletion, "get_shared_engine", shared_engine),
+            patch.object(org_deletion, "async_sessionmaker", _snapshot_sessionmaker(session)),
+            patch.object(org_deletion, "set_rls_org", AsyncMock()),
+            patch.object(org_deletion, "_collect_org_export", AsyncMock(return_value=export)),
+        ):
+            assert await org_deletion._collect_org_export_in_snapshot(_ORG_ID) == export
+
+        shared_engine.assert_called_once_with()
+        assert engine.connect_count == 1
+
+    async def test_missing_org_raises_before_collecting(self) -> None:
+        from modulo.db.crud import org_deletion
+
+        engine = _FakeSnapshotEngine(_FakeSnapshotConnection("sqlite"))
+        session = _FakeSnapshotSession(None)
+        collect = AsyncMock()
+
+        with (
+            patch.object(org_deletion, "async_sessionmaker", _snapshot_sessionmaker(session)),
+            patch.object(org_deletion, "set_rls_org", AsyncMock()),
+            patch.object(org_deletion, "_collect_org_export", collect),
+            pytest.raises(ValueError, match="not found"),
+        ):
+            await org_deletion._collect_org_export_in_snapshot(_ORG_ID, engine=engine)
+
+        collect.assert_not_awaited()
 
 
 class TestRequestOrgDeletion:
