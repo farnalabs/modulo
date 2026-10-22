@@ -598,3 +598,16 @@ def test_label_failure_is_a_warning_not_a_second_hard_failure(tmp_path: Path) ->
     assert "::warning::Could not apply the 'fixer-dispatch-pending' label" in run.output
     assert run.pr_comment_body, "the dispatch-failure comment must still be posted"
     assert "could **not** be applied automatically" in run.pr_comment_body
+
+
+def test_clearing_a_label_that_fails_otherwise_is_a_warning(tmp_path: Path) -> None:
+    """A non-404 DELETE failure is a warning on an otherwise delivered dispatch."""
+    run = _run_dispatch(
+        tmp_path,
+        [Response("202", '{"run_id": "abc"}')],
+        {"STUB_GH_FAIL_MATCH": PENDING_LABEL, "STUB_GH_FAIL_MESSAGE": "gh: Server Error (HTTP 500)"},
+    )
+
+    assert run.exit_code == 0, run.output
+    assert "::warning::Could not clear the 'fixer-dispatch-pending' label" in run.output
+    assert "dispatch delivered" in run.output
