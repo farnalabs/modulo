@@ -66,7 +66,10 @@ from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNo
 # adds no cycle.
 from modulo.core.hitl_manager.review_expiry import record_review_expiry_outcomes
 from modulo.core.logging_config import org_id_var
-from modulo.core.pipeline_engine.error_codes import sanitize_error_text
+from modulo.core.pipeline_engine.error_codes import (
+    _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED,
+    sanitize_error_text,
+)
 from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
 
 # FAR-190 streak engine lives in its own module (extracted so cron_helpers can
@@ -352,7 +355,12 @@ _DISPATCH_FAILED_ERROR_CODE = "dispatch_failed"
 # a different budget. Terminal-failing (rather than silently skipping) is the
 # honest outcome — skipping would leave the row pending until the age backstop
 # hours later, counted as no_progress and misattributed.
-_RETRY_BUDGET_EXHAUSTED_ERROR_CODE = "retry_budget_exhausted"
+#
+# The canonical dotted spelling (and its read-boundary registration) is owned
+# by ``pipeline_engine.error_codes`` so the runs UI and the analytics
+# ``dimension=error_code`` slice classify this failure instead of collapsing it
+# into ``harness.unknown`` / "Unknown error".
+_RETRY_BUDGET_EXHAUSTED_ERROR_CODE = _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED
 
 # The capacity-block reason markers (mirrors ``_reconcile_capacity_marker_exclusion``
 # and ``db.crud.run``'s constants). A pending row carrying one of these was
