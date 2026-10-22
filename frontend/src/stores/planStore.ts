@@ -94,6 +94,20 @@ function currentOrgId(): string | null {
 }
 
 /**
+ * The subject (`sub` claim) a token belongs to. `null` = no token / opaque
+ * token. Used to tell a ROTATED token for the same person (a refresh — same
+ * sub, keep the list) from a different principal (reset), because a same-SPA
+ * login can replace the token without ever passing through `null`.
+ */
+function principalSubject(token: string | null | undefined): string | null {
+  // No token at all is its own answer — never decode an absent/opaque token
+  // into whoever the decoder last saw.
+  if (!token) return null;
+  const sub = decodeJwtPayload(token)?.sub;
+  return typeof sub === "string" && sub.length > 0 ? sub : null;
+}
+
+/**
  * Synchronous read of the persisted flag map for `orgId` (FAR-1237). Runs at
  * store creation — before first paint — so flag-driven decisions (mobile nav
  * layout, gated surfaces) start from the LAST RESOLVED value for THIS org
@@ -367,21 +381,6 @@ export const usePlanStore = defineStore("plan", () => {
   // FAR-2020: bumped whenever the SPA's principal changes, so a response that
   // was in flight across the switch can never be applied to the new session.
   let permissionsGeneration = 0;
-
-  /**
-   * The subject (`sub` claim) that `userPermissions` currently belongs to.
-   * `null` = no token / opaque token. Used to tell a ROTATED token for the same
-   * person (a refresh — same sub, keep the list) from a different principal
-   * (reset), because a same-SPA login can replace the token without ever
-   * passing through `null`.
-   */
-  function principalSubject(token: string | null | undefined): string | null {
-    // No token at all is its own answer — never decode an absent/opaque token
-    // into whoever the decoder last saw.
-    if (!token) return null;
-    const sub = decodeJwtPayload(token)?.sub;
-    return typeof sub === "string" && sub.length > 0 ? sub : null;
-  }
 
   /**
    * The principal this store starts out belonging to. Best effort, like
