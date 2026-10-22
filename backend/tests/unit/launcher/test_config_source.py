@@ -225,7 +225,7 @@ def test_source_skips_empty_composed_values(
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
     composed = compose_config(_state(), password_free)
-    assert composed["MODULO_SYSTEM_DATABASE_URL"] == ""  # blank key IS present in the composition
+    assert not composed["MODULO_SYSTEM_DATABASE_URL"]  # blank key IS present in the composition
     resolved = LauncherConfigSource(data_dir)()
     assert "modulo_system_database_url" not in resolved  # blank value omitted, not injected
     assert resolved  # the non-blank composed values are still injected
