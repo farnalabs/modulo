@@ -80,16 +80,22 @@ The schema validator mode is resolved from (in priority order):
 3. `MODULO_SCHEMA_VALIDATOR_MODE` env var (first-boot seed only)
 4. `"lenient"` (hard default)
 
-To set the mode, update the organisation's `settings_json` or the system
-config via the admin API or MCP tools. For example, to set instance-wide:
+To set the mode, write the value directly: no admin endpoint or MCP tool
+currently exposes this key. To set the mode instance-wide, write the
+`system_config` row. `value` is a JSONB column, so the string must be
+JSON-encoded:
 
 ```sql
 INSERT INTO system_config (key, value)
-VALUES ('schema_validator_mode', 'strict')
-ON CONFLICT (key) DO UPDATE SET value = 'strict';
+VALUES ('schema_validator_mode', '"strict"'::jsonb)
+ON CONFLICT (key)
+DO UPDATE SET value = '"strict"'::jsonb, updated_at = now();
 ```
 
-Or per-org via the organisation settings endpoint.
+To set the mode per-org, write `schema_validator_mode: "strict"` into the
+target organisation's `settings_json`. The resolver requires a JSON string
+value exactly equal to `lenient` or `strict`; anything else resolves to
+`lenient`.
 
 ### Verify
 
