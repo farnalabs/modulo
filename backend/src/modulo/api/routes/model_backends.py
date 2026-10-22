@@ -343,6 +343,22 @@ def _strip_legacy_base_url(default_params: Mapping[str, Any] | None) -> dict[str
     return {key: value for key, value in default_params.items() if key != "base_url"}
 
 
+def _try_secrets_backend(settings: Settings, session: AsyncSession) -> SecretsBackend | None:
+    """Construct the secrets backend for a read path, tolerating failure.
+
+    Reading a backend's endpoint is a best-effort enrichment, so a construction
+    failure (e.g. a malformed ``fernet_key``, or an external backend that cannot
+    initialise) must degrade to "no credential endpoint shown" — never turn a
+    GET / list into a 500. The legacy ``default_params.base_url`` is still
+    reported. Logged once per request (fail open WITH a log).
+    """
+    try:
+        return create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+    except Exception:
+        logger.warning("model_backends.secrets_backend_unavailable", exc_info=True)
+        return None
+
+
 async def _base_urls_for_backends(
     session: AsyncSession,
     settings: Settings,
@@ -355,17 +371,32 @@ async def _base_urls_for_backends(
     the endpoint it actually uses. A missing/malformed secret is treated as "no
     credential endpoint" rather than failing the whole listing. Runs inside the
     caller's already-open RLS transaction.
+
+    The secrets backend is constructed LAZILY (only once a row that can carry a
+    custom endpoint needs a credential read) and construction failure is
+    tolerated, so a read never 500s and a page of endpoint-incapable providers
+    pays nothing.
     """
     if not backends:
         return {}
-    secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
     result: dict[uuid.UUID, str | None] = {}
+    secrets_backend: SecretsBackend | None = None
+    secrets_backend_resolved = False
     for mb in backends:
-        payload = await _read_secret_payload(secrets_backend, mb.id)
+        provider = getattr(mb, "provider", None)
+        if provider is not None and not supports_custom_base_url(provider):
+            result[mb.id] = None
+            continue
+        if not secrets_backend_resolved:
+            secrets_backend = _try_secrets_backend(settings, session)
+            secrets_backend_resolved = True
+        payload: dict[str, Any] = {}
+        if secrets_backend is not None:
+            payload = await _read_secret_payload(secrets_backend, mb.id)
         result[mb.id] = _effective_base_url(
             payload,
             getattr(mb, "default_params", None),
-            getattr(mb, "provider", None),
+            provider,
         )
     return result
 
@@ -1116,20 +1147,18 @@ async def get_model_backend_endpoint(
     principal: TenantPrincipal = require_permission(_PERM_MODEL_BACKEND_LIST),
 ) -> ModelBackendResponse:
     base_url: str | None = None
-    mb: Any = None
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             mb = await get_model_backend(session, backend_id)
-            # FAR-2046: resolve the stored endpoint ONLY after the org check.
-            # Decrypting first constructed the secrets backend (and read the
-            # row's credential JSON) for a row this principal may not read,
-            # turning the IDOR deny into a 500 when the secrets backend cannot
-            # be constructed.
-            if mb is not None and mb.organisation_id == principal.organisation_id:
-                base_urls = await _base_urls_for_backends(session, settings, [mb])
-                base_url = base_urls.get(mb.id)
+            # FAR-2046: authorise BEFORE resolving the endpoint. The endpoint
+            # lives in the credential JSON, so a cross-org read must be a 404
+            # before any decryption happens — never a 500 from the secrets
+            # backend, and never a reason to touch another org's secret.
+            if mb is None or mb.organisation_id != principal.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MODEL_BACKEND_NOT_FOUND)
+            base_url = (await _base_urls_for_backends(session, settings, [mb])).get(mb.id)
     except IntegrityError:
         logger.exception(_CODE_MODEL_BACKENDS_GET_MODEL)
         raise HTTPException(
@@ -1157,8 +1186,6 @@ async def get_model_backend_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while fetching model backend.",
         ) from None
-    if mb is None or mb.organisation_id != principal.organisation_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MODEL_BACKEND_NOT_FOUND)
     return _to_response(mb, base_url=base_url, can_manage=_can_manage_model_backends(principal))
 
 

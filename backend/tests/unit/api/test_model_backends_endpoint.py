@@ -202,6 +202,50 @@ def runner_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+def test_get_model_backend_survives_secrets_backend_construction_failure(client: TestClient) -> None:
+    """A read must not 500 when the secrets backend cannot be constructed.
+
+    Reading the stored endpoint is best-effort enrichment: a bad fernet key (or
+    an external secrets backend that cannot initialise) degrades to "no
+    endpoint shown" instead of failing the whole request.
+    """
+    with patch("modulo.api.routes.model_backends.create_secrets_backend", side_effect=ValueError("bad key")):
+        resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
+    assert resp.status_code == 200
+    assert resp.json()["base_url"] is None
+
+
+def test_get_model_backend_reports_legacy_endpoint_when_secrets_backend_unavailable(
+    client: TestClient,
+) -> None:
+    """The legacy default_params.base_url still surfaces without decryption."""
+    backend = _make_backend()
+    backend.default_params = {"base_url": "https://legacy.example.com/v1"}
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", side_effect=ValueError("bad key")),
+    ):
+        resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
+    assert resp.status_code == 200
+    assert resp.json()["base_url"] == "https://legacy.example.com/v1"
+
+
+def test_list_model_backends_survives_secrets_backend_construction_failure(client: TestClient) -> None:
+    """A listing degrades to no endpoint rather than failing every row."""
+    page_result = MagicMock(items=[_make_backend()], total=1, page=1, page_size=20)
+    with (
+        patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", side_effect=ValueError("bad key")),
+    ):
+        resp = client.get("/api/v1/model-backends")
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["base_url"] is None
+
+
 _CREATE_BODY = {
     "name": "Test Backend",
     "display_name": "GPT-4",
