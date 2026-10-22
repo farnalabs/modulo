@@ -5,9 +5,9 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import Select, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,8 +26,8 @@ from modulo.api.dependencies import (
 )
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.api.team_scope import (
-    TeamScopedResource,
     resolve_lifecycle_map_team_scope,
+    team_scope_resolver,
     validate_owner_team_for_create,
     validate_team_transition_for_update,
 )
@@ -65,7 +65,6 @@ from modulo.core.run_provenance import run_provenance_fields
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.rls import set_rls_org, set_rls_user_context
-from modulo.db.soft_delete import include_soft_deleted
 from modulo.db.sqlstates import sqlstate_of
 
 _CODE_LIFECYCLE_MAPS_AUDIT_FAILED = "lifecycle_maps.audit_failed"
@@ -983,57 +982,16 @@ async def delete_lifecycle_map_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_LIFECYCLE_MAP_NOT_FOUND)
 
 
-async def _resolve_lifecycle_map_team_scope_including_deleted(
-    request: Request,
-    session: AsyncSession,
-) -> TeamScopedResource | None:
-    """``resolve_lifecycle_map_team_scope`` for a SOFT-DELETED target row.
-
-    FAR-1514: ``POST /{lifecycle_map_id}/restore`` is the one lifecycle-map
-    mutation whose target row is soft-deleted — that is the whole point of the
-    endpoint. The shared ``team_scope_resolver`` cannot see such a row (it adds
-    an explicit ``deleted_at IS NULL`` predicate), so reusing it here would
-    resolve ``None`` for a non-admin caller and the dependency would answer 404
-    "Resource not found" BEFORE the handler — breaking restore for every
-    non-admin while admins (who bypass the gate) kept working.
-
-    Two things exclude a deleted row, and BOTH are handled here:
-
-    * ``team_scope_resolver`` adds an explicit ``deleted_at IS NULL``
-      predicate, and
-    * a global ``do_orm_execute`` listener (``db.soft_delete``) injects the
-      same predicate into EVERY ORM SELECT on a ``SoftDeleteMixin`` model —
-      which is why the explicit one is redundant everywhere else. The
-      statement is marked with ``include_soft_deleted`` to opt out of it.
-
-    Same path-param read, same ``TeamScopedResource`` shape, so the
-    dependency's membership-or-admin matrix is unchanged; only the visibility
-    predicate matches what the endpoint acts on. Under RLS the row is still
-    subject to ``rls_team_isolation`` (which does NOT filter on deletion), so
-    a non-member's deleted row stays invisible and the dependency still 404s.
-
-    Mirrors pipelines' ``_resolve_pipeline_team_scope_including_deleted``
-    (FAR-1362); wired on the restore endpoint ONLY.
-    """
-    raw = request.path_params.get("lifecycle_map_id")
-    if raw is None:
-        return None
-    try:
-        obj_id = uuid.UUID(str(raw))
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid lifecycle_map_id path parameter",
-        ) from None
-    # ``Select[Any]`` cast: ``include_soft_deleted``'s ``T: Select[Any]`` bound
-    # rejects the concrete ``Select[UUID | None, str]`` a two-column select
-    # infers (SQLAlchemy's type parameters are invariant).
-    scope_stmt = select(LifecycleMap.owner_team_id, LifecycleMap.visibility).where(LifecycleMap.id == obj_id)
-    result = await session.execute(include_soft_deleted(cast(Select[Any], scope_stmt)))
-    row = result.first()
-    if row is None:
-        return None
-    return TeamScopedResource(owner_team_id=row[0], visibility=row[1])
+# FAR-1514: ``POST /{lifecycle_map_id}/restore`` is the one lifecycle-map
+# mutation whose target row is soft-deleted by design, so it needs the
+# deleted-inclusive variant of the shared resolver. The rationale for the two
+# exclusion layers (the explicit ``deleted_at IS NULL`` predicate and the global
+# ``do_orm_execute`` soft-delete filter) lives on ``team_scope_resolver``; this
+# mirrors pipelines' ``_resolve_pipeline_team_scope_including_deleted``
+# (FAR-1362) and is wired on the restore endpoint ONLY.
+_resolve_lifecycle_map_team_scope_including_deleted = team_scope_resolver(
+    LifecycleMap, path_param="lifecycle_map_id", include_deleted=True
+)
 
 
 @router.post(

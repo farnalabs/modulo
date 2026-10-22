@@ -55,10 +55,10 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from fastapi import HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.connector_instance import ConnectorInstance
@@ -74,6 +74,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
+from modulo.db.soft_delete import include_soft_deleted
 
 _MSG_NOT_TEAM_MEMBER = "Not a member of the team that owns this resource"
 
@@ -202,7 +203,7 @@ async def team_membership_exists(
     return result.first() is not None
 
 
-def team_scope_resolver(model: type[Any], *, path_param: str) -> TeamScopeProvider:
+def team_scope_resolver(model: type[Any], *, path_param: str, include_deleted: bool = False) -> TeamScopeProvider:
     """Build a resolver that loads ``owner_team_id``/``visibility`` by ID.
 
     The resolver reads the resource id from ``request.path_params[path_param]``
@@ -210,6 +211,21 @@ def team_scope_resolver(model: type[Any], *, path_param: str) -> TeamScopeProvid
     dependency raises 404 (the route would 404 on the same id anyway). Callers
     must run this inside a transaction with ``set_rls_org``/``set_rls_user_context``
     active — the ``require_team_membership_or_admin`` dependency does this.
+
+    ``include_deleted=True`` builds the variant for a RESTORE endpoint, whose
+    target row is soft-deleted by design (FAR-1362 for pipelines, FAR-1514 for
+    lifecycle maps). Two things would otherwise hide that row and 404 a
+    non-admin BEFORE the handler runs:
+
+    * this resolver's explicit ``deleted_at IS NULL`` predicate, and
+    * the global ``do_orm_execute`` listener (``db.soft_delete``) that injects
+      the same predicate into EVERY ORM SELECT on a ``SoftDeleteMixin`` model.
+
+    The variant drops the explicit predicate and marks the statement with
+    ``include_soft_deleted`` to opt out of the listener, so the resolved row is
+    exactly what the restore handler acts on. Under RLS the row is still subject
+    to ``rls_team_isolation`` (which does NOT filter on deletion), so a
+    non-member's deleted row stays invisible and the dependency still 404s.
     """
 
     async def _resolve(request: Request, session: AsyncSession) -> TeamScopedResource | None:
@@ -224,9 +240,16 @@ def team_scope_resolver(model: type[Any], *, path_param: str) -> TeamScopeProvid
                 detail=f"Invalid {path_param} path parameter",
             ) from None
         stmt = select(model.owner_team_id, model.visibility).where(model.id == obj_id)
-        if hasattr(model, "deleted_at"):
-            stmt = stmt.where(model.deleted_at.is_(None))
-        result = await session.execute(stmt)
+        if include_deleted:
+            # ``Select[Any]`` cast: ``include_soft_deleted``'s ``T: Select[Any]``
+            # bound rejects the concrete ``Select[UUID | None, str]`` a
+            # two-column select infers (SQLAlchemy's type parameters are
+            # invariant).
+            result = await session.execute(include_soft_deleted(cast(Select[Any], stmt)))
+        else:
+            if hasattr(model, "deleted_at"):
+                stmt = stmt.where(model.deleted_at.is_(None))
+            result = await session.execute(stmt)
         row = result.first()
         if row is None:
             return None
