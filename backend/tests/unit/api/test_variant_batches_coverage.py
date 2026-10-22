@@ -28,6 +28,7 @@ from modulo.api.routes.variant_batches import (
     re_fire_batch,
 )
 from modulo.db.crud.run_node_outputs import RunBlobs
+from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -36,8 +37,11 @@ from modulo.db.crud.run_node_outputs import RunBlobs
 
 def make_session_mock() -> AsyncMock:
     """Create an AsyncSession mock that supports `async with session.begin()`."""
-    session = AsyncMock()
-    session.execute = AsyncMock()
+    # ``in_transaction``/``get_bind``/``add`` are SYNC on AsyncSession, and
+    # ``execute`` must yield a plain MagicMock result so the SYNC
+    # ``scalar_one_or_none``/``all`` readers do not orphan a coroutine.
+    session = configure_rls_preamble(AsyncMock())
+    session.execute = AsyncMock(return_value=make_empty_execute_result())
     begin_ctx = AsyncMock()
     begin_ctx.__aenter__ = AsyncMock(return_value=session)
     begin_ctx.__aexit__ = AsyncMock(return_value=None)

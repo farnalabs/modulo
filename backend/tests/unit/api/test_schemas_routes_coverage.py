@@ -32,6 +32,7 @@ from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.schema_registry import SchemaGenerationError
 from modulo.db.crud.schema import SchemaDeletionProtectedError
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -91,7 +92,10 @@ def _make_schema_version(schema_id: uuid.UUID) -> MagicMock:
 
 
 def _make_session() -> AsyncMock:
-    session = AsyncMock()
+    # ``set_rls_org``/``set_rls_user_context`` call ``in_transaction()`` and
+    # ``get_bind()`` SYNCHRONOUSLY; a bare AsyncMock child orphans a
+    # never-awaited coroutine per request.
+    session = configure_rls_preamble(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

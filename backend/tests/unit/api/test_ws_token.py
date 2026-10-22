@@ -22,7 +22,11 @@ from modulo.auth.jwt import (
 )
 from modulo.core.audit_coverage import audit_session
 from modulo.settings import Settings, get_settings
-from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.api.mock_session import (
+    configure_mock_session,
+    configure_rls_preamble,
+    make_empty_execute_result,
+)
 
 _VALID_32 = "a" * 32
 _CSRF = "ws-token-csrf"
@@ -175,11 +179,16 @@ def test_ws_token_rejected_with_wrong_key():
 
 @pytest.fixture
 def mock_session() -> AsyncMock:
-    session = AsyncMock(spec=AsyncSession)
+    # SYNC session members (``in_transaction``/``get_bind``/``add``) and SYNC
+    # Result readers (``scalar_one_or_none``) must not be AsyncMock children:
+    # each call would orphan a never-awaited coroutine (the permission gate
+    # reads ``result.scalar_one_or_none()`` on every request).
+    session = configure_rls_preamble(AsyncMock(spec=AsyncSession))
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    session.execute = AsyncMock(return_value=make_empty_execute_result())
     return session
 
 
