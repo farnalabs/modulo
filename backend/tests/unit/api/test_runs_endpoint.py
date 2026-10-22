@@ -1070,14 +1070,19 @@ def test_run_response_populates_guardrail_summary(client: TestClient) -> None:
     run.guardrail_summary_json = {
         "bound": 1,
         "evaluated": 1,
-        "passed": 0,
-        "violated": 1,
-        "observed": 0,
+        "passed": 1,
+        "violated": 0,
+        "observed": 1,
         "errored": 0,
         "redacted": 0,
         "skipped": 0,
         "expected_skips": 0,
         "unexpected_skips": 0,
+    }
+    run.guardrail_coverage_json = {
+        "state": "degraded",
+        "reason": "runtime_tool_event_source_unobserved",
+        "provenance": "derived",
     }
     with (
         patch("modulo.api.routes.runs._do_get_run", return_value=run),
@@ -1089,14 +1094,19 @@ def test_run_response_populates_guardrail_summary(client: TestClient) -> None:
     assert body["guardrail_summary"] == {
         "bound": 1,
         "evaluated": 1,
-        "passed": 0,
-        "violated": 1,
-        "observed": 0,
+        "passed": 1,
+        "violated": 0,
+        "observed": 1,
         "errored": 0,
         "redacted": 0,
         "skipped": 0,
         "expected_skips": 0,
         "unexpected_skips": 0,
+    }
+    assert body["guardrail_coverage"] == {
+        "state": "degraded",
+        "reason": "runtime_tool_event_source_unobserved",
+        "provenance": "derived",
     }
 
 

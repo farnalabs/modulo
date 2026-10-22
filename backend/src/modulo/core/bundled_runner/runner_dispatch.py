@@ -2266,6 +2266,7 @@ async def _maybe_start_loop_bridge(
             bridge_client_source,
             load_loop_intercept_guardrails,
             persist_loop_interception_audit,
+            persist_loop_interception_coverage,
         )
 
         bridge_defs = await load_loop_intercept_guardrails(
@@ -2285,6 +2286,12 @@ async def _maybe_start_loop_bridge(
                 org_id=str(org_id) if org_id else "",
                 run_id=run_id,
                 node_id=node_id,
+            ),
+            coverage_sink=partial(
+                persist_loop_interception_coverage,
+                session_factory=session_factory,
+                org_id=str(org_id) if org_id else "",
+                run_id=run_id,
             ),
         )
         bridge_port = await bridge_server.start()

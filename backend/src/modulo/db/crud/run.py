@@ -1094,6 +1094,7 @@ class _GuardrailInterception:
     blocking_eval_name: str
     observed_by_eval: dict[uuid.UUID, bool]
     summary_json: dict[str, int] | None
+    coverage_json: dict[str, str] | None = None
 
 
 @dataclass
@@ -1758,6 +1759,7 @@ async def _run_guardrail_gate(
         blocking_eval_name=blocking_eval_name,
         observed_by_eval=observed_by_eval,
         summary_json=summary_json,
+        coverage_json=None,
     )
 
 
@@ -1830,6 +1832,11 @@ async def _intercept_guardrails(
             blocking_eval_name="",
             observed_by_eval={},
             summary_json=None,
+            coverage_json={
+                "state": "not_applicable",
+                "reason": "ingestion_guardrail_blocked_before_runtime_dispatch",
+                "provenance": "derived",
+            },
         )
 
     if _has_guardrail_work(guardrail_rows, pinned.pinned_defs, pinned.skipped_guardrails, pinned.blocked):
@@ -1843,6 +1850,11 @@ async def _intercept_guardrails(
         blocking_eval_name="",
         observed_by_eval={},
         summary_json=None,
+        coverage_json={
+            "state": "not_applicable",
+            "reason": "no_runtime_loop_guardrail_bound",
+            "provenance": "derived",
+        },
     )
 
 
@@ -2309,6 +2321,15 @@ async def create_run(
     guardrail_blocking_eval_name = interception.blocking_eval_name
     guardrail_observed_by_eval = interception.observed_by_eval
     guardrail_summary_dict = interception.summary_json
+    guardrail_coverage_dict = interception.coverage_json
+    if guardrail_coverage_dict is None:
+        guardrail_coverage_dict = {
+            "state": "degraded" if guardrail_summary_dict else "not_applicable",
+            "reason": (
+                "runtime_tool_event_source_unobserved" if guardrail_summary_dict else "no_runtime_loop_guardrail_bound"
+            ),
+            "provenance": "derived",
+        }
 
     stored_payload = _inject_engine_payload_keys(
         stored_payload,
@@ -2425,6 +2446,7 @@ async def create_run(
         batch_id=batch_id,
         variant_config_snapshot=variant_config_snapshot,
         guardrail_summary_json=guardrail_summary_dict,
+        guardrail_coverage_json=guardrail_coverage_dict,
     )
     if guardrail_blocked:
         _stamp_guardrail_blocked_run(run, guardrail_block_message)

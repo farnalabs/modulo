@@ -84,6 +84,7 @@ ESCALATED_MARKER = "MODULO_BRIDGE_ESCALATED:"
 # mid-loop suspension that acts on it ships in a later FAR-1694 slice.
 BLOCKED_EXIT_CODE = 3
 ESCALATED_EXIT_CODE = 4
+SOURCE_STATUS_MARKER = "MODULO_BRIDGE_SOURCE_STATUS:"
 
 DEFAULT_ENDPOINT = "http://127.0.0.1:8765"
 
@@ -190,6 +191,20 @@ class BridgeClient:
 
     def should_intercept(self, tool_name: str) -> bool:
         return any(fnmatch.fnmatch(tool_name, pattern) for pattern in self._patterns)
+
+    def notify_source_status(self) -> bool:
+        """Prove the runtime tool-event source can reach the bridge."""
+        request = urllib.request.Request(  # noqa: S310
+            self._endpoint + "/source-status",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self._timeout) as response:  # noqa: S310  # nosec B310
+                return bool(response.status == 200)
+        except Exception:
+            return False
 
     def notify(
         self,
@@ -424,6 +439,7 @@ def main(argv: list[str] | None = None) -> int:
     client = _build_cli_client(args)
 
     if args.wrap:
+        client.notify_source_status()
         return _wrap_command(_strip_double_dash(args.command), client)
     if args.notify:
         return _notify_once(client, args.notify)

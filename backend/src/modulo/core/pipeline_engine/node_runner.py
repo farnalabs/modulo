@@ -10489,6 +10489,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         bridge_client_source,
         load_loop_intercept_guardrails,
         persist_loop_interception_audit,
+        persist_loop_interception_coverage,
     )
     from modulo.core.runner_bindings import (
         AgentBindingResolutionError,
@@ -11906,6 +11907,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                                 org_id=org_id,
                                 run_id=run_id,
                                 node_id=node_id,
+                            ),
+                            coverage_sink=partial(
+                                persist_loop_interception_coverage,
+                                session_factory=session_factory,
+                                org_id=org_id,
+                                run_id=run_id,
                             ),
                         )
                         _bridge_port = await _bridge_server.start()

@@ -432,6 +432,35 @@ async def test_callback_server_redact_round_trip():
         await server.close()
 
 
+async def test_callback_server_source_probe_marks_coverage_enforced():
+    coverage: list[dict[str, str]] = []
+
+    async def _coverage_sink(value: dict[str, str]) -> None:
+        coverage.append(value)
+
+    server = li.LoopInterceptCallbackServer(
+        EvalEngine(),
+        [_guardrail(name="block-token")],
+        _cfg(),
+        coverage_sink=_coverage_sink,
+    )
+    port = await server.start()
+    try:
+        client = BridgeClient(f"http://127.0.0.1:{port}", timeout=5.0)
+        assert await asyncio.to_thread(client.notify_source_status)
+        await asyncio.sleep(0.05)
+        assert not coverage
+        await asyncio.to_thread(client.decide_before, "git push", _event()["args"])
+        await asyncio.sleep(0.05)
+        assert coverage[-1] == {
+            "state": "enforced",
+            "reason": "runtime_tool_event_observed",
+            "provenance": "observed",
+        }
+    finally:
+        await server.close()
+
+
 async def test_callback_server_invokes_audit_sink():
     records: list[li.LoopInterceptAuditRecord] = []
 
@@ -456,6 +485,11 @@ async def test_callback_server_invokes_audit_sink():
         assert any(r.event_type == "guardrail.loop_blocked" for r in records)
     finally:
         await server.close()
+
+
+def test_bridge_client_source_probe_fails_closed_as_observation():
+    client = BridgeClient("http://127.0.0.1:1", timeout=0.5)
+    assert client.notify_source_status() is False
 
 
 def test_bridge_client_fails_open_on_unreachable_endpoint():

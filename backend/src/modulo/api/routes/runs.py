@@ -1091,6 +1091,8 @@ class RunResponse(BaseModel):
     # expected_skips / unexpected_skips). NULL when the run had no guardrails
     # bound, or on pre-migration runs.
     guardrail_summary: dict[str, int] | None = None
+    # FAR-2054: provenance-typed in-loop guardrail coverage state.
+    guardrail_coverage: dict[str, str] | None = None
     # Active-run observability (FAR-307). `trigger_actor`, `heartbeat_at`, and
     # `capacity` are populated on every list item and on detail for active
     # runs; `work_item_refs` and `child_runs` are populated only on detail.
@@ -1188,6 +1190,20 @@ async def _run_gate_fired(session: AsyncSession, run: Any) -> bool:
         return True
     markers = await read_run_markers(session, run_id=run.id, organisation_id=getattr(run, "organisation_id", None))
     return bool(_any_marker_delivery_done(markers))
+
+
+def _guardrail_coverage_from_run(run: Any) -> dict[str, str] | None:
+    """Parse the persisted FAR-2054 in-loop coverage record defensively."""
+    raw = getattr(run, "guardrail_coverage_json", None)
+    if not isinstance(raw, dict):
+        return None
+    state = raw.get("state")
+    reason = raw.get("reason")
+    provenance = raw.get("provenance")
+    if not all(isinstance(value, str) and value for value in (state, reason, provenance)):
+        _log.warning("runs.guardrail_coverage_invalid", extra={"run_id": str(getattr(run, "id", ""))})
+        return None
+    return {"state": str(state), "reason": str(reason), "provenance": str(provenance)}
 
 
 def _guardrail_summary_from_run(run: Any) -> dict[str, int] | None:
@@ -1371,6 +1387,7 @@ def _build_run_response(
         gate_fired=gate_fired,
         blocked_partial_summary=blocked_partial_summary,
         guardrail_summary=_guardrail_summary_from_run(run),
+        guardrail_coverage=_guardrail_coverage_from_run(run),
         trigger_actor=ctx.trigger_actor,
         trigger_type=getattr(run, "trigger_type", None),
         # FAR-1141 / ADR-042: run execution provenance, composed from the ONE
