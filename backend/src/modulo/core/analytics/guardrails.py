@@ -37,7 +37,7 @@ import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, NoReturn
+from typing import Any, NamedTuple, NoReturn
 
 import sqlalchemy as sa
 from sqlalchemy import func, text
@@ -317,28 +317,17 @@ def _assemble_scorecard(
     The first-try-pass and corrected-pass numbers are deliberately kept in
     separate top-level objects and never combined into a single pass rate.
     """
-    runs_with_guardrail = int(runs_row.runs_with_guardrail or 0)
-    runs_with_violations = int(runs_row.runs_with_violations or 0)
-    first_try_pass_runs = int(runs_row.first_try_pass_runs or 0)
-    bound_total = int(runs_row.bound_total or 0)
-    violated_total = int(runs_row.violated_total or 0)
-    errored_total = int(runs_row.errored_total or 0)
-    unexpected_skips = int(runs_row.unexpected_skips_total or 0)
-
-    raw_violation_rate = _rate(violated_total, bound_total)
-    first_try_pass_rate = _rate(first_try_pass_runs, runs_with_guardrail) if runs_with_guardrail else None
-
-    corrections_total = int(corrections_row.corrections_total or 0)
-    converged_clean = int(corrections_row.converged_clean or 0)
-    corrected_pass_rate = _rate(converged_clean, corrections_total) if corrections_total else None
-
-    current_errored_rate = _rate(errored_total, bound_total)
+    totals = _scorecard_totals(runs_row, corrections_row)
+    raw_violation_rate = _rate(totals.violated_total, totals.bound_total)
+    first_try_pass_rate = _first_try_pass_rate(totals.first_try_pass_runs, totals.runs_with_guardrail)
+    corrected_pass_rate = _corrected_pass_rate(totals.converged_clean, totals.corrections_total)
+    current_errored_rate = _rate(totals.errored_total, totals.bound_total)
     baseline_errored_rate = _rate(
-        int(baseline_row.errored_total or 0),
-        int(baseline_row.bound_total or 0),
+        _as_int(baseline_row.errored_total),
+        _as_int(baseline_row.bound_total),
     )
     drift_detected, drift_indicator = _drift_indicator(
-        unexpected_skips=unexpected_skips,
+        unexpected_skips=totals.unexpected_skips,
         current_rate=current_errored_rate,
         baseline_rate=baseline_errored_rate,
     )
@@ -347,50 +336,138 @@ def _assemble_scorecard(
         "advisory_only": True,
         "date_from": date_from,
         "date_to": date_to,
-        "scope": {
-            "runs_with_guardrail": runs_with_guardrail,
-            "runs_with_violations": runs_with_violations,
-            "runs_blocked": int(runs_row.runs_blocked or 0),
-            "first_try_pass_runs": first_try_pass_runs,
-        },
-        "fire_counts": {
-            "bound": bound_total,
-            "evaluated": int(runs_row.evaluated_total or 0),
-            "passed": int(runs_row.passed_total or 0),
-            "violated": violated_total,
-            "observed": int(runs_row.observed_total or 0),
-            "errored": errored_total,
-            "redacted": int(runs_row.redacted_total or 0),
-            "skipped": int(runs_row.skipped_total or 0),
-            "expected_skips": int(runs_row.expected_skips_total or 0),
-            "unexpected_skips": unexpected_skips,
-        },
+        "scope": _scope_section(runs_row, totals),
+        "fire_counts": _fire_counts_section(runs_row, totals),
         "rates": {
             "raw_violation_rate": raw_violation_rate,
             "first_try_pass_rate": first_try_pass_rate,
             "note": _NOTE_RATES,
         },
-        "self_correction": {
-            "corrections_total": corrections_total,
-            "converged_clean": converged_clean,
-            "escalated_hitl": int(corrections_row.escalated_hitl or 0),
-            "budget_exhausted": budget_exhausted,
-            "dismissed": int(corrections_row.dismissed or 0),
-            "in_flight": int(corrections_row.in_flight or 0),
-            "corrected_pass_rate": corrected_pass_rate,
-            "note": _NOTE_CORRECTIONS,
-        },
-        "evasion_band_drift": {
-            "current_errored_rate": current_errored_rate,
-            "baseline_errored_rate": baseline_errored_rate,
-            "baseline_window_days": baseline_window_days,
-            "unexpected_skips_total": unexpected_skips,
-            "drift_detected": drift_detected,
-            "drift_indicator": drift_indicator,
-            "advisory_only": True,
-            "note": _NOTE_DRIFT,
-        },
+        "self_correction": _self_correction_section(corrections_row, totals, budget_exhausted, corrected_pass_rate),
+        "evasion_band_drift": _evasion_band_section(
+            totals=totals,
+            current_errored_rate=current_errored_rate,
+            baseline_errored_rate=baseline_errored_rate,
+            baseline_window_days=baseline_window_days,
+            drift_detected=drift_detected,
+            drift_indicator=drift_indicator,
+        ),
         "generated_at": datetime.now(UTC).isoformat(),
+    }
+
+
+class _ScorecardTotals(NamedTuple):
+    """Integer aggregate totals shared by every scorecard section."""
+
+    runs_with_guardrail: int
+    runs_with_violations: int
+    first_try_pass_runs: int
+    bound_total: int
+    violated_total: int
+    errored_total: int
+    unexpected_skips: int
+    corrections_total: int
+    converged_clean: int
+
+
+def _as_int(value: Any) -> int:
+    """Coalesce a nullable aggregate to a plain int."""
+    return int(value or 0)
+
+
+def _scorecard_totals(runs_row: Any, corrections_row: Any) -> _ScorecardTotals:
+    """Extract the integer aggregate totals from the two aggregate rows."""
+    return _ScorecardTotals(
+        runs_with_guardrail=_as_int(runs_row.runs_with_guardrail),
+        runs_with_violations=_as_int(runs_row.runs_with_violations),
+        first_try_pass_runs=_as_int(runs_row.first_try_pass_runs),
+        bound_total=_as_int(runs_row.bound_total),
+        violated_total=_as_int(runs_row.violated_total),
+        errored_total=_as_int(runs_row.errored_total),
+        unexpected_skips=_as_int(runs_row.unexpected_skips_total),
+        corrections_total=_as_int(corrections_row.corrections_total),
+        converged_clean=_as_int(corrections_row.converged_clean),
+    )
+
+
+def _first_try_pass_rate(first_try_pass_runs: int, runs_with_guardrail: int) -> float | None:
+    """First-try-pass ratio, or None when no run had a guardrail bound."""
+    if runs_with_guardrail:
+        return _rate(first_try_pass_runs, runs_with_guardrail)
+    return None
+
+
+def _corrected_pass_rate(converged_clean: int, corrections_total: int) -> float | None:
+    """Corrected-pass ratio, or None when no correction was recorded."""
+    if corrections_total:
+        return _rate(converged_clean, corrections_total)
+    return None
+
+
+def _scope_section(runs_row: Any, totals: _ScorecardTotals) -> dict[str, Any]:
+    """Build the ``scope`` section of the scorecard."""
+    return {
+        "runs_with_guardrail": totals.runs_with_guardrail,
+        "runs_with_violations": totals.runs_with_violations,
+        "runs_blocked": _as_int(runs_row.runs_blocked),
+        "first_try_pass_runs": totals.first_try_pass_runs,
+    }
+
+
+def _fire_counts_section(runs_row: Any, totals: _ScorecardTotals) -> dict[str, Any]:
+    """Build the ``fire_counts`` section of the scorecard."""
+    return {
+        "bound": totals.bound_total,
+        "evaluated": _as_int(runs_row.evaluated_total),
+        "passed": _as_int(runs_row.passed_total),
+        "violated": totals.violated_total,
+        "observed": _as_int(runs_row.observed_total),
+        "errored": totals.errored_total,
+        "redacted": _as_int(runs_row.redacted_total),
+        "skipped": _as_int(runs_row.skipped_total),
+        "expected_skips": _as_int(runs_row.expected_skips_total),
+        "unexpected_skips": totals.unexpected_skips,
+    }
+
+
+def _self_correction_section(
+    corrections_row: Any,
+    totals: _ScorecardTotals,
+    budget_exhausted: int,
+    corrected_pass_rate: float | None,
+) -> dict[str, Any]:
+    """Build the ``self_correction`` section of the scorecard."""
+    return {
+        "corrections_total": totals.corrections_total,
+        "converged_clean": totals.converged_clean,
+        "escalated_hitl": _as_int(corrections_row.escalated_hitl),
+        "budget_exhausted": budget_exhausted,
+        "dismissed": _as_int(corrections_row.dismissed),
+        "in_flight": _as_int(corrections_row.in_flight),
+        "corrected_pass_rate": corrected_pass_rate,
+        "note": _NOTE_CORRECTIONS,
+    }
+
+
+def _evasion_band_section(
+    *,
+    totals: _ScorecardTotals,
+    current_errored_rate: float | None,
+    baseline_errored_rate: float | None,
+    baseline_window_days: int,
+    drift_detected: bool,
+    drift_indicator: str,
+) -> dict[str, Any]:
+    """Build the ``evasion_band_drift`` section of the scorecard."""
+    return {
+        "current_errored_rate": current_errored_rate,
+        "baseline_errored_rate": baseline_errored_rate,
+        "baseline_window_days": baseline_window_days,
+        "unexpected_skips_total": totals.unexpected_skips,
+        "drift_detected": drift_detected,
+        "drift_indicator": drift_indicator,
+        "advisory_only": True,
+        "note": _NOTE_DRIFT,
     }
 
 

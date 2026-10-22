@@ -1330,6 +1330,8 @@ class TestStaleRunSweepJourneyAdvance:
         monkeypatch.setattr(pe, "get_settings", lambda: self._settings())
         advanced = AsyncMock()
         monkeypatch.setattr("modulo.core.run_terminal_advance.advance_journeys_from_stored_refs", advanced)
+        monkeypatch.setattr("modulo.core.run_terminal_advance.record_terminal_failed_fact", AsyncMock())
+        monkeypatch.setattr("modulo.core.audit_logger.background.record_run_state_change_audits", AsyncMock())
         if stranded_row is not None:
             monkeypatch.setattr(
                 "modulo.core.pipeline_execution._re_dispatch_capacity_blocked",
@@ -1347,7 +1349,7 @@ class TestStaleRunSweepJourneyAdvance:
             terminal_rows={
                 "never_dispatched": nd_run,
                 "queue.expired": qx_run,
-                "worker_lost": wl_run,
+                "error_code = 'worker_lost'": wl_run,
             },
         )
         assert result["never_dispatched_swept"] == 1

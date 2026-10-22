@@ -121,6 +121,11 @@ class TestResolvePlanContext:
         org.id = "test-org"
         org.settings_json = {"license_key": "org-key"}
         org.plan_id = None
+        # FAR-2060: an org-scoped key is applied ONLY when its org_id claim names
+        # this org (a key claimed for another tenant is treated as absent). The
+        # key below claims ``_make_license_data``'s default org_id, so the org it
+        # is installed on must be that same tenant for the org rung to win.
+        org.id = "test-org"
         settings = MagicMock()
         settings.modulo_license_key = ""
 
@@ -134,6 +139,34 @@ class TestResolvePlanContext:
             plan = await resolve_plan_context(settings, session, org=org)
         assert plan.has_license_key() is True
         assert plan.tier() == "team"
+
+    async def test_org_license_key_claimed_for_another_tenant_is_ignored(self) -> None:
+        """A key claimed for a DIFFERENT org must not license this one.
+
+        FAR-2060: applying org B's key to org A would let one tenant's licence
+        entitle another, so a mismatched ``org_id`` claim is treated as ABSENT
+        at the org rung (the key is real, it just licenses a different tenant).
+        Fail-closed: the plan degrades to Community rather than reusing it.
+        """
+        session = AsyncMock()
+        org = MagicMock()
+        org.settings_json = {"license_key": "org-key"}
+        org.plan_id = None
+        org.id = "org-a"
+        settings = MagicMock()
+        settings.modulo_license_key = ""
+
+        with (
+            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=[]),
+            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=[]),
+            patch("modulo.core.license.parse_and_verify") as mock_verify,
+        ):
+            mock_verify.return_value.valid = True
+            mock_verify.return_value.license_data = _make_license_data(tier="team", org_id="org-b")
+            plan = await resolve_plan_context(settings, session, org=org)
+        assert plan.has_license_key() is False
+        assert plan.tier() == "community"
+        assert plan.feature_enabled("sso") is False
 
     async def test_team_plan_id_without_license_falls_back_to_community(self) -> None:
         """Bare plan_id='team' with NO license must NOT grant team tier.

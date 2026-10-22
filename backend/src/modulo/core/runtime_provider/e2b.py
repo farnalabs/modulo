@@ -12,7 +12,7 @@ import time
 import urllib.request
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from modulo.core.runtime_config.key_bridge import get_e2b_api_key
 from modulo.core.runtime_provider import (
@@ -27,6 +27,9 @@ from modulo.core.runtime_provider import (
     WorkspaceSpec,
 )
 from modulo.core.runtime_provider.log_tail import combine_log_entries
+
+if TYPE_CHECKING:
+    from e2b.sandbox.commands.command_handle import CommandExitException
 
 _log = logging.getLogger(__name__)
 
@@ -836,6 +839,11 @@ class E2BRuntimeProvider(RuntimeProvider):
         layer owns stall/deadline kills through :meth:`ExecProcess.kill`,
         exactly as it does for Docker's unbounded exec stream.
         """
+        # Imported at the CALLER's await point (not inside the fire-and-forget
+        # terminal task): an import failure must surface synchronously to the
+        # consumer. Raised inside ``_enqueue_terminal`` it would leave the
+        # queue without its terminal marker and hang the stream until the node
+        # deadline fires.
         from e2b.sandbox.commands.command_handle import CommandExitException
 
         sandbox = self._get_sandbox(provider_ref)
@@ -861,64 +869,15 @@ class E2BRuntimeProvider(RuntimeProvider):
         )
 
         process = ExecProcess(chunks=None, kill=None)  # type: ignore[arg-type]
-
-        async def _chunks() -> AsyncIterator[ExecStreamChunk]:
-            exit_code: int | None = None
-            error: str | None = None
-            try:
-                while True:
-                    item = await queue.get()
-                    if isinstance(item, _StreamEnd):
-                        exit_code = item.exit_code
-                        error = item.error
-                        break
-                    yield item
-            finally:
-                if error is not None:
-                    process.error = error
-                process.exit_code = exit_code
-                process.done.set()
-
-        async def _await_terminal() -> None:
-            """Resolve the command once and enqueue exactly one terminal marker.
-
-            The SDK resolves ``wait()`` only after every ``on_stdout``/
-            ``on_stderr`` callback has run (they are awaited inside the same
-            event-handler task), and the queue is FIFO — so the terminal
-            marker always lands after all output chunks.
-            """
-            try:
-                result = await handle.wait()
-            except asyncio.CancelledError:
-                raise
-            except CommandExitException as exc:
-                # Non-zero command exit: a HEALTHY stream end carrying the
-                # real exit code (specific exception before its bases).
-                await queue.put(_StreamEnd(exit_code=exc.exit_code, error=None))
-            except Exception as exc:
-                # Engine/proxy drop or an end-eventless termination: stream
-                # ERROR — exit_code must stay None (no zero-exit fabrication).
-                await queue.put(_StreamEnd(exit_code=None, error=_stream_error_message(exc)))
-            else:
-                await queue.put(_StreamEnd(exit_code=result.exit_code, error=None))
-
-        process.chunks = _chunks()
+        process.chunks = _iter_stream_chunks(queue, process)
         # Strong ref while in flight (asyncio holds only weak task refs);
         # discarded automatically when the terminal marker has been queued.
-        waiter = asyncio.ensure_future(_await_terminal())
+        waiter = asyncio.ensure_future(_enqueue_terminal(handle, queue, exit_exception=CommandExitException))
         self._stream_waiters.add(waiter)
         waiter.add_done_callback(lambda _t: self._stream_waiters.discard(waiter))
 
         async def _kill() -> None:
-            try:
-                await asyncio.wait_for(handle.kill(), timeout=_KILL_TIMEOUT)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception(
-                    "exec_command_stream: failed to kill streamed command in sandbox %s",
-                    provider_ref,
-                )
+            await _kill_streamed_command(handle, provider_ref)
 
         process._kill = _kill
         return process
@@ -1015,3 +974,71 @@ class E2BRuntimeProvider(RuntimeProvider):
         if exit_code != 0:
             stderr = getattr(result, "stderr", "") or ""
             raise RuntimeError(f"Repo clone failed (exit {exit_code}) for {repo_url}: {stderr}")
+
+
+async def _iter_stream_chunks(
+    queue: asyncio.Queue[ExecStreamChunk | _StreamEnd],
+    process: ExecProcess,
+) -> AsyncIterator[ExecStreamChunk]:
+    """Drain the callback queue until the terminal marker, updating *process*."""
+    exit_code: int | None = None
+    error: str | None = None
+    try:
+        while True:
+            item = await queue.get()
+            if isinstance(item, _StreamEnd):
+                exit_code = item.exit_code
+                error = item.error
+                break
+            yield item
+    finally:
+        if error is not None:
+            process.error = error
+        process.exit_code = exit_code
+        process.done.set()
+
+
+async def _enqueue_terminal(
+    handle: Any,
+    queue: asyncio.Queue[ExecStreamChunk | _StreamEnd],
+    *,
+    exit_exception: type[CommandExitException],
+) -> None:
+    """Resolve the command once and enqueue exactly one terminal marker.
+
+    The SDK resolves ``wait()`` only after every ``on_stdout``/``on_stderr``
+    callback has run (they are awaited inside the same event-handler task), and
+    the queue is FIFO — so the terminal marker always lands after all output
+    chunks.
+
+    *exit_exception* is imported by the caller and passed in: this task is
+    fire-and-forget, so an import failure raised HERE would never reach the
+    awaiting consumer and would strand the stream without a terminal marker.
+    """
+    try:
+        result = await handle.wait()
+    except asyncio.CancelledError:
+        raise
+    except exit_exception as exc:
+        # Non-zero command exit: a HEALTHY stream end carrying the real exit
+        # code (specific exception before its bases).
+        await queue.put(_StreamEnd(exit_code=exc.exit_code, error=None))
+    except Exception as exc:
+        # Engine/proxy drop or an end-eventless termination: stream ERROR —
+        # exit_code must stay None (no zero-exit fabrication).
+        await queue.put(_StreamEnd(exit_code=None, error=_stream_error_message(exc)))
+    else:
+        await queue.put(_StreamEnd(exit_code=result.exit_code, error=None))
+
+
+async def _kill_streamed_command(handle: Any, provider_ref: str) -> None:
+    """Best-effort SIGKILL of a streamed background command."""
+    try:
+        await asyncio.wait_for(handle.kill(), timeout=_KILL_TIMEOUT)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "exec_command_stream: failed to kill streamed command in sandbox %s",
+            provider_ref,
+        )

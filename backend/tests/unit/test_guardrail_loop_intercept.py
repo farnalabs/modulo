@@ -247,6 +247,26 @@ async def test_redact_masks_args_before_execution():
     assert audit[0].event_type == "guardrail.loop_redacted"
 
 
+async def test_redact_guardrail_with_no_valid_policy_passes():
+    """A redact-action guardrail whose ``redaction`` list yields no valid policy
+    contributes nothing and the call passes (no redaction applied)."""
+    cfg = _cfg()
+    gr = _guardrail(name="bad-redact", action="redact", redaction=[])
+    outcome, audit = await run_loop_interception(EvalEngine(), [gr], _event(), config=cfg)
+    assert outcome.action == "pass"
+    assert audit == []
+
+
+async def test_redact_policy_that_does_not_match_passes():
+    """A valid policy whose path is absent applies nothing, so the call passes."""
+    cfg = _cfg()
+    policy = FieldRedactionPolicy(path="args.missing", mode=FieldRedactionMode.TRANSFORM)
+    gr = _guardrail(name="redact-miss", action="redact", redaction=[policy.model_dump()])
+    outcome, audit = await run_loop_interception(EvalEngine(), [gr], _event(), config=cfg)
+    assert outcome.action == "pass"
+    assert audit == []
+
+
 async def test_block_mode_redaction_policy_blocks_before():
     cfg = _cfg()
     policy = FieldRedactionPolicy(path="args.url", mode=FieldRedactionMode.BLOCK)
@@ -645,6 +665,48 @@ def test_notify_cli_downgraded_block_exit_0(monkeypatch):
         lambda self, tool, args, direction, result_summary="": {"action": "block", "blocked": False},
     )
     assert sb.main(["--notify", '{"tool_name": "git push", "args": {}, "direction": "before"}', "--endpoint", "x"]) == 0
+
+
+def test_bridge_main_help_wrap_config_and_bad_json(monkeypatch, tmp_path, capsys):
+    """The bridge CLI's non-notify branches: help, --wrap resolution, --config,
+    and a malformed --notify payload (event {} -> still a dict, no crash)."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    # No arguments: print help and exit 2 (no client is built beyond defaults).
+    assert sb.main([]) == 2
+    assert "usage" in capsys.readouterr().out.lower()
+
+    calls: dict[str, object] = {}
+
+    def _fake_wrap(command, client):
+        calls["cmd"] = command
+        return 0
+
+    monkeypatch.setattr(sb, "_wrap_command", _fake_wrap)
+
+    # --wrap with the ``--`` separator: the separator is stripped.
+    assert sb.main(["--wrap", "--", "true"]) == 0
+    assert calls["cmd"] == ["true"]
+
+    # --wrap without a separator: the command passes through unchanged.
+    assert sb.main(["--wrap", "true"]) == 0
+    assert calls["cmd"] == ["true"]
+
+    # --config: the client is built from the config file's patterns.
+    cfg = tmp_path / "bridge.json"
+    cfg.write_text('{"patterns": ["custom"]}', encoding="utf-8")
+    assert sb.main(["--config", str(cfg), "--wrap", "true"]) == 0
+
+    # Malformed --notify JSON degrades to an empty event (a dict), so the
+    # notify path still runs rather than crashing.
+    monkeypatch.setattr(
+        sb.BridgeClient,
+        "notify",
+        lambda self, tool, args, direction, result_summary="": {"action": "pass", "blocked": False},
+    )
+    assert sb.main(["--notify", "{bad json", "--endpoint", "x"]) == 0
+    # A non-object JSON payload (an array) is refused with a clear error.
+    assert sb.main(["--notify", "[]", "--endpoint", "x"]) == 2
 
 
 def test_decide_before_honours_blocked_flag(monkeypatch):

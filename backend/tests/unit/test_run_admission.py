@@ -33,16 +33,34 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 import modulo.core.run_admission as ra
 from modulo.core.run_admission import (
+    CI_FAILURE_INFLIGHT_BACKSTOP_SECONDS,
     SlotReconciliationError,
     coalesce_enabled,
     derive_webhook_coalesce_key,
     evaluate_backpressure,
+    has_in_flight_ci_failure_run,
     reconcile_pipeline_slots,
     trigger_slot_count_predicate,
 )
-from modulo.core.trigger_engine import PipelineBackpressureError, TriggerEngine
+from modulo.core.trigger_engine import (
+    CiFailureCoalescedError,
+    PipelineBackpressureError,
+    TriggerEngine,
+)
+from modulo.db.crud.run import (
+    CI_FAILURE_COALESCE_KEY_FIELD,
+    create_run,
+    read_ci_failure_coalesce_key,
+)
 from modulo.db.models.base import Base
+from modulo.db.models.eval import Eval
+from modulo.db.models.journey import Journey
+from modulo.db.models.organisation import Organisation
+from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.team import Team
+from modulo.db.models.variant_group import VariantGroup
 
 ORG_ID = uuid.UUID("18348064-eca3-4aa7-be96-8f6c9123efd0")
 OTHER_ORG_ID = uuid.UUID("2b6d9f0a-1c3e-4d5b-8a7f-9e0d1c2b3a4c")
@@ -445,6 +463,27 @@ class TestDeriveWebhookCoalesceKey:
         assert derive_webhook_coalesce_key(push_a) == derive_webhook_coalesce_key(push_b)
 
 
+class TestReadCiFailureCoalesceKey:
+    """The stored-row reader must be robust to every shape a payload can take."""
+
+    def test_reads_the_engine_stamp(self) -> None:
+        payload = {"mapped": "x", CI_FAILURE_COALESCE_KEY_FIELD: "ci-failure:pr:7:sha:s"}
+        assert read_ci_failure_coalesce_key(payload) == "ci-failure:pr:7:sha:s"
+
+    def test_json_text_payload(self) -> None:
+        assert (
+            read_ci_failure_coalesce_key('{"' + CI_FAILURE_COALESCE_KEY_FIELD + '": "ci-failure:pr:7:sha:s"}')
+            == "ci-failure:pr:7:sha:s"
+        )
+
+    def test_absent_or_foreign_shapes_return_none(self) -> None:
+        assert read_ci_failure_coalesce_key({"prNumber": 7}) is None
+        assert read_ci_failure_coalesce_key({CI_FAILURE_COALESCE_KEY_FIELD: ""}) is None
+        assert read_ci_failure_coalesce_key("not json") is None
+        assert read_ci_failure_coalesce_key(None) is None
+        assert read_ci_failure_coalesce_key(["list"]) is None
+
+
 class TestDeriveCiFailureCoalesceKey:
     def test_ci_failure_payload_derives_key(self) -> None:
         payload = {
@@ -521,6 +560,323 @@ class TestCoalesceEnabled:
     def test_explicit_flag(self) -> None:
         assert coalesce_enabled({"coalesce_pending": False}) is False
         assert coalesce_enabled({"coalesce_pending": True}) is True
+
+
+class TestCiFailureInflightSuppression:
+    """Regression: CI-failure suppression must cover the RUN's lifetime.
+
+    Premise verified 2026-10-22: the coalesce window is a dedup-marker TTL
+    anchored on the PREVIOUS DELIVERY (``TriggerEngine._try_insert_dedup`` with
+    ``ttl_seconds=3600``, ``trigger_engine/__init__.py``), and nothing in the
+    gate consulted run state. A repeat delivery after the window elapsed
+    therefore minted a second full run for the identical (PR, head SHA) work
+    unit even while the first was still executing — observed as 20 Branch Fixer
+    runs producing 1 success against an 8-slot concurrency cap.
+
+    These cases prove the fix: suppression holds while ANY same-key run is
+    non-terminal, at ANY age, with the age window as the primary fast path and
+    an absolute age backstop as the secondary bound.
+    """
+
+    @pytest.fixture
+    async def session(self) -> AsyncGenerator[AsyncSession, None]:
+        engine: AsyncEngine = create_async_engine("sqlite+aiosqlite://", echo=False)
+        async with engine.begin() as conn:
+            # The full set create_run touches on the sqlite path (mirrors
+            # tests/unit/db/test_journey_create_run.py) so the stamping cases can
+            # exercise the REAL create_run, not a hand-rolled row.
+            tables = [
+                Organisation.__table__,
+                Pipeline.__table__,
+                Team.__table__,
+                Run.__table__,
+                PipelineSnapshot.__table__,
+                Journey.__table__,
+                VariantGroup.__table__,
+                Eval.__table__,
+            ]
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+            await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        async with maker() as db_session:
+            yield db_session
+        await engine.dispose()
+
+    @staticmethod
+    def _ago(**kwargs: float) -> datetime:
+        """Naive UTC ``now - delta`` (SQLite stores/compares naive ISO strings)."""
+        return datetime.now(UTC).replace(tzinfo=None) - timedelta(**kwargs)
+
+    @staticmethod
+    def _seed(
+        session: AsyncSession,
+        *,
+        status: str,
+        created_at: datetime,
+        payload: dict[str, Any],
+        pipeline_id: uuid.UUID = PIPELINE_ID,
+        org_id: uuid.UUID = ORG_ID,
+    ) -> Run:
+        run = Run(
+            organisation_id=org_id,
+            pipeline_id=pipeline_id,
+            snapshot_id=SNAPSHOT_ID,
+            trigger_type="webhook",
+            run_number=1,
+            input_hash="b" * 64,
+            langgraph_thread_id="t-" + uuid.uuid4().hex,
+            status=status,
+            cancellation_requested=False,
+            input_payload=payload,
+            created_at=created_at,
+        )
+        session.add(run)
+        return run
+
+    @staticmethod
+    def _ci_payload(*, pr: int = 777, sha: str = "abc123") -> dict[str, Any]:
+        return {"prNumber": pr, "headSha": sha, "runUrl": "https://example/runs/1"}
+
+    @staticmethod
+    def _trigger() -> Any:
+        return SimpleNamespace(
+            id=TRIGGER_ID,
+            pipeline_id=PIPELINE_ID,
+            trigger_type="webhook",
+            config_json={},
+        )
+
+    # -- the helper's own predicate ----------------------------------------
+
+    async def test_running_run_for_same_key_is_in_flight(self, session: AsyncSession) -> None:
+        self._seed(
+            session,
+            status="running",
+            created_at=self._ago(minutes=90),
+            payload=self._ci_payload(),
+        )
+        await session.commit()
+        assert await has_in_flight_ci_failure_run(
+            session,
+            pipeline_id=PIPELINE_ID,
+            coalesce_key="ci-failure:pr:777:sha:abc123",
+        )
+
+    async def test_queued_run_for_same_key_is_in_flight(self, session: AsyncSession) -> None:
+        # A queued (pending) run is equally non-terminal — a repeat delivery
+        # must not add a second row behind it.
+        self._seed(
+            session,
+            status="pending",
+            created_at=self._ago(minutes=5),
+            payload=self._ci_payload(),
+        )
+        await session.commit()
+        assert await has_in_flight_ci_failure_run(
+            session,
+            pipeline_id=PIPELINE_ID,
+            coalesce_key="ci-failure:pr:777:sha:abc123",
+        )
+
+    async def test_terminal_run_for_same_key_is_not_in_flight(self, session: AsyncSession) -> None:
+        self._seed(
+            session,
+            status="complete",
+            created_at=self._ago(minutes=90),
+            payload=self._ci_payload(),
+        )
+        await session.commit()
+        assert not await has_in_flight_ci_failure_run(
+            session,
+            pipeline_id=PIPELINE_ID,
+            coalesce_key="ci-failure:pr:777:sha:abc123",
+        )
+
+    async def test_different_head_sha_is_not_in_flight(self, session: AsyncSession) -> None:
+        # A NEW commit is new work and must never be suppressed by an older
+        # in-flight run for the same PR.
+        self._seed(
+            session,
+            status="running",
+            created_at=self._ago(minutes=30),
+            payload=self._ci_payload(sha="def456"),
+        )
+        await session.commit()
+        assert not await has_in_flight_ci_failure_run(
+            session,
+            pipeline_id=PIPELINE_ID,
+            coalesce_key="ci-failure:pr:777:sha:abc123",
+        )
+
+    async def test_other_pipeline_run_is_not_in_flight(self, session: AsyncSession) -> None:
+        self._seed(
+            session,
+            status="running",
+            created_at=self._ago(minutes=30),
+            payload=self._ci_payload(),
+            pipeline_id=uuid.uuid4(),
+        )
+        await session.commit()
+        assert not await has_in_flight_ci_failure_run(
+            session,
+            pipeline_id=PIPELINE_ID,
+            coalesce_key="ci-failure:pr:777:sha:abc123",
+        )
+
+    async def test_backstop_stops_a_permanently_stuck_run_suppressing(self, session: AsyncSession) -> None:
+        # The bound is a defence against a sweep that is itself broken: past it,
+        # the age decision takes over rather than suppressing forever.
+        self._seed(
+            session,
+            status="running",
+            created_at=self._ago(seconds=CI_FAILURE_INFLIGHT_BACKSTOP_SECONDS + 60),
+            payload=self._ci_payload(),
+        )
+        await session.commit()
+        assert not await has_in_flight_ci_failure_run(
+            session,
+            pipeline_id=PIPELINE_ID,
+            coalesce_key="ci-failure:pr:777:sha:abc123",
+        )
+
+    async def test_unreadable_query_falls_open_and_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        # Never block every dispatch on an unreadable query: fall through to the
+        # existing age decision, loudly.
+        unreadable = MagicMock()
+        unreadable.execute = AsyncMock(
+            side_effect=OperationalError("SELECT runs", {}, Exception("database is locked")),
+        )
+        with caplog.at_level(logging.WARNING, logger="modulo.core.run_admission"):
+            in_flight = await has_in_flight_ci_failure_run(
+                unreadable,
+                pipeline_id=PIPELINE_ID,
+                coalesce_key="ci-failure:pr:777:sha:abc123",
+            )
+        assert in_flight is False
+        assert "ci_failure_coalesce.inflight_check_failed" in caplog.text
+
+    async def test_payload_without_head_sha_is_never_a_blocker(self, session: AsyncSession) -> None:
+        # A non-terminal run whose payload carries no headSha (a different
+        # trigger on the same pipeline, or the `force: true` opt-out) derives no
+        # key and must never suppress a CI-failure delivery.
+        self._seed(
+            session,
+            status="running",
+            created_at=self._ago(minutes=30),
+            payload={"prNumber": 777, "mapped": "no-sha"},
+        )
+        await session.commit()
+        assert not await has_in_flight_ci_failure_run(
+            session,
+            pipeline_id=PIPELINE_ID,
+            coalesce_key="ci-failure:pr:777:sha:abc123",
+        )
+
+    async def test_engine_stamped_key_matches_after_a_wholesale_payload_mapping(self, session: AsyncSession) -> None:
+        """The stored row's key survives a non-empty payload_mapping.
+
+        A non-empty ``payload_mapping`` REPLACES the payload wholesale, so the
+        stored payload has no ``prNumber`` / ``headSha``. Before the stamp the
+        in-flight leg re-derived from that mapped payload, got ``None`` and was
+        silently inert in exactly the deployments the fix targets. This drives
+        the REAL ``create_run`` (the storage seam) and then asks the predicate,
+        so it fails if the stamp is dropped.
+        """
+        session.add(Organisation(id=ORG_ID, name="org", slug=f"org-{ORG_ID}"))
+        session.add(Pipeline(id=PIPELINE_ID, organisation_id=ORG_ID, name="p", account_id=ORG_ID, visibility="org"))
+        await session.commit()
+
+        ci_key = "ci-failure:pr:777:sha:abc123"
+        run = await create_run(
+            session,
+            org_id=ORG_ID,
+            pipeline_id=PIPELINE_ID,
+            snapshot_id=SNAPSHOT_ID,
+            trigger_type="webhook",
+            # The mapped payload: prNumber/headSha were renamed away.
+            input_payload={"pr": 777, "sha": "abc123"},
+            ci_failure_coalesce_key=ci_key,
+        )
+        await session.commit()
+
+        stored = (await session.execute(select(Run.input_payload).where(Run.id == run.id))).scalar_one()
+        assert "prNumber" not in stored
+        assert stored[CI_FAILURE_COALESCE_KEY_FIELD] == ci_key
+        assert await has_in_flight_ci_failure_run(session, pipeline_id=PIPELINE_ID, coalesce_key=ci_key)
+
+    async def test_cancelled_query_propagates_not_falls_open(self) -> None:
+        # ``asyncio.CancelledError`` is a ``BaseException``, not an
+        # ``Exception``: a cancelled read must keep propagating so the task
+        # shutdown is honoured — the fail-open ``except Exception`` arm must
+        # never swallow it and never render a cancelled dispatch check as a
+        # clean "not in flight".
+        cancelled = MagicMock()
+        cancelled.execute = AsyncMock(side_effect=asyncio.CancelledError())
+        with pytest.raises(asyncio.CancelledError):
+            await has_in_flight_ci_failure_run(
+                cancelled,
+                pipeline_id=PIPELINE_ID,
+                coalesce_key="ci-failure:pr:777:sha:abc123",
+            )
+
+    # -- the gate (trigger engine seam) ------------------------------------
+
+    async def test_repeat_delivery_beyond_the_age_window_is_suppressed(self, session: AsyncSession) -> None:
+        """The regression: marker EXPIRED (age gate says "new"), run STILL RUNNING."""
+        self._seed(
+            session,
+            status="running",
+            created_at=self._ago(minutes=90),
+            payload=self._ci_payload(),
+        )
+        await session.commit()
+        engine = TriggerEngine()
+        age_gate = AsyncMock(return_value=True)  # marker absent/expired
+        with (
+            patch.object(TriggerEngine, "_try_insert_dedup", new=age_gate),
+            patch.object(engine, "_log_event", new=AsyncMock()) as log_event,
+            pytest.raises(CiFailureCoalescedError),
+        ):
+            await engine._coalesce_ci_failure(
+                session,
+                trigger=self._trigger(),
+                org_id=ORG_ID,
+                cfg={},
+                post_guardrail_payload=self._ci_payload(),
+                dedup_hash="c" * 64,
+                trigger_id=TRIGGER_ID,
+            )
+        # The age gate DID run (and returned "new") — so the suppression came
+        # from the in-flight leg, not from the window.
+        age_gate.assert_awaited_once()
+        # Audited exactly like a window suppression: same event shape, no run.
+        assert log_event.await_args.kwargs["result"] == "coalesced"
+        assert log_event.await_args.kwargs["error_detail"] == "ci_failure_coalesced:ci-failure:pr:777:sha:abc123"
+
+    async def test_terminal_run_does_not_suppress_a_repeat_delivery(self, session: AsyncSession) -> None:
+        """A finished run must not block the next delivery (the age gate decides)."""
+        self._seed(
+            session,
+            status="complete",
+            created_at=self._ago(minutes=90),
+            payload=self._ci_payload(),
+        )
+        await session.commit()
+        engine = TriggerEngine()
+        with (
+            patch.object(TriggerEngine, "_try_insert_dedup", new=AsyncMock(return_value=True)),
+            patch.object(engine, "_log_event", new=AsyncMock()) as log_event,
+        ):
+            await engine._coalesce_ci_failure(
+                session,
+                trigger=self._trigger(),
+                org_id=ORG_ID,
+                cfg={},
+                post_guardrail_payload=self._ci_payload(),
+                dedup_hash="d" * 64,
+                trigger_id=TRIGGER_ID,
+            )
+        log_event.assert_not_awaited()
 
 
 class TestCoalescePendingRun:

@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from modulo.api.routes.admin import BillingOverviewResponse, admin_billing_overview
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.license import LicenseData, LicenseValidation
+from tests.unit.api.mock_session import configure_rls_preamble
 
 
 def _license_data(tier: str = "team") -> LicenseData:
@@ -53,7 +54,12 @@ def _principal(org_id: uuid.UUID) -> TenantPrincipal:
 
 
 def _session() -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct double: ``set_rls_user_context`` derives the dialect via
+    # ``_ensure_active_transaction``, which reads ``in_transaction()`` and
+    # ``get_bind()`` SYNCHRONOUSLY. On a bare AsyncMock the first returns a
+    # never-awaited coroutine (truthy, so the transaction guard passes for the
+    # wrong reason); the second returns a coroutine that is awaited.
+    session = configure_rls_preamble(AsyncMock())
     session.begin = MagicMock(return_value=AsyncMock())
     result = MagicMock()
     result.scalar.return_value = None

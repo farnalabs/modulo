@@ -16,6 +16,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -53,11 +54,18 @@ def _make_view(**overrides: object) -> MagicMock:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # ``set_rls_org``/``set_rls_user_context`` call ``in_transaction()`` and
+    # ``get_bind()`` SYNCHRONOUSLY; a bare AsyncMock child returns a
+    # never-awaited coroutine on every request.
+    session = configure_rls_preamble(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # The permission gate reads ``result.scalar_one_or_none()`` — a SYNC Result
+    # method. An AsyncMock ``execute`` hands back an AsyncMock whose child calls
+    # are coroutines, orphaned on every request.
+    session.execute = AsyncMock(return_value=make_empty_execute_result())
     return session
 
 
@@ -380,6 +388,7 @@ class TestCancelledErrorPropagation:
 
     def _make_session(self) -> AsyncMock:
         session = AsyncMock()
+        configure_rls_preamble(session)
         session.execute = AsyncMock(side_effect=asyncio.CancelledError())
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)

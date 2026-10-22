@@ -39,6 +39,7 @@ from modulo.db.models.base import Base
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.organisation import Organisation
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _FERNET_KEY = Fernet.generate_key().decode()
 _VALID_32 = "a" * 32
@@ -97,7 +98,11 @@ def _make_connector(credentials_ciphertext: bytes = b"encrypted", tier: str = "n
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct double: the permission dependency's authz-enforce read
+    # calls ``result.scalar_one_or_none()`` (SYNC on a real Result) and the RLS
+    # preamble reads ``in_transaction()``/``get_bind()``/``add()`` synchronously;
+    # a bare AsyncMock turns each into a never-awaited coroutine.
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

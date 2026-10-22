@@ -192,6 +192,10 @@ def client(tmp_path: Path) -> Generator[TestClient, None, None]:
     ):
         yield TestClient(app)
 
+    # Dispose the per-test engine: an undisposed aiosqlite pool leaves its
+    # ``Connection`` objects to be finalised at interpreter shutdown, which
+    # pytest reports as a PytestUnraisableExceptionWarning.
+    asyncio.run(engine.dispose())
     app.dependency_overrides.clear()
 
 

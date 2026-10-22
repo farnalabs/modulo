@@ -59,54 +59,56 @@ def test_repo_family_records_detect_development_stage(
     assert stages[0].confidence == "high"
 
 
-def test_pull_requests_detect_code_review() -> None:
-    samples = [make_sample("pulls", [{"number": 1, "created_at": iso_days_ago(2)}])]
-    findings = infer(samples)
-    review = [f for f in findings if f.category == "stage" and "Code review" in f.finding]
-    assert len(review) == 1
-    assert "1 open PRs/MRs" in review[0].evidence
-
-
-def test_mrs_detect_code_review_stage() -> None:
-    samples = [make_sample("mrs", [{"title": "MR 1"}], connector_type=ConnectorType.GITLAB)]
-    findings = infer(samples)
-    review = [f for f in findings if f.category == "stage" and "Code review" in f.finding]
-    assert len(review) == 1
-    assert "1 open PRs/MRs" in review[0].evidence
-
-
-def test_stale_pr_bottleneck() -> None:
-    samples = [
-        make_sample(
+@pytest.mark.parametrize(
+    ("resource", "records", "connector_type"),
+    [
+        pytest.param(
             "pulls",
-            [
-                {"number": 1, "created_at": iso_days_ago(10)},
-                {"number": 2, "created_at": iso_days_ago(2)},
-            ],
-        )
-    ]
-    findings = infer(samples)
+            [{"number": 1, "created_at": iso_days_ago(2)}],
+            ConnectorType.GITHUB,
+            id="github-pulls",
+        ),
+        pytest.param(
+            "mrs",
+            [{"title": "MR 1"}],
+            ConnectorType.GITLAB,
+            id="gitlab-mrs",
+        ),
+    ],
+)
+def test_open_pull_requests_detect_code_review_stage(
+    resource: str,
+    records: list[dict],
+    connector_type: ConnectorType,
+) -> None:
+    """Both GitHub PRs and GitLab MRs count as one open code-review item."""
+    findings = infer([make_sample(resource, records, connector_type=connector_type)])
+    review = [f for f in findings if f.category == "stage" and "Code review" in f.finding]
+    assert len(review) == 1
+    assert "1 open PRs/MRs" in review[0].evidence
+
+
+@pytest.mark.parametrize(
+    ("ages_days", "expected_finding", "expected_stale_fraction", "expected_confidence"),
+    [
+        pytest.param([10, 2], "Potential review bottleneck", "1/2 open for >5 days", "medium", id="one-stale-pr"),
+        pytest.param([2, 0.5], "No stale PRs", "0/2 open for >5 days", "low", id="all-recent-prs"),
+    ],
+)
+def test_stale_pr_summary_reports_evidence_and_confidence(
+    ages_days: list[float],
+    expected_finding: str,
+    expected_stale_fraction: str,
+    expected_confidence: str,
+) -> None:
+    """The bottleneck finding carries the stale fraction and matches its confidence to the outcome."""
+    records = [{"number": index, "created_at": iso_days_ago(age)} for index, age in enumerate(ages_days, start=1)]
+    findings = infer([make_sample("pulls", records)])
     bottlenecks = [f for f in findings if f.category == "bottleneck"]
     assert len(bottlenecks) == 1
-    assert "Potential review bottleneck: 1 PRs/MRs open for >5 days without merge" in bottlenecks[0].finding
-    assert "1/2 open for >5 days" in bottlenecks[0].evidence
-
-
-def test_no_stale_prs_when_all_recent() -> None:
-    samples = [
-        make_sample(
-            "pulls",
-            [
-                {"number": 1, "created_at": iso_days_ago(2)},
-                {"number": 2, "created_at": iso_days_ago(0.5)},
-            ],
-        )
-    ]
-    findings = infer(samples)
-    no_stale = [f for f in findings if f.category == "bottleneck" and "No stale PRs" in f.finding]
-    assert len(no_stale) == 1
-    assert "0/2 open for >5 days" in no_stale[0].evidence
-    assert no_stale[0].confidence == "low"
+    assert expected_finding in bottlenecks[0].finding
+    assert expected_stale_fraction in bottlenecks[0].evidence
+    assert bottlenecks[0].confidence == expected_confidence
 
 
 _STALE_BOTTLENECK = "Potential review bottleneck"
@@ -325,8 +327,15 @@ def test_unknown_resource_samples_are_ignored() -> None:
         make_sample("repos", [{"name": "repo-a"}]),
     ]
     findings = infer(samples)
-    assert any(f.category == "stage" and "Development" in f.finding for f in findings)
-    assert "1 repository" in next(f for f in findings if f.category == "stage").evidence
+    development = [f for f in findings if f.category == "stage" and "Development" in f.finding]
+    assert len(development) == 1
+    assert "1 repository" in development[0].evidence
+
+
+def test_finding_rejects_unknown_confidence() -> None:
+    """A confidence outside high/medium/low must fail loudly rather than being stored."""
+    with pytest.raises(ValueError, match="confidence must be one of"):
+        Finding(category="stage", finding="Test finding", evidence="Some evidence", confidence="certain")
 
 
 def test_finding_defaults_and_optional_fields() -> None:

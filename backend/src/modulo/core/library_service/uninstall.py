@@ -196,74 +196,21 @@ async def uninstall_collection(
     if collection_id is not None and install.collection_id != collection_id:
         raise InstallNotFoundError(f"Install {install_id} does not belong to collection {collection_id}")
     entity_rows = await _load_entity_rows(session, install_id)
-
-    # Sort entities by uninstall order
-    sorted_entities = sorted(
-        entity_rows,
-        key=lambda e: (
-            _UNINSTALL_ORDER.index(e.entity_type) if e.entity_type in _UNINSTALL_ORDER else len(_UNINSTALL_ORDER)
-        ),
-    )
+    sorted_entities = sorted(entity_rows, key=_uninstall_sort_key)
 
     deleted: list[dict[str, str]] = []
     detached: list[dict[str, str]] = []
     blocked: list[dict[str, str]] = []
 
     for entity_row in sorted_entities:
-        # The underlying entity may have been removed out-of-band. Skip it:
-        # there is nothing to delete or detach, and reporting it as "detached"
-        # would be misleading. Its tracking row is kept as provenance — the
-        # install record is soft-deleted (not cascaded away) below.
-        if not await _entity_exists(
+        await _process_uninstall_entity(
             session,
-            entity_row.entity_type,
-            entity_row.entity_id,
-        ):
-            continue
-
-        is_unmodified = await _check_unmodified(
-            session,
-            entity_row.entity_type,
-            entity_row.entity_id,
-            install_id,
+            entity_row,
+            install_id=install_id,
+            deleted=deleted,
+            detached=detached,
+            blocked=blocked,
         )
-
-        if is_unmodified:
-            try:
-                async with session.begin_nested():
-                    await _delete_entity(session, entity_row.entity_type, entity_row.entity_id)
-                deleted.append(
-                    {
-                        "entity_type": entity_row.entity_type,
-                        "entity_id": str(entity_row.entity_id),
-                    }
-                )
-            except IntegrityError as exc:
-                from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
-
-                if is_policy_gate_decision_fk_error(exc):
-                    blocked.append(
-                        {
-                            "entity_type": entity_row.entity_type,
-                            "entity_id": str(entity_row.entity_id),
-                            "blocked_by": "policy_gate_decisions",
-                            "error": (
-                                f"Cannot delete {entity_row.entity_type} {entity_row.entity_id}: "
-                                "governance decision records present — "
-                                "archive or purge policy_gate_decisions first"
-                            ),
-                        }
-                    )
-                else:
-                    raise
-        else:
-            await _detach_entity(session, entity_row.entity_type, entity_row.entity_id)
-            detached.append(
-                {
-                    "entity_type": entity_row.entity_type,
-                    "entity_id": str(entity_row.entity_id),
-                }
-            )
 
     # Retire the CollectionInstall provenance row via SOFT delete — the row is
     # append-only history (its ``collection_install_entity`` children stay for
@@ -280,3 +227,83 @@ async def uninstall_collection(
         "detached": detached,
         "blocked": blocked,
     }
+
+
+def _uninstall_sort_key(entity_row: Any) -> int:
+    """Sort key placing entities in reverse topological uninstall order."""
+    if entity_row.entity_type in _UNINSTALL_ORDER:
+        return _UNINSTALL_ORDER.index(entity_row.entity_type)
+    return len(_UNINSTALL_ORDER)
+
+
+def _entity_ref(entity_row: Any) -> dict[str, str]:
+    """Build the report entry identifying a tracked entity."""
+    return {
+        "entity_type": entity_row.entity_type,
+        "entity_id": str(entity_row.entity_id),
+    }
+
+
+async def _process_uninstall_entity(
+    session: AsyncSession,
+    entity_row: Any,
+    *,
+    install_id: uuid.UUID,
+    deleted: list[dict[str, str]],
+    detached: list[dict[str, str]],
+    blocked: list[dict[str, str]],
+) -> None:
+    """Delete an unmodified entity, or detach a modified one, into the report."""
+    # The underlying entity may have been removed out-of-band. Skip it:
+    # there is nothing to delete or detach, and reporting it as "detached"
+    # would be misleading. Its tracking row is kept as provenance — the
+    # install record is soft-deleted (not cascaded away) below.
+    if not await _entity_exists(session, entity_row.entity_type, entity_row.entity_id):
+        return
+
+    if await _check_unmodified(session, entity_row.entity_type, entity_row.entity_id, install_id):
+        await _delete_unmodified_entity(session, entity_row, deleted=deleted, blocked=blocked)
+        return
+
+    await _detach_entity(session, entity_row.entity_type, entity_row.entity_id)
+    detached.append(_entity_ref(entity_row))
+
+
+async def _delete_unmodified_entity(
+    session: AsyncSession,
+    entity_row: Any,
+    *,
+    deleted: list[dict[str, str]],
+    blocked: list[dict[str, str]],
+) -> None:
+    """Delete one unmodified entity in a savepoint, recording the outcome."""
+    try:
+        async with session.begin_nested():
+            await _delete_entity(session, entity_row.entity_type, entity_row.entity_id)
+        deleted.append(_entity_ref(entity_row))
+    except IntegrityError as exc:
+        _record_integrity_block(exc, entity_row, blocked)
+
+
+def _record_integrity_block(
+    exc: IntegrityError,
+    entity_row: Any,
+    blocked: list[dict[str, str]],
+) -> None:
+    """Record a policy-gate-decision FK block, re-raising any other integrity error."""
+    from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+
+    if not is_policy_gate_decision_fk_error(exc):
+        raise
+    blocked.append(
+        {
+            "entity_type": entity_row.entity_type,
+            "entity_id": str(entity_row.entity_id),
+            "blocked_by": "policy_gate_decisions",
+            "error": (
+                f"Cannot delete {entity_row.entity_type} {entity_row.entity_id}: "
+                "governance decision records present — "
+                "archive or purge policy_gate_decisions first"
+            ),
+        }
+    )

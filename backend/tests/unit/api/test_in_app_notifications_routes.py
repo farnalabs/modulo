@@ -25,6 +25,7 @@ from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.db.crud.notifications import LinkedRunState
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -61,7 +62,10 @@ def _make_settings() -> Settings:
 
 
 def _make_session() -> AsyncMock:
-    session = AsyncMock()
+    # A bare ``AsyncMock`` returns an AsyncMock from ``execute()``, so the SYNC
+    # ``result.scalar_one_or_none()`` read in ``resolve_authz_enforce`` orphans
+    # a never-awaited coroutine on every request.
+    session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

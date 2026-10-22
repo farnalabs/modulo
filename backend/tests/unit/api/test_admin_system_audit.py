@@ -25,6 +25,7 @@ from modulo.api.routes.admin_system_audit import admin_list_system_audit_events
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 from tests.unit.api.plan_stubs import all_features
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -53,6 +54,7 @@ def _principal(*, system_admin: bool) -> AuthenticatedPrincipal:
 
 def _make_session() -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

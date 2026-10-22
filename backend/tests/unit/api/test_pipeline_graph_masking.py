@@ -33,6 +33,7 @@ from modulo.api.middleware.sensitive_mask import (
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -468,7 +469,11 @@ async def test_masked_read_to_mcp_graph_write_round_trip_preserves_stored_secret
     read_body = read_resp.json()
     assert read_body["nodes"][0]["env_vars"]["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
 
-    mock_session: Any = AsyncMock()
+    # Contract-correct children: the masked-echo resolution runs the RLS
+    # preamble (SYNC ``in_transaction()`` / ``get_bind()``) and the scoped
+    # secret read's ``set_config`` SELECT, whose SYNC result read would orphan
+    # a coroutine on a bare AsyncMock.
+    mock_session: Any = configure_mock_session(AsyncMock())
     session_cm = MagicMock()
     session_cm.__aenter__ = AsyncMock(return_value=mock_session)
     session_cm.__aexit__ = AsyncMock(return_value=False)
@@ -752,6 +757,7 @@ def _export_session_for(nodes: list[dict[str, Any]]) -> AsyncMock:
     edges_result = MagicMock()
     edges_result.scalars.return_value = []
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.execute = AsyncMock(side_effect=[pipeline_result, edges_result])
     return session
 
@@ -879,6 +885,7 @@ def _import_session(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     monkeypatch.setattr(wix, "get_existing_pipeline_names", AsyncMock(return_value=set()))
     monkeypatch.setattr(wix, "create_agent", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4())))
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.flush = AsyncMock()
     session.begin_nested = MagicMock(return_value=_AsyncNoopContext())
     return session

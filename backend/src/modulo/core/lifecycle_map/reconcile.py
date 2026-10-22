@@ -63,6 +63,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -408,25 +409,33 @@ def _refs_event_sink(event: str, attrs: dict[str, Any]) -> None:
     count = attrs.get("count")
     if event == REFS_EVENT_SHADOW_STRIP_HIT:
         record_refs_shadow_strip_hit(str(surface) if surface is not None else "unknown")
-    elif event == REFS_EVENT_ASSIGNED_SOURCE:
+        return
+    if event == REFS_EVENT_ASSIGNED_SOURCE:
         record_refs_by_source(
             str(source) if source is not None else "unknown",
-            int(count) if count is not None else 1,
+            _event_count(count),
         )
-    elif event == REFS_EVENT_UNKNOWN_SOURCE:
-        record_refs_unknown_source(int(count) if count is not None else 1)
-    elif event == REFS_EVENT_MALFORMED:
-        record_refs_malformed(int(count) if count is not None else 1)
-    elif event == _REFS_EVENT_CAP_DROPPED:
-        record_refs_cap_dropped(int(count) if count is not None else 1)
-    elif event == REFS_EVENT_AGENT_MINTED:
-        record_refs_agent_minted(int(count) if count is not None else 1)
-    elif event == REFS_EVENT_AGENT_MINT_SUPPRESSED:
-        record_refs_agent_mint_suppressed_by_flag(int(count) if count is not None else 1)
-    elif event == REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED:
-        record_refs_agent_mint_budget_exceeded(int(count) if count is not None else 1)
-    elif event == REFS_EVENT_DISMISSAL_SUPPRESSED:
-        record_refs_dismissal_suppressed(int(count) if count is not None else 1)
+        return
+    recorder = _COUNT_EVENT_RECORDERS.get(event)
+    if recorder is not None:
+        recorder(_event_count(count))
+
+
+def _event_count(count: Any) -> int:
+    """Coalesce an optional event count to at least one."""
+    return int(count) if count is not None else 1
+
+
+# Count-only ref events map 1:1 onto their FAR-794 counter recorder.
+_COUNT_EVENT_RECORDERS: dict[str, Callable[[int], None]] = {
+    REFS_EVENT_UNKNOWN_SOURCE: record_refs_unknown_source,
+    REFS_EVENT_MALFORMED: record_refs_malformed,
+    _REFS_EVENT_CAP_DROPPED: record_refs_cap_dropped,
+    REFS_EVENT_AGENT_MINTED: record_refs_agent_minted,
+    REFS_EVENT_AGENT_MINT_SUPPRESSED: record_refs_agent_mint_suppressed_by_flag,
+    REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED: record_refs_agent_mint_budget_exceeded,
+    REFS_EVENT_DISMISSAL_SUPPRESSED: record_refs_dismissal_suppressed,
+}
 
 
 def _init_once_register_refs_counter_hook() -> None:

@@ -172,6 +172,11 @@ describe('PipelineEditorView - spend circuit breaker', () => {
     const wrapper = await mountEditor()
 
     expect(wrapper.find(TRIPPED).text()).toContain('Circuit breaker tripped')
+    // The badge is a native <output> (implicit status role); an explicit
+    // role="status" must not be reintroduced (Web:S6819).
+    const badge = wrapper.find(TRIPPED).find('output')
+    expect(badge.exists()).toBe(true)
+    expect(badge.attributes('role')).toBeUndefined()
     await wrapper.find(RESET).trigger('click')
     await flushPromises()
 

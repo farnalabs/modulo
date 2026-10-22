@@ -41,7 +41,7 @@ from modulo.core.trigger_engine.slack_app_mention import (
 )
 from modulo.settings import Settings, get_settings
 from tests.unit.api.conftest import _ProvisionedSystemSettings, make_system_session_mock
-from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -143,6 +143,7 @@ def _make_trigger_session() -> AsyncMock:
     """Session whose trigger carries a signing_secret so route-level signature
     validation runs against the real secret."""
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -896,7 +897,9 @@ async def test_verify_slack_delivery_maps_inactive_trigger_to_404() -> None:
         pytest.raises(HTTPException) as exc_info,
     ):
         await _verify_slack_delivery(
-            session=AsyncMock(),
+            # See the encrypted-secret test: the real RLS preamble needs a
+            # contract-correct (sync ``in_transaction``/``get_bind``) session.
+            session=configure_rls_preamble(AsyncMock()),
             system_session=AsyncMock(),
             request=MagicMock(),
             trigger_id=_TRIGGER_ID,
@@ -929,7 +932,9 @@ async def test_verify_slack_delivery_missing_signing_secret_returns_401() -> Non
         pytest.raises(HTTPException) as exc_info,
     ):
         await _verify_slack_delivery(
-            session=AsyncMock(),
+            # See the encrypted-secret test: the real RLS preamble needs a
+            # contract-correct (sync ``in_transaction``/``get_bind``) session.
+            session=configure_rls_preamble(AsyncMock()),
             system_session=AsyncMock(),
             request=MagicMock(),
             trigger_id=_TRIGGER_ID,
@@ -1018,7 +1023,11 @@ async def test_verify_slack_delivery_encrypted_signing_secret_verifies() -> None
         patch("modulo.api.routes.slack.get_settings", return_value=_fake_settings_with_key(valid_key)),
     ):
         result_trigger, org_id = await _verify_slack_delivery(
-            session=AsyncMock(),
+            # ``decode_stored_secret_scoped`` re-applies the RLS org on THIS
+            # session via the REAL ``set_rls_org``, whose ``in_transaction()`` /
+            # ``get_bind()`` reads are SYNC — a bare AsyncMock orphans a
+            # never-awaited coroutine per call.
+            session=configure_rls_preamble(AsyncMock()),
             system_session=AsyncMock(),
             request=MagicMock(),
             trigger_id=_TRIGGER_ID,
@@ -1058,7 +1067,9 @@ async def test_verify_slack_delivery_undecryptable_token_fails_closed() -> None:
         pytest.raises(HTTPException) as exc_info,
     ):
         await _verify_slack_delivery(
-            session=AsyncMock(),
+            # See the encrypted-secret test: the real RLS preamble needs a
+            # contract-correct (sync ``in_transaction``/``get_bind``) session.
+            session=configure_rls_preamble(AsyncMock()),
             system_session=AsyncMock(),
             request=MagicMock(),
             trigger_id=_TRIGGER_ID,
@@ -1102,7 +1113,11 @@ async def test_verify_slack_delivery_legacy_plaintext_accepted_with_dated_warnin
         caplog.at_level(_logging.WARNING, logger="modulo.core.trigger_secrets"),
     ):
         result_trigger, org_id = await _verify_slack_delivery(
-            session=AsyncMock(),
+            # ``decode_stored_secret_scoped`` re-applies the RLS org on THIS
+            # session via the REAL ``set_rls_org``, whose ``in_transaction()`` /
+            # ``get_bind()`` reads are SYNC — a bare AsyncMock orphans a
+            # never-awaited coroutine per call.
+            session=configure_rls_preamble(AsyncMock()),
             system_session=AsyncMock(),
             request=MagicMock(),
             trigger_id=_TRIGGER_ID,

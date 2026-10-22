@@ -22,6 +22,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy.sql import Select
 
+from tests.unit.api.mock_session import configure_rls_preamble
+
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/test")
 os.environ.setdefault("SECRET_KEY", "a" * 32)
 os.environ.setdefault("FERNET_KEY", "a" * 32)
@@ -75,6 +77,7 @@ def make_system_session_mock(
             query.
     """
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

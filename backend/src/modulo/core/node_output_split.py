@@ -477,19 +477,40 @@ def _split_connector(envelope: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
     node Modulo executed itself.
     """
     a0 = _first_artifact(envelope)
-    telemetry: dict[str, Any] = {}
     if a0 is not None and a0.get("status") == "failed":
-        telemetry["status"] = "failed"
-        if "error" in a0:
-            telemetry["error"] = a0["error"]
-        _surface_artifact_fields(a0, telemetry)
-        failed_output = envelope.get("output")
-        if isinstance(failed_output, dict):
-            for key in DISPATCH_PROVENANCE_FIELDS:
-                if key in failed_output and key not in telemetry:
-                    telemetry[key] = failed_output[key]
-        _add_lossless(envelope, telemetry, {"artifacts", "output"})
-        return None, telemetry
+        return _split_failed_connector(envelope, a0)
+    return _split_completed_connector(envelope, a0)
+
+
+def _split_failed_connector(
+    envelope: dict[str, Any],
+    a0: dict[str, Any],
+) -> tuple[None, dict[str, Any]]:
+    """Split a FAILED connector envelope: return None, keep status/error."""
+    telemetry: dict[str, Any] = {"status": "failed"}
+    if "error" in a0:
+        telemetry["error"] = a0["error"]
+    _surface_artifact_fields(a0, telemetry)
+    _lift_dispatch_provenance(envelope.get("output"), telemetry)
+    _add_lossless(envelope, telemetry, {"artifacts", "output"})
+    return None, telemetry
+
+
+def _lift_dispatch_provenance(failed_output: Any, telemetry: dict[str, Any]) -> None:
+    """Lift dispatch provenance fields out of a failed envelope's ``output``."""
+    if not isinstance(failed_output, dict):
+        return
+    for key in DISPATCH_PROVENANCE_FIELDS:
+        if key in failed_output and key not in telemetry:
+            telemetry[key] = failed_output[key]
+
+
+def _split_completed_connector(
+    envelope: dict[str, Any],
+    a0: dict[str, Any] | None,
+) -> tuple[Any, dict[str, Any]]:
+    """Split a completed connector envelope: return ``artifacts[0].output``."""
+    telemetry: dict[str, Any] = {}
     return_value = a0.get("output") if a0 is not None else envelope.get("output")
     _surface_artifact_fields(a0, telemetry)
     excluded = {"artifacts"}

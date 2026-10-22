@@ -87,6 +87,7 @@ from modulo.db.models.run import (
     TERMINAL_STATUSES,
     Run,
 )
+from modulo.db.models.run_node_outputs import SENTINEL_NODE_ID_PREFIX
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
 from modulo.db.sqlstates import is_row_lock_timeout, is_statement_timeout
 from modulo.settings import (
@@ -474,14 +475,42 @@ _NO_PROGRESS_ERROR_DETAIL_PREFIX_FMT = "No node progress within the {age}m age b
 # the ORM predicate's parameterised leg cannot desynchronise (FAR-1649 qa
 # finding 7): there is one constant and one bind, not two spellings to pin
 # together.
+#
+# FAR-2052: the ``__final__`` leg means "a NODE finalised a store row", never
+# "any row is present". ``workspace_input_audit`` writes
+# ``(run_id, '__mwi_audit__', '__final__')`` BEFORE any node runs (the resolved
+# managed-workspace-input audit), so an unscoped leg read a run whose inputs had
+# merely been resolved as already-progressing: the zero-progress shape went
+# false, the nodeless repairs and the FAR-1999 node-deadline reaper skipped a
+# genuinely stuck run, and only the ~135-minute mid-graph age gate could collect
+# it. ``__run_meta__`` (run metadata) and ``__unknown__`` (unparseable-marker
+# evidence) are bookkeeping rows of the same kind.
+#
+# The reserved ``__``-prefixed sentinel namespace is defined ONCE in
+# :data:`modulo.db.models.run_node_outputs.SENTINEL_NODE_ID_PREFIX`; the graph
+# validator REJECTS any node id using that prefix (``DB_SENTINEL_NODE_ID_PREFIX``
+# in ``core/graph_validator``), so a genuine node id can never be excluded here.
+# ``substr`` rather than ``LIKE '__%'``: ``_`` is a LIKE wildcard, so that
+# pattern would match ANY two leading characters (the ``agent_return_legacy``
+# precedent). Assembled with str.replace from the shared constant (the
+# trigger_streak ``__STATUSES__`` precedent — S608 flags f-string/format SQL
+# construction), so the raw-SQL leg and :func:`_final_row_absent_expr`'s ORM leg
+# cannot drift.
+_NON_SENTINEL_FINAL_NODE_ID_SQL = (
+    ("substr(rno.node_id, 1, __SENTINEL_PREFIX_LENGTH__) <> '__SENTINEL_PREFIX__'")  # nosec B608 - static fragment, module constants only
+    .replace("__SENTINEL_PREFIX_LENGTH__", str(len(SENTINEL_NODE_ID_PREFIX)))
+    .replace("__SENTINEL_PREFIX__", SENTINEL_NODE_ID_PREFIX)
+)
+_NON_SENTINEL_FINAL_NODE_ID_TOKEN = "__NON_SENTINEL_FINAL_NODE_ID__"
 _ZERO_PROGRESS_SHAPE_SQL = (
-    "COALESCE(node_attempt_count,0) = 0 AND node_token_usage IS NULL "
+    "COALESCE(node_attempt_count,0) = 0 AND node_token_usage IS NULL "  # nosec B608 - static constant fragments, never caller data
     "AND NOT EXISTS (SELECT 1 FROM run_node_outputs rno "
-    "WHERE rno.run_id = runs.id AND rno.attempt_key = :final_key) "
+    "WHERE rno.run_id = runs.id AND rno.attempt_key = :final_key "
+    "AND __NON_SENTINEL_FINAL_NODE_ID__) "
     "AND NOT EXISTS (SELECT 1 FROM checkpoints cp "
     "WHERE cp.organisation_id = runs.organisation_id AND cp.thread_id = runs.langgraph_thread_id) "
     "AND (dispatch_phase IS NULL OR dispatch_phase <> :first_node_phase)"
-)
+).replace(_NON_SENTINEL_FINAL_NODE_ID_TOKEN, _NON_SENTINEL_FINAL_NODE_ID_SQL)
 _ZERO_PROGRESS_SHAPE_TOKEN = "__ZERO_PROGRESS_SHAPE__"
 
 # The two FAR-1329 statements. Assembled from static templates + str.replace
@@ -4682,14 +4711,29 @@ def _reconcile_capacity_marker_exclusion(capacity_redispatch_seconds: int) -> An
 
 def _final_row_absent_expr() -> Any:
     """The ONE correlated NOT-EXISTS expression for the run's far-583 store
-    finalisation marker: ``NOT EXISTS(run_node_output __final__ row)``.
+    finalisation marker: ``NOT EXISTS(run_node_output __final__ row for a real
+    node)``.
 
     Single definition shared by the nodeless zombie predicate (line-level
     WHERE leg) and the reconcile org SELECT (the ``outputs_absent`` labeled
     column — the label is applied at the call site) so the two correlated
     subqueries can never drift (qa iteration 1 rider).
+
+    FAR-2052: the ``__final__`` leg is scoped to GENUINE node rows. The reserved
+    ``__``-prefixed sentinel namespace is bookkeeping, not progress — notably
+    ``workspace_input_audit`` writes ``(run_id, '__mwi_audit__', '__final__')``
+    before any node runs, so an unscoped leg made a run whose managed workspace
+    inputs were merely resolved read as already-progressing (the zero-progress
+    shape then excluded it from the nodeless repairs and the FAR-1999
+    node-deadline reaper). The prefix comes from
+    :data:`modulo.db.models.run_node_outputs.SENTINEL_NODE_ID_PREFIX` — the
+    graph validator rejects it for real node ids — and ``substr`` is used rather
+    than ``LIKE '__%'`` because ``_`` is a LIKE wildcard that would match any
+    two leading characters. The raw-SQL twin is
+    :data:`_ZERO_PROGRESS_SHAPE_SQL`'s ``_NON_SENTINEL_FINAL_NODE_ID_SQL``.
     """
     from sqlalchemy import exists as sa_exists
+    from sqlalchemy import func as sa_func
     from sqlalchemy import select as sa_select
 
     from modulo.db.models.run import Run
@@ -4701,6 +4745,7 @@ def _final_row_absent_expr() -> Any:
         .where(
             RunNodeOutput.run_id == Run.id,
             RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
+            sa_func.substr(RunNodeOutput.node_id, 1, len(SENTINEL_NODE_ID_PREFIX)) != SENTINEL_NODE_ID_PREFIX,
         )
     )
 
@@ -4961,10 +5006,11 @@ def _is_zero_progress_shape_row(row: Any) -> bool:
     """Row-level mirror of :data:`_ZERO_PROGRESS_SHAPE_SQL` (FAR-1740).
 
     True when the reconcile flags say ZERO node progress: no token usage, no
-    finalised store row (``outputs_absent``), no LangGraph checkpoint
-    (``checkpoints_absent``) AND no durably-recorded first-node start. Fails
-    CLOSED (``False``) when a flag is absent, so a row source that forgets a
-    column is never treated as zero-progress.
+    finalised store row from a genuine node (``outputs_absent`` — bookkeeping
+    rows in the reserved ``__`` sentinel namespace do not count, FAR-2052), no
+    LangGraph checkpoint (``checkpoints_absent``) AND no durably-recorded
+    first-node start. Fails CLOSED (``False``) when a flag is absent, so a row
+    source that forgets a column is never treated as zero-progress.
 
     FAR-1914: the durable ``first_node_dispatched`` phase (FAR-1649) proves a
     node STARTED even though no super-step completed, so such a row is NOT
@@ -4982,11 +5028,13 @@ def _is_zero_progress_shape_row(row: Any) -> bool:
 def _has_zero_progress_evidence(row: Any) -> bool:
     """Do the reconcile flags prove ZERO node progress for *row*?
 
-    No token usage (written when the run finalises), no finalised store row
-    (``outputs_absent``), and no LangGraph checkpoint (``checkpoints_absent`` —
-    a checkpoint is written when a node COMPLETES a super-step). Fails CLOSED
-    (``False``) when a flag is absent, so a row source that forgets a column is
-    never treated as zero-progress.
+    No token usage (written when the run finalises), no finalised store row from
+    a genuine node (``outputs_absent`` — reserved ``__`` sentinel bookkeeping
+    rows such as the workspace-input audit are not node progress, FAR-2052), and
+    no LangGraph checkpoint (``checkpoints_absent`` — a checkpoint is written
+    when a node COMPLETES a super-step). Fails CLOSED (``False``) when a flag is
+    absent, so a row source that forgets a column is never treated as
+    zero-progress.
     """
     return (
         getattr(row, "node_token_usage", None) is None
@@ -5960,6 +6008,15 @@ async def _fail_node_deadline_run(
 # key would squat a real node id.
 # ---------------------------------------------------------------------------
 _TERMINAL_TRIAGE_ATTEMPT_KEY_PREFIX = "terminal-triage:"
+# A kill that RE-DISPATCHES the run is not a terminalisation, so its note gets
+# its own key: the read-merge-write merges by key and ``write_run_markers``
+# deletes every marker absent from the merged dict, so sharing
+# ``terminal-triage:<run>`` would make a later terminalisation overwrite the
+# earlier re-dispatch note (and vice versa) instead of preserving both
+# observations. Unparseable by the ``run:<uuid>:node:<id>:<suffix>`` grammar,
+# exactly like the terminal key, so the row lands on the ``__unknown__``
+# sentinel node id and cannot squat a real node id.
+_REDISPATCH_TRIAGE_ATTEMPT_KEY_PREFIX = "redispatch-triage:"
 # The reason is PASSED IN by each terminaliser and states only what that
 # terminaliser actually observed — never a cause inferred from a counter.
 # Whether node attempts were recorded is reported as DATA on the envelope
@@ -5970,6 +6027,14 @@ _TERMINAL_TRIAGE_ATTEMPT_KEY_PREFIX = "terminal-triage:"
 _TERMINAL_TRIAGE_REASON_AGE_BOUND = "no node progress within the age bound"
 _TERMINAL_TRIAGE_REASON_STRANDED_PENDING = "stranded pending run past the age bound"
 _TERMINAL_TRIAGE_REASON_NODE_DEADLINE = "node started, no terminal envelope before its deadline"
+# The node-deadline watchdog's RE-DISPATCH branch. It must never claim the run
+# was terminalised: the fenced pending-reset handed the still-live run to a
+# successor attempt. The attempt NUMBER is deliberately not interpolated here —
+# ``run_attempt_count`` is projected as DATA on the envelope, so the count stays
+# truthful even though the successor may be claimed after this note is written.
+_TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH = (
+    "node exceeded its deadline; dispatch killed and the run re-dispatched"
+)
 _TERMINAL_TRIAGE_REASON_WORKER_LOST = "executor lost (worker handoff)"
 # Bounded like ``node_runner._RAW_OUTPUT_MARKER_PERSIST_TIMEOUT``: the run-row
 # lock taken below is client-bounded so a contended row can never stall the
@@ -5982,6 +6047,15 @@ def _terminal_triage_attempt_key(run_id: uuid.UUID) -> str:
     return f"{_TERMINAL_TRIAGE_ATTEMPT_KEY_PREFIX}{run_id}"
 
 
+def _redispatch_triage_attempt_key(run_id: uuid.UUID) -> str:
+    """The synthetic, grammar-unparseable attempt key for a RE-DISPATCH note.
+
+    Distinct from :func:`_terminal_triage_attempt_key` so both observations of
+    the same run can coexist (see ``_REDISPATCH_TRIAGE_ATTEMPT_KEY_PREFIX``).
+    """
+    return f"{_REDISPATCH_TRIAGE_ATTEMPT_KEY_PREFIX}{run_id}"
+
+
 async def _write_terminal_triage_marker(
     session: AsyncSession,
     *,
@@ -5989,13 +6063,20 @@ async def _write_terminal_triage_marker(
     organisation_id: uuid.UUID,
     error_code: str,
     reason: str,
+    attempt_key: str,
+    summary: str,
 ) -> bool:
-    """The savepoint-scoped body of :func:`persist_terminal_triage_marker`.
+    """The savepoint-scoped body of the run-level triage writers.
 
     EVERY read and the write live inside ONE savepoint. A DB-level read
     failure (e.g. a serialisation error on the shared reconcile transaction)
     aborts only the savepoint, never the caller's transaction — so the
     terminalisations that transaction already wrote still commit.
+
+    ``attempt_key`` and ``summary`` are supplied by the public writer, which
+    owns the vocabulary for its own branch: a terminal key/summary must never
+    be reused for a re-dispatch note (it would overwrite the terminal entry and
+    claim the run had ended).
     """
     from modulo.db.crud.run_node_outputs import read_run_markers, write_run_markers
 
@@ -6016,18 +6097,17 @@ async def _write_terminal_triage_marker(
             )
             return False
         markers = dict(await read_run_markers(session, run_id=run_id, organisation_id=organisation_id) or {})
-        key = _terminal_triage_attempt_key(run_id)
-        markers[key] = {
+        markers[attempt_key] = {
             "_modulo_marker": True,
             "status": "failed",
-            "summary": f"Run terminalised by {error_code} — run-level triage evidence (FAR-1886)",
+            "summary": summary,
             "raw_output": "",
             "parse_error": "",
             "pr_url": None,
             "exit_code": -1,
             "stdout_length": 0,
             "stderr_length": 0,
-            "attempt_key": key,
+            "attempt_key": attempt_key,
             "node_id": None,
             "deadline_triage": True,
             "no_output_reason": reason,
@@ -6042,6 +6122,49 @@ async def _write_terminal_triage_marker(
     return True
 
 
+async def _persist_triage_marker_bounded(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    error_code: str,
+    reason: str,
+    attempt_key: str,
+    summary: str,
+    log_event: str,
+) -> bool:
+    """The bounded, best-effort wrapper shared by the run-level triage writers.
+
+    Best-effort by design: observability must never break the repair that
+    already committed. The read-merge-write runs in its OWN savepoint and is
+    bounded by ``_TERMINAL_TRIAGE_PERSIST_TIMEOUT``. Returns ``True`` when
+    the marker was written. ``log_event`` names the calling branch's failure
+    event so a re-dispatch miss is never logged as a terminalisation.
+    """
+    try:
+        return await asyncio.wait_for(
+            _write_terminal_triage_marker(
+                session,
+                run_id=run_id,
+                organisation_id=organisation_id,
+                error_code=error_code,
+                reason=reason,
+                attempt_key=attempt_key,
+                summary=summary,
+            ),
+            timeout=_TERMINAL_TRIAGE_PERSIST_TIMEOUT,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            log_event,
+            extra={"run_id": str(run_id), "error_code": error_code, "attempt_key": attempt_key},
+            exc_info=True,
+        )
+        return False
+
+
 async def persist_terminal_triage_marker(
     session: AsyncSession,
     *,
@@ -6054,9 +6177,10 @@ async def persist_terminal_triage_marker(
 
     Used by the age gate (``run.no_progress``), the stranded-pending backstop
     (``run.no_progress``), the FAR-1999 node-deadline reaper
-    (``node_deadline_exceeded``) and the ``harness.worker_lost`` terminal-fail
-    path — none of which has a prior sandbox attempt marker to project. The
-    marker carries the SAME ``deadline_triage``/``no_output_reason``/tail/stdout
+    (``node_deadline_exceeded``), the ``harness.worker_lost`` terminal-fail
+    path and the FAR-369 in-process node-deadline watchdog's TERMINAL branch —
+    none of which has a prior sandbox attempt marker to project. The marker
+    carries the SAME ``deadline_triage``/``no_output_reason``/tail/stdout
     envelope signature as the FAR-704 per-attempt marker, so the run-detail
     projection needs no special case.
 
@@ -6073,26 +6197,60 @@ async def persist_terminal_triage_marker(
     Must be called with a bound, matching RLS organisation context (the
     ``run_node_outputs`` write contract) inside an open transaction.
     """
-    try:
-        return await asyncio.wait_for(
-            _write_terminal_triage_marker(
-                session,
-                run_id=run_id,
-                organisation_id=organisation_id,
-                error_code=error_code,
-                reason=reason,
-            ),
-            timeout=_TERMINAL_TRIAGE_PERSIST_TIMEOUT,
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.warning(
-            "cron_helpers.terminal_triage_marker_failed",
-            extra={"run_id": str(run_id), "error_code": error_code},
-            exc_info=True,
-        )
-        return False
+    return await _persist_triage_marker_bounded(
+        session,
+        run_id=run_id,
+        organisation_id=organisation_id,
+        error_code=error_code,
+        reason=reason,
+        attempt_key=_terminal_triage_attempt_key(run_id),
+        summary=f"Run terminalised by {error_code} — run-level triage evidence (FAR-1886)",
+        log_event="cron_helpers.terminal_triage_marker_failed",
+    )
+
+
+async def persist_redispatch_triage_marker(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    error_code: str,
+    reason: str,
+) -> bool:
+    """Persist a run-level triage marker for a RE-DISPATCH (not an ending).
+
+    The counterpart of :func:`persist_terminal_triage_marker` for a watchdog
+    kill that handed the run back to a successor attempt. The run is STILL
+    ALIVE: the retry hook's fenced pending-reset NULLs ``error_code``, and
+    nothing in the run row says the watchdog fired — so without this note the
+    run page shows nothing at all (``runs.node_deadline_watchdog_fired_count``
+    is analytics-only and absent from the run response).
+
+    Deliberately a SEPARATE attempt key (``redispatch-triage:<run_id>``) from
+    the terminal writer's ``terminal-triage:<run_id>``: the read-merge-write
+    merges per key, so a later terminalisation of the same run cannot overwrite
+    this observation — and this write cannot overwrite a terminal one.
+
+    ``reason`` must state only what this path observed and must never claim the
+    run was terminalised (see
+    ``_TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH``). The attempt NUMBER
+    is not interpolated: ``run_attempt_count`` is projected as DATA on the
+    envelope, so the count stays truthful if the successor is claimed after
+    this note is written.
+
+    Same savepoint / run-row-lock / client-timeout / best-effort contract as
+    :func:`persist_terminal_triage_marker`; returns ``True`` when written.
+    """
+    return await _persist_triage_marker_bounded(
+        session,
+        run_id=run_id,
+        organisation_id=organisation_id,
+        error_code=error_code,
+        reason=reason,
+        attempt_key=_redispatch_triage_attempt_key(run_id),
+        summary=f"Run re-dispatched after {error_code} — run-level triage evidence (FAR-1886)",
+        log_event="cron_helpers.redispatch_triage_marker_failed",
+    )
 
 
 def _build_re_dispatch_predicate(
@@ -6821,6 +6979,29 @@ _RECONCILE_POST_ORGS_RESERVE_SECONDS = 15
 # Smallest org slice worth starting: below this the remaining budget goes to
 # record_facts / the compensating sweeps and the org is deferred, not cut.
 _RECONCILE_ORG_MIN_SECONDS = 1.0
+# FAR-1643: MAXIMUM headroom kept for the per-row loop to exit CLEANLY before
+# the caller's per-org slice cuts the whole transaction. The prod episodes
+# localise the cut to the row loop (last observed stage ``row_loop:13/15``),
+# so a new row is not started once less than the margin remains: the rows
+# already processed COMMIT and the remainder drains on the next 60s tick,
+# instead of the lot rolling back and raising a readiness alert.
+#
+# The margin is ADAPTIVE, not this constant verbatim — ``_attempt_reconcile_org``
+# applies ``min(this, max(0.25, org_slice_seconds / 2))``. A flat 5s margin
+# would be a DEAD ZONE on a short slice: ``dispatcher_reconcile_org_budget_seconds``
+# allows ``ge=1`` and the tick-tail clamp can yield a 1-5s slice, in which
+# "less than 5s of the slice remains" is true before the loop starts — every
+# row would be deferred forever while the tick reported ``ok``. A 1s slice
+# therefore gets a 0.5s margin (a row CAN start), a 30s slice keeps 5s, and
+# the 0.25s floor keeps the window non-degenerate. A single row that itself
+# overruns the margin is still caught by the CALLER's ``asyncio.timeout``
+# backstop — this is a clean-exit improvement, never a replacement for the
+# hard bound.
+_RECONCILE_ROW_DEFER_MARGIN_SECONDS = 5.0
+# FAR-1643: lower bound on the adaptive row-deferral margin. Keeps the window
+# non-degenerate on a very short slice while leaving a real chance to start
+# one row.
+_RECONCILE_ROW_DEFER_MARGIN_MIN_SECONDS = 0.25
 # FAR-1644 (M2): the per-org-cut discriminator is the slice ITSELF — see the
 # ``except TimeoutError`` arm in ``_dispatcher_reconcile_body``. It used to
 # subtract a 0.5s ``_RECONCILE_ORG_CUT_SLACK_SECONDS`` first, on the theory
@@ -8766,6 +8947,21 @@ async def _attempt_reconcile_org(
     terminalized_len_before = len(ctx.terminalized_run_ids)
     age_gate_len_before = len(ctx.age_gate_run_ids)
     org_pass_started = time.monotonic()
+    # FAR-1643: the same slice expressed as an absolute deadline so the row
+    # loop can stop STARTING rows with margin to spare. The ``asyncio.timeout``
+    # below stays armed as the hard backstop for a single row that overruns it.
+    org_deadline_monotonic = time.monotonic() + org_slice_seconds
+    # FAR-1643: the margin is ADAPTIVE to the slice, never the 5s cap verbatim.
+    # A flat 5s margin on a 1-5s slice (``dispatcher_reconcile_org_budget_seconds``
+    # allows ``ge=1``; the tick-tail clamp can also shrink the slice) would sit
+    # INSIDE the slice before the loop began, deferring every row forever while
+    # the tick reported ``ok`` — a dead zone that never starts a row. Half the
+    # slice (floored at 0.25s, capped at the constant) always leaves room for at
+    # least one row attempt: 1s -> 0.5s, 30s -> 5s.
+    row_defer_margin_seconds = min(
+        _RECONCILE_ROW_DEFER_MARGIN_SECONDS,
+        max(_RECONCILE_ROW_DEFER_MARGIN_MIN_SECONDS, org_slice_seconds / 2),
+    )
     try:
         async with asyncio.timeout(org_slice_seconds):
             return await _reconcile_org(
@@ -8785,6 +8981,9 @@ async def _attempt_reconcile_org(
                     row_budget=row_budget,
                 ),
                 stage=stage,
+                org_deadline_monotonic=org_deadline_monotonic,
+                row_defer_margin_seconds=row_defer_margin_seconds,
+                org_slice_seconds=org_slice_seconds,
             )
     except TimeoutError:
         # FAR-1525: the org's pass raised a builtin TimeoutError. The
@@ -9162,6 +9361,16 @@ def _dispatcher_summary() -> dict[str, Any]:
         "org_pool_timeouts": 0,
         "org_connect_timeouts": 0,
         "org_statement_timeouts": 0,
+        # FAR-1643 row-loop time deferral: rows NOT started because the org's
+        # slice was about to cut the row loop. DISTINCT from ``rows_deferred``
+        # (orgs/cap markers) so the readiness detail tells a time-deferral
+        # from a row-budget cap. The processed prefix commits and the
+        # remainder drains on the next 60s tick, so the tick stays ok.
+        "row_loop_time_deferred": 0,
+        # FAR-1643 instrumentation: the slowest single row the tick's row
+        # loops measured (ms). Lets the next deferral distinguish one
+        # pathological row from a uniformly slow loop.
+        "row_loop_slowest_row_ms": 0,
     }
     # Terminalizer counters (and their healthz aliases) derive from the
     # registry (FAR-720) — a new terminalizer registers once below without a
@@ -9184,6 +9393,9 @@ async def _reconcile_org(
     age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
     limits: _ReconcileOrgLimits = _ReconcileOrgLimits(),
     stage: dict[str, str] | None = None,
+    org_deadline_monotonic: float | None = None,
+    row_defer_margin_seconds: float = _RECONCILE_ROW_DEFER_MARGIN_SECONDS,
+    org_slice_seconds: float | None = None,
 ) -> int:
     """Run one org's reconcile pass (terminalizers + row select + per-row loop).
 
@@ -9207,12 +9419,50 @@ async def _reconcile_org(
     exercising one specific branch) means unbounded, exactly as before
     FAR-1425.
 
-    TIME: this pass is bounded by the CALLER (FAR-1525) — the reconcile body
-    wraps the call in ``asyncio.timeout`` at
+    TIME: this pass is still bounded by the CALLER (FAR-1525) — the reconcile
+    body wraps the call in ``asyncio.timeout`` at
     ``dispatcher_reconcile_org_budget_seconds``. On expiry the transaction
     above rolls back at its safe boundary and the caller unwinds the counts
     and terminalizer ids this pass recorded; direct callers (tests) remain
     unbounded, exactly as before.
+
+    ROW-LOOP DEFERRAL (FAR-1643): the prod ``dispatcher_reconcile`` alert
+    episodes LOCALISED the 30s org bound to time spent PROCESSING ROWS, not
+    waiting — ``last_error`` carried
+    ``during stage=reconcile_org:<id>/row_loop:13/15`` with
+    ``org_pool_timeouts`` / ``org_connect_timeouts`` /
+    ``org_statement_timeouts`` / ``org_lock_timeouts`` all at 0. That
+    localises the cut to the row loop; it does NOT measure a per-row cost
+    (the earlier "~2s/row" figure was inferred from one stage sample). The
+    per-row cost is now INSTRUMENTED per tick as
+    ``summary["row_loop_slowest_row_ms"]`` plus the ``slowest_row_seconds``
+    field on the deferral WARNING, so the next occurrence can tell a single
+    pathological row from a uniformly slow loop instead of assuming either.
+
+    A cut there discards the WHOLE org transaction, including every
+    terminalizer and row this pass had already repaired. When the caller
+    supplies ``org_deadline_monotonic`` (the absolute end of this org's
+    slice), the per-row loop therefore stops STARTING a new row once less
+    than ``row_defer_margin_seconds`` remains, counts the unprocessed rows in
+    ``summary["row_loop_time_deferred"]`` (DISTINCT from the FAR-1425 cap
+    marker ``rows_deferred``, so the readiness detail can tell time-deferral
+    from a row-budget cap) and RETURNS NORMALLY so the processed prefix
+    commits. The deferral is a WARNING, not an INFO line, because it is the
+    durable signal operators need; the tick itself stays ``ok`` BY DESIGN (a
+    partial pass that drains next tick is not a failure) — the distinct
+    counter plus the WARNING is the visibility, rather than the old
+    rollback-and-``status=timeout`` report. The remainder drains on the next
+    60s tick. The caller's ``asyncio.timeout`` is untouched and remains the
+    hard backstop for a single row that overruns the margin.
+
+    ``row_defer_margin_seconds`` is the ADAPTIVE margin the caller derived
+    from its slice (``min(5s, max(0.25s, slice / 2))``), never a flat 5s:
+    on a 1-5s slice a flat margin would sit inside the slice before the loop
+    began and defer every row forever. ``org_slice_seconds`` is carried only
+    so the deferral WARNING can report the slice alongside the margin.
+
+    ``org_deadline_monotonic=None`` (a direct caller such as a test) means
+    unbounded in exactly the pre-FAR-1643 sense.
 
     LOCK BOUND (FAR-1601): this transaction is the ONE boundary for every
     periodic-sweep write this module makes on the hot ``runs`` table, so the
@@ -9508,14 +9758,36 @@ async def _reconcile_org(
             )
             return enqueue_failed_redispatched
 
+        row_loop_started = time.monotonic()
+        rows_processed_this_pass = 0
+        slowest_row_seconds = 0.0
+        deferred_for_time = 0
         for row_index, row in enumerate(rows):
             # FAR-1425: defence in depth — the LIMIT already caps the fetch,
             # but the loop must never be able to exceed the budget the
             # inner-deadline message advertises (``max_rows=...``).
             if row_budget is not None and row_index >= row_budget:
                 break
+            # FAR-1643: stop STARTING rows with margin to spare, so the work
+            # already done commits instead of the caller's slice rolling the
+            # whole org transaction back (the prod row_loop:13/15 cut). The
+            # unprocessed rows are counted in a DISTINCT counter — never
+            # silently dropped, and never folded into ``rows_deferred`` (the
+            # FAR-1425 cap marker) so the readiness detail can tell a
+            # time-deferral from a row-budget cap. Checked AFTER the row budget
+            # so the FAR-1425 path above keeps its exact semantics, and BEFORE
+            # the stage mark so a deferral never looks like a row in flight.
+            if (
+                org_deadline_monotonic is not None
+                and time.monotonic() >= org_deadline_monotonic - row_defer_margin_seconds
+            ):
+                deferred_for_time = len(rows) - row_index
+                summary["row_loop_time_deferred"] = summary.get("row_loop_time_deferred", 0) + deferred_for_time
+                break
             _mark(f"row_loop:{row_index}/{len(rows)}")
             summary["scanned"] += 1
+            rows_processed_this_pass += 1
+            row_started = time.monotonic()
             # FAR-1740: derive the claimed-but-nodeless window PER-PIPELINE from
             # this row's longest node timeout (frozen snapshot graph preferred,
             # then the live node list, then the pipeline default). A row whose
@@ -9547,6 +9819,40 @@ async def _reconcile_org(
                 early_detect_minutes=row_early_detect_minutes,
                 floor_nodeless_window=tuning.nodeless_window,
                 stale_window=tuning.stale_window,
+            )
+            # FAR-1643 instrumentation: the per-row cost, so the NEXT deferral
+            # can tell a single pathological row from a uniformly slow loop
+            # instead of assuming a fixed per-row figure. Measured around the
+            # whole per-row body (window derivation + repair) because that is
+            # what actually consumes the slice.
+            slowest_row_seconds = max(slowest_row_seconds, time.monotonic() - row_started)
+        # FAR-1643: the tick-level slowest-row gauge (max across orgs — the
+        # summary is shared by every org pass), surfaced in the readiness
+        # detail as ``row_loop_slowest_row_ms``.
+        summary["row_loop_slowest_row_ms"] = max(
+            float(summary.get("row_loop_slowest_row_ms", 0) or 0.0),
+            round(slowest_row_seconds * 1000, 1),
+        )
+        if deferred_for_time:
+            # WARNING, not INFO: a sustained deferral is the durable signal an
+            # operator needs (the tick deliberately stays ``ok`` — a partial
+            # pass that drains next tick is not a failure). The distinct
+            # ``row_loop_time_deferred`` counter plus this line IS the
+            # visibility; there is no rollback and no ``status=timeout``.
+            _log.warning(
+                "dispatcher_reconcile.row_loop_time_deferred org=%s deferred_rows=%d "
+                "rows_processed=%d elapsed_seconds=%.1f slowest_row_seconds=%.2f "
+                "org_slice_seconds=%s row_defer_margin_seconds=%.2f "
+                "(row loop stopped STARTING rows before the per-org slice could cut the "
+                "whole transaction; the processed prefix commits and the remainder drains "
+                "on the next 60s tick)",
+                org_id,
+                deferred_for_time,
+                rows_processed_this_pass,
+                time.monotonic() - row_loop_started,
+                slowest_row_seconds,
+                f"{org_slice_seconds:.2f}" if org_slice_seconds is not None else "n/a",
+                row_defer_margin_seconds,
             )
         # FAR-1425: the fetch above returned one row beyond the budget when
         # (and only when) matching rows remain. Count the org as deferred so

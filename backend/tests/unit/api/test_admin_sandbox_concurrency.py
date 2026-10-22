@@ -11,6 +11,7 @@ from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from tests.unit.api.mock_session import configure_rls_preamble
 
 ORG_ID = uuid4()
 USER_ID = uuid4()
@@ -41,7 +42,7 @@ def mock_session(org_settings):
     result = MagicMock()
     result.scalar_one_or_none.return_value = org
 
-    session = AsyncMock()
+    session = configure_rls_preamble(AsyncMock())
     # Real SQLAlchemy sessions expose ``info`` as a dict; the route binds RLS
     # via ``set_rls_org`` which stores the org id here on generic backends, and
     # the FAR-1830/FAR-1832 patch helper reads it back through its strict

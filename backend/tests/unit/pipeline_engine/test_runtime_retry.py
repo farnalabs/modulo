@@ -307,3 +307,154 @@ async def test_no_compensated_marker_when_loop_exits_on_success() -> None:
     result = await wrapped({})
     assert result == {"ok": True}
     assert "_compensated" not in result
+
+
+# ---------------------------------------------------------------------------
+# Private retry-helper branches (edge source resolution / compensation)
+# ---------------------------------------------------------------------------
+
+
+def _no_retry_policy() -> NodeRetryPolicy:
+    return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
+
+
+def _ctx(**overrides: Any) -> Any:
+    from modulo.core.pipeline_engine import runtime_retry as rr
+
+    base: dict[str, Any] = {
+        "raw_fn": _async_noop,
+        "node_id": "n1",
+        "effective_policy": _no_retry_policy(),
+        "outgoing_edges": [],
+        "incoming_edges": [],
+        "raw_fn_resolver": None,
+        "idempotency_key": None,
+        "node_defs": {},
+        "node_fires_job": False,
+    }
+    base.update(overrides)
+    return rr._RetryContext(**base)
+
+
+async def _async_noop(_state: dict[str, Any]) -> dict[str, Any]:
+    return {"ok": True}
+
+
+async def test_execute_edge_retry_source_none_when_source_unresolved() -> None:
+    """A resolver that cannot resolve the source is a no-op (returns None)."""
+    from modulo.core.pipeline_engine import runtime_retry as rr
+
+    ctx = _ctx(raw_fn_resolver=lambda _sid: None)
+    result = await rr._execute_edge_retry_source(ctx, {"source_node_id": "src"}, {})
+    assert result is None
+
+
+async def test_execute_edge_retry_source_none_without_resolver() -> None:
+    """A wrapper with no resolver cannot re-execute a source at all."""
+    from modulo.core.pipeline_engine import runtime_retry as rr
+
+    result = await rr._execute_edge_retry_source(_ctx(), {"source_node_id": "src"}, {})
+    assert result is None
+
+
+async def test_execute_edge_retry_source_passes_merged_state_to_target() -> None:
+    """The source output (coerced to a dict) is merged into the target's state."""
+    from modulo.core.pipeline_engine import runtime_retry as rr
+
+    seen: dict[str, Any] = {}
+
+    async def _source(_state: dict[str, Any]) -> Any:
+        return ["not", "a", "dict"]
+
+    async def _target(state: dict[str, Any]) -> dict[str, Any]:
+        seen.update(state)
+        return {"ok": True}
+
+    ctx = _ctx(raw_fn=_target, raw_fn_resolver=lambda _sid: _source)
+    result = await rr._execute_edge_retry_source(ctx, {"source_node_id": "src"}, {"kept": True})
+    assert result == {"ok": True}
+    assert seen["kept"] is True
+    # _await_result coerces the non-dict source result to {"output": result}.
+    assert seen["output"] == ["not", "a", "dict"]
+
+
+async def test_execute_edge_retry_source_reraises_cancellation() -> None:
+    """A CancelledError from the source re-execution propagates unchanged."""
+    from modulo.core.pipeline_engine import runtime_retry as rr
+
+    async def _cancelled(_state: dict[str, Any]) -> dict[str, Any]:
+        raise asyncio.CancelledError
+
+    ctx = _ctx(raw_fn_resolver=lambda _sid: _cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        await rr._execute_edge_retry_source(ctx, {"source_node_id": "src"}, {})
+
+
+async def test_execute_edge_retry_source_breaks_on_non_retryable_failure() -> None:
+    """A non-retryable source failure exhausts the edge budget without retrying."""
+    from modulo.core.pipeline_engine import runtime_retry as rr
+
+    calls: list[int] = []
+
+    async def _failing(_state: dict[str, Any]) -> dict[str, Any]:
+        calls.append(1)
+        raise ValueError("non-retryable")
+
+    ctx = _ctx(
+        raw_fn_resolver=lambda _sid: _failing,
+        effective_policy=NodeRetryPolicy(max_attempts=3, backoff_seconds=0.0, events=frozenset()),
+    )
+    result = await rr._execute_edge_retry_source(ctx, {"source_node_id": "src"}, {})
+    assert result is None
+    assert len(calls) == 1
+
+
+async def test_edge_retry_skips_fail_closed_source(monkeypatch) -> None:
+    from modulo.core.pipeline_engine import runtime_retry as rr
+
+    monkeypatch.setattr(rr.rc, "edge_retry_reattempts_source", lambda _edge: True)
+    monkeypatch.setattr(rr, "_source_fail_closed", lambda _edge, _node_defs: True)
+    ctx = _ctx(incoming_edges=[{"source_node_id": "src"}], raw_fn_resolver=lambda _sid: _async_noop)
+    assert await rr._edge_retry(ctx, {}, "error") is None
+
+
+async def test_edge_retry_skips_without_resolver(monkeypatch) -> None:
+    from modulo.core.pipeline_engine import runtime_retry as rr
+
+    monkeypatch.setattr(rr.rc, "edge_retry_reattempts_source", lambda _edge: True)
+    monkeypatch.setattr(rr, "_source_fail_closed", lambda _edge, _node_defs: False)
+    ctx = _ctx(incoming_edges=[{"source_node_id": "src"}], raw_fn_resolver=None)
+    assert await rr._edge_retry(ctx, {}, "error") is None
+
+
+async def test_handle_compensation_false_when_target_unresolved(monkeypatch) -> None:
+    from modulo.core.pipeline_engine import runtime_retry as rr
+
+    monkeypatch.setattr(rr, "resolve_compensation_target", lambda _node_id, _edges: "comp")
+    ctx = _ctx(raw_fn_resolver=lambda _sid: None, outgoing_edges=[{"on_failure_target": "comp"}])
+    assert await rr._handle_compensation(ctx, {}, ValueError("boom")) is False
+
+
+async def test_handle_compensation_reraises_cancellation(monkeypatch) -> None:
+    from modulo.core.pipeline_engine import runtime_retry as rr
+
+    async def _cancelled(_state: dict[str, Any]) -> dict[str, Any]:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(rr, "resolve_compensation_target", lambda _node_id, _edges: "comp")
+    ctx = _ctx(raw_fn_resolver=lambda _sid: _cancelled, outgoing_edges=[{"on_failure_target": "comp"}])
+    with pytest.raises(asyncio.CancelledError):
+        await rr._handle_compensation(ctx, {}, ValueError("boom"))
+
+
+async def test_handle_compensation_reraises_never_retryable(monkeypatch) -> None:
+    """A never-retryable compensation failure is re-raised, not wrapped."""
+    from modulo.core.pipeline_engine import runtime_retry as rr
+
+    async def _never_retryable(_state: dict[str, Any]) -> dict[str, Any]:
+        raise RunCancelledError("cancelled")
+
+    monkeypatch.setattr(rr, "resolve_compensation_target", lambda _node_id, _edges: "comp")
+    ctx = _ctx(raw_fn_resolver=lambda _sid: _never_retryable, outgoing_edges=[{"on_failure_target": "comp"}])
+    with pytest.raises(RunCancelledError):
+        await rr._handle_compensation(ctx, {}, ValueError("boom"))

@@ -29,7 +29,7 @@ from modulo.api.routes.auth import router as auth_router
 from modulo.auth.passwords import hash_password
 from modulo.db.crud.token_family import consume_break_glass_credential
 from modulo.settings import Settings, get_settings
-from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _VALID_32 = "a" * 32
 _CSRF_VALUE = "bg-csrf"
@@ -120,6 +120,7 @@ def _set_env(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def mock_session() -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -282,6 +283,7 @@ async def test_consume_late_cas_error_fail_closed_401_not_503(mock_session: Asyn
 
 def _cas_session(rowcount: int | None) -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
+    configure_rls_preamble(session)
     result = MagicMock()
     result.rowcount = rowcount
     session.execute.return_value = result

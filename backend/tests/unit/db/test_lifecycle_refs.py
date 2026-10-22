@@ -13,6 +13,8 @@ Covers the canonical work-item ref rules owned by ``modulo.db.lifecycle_refs``:
     ``FAR 1`` / ``FAR-1`` / ``FAR:1`` project-key normalisation, plain-uppercase
     fallback;
   * ``canonicalise_ref`` per-kind dispatch and None/blank rejection;
+  * ``canonicalise_ref_pair`` — one raw ``{"kind", "ref"}`` mapping to its
+    canonical pair, with malformed input yielding None instead of raising;
   * ``validate_ref_entry`` — non-dict entry, missing/blank ref, invalid source
     and invalid status rejection, plus canonicalised output shape;
   * ``canonical_work_item_id`` — deterministic uuid5 derivation, so
@@ -29,6 +31,7 @@ from modulo.db.lifecycle_refs import (
     canonical_work_item_id,
     canonicalise_kind,
     canonicalise_ref,
+    canonicalise_ref_pair,
     validate_ref_entry,
 )
 
@@ -43,7 +46,14 @@ class TestReservedInputPayloadKeys:
         # trusted) at the create_run chokepoint.
         assert (
             frozenset(
-                {"_work_item_id", "_modulo.work_item", "_feedback_correction", "_coalesce_key", "_work_item_refs"}
+                {
+                    "_work_item_id",
+                    "_modulo.work_item",
+                    "_feedback_correction",
+                    "_coalesce_key",
+                    "_ci_failure_coalesce_key",
+                    "_work_item_refs",
+                }
             )
             == _RESERVED_INPUT_PAYLOAD_KEYS
         )
@@ -149,6 +159,49 @@ class TestCanonicaliseRefGeneric:
     def test_blank_ref_raises(self) -> None:
         with pytest.raises(ValueError, match="ref must not be empty"):
             canonicalise_ref("feature", "   ")
+
+
+class TestCanonicaliseRefPair:
+    """The raw ``{"kind", "ref"}`` mapping shape the self-report parser uses."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            (
+                {"kind": "GitHub Issue", "ref": "https://github.com/a/b/pull/5"},
+                ("github_issue", "a/b#5"),
+            ),
+            ({"kind": "linear", "ref": "far 12"}, ("linear", "FAR-12")),
+            ({"kind": "feature", "ref": " #7 "}, ("feature", "7")),
+        ],
+    )
+    def test_canonicalises_a_valid_pair(self, raw: dict[str, object], expected: tuple[str, str]) -> None:
+        assert canonicalise_ref_pair(raw) == expected
+
+    def test_ignores_keys_outside_the_pair(self) -> None:
+        """``source``/``status`` belong to the entry validator, not the pair."""
+        raw = {"kind": "github_pr", "ref": "#1", "source": "agent", "status": "done"}
+        assert canonicalise_ref_pair(raw) == ("github_pr", "1")
+
+    @pytest.mark.parametrize("raw", ["not-a-dict", ["kind", "ref"], None, 7])
+    def test_non_dict_is_none(self, raw: object) -> None:
+        assert canonicalise_ref_pair(raw) is None
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            pytest.param({"ref": "1"}, id="missing-kind"),
+            pytest.param({"kind": "feature"}, id="missing-ref"),
+            pytest.param({"kind": None, "ref": "1"}, id="null-kind"),
+            pytest.param({"kind": "feature", "ref": None}, id="null-ref"),
+            pytest.param({"kind": "feature", "ref": ""}, id="empty-ref"),
+            pytest.param({"kind": "feature", "ref": "   "}, id="blank-ref"),
+            pytest.param({"kind": "", "ref": "1"}, id="empty-kind"),
+            pytest.param({"kind": "   ", "ref": "1"}, id="blank-kind"),
+        ],
+    )
+    def test_missing_or_unusable_values_are_none(self, raw: dict[str, object]) -> None:
+        assert canonicalise_ref_pair(raw) is None
 
 
 class TestValidateRefEntry:

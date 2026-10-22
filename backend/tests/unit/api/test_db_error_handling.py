@@ -874,3 +874,17 @@ class TestReemitPrimedStream:
         with pytest.raises(SQLAlchemyError):
             await _collect()
         assert seen == ["1\n", "2\n"], "the completeness trailer must not be emitted on a truncated stream"
+
+
+class TestManualNodeOutputSchemaErrorMapping:
+    """The manual-node output-schema refusal keeps its own 422 detail."""
+
+    def test_maps_to_422_with_the_exception_detail(self) -> None:
+        from modulo.api.db_error_handling import _translate_wrapped_exception
+        from modulo.db.crud.pipeline import ManualNodeOutputSchemaError
+
+        exc = ManualNodeOutputSchemaError("node-123")
+        with pytest.raises(HTTPException) as excinfo:
+            _translate_wrapped_exception(exc, "test_prefix")
+        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+        assert "node-123" in excinfo.value.detail

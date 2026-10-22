@@ -31,11 +31,11 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from langgraph.errors import NodeCancelledError
-from sqlalchemy import bindparam, text
+from sqlalchemy import DateTime, bindparam, text
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, async_sessionmaker
 
@@ -1710,6 +1710,7 @@ async def _maybe_watchdog_retry(
     final_status: str,
     error_code: str,
     zero_node: bool = False,
+    veto_if_delivered: bool = False,
 ) -> bool:
     """Consult the shared watchdog-retry hook (FAR-690 / FAR-693); fail closed.
 
@@ -1720,16 +1721,29 @@ async def _maybe_watchdog_retry(
     prevent a run from reaching a terminal state.
 
     ``zero_node`` (FAR-1088) opts the caller into the zero-node failure
-    carve-out and is forwarded ONLY when set, so hooks without the parameter
-    keep the exact two-argument call shape. Only the zombie watchdog passes it
-    (zero nodes by construction — it fires pre-first-progress).
+    carve-out; passed ONLY by the zombie watchdog (zero nodes by construction —
+    it fires pre-first-progress).
+
+    ``veto_if_delivered`` (FAR-2053 / FAR-2071) opts the caller into the
+    delivery veto — refuse to re-dispatch a run whose markers already record a
+    delivery. Passed by BOTH in-process watchdog call sites: the zombie/stall
+    path (FAR-2053) and the FAR-369 node-deadline path (FAR-2071). Each one's
+    kill can be reached by a re-dispatched attempt that delivered on a PRIOR
+    attempt — the markers survive the fenced pending-reset — and neither
+    re-dispatch has any other delivery guard.
+
+    Both flags are forwarded ONLY when set, so hooks without the parameters
+    keep the exact two-argument call shape.
     """
     if retry_hook is None:
         return False
+    forwarding: dict[str, bool] = {}
+    if zero_node:
+        forwarding["zero_node"] = True
+    if veto_if_delivered:
+        forwarding["veto_if_delivered"] = True
     try:
-        if zero_node:
-            return bool(await retry_hook(final_status, error_code, zero_node=True))
-        return bool(await retry_hook(final_status, error_code))
+        return bool(await retry_hook(final_status, error_code, **forwarding))
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -1779,6 +1793,16 @@ async def zombie_watchdog(
     consult additionally opts into the zero-node failure carve-out — a
     ``failure``-covered policy re-dispatches a zero-node death here exactly as
     the cron path does (see the ``zero_node=True`` call below).
+
+    FAR-2053: the consult also opts into the DELIVERY VETO
+    (``veto_if_delivered=True``). A run that delivered on an EARLIER attempt
+    keeps its ``delivery_done`` markers across the pending-reset, so the
+    renewed pre-node stall of a delivered run is reachable here and nowhere
+    else; re-dispatching it would re-execute the graph from the start and risk
+    a second delivery. When a marker records ``delivery_done`` the hook
+    refuses, and this watchdog terminal-fails the run with
+    ``executor_stalled`` exactly as it would without policy coverage (a probe
+    read failure vetoes too — fail closed).
 
     FAR-893: *dispatch_tracker* (optional) reports the executor's progress
     through the claim→first-node-dispatch phases.  When the grace period
@@ -1845,6 +1869,12 @@ async def zombie_watchdog(
         final_status="stalled",
         error_code=EXECUTOR_STALLED_ERROR_CODE,
         zero_node=True,
+        # FAR-2053: a run re-dispatched after an earlier attempt DELIVERED
+        # (its marker rows carry ``delivery_done``) must not be re-run from the
+        # start — the side effect already happened. That prior delivery is only
+        # visible here, on a renewed pre-node stall, so this is the path that
+        # has to read it.
+        veto_if_delivered=True,
     ):
         return
     await fail_run_terminal(
@@ -2045,6 +2075,101 @@ async def _record_derived_deadline_cost(
         )
 
 
+async def _write_node_deadline_triage_marker(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    redispatched: bool,
+) -> None:
+    """The RLS-scoped write body of :func:`_persist_node_deadline_triage`."""
+    from modulo.core.cron_helpers import (
+        _TERMINAL_TRIAGE_REASON_NODE_DEADLINE,
+        _TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH,
+        persist_redispatch_triage_marker,
+        persist_terminal_triage_marker,
+    )
+
+    factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+    run_uuid = uuid.UUID(run_id)
+    org_uuid = uuid.UUID(org_id)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_uuid)
+        if redispatched:
+            await persist_redispatch_triage_marker(
+                session,
+                run_id=run_uuid,
+                organisation_id=org_uuid,
+                error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+                # States only what this path observed. The run is still alive,
+                # so the note must never claim it was terminalised.
+                reason=_TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH,
+            )
+        else:
+            await persist_terminal_triage_marker(
+                session,
+                run_id=run_uuid,
+                organisation_id=org_uuid,
+                error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+                # The SAME reason (and the same synthetic key) the FAR-1999
+                # durable reaper writes, so a run reaped by either path is
+                # explained identically on the run page.
+                reason=_TERMINAL_TRIAGE_REASON_NODE_DEADLINE,
+            )
+
+
+async def _persist_node_deadline_triage(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    redispatched: bool,
+) -> None:
+    """Best-effort run-page triage marker for a node-deadline watchdog kill.
+
+    Both FAR-369 outcomes previously left the run page with nothing:
+
+    * TERMINAL (``redispatched=False``) — the kill terminal-fails with
+      ``node_deadline_exceeded``, but ``fail_run_terminal`` persists a
+      run-level marker only for ``harness.worker_lost``, and the sandbox
+      cancellation handler's per-attempt marker is not guaranteed (the node may
+      never have produced an envelope, and the process may die before the
+      marker lands). ``deadline_triage`` could therefore be ``[]`` for exactly
+      the failure that surface exists to explain.
+    * RE-DISPATCH (``redispatched=True``) — the kill returns early and the retry
+      hook's fenced pending-reset NULLs ``error_code``; the only durable
+      fingerprint is ``runs.node_deadline_watchdog_fired_count``, which is
+      analytics-only and absent from the run response.
+
+    The terminal branch writes the SAME marker the FAR-1999 reaper writes; the
+    re-dispatch branch writes a sibling marker under a DISTINCT attempt key
+    whose prose does not claim terminalisation (see
+    ``cron_helpers.persist_redispatch_triage_marker``).
+
+    Best-effort by design: the terminal write / re-dispatch it describes has
+    already committed, so a marker failure must never surface — it is logged
+    and swallowed, bounded by ``_TERMINAL_TRIAGE_PERSIST_TIMEOUT`` (the status
+    write always wins). ``asyncio.CancelledError`` is re-raised: worker
+    shutdown is not ours to swallow.
+    """
+    from modulo.core.cron_helpers import _TERMINAL_TRIAGE_PERSIST_TIMEOUT
+
+    try:
+        await asyncio.wait_for(
+            _write_node_deadline_triage_marker(aeng, run_id, org_id, redispatched=redispatched),
+            timeout=_TERMINAL_TRIAGE_PERSIST_TIMEOUT,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "pipeline_execution.node_deadline_triage_failed run=%s redispatched=%s",
+            run_id,
+            redispatched,
+            exc_info=True,
+        )
+
+
 async def _salvage_cancelled_run_cost(aengine: AsyncEngine, run_id: str, org_id: str) -> None:
     """Attribute a settled CANCELLED run's marker-provable spend (FAR-1914 C2).
 
@@ -2143,6 +2268,22 @@ async def _fail_overdue_node(
     analytics whether it re-dispatches or terminal-fails, and the marker
     survives the re-dispatch (neither the claim nor the pending-reset touches
     the column).
+
+    Each branch then writes the run-page evidence for its own outcome
+    (``_persist_node_deadline_triage``): the terminal branch the same run-level
+    triage marker the FAR-1999 reaper writes, and the re-dispatch branch a
+    sibling marker whose prose says the run was re-dispatched, never that it
+    was terminalised. Both are best-effort — a marker failure is logged and
+    swallowed so it can never delay or undo the outcome it describes.
+
+    FAR-2071: the consult opts into the FAR-2053 DELIVERY VETO
+    (``veto_if_delivered=True``), exactly like the stall path. A run that
+    delivered on an EARLIER attempt keeps its ``delivery_done`` markers across
+    the fenced pending-reset, so a node-deadline kill on a later attempt is
+    reachable with the side effect already recorded. When a marker records
+    ``delivery_done`` the hook refuses the re-dispatch and this path
+    terminal-fails the run with ``node_deadline_exceeded`` exactly as it does
+    without policy coverage (a probe read failure vetoes too — fail closed).
     """
     exceeded = [nid for nid, (dl, _to) in node_deadlines.items() if dl <= time.monotonic()]
     exceeded.sort(key=lambda nid: node_deadlines[nid][0])
@@ -2167,8 +2308,25 @@ async def _fail_overdue_node(
     # before either outcome runs, so the fact writer always sees it.
     await _record_node_deadline_watchdog_firing(aeng, run_id, org_id)
     if await _maybe_watchdog_retry(
-        retry_hook, run_id, final_status="failed", error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE
+        retry_hook,
+        run_id,
+        final_status="failed",
+        error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+        # FAR-2071: the same delivery veto the stall path applies. The run's
+        # ``delivery_done`` markers survive the fenced pending-reset, so a run
+        # that delivered on an EARLIER attempt and then blows a node deadline
+        # on a later one is reachable here; re-dispatching it would re-execute
+        # the graph from the start and risk repeating the side effect. The
+        # veto only REFUSES a re-dispatch — the run then terminal-fails with
+        # ``node_deadline_exceeded`` exactly as it does without policy coverage.
+        veto_if_delivered=True,
     ):
+        # The retry hook's fenced pending-reset nulls ``error_code`` and the run
+        # is now owned by a successor attempt, so the run page has no trace of
+        # this kill. Persist the re-dispatch note BEFORE returning (best-effort:
+        # the re-dispatch already committed and must never be delayed or
+        # undone by an observability write).
+        await _persist_node_deadline_triage(aeng, run_id, org_id, redispatched=True)
         return
     # FAR-1914 B2: on the TERMINAL branch only, give the cancelled executor a
     # SHORT BOUNDED window to run its cancellation cleanup before the run is
@@ -2194,6 +2352,13 @@ async def _fail_overdue_node(
         error_detail=error_detail,
     )
     if terminal_written:
+        # A terminal deadline kill writes no run-level triage marker of its own
+        # (``fail_run_terminal`` persists one for ``harness.worker_lost`` only)
+        # and the sandbox cancel handler's per-attempt marker is not guaranteed,
+        # so write the entry the FAR-1999 reaper writes. Triage first: the run
+        # page's explanation should land even if the (slower) cost booking
+        # below fails.
+        await _persist_node_deadline_triage(aeng, run_id, org_id, redispatched=False)
         # FAR-1993: the run is now terminally failed but the raw writer recorded
         # no cost. Attribute the node's configured deadline as DERIVED sandbox
         # spend (the sandbox really did run for approximately that long — this
@@ -2482,6 +2647,12 @@ async def run_executor_with_watchdog(
     # re-claim a pending run — see watchdog_retry). The hook fails CLOSED to
     # the terminal fail, so this can never prevent a run from reaching a
     # terminal state.
+    #
+    # FAR-2053 / FAR-2071: ONE hook, two call sites with different opt-ins —
+    # the zombie watchdog passes ``zero_node=True`` + ``veto_if_delivered=True``,
+    # the node-deadline watchdog passes ``veto_if_delivered=True`` only (nodes
+    # may have executed there, so the zero-node failure carve-out does not
+    # apply, but a prior delivery still forbids re-executing the graph).
     watchdog_retry_hook: Callable[[str, str], Awaitable[Any]] | None = None
     watchdog_retry_outcome: Any = None
     if _watchdog_retry_enabled_for_job(job):
@@ -3065,6 +3236,76 @@ async def _re_dispatch_capacity_blocked(run_id: str, org_id: str) -> str:
         return "failed"
 
 
+# 2026-10-22 leak: a ``running`` run with NO dispatcher identity is invisible to
+# every liveness arm, and once a node has STARTED nothing ever reclaims it.
+#
+# The observed shape (a deploy restarted the app+worker while ten runs were in
+# flight): ``status='running'``, ``dispatcher IS NULL``, ``dispatched_at IS
+# NULL``, ``dispatch_phase='first_node_dispatched'``, ``claim_count=2``,
+# ``nodes=[]``. Five sibling runs were terminal-failed promptly by the graceful
+# shutdown handoff (``worker_handoff``); these six were not, and stayed
+# ``running`` for 70+ minutes holding every concurrency slot until a human
+# cancelled them.
+#
+# Why no existing arm collected that shape (each verified by reading its WHERE):
+#   * this sweep's legacy ``worker_lost`` arm requires ``claim_count >= 5`` AND
+#     ``heartbeat_at < now() - window`` — the row has claim_count 2 and a NULL
+#     heartbeat (``NULL < ...`` is never true, so a NULL heartbeat is invisible);
+#   * ``run_admission._RECONCILE_RUNS_SQL`` deliberately EXCLUDES a node-started
+#     row from its retry-reset arm (FAR-1649: re-dispatching re-executes the
+#     started node) and only terminal-fails it once ``claim_count`` exceeds the
+#     retry budget — which never happens, because the exclusion means the row is
+#     never re-claimed, so its claim_count never grows;
+#   * ``run_admission._REAP_DEAD_HEARTBEAT_NODE_STARTED_SQL`` (FAR-2005), the
+#     SAQ zero-progress terminaliser and every ``dispatcher_reconcile`` RUNNING
+#     leg are scoped ``dispatcher='saq'``;
+#   * the B5 claim-cap arm needs ``claim_count >= SAQ_RUN_CLAIM_CAP`` (20).
+# A NULL ``dispatcher`` is a REACHABLE running state, not a corrupt one: dispatch
+# stamps it in a separate best-effort write AFTER the enqueue
+# (``dispatch._record_saq_job``), and a 55P03 expiry there deliberately leaves the
+# run ``dispatcher IS NULL`` for an already-enqueued job; a re-claim of a reset
+# row (heartbeat-stale reset / worker handoff, both of which clear ``dispatcher``)
+# likewise runs with no dispatcher identity.
+#
+# The fix therefore lives HERE, in the arm whose window is already the non-SAQ
+# one: a node-started run with no SAQ dispatcher identity and a dead heartbeat is
+# terminal-failed ``harness.worker_lost`` — the truthful code for "the executor is
+# gone" (the same code the shutdown handoff stamps), never a re-dispatch
+# (FAR-1649). It reuses this sweep's existing terminalisation path, so journeys,
+# the daily fact and the audit record are written exactly as for every other arm.
+#
+# Grace: the arm's OWN ``wl_window`` (``SAQ_WORKER_LOST_WINDOW``, 600s = twenty
+# missed 30s heartbeats). The FAR-2005 300s bound is deliberately NOT reused:
+# that bound's safety argument is explicitly scoped to ``dispatcher='saq'`` rows
+# whose heartbeat contract is known, whereas this class carries no dispatcher
+# identity — so the wider, already-established worker-lost window is the honest
+# one. Both timestamps are BOUND datetimes (not ``now()`` arithmetic) so the
+# predicate is executable under the in-memory SQLite fixture — the same technique
+# ``run_admission._REAP_DEAD_HEARTBEAT_NODE_STARTED_SQL`` uses.
+_ORPHANED_RUN_DETAIL = (
+    "Worker lost: this node-started run carries no SAQ dispatcher identity (so the "
+    "dispatcher-scoped recovery arms cannot see it) and its executor stopped "
+    "heartbeating past the worker-lost window; run terminal-failed without "
+    "re-dispatch (a started node may already have executed side effects)."
+)
+
+_SWEEP_ORPHANED_RUNS_SQL = text(
+    "UPDATE runs SET status = 'failed', error_code = 'harness.worker_lost', "
+    "error_detail = :detail, completed_at = :completed_at "
+    "WHERE status = 'running' "
+    "AND organisation_id = :oid "
+    "AND cancellation_requested = false "
+    "AND guardrail_override_resume_pending = false "
+    "AND (dispatcher IS NULL OR dispatcher != 'saq') "
+    "AND dispatch_phase = :first_node_phase "
+    "AND COALESCE(heartbeat_at, started_at, created_at) < :orphan_cutoff "
+    "RETURNING id"
+).bindparams(
+    bindparam("orphan_cutoff", type_=DateTime(timezone=True)),
+    bindparam("completed_at", type_=DateTime(timezone=True)),
+)
+
+
 async def _sweep_org_stale_runs(
     conn: Any,
     *,
@@ -3074,6 +3315,7 @@ async def _sweep_org_stale_runs(
     stranded_rows: list[Any],
     terminalised_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
     queue_expired_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    orphaned_run_ids: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
 ) -> tuple[int, int, int]:
     """Run one org's stale-run UPDATE set; return (never, queue_expired, lost) counts.
 
@@ -3082,8 +3324,15 @@ async def _sweep_org_stale_runs(
     can post-process them once the transaction commits. Extracted from
     :func:`stale_run_recovery_sweep` to keep that function's control flow shallow.
 
+    ``orphaned_run_ids`` is an OPTIONAL collector: the node-started / no-SAQ-
+    dispatcher orphans terminalised by :data:`_SWEEP_ORPHANED_RUNS_SQL` are
+    appended to ``terminalised_run_ids`` unconditionally (so they get the same
+    journeys + daily fact + audit advance as every other arm); the caller that
+    wants to report them under their own counter also passes a list here. A
+    caller that does not care about the split still gets the terminalisation.
+
     FAR-1601 (row-lock bound, 55P03 contract): the bound is issued FIRST in
-    the org transaction, so every one of the four ``UPDATE runs`` branches
+    the org transaction, so every one of the five ``UPDATE runs`` branches
     below waits at most ``mutation_row_lock_timeout_ms`` for a contended row
     instead of parking the sweep (and its transaction's row locks) unbounded.
     A 55P03 PROPAGATES out of this helper and out of
@@ -3098,7 +3347,7 @@ async def _sweep_org_stale_runs(
     tick re-runs the same UPDATE set from scratch.
     """
     # FAR-1601: bound FIRST — before the RLS set_config and before any of the
-    # four UPDATEs take their row locks.
+    # five UPDATEs take their row locks.
     await _bound_hot_runs_row_lock(conn)
     await conn.execute(
         text(_SQL_SET_ORG_ID),
@@ -3217,6 +3466,28 @@ async def _sweep_org_stale_runs(
     )
     lost_count = lost_result.rowcount or 0
     terminalised_run_ids.extend((row[0], org_id) for row in lost_result.all())
+
+    # 2026-10-22 leak (see :data:`_SWEEP_ORPHANED_RUNS_SQL`): a node-started run
+    # with no SAQ dispatcher identity is out of every other arm's scope, so this
+    # arm is its ONLY terminaliser. Runs AFTER the legacy worker_lost branch: the
+    # legacy arm's stricter shape (claim_count >= 5, non-NULL heartbeat) keeps its
+    # own code, and the two can never double-write the same row (this statement
+    # re-checks ``status = 'running'``).
+    orphan_now = datetime.now(UTC)
+    orphaned_result = await conn.execute(
+        _SWEEP_ORPHANED_RUNS_SQL,
+        {
+            "oid": str(org_id),
+            "first_node_phase": PHASE_FIRST_NODE_DISPATCHED,
+            "orphan_cutoff": orphan_now - timedelta(seconds=wl_window),
+            "completed_at": orphan_now,
+            "detail": _ORPHANED_RUN_DETAIL,
+        },
+    )
+    orphaned_rows = orphaned_result.all()
+    terminalised_run_ids.extend((row[0], org_id) for row in orphaned_rows)
+    if orphaned_run_ids is not None:
+        orphaned_run_ids.extend((row[0], org_id) for row in orphaned_rows)
     return never_count, queue_expired_count, lost_count
 
 
@@ -3443,6 +3714,16 @@ async def stale_run_recovery_sweep(
       rows (their own TTL).
     - Running runs with a heartbeat older than the worker-lost window and
       5+ claims are marked ``failed`` with ``worker_lost``.
+    - Node-STARTED running runs that carry NO SAQ dispatcher identity
+      (``dispatcher IS NULL`` or a foreign value) whose liveness reference
+      (``COALESCE(heartbeat_at, started_at, created_at)``) is older than the
+      same worker-lost window are marked ``failed`` with ``harness.worker_lost``
+      (:data:`_SWEEP_ORPHANED_RUNS_SQL`). This is the ONLY arm that can reclaim
+      that shape — the reconcile retry-reset arm excludes node-started rows
+      (FAR-1649) and every dispatcher-scoped arm requires ``dispatcher='saq'`` —
+      so without it such a run stays ``running`` forever, holding a concurrency
+      slot. Counted separately as ``worker_orphaned_swept``; terminalised
+      without re-dispatch (a started node may already have run).
     - FAR-1715: running ``dispatcher='saq'`` runs with ZERO node progress
       whose ``started_at`` is older than the shared zero-progress age bound
       (Settings ``saq_zero_progress_max_age_minutes``, ~135m at the default)
@@ -3452,7 +3733,7 @@ async def stale_run_recovery_sweep(
       (:func:`_sweep_org_saq_zero_progress_runs`). The ``status='running'``
       guard makes double-firing with the reconcile path a no-op.
     - Every run terminalised by the sweep (never_dispatched / queue.expired /
-      worker_lost / saq zero-progress) has its journeys advanced from its
+      worker_lost / worker_orphaned / saq zero-progress) has its journeys advanced from its
       CREATE-STAMPED refs
       (FAR-143 follow-up) — the raw UPDATEs never run ``finalize_cost``, so
       without this the swept runs' journeys would never move. Fail-open per
@@ -3503,6 +3784,7 @@ async def stale_run_recovery_sweep(
     )
     never_count = 0
     lost_count = 0
+    orphaned_count = 0
     queue_expired_count = 0
     zero_progress_count = 0
     stranded_rows: list[Any] = []
@@ -3513,6 +3795,10 @@ async def stale_run_recovery_sweep(
     # failure) and are advanced with that status so they never count as a
     # failed journey cycle.
     queue_expired_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
+    # 2026-10-22: the node-started / no-SAQ-dispatcher orphans reclaimed by
+    # :data:`_SWEEP_ORPHANED_RUNS_SQL`, reported under their own counter (they
+    # also join ``terminalised_run_ids`` above for the advance).
+    orphaned_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
     try:
         # Collect all org ids FIRST in system context (organisations is the
         # root table — the app role owns it, owner bypasses RLS). The sweep's
@@ -3528,6 +3814,7 @@ async def stale_run_recovery_sweep(
             return {
                 "never_dispatched_swept": 0,
                 "worker_lost_swept": 0,
+                "worker_orphaned_swept": 0,
                 "queue_expired_swept": 0,
                 "saq_zero_progress_swept": 0,
                 "stranded_capacity_redispatched": 0,
@@ -3535,6 +3822,11 @@ async def stale_run_recovery_sweep(
             }
 
         for org_id in org_ids:
+            # Orphan ids are collected INSIDE the org transaction; count only the
+            # delta from an org whose transaction COMMITTED (same truthfulness
+            # rule as the per-arm counters below — a rolled-back org swept
+            # nothing).
+            orphaned_before_org = len(orphaned_run_ids)
             async with async_engine.connect() as conn, conn.begin():
                 never_delta, queue_expired_delta, lost_delta = await _sweep_org_stale_runs(
                     conn,
@@ -3544,6 +3836,7 @@ async def stale_run_recovery_sweep(
                     stranded_rows=stranded_rows,
                     terminalised_run_ids=terminalised_run_ids,
                     queue_expired_run_ids=queue_expired_run_ids,
+                    orphaned_run_ids=orphaned_run_ids,
                 )
                 # FAR-1715: the independent SAQ zero-progress branch runs in
                 # the SAME per-org transaction, after the legacy branches (its
@@ -3560,6 +3853,7 @@ async def stale_run_recovery_sweep(
                 queue_expired_count += queue_expired_delta
                 lost_count += lost_delta
                 zero_progress_count += zero_progress_delta
+            orphaned_count += len(orphaned_run_ids) - orphaned_before_org
         stranded_count = len(stranded_rows)
 
         # Re-dispatch AFTER each org's sweep transaction commits so dispatch_run's
@@ -3579,13 +3873,15 @@ async def stale_run_recovery_sweep(
         for run_id, run_org_id in queue_expired_run_ids:
             await _advance_terminalised_run(async_engine, run_id, run_org_id, status="rejected")
 
-        if never_count or lost_count or queue_expired_count or zero_progress_count or stranded_count:
+        if never_count or lost_count or orphaned_count or queue_expired_count or zero_progress_count or stranded_count:
             _log.info(
                 "Stale run recovery: %d never-dispatched, %d queue-expired, %d worker-lost, "
+                "%d worker-orphaned (no SAQ dispatcher identity), "
                 "%d saq zero-progress runs swept, %d stranded capacity-blocked runs re-dispatched (%s)",
                 never_count,
                 queue_expired_count,
                 lost_count,
+                orphaned_count,
                 zero_progress_count,
                 stranded_count,
                 redispatch_outcomes,
@@ -3593,6 +3889,7 @@ async def stale_run_recovery_sweep(
         return {
             "never_dispatched_swept": never_count,
             "worker_lost_swept": lost_count,
+            "worker_orphaned_swept": orphaned_count,
             "queue_expired_swept": queue_expired_count,
             "saq_zero_progress_swept": zero_progress_count,
             "stranded_capacity_redispatched": stranded_count,
@@ -3611,6 +3908,7 @@ async def stale_run_recovery_sweep(
         return {
             "never_dispatched_swept": never_count,
             "worker_lost_swept": lost_count,
+            "worker_orphaned_swept": orphaned_count,
             "queue_expired_swept": queue_expired_count,
             "saq_zero_progress_swept": zero_progress_count,
             "stranded_capacity_redispatched": 0,

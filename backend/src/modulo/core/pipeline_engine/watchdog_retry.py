@@ -42,10 +42,24 @@ resume_run``, see ``dispatch.py``), so the check matches with the same
 ``job=None`` (``resume_run``'s default) or an unknown function shape
 disables the hook.
 
+FAR-2053 — the DELIVERY VETO (opt-in per call site, ``veto_if_delivered``):
+a re-dispatch re-executes the graph from the start, so a run whose marker rows
+already record a completed delivery (``classify._any_marker_delivery_done`` —
+the SAME FAR-228 ``delivery_done`` sentinel the node-level gate reads) must not
+be re-dispatched: the side effect already happened and re-running can produce
+it twice. BOTH in-process watchdog call sites pass the flag — the stall/zombie
+watchdog (FAR-2053) and the node-deadline watchdog (FAR-2071) — because both
+kills can be reached on an attempt that follows one which delivered. The veto
+reads through the SAME repo reader the executor's gate uses
+(``read_run_markers``), so this path can never disagree with it about what the
+run recorded — there is no second definition of "delivered" and no new
+bookkeeping.
+
 Fail-closed by design: any hook failure (DB error, missing executor, lost
 claim token) returns ``False`` and the watchdog terminal-fails the run
 exactly as before — a retry decision must never prevent a run from reaching
-a terminal state.
+a terminal state. An UNREADABLE delivery record is treated as "delivered"
+(the veto engages): an unreadable fact must never license a re-dispatch.
 
 Known residual race (bounded): between the hook's ``exec_task.done()``
 re-check and the fenced pending-reset the executor task could complete
@@ -83,6 +97,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.core.pipeline_engine import retry_compensation as rc
 from modulo.core.pipeline_engine.executor import (
+    _attempt_consumed_node_budget,
+    _attempt_elapsed_seconds,
     _can_retry_after_policy,
     _graph_has_script_mode,
     _graph_is_idempotent,
@@ -93,13 +109,19 @@ from modulo.core.pipeline_engine.executor import (
 
 _log = logging.getLogger(__name__)
 
-# The hook takes ``(final_status, error_code)`` plus ONE optional keyword-only
-# flag: ``zero_node`` (FAR-1088). Only the in-process ZOMBIE watchdog passes it
-# — its kill fires pre-first-progress, so the run executed ZERO nodes by
-# construction and the zero-node failure carve-out is safe there. The FAR-369
-# node-deadline watchdog (and the in-execute retry path) never pass it, because
-# nodes may already have executed on those paths. ``Callable[..., ...]`` because
-# the kwarg is optional and call sites without it must keep working.
+# The hook takes ``(final_status, error_code)`` plus TWO optional keyword-only
+# flags, both opt-in per call site:
+#
+# * ``zero_node`` (FAR-1088) — only the in-process ZOMBIE watchdog passes it;
+#   its kill fires pre-first-progress, so the run executed ZERO nodes by
+#   construction and the zero-node failure carve-out is safe there.
+# * ``veto_if_delivered`` (FAR-2053) — the delivery veto: refuse to re-dispatch
+#   a run whose markers already record a delivery. The ZOMBIE watchdog passes
+#   it; the FAR-369 node-deadline watchdog (and the in-execute retry path) do
+#   not, so their behaviour is unchanged.
+#
+# ``Callable[..., ...]`` because the kwargs are optional and call sites without
+# them must keep working.
 WatchdogRetryHook = Callable[..., Awaitable[bool]]
 
 # Runtime SAQ job function names are FULLY-QUALIFIED ("modulo.core.saq_worker.execute_run"
@@ -148,15 +170,22 @@ def create_watchdog_retry_hook(
 ) -> tuple[WatchdogRetryHook, WatchdogRetryOutcome]:
     """Build the watchdog retry hook + its outcome box for one run.
 
-    The hook signature is ``(final_status, error_code, *, zero_node=False) ->
-    bool``: ``True`` when the run was re-dispatched (the watchdog must NOT
-    terminal-fail), ``False`` when it must terminal-fail exactly as before.
-    ``zero_node`` opts the caller into the FAR-1088 zero-node failure
-    carve-out; the default keeps every existing caller's behaviour unchanged.
+    The hook signature is ``(final_status, error_code, *, zero_node=False,
+    veto_if_delivered=False) -> bool``: ``True`` when the run was re-dispatched
+    (the watchdog must NOT terminal-fail), ``False`` when it must terminal-fail
+    exactly as before. ``zero_node`` opts the caller into the FAR-1088 zero-node
+    failure carve-out; ``veto_if_delivered`` opts it into the FAR-2053 delivery
+    veto. Both default off, so every existing caller's behaviour is unchanged.
     """
     box = WatchdogRetryOutcome()
 
-    async def _hook(final_status: str, error_code: str, *, zero_node: bool = False) -> bool:
+    async def _hook(
+        final_status: str,
+        error_code: str,
+        *,
+        zero_node: bool = False,
+        veto_if_delivered: bool = False,
+    ) -> bool:
         return await watchdog_retry_after_policy(
             aeng=aeng,
             run_id=run_id,
@@ -166,6 +195,7 @@ def create_watchdog_retry_hook(
             final_status=final_status,
             error_code=error_code,
             zero_node=zero_node,
+            veto_if_delivered=veto_if_delivered,
             outcome=box,
         )
 
@@ -234,6 +264,8 @@ async def _attempt_count_if_retryable(
     claim_token: Any,
     claim_count: int,
     retry_budget: int,
+    final_status: str,
+    error_code: str,
 ) -> int | None:
     """Apply the shared gates + bookkeeping; return the effective attempt count.
 
@@ -255,13 +287,42 @@ async def _attempt_count_if_retryable(
     graph_idempotent = _graph_is_idempotent(graph_json)
     if is_correction_run or not graph_idempotent:
         return None
-    node_attempt_count, current_claim_token = await executor._read_retry_attempt_state(org_id, run_id)
+    node_attempt_count, current_claim_token, attempt_started_at = await executor._read_retry_attempt_state(
+        org_id, run_id
+    )
     attempt_count: int = max(node_attempt_count, claim_count - 1)
     superseded = claim_token is not None and current_claim_token is not None and current_claim_token != claim_token
     script_retry_probe_ok = True
     if _graph_has_script_mode(graph_json):
         script_retry_probe_ok = await executor._probe_script_lease(run_id=run_id, org_id=org_id)
-    if not _can_retry_after_policy(attempt_count, retry_budget, superseded, script_retry_probe_ok):
+    # FAR-2025: refuse the re-dispatch when the killed attempt already consumed the
+    # graph's whole node-budget allowance (a watchdog deadline kill always has). An
+    # over-budget task cannot be rescued by spending the same budgets again, so the
+    # retry is a pure occupancy multiplier. ``_node_timeouts`` is empty before the
+    # first node starts, so a PRE-node hang (the zombie watchdog's sites) is not
+    # affected — it consumed no node budget and stays retryable.
+    node_timeouts = getattr(executor, "_node_timeouts", None)
+    timeouts = node_timeouts.values() if isinstance(node_timeouts, dict) else ()
+    attempt_consumed_budget = _attempt_consumed_node_budget(
+        _attempt_elapsed_seconds(attempt_started_at),
+        timeouts,
+    )
+    if attempt_consumed_budget:
+        _log.warning(
+            "pipeline.watchdog_retry_budget_exhausted run=%s status=%s error_code=%s attempt=%s budget=%s",
+            run_id,
+            final_status,
+            error_code,
+            attempt_count,
+            retry_budget,
+        )
+    if not _can_retry_after_policy(
+        attempt_count,
+        retry_budget,
+        superseded,
+        script_retry_probe_ok,
+        attempt_consumed_budget=attempt_consumed_budget,
+    ):
         return None
     return attempt_count
 
@@ -293,6 +354,62 @@ def _resolve_schedule_state(
     return schedule_state, effective_sleep
 
 
+async def _read_run_markers(
+    aeng: AsyncEngine,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """Read the run's reassembled marker rows (RLS-scoped, one session).
+
+    Reads through the SAME repo reader the executor's FAR-228 gate
+    (``_load_transient_state`` → ``read_run_markers``) and the run-detail
+    delivery read (``api.routes.runs._run_gate_fired``) use, so this path can
+    never disagree with them about what the run recorded.
+    """
+    from modulo.db.crud.run_node_outputs import read_run_markers
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
+
+    factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        await set_rls_execution_context(session)
+        return await read_run_markers(session, run_id=run_id, organisation_id=org_id)
+
+
+async def _run_already_delivered(
+    aeng: AsyncEngine,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> bool:
+    """True when the run's marker rows already record a completed delivery.
+
+    FAR-2053: the ONE definition of "delivered" used here is the existing
+    ``classify._any_marker_delivery_done`` (the FAR-228 ``delivery_done``
+    sentinel) applied to the run's marker rows — no new bookkeeping, no second
+    vocabulary.
+
+    FAIL CLOSED: a probe read failure returns ``True`` (the veto engages) and
+    never raises into the watchdog path — an unreadable delivery record must
+    not license a re-dispatch that could repeat a side effect. The cost of
+    being wrong is asymmetric: a withheld retry leaves a terminal-failed run
+    that an operator can inspect, while a wrongly-permitted retry re-sends an
+    email or re-opens a PR. ``CancelledError`` is re-raised — watchdog/job
+    shutdown is not ours to swallow.
+    """
+    try:
+        from modulo.core.pipeline_engine.classify import _any_marker_delivery_done
+
+        markers = await _read_run_markers(aeng, run_id=run_id, org_id=org_id)
+        return _any_marker_delivery_done(markers)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("pipeline.watchdog_retry_delivery_probe_failed run=%s", run_id, exc_info=True)
+        return True
+
+
 async def watchdog_retry_after_policy(
     *,
     aeng: AsyncEngine,
@@ -303,6 +420,7 @@ async def watchdog_retry_after_policy(
     error_code: str,
     exec_task: asyncio.Task[Any] | None = None,
     zero_node: bool = False,
+    veto_if_delivered: bool = False,
     outcome: WatchdogRetryOutcome | None = None,
 ) -> bool:
     """Consult the run's retry_policy for a watchdog kill; re-dispatch if allowed.
@@ -332,6 +450,18 @@ async def watchdog_retry_after_policy(
     ``zero_node=False`` (default — node-deadline watchdog, in-execute path)
     behaviour is byte-for-byte unchanged: nodes may have executed there, so a
     failure carve-out is not safe without an explicit zero-node criterion.
+
+    FAR-2053 delivery veto — ``veto_if_delivered=True`` ONLY, and passed by
+    BOTH in-process watchdog call sites: the stall/zombie watchdog (FAR-2053)
+    and the node-deadline watchdog (FAR-2071). Once the retry policy would
+    re-dispatch, the run's marker rows are read and, if ANY of them records
+    ``delivery_done``, the re-dispatch is REFUSED and the watchdog
+    terminal-fails instead. A re-dispatch re-executes the graph from the start,
+    so re-running a run that already delivered can repeat its side effect; the
+    FAR-228 node-level gate only bounds that for single-sandbox-node graphs on
+    the transient-failure path, and neither watchdog kill has any other
+    delivery guard. The probe fails CLOSED — an unreadable delivery record
+    vetoes.
     """
     box = outcome if outcome is not None else WatchdogRetryOutcome()
     if executor is None:
@@ -364,6 +494,21 @@ async def watchdog_retry_after_policy(
     )
     if retry_budget is None:
         return False
+    # FAR-2053 delivery veto. Consulted only now — i.e. only when the policy
+    # WOULD re-dispatch — so the extra read is never paid on the common
+    # "no coverage" path and the WARNING below always means a re-dispatch was
+    # actually blocked. ORDERING: before the attempt/budget gates and before
+    # the fenced pending-reset, because the fact it reads (a completed side
+    # effect) outranks every budget consideration: no remaining budget makes a
+    # re-dispatch of already-delivered work safe.
+    if veto_if_delivered and await _run_already_delivered(aeng, run_id=run_id, org_id=org_id):
+        _log.warning(
+            "pipeline.watchdog_retry_suppressed_delivered run=%s status=%s error_code=%s",
+            run_id,
+            final_status,
+            error_code,
+        )
+        return False
     # Same gates + bookkeeping as the in-execute path (FAR-210 correction runs,
     # FAR-295 non-idempotent graphs, attempt budget, superseded claim, FAR-296
     # script-mode stale-lease probe).
@@ -376,6 +521,8 @@ async def watchdog_retry_after_policy(
         claim_token=claim_token,
         claim_count=claim_count,
         retry_budget=retry_budget,
+        final_status=final_status,
+        error_code=error_code,
     )
     if attempt_count is None:
         return False

@@ -620,3 +620,45 @@ async def test_bad_jwt_fails_fast_before_sql_update() -> None:
     # The JWT was rejected before any DB statement was prepared/executed.
     session.execute.assert_not_awaited()
     session.get.assert_not_awaited()
+
+
+def test_stamp_decision_payload_none_is_stamped() -> None:
+    assert HITLManager._stamp_decision_payload(None, "approved", _GATE) == {
+        "action": "approved",
+        "review_id": _GATE,
+    }
+
+
+def test_stamp_decision_payload_unstamped_dict_is_copied() -> None:
+    original = {"action": "rejected"}
+    stamped = HITLManager._stamp_decision_payload(original, "rejected", _GATE)
+    assert stamped == {"action": "rejected", "review_id": _GATE}
+    assert original == {"action": "rejected"}  # never mutated in place
+
+
+def test_stamp_decision_payload_already_stamped_is_returned_unchanged() -> None:
+    original = {"action": "approved", "review_id": "other-gate"}
+    assert HITLManager._stamp_decision_payload(original, "approved", _GATE) is original
+
+
+def test_raise_decision_conflict_maps_each_zero_row_state() -> None:
+    token = "claim-token-abc"
+    with pytest.raises(GateNotFoundError):
+        HITLManager._raise_decision_conflict(None, run_id=_RUN, review_id=_GATE, claim_token=token)
+
+    with pytest.raises(GateAlreadyDecidedError):
+        HITLManager._raise_decision_conflict(
+            _gate(decision="approved"), run_id=_RUN, review_id=_GATE, claim_token=token
+        )
+
+    with pytest.raises(ClaimTokenExpiredError):
+        HITLManager._raise_decision_conflict(_gate(claim_token=None), run_id=_RUN, review_id=_GATE, claim_token=token)
+
+    with pytest.raises(ClaimTokenInvalidError):
+        HITLManager._raise_decision_conflict(
+            _gate(claim_token="different-token"), run_id=_RUN, review_id=_GATE, claim_token=token
+        )
+
+    # Token matches but the row is undecided and expiry-filtered: expired.
+    with pytest.raises(ClaimTokenExpiredError):
+        HITLManager._raise_decision_conflict(_gate(claim_token=token), run_id=_RUN, review_id=_GATE, claim_token=token)
