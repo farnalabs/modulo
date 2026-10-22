@@ -113,6 +113,7 @@
         <a
           href="https://modulo.run/docs/features/saved-views"
           target="_blank"
+          rel="noopener noreferrer"
           class="inline-flex items-center gap-1 text-sm text-primary-text hover:underline"
         >
           {{ $t('views.AdminViewsView.learn_about_saved_views') }}
