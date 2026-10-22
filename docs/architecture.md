@@ -437,6 +437,26 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   `created_at` bumped, and a `coalesced` TriggerEvent is recorded. On by
   default; disable per trigger with `config_json.coalesce_pending: false`.
   Replays never coalesce.
+- **CI-failure coalesce (Branch Fixer deduplication, FAR-1034):**
+
+  > This section reflects the behaviour on the `dist/conflict-dispatch-dedupe` branch (PR #2186); it merges after that PR.
+
+  **Purpose.** Prevent duplicate Branch Fixer dispatches for the same failing PR at the same head SHA. The GitHub Actions `ci.yml` `notify-pr-failure` job and `branch-fixer.yml` each emit a webhook payload that carries the volatile `runUrl` of the failed CI run, so the canonical payload-hash deduplication (`webhook_dedup_hashes`) never matches — every delivery has a unique hash and would mint a full Branch Fixer run. CI-failure coalescing keys the suppression on the stable `(prNumber, headSha)` subset instead.
+
+  **Identity key.** `derive_ci_failure_coalesce_key` produces `ci-failure:pr:<n>:sha:<sha>` from the payload's `prNumber` and `headSha` fields. A PR with no `headSha` derives no key and is never coalesced. A new commit changes the head SHA and dispatches fresh.
+
+  **Two legs (executed in order).**
+
+  1. **Age window (primary, fast path).** Default 3600s (`_CI_FAILURE_COALESCE_WINDOW_SECONDS`). Overridable per trigger via `config_json.ci_failure_coalesce_window_seconds`, clamped to a minimum of 1s and a maximum of 7 days (`_CI_FAILURE_COALESCE_WINDOW_MAX_SECONDS`). A repeat delivery whose derived key already has a live entry in `webhook_dedup_hashes` (TTL = the window) is suppressed immediately. A `coalesced` TriggerEvent is recorded and `CiFailureCoalescedError` raised. The route commits the event inside its transaction and acks the sender with a handled 202.
+
+  2. **In-flight run (secondary).** When the age window has elapsed, a same-key delivery is STILL suppressed if any run for the same pipeline and derived key is non-terminal. Implemented in `has_in_flight_ci_failure_run` (called via the shared `_suppress_ci_failure` path). The check is pipeline-scoped, bounded by `CI_FAILURE_INFLIGHT_BACKSTOP_SECONDS` (default 7200s), and limited to `COALESCE_CANDIDATE_LIMIT` recent candidates. The key is re-derived from each candidate run's `input_payload` so identity is derived once. Fail-open: an unreadable query logs `ci_failure_coalesce.inflight_check_failed` and falls through to the age decision — dispatch is never blocked.
+
+  **Audit.** Both legs funnel through the same suppression point. The `coalesced` TriggerEvent and `CiFailureCoalescedError` carry the stable marker `ci_failure_coalesced:<key>` in `error_detail`. The log distinguishes the leg (`"inside the <window>s coalesce window"` vs `"a run for the same PR + head SHA is still in flight"`), but the event shape is identical.
+
+  **Config.** The age window is per-trigger (`config_json.ci_failure_coalesce_window_seconds`); the in-flight backstop is a global constant. The Branch Fixer webhook triggers: the CI-failure trigger has no override (uses default 3600s); the review trigger maps a payload without `headSha` and can never match.
+
+  **Why the second leg exists.** The Branch Fixer `sandbox_agent` node runs 3300s with one watchdog re-dispatch (~110 min worst case) vs a 1-hour default window. Without the in-flight leg, a same-key delivery after the window elapsed would mint a second full run while the first was still executing, doubling concurrency consumption.
+
 - **Dispatcher backpressure (per-funnel wedge posture):** trigger dispatch
   refuses NEW runs when the pipeline's pending queue exceeds
   `max(3 x max_concurrent_runs, 5)` rows, or its oldest genuinely-wedged
