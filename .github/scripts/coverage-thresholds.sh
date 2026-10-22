@@ -10,7 +10,15 @@ set -euo pipefail
 PARALLELISM="${1:-auto}"
 
 echo "::group::Running unit tests (overall coverage threshold: 89%)"
-uv run --no-sync pytest tests/unit/ -n "$PARALLELISM" --cov=src/modulo --cov-report=xml --cov-report=term-missing --cov-fail-under=89 -q
+# Defence in depth for the unit-suite gate installed by
+# tests/unit/conftest.py::pytest_runtest_setup. A leaked never-awaited
+# coroutine only surfaces at GC as PytestUnraisableExceptionWarning; left as a
+# warning, a large enough flood of them wedged pytest's terminal writer
+# (BlockingIOError: [Errno 11]) and took the 2026-10-21 merge queue down.
+# The same escalation is asserted by
+# tests/architecture/test_unit_unraisable_warning_gate.py.
+uv run --no-sync pytest tests/unit/ -n "$PARALLELISM" --cov=src/modulo --cov-report=xml --cov-report=term-missing --cov-fail-under=89 -q \
+  -W "error::pytest.PytestUnraisableExceptionWarning"
 echo "::endgroup::"
 
 echo "::group::Per-module coverage checks"
