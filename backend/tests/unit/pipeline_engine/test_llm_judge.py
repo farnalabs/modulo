@@ -141,7 +141,7 @@ def test_response_detail_null_is_coerced_to_empty_string() -> None:
 
 
 def test_resolve_model_judge_returns_none_for_non_judge_eval() -> None:
-    """A non-llm_judge eval never resolves a judge, even with a backend id."""
+    """A non-model_judge eval never resolves a judge, even with a backend id."""
     eval_def = _make_eval_def(
         eval_type=EvalType.REGEX,
         config={"field": "content", "model_backend_id": str(uuid.uuid4())},
@@ -151,7 +151,7 @@ def test_resolve_model_judge_returns_none_for_non_judge_eval() -> None:
 
 
 def test_resolve_model_judge_returns_none_when_hub_unavailable() -> None:
-    """An llm_judge eval with no ambient ModelBackendHub resolves to ``None``
+    """A model_judge eval with no ambient ModelBackendHub resolves to ``None``
     (the caller then fails the eval closed, pre-existing behaviour)."""
     eval_def = _make_eval_def(
         config={"field": "content", "model_backend_id": str(uuid.uuid4())},

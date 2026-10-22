@@ -49,6 +49,7 @@ from modulo.compliance.evidence_index import (
     build_evidence_index,
 )
 from modulo.compliance.pack import load_mapping_pack
+from modulo.core.eval_engine import EvalType
 from modulo.db.crud.hitl_review_config import human_only_effective
 from modulo.db.models.account import Account
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
@@ -221,7 +222,7 @@ async def _make_eval(
             organisation_id=org_id,
             pipeline_id=pipeline_id,
             account_id=account_id,
-            eval_type="llm_judge",
+            eval_type=EvalType.MODEL_JUDGE,
             config_json={},
         )
     )
@@ -246,6 +247,7 @@ async def _make_eval_result(
             eval_id=eval_id,
             run_id=run_id,
             passed=passed,
+            outcome="pass" if passed else "fail",
             observed=True,
             evaluated_at=evaluated_at,
         )

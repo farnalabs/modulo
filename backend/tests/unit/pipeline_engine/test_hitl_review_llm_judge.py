@@ -1,4 +1,4 @@
-"""Unit tests for llm_judge evals inside a HITL gate (FAR-307).
+"""Unit tests for model_judge evals inside a HITL gate (FAR-307).
 
 The judge callable is resolved from ``eval_def.config["model_backend_id"]`` via
 the ModelBackendHub and passed to ``engine.evaluate``, so the gate fires only
