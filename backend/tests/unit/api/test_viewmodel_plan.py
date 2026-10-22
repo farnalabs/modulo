@@ -427,13 +427,13 @@ class TestResolveLicenseExpiryLadder:
     """
 
     def test_org_key_valid_returns_its_view(self) -> None:
-        key = _sign_license_payload(_valid_payload(expires_at="2027-06-30T00:00:00+00:00", org_id="org-run"))
+        key = _sign_license_payload(_valid_payload(expires_at="2027-06-30T00:00:00+00:00", org_id=str(_ORG_ID)))
         org = _make_org(settings_json={"license_key": key})
 
         expires_at, org_id = _resolve_license_expiry(_make_settings(), org)
 
         assert expires_at == "2027-06-30T00:00:00+00:00"
-        assert org_id == "org-run"
+        assert org_id == str(_ORG_ID)
 
     def test_invalid_org_key_falls_through_to_in_memory_licence(self) -> None:
         org = _make_org(settings_json={"license_key": "not-a-valid-key"})

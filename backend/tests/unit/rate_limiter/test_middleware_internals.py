@@ -95,8 +95,24 @@ class TestRuleFor:
             ("/api/v1/auth/login-context", "/api/v1/auth/login-context"),
             ("/api/v1/auth/org-login/acme", "/api/v1/auth/org-login/"),
             ("/api/v1/auth/sso/providers", "/api/v1/auth/sso/providers"),
+            # FAR-2059: the SSO login legs now do tenant + licence resolution
+            # before the handler, so they must be inside the GET budget.
+            ("/api/v1/auth/oidc/google/login", "/api/v1/auth/oidc/"),
+            ("/api/v1/auth/oidc/google/callback", "/api/v1/auth/oidc/"),
+            ("/api/v1/auth/saml/login", "/api/v1/auth/saml/"),
+            ("/api/v1/auth/saml/acme/metadata", "/api/v1/auth/saml/"),
+            ("/api/v1/auth/saml/acme/login", "/api/v1/auth/saml/"),
         ],
-        ids=["login-context", "org-login", "sso-providers"],
+        ids=[
+            "login-context",
+            "org-login",
+            "sso-providers",
+            "oidc-login",
+            "oidc-callback",
+            "saml-login",
+            "saml-metadata",
+            "saml-provider-login",
+        ],
     )
     def test_anonymous_get_paths_resolve_to_get_rules(self, middleware, path, prefix):
         """FAR-856: _rule_for must resolve pre-auth anonymous GET endpoints to

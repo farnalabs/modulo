@@ -436,13 +436,31 @@ def _verified_license_key(raw_key: str, error_log: str) -> LicenseData | None:
     return None
 
 
+def _license_claims_org(data: LicenseData, org: Any) -> bool:
+    """Whether an org-scoped licence may license ``org`` (FAR-2060).
+
+    An empty ``org_id`` claim is instance-wide and applies anywhere. A non-empty
+    claim names ONE organisation, and applying it to any other tenant would let
+    org B's key license org A — so the claim is enforced here, at the point the
+    key is APPLIED, not only at install time (a stored key can predate this
+    check, and ``parse_and_verify`` never inspects the claim).
+    """
+    claimed = getattr(data, "org_id", "") or ""
+    if not claimed:
+        return True
+    return claimed == str(getattr(org, "id", ""))
+
+
 def resolve_effective_license(settings: Any, org: Any | None) -> LicenseData | None:
     """The canonical licence ladder, session-free — first valid rung wins.
 
     Rungs (absent/invalid falls through; a key is verified via
     ``parse_and_verify``, never trusted on mere presence — FAR-1733):
 
-    1. Org-level key (``org.settings_json["license_key"]``)
+    1. Org-level key (``org.settings_json["license_key"]``) — applied ONLY when
+       its ``org_id`` claim is empty or names this org (FAR-2060). A mismatch is
+       treated as absent at this rung: the key is real, but it licenses a
+       different tenant.
     2. System-level in-memory licence (``store_license()``)
     3. System-level env-var key (``settings.modulo_license_key``)
 
@@ -464,8 +482,16 @@ def resolve_effective_license(settings: Any, org: Any | None) -> LicenseData | N
         org_key = org_settings.get("license_key") if isinstance(org_settings, dict) else None
         if org_key:
             data = _verified_license_key(str(org_key), "Failed to parse org-level license key")
-            if data is not None:
+            if data is not None and _license_claims_org(data, org):
                 return data
+            if data is not None:
+                logger.warning(
+                    "license.org_id_mismatch",
+                    extra={
+                        "org_id": str(getattr(org, "id", "")),
+                        "claimed_org_id": data.org_id,
+                    },
+                )
 
     # 2. System-level in-memory license (stored pre-verified; expiry re-checked by get_license)
     lic = get_license()

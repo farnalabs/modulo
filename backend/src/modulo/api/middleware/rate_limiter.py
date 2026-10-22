@@ -270,6 +270,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # unthrottled. The budget matches its two siblings above (60/min/IP) —
         # no reason to differ: all three answer the same login-page question.
         RateLimitRule(path_prefix="/api/v1/auth/sso/providers", max_requests=60, window_s=60),
+        # FAR-2059: the SSO login legs are also anonymous GETs. Each one now
+        # resolves the tenant + licence before a button click, so an
+        # unauthenticated caller could otherwise amplify that work unthrottled
+        # (two per discovery call, one per login leg). Same 60/min/IP budget:
+        # a real browser starts at most a handful of these per login.
+        RateLimitRule(path_prefix="/api/v1/auth/oidc/", max_requests=60, window_s=60),
+        RateLimitRule(path_prefix="/api/v1/auth/saml/", max_requests=60, window_s=60),
     ]
 
     # PRD §7.18: HITL review actions — 20/min per user, AGGREGATE across

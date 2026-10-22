@@ -1623,12 +1623,19 @@ export interface paths {
          *
          *     Pre-auth discovery endpoint: the login page fetches it BEFORE any user is
          *     authenticated, so it must never require a user and must never surface an
-         *     auth error. Plan/feature resolution is anonymous (via
-         *     ``_anonymous_plan_context``); when the SSO feature is not enabled /
-         *     unlicensed the endpoint answers a normal 200 with an EMPTY provider list
-         *     (no 401/402) so the login page simply renders no SSO options. The
-         *     anonymous path resolves system-level licenses only — org-level licenses
-         *     are unreachable pre-auth.
+         *     auth error. Plan/feature resolution is anonymous and resolves over the
+         *     trusted tenant, so an organisation-scoped Team key enables SSO for the
+         *     organisation it belongs to (FAR-2060). The plan AND the tenant are resolved
+         *     ONCE, in the same transaction, and the tenant is reused for the provider
+         *     listing (no TOCTOU between the entitlement decision and the listing).
+         *
+         *     FAR-2059 — degrade, never strand: when NO valid licence resolves at any
+         *     scope (an expired key is cleared and reads as absent), the endpoint still
+         *     advertises the configured providers so an SSO-only deployment can sign in;
+         *     entitlement is enforced post-auth (Community plan -> Team features off). The
+         *     provider list is suppressed only when a licence DOES resolve but does not
+         *     grant SSO — the auth gate refuses that case (402) and a button that cannot
+         *     complete sign-in is worse than no button.
          *
          *     FAR-1978 — the response is SCOPED. ``display_name`` is admin-chosen free
          *     text and can name a tenant, so an anonymous caller must never read a
@@ -1640,6 +1647,11 @@ export interface paths {
          *     - Zero or more than one login-active org: environment-level configuration
          *       only — env-var OIDC providers and env-var SAML. No DB provider name is
          *       listed.
+         *
+         *     FAR-2059: on the DEGRADED (no valid licence) path the DB providers are
+         *     still listed — sign-in must remain reachable — but each is labelled with a
+         *     generic name instead of the admin's free-text ``display_name``. The
+         *     licensed path keeps the configured name, as before.
          *
          *     SAML is enabled on the single-org path if any enabled SAML provider exists
          *     in the DB, or if env-var SAML is fully configured (enabled + license +
@@ -1867,7 +1879,12 @@ export interface paths {
          *     Exactly ONE login-active org → ``multi_org=false, org={slug, name}``
          *     (powers the single-org auto-skip on the frontend).
          *
-         *     Zero or more than one → ``multi_org=true, org=null``.
+         *     Zero or more than one → ``multi_org=true, org=null`` (and, under the ADR 005
+         *     single-org invariant, ``multi_org=false, org=null``).
+         *
+         *     The single-org predicate is :func:`resolve_login_tenant` — the SAME helper
+         *     the pre-auth plan resolver and SSO discovery use, so this endpoint and the
+         *     entitlement decision can never disagree (FAR-2060).
          *
          *     Never returns a list of orgs, and never any data about a non-single org.
          */
