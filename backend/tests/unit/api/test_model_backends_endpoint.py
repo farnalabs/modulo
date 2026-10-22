@@ -1619,7 +1619,7 @@ def test_create_accepts_http_with_explicit_opt_in(client: TestClient, host: str)
     assert resp.json()["base_url"] == host
 
 
-@pytest.mark.parametrize("provider", ["anthropic", "azure_openai"])
+@pytest.mark.parametrize("provider", ["azure_openai", "bedrock", "vertexai", "watsonx", "custom"])
 def test_create_rejects_base_url_for_incapable_provider(client: TestClient, provider: str) -> None:
     """The hub capability map is the single source of truth — fail closed."""
     with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
@@ -1678,9 +1678,9 @@ def test_presets_surface_the_hub_capability_map(client: TestClient) -> None:
     resp = client.get("/api/v1/model-backends/presets")
     assert resp.status_code == 200
     providers = set(resp.json()["base_url_providers"])
-    assert {"openai", "ollama", "vllm", "openrouter"} <= providers
-    assert "anthropic" not in providers
+    assert {"openai", "ollama", "vllm", "openrouter", "anthropic", "cohere", "gemini", "mistral"} <= providers
     assert "azure_openai" not in providers
+    assert "bedrock" not in providers
 
 
 def test_update_endpoint_change_without_api_key_is_rejected(client: TestClient) -> None:
@@ -1744,6 +1744,7 @@ def test_update_endpoint_change_with_api_key_rebinds_and_health_checks_new_host(
     assert change["from_host"] is None
     assert change["to_host"] == "gateway.internal.example"
     assert change["credential_resupplied"] is True
+    assert change["credential_kind"] == "literal"
     assert "sk-fresh" not in json.dumps(updated_payloads)
 
 
@@ -1824,7 +1825,7 @@ def test_update_rejects_migrating_a_plain_http_legacy_endpoint_without_opt_in(cl
 def test_update_drops_an_unusable_legacy_endpoint_on_an_incapable_provider(client: TestClient) -> None:
     """azure_openai/anthropic never consumed the legacy value; an edit must not 422."""
     backend = _make_backend(credentials_ciphertext=Fernet(_FERNET_KEY.encode()).encrypt(b"sk-legacy"))
-    backend.provider = "anthropic"
+    backend.provider = "azure_openai"
     backend.default_params = {"base_url": _LEGACY_BASE_URL, "temperature": 0.1}
     captured: dict[str, object] = {}
 
@@ -1884,7 +1885,7 @@ def test_update_null_base_url_clears_credential_and_legacy_locations(client: Tes
     assert "base_url" not in updates["default_params"]
 
 
-@pytest.mark.parametrize("provider", ["anthropic", "azure_openai"])
+@pytest.mark.parametrize("provider", ["azure_openai", "bedrock", "vertexai", "watsonx"])
 def test_update_rejects_base_url_for_incapable_provider(client: TestClient, provider: str) -> None:
     backend = _make_backend()
     backend.provider = provider
@@ -1957,3 +1958,198 @@ def test_base_url_masking_by_audience(
         assert legacy == _LEGACY_BASE_URL
     else:
         assert legacy == "legacy.internal.example"
+
+
+def test_create_audit_records_the_credential_kind(client: TestClient) -> None:
+    backend = _make_backend()
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.append_audit_event_isolated", new=AsyncMock()) as audit_mock,
+    ):
+        resp = client.post(
+            "/api/v1/model-backends",
+            json={**_CREATE_BODY, "base_url": _CUSTOM_BASE_URL},
+        )
+    assert resp.status_code == 201
+    created = [
+        call.kwargs["payload"]
+        for call in audit_mock.await_args_list
+        if call.kwargs["event_type"] == "model_backend.created"
+    ]
+    assert created
+    assert created[-1]["credential_kind"] == "literal"
+
+
+def test_create_with_base_url_rejects_a_vault_reference(client: TestClient) -> None:
+    """A reference's owner never authorised the new destination (FAR-2046)."""
+    with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
+        resp = client.post(
+            "/api/v1/model-backends",
+            json={**_CREATE_BODY, "base_url": _CUSTOM_BASE_URL, "api_key": "secretref://github-token"},
+        )
+    assert resp.status_code == 422
+    assert "base_url_requires_literal_credential" in str(resp.json()["detail"])
+    create_mock.assert_not_awaited()
+
+
+def test_update_endpoint_change_rejects_a_vault_reference(client: TestClient) -> None:
+    """The binding rule cannot be satisfied with a server-resolved reference."""
+    stub = _secrets_with({"api_key": "ghp_VAULT_SECRET"})
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch(
+            "modulo.api.routes.model_backends._run_health_check_on_save_and_persist",
+            new=AsyncMock(),
+        ) as health_mock,
+    ):
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"base_url": "https://attacker.example/v1", "api_key": "secretref://github-token"},
+        )
+    assert resp.status_code == 422
+    assert "base_url_requires_literal_credential" in str(resp.json()["detail"])
+    update_mock.assert_not_awaited()
+    assert not stub.set_calls
+    health_mock.assert_not_awaited()
+
+
+def test_update_endpoint_change_without_key_does_not_run_a_health_check(client: TestClient) -> None:
+    """The 422 is raised before any outbound probe with the stored key."""
+    stub = _secrets_with({"api_key": "sk-ORG-SECRET"})
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch(
+            "modulo.api.routes.model_backends._run_health_check_on_save_and_persist",
+            new=AsyncMock(),
+        ) as health_mock,
+    ):
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"base_url": "https://attacker.example/v1"},
+        )
+    assert resp.status_code == 422
+    assert "base_url_change_requires_credential" in str(resp.json()["detail"])
+    update_mock.assert_not_awaited()
+    health_mock.assert_not_awaited()
+    assert not stub.set_calls
+
+
+def test_update_endpoint_refuses_to_write_when_the_key_cannot_be_recovered(client: TestClient) -> None:
+    """Undecryptable legacy ciphertext + no key must fail closed, not drop the key."""
+    # Structurally a Fernet token, so decode fails closed instead of being
+    # treated as legacy plaintext.
+    legacy_backend = _make_backend(credentials_ciphertext=b"gAAAAAB")
+    legacy_backend.default_params = {"base_url": _LEGACY_BASE_URL}
+    stub = _StubSecretsBackend({})
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=legacy_backend),
+        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"base_url": _LEGACY_BASE_URL},
+        )
+    assert resp.status_code == 422
+    assert "credentials_unavailable" in str(resp.json()["detail"])
+    update_mock.assert_not_awaited()
+    assert not stub.set_calls
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "cohere", "gemini", "mistral"])
+def test_create_accepts_base_url_for_newly_capable_providers(client: TestClient, provider: str) -> None:
+    backend = _make_backend()
+    backend.provider = provider
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.post(
+            "/api/v1/model-backends",
+            json={**_CREATE_BODY, "provider": provider, "base_url": _CUSTOM_BASE_URL},
+        )
+    assert resp.status_code == 201
+    assert resp.json()["base_url"] == _CUSTOM_BASE_URL
+
+
+def test_update_drops_an_unchanged_legacy_echo_on_an_incapable_provider(client: TestClient) -> None:
+    """The pre-FAR-2046 UI shape (legacy key inside default_params) must not 422."""
+    backend = _make_backend(credentials_ciphertext=Fernet(_FERNET_KEY.encode()).encrypt(b"sk-legacy"))
+    backend.provider = "azure_openai"
+    backend.default_params = {"base_url": _LEGACY_BASE_URL, "temperature": 0.1}
+    captured: dict[str, object] = {}
+
+    async def fake_update(session: object, backend_id: object, updates: dict[str, object]) -> MagicMock:
+        captured["updates"] = updates
+        if "default_params" in updates:
+            backend.default_params = updates["default_params"]
+        return backend
+
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.update_model_backend", new=fake_update),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={
+                "display_name": "Renamed",
+                "default_params": {"base_url": _LEGACY_BASE_URL, "temperature": 0.5},
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["base_url"] is None
+    updates = captured["updates"]
+    assert isinstance(updates, dict)
+    assert "base_url" not in updates["default_params"]
+
+
+def test_update_rejects_a_new_legacy_value_on_an_incapable_provider(client: TestClient) -> None:
+    backend = _make_backend()
+    backend.provider = "azure_openai"
+    backend.default_params = {}
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"default_params": {"base_url": _LEGACY_BASE_URL}},
+        )
+    assert resp.status_code == 422
+    assert "base_url_not_supported_for_provider" in str(resp.json()["detail"])
+    update_mock.assert_not_awaited()
+
+
+def test_get_does_not_report_an_ignored_legacy_endpoint_for_an_incapable_provider(
+    client: TestClient,
+) -> None:
+    backend = _make_backend()
+    backend.provider = "azure_openai"
+    backend.default_params = {"base_url": _LEGACY_BASE_URL}
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=_StubSecretsBackend({})),
+    ):
+        resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["base_url"] is None
+    assert "base_url" not in body["default_params"]

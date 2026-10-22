@@ -7,7 +7,7 @@ stay hermetic (many of them would otherwise attempt network calls at init).
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -407,20 +407,85 @@ def test_build_backend_warns_when_custom_base_url_cannot_be_applied(caplog) -> N
     ):
         klass.side_effect = lambda *_a, **_k: _DummyBackend
         _build_backend(
-            "anthropic",
+            "bedrock",
             "claude-3",
-            {"api_key": "k", "base_url": "https://gateway.internal.example/v1"},
+            {
+                "aws_access_key_id": "x",
+                "aws_secret_access_key": "y",
+                "base_url": "https://gateway.internal.example/v1",
+            },
             {},
         )
     assert "Ignoring custom base_url" in caplog.text
 
 
 def test_capability_map_is_the_single_source_of_truth() -> None:
-    """Only providers routed through the OpenAI-compatible path can take a base_url."""
-    assert "openai" in BASE_URL_CAPABLE_PROVIDERS
-    assert "ollama" in BASE_URL_CAPABLE_PROVIDERS
-    assert "vllm" in BASE_URL_CAPABLE_PROVIDERS
-    assert "opencode" in BASE_URL_CAPABLE_PROVIDERS
-    for provider in ("anthropic", "azure_openai", "cohere", "gemini", "mistral", "bedrock", "vertexai", "watsonx"):
+    """Every provider whose constructor/health path can honour an endpoint."""
+    for provider in (
+        "openai",
+        "ollama",
+        "vllm",
+        "opencode",
+        "anthropic",
+        "cohere",
+        "gemini",
+        "mistral",
+    ):
+        assert provider in BASE_URL_CAPABLE_PROVIDERS
+        assert supports_custom_base_url(provider)
+    for provider in ("azure_openai", "bedrock", "vertexai", "watsonx", "custom"):
         assert provider not in BASE_URL_CAPABLE_PROVIDERS
         assert not supports_custom_base_url(provider)
+
+
+@pytest.mark.parametrize(
+    ("provider", "class_name", "endpoint_kwarg", "creds"),
+    [
+        ("anthropic", "AnthropicBackend", "anthropic_api_url", {"api_key": "k"}),
+        ("cohere", "CohereBackend", "base_url", {"api_key": "k"}),
+        ("gemini", "GeminiBackend", "base_url", {"api_key": "k"}),
+        ("mistral", "MistralBackend", "endpoint", {"api_key": "k"}),
+    ],
+    ids=["anthropic", "cohere", "gemini", "mistral"],
+)
+def test_build_backend_passes_custom_endpoint_to_capable_adapter(
+    provider: str, class_name: str, endpoint_kwarg: str, creds: dict[str, str]
+) -> None:
+    with patch(f"modulo.model_backends.{provider}.{class_name}") as klass:
+        klass.side_effect = _DummyBackend
+        result = _build_backend(
+            provider,
+            "model-1",
+            {**creds, "base_url": "https://gateway.internal.example/v1"},
+            {},
+        )
+    assert result.kwargs[endpoint_kwarg] == "https://gateway.internal.example/v1"
+
+
+@pytest.mark.parametrize(
+    ("provider", "module_name", "class_name"),
+    [
+        ("anthropic", "anthropic", "AnthropicBackend"),
+        ("cohere", "cohere", "CohereBackend"),
+        ("gemini", "gemini", "GeminiBackend"),
+        ("mistral", "mistral", "MistralBackend"),
+    ],
+    ids=["anthropic", "cohere", "gemini", "mistral"],
+)
+@pytest.mark.anyio
+async def test_capable_adapter_health_check_probes_its_effective_endpoint(
+    provider: str, module_name: str, class_name: str
+) -> None:
+    """The health check must probe the custom endpoint, not the vendor default."""
+    module = __import__(f"modulo.model_backends.{module_name}", fromlist=[class_name])
+    health_mock = AsyncMock(return_value=HealthResult(ok=True))
+    with patch.object(module, "openai_compatible_health_check", new=health_mock):
+        backend = _build_backend(
+            provider,
+            "model-1",
+            {"api_key": "k", "base_url": "https://gateway.internal.example/v1"},
+            {},
+        )
+        await backend.health_check()
+        health_mock.assert_awaited_once()
+        assert health_mock.await_args.kwargs["base_url"] == "https://gateway.internal.example/v1"
