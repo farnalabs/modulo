@@ -207,6 +207,7 @@ def _run_row(
     claim_count: int = 1,
     retry_policy: Any = None,
     trigger_id: uuid.UUID | None = None,
+    execution_attempt_count: int | None = None,
 ) -> SimpleNamespace:
     heartbeat = datetime.now(UTC) - timedelta(minutes=30) if stale else datetime.now(UTC)
     if dispatched_minutes_ago is not None:
@@ -239,6 +240,10 @@ def _run_row(
         dispatcher=dispatcher,
         enqueue_failed_at=enqueue_failed_at,
         claim_count=claim_count,
+        # FAR-2076: every claim a nodeless zombie took was an admitted
+        # EXECUTION attempt that died before its first node, so the durable
+        # counter equals the claim count unless a test says otherwise.
+        execution_attempt_count=claim_count if execution_attempt_count is None else execution_attempt_count,
         retry_policy=retry_policy,
     )
 
@@ -1056,13 +1061,15 @@ class TestNodelessRedispatchBudget:
         assert ch._should_redispatch_nodeless(self._row(2)) is False
 
     def test_stall_retry_policy_honors_max_retries(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """FAR-733: a policy covering 'stall' honors its OWN max_retries budget,
-        not the global nodeless budget.  The attempt count uses
-        max(0, claim_count - 1) (the watchdog path's budget for nodeless
-        runs), so claim_count=3 with max_retries=2 still has budget (2 <= 2)."""
+        """FAR-733 + FAR-2076: a policy covering 'stall' honors its OWN
+        max_retries budget, not the global nodeless budget. The attempt count
+        is the durable ``execution_attempt_count``, so with max_retries=2 (a
+        ceiling of 3 executions) a zombie from execution 2 may be
+        re-dispatched (2 <= 2) and one from execution 3 may not (3 > 2 — it
+        already IS the last permitted execution)."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings())
         assert ch._should_redispatch_nodeless(self._row(2, retry_policy={"on": ["stall"], "max_retries": 2})) is True
-        assert ch._should_redispatch_nodeless(self._row(3, retry_policy={"on": ["stall"], "max_retries": 2})) is True
+        assert ch._should_redispatch_nodeless(self._row(3, retry_policy={"on": ["stall"], "max_retries": 2})) is False
         assert ch._should_redispatch_nodeless(self._row(4, retry_policy={"on": ["stall"], "max_retries": 2})) is False
 
     def test_non_stall_policy_never_redispatches(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1101,11 +1108,11 @@ class TestNodelessRedispatchBudget:
         default pin): an ABSENT `on` key with a valid budget > 0 is now ALL-
         events coverage (stall included), so the POLICY budget applies —
         terminal-fail once the adjusted attempt count exceeds max_retries, NOT
-        the budget-default.  The attempt count uses max(0, claim_count - 1)
-        (the watchdog path's budget for nodeless runs)."""
+        the budget-default.  The attempt count is the durable execution count
+        (FAR-2076)."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings(saq_nodeless_redispatch_budget=10))
         assert ch._should_redispatch_nodeless(self._row(3, retry_policy={"max_retries": 3})) is True
-        assert ch._should_redispatch_nodeless(self._row(4, retry_policy={"max_retries": 3})) is True
+        assert ch._should_redispatch_nodeless(self._row(4, retry_policy={"max_retries": 3})) is False
         assert ch._should_redispatch_nodeless(self._row(5, retry_policy={"max_retries": 3})) is False
 
     def test_absent_on_policy_with_zero_budget_falls_to_budget_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1119,30 +1126,30 @@ class TestNodelessRedispatchBudget:
     def test_null_on_policy_with_budget_honors_policy_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-649 + FAR-733 — matrix row 6: an explicitly-NULL `on` with a
         valid budget > 0 behaves like an absent key — all-events coverage,
-        POLICY budget.  The attempt count uses max(0, claim_count - 1)."""
+        POLICY budget.  The attempt count is the durable execution count."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings(saq_nodeless_redispatch_budget=10))
         assert ch._should_redispatch_nodeless(self._row(3, retry_policy={"on": None, "max_retries": 3})) is True
-        assert ch._should_redispatch_nodeless(self._row(4, retry_policy={"on": None, "max_retries": 3})) is True
+        assert ch._should_redispatch_nodeless(self._row(4, retry_policy={"on": None, "max_retries": 3})) is False
         assert ch._should_redispatch_nodeless(self._row(5, retry_policy={"on": None, "max_retries": 3})) is False
 
     def test_far733_stall_covered_uses_shared_matcher(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-733: nodeless zombie deaths under a stall-covered policy
         consult the SHARED ``_retry_after_policy`` matcher — the same event
-        resolution the in-execute path and watchdog kills use.  The attempt
-        budget uses max(0, claim_count - 1) (the watchdog path's budget for
-        nodeless runs), so claim_count=3 with max_retries=2 has budget
-        (attempt 2 <= 2)."""
+        resolution the in-execute path and watchdog kills use. FAR-2076: the
+        attempt budget is the durable execution count, so a zombie from
+        execution 3 under max_retries=2 is already AT the ceiling (3) and is
+        terminal-failed."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings())
-        assert ch._should_redispatch_nodeless(self._row(3, retry_policy={"on": ["stall"], "max_retries": 2})) is True
-        assert ch._should_redispatch_nodeless(self._row(4, retry_policy={"on": ["stall"], "max_retries": 2})) is False
+        assert ch._should_redispatch_nodeless(self._row(2, retry_policy={"on": ["stall"], "max_retries": 2})) is True
+        assert ch._should_redispatch_nodeless(self._row(3, retry_policy={"on": ["stall"], "max_retries": 2})) is False
 
     def test_far733_absent_on_all_events_uses_shared_matcher(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-733 + FAR-649: an absent-`on` policy with valid budget is ALL-
         events coverage.  The SHARED ``_retry_after_policy`` matcher returns
-        the budget; the attempt count uses max(0, claim_count - 1)."""
+        the budget; the attempt count is the durable execution count."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings())
         assert ch._should_redispatch_nodeless(self._row(3, retry_policy={"max_retries": 3})) is True
-        assert ch._should_redispatch_nodeless(self._row(4, retry_policy={"max_retries": 3})) is True
+        assert ch._should_redispatch_nodeless(self._row(4, retry_policy={"max_retries": 3})) is False
         assert ch._should_redispatch_nodeless(self._row(5, retry_policy={"max_retries": 3})) is False
 
     def test_far733_non_stall_exclusive_terminally_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:

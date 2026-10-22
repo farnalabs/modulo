@@ -56,14 +56,6 @@ from modulo.core.audit_logger.labels import (
 )
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.cost_controller.finalize import FinalizeMetricSink, derive_node_type_map, finalize_cost
-from modulo.core.dispatch import (
-    # Re-exported under its historical private name: the bound lives ONCE in
-    # ``modulo.core.dispatch`` and existing callers/tests read it here.
-    RETRY_POLICY_MAX_RETRIES as _RETRY_POLICY_MAX_RETRIES,  # noqa: F401
-)
-from modulo.core.dispatch import (
-    retry_policy_max_retries,
-)
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.eval_engine import (
     EvalBlockedError,
@@ -141,6 +133,13 @@ from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.port_resolver import compute_port_topology_hash
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.core.pipeline_engine.runtime_retry import COMPENSATION_FAILED_CODE, CompensationFailedError
+from modulo.core.retry_budget import (
+    # The ONE retry-budget module (zero-import leaf): the bound, the ceiling and
+    # the consumed measure all live there so no path can define a second copy.
+    retry_executions_consumed,
+    retry_max_executions,
+    retry_policy_max_retries,
+)
 from modulo.core.run_context.autonomy import (
     PIPELINE_EARNED_AT_START_KEY,
     PIPELINE_MAX_AUTONOMY_KEY,
@@ -270,8 +269,9 @@ GUARDRAIL_EVAL_TYPE = "guardrail"
 #                 because the FAR-228 idempotency gate (guard A) skips an
 #                 already-delivered node on re-execution.
 _RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure", "eval_failed"})
-# ``_RETRY_POLICY_MAX_RETRIES`` is imported (aliased) from ``modulo.core.dispatch``
-# above — the ONE definition, shared with every other retry-budget consumer.
+# The ``max_retries`` BOUND is not defined here: it lives in the one shared
+# ``modulo.core.retry_budget`` module (imported above), so this file cannot
+# drift from the validator or the other retry-budget consumers.
 
 # FAR-939 chunk 12 (M4, §3.3 run-frozen): key under which the fire-time
 # evaluation modes of the gate's source node are stamped onto the claim's
@@ -472,10 +472,10 @@ def _retry_backoff_seconds(
     exponential schedule.
 
     The schedule is bounded by the retry budget at the decision site: the
-    executor only re-dispatches while ``node_attempt_count <= max_retries``,
-    so the last scheduled attempt (attempt == budget) cannot extend beyond the
-    policy's ``max_retries``. This is a pure function of the attempt number —
-    unit-testable without touching the async retry path.
+    executor only re-dispatches while ``execution_attempt_count <=
+    max_retries``, so the last scheduled attempt (attempt == budget) cannot
+    extend beyond the policy's ``max_retries``. This is a pure function of the
+    attempt number — unit-testable without touching the async retry path.
     """
     n = max(int(attempt_n), 1)
     exponential: float = min(float(base) * float(multiplier) ** (n - 1), cap)
@@ -621,9 +621,10 @@ def _retry_after_policy(
     this function with ``final_status="stalled"`` and
     ``error_code="executor_stalled"`` so that a stall-covered policy
     re-dispatches nodeless zombies on the SAME cycle the watchdog would allow.
-    The attempt budget uses ``max(0, claim_count - 1)`` (the watchdog path's
-    ``max(node_attempt_count, claim_count - 1)`` where ``node_attempt_count``
-    is 0 for nodeless runs).
+    FAR-2076: the attempt count on every path is the durable
+    ``runs.execution_attempt_count`` (via
+    ``modulo.core.retry_budget.retry_executions_consumed``) — never
+    ``claim_count``, which grows on capacity-demoted and resume claims.
 
     An absent/malformed policy or a 0 budget yields None (no retry) — the
     current behaviour is unchanged for pipelines without a policy.
@@ -1977,7 +1978,7 @@ def _sandbox_failure_error_code(exc: SandboxNodeFailedError) -> str:
 def _non_retryable_failure_detail(
     non_retryable_code: str,
     exc: Exception,
-    node_attempt_count: int,
+    execution_attempt_count: int,
     retries: int,
 ) -> str:
     """Terminal detail for a failure whose error class cannot be retried (FAR-1800).
@@ -1988,7 +1989,7 @@ def _non_retryable_failure_detail(
     is a FIRST-attempt terminal in that case, and a retries-exhausted terminal
     only when the budget was already spent.
     """
-    if node_attempt_count < retries:
+    if execution_attempt_count < retries:
         return _sanitize_detail(
             f"Sandbox node failed with non-retryable error {non_retryable_code}; "
             "not retried because a retry re-hits the same fault: " + str(exc),
@@ -2003,7 +2004,7 @@ def _non_retryable_failure_detail(
 
 
 def _can_fenced_requeue(
-    node_attempt_count: int,
+    execution_attempt_count: int,
     retries: int,
     superseded: bool,
     stalled: bool,
@@ -2027,28 +2028,27 @@ def _can_fenced_requeue(
     """
     if _is_non_retryable_error_code(error_code):
         return False
-    return node_attempt_count < retries and not superseded and not stalled and script_lease_ok and graph_idempotent
+    return execution_attempt_count < retries and not superseded and not stalled and script_lease_ok and graph_idempotent
 
 
 def _transient_retry_allowance(configured: int, retry_policy: Any) -> int:
     """Bound the in-execute transient retry by the pipeline's policy (FAR-2076).
 
-    ``_can_fenced_requeue`` compares ``node_attempt_count < retries`` and
-    ``retries`` used to be ``settings.saq_run_retries`` ONLY — so the
-    in-execute transient path could grant executions the pipeline's
-    ``retry_policy`` had already refused (the run-level policy path and the
-    transport were each counting a different budget).
+    ``_can_fenced_requeue`` is fed ``runs.execution_attempt_count`` (via
+    ``modulo.core.retry_budget.retry_executions_consumed``) and ``retries`` used
+    to be ``settings.saq_run_retries`` ONLY — so the in-execute transient path
+    could grant executions the pipeline's ``retry_policy`` had already refused
+    (the run-level policy path and the transport were each counting a different
+    budget).
 
     Returns ``min(configured, execution ceiling)`` where the ceiling is
     ``1 + max_retries`` (the total executions the policy authorises, this
-    attempt included). ``node_attempt_count`` — the value compared against
+    attempt included). ``execution_attempt_count`` — the value compared against
     the returned bound — counts executions, so ``consumed < 1 + max_retries``
     permits exactly ``1 + max_retries`` executions in total. A policy with no
-    usable budget (absent/malformed/absent ``max_retries``) returns the
-    configured value unchanged: no policy means existing behaviour.
+    ceiling (absent / empty) returns the configured value unchanged: no policy
+    means existing behaviour.
     """
-    from modulo.core.dispatch import retry_max_executions
-
     max_executions = retry_max_executions(retry_policy)
     if max_executions is None:
         return configured
@@ -2143,7 +2143,7 @@ def _attempt_consumed_node_budget(elapsed_seconds: float | None, node_timeouts: 
 
 
 def _can_retry_after_policy(
-    node_attempt_count: int,
+    execution_attempt_count: int,
     retry_budget: int,
     superseded: bool,
     script_retry_probe_ok: bool,
@@ -2158,7 +2158,10 @@ def _can_retry_after_policy(
     so every caller that has not been taught the guard keeps today's behaviour.
     """
     return (
-        node_attempt_count <= retry_budget and not superseded and script_retry_probe_ok and not attempt_consumed_budget
+        execution_attempt_count <= retry_budget
+        and not superseded
+        and script_retry_probe_ok
+        and not attempt_consumed_budget
     )
 
 
@@ -2548,12 +2551,35 @@ class PipelineExecutor:
                     # off — never resurrect it. Return it untouched so the
                     # caller does not resume execution.
                     return run
-                return await self._claim_run_and_audit(
+                admitted = await self._claim_run_and_audit(
                     session=session,
                     run_id=run_id,
                     org_id=org_id,
                     pipeline_id=pipeline_id,
                 )
+                # FAR-2076: this attempt is EXECUTING — spend ONE execution
+                # against the pipeline's retry budget. Placement is the
+                # invariant: the capacity check above has passed (a demotion
+                # returns below and never reaches this line), so the counter
+                # grows if and only if the execution attempt actually begins.
+                # Stamped in the SAME transaction as the admission decision, so
+                # a crash immediately after this commit still leaves the
+                # attempt counted; every pre-node death that follows
+                # (checkpointer setup, graph compile, hub init) therefore
+                # consumes budget, because the attempt was made. It is NEVER
+                # stamped by the SAQ claim (``claim_run_async``) — that runs
+                # before capacity and would charge a demoted claim — and never
+                # by the resume claim (a checkpoint continuation, not a graph
+                # execution).
+                from modulo.core.pipeline_execution import bump_execution_attempt_count
+
+                await bump_execution_attempt_count(
+                    session,
+                    run_id,
+                    org_id,
+                    claim_token=self._claim_token,
+                )
+                return admitted
 
             decline_code, decline_detail = self._capacity_decline(
                 max_concurrent=max_concurrent,
@@ -5906,12 +5932,18 @@ class PipelineExecutor:
         # the policy refuses. No policy => unchanged.
         retries = _transient_retry_allowance(retries, pipeline_retry_policy)
         (
-            node_attempt_count,
+            execution_attempt_count,
             current_token,
             run_markers,
             cancellation_requested,
             idempotency_key,
         ) = await self._load_transient_state(run_id=run_id, org_id=org_id)
+        # FAR-2076: the ONE shared measure of executions already consumed —
+        # never re-derived here, so this path cannot disagree with the policy /
+        # watchdog / reconcile ceilings about what a run has spent.
+        execution_attempt_count = retry_executions_consumed(
+            execution_attempt_count=execution_attempt_count,
+        )
 
         superseded = self._claim_token is not None and current_token is not None and current_token != self._claim_token
         stalled = bool(stall_requested is not None and stall_requested.is_set())
@@ -6001,7 +6033,7 @@ class PipelineExecutor:
         # Fail open: an unrecognised failure yields None and keeps today's path.
         failure_code = classify_provider_error(str(exc))
         if _can_fenced_requeue(
-            node_attempt_count,
+            execution_attempt_count,
             retries,
             superseded,
             stalled,
@@ -6053,7 +6085,7 @@ class PipelineExecutor:
             exc=exc,
             script_lease_ok=script_lease_ok,
             graph_idempotent=graph_idempotent,
-            node_attempt_count=node_attempt_count,
+            execution_attempt_count=execution_attempt_count,
             retries=retries,
             non_retryable_code=failure_code if _is_non_retryable_error_code(failure_code) else None,
         )
@@ -6390,7 +6422,11 @@ class PipelineExecutor:
         # claim_count increments on every SAQ claim including
         # capacity-deferred / non-executing claims, which would otherwise
         # consume the retry budget before any real execution attempt
-        # (postmortem FAR-121).
+        # (postmortem FAR-121). FAR-2076 keeps this counter as the per-node
+        # retry budget it always was; the RUN-level execution budget is the
+        # separate durable ``execution_attempt_count``, stamped on admission
+        # in ``_claim_under_capacity`` (earlier than this line, so a pre-node
+        # death still consumes the run-level budget).
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, scope.org_id)
             await set_rls_execution_context(session)
@@ -6462,13 +6498,17 @@ class PipelineExecutor:
     ) -> tuple[int, str | None, dict[str, Any] | None, bool, str | None]:
         """Reload the run's attempt markers + claim + cancellation state.
 
-        Returns ``(node_attempt_count, current_token, run_markers,
-        cancellation_requested, idempotency_key)``. ``idempotency_key`` is the
-        run's persisted FAR-438 idempotency identity (``<pipeline_id>:<run_number>``)
-        written at create — a re-run reads it back to recompute the SAME per-node
-        keys for the read-before-write dedupe.
+        Returns ``(execution_attempt_count, current_token, run_markers,
+        cancellation_requested, idempotency_key)``. The attempt count is the
+        durable ``runs.execution_attempt_count`` — the ONE retry-budget
+        measure (FAR-2076), not ``node_attempt_count`` (which a pre-node death
+        never increments) and not ``claim_count`` (which grows on
+        capacity-demoted and resume claims). ``idempotency_key`` is the run's
+        persisted FAR-438 idempotency identity (``<pipeline_id>:<run_number>``)
+        written at create — a re-run reads it back to recompute the SAME
+        per-node keys for the read-before-write dedupe.
         """
-        node_attempt_count = 0
+        execution_attempt_count = 0
         current_token: str | None = None
         run_markers: dict[str, Any] | None = None
         cancellation_requested = False
@@ -6478,7 +6518,7 @@ class PipelineExecutor:
             await set_rls_execution_context(session)
             current_run = await get_run(session, run_id)
             if current_run is not None:
-                node_attempt_count = int(current_run.node_attempt_count or 0)
+                execution_attempt_count = int(current_run.execution_attempt_count or 0)
                 current_token = current_run.claim_token
                 # FAR-583 read-switch: the markers reassemble from
                 # run_node_outputs (with the empty/mismatch legacy fallback)
@@ -6489,7 +6529,7 @@ class PipelineExecutor:
                 run_markers = await read_run_markers(session, run_id=run_id, organisation_id=org_id)
                 cancellation_requested = bool(current_run.cancellation_requested)
                 idempotency_key = current_run.idempotency_key
-        return node_attempt_count, current_token, run_markers, cancellation_requested, idempotency_key
+        return execution_attempt_count, current_token, run_markers, cancellation_requested, idempotency_key
 
     def _idempotency_gate_ok(
         self,
@@ -6679,7 +6719,7 @@ class PipelineExecutor:
         exc: Exception,
         script_lease_ok: bool,
         graph_idempotent: bool,
-        node_attempt_count: int,
+        execution_attempt_count: int,
         retries: int,
         non_retryable_code: str | None = None,
     ) -> tuple[str, str]:
@@ -6710,10 +6750,10 @@ class PipelineExecutor:
             # retried" would be false — the retries DID run, and the last
             # failure happens to be non-retryable.
             return non_retryable_code, _non_retryable_failure_detail(
-                non_retryable_code, exc, node_attempt_count, retries
+                non_retryable_code, exc, execution_attempt_count, retries
             )
         error_code = "node_cancelled"
-        if not graph_idempotent and node_attempt_count < retries:
+        if not graph_idempotent and execution_attempt_count < retries:
             # FAR-295: the run was NOT retried because a node in the
             # graph is non-idempotent (idempotent=false) — a retry
             # would re-execute a side-effecting step. Distinguish
@@ -6778,7 +6818,13 @@ class PipelineExecutor:
         org_id: uuid.UUID,
         run_id: uuid.UUID,
     ) -> tuple[int, str | None, datetime | None]:
-        """Read the run's attempt count, claim token, and THIS attempt's start.
+        """Read the run's EXECUTION attempt count, claim token, and THIS attempt's start.
+
+        The first element is the durable ``runs.execution_attempt_count`` — the
+        ONE retry-budget measure (FAR-2076). It is what every granting path
+        compares against ``1 + max_retries``; ``claim_count`` (capacity-demoted
+        / resume claims) and ``node_attempt_count`` (nothing recorded for a
+        pre-node death) are NOT execution counters and must never be used here.
 
         ``attempt_started_at`` is the LATER of ``dispatched_at`` (rewritten on
         every claim / re-claim, so it marks the current attempt's start) and
@@ -6787,7 +6833,7 @@ class PipelineExecutor:
         is the input to the FAR-2025 over-budget retry guard: an attempt that
         consumed the graph's node-budget allowance must not be re-dispatched.
         """
-        node_attempt_count = 0
+        execution_attempt_count = 0
         current_claim_token: str | None = None
         attempt_started_at: datetime | None = None
         async with self._session_factory() as session, session.begin():
@@ -6795,10 +6841,10 @@ class PipelineExecutor:
             await set_rls_execution_context(session)
             current_run = await get_run(session, run_id)
             if current_run is not None:
-                node_attempt_count = int(current_run.node_attempt_count or 0)
+                execution_attempt_count = int(current_run.execution_attempt_count or 0)
                 current_claim_token = current_run.claim_token
                 attempt_started_at = _attempt_started_at(current_run)
-        return node_attempt_count, current_claim_token, attempt_started_at
+        return execution_attempt_count, current_claim_token, attempt_started_at
 
     async def _probe_script_lease(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> bool:
         """FAR-296 Phase 2 stale-claim lease probe before ANY requeue of script mode.
@@ -6850,7 +6896,7 @@ class PipelineExecutor:
         org_id: uuid.UUID,
         final_status: str,
         error_code: str | None,
-        node_attempt_count: int,
+        execution_attempt_count: int,
         retry_budget: int,
         pipeline_retry_policy: dict[str, Any],
         model_backend_hub: ModelBackendHub | None,
@@ -6890,7 +6936,7 @@ class PipelineExecutor:
         # ONE jitter draw: the delay is computed ONCE here and threaded to
         # BOTH the log line and the asyncio.sleep below (no re-resolution).
         effective_sleep = _retry_backoff_seconds(
-            node_attempt_count, base=schedule_delay, multiplier=schedule_multiplier
+            execution_attempt_count, base=schedule_delay, multiplier=schedule_multiplier
         )
         _log.warning(
             "pipeline.retry_policy",
@@ -6898,7 +6944,7 @@ class PipelineExecutor:
                 "run_id": str(run_id),
                 "status": final_status,
                 "error_code": error_code,
-                "attempt": node_attempt_count,
+                "attempt": execution_attempt_count,
                 "budget": retry_budget,
                 # FAR-525 observability: the effective post-cap post-jitter
                 # sleep, the schedule state, and the SAQ delay component.
@@ -6915,8 +6961,8 @@ class PipelineExecutor:
         # Without it a policy-triggered retry re-fires back-to-back,
         # hammering the queue/gateway on a persistent failure. The delay
         # grows with the attempt count and is bounded by the retry
-        # budget (the loop above only re-dispatches while
-        # node_attempt_count <= retry_budget), so the schedule can never
+        # budget (the caller only re-dispatches while
+        # execution_attempt_count <= retry_budget), so the schedule can never
         # extend beyond max_retries. `_retry_backoff_seconds` is a pure
         # function of the attempt number — covered by unit tests.
         # FAR-525: the delay honours the run-level ``backoff_schedule``
@@ -6962,7 +7008,7 @@ class PipelineExecutor:
         # narrowing keeps mypy strict-clean without introducing an ``assert``.
         if retry_budget is None:
             return "none"
-        node_attempt_count, current_claim_token, attempt_started_at = await self._read_retry_attempt_state(
+        execution_attempt_count, current_claim_token, attempt_started_at = await self._read_retry_attempt_state(
             org_id, run_id
         )
         superseded = (
@@ -6984,25 +7030,26 @@ class PipelineExecutor:
                 extra={
                     "run_id": str(run_id),
                     "error_code": error_code,
-                    "attempt": node_attempt_count,
+                    "attempt": execution_attempt_count,
                     "budget": retry_budget,
                     "node_budget_seconds": sum(t for t in self._node_timeouts.values() if isinstance(t, int) and t > 0),
                 },
             )
-        # ``node_attempt_count`` is incremented to 1 on the FIRST real
-        # execution attempt (above), so ``<= retry_budget`` means the
-        # budget counts actual RETRIES: budget=1 retries attempt 1
-        # (1 <= 1) and is terminal after attempt 2 (2 <= 1 is false) —
-        # 1 retry, 2 attempts. ``< retry_budget`` would have yielded N
-        # total attempts (N-1 retries), contradicting the API's
-        # "max_retries means retries" contract.
+        # FAR-2076: ``execution_attempt_count`` counts EXECUTIONS of the graph
+        # (one per admitted ``execute_run``), so ``<= retry_budget`` means the
+        # budget counts actual RETRIES: budget=1 permits execution 1
+        # (1 <= 1) and refuses execution 2 (2 <= 1 is false) — one retry, two
+        # executions. ``claim_count`` (the old pre-node measure) and
+        # ``node_attempt_count`` are NOT execution counters: the former grows on
+        # capacity-demoted / resume claims, the latter records nothing for a
+        # pre-node death.
         # FAR-296 Phase 2: before ANY requeue of a script-mode run, prove
         # no script process could still be alive (stale-claim lease probe).
         script_retry_probe_ok = True
         if _graph_has_script_mode(graph_json):
             script_retry_probe_ok = await self._probe_script_lease(run_id=run_id, org_id=org_id)
         if _can_retry_after_policy(
-            node_attempt_count,
+            execution_attempt_count,
             retry_budget,
             superseded,
             script_retry_probe_ok,
@@ -7013,7 +7060,7 @@ class PipelineExecutor:
                 org_id=org_id,
                 final_status=final_status,
                 error_code=error_code,
-                node_attempt_count=node_attempt_count,
+                execution_attempt_count=execution_attempt_count,
                 retry_budget=retry_budget,
                 pipeline_retry_policy=pipeline_retry_policy,
                 model_backend_hub=model_backend_hub,

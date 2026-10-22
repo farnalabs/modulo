@@ -38,6 +38,10 @@ def _row(claim_count: int, retry_policy: Any = None, *, checkpoints_absent: bool
         pipeline_id=uuid.uuid4(),
         status="running",
         claim_count=claim_count,
+        # FAR-2076: each claim a nodeless zombie took was an admitted execution
+        # attempt that died before its first node, so the durable execution
+        # counter equals the claim count.
+        execution_attempt_count=claim_count,
         retry_policy=retry_policy,
         node_token_usage=None,
         outputs_absent=True,
@@ -63,14 +67,15 @@ def budget_default(monkeypatch: pytest.MonkeyPatch) -> None:
 class TestFailureCoverageCarveOut:
     """The NEW zero-node failure-coverage carve-out (FAR-1088 W4)."""
 
-    def test_re_dispatches_claim_1_2_3(self, budget_default: None) -> None:
-        """claim_count 1/2/3 re-dispatch: attempt = max(0, claim - 1) <= 2."""
+    def test_re_dispatches_execution_1_and_2(self, budget_default: None) -> None:
+        """FAR-2076: consumed executions 1/2 may be re-dispatched (<= 2)."""
         assert ch._should_redispatch_nodeless(_row(1, FAILURE_POLICY)) is True
         assert ch._should_redispatch_nodeless(_row(2, FAILURE_POLICY)) is True
-        assert ch._should_redispatch_nodeless(_row(3, FAILURE_POLICY)) is True
 
-    def test_terminal_fails_at_claim_4(self, budget_default: None) -> None:
-        """Bounded by the POLICY's max_retries=2: attempt 3 > 2 terminal-fails."""
+    def test_terminal_fails_at_execution_3(self, budget_default: None) -> None:
+        """Bounded by the POLICY's max_retries=2 (ceiling 3): the zombie from
+        execution 3 is already the last permitted execution — terminal-fail."""
+        assert ch._should_redispatch_nodeless(_row(3, FAILURE_POLICY)) is False
         assert ch._should_redispatch_nodeless(_row(4, FAILURE_POLICY)) is False
 
     def test_bounded_by_policy_budget_not_config_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -97,12 +102,13 @@ class TestPreservedBehaviour:
     """Every pre-existing behaviour must be byte-for-byte unchanged."""
 
     def test_stall_policy_honors_policy_budget(self, budget_default: None) -> None:
-        """The stall branch (shared matcher) is untouched: claim 1/2/3 True,
-        claim 4 False under max_retries=2."""
+        """The stall branch (shared matcher) keeps the policy budget, measured
+        on the durable execution count: 1/2 True, 3/4 False under
+        max_retries=2 (ceiling 3 executions)."""
         policy = {"on": ["stall"], "max_retries": 2}
         assert ch._should_redispatch_nodeless(_row(1, policy)) is True
         assert ch._should_redispatch_nodeless(_row(2, policy)) is True
-        assert ch._should_redispatch_nodeless(_row(3, policy)) is True
+        assert ch._should_redispatch_nodeless(_row(3, policy)) is False
         assert ch._should_redispatch_nodeless(_row(4, policy)) is False
 
     def test_timeout_only_policy_terminal_fails(self, budget_default: None) -> None:
@@ -128,12 +134,12 @@ class TestPreservedBehaviour:
     def test_missing_on_uses_shared_matcher_not_budget_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-649: an absent `on` with a valid budget is ALL-events coverage —
         the POLICY budget (3) is the binding bound, not the configurable
-        budget-default: with the default raised to 10, claim 5 still
-        terminal-fails (attempt 4 > 3) where the budget-default would allow it."""
+        budget-default: with the default raised to 10, execution 4 still
+        terminal-fails (4 > 3) where the budget-default would allow it."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings(saq_nodeless_redispatch_budget=10))
         policy = {"max_retries": 3}
-        assert ch._should_redispatch_nodeless(_row(4, policy)) is True
-        assert ch._should_redispatch_nodeless(_row(5, policy)) is False
+        assert ch._should_redispatch_nodeless(_row(3, policy)) is True
+        assert ch._should_redispatch_nodeless(_row(4, policy)) is False
 
     def test_policy_less_uses_budget_default(self, budget_default: None) -> None:
         """No policy at all: the configurable budget path is untouched."""
@@ -147,7 +153,7 @@ class TestPreservedBehaviour:
         the failure budget instead of re-validating ``max_retries`` by hand
         (F3): a matcher that answers with a DIFFERENT budget moves the
         decision with it — under the hand-rolled validation the policy's own
-        ``max_retries=2`` would have bound (claim 3 still True)."""
+        ``max_retries=2`` would have bound (execution 2 still True)."""
         import modulo.core.pipeline_engine.executor as executor_module
 
         real = executor_module._retry_after_policy
@@ -163,10 +169,11 @@ class TestPreservedBehaviour:
 
         monkeypatch.setattr(executor_module, "_retry_after_policy", _fake)
 
-        # attempt = max(0, claim-1): claim 2 -> 1 <= 1 re-dispatches; claim 3
-        # -> 2 > 1 terminal-fails — the matcher-derived budget, not max_retries.
-        assert ch._should_redispatch_nodeless(_row(2, FAILURE_POLICY)) is True
-        assert ch._should_redispatch_nodeless(_row(3, FAILURE_POLICY)) is False
+        # FAR-2076: the execution count is the measure — execution 1 <= 1
+        # re-dispatches; execution 2 > 1 terminal-fails. The budget is the
+        # matcher-derived 1, not the policy's max_retries=2.
+        assert ch._should_redispatch_nodeless(_row(1, FAILURE_POLICY)) is True
+        assert ch._should_redispatch_nodeless(_row(2, FAILURE_POLICY)) is False
 
 
 class TestZeroNodePremiseEnforcedAtTheCarveOut:

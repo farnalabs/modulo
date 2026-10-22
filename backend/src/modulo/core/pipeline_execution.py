@@ -897,6 +897,84 @@ def _claim_params(
     return params
 
 
+# FAR-2076 — the durable EXECUTION-ATTEMPT counter.
+#
+# ``runs.execution_attempt_count`` is the single authority for "executions
+# used" (see ``modulo.core.retry_budget``). It is incremented EXACTLY ONCE per
+# execution attempt of the graph, and deliberately NOT by the claim UPDATE:
+#
+#   * ``_CLAIM_UPDATE_SQL*`` increments ``claim_count`` on EVERY claim —
+#     including the HITL resume claim and a claim the executor then demotes
+#     back to ``pending`` because a capacity slot was full. Neither is an
+#     execution of the graph, so a claim-time increment would spend budget for
+#     work that never ran.
+#   * ``_RESUME_CLAIM_UPDATE_SQL*`` is a checkpoint continuation, not a graph
+#     execution — never stamped, and this module's resume claim statements are
+#     untouched.
+#
+# ORDERING (verified in the tree): the claim UPDATE commits first
+# (``claim_run_async``), then ``PipelineExecutor.execute`` performs the capacity
+# check (``_check_capacity`` → ``_claim_under_capacity``) and only THEN admits
+# the attempt. The bump therefore happens inside ``_claim_under_capacity``'s
+# admission branch — in the SAME transaction as the admission decision, after
+# ``_all_capacities_ok`` proved a slot is free — so it lands if and only if the
+# execution attempt actually begins. A capacity demotion never reaches it. A
+# pre-node death (checkpointer setup, graph compile, connector-hub init) happens
+# AFTER that point and therefore DOES consume budget: the attempt was made.
+#
+# Fenced on the claim token + ``status='running'`` like every other
+# claim-scoped writer, so a superseded executor (whose token was rotated by a
+# successor) can never spend the successor's budget.
+_EXECUTION_ATTEMPT_BUMP_SQL = text(
+    "UPDATE runs SET execution_attempt_count = execution_attempt_count + 1 "
+    "WHERE id=:rid AND organisation_id=:oid AND status='running' AND claim_token=:tok "
+    "RETURNING id"
+)
+_EXECUTION_ATTEMPT_BUMP_SQL_NO_TOKEN = text(
+    "UPDATE runs SET execution_attempt_count = execution_attempt_count + 1 "
+    "WHERE id=:rid AND organisation_id=:oid AND status='running' "
+    "RETURNING id"
+)
+
+
+async def bump_execution_attempt_count(
+    session: Any,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    *,
+    claim_token: str | None = None,
+) -> bool:
+    """Spend ONE execution attempt against the run's retry budget.
+
+    The only writer of ``runs.execution_attempt_count``. Call it in the
+    transaction that ADMITS an ``execute_run`` attempt (immediately after the
+    capacity check passes) — never at claim time, never on the resume path.
+
+    Atomic and fenced: the increment is a single ``UPDATE ... WHERE id=...
+    AND status='running' [AND claim_token=:tok]``, so it either lands once for
+    the current claim or not at all. Returns ``True`` when the row was
+    incremented, ``False`` when the fence rejected it (a superseded claim, a
+    row that went terminal in the meantime, or one that is not ``running``).
+
+    A ``False`` is diagnostic, not a control-flow signal: the admission this
+    write accompanies has already committed, and when the fence rejects
+    because a successor took the run, that successor's own admission spent its
+    own attempt — so the invariant ("at most one spend per execution") still
+    holds. Every write the executor makes afterwards is token-fenced, so a
+    superseded executor cannot complete or reset the successor's row.
+
+    ``claim_token=None`` is only for callers with no token (direct executor
+    use in tests); production always holds one from ``claim_run_async``.
+    """
+    params: dict[str, Any] = {"rid": str(run_id), "oid": str(org_id)}
+    stmt = _EXECUTION_ATTEMPT_BUMP_SQL_NO_TOKEN
+    if claim_token is not None:
+        params["tok"] = claim_token
+        stmt = _EXECUTION_ATTEMPT_BUMP_SQL
+    result = await session.execute(stmt, params)
+    return result.fetchone() is not None
+
+
 async def _maybe_alert_retry_storm(aengine: AsyncEngine, run_id: str, org_id: str) -> None:
     """Best-effort SAQ retry-storm alert (plan F1 probe 6 / F3a).
 
