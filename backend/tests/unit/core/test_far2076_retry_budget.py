@@ -35,6 +35,14 @@ from modulo.core.dispatch import (
 )
 from modulo.core.pipeline_engine import executor as ex
 from modulo.core.pipeline_engine import watchdog_retry as wr
+from modulo.core.pipeline_engine.error_codes import (
+    _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED,
+    ERROR_CODE_REGISTRY,
+    LEGACY_ALIASES,
+    class_for,
+    known_error_codes,
+    map_legacy_code,
+)
 from modulo.core.worker_handoff import (
     WORKER_LOST_ERROR_CODE,
     _node_started_policy_allows,
@@ -349,7 +357,10 @@ async def test_budget_exhausted_terminal_fail_is_guarded_and_coded() -> None:
 
     sql, params = session.statements[0]
     assert params["code"] == ch._RETRY_BUDGET_EXHAUSTED_ERROR_CODE
-    assert params["code"] == "retry_budget_exhausted"
+    # The write site emits the CANONICAL dotted code, derived from the registry
+    # (never a duplicated bare literal), so the read boundary classifies it.
+    assert params["code"] == "harness.retry_budget_exhausted"
+    assert params["code"] == _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED
     assert params["ceiling"] == _CEILING
     # The UPDATE re-checks the premise on the row itself.
     assert "status='pending'" in sql
@@ -359,6 +370,41 @@ async def test_budget_exhausted_terminal_fail_is_guarded_and_coded() -> None:
 
     # A row that advanced between the scan and the write is NOT reported killed.
     assert not await ch._fail_retry_budget_exhausted_run(_CapturingSession(rowcount=0), run_id, ORG, ceiling=_CEILING)
+
+
+# ---------------------------------------------------------------------------
+# 5b. The terminal code is registered in the read-boundary taxonomy
+# ---------------------------------------------------------------------------
+
+
+def test_retry_budget_exhausted_is_a_known_error_code() -> None:
+    """The write site's code must resolve at the read boundary.
+
+    A new value in the closed error-code vocabulary has to be reconciled with
+    every reader in the SAME change: an unregistered raw spelling collapses to
+    ``harness.unknown``, so the runs UI renders "Unknown error" and the
+    analytics ``dimension=error_code`` slice buckets the failure under Unknown.
+    """
+    assert "harness.retry_budget_exhausted" in known_error_codes()
+    assert _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED in known_error_codes()
+
+
+def test_retry_budget_exhausted_registered_with_expected_attributes() -> None:
+    """Terminal by construction: no execution is left to grant, so no retry."""
+    spec = ERROR_CODE_REGISTRY["harness.retry_budget_exhausted"]
+    assert spec.error_class == "harness"
+    assert spec.retryable is False
+    assert spec.alert_severity == "warning"
+    assert spec.guidance
+    assert class_for("retry_budget_exhausted") == "harness"
+
+
+def test_retry_budget_exhausted_bare_spelling_canonicalizes() -> None:
+    """Historical rows carry the bare spelling; the alias keeps them resolving."""
+    assert LEGACY_ALIASES["retry_budget_exhausted"] == "harness.retry_budget_exhausted"
+    assert map_legacy_code("retry_budget_exhausted") == "harness.retry_budget_exhausted"
+    assert map_legacy_code("harness.retry_budget_exhausted") == "harness.retry_budget_exhausted"
+    assert map_legacy_code("retry_budget_exhausted") != "harness.unknown"
 
 
 # ---------------------------------------------------------------------------
