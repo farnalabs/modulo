@@ -1724,12 +1724,13 @@ async def _maybe_watchdog_retry(
     carve-out; passed ONLY by the zombie watchdog (zero nodes by construction —
     it fires pre-first-progress).
 
-    ``veto_if_delivered`` (FAR-2053) opts the caller into the delivery veto —
-    refuse to re-dispatch a run whose markers already record a delivery.
-    Passed ONLY by the zombie watchdog: that path's kill is the one reached by
-    a re-dispatched attempt that delivered on a PRIOR attempt, and it is the
-    one whose re-dispatch has no other delivery guard. The FAR-369
-    node-deadline path does not pass it and is unchanged.
+    ``veto_if_delivered`` (FAR-2053 / FAR-2071) opts the caller into the
+    delivery veto — refuse to re-dispatch a run whose markers already record a
+    delivery. Passed by BOTH in-process watchdog call sites: the zombie/stall
+    path (FAR-2053) and the FAR-369 node-deadline path (FAR-2071). Each one's
+    kill can be reached by a re-dispatched attempt that delivered on a PRIOR
+    attempt — the markers survive the fenced pending-reset — and neither
+    re-dispatch has any other delivery guard.
 
     Both flags are forwarded ONLY when set, so hooks without the parameters
     keep the exact two-argument call shape.
@@ -2274,6 +2275,15 @@ async def _fail_overdue_node(
     sibling marker whose prose says the run was re-dispatched, never that it
     was terminalised. Both are best-effort — a marker failure is logged and
     swallowed so it can never delay or undo the outcome it describes.
+
+    FAR-2071: the consult opts into the FAR-2053 DELIVERY VETO
+    (``veto_if_delivered=True``), exactly like the stall path. A run that
+    delivered on an EARLIER attempt keeps its ``delivery_done`` markers across
+    the fenced pending-reset, so a node-deadline kill on a later attempt is
+    reachable with the side effect already recorded. When a marker records
+    ``delivery_done`` the hook refuses the re-dispatch and this path
+    terminal-fails the run with ``node_deadline_exceeded`` exactly as it does
+    without policy coverage (a probe read failure vetoes too — fail closed).
     """
     exceeded = [nid for nid, (dl, _to) in node_deadlines.items() if dl <= time.monotonic()]
     exceeded.sort(key=lambda nid: node_deadlines[nid][0])
@@ -2298,7 +2308,18 @@ async def _fail_overdue_node(
     # before either outcome runs, so the fact writer always sees it.
     await _record_node_deadline_watchdog_firing(aeng, run_id, org_id)
     if await _maybe_watchdog_retry(
-        retry_hook, run_id, final_status="failed", error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE
+        retry_hook,
+        run_id,
+        final_status="failed",
+        error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+        # FAR-2071: the same delivery veto the stall path applies. The run's
+        # ``delivery_done`` markers survive the fenced pending-reset, so a run
+        # that delivered on an EARLIER attempt and then blows a node deadline
+        # on a later one is reachable here; re-dispatching it would re-execute
+        # the graph from the start and risk repeating the side effect. The
+        # veto only REFUSES a re-dispatch — the run then terminal-fails with
+        # ``node_deadline_exceeded`` exactly as it does without policy coverage.
+        veto_if_delivered=True,
     ):
         # The retry hook's fenced pending-reset nulls ``error_code`` and the run
         # is now owned by a successor attempt, so the run page has no trace of
@@ -2627,10 +2648,11 @@ async def run_executor_with_watchdog(
     # the terminal fail, so this can never prevent a run from reaching a
     # terminal state.
     #
-    # FAR-2053: ONE hook, two call sites with different opt-ins — the zombie
-    # watchdog passes ``zero_node=True`` + ``veto_if_delivered=True``, the
-    # node-deadline watchdog passes neither. The delivery veto is deliberately
-    # stall-only; widening it is a separate decision, not a wiring default.
+    # FAR-2053 / FAR-2071: ONE hook, two call sites with different opt-ins —
+    # the zombie watchdog passes ``zero_node=True`` + ``veto_if_delivered=True``,
+    # the node-deadline watchdog passes ``veto_if_delivered=True`` only (nodes
+    # may have executed there, so the zero-node failure carve-out does not
+    # apply, but a prior delivery still forbids re-executing the graph).
     watchdog_retry_hook: Callable[[str, str], Awaitable[Any]] | None = None
     watchdog_retry_outcome: Any = None
     if _watchdog_retry_enabled_for_job(job):

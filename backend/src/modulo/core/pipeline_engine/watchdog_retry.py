@@ -47,11 +47,13 @@ a re-dispatch re-executes the graph from the start, so a run whose marker rows
 already record a completed delivery (``classify._any_marker_delivery_done`` —
 the SAME FAR-228 ``delivery_done`` sentinel the node-level gate reads) must not
 be re-dispatched: the side effect already happened and re-running can produce
-it twice. The stall/zombie watchdog passes the flag; the node-deadline
-watchdog does not (its behaviour is unchanged). The veto reads through the
-SAME repo reader the executor's gate uses (``read_run_markers``), so this path
-can never disagree with it about what the run recorded — there is no second
-definition of "delivered" and no new bookkeeping.
+it twice. BOTH in-process watchdog call sites pass the flag — the stall/zombie
+watchdog (FAR-2053) and the node-deadline watchdog (FAR-2071) — because both
+kills can be reached on an attempt that follows one which delivered. The veto
+reads through the SAME repo reader the executor's gate uses
+(``read_run_markers``), so this path can never disagree with it about what the
+run recorded — there is no second definition of "delivered" and no new
+bookkeeping.
 
 Fail-closed by design: any hook failure (DB error, missing executor, lost
 claim token) returns ``False`` and the watchdog terminal-fails the run
@@ -416,16 +418,17 @@ async def watchdog_retry_after_policy(
     behaviour is byte-for-byte unchanged: nodes may have executed there, so a
     failure carve-out is not safe without an explicit zero-node criterion.
 
-    FAR-2053 delivery veto — ``veto_if_delivered=True`` ONLY (the stall/zombie
-    watchdog passes it): once the retry policy would re-dispatch, the run's
-    marker rows are read and, if ANY of them records ``delivery_done``, the
-    re-dispatch is REFUSED and the watchdog terminal-fails instead. A
-    re-dispatch re-executes the graph from the start, so re-running a run that
-    already delivered can repeat its side effect; the FAR-228 node-level gate
-    only bounds that for single-sandbox-node graphs on the transient-failure
-    path. The probe fails CLOSED — an unreadable delivery record vetoes. The
-    node-deadline watchdog does not pass the flag, so its behaviour is
-    unchanged.
+    FAR-2053 delivery veto — ``veto_if_delivered=True`` ONLY, and passed by
+    BOTH in-process watchdog call sites: the stall/zombie watchdog (FAR-2053)
+    and the node-deadline watchdog (FAR-2071). Once the retry policy would
+    re-dispatch, the run's marker rows are read and, if ANY of them records
+    ``delivery_done``, the re-dispatch is REFUSED and the watchdog
+    terminal-fails instead. A re-dispatch re-executes the graph from the start,
+    so re-running a run that already delivered can repeat its side effect; the
+    FAR-228 node-level gate only bounds that for single-sandbox-node graphs on
+    the transient-failure path, and neither watchdog kill has any other
+    delivery guard. The probe fails CLOSED — an unreadable delivery record
+    vetoes.
     """
     box = outcome if outcome is not None else WatchdogRetryOutcome()
     if executor is None:
