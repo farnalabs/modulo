@@ -31,6 +31,7 @@ from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.db.crud.team import TeamUpdateOutcome
 from modulo.db.models.organisation import Organisation
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -87,6 +88,7 @@ def _make_session(execute_results: list[MagicMock] | None = None) -> AsyncMock:
     per-test execute queues only carry the route's own statements.
     """
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.in_transaction = MagicMock(return_value=True)
     session.get_bind = MagicMock(return_value=MagicMock(dialect=MagicMock(name="sqlite")))
     session.info = {}
