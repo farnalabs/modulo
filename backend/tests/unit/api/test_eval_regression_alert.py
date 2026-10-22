@@ -36,7 +36,7 @@ from modulo.core.eval_engine.suite_run import (
 from modulo.db.models.eval_suite import EvalSuite
 from modulo.db.models.eval_suite_run import SuiteRun
 from modulo.settings import Settings, get_settings
-from tests.unit.api.mock_session import configure_mock_session, make_empty_execute_result
+from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble, make_empty_execute_result
 
 _VALID_32 = "b" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -320,6 +320,7 @@ _COMPARISON = {"alerts": [{"prev_pass_rate": 0.9, "current_pass_rate": 0.3, "dro
 
 def _session(exec_value: Any = None, subscribers: list[Any] | None = None) -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.execute.return_value = _FakeScalar(exec_value)
     session.scalars.return_value = _FakeScalars(subscribers or [])
     session.flush = AsyncMock()

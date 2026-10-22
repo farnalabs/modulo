@@ -17,8 +17,10 @@ import json
 import os
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import urlsplit
 
 import click
 import pytest
@@ -28,14 +30,20 @@ from psycopg.types.json import Jsonb
 import modulo.cli.backup as backup_mod
 from modulo.cli.backup import (
     MANIFEST_VERSION,
+    RestorePostureError,
     _fernet_key_hash,
     _record_last_backup,
+    _restore_checkpoints_sync,
     cli,
 )
 from modulo.launcher.state import LauncherState, load_state, save_state
 
 _FERNET_KEY = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 _RESTORE_OUTPUTS = "restore-outputs"
+# The app role URL is resolved BEFORE the archive is validated (FAR-2021), so
+# tests that exercise archive-level refusals with the ambient test settings
+# (whose DATABASE_URL is sqlite) must supply it explicitly.
+_APP_DB_URL = "postgresql://modulo_app:pw@127.0.0.1:5432/modulo"
 
 _FAKE_ARCHIVED_PAYLOAD = {"schema_version": 1, "postgres_port": 15432, "redis_port": 16379, "api_port": 18000}
 _DB_SQL_NAME = "database.sql"
@@ -510,6 +518,261 @@ def test_restore_reruns_promoted_posture_bootstrap(tmp_path: Path) -> None:
     assert admin_url
 
 
+def test_restore_resolves_app_role_from_configuration_not_db_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FAR-2021: the app role comes from DATABASE_URL, never from --db-url.
+
+    A restore run through the ADMIN URL must not configure the admin role as
+    the application role — assert the RESOLVED roles, not that a call happened.
+    """
+    monkeypatch.delenv("DATABASE_ADMIN_URL", raising=False)
+    archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
+    posture_mock = MagicMock()
+    with contextlib.ExitStack() as stack:
+        _enter_restore_patches(stack, lock=MagicMock())
+        stack.enter_context(patch("modulo.cli.backup._ensure_restore_posture", posture_mock))
+        args = [
+            "restore",
+            str(archive),
+            "--yes",
+            "--db-url",
+            "postgresql://modulo_admin:adminpw@127.0.0.1:5432/modulo",
+        ]
+        result = CliRunner().invoke(cli, args)
+    assert result.exit_code == 0, result.output
+    admin_url, app_url = posture_mock.call_args[0]
+    # settings.database_url in this suite is postgresql+asyncpg://modulo:pw@...
+    assert urlsplit(app_url).username == "modulo"
+    assert urlsplit(admin_url).username == "modulo_admin"
+    assert app_url.startswith("postgresql+asyncpg://")
+
+
+def test_restore_app_db_url_option_overrides_configuration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-2021: --app-db-url is the explicit override for a different app role."""
+    monkeypatch.delenv("DATABASE_ADMIN_URL", raising=False)
+    archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
+    posture_mock = MagicMock()
+    with contextlib.ExitStack() as stack:
+        _enter_restore_patches(stack, lock=MagicMock())
+        stack.enter_context(patch("modulo.cli.backup._ensure_restore_posture", posture_mock))
+        args = [
+            "restore",
+            str(archive),
+            "--yes",
+            "--db-url",
+            "postgresql://modulo_admin:adminpw@127.0.0.1:5432/modulo",
+            "--app-db-url",
+            "postgresql://modulo_app:apppw@127.0.0.1:5432/modulo",
+        ]
+        result = CliRunner().invoke(cli, args)
+    assert result.exit_code == 0, result.output
+    _admin_url, app_url = posture_mock.call_args[0]
+    assert urlsplit(app_url).username == "modulo_app"
+
+
+def test_restore_fails_when_posture_verification_fails(tmp_path: Path) -> None:
+    """FAR-2021: a posture failure FAILS the restore (non-zero) and names the check."""
+    archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
+    failure = RestorePostureError(
+        "Role-posture verification FAILED after the restore. Failing check: RuntimeError: modulo_app can bypass RLS."
+    )
+    with contextlib.ExitStack() as stack:
+        _enter_restore_patches(stack, lock=MagicMock())
+        stack.enter_context(patch("modulo.cli.backup._ensure_restore_posture", side_effect=failure))
+        result = CliRunner().invoke(cli, ["restore", str(archive), "--yes"])
+    assert result.exit_code != 0
+    assert "modulo_app can bypass RLS" in result.output
+    assert "Restore complete" not in result.output
+
+
+def test_ensure_restore_posture_raises_typed_error_naming_the_check() -> None:
+    """FAR-2021: the posture helper itself raises, naming the failing check."""
+    failing = AsyncMock(side_effect=RuntimeError("modulo_app has BYPASSRLS"))
+    with patch("modulo.db.bootstrap_role.bootstrap_roles", failing), pytest.raises(RestorePostureError) as excinfo:
+        backup_mod._ensure_restore_posture(
+            "postgresql://modulo_admin:adminpw@127.0.0.1:5432/modulo",
+            "postgresql+asyncpg://modulo_app:apppw@127.0.0.1:5432/modulo",
+        )
+    assert "RuntimeError" in excinfo.value.message
+    assert "modulo_app has BYPASSRLS" in excinfo.value.message
+    assert "modulo_app" in excinfo.value.message
+
+
+def test_ensure_restore_posture_echoes_the_application_role_on_success(capsys: pytest.CaptureFixture[str]) -> None:
+    """FAR-2021: a SUCCESSFUL posture re-run says which role it configured."""
+    with patch("modulo.db.bootstrap_role.bootstrap_roles", AsyncMock()):
+        backup_mod._ensure_restore_posture(
+            "postgresql://modulo_admin:adminpw@127.0.0.1:5432/modulo",
+            "postgresql+asyncpg://modulo_app:apppw@127.0.0.1:5432/modulo",
+        )
+    out = capsys.readouterr().out
+    assert "modulo_app" in out
+    assert "Role posture re-verified via the promoted bootstrap path" in out
+
+
+def test_executed_restore_does_not_rewrap_a_posture_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-2021: ``_run_restore`` re-raises the posture error AS ITSELF.
+
+    Asserting only the CLI exit code cannot distinguish the typed,
+    remediation-carrying ``RestorePostureError`` from the generic handler
+    re-wrapping it in a bare ``ClickException`` — so call the body directly
+    and pin the exception type.
+    """
+    monkeypatch.delenv("DATABASE_ADMIN_URL", raising=False)
+    archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
+    with contextlib.ExitStack() as stack:
+        _enter_restore_patches(stack, lock=MagicMock())
+        stack.enter_context(
+            patch(
+                "modulo.cli.backup._ensure_restore_posture",
+                side_effect=RestorePostureError("Role-posture verification FAILED after the restore."),
+            )
+        )
+        opts = backup_mod._RestoreOptions(
+            backup_dir=archive,
+            db_url=None,
+            app_db_url=None,
+            yes=True,
+            previous_fernet_key=None,
+            dry_run=False,
+            data_dir=None,
+            replace_cluster=False,
+            no_safety_dump=False,
+        )
+        with pytest.raises(RestorePostureError):
+            backup_mod._run_restore(opts)
+
+
+def test_as_asyncpg_url_normalises_every_supported_prefix() -> None:
+    """FAR-2021: each accepted Postgres URL prefix normalises to asyncpg."""
+    for prefix in ("postgresql+asyncpg://", "postgresql+psycopg://", "postgresql://", "postgres://"):
+        assert backup_mod._as_asyncpg_url(f"{prefix}role:pw@db:5432/modulo") == (
+            "postgresql+asyncpg://role:pw@db:5432/modulo"
+        )
+
+
+def test_as_asyncpg_url_refuses_a_non_postgres_url_without_leaking_the_password() -> None:
+    """FAR-2021: a non-Postgres URL is refused, and the message is credential-free.
+
+    The refusal is echoed to stderr and logged by ``_run_restore``, so the
+    URL's password must never appear in it.
+    """
+    with pytest.raises(click.ClickException) as excinfo:
+        backup_mod._as_asyncpg_url("mysql://app_role:sup3r-s3cret@db:3306/modulo")
+    message = excinfo.value.message
+    assert "sup3r-s3cret" not in message
+    assert "mysql://" in message
+    assert "app_role" in message
+
+
+def test_as_asyncpg_url_describes_a_roleless_url_without_inventing_one() -> None:
+    """FAR-2021: a URL with no userinfo is described by scheme only."""
+    with pytest.raises(click.ClickException) as excinfo:
+        backup_mod._as_asyncpg_url("sqlite:///var/lib/modulo.db")
+    assert "sqlite://" in excinfo.value.message
+    assert "(role " not in excinfo.value.message
+
+
+def test_as_asyncpg_url_survives_an_unparseable_url() -> None:
+    """FAR-2021: a malformed URL is refused cleanly, not with a ValueError.
+
+    ``urlsplit`` raises on a bad IPv6 literal; the operator must still get the
+    remediation message rather than a raw traceback.
+    """
+    with pytest.raises(click.ClickException) as excinfo:
+        backup_mod._as_asyncpg_url("mysql://[::1:bad-port/modulo")
+    assert "<unparseable URL>" in excinfo.value.message
+
+
+def test_resolve_restore_app_url_falls_back_to_the_configured_database_url() -> None:
+    """FAR-2021: with no --app-db-url the settings DATABASE_URL is the source."""
+    settings = SimpleNamespace(database_url="postgresql+psycopg://modulo:pw@127.0.0.1:5432/modulo")
+    resolved = backup_mod._resolve_restore_app_url(settings, None)
+    assert resolved == "postgresql+asyncpg://modulo:pw@127.0.0.1:5432/modulo"
+
+
+def test_resolve_restore_app_url_prefers_the_explicit_app_db_url() -> None:
+    """FAR-2021: --app-db-url wins over the configured DATABASE_URL."""
+    settings = SimpleNamespace(database_url="postgresql://from_settings:pw@127.0.0.1:5432/modulo")
+    resolved = backup_mod._resolve_restore_app_url(settings, "postgres://modulo_app:apppw@127.0.0.1:5432/modulo")
+    assert resolved == "postgresql+asyncpg://modulo_app:apppw@127.0.0.1:5432/modulo"
+
+
+@pytest.mark.parametrize("configured", ["", None])
+def test_resolve_restore_app_url_refuses_a_missing_source(configured: Any) -> None:
+    """FAR-2021: an unset/empty DATABASE_URL is a refusal, not a silent default."""
+    settings = SimpleNamespace(database_url=configured)
+    with pytest.raises(click.ClickException, match="--app-db-url"):
+        backup_mod._resolve_restore_app_url(settings, None)
+
+
+def test_restore_validates_the_app_url_before_touching_the_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FAR-2021: an invalid app URL must fail BEFORE the safety dump / wipe."""
+    monkeypatch.delenv("DATABASE_ADMIN_URL", raising=False)
+    archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
+    restore_cluster = MagicMock()
+    safety_dump = MagicMock()
+    with contextlib.ExitStack() as stack:
+        _enter_restore_patches(stack, lock=MagicMock())
+        stack.enter_context(patch("modulo.cli.backup._restore_cluster", restore_cluster))
+        stack.enter_context(patch("modulo.cli.backup._take_safety_dump", safety_dump))
+        stack.enter_context(
+            patch(
+                "modulo.cli.backup.get_settings",
+                **{
+                    "return_value.fernet_key": _FERNET_KEY,
+                    "return_value.database_url": "",
+                },
+            )
+        )
+        result = CliRunner().invoke(cli, ["restore", str(archive), "--yes"])
+    assert result.exit_code != 0, result.output
+    assert "--app-db-url" in result.output
+    safety_dump.assert_not_called()
+    restore_cluster.assert_not_called()
+
+
+def test_restore_carries_nullable_checkpoint_type_through_json_export(tmp_path: Path) -> None:
+    """FAR-2022: a non-null ``checkpoints.type`` survives the JSON restore.
+
+    ``type`` is nullable, so dropping it from the INSERT raised nothing and
+    silently lost the value on every restore.
+    """
+    archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
+    records = [
+        {
+            "organisation_id": "00000000-0000-0000-0000-000000000001",
+            "thread_id": "t1",
+            "checkpoint_ns": "ns",
+            "checkpoint_id": "cp1",
+            "parent_checkpoint_id": None,
+            "type": "msgpack",
+            "checkpoint": {"key": "val"},
+            "metadata": {"src": "test"},
+        }
+    ]
+    (archive / "checkpoints.json").write_text(json.dumps(records), encoding="utf-8")
+
+    cursor = MagicMock()
+    conn = MagicMock()
+    conn.__enter__.return_value = conn
+    conn.cursor.return_value.__enter__.return_value = cursor
+    with patch("modulo.cli.backup.psycopg.connect", return_value=conn):
+        restored = _restore_checkpoints_sync(
+            "postgresql://localhost/db",
+            json.loads((archive / "checkpoints.json").read_text(encoding="utf-8")),
+        )
+
+    assert restored == 1
+    sql, params = cursor.execute.call_args_list[1][0]
+    columns = [column.strip() for column in sql[sql.index("(") + 1 : sql.index(")")].split(",")]
+    assert "type" in columns
+    assert params[columns.index("type")] == "msgpack"
+
+
 #    QA gate fixes: directory modes, identity round-trip, restore safety
 
 
@@ -810,7 +1073,7 @@ def test_restore_refuses_malformed_manifest_before_echo(tmp_path: Path) -> None:
     bad_archive = tmp_path / "badlist"
     bad_archive.mkdir()
     (bad_archive / "backup-info.json").write_text("[]", encoding="utf-8")
-    result = CliRunner().invoke(cli, ["restore", str(bad_archive), "--yes"])
+    result = CliRunner().invoke(cli, ["restore", str(bad_archive), "--yes", "--app-db-url", _APP_DB_URL])
     assert result.exit_code != 0
     assert "not a JSON object" in result.output
     assert "Backup timestamp" not in result.output
@@ -820,7 +1083,7 @@ def test_restore_refuses_corrupt_manifest(tmp_path: Path) -> None:
     bad_archive = tmp_path / "badjson"
     bad_archive.mkdir()
     (bad_archive / "backup-info.json").write_text("{not json", encoding="utf-8")
-    result = CliRunner().invoke(cli, ["restore", str(bad_archive), "--yes"])
+    result = CliRunner().invoke(cli, ["restore", str(bad_archive), "--yes", "--app-db-url", _APP_DB_URL])
     assert result.exit_code != 0
     assert "unreadable" in result.output
 
@@ -830,7 +1093,7 @@ def test_restore_typed_field_validation_refuses_wrong_types(tmp_path: Path) -> N
     archive_manifest = json.loads((archive / "backup-info.json").read_text(encoding="utf-8"))
     archive_manifest["schema_versions"] = "rev1"  # must be a LIST of strings
     (archive / "backup-info.json").write_text(json.dumps(archive_manifest), encoding="utf-8")
-    result = CliRunner().invoke(cli, ["restore", str(archive), "--yes"])
+    result = CliRunner().invoke(cli, ["restore", str(archive), "--yes", "--app-db-url", _APP_DB_URL])
     assert result.exit_code != 0
     assert "not a list of strings" in result.output
 
@@ -995,6 +1258,19 @@ def _insert_params(cursor: MagicMock, call_index: int) -> tuple[Any, ...]:
     return params
 
 
+def _insert_columns(cursor: MagicMock, call_index: int) -> list[str]:
+    """The INSERT column list of the Nth ``execute`` call, in parameter order.
+
+    Indexing the parameter tuple through this keeps the assertions honest when
+    a column is added to the INSERT (``checkpoints.type`` did exactly that to
+    the positional indices this file used to hardcode).
+    """
+    sql = cursor.execute.call_args_list[call_index].args[0]
+    assert isinstance(sql, str)
+    assert sql.startswith("INSERT INTO")
+    return [column.strip() for column in sql[sql.index("(") + 1 : sql.index(")")].split(",")]
+
+
 def _checkpoint_row(**overrides: Any) -> dict[str, Any]:
     row: dict[str, Any] = {
         "organisation_id": _TEST_ORG_ID,
@@ -1023,10 +1299,11 @@ def test_restore_checkpoints_encodes_jsonb_columns_with_psycopg_jsonb() -> None:
     assert restored == 1
     assert cursor.execute.call_args_list[0].args[0].startswith("TRUNCATE TABLE checkpoints")
     params = _insert_params(cursor, 1)
-    assert isinstance(params[5], Jsonb)
-    assert isinstance(params[6], Jsonb)
-    assert params[5].obj == checkpoint
-    assert params[6].obj == metadata
+    columns = _insert_columns(cursor, 1)
+    assert isinstance(params[columns.index("checkpoint")], Jsonb)
+    assert isinstance(params[columns.index("metadata")], Jsonb)
+    assert params[columns.index("checkpoint")].obj == checkpoint
+    assert params[columns.index("metadata")].obj == metadata
     assert conn.commit.called
 
 
@@ -1039,9 +1316,10 @@ def test_restore_checkpoints_keeps_null_jsonb_columns_null() -> None:
     with patch("modulo.cli.backup.psycopg.connect", return_value=conn):
         backup_mod._restore_checkpoints_sync(_TEST_DB_URL, rows)
     params = _insert_params(cursor, 1)
-    assert isinstance(params[5], Jsonb)
-    assert params[5].obj == checkpoint
-    assert params[6] is None
+    columns = _insert_columns(cursor, 1)
+    assert isinstance(params[columns.index("checkpoint")], Jsonb)
+    assert params[columns.index("checkpoint")].obj == checkpoint
+    assert params[columns.index("metadata")] is None
 
 
 def test_restore_checkpoints_adapts_a_list_valued_jsonb_column() -> None:
@@ -1052,8 +1330,9 @@ def test_restore_checkpoints_adapts_a_list_valued_jsonb_column() -> None:
     with patch("modulo.cli.backup.psycopg.connect", return_value=conn):
         backup_mod._restore_checkpoints_sync(_TEST_DB_URL, rows)
     params = _insert_params(cursor, 1)
-    assert isinstance(params[6], Jsonb)
-    assert params[6].obj == metadata
+    columns = _insert_columns(cursor, 1)
+    assert isinstance(params[columns.index("metadata")], Jsonb)
+    assert params[columns.index("metadata")].obj == metadata
 
 
 def test_restore_checkpoint_blobs_decodes_hex_blobs_to_bytes() -> None:

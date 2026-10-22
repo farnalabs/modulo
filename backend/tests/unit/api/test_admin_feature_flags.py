@@ -38,6 +38,7 @@ from modulo.core.license import (
 )
 from modulo.core.registry.crypto import generate_keypair, sign_primitive
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
 
@@ -1300,6 +1301,7 @@ def _principal(org_id: uuid.UUID | None = None) -> AuthenticatedPrincipal:
 
 def _session() -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.begin = MagicMock(return_value=AsyncMock())
     return session
 
@@ -1312,6 +1314,9 @@ def _settings(license_key: str = "") -> MagicMock:
 
 def _org(plan_id: str, settings_json: dict | None = None) -> MagicMock:
     org = MagicMock()
+    # FAR-2060: an org-scoped key's ``org_id`` claim must match the tenant it is
+    # applied to; ``_license_data`` claims "test-org".
+    org.id = "test-org"
     org.settings_json = settings_json if settings_json is not None else {}
     org.plan_id = plan_id
     return org

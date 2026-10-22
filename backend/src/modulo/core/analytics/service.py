@@ -24,8 +24,8 @@ import asyncio
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -1010,53 +1010,109 @@ async def stream_export_facts(
         effective_from=effective_from,
         effective_to=effective_to,
     )
+    rows_stmt = _build_scan_rows_stmt(conditions, needs_pipeline_join)
 
-    rows_stmt = sa.select(*_EXPORT_COLUMNS)
-    if needs_pipeline_join:
-        # Team boundary coalesce — same outerjoin the paginated export adds so
-        # the effective owner resolves for NULL-stamped facts (#1795).
-        rows_stmt = rows_stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
-    rows_stmt = rows_stmt.where(*conditions).order_by(
-        RunDailyFact.run_date,
-        RunDailyFact.created_at,
-        RunDailyFact.run_id,
-    )
-
-    cursor: tuple[date, datetime, uuid.UUID] | None = None
-    page_stmt = rows_stmt
-    page_bind = dict(bind)
     try:
-        try:
-            async with _guarded_session(
-                factory, settings, org_id=org_id, account_id=account_id, org_role=org_role
-            ) as session:
-                while True:
-                    result = await session.execute(page_stmt, dict(page_bind))
-                    page = list(result.all())
-                    for row in page:
-                        yield _serialize_fact_row(row)
-                    if len(page) < page_size:
-                        break
-                    last = page[-1]
-                    cursor = (last.run_date, last.created_at, last.run_id)
-                    page_bind.update(_keyset_bind(cursor))
-                    page_stmt = rows_stmt.where(_keyset_conditions(cursor))
-        except asyncio.CancelledError:
-            raise
-        except ProgrammingError:
-            _log.exception("analytics.scan.programming_error", extra={"org_id": str(org_id)})
-            raise AnalyticsMigrationRequiredError(_MSG_MIGRATION_REQUIRED) from None
-        except DBAPIError as exc:
-            if _is_query_canceled(exc):
-                _log.warning("analytics.scan.timeout", extra={"org_id": str(org_id)})
-                raise AnalyticsQueryTimeoutError(_MSG_QUERY_TIMEOUT) from None
-            _log.exception("analytics.scan.db_error", extra={"org_id": str(org_id)})
-            raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
-        except SQLAlchemyError:
-            _log.exception("analytics.scan.db_error", extra={"org_id": str(org_id)})
-            raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+        # ``aclosing`` (not a bare ``async for``) so an early ``aclose()`` of
+        # THIS generator — a client disconnect on the StreamingResponse —
+        # closes the delegated page generator synchronously instead of leaving
+        # it to the event loop's async-generator finalizer.
+        async with aclosing(
+            _stream_scan_pages(
+                rows_stmt,
+                bind,
+                page_size=page_size,
+                factory=factory,
+                settings=settings,
+                org_id=org_id,
+                account_id=account_id,
+                org_role=org_role,
+            )
+        ) as pages:
+            async for payload in pages:
+                yield payload
     except (AnalyticsError, asyncio.CancelledError):
         raise
     except Exception:
         _log.exception("analytics.scan.unexpected_error", extra={"org_id": str(org_id)})
         raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+
+
+def _build_scan_rows_stmt(conditions: list[Any], needs_pipeline_join: bool) -> sa.Select[Any]:
+    """Build the ordered scan statement (with the team-boundary outerjoin)."""
+    rows_stmt = sa.select(*_EXPORT_COLUMNS)
+    if needs_pipeline_join:
+        # Team boundary coalesce — same outerjoin the paginated export adds so
+        # the effective owner resolves for NULL-stamped facts (#1795).
+        rows_stmt = rows_stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
+    return rows_stmt.where(*conditions).order_by(
+        RunDailyFact.run_date,
+        RunDailyFact.created_at,
+        RunDailyFact.run_id,
+    )
+
+
+async def _stream_scan_pages(
+    rows_stmt: sa.Select[Any],
+    bind: dict[str, Any],
+    *,
+    page_size: int,
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    org_role: str | None,
+) -> AsyncGenerator[dict[str, Any], None]:
+    """Open one guarded session/transaction and stream every scan page.
+
+    Maps the DB failure family onto the typed ``AnalyticsError`` contract
+    (migration-required / query-timeout / database-unavailable); unexpected
+    failures are handled by the caller.
+    """
+    page_bind = dict(bind)
+    try:
+        # Same close-timing contract one level down: the caller's ``aclose()``
+        # must reach ``_guarded_session.__aexit__`` (transaction end + pooled-
+        # connection return) synchronously, so the page generator is closed
+        # explicitly rather than abandoned.
+        async with (
+            _guarded_session(factory, settings, org_id=org_id, account_id=account_id, org_role=org_role) as session,
+            aclosing(_stream_session_pages(session, rows_stmt, page_size, page_bind)) as pages,
+        ):
+            async for payload in pages:
+                yield payload
+    except asyncio.CancelledError:
+        raise
+    except ProgrammingError:
+        _log.exception("analytics.scan.programming_error", extra={"org_id": str(org_id)})
+        raise AnalyticsMigrationRequiredError(_MSG_MIGRATION_REQUIRED) from None
+    except DBAPIError as exc:
+        if _is_query_canceled(exc):
+            _log.warning("analytics.scan.timeout", extra={"org_id": str(org_id)})
+            raise AnalyticsQueryTimeoutError(_MSG_QUERY_TIMEOUT) from None
+        _log.exception("analytics.scan.db_error", extra={"org_id": str(org_id)})
+        raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+    except SQLAlchemyError:
+        _log.exception("analytics.scan.db_error", extra={"org_id": str(org_id)})
+        raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+
+
+async def _stream_session_pages(
+    session: AsyncSession,
+    rows_stmt: sa.Select[Any],
+    page_size: int,
+    page_bind: dict[str, Any],
+) -> AsyncGenerator[dict[str, Any], None]:
+    """Yield serialized rows, keyset-paginating over the stable scan order."""
+    page_stmt = rows_stmt
+    while True:
+        result = await session.execute(page_stmt, dict(page_bind))
+        page = list(result.all())
+        for row in page:
+            yield _serialize_fact_row(row)
+        if len(page) < page_size:
+            break
+        last = page[-1]
+        cursor = (last.run_date, last.created_at, last.run_id)
+        page_bind.update(_keyset_bind(cursor))
+        page_stmt = rows_stmt.where(_keyset_conditions(cursor))

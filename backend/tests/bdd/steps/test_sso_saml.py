@@ -125,10 +125,12 @@ def _saml_settings(license_key: str = _VALID_LICENSE_KEY) -> Settings:
     )
 
 
-def _setup_saml_client(license_key: str = _VALID_LICENSE_KEY) -> None:
+def _setup_saml_client(license_key: str = _VALID_LICENSE_KEY, custom_plan: Any = None) -> None:
     from modulo.api.main import app as _app
 
-    if not license_key:
+    if custom_plan is not None:
+        _plan = custom_plan
+    elif not license_key:
         _plan = CommunityTier()
     else:
         _plan = LicenseKeyTier(
@@ -176,6 +178,26 @@ def no_team_license(ctx: dict[str, Any]) -> None:
     ctx["license_key"] = ""
 
 
+@given("I have a licence that does not grant SSO")
+def licence_without_sso(ctx: dict[str, Any]) -> None:
+    """A licence that RESOLVES but does not include the ``sso`` feature.
+
+    FAR-2059: this is a determinate entitlement refusal (402), distinct from
+    "no licence at all", which lets authentication proceed in degraded mode.
+    """
+    ctx["license_key"] = "determinate-without-sso"
+    ctx["custom_plan"] = LicenseKeyTier(
+        LicenseData(
+            tier="community",
+            features=[],
+            expires_at="",
+            org_id="",
+            raw_payload={},
+            raw_key="determinate-without-sso",
+        )
+    )
+
+
 # ── Given: user state for JIT ─────────────────────────────────────────────
 
 
@@ -206,7 +228,7 @@ def group_mapping_configured(idp_group: str, team_id: str, role: str, ctx: dict[
 
 @when("I initiate SAML login")
 def initiate_saml_login(request: Any, ctx: dict[str, Any], client: Any) -> None:
-    _setup_saml_client(ctx.get("license_key", _VALID_LICENSE_KEY))
+    _setup_saml_client(ctx.get("license_key", _VALID_LICENSE_KEY), ctx.get("custom_plan"))
     with patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch:
         mock_fetch.return_value = _SAMPLE_IDP_METADATA
         resp = client.get("/api/v1/auth/saml/login", follow_redirects=False)
@@ -218,7 +240,7 @@ def initiate_saml_login(request: Any, ctx: dict[str, Any], client: Any) -> None:
 
 @when("I request the SAML SP metadata endpoint")
 def request_sp_metadata(request: Any, ctx: dict[str, Any], client: Any) -> None:
-    _setup_saml_client(ctx.get("license_key", _VALID_LICENSE_KEY))
+    _setup_saml_client(ctx.get("license_key", _VALID_LICENSE_KEY), ctx.get("custom_plan"))
     resp = client.get("/api/v1/auth/saml/metadata", follow_redirects=False)
     _store_response(request, ctx, resp)
 

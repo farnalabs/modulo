@@ -33,6 +33,7 @@ from modulo.db.models.organisation import (
     Organisation,
 )
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -101,6 +102,7 @@ def _result(
 
 def _make_session(results: list[MagicMock] | None = None) -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.in_transaction = MagicMock(return_value=True)
     session.get_bind = MagicMock(return_value=MagicMock(dialect=MagicMock(name="sqlite")))
     session.info = {}

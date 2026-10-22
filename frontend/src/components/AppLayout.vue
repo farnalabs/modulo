@@ -3,7 +3,6 @@
     <AppSidebar
       :is-system-admin="isSystemAdmin"
       :user-role="userRole"
-      :user-permissions="userPermissions"
       :user-email="userEmail"
       :user-initial="userInitial"
       :is-light="isLight"
@@ -127,7 +126,7 @@ function logout() {
   window.location.reload();
 }
 
-const { userId, isSystemAdmin: isSystemAdminFlag, orgRole, permissions } = useCurrentUser();
+const { userId, isSystemAdmin: isSystemAdminFlag, orgRole } = useCurrentUser();
 
 const userEmail = computed(() => userId.value || "");
 
@@ -141,10 +140,12 @@ const isSystemAdmin = isSystemAdminFlag;
 
 const userRole = computed(() => orgRole.value || null);
 
-const userPermissions = computed<string[]>(() => {
-  const perms = permissions.value;
-  return Array.isArray(perms) ? (perms as string[]) : [];
-});
+// FAR-2020: the permission list is deliberately NOT derived here and passed
+// down. The access token mints no `permissions` claim, so a JWT-derived array
+// was always `[]` — and an empty override used to win over the endpoint's
+// resolved list, hiding every permission-gated nav item. The sidebar's nav
+// context now reads the list from the plan store (the caller-scoped
+// `/api/v1/auth/permissions` read), which is the single source.
 
 // Mirrors the backend guard on GET /api/v1/admin/db-capacity
 // (require_system_or_org_admin): system admin OR org role "admin". Non-admins

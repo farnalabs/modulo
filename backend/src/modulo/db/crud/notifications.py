@@ -363,7 +363,11 @@ async def get_dashboard_notifications(
     *,
     org_id: uuid.UUID,
     user_id: uuid.UUID,
-    min_level: str = "warning",
+    # Default mirrors the user-preference default (``_DEFAULT_DASHBOARD_LEVEL``
+    # in ``api/routes/in_app_notifications.py``). A caller that omits the
+    # argument must not silently narrow the dashboard feed below the product
+    # default — the stale ``warning`` floor hid every ``info`` notification.
+    min_level: str = "info",
     limit: int = 5,
 ) -> list[Notification]:
     """Return the live dashboard feed for one user (severity-filtered).
@@ -667,7 +671,11 @@ async def get_unread_count(
     *,
     org_id: uuid.UUID,
     user_id: uuid.UUID,
-    min_level: str = "warning",
+    # Default mirrors the user-preference default (``_DEFAULT_DASHBOARD_LEVEL``
+    # in ``api/routes/in_app_notifications.py``). A caller that omits the
+    # argument must not silently narrow the unread badge below the product
+    # default — it must agree with ``get_dashboard_notifications``.
+    min_level: str = "info",
 ) -> int:
     min_rank = LEVEL_RANK.get(min_level, 1)
     allowed_levels = [lvl for lvl, rnk in LEVEL_RANK.items() if rnk >= min_rank]

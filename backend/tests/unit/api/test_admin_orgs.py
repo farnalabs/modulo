@@ -15,6 +15,7 @@ from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.db.models.organisation import SYSTEM_ORG_ID, Organisation
 from modulo.settings import get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 ORG_ID = uuid4()
 USER_ID = uuid4()
@@ -45,6 +46,7 @@ def mock_session():
     from unittest.mock import AsyncMock, MagicMock
 
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.begin = MagicMock()
     session.begin.return_value.__aenter__.return_value = session
     session.begin.return_value.__aexit__.return_value = None

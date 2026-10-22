@@ -39,11 +39,13 @@ import pytest
 from fastapi import HTTPException
 
 from modulo.api.routes import product_analytics_identity as pa
+from tests.unit.api.mock_session import configure_rls_preamble
 
 
 def _mock_session() -> AsyncMock:
     """An AsyncMock session whose ``begin()`` is an async context manager."""
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -66,6 +68,7 @@ def _fake_session() -> AsyncMock:
     coroutine from ``scalar_one_or_none`` that is never awaited.
     """
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

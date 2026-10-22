@@ -36,6 +36,7 @@ from modulo.core.evidence_retention import (
     PurgeResult,
 )
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _OTHER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -84,6 +85,7 @@ class _BeginRaiser:
 
 def _make_session(begin_exc: Exception | None = None) -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.flush = AsyncMock(return_value=None)
     session.execute = AsyncMock()
     if begin_exc is not None:

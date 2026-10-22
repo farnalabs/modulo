@@ -23,11 +23,12 @@ _log = logging.getLogger(__name__)
 
 # Keys that a user-supplied ``input_payload`` may NEVER set. System-injected
 # data (work-item stamping, feedback-correction context, the FAR-604 queue
-# coalesce key) flows through explicit ``create_run`` kwargs — never through
-# ``input_payload`` — so a webhook payload or a manual POST /runs body can
-# never forge a ``work_item_id`` or a planted ``_coalesce_key`` (which would
-# let a later webhook delivery fold into the attacker's run, replacing its
-# payload and carrying its stale work-item refs).
+# coalesce key, the CI-failure coalesce key) flows through explicit
+# ``create_run`` kwargs — never through ``input_payload`` — so a webhook
+# payload or a manual POST /runs body can never forge a ``work_item_id`` or a
+# planted ``_coalesce_key`` / ``_ci_failure_coalesce_key`` (which would let a
+# later webhook delivery fold into the attacker's run, replacing its payload and
+# carrying its stale work-item refs).
 #
 # ``_work_item_refs`` (FAR-794 slice 2a) is the system-managed carrier for the
 # run's canonical work-item refs inside ``input_payload``. It is reserved (a
@@ -44,6 +45,7 @@ _RESERVED_INPUT_PAYLOAD_KEYS: frozenset[str] = frozenset(
         "_modulo.work_item",
         "_feedback_correction",
         "_coalesce_key",
+        "_ci_failure_coalesce_key",
         "_work_item_refs",
     }
 )
@@ -160,6 +162,26 @@ def canonicalise_ref(kind: Any, ref: Any) -> str:
     if k in _TRACKER_KINDS:
         return _canonicalise_tracker_ref(raw)
     return raw.lstrip("#").strip()
+
+
+def canonicalise_ref_pair(raw: Any) -> tuple[str, str] | None:
+    """Canonical ``(kind, ref)`` for one raw ``{"kind", "ref"}`` mapping, else None.
+
+    The single canonicalisation step a raw ref-entry consumer needs: a
+    non-dict, a missing/blank ``kind`` or ``ref``, or a value that fails
+    canonicalisation yields None, so the caller counts it as malformed instead
+    of raising.
+    """
+    if not isinstance(raw, dict):
+        return None
+    try:
+        # A missing ``kind``/``ref`` surfaces as ValueError from the
+        # canonicalisers, so it needs no separate guard here.
+        kind = canonicalise_kind(raw.get("kind"))
+        ref = canonicalise_ref(kind, raw.get("ref"))
+    except ValueError:
+        return None
+    return kind, ref
 
 
 def validate_ref_entry(

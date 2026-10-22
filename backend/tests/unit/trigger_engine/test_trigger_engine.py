@@ -1156,6 +1156,23 @@ class TestCiFailureCoalesce:
     (``create_run``), not merely on a mock having been called.
     """
 
+    @pytest.fixture(autouse=True)
+    def _no_in_flight_run(self) -> Generator[None, None, None]:
+        """Stub the run-LIFETIME leg of the gate for these window cases.
+
+        These cases pin the age window. The in-flight leg (suppression held while
+        a same-key run is non-terminal) needs real run rows and is covered in
+        ``tests/unit/test_run_admission.py::TestCiFailureInflightSuppression``.
+        Stubbing it here also keeps ``_make_session``'s call-count result routing
+        stable — an extra ``session.execute`` would shift every later result.
+        """
+        with patch(
+            "modulo.core.trigger_engine.has_in_flight_ci_failure_run",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            yield
+
     @staticmethod
     async def _deliver(session: AsyncMock, trigger: MagicMock, payload: dict[str, Any]) -> Any:
         return await TriggerEngine().handle_webhook(

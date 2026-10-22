@@ -181,8 +181,17 @@ def _settings_with_bound(**extra: Any) -> MagicMock:
 
     The wrapper reads the knob from this module's own ``get_settings`` AFTER
     its ``conn.dialect`` gate, so every LIVE-bound test patches it here.
+
+    The stale-run sweep's windows are real integers on Settings (a bare
+    ``MagicMock`` attribute would break the orphan arm's
+    ``timedelta(seconds=wl_window)``), so they are pinned here as well.
     """
-    return MagicMock(mutation_row_lock_timeout_ms=5000, **extra)
+    return MagicMock(
+        mutation_row_lock_timeout_ms=5000,
+        saq_never_dispatched_window=900,
+        saq_worker_lost_window=600,
+        **extra,
+    )
 
 
 # ---------------------------------------------------------------------------

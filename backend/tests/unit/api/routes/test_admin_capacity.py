@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.unit.api.mock_session import configure_rls_preamble
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.main import app
@@ -47,6 +48,7 @@ def _make_principal(role: str = "admin", *, is_system_admin: bool = False) -> Te
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     result = MagicMock()
     result.scalar_one_or_none = MagicMock(return_value=True)
     session.execute = AsyncMock(return_value=result)

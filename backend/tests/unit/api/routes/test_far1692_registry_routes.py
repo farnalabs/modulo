@@ -21,6 +21,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from tests.unit.api.mock_session import configure_rls_preamble
 
 import modulo.api.routes.external_agents as ext_mod
 import modulo.api.routes.mcp_servers as mcp_mod
@@ -99,6 +100,7 @@ def _result() -> MagicMock:
 
 def _make_session() -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.in_transaction = MagicMock(return_value=True)
     session.get_bind = MagicMock(return_value=MagicMock(dialect=MagicMock(name="sqlite")))
     session.info = {}

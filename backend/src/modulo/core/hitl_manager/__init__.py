@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 from jwt import ExpiredSignatureError
 from jwt import InvalidTokenError as JWTError
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import Update, and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1156,10 +1156,7 @@ class HITLManager:
         # any DB write. Copied (not mutated) so the caller's dict — reused for
         # the direct executor.resume injection — is untouched. A non-dict
         # payload skips stamping here and is rejected by the validator below.
-        if decision_payload is None:
-            decision_payload = {"action": decision, "review_id": review_id}
-        elif isinstance(decision_payload, dict) and decision_payload.get("review_id") is None:
-            decision_payload = {**decision_payload, "review_id": review_id}
+        decision_payload = self._stamp_decision_payload(decision_payload, decision, review_id)
 
         # Validate the resume payload shape at write (B1): it must be a dict
         # and any output/modified_output members must be dicts. Oversized
@@ -1167,18 +1164,85 @@ class HITLManager:
         # silently truncated or auto-approved as an empty dict on recovery.
         self._validate_decision_payload(decision_payload, review_id=review_id)
 
-        # Validate JWT signature and scope before attempting the SQL UPDATE.
-        # Expiry is checked separately via the SQL WHERE clause (expires_at > now)
-        # so that the DB remains the authoritative source of truth for TTL.
-        if self._secret_key and self._looks_like_jwt(claim_token):
-            try:
-                _decode_claim_jwt(claim_token, self._secret_key, run_id=str(run_id), review_id=review_id)
-            except ExpiredSignatureError as err:
-                raise ClaimTokenExpiredError from err
-            except JWTError as err:
-                raise ClaimTokenInvalidError from err
+        self._validate_claim_jwt(claim_token, run_id=run_id, review_id=review_id)
 
-        stmt = (
+        stmt = self._build_decision_stmt(
+            run_id=run_id,
+            review_id=review_id,
+            org_id=org_id,
+            claim_token=claim_token,
+            decision=decision,
+            decided_by=decided_by,
+            now=now,
+            decision_payload=decision_payload,
+        )
+        result = await session.execute(stmt)
+        claim_id = result.scalar_one_or_none()
+        if claim_id is None:
+            existing = await self._get(session, run_id=run_id, review_id=review_id, org_id=org_id)
+            self._raise_decision_conflict(existing, run_id=run_id, review_id=review_id, claim_token=claim_token)
+        # FAR-604 D3 un-park on decision: a run the park sweep moved to
+        # ``hitl_parked`` re-enters normal admission the moment its gate is
+        # decided — approve resumes from the checkpoint (the API route's
+        # executor.resume), reject resumes through the same path and routes
+        # to the gate's reject route (``reject_target`` config or a reject
+        # edge) when one is configured — with no reject route the run ENDS
+        # ``rejected`` (FAR-1487; ``on_reject: proceed`` opts back into
+        # continuing along the normal path) — and a decision committed
+        # without an inline resume
+        # (the MCP flow) leaves the run ``awaiting_human`` with a committed
+        # decision, which dispatcher_reconcile's gated recovery then resumes.
+        # The guarded predicate makes this a no-op for every non-parked run.
+        # Shared transition (qa F15) — the gate coalescing's supersede
+        # close-out issues the identical write through the same helper.
+        await unpark_parked_run(session, run_id=run_id, org_id=org_id)
+        gate = await session.get(HitlClaim, claim_id, populate_existing=True)
+        if gate is None:
+            raise GateVanishedError(run_id, review_id, "decided")
+        return gate
+
+    @staticmethod
+    def _stamp_decision_payload(
+        decision_payload: dict[str, Any] | None,
+        decision: str,
+        review_id: str,
+    ) -> dict[str, Any] | None:
+        """Stamp an unstamped payload with this row's gate id (never mutate)."""
+        if decision_payload is None:
+            return {"action": decision, "review_id": review_id}
+        if isinstance(decision_payload, dict) and decision_payload.get("review_id") is None:
+            return {**decision_payload, "review_id": review_id}
+        return decision_payload
+
+    def _validate_claim_jwt(self, claim_token: str, *, run_id: uuid.UUID, review_id: str) -> None:
+        """Validate JWT signature and scope before attempting the SQL UPDATE.
+
+        Expiry is checked separately via the SQL WHERE clause (``expires_at >
+        now``) so that the DB remains the authoritative source of truth for TTL.
+        """
+        if not self._secret_key or not self._looks_like_jwt(claim_token):
+            return
+        try:
+            _decode_claim_jwt(claim_token, self._secret_key, run_id=str(run_id), review_id=review_id)
+        except ExpiredSignatureError as err:
+            raise ClaimTokenExpiredError from err
+        except JWTError as err:
+            raise ClaimTokenInvalidError from err
+
+    @staticmethod
+    def _build_decision_stmt(
+        *,
+        run_id: uuid.UUID,
+        review_id: str,
+        org_id: uuid.UUID,
+        claim_token: str,
+        decision: str,
+        decided_by: uuid.UUID | None,
+        now: datetime,
+        decision_payload: dict[str, Any] | None,
+    ) -> Update:
+        """Build the guarded HitlClaim decision UPDATE."""
+        return (
             update(HitlClaim)
             .where(
                 HitlClaim.run_id == run_id,
@@ -1200,38 +1264,25 @@ class HITLManager:
             )
             .returning(HitlClaim.id)
         )
-        result = await session.execute(stmt)
-        claim_id = result.scalar_one_or_none()
-        if claim_id is None:
-            existing = await self._get(session, run_id=run_id, review_id=review_id, org_id=org_id)
-            if existing is None:
-                raise GateNotFoundError(run_id, review_id)
-            if existing.decision is not None:
-                raise GateAlreadyDecidedError(run_id, review_id)
-            if existing.claim_token is None:
-                raise ClaimTokenExpiredError
-            if existing.claim_token != claim_token:
-                raise ClaimTokenInvalidError
+
+    @staticmethod
+    def _raise_decision_conflict(
+        existing: HitlClaim | None,
+        *,
+        run_id: uuid.UUID,
+        review_id: str,
+        claim_token: str,
+    ) -> NoReturn:
+        """Map a zero-row UPDATE onto its specific decision error."""
+        if existing is None:
+            raise GateNotFoundError(run_id, review_id)
+        if existing.decision is not None:
+            raise GateAlreadyDecidedError(run_id, review_id)
+        if existing.claim_token is None:
             raise ClaimTokenExpiredError
-        # FAR-604 D3 un-park on decision: a run the park sweep moved to
-        # ``hitl_parked`` re-enters normal admission the moment its gate is
-        # decided — approve resumes from the checkpoint (the API route's
-        # executor.resume), reject resumes through the same path and routes
-        # to the gate's reject route (``reject_target`` config or a reject
-        # edge) when one is configured — with no reject route the run ENDS
-        # ``rejected`` (FAR-1487; ``on_reject: proceed`` opts back into
-        # continuing along the normal path) — and a decision committed
-        # without an inline resume
-        # (the MCP flow) leaves the run ``awaiting_human`` with a committed
-        # decision, which dispatcher_reconcile's gated recovery then resumes.
-        # The guarded predicate makes this a no-op for every non-parked run.
-        # Shared transition (qa F15) — the gate coalescing's supersede
-        # close-out issues the identical write through the same helper.
-        await unpark_parked_run(session, run_id=run_id, org_id=org_id)
-        gate = await session.get(HitlClaim, claim_id, populate_existing=True)
-        if gate is None:
-            raise GateVanishedError(run_id, review_id, "decided")
-        return gate
+        if existing.claim_token != claim_token:
+            raise ClaimTokenInvalidError
+        raise ClaimTokenExpiredError
 
     @staticmethod
     def _looks_like_jwt(token: str) -> bool:

@@ -205,8 +205,22 @@ class TestShouldRateLimit:
             "/api/v1/auth/login-context",
             "/api/v1/auth/org-login/acme",
             "/api/v1/auth/sso/providers",
+            "/api/v1/auth/oidc/google/login",
+            "/api/v1/auth/oidc/google/callback",
+            "/api/v1/auth/saml/login",
+            "/api/v1/auth/saml/acme/metadata",
+            "/api/v1/auth/saml/acme/login",
         ],
-        ids=["login-context", "org-login", "sso-providers"],
+        ids=[
+            "login-context",
+            "org-login",
+            "sso-providers",
+            "oidc-login",
+            "oidc-callback",
+            "saml-login",
+            "saml-metadata",
+            "saml-provider-login",
+        ],
     )
     def test_rate_limits_anonymous_get_endpoints(self, path):
         """FAR-856: pre-auth anonymous GET endpoints are gated by GET_RULES (enumeration defence)."""

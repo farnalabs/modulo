@@ -587,6 +587,7 @@ jobs:
     name: "STUB FAR-1869 - publish container images"
     if: inputs.action == 'never'
     runs-on: ubicloud-standard-2
+    environment: release
     permissions:
       contents: read
     steps:
@@ -602,6 +603,7 @@ jobs:
     name: "STUB FAR-1869 - release bundle, GitHub Release, Helm chart"
     if: inputs.action == 'never'
     runs-on: ubicloud-standard-2
+    environment: release
     permissions:
       contents: read
     steps:
@@ -616,6 +618,7 @@ jobs:
     name: "STUB FAR-1870 - dispatch the RC soak"
     if: inputs.action == 'never'
     runs-on: ubicloud-standard-2
+    environment: release
     permissions:
       contents: read
     steps:
@@ -630,6 +633,7 @@ jobs:
     name: "STUB FAR-1871 - publish the Python package"
     if: inputs.action == 'never'
     runs-on: ubicloud-standard-2
+    environment: release
     permissions:
       contents: read
     steps:
@@ -644,6 +648,7 @@ jobs:
     name: "STUB FAR-1872 - pin the released version in docs"
     if: inputs.action == 'never'
     runs-on: ubicloud-standard-2
+    environment: release
     permissions:
       contents: read
     steps:

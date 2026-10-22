@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.unit.api.mock_session import configure_rls_preamble
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes import product_analytics_transparency as pat_module
@@ -142,6 +143,7 @@ def _make_session(
     instance aggregate becomes the FIRST execute.
     """
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
