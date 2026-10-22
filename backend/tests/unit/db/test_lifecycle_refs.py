@@ -46,7 +46,14 @@ class TestReservedInputPayloadKeys:
         # trusted) at the create_run chokepoint.
         assert (
             frozenset(
-                {"_work_item_id", "_modulo.work_item", "_feedback_correction", "_coalesce_key", "_work_item_refs"}
+                {
+                    "_work_item_id",
+                    "_modulo.work_item",
+                    "_feedback_correction",
+                    "_coalesce_key",
+                    "_ci_failure_coalesce_key",
+                    "_work_item_refs",
+                }
             )
             == _RESERVED_INPUT_PAYLOAD_KEYS
         )

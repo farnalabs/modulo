@@ -26,6 +26,7 @@ from modulo.core.eval_engine.eval_definition_write import (
     validate_guardrail_request,
 )
 from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -57,6 +58,7 @@ def _make_eval(**kwargs: object) -> SimpleNamespace:
 
 def _make_session(return_obj: object) -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     execute_result = MagicMock()
     execute_result.scalar_one_or_none = MagicMock(return_value=return_obj)
     session.execute = AsyncMock(return_value=execute_result)

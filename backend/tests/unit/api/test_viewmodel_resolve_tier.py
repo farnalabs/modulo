@@ -77,6 +77,8 @@ def _valid_payload(**overrides: Any) -> dict[str, Any]:
 
 def _org(settings_json: dict[str, Any] | None = None) -> MagicMock:
     org = MagicMock()
+    # ``_valid_payload`` claims "test-org"; the tenant must match it (FAR-2060).
+    org.id = "test-org"
     org.settings_json = settings_json if settings_json is not None else {}
     return org
 

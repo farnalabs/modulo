@@ -983,13 +983,14 @@ class TestStaleRunRecoverySweep:
 
         assert result["never_dispatched_swept"] == 0
         assert result["worker_lost_swept"] == 0
+        assert result["worker_orphaned_swept"] == 0
         assert result["queue_expired_swept"] == 0
         assert result["saq_zero_progress_swept"] == 0
         assert result["stranded_capacity_redispatched"] == 0
-        # Per-org: org enumeration + set_config + the four UPDATE branches
-        # (never-dispatched / queue-expired / stranded / worker-lost) + the
-        # FAR-1715 zero-progress branch (its own set_config + UPDATE).
-        assert len(statements) == 8
+        # Per-org: org enumeration + set_config + the five UPDATE branches
+        # (never-dispatched / queue-expired / stranded / worker-lost / orphaned)
+        # + the FAR-1715 zero-progress branch (its own set_config + UPDATE).
+        assert len(statements) == 9
         joined = " ".join(statements)
         assert "never_dispatched" in joined
         assert "RETURNING id, organisation_id" in joined
@@ -1001,6 +1002,18 @@ class TestStaleRunRecoverySweep:
         assert ":redispatch_ttl" in joined
         assert "queue_timeout_seconds" in joined
         assert ":wl_window" in joined
+        # 2026-10-22: the dispatcherless-orphan arm exists, is scoped to
+        # node-started rows with no SAQ dispatcher, and — unlike the legacy
+        # worker_lost arm — carries NO claim_count gate (the gate is what let the
+        # leaked run sit ``running`` forever: its claim_count never grew).
+        orphan_stmts = [s for s in statements if "harness.worker_lost" in s]
+        assert len(orphan_stmts) == 1
+        orphan_stmt = orphan_stmts[0]
+        assert "AND (dispatcher IS NULL OR dispatcher != 'saq')" in orphan_stmt
+        assert "AND dispatch_phase = :first_node_phase" in orphan_stmt
+        assert "COALESCE(heartbeat_at, started_at, created_at) < :orphan_cutoff" in orphan_stmt
+        assert "claim_count" not in orphan_stmt
+        assert "status = 'failed'" in orphan_stmt
         # FAR-1883: there is NO instance-wide queued TTL any more - the queue
         # expiry reads the per-pipeline ``queue_timeout_seconds``, so no
         # ``:fail_ttl`` / ``:ttl`` bind exists.
@@ -1299,7 +1312,13 @@ class TestStaleRunRecoverySweep:
                     return _AsyncResult(rowcount=1, rows=[(never_run,)])
                 if "queue.expired" in s:
                     return _AsyncResult(rowcount=1, rows=[(expired_run,)])
-                if "worker_lost" in s:
+                # 2026-10-22: the dispatcherless-orphan arm writes the DOTTED
+                # ``harness.worker_lost`` code; match the legacy raw spelling
+                # exactly so this arm is a no-op here (its own coverage lives in
+                # test_stale_sweep_dispatcherless_orphans.py).
+                if "error_code = 'harness.worker_lost'" in s:
+                    return _AsyncResult()
+                if "error_code = 'worker_lost'" in s:
                     return _AsyncResult(rowcount=1, rows=[(lost_run,)])
                 return _AsyncResult()
 

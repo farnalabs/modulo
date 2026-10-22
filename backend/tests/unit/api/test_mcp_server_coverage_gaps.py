@@ -134,6 +134,7 @@ from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
 from modulo.db.capacity import StorageExhaustedError
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -150,6 +151,7 @@ def _make_session_context(session: AsyncMock) -> AsyncMock:
 
 def _mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=None)

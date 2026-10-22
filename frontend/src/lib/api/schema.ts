@@ -1553,6 +1553,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Permissions
+         * @description Return the CALLER's effective permission names (FAR-2020).
+         *
+         *     The frontend gates nav/route entries on ``required_permissions`` (see
+         *     ``frontend/src/config/navigation.ts``); the access token deliberately
+         *     carries no ``permissions`` claim (honouring one would bloat every request
+         *     and leave it stale after a role change), so the nav resolves them from this
+         *     registry-backed read instead.
+         *
+         *     Authenticated only. The role is the LIVE membership role (ADR 047), not the
+         *     token claim, so a removed or deactivated member is denied outright (401)
+         *     rather than served a stale set. A DEMOTED user does get the reduced set on
+         *     this read, but the SPA caches the answer for the session: the client's nav
+         *     follows the reduction on its next permissions read, not the instant the role
+         *     changes.
+         *
+         *     A system admin is resolved at the admin floor regardless of the org role the
+         *     token carries, and additionally retains the keys only a system admin can
+         *     reach (a non-system-admin's set omits those, so it never over-states what
+         *     their org role can do). When the token carries no org claim there is no
+         *     membership lookup at all; when it does, the lookup still guards removed
+         *     members (401) even though the role it returns no longer narrows the set.
+         */
+        get: operations["permissions_api_v1_auth_permissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/csrf-token": {
         parameters: {
             query?: never;
@@ -1583,12 +1623,19 @@ export interface paths {
          *
          *     Pre-auth discovery endpoint: the login page fetches it BEFORE any user is
          *     authenticated, so it must never require a user and must never surface an
-         *     auth error. Plan/feature resolution is anonymous (via
-         *     ``_anonymous_plan_context``); when the SSO feature is not enabled /
-         *     unlicensed the endpoint answers a normal 200 with an EMPTY provider list
-         *     (no 401/402) so the login page simply renders no SSO options. The
-         *     anonymous path resolves system-level licenses only — org-level licenses
-         *     are unreachable pre-auth.
+         *     auth error. Plan/feature resolution is anonymous and resolves over the
+         *     trusted tenant, so an organisation-scoped Team key enables SSO for the
+         *     organisation it belongs to (FAR-2060). The plan AND the tenant are resolved
+         *     ONCE, in the same transaction, and the tenant is reused for the provider
+         *     listing (no TOCTOU between the entitlement decision and the listing).
+         *
+         *     FAR-2059 — degrade, never strand: when NO valid licence resolves at any
+         *     scope (an expired key is cleared and reads as absent), the endpoint still
+         *     advertises the configured providers so an SSO-only deployment can sign in;
+         *     entitlement is enforced post-auth (Community plan -> Team features off). The
+         *     provider list is suppressed only when a licence DOES resolve but does not
+         *     grant SSO — the auth gate refuses that case (402) and a button that cannot
+         *     complete sign-in is worse than no button.
          *
          *     FAR-1978 — the response is SCOPED. ``display_name`` is admin-chosen free
          *     text and can name a tenant, so an anonymous caller must never read a
@@ -1600,6 +1647,11 @@ export interface paths {
          *     - Zero or more than one login-active org: environment-level configuration
          *       only — env-var OIDC providers and env-var SAML. No DB provider name is
          *       listed.
+         *
+         *     FAR-2059: on the DEGRADED (no valid licence) path the DB providers are
+         *     still listed — sign-in must remain reachable — but each is labelled with a
+         *     generic name instead of the admin's free-text ``display_name``. The
+         *     licensed path keeps the configured name, as before.
          *
          *     SAML is enabled on the single-org path if any enabled SAML provider exists
          *     in the DB, or if env-var SAML is fully configured (enabled + license +
@@ -1827,7 +1879,12 @@ export interface paths {
          *     Exactly ONE login-active org → ``multi_org=false, org={slug, name}``
          *     (powers the single-org auto-skip on the frontend).
          *
-         *     Zero or more than one → ``multi_org=true, org=null``.
+         *     Zero or more than one → ``multi_org=true, org=null`` (and, under the ADR 005
+         *     single-org invariant, ``multi_org=false, org=null``).
+         *
+         *     The single-org predicate is :func:`resolve_login_tenant` — the SAME helper
+         *     the pre-auth plan resolver and SSO discovery use, so this endpoint and the
+         *     entitlement decision can never disagree (FAR-2060).
          *
          *     Never returns a list of orgs, and never any data about a non-single org.
          */
@@ -17519,6 +17576,18 @@ export interface components {
             /** Action */
             action: string;
         };
+        /**
+         * PermissionsResponse
+         * @description The caller's effective permission names (FAR-2020).
+         *
+         *     Sorted, so a client comparing the set is deterministic and the response is
+         *     diff-stable. Scoped to the CALLER: the route takes no parameters, so there
+         *     is no way to read another account's permissions through it.
+         */
+        PermissionsResponse: {
+            /** Permissions */
+            permissions: string[];
+        };
         /** PipelineCloneRequest */
         PipelineCloneRequest: {
             /**
@@ -26258,6 +26327,37 @@ export interface operations {
             };
         };
     };
+    permissions_api_v1_auth_permissions_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     csrf_token_api_v1_auth_csrf_token_get: {
         parameters: {
             query?: {
@@ -26366,14 +26466,23 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description Handled sign-in failure: redirect to the frontend login page with a whitelisted ``sso_error`` code; there is no response body. */
+            303: {
                 headers: {
+                    /** @description URL the browser is redirected to. */
+                    Location?: string;
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": unknown;
+                content?: never;
+            };
+            /** @description Success: redirect to the frontend callback URL. The access token is carried in the URL fragment; there is no response body. */
+            307: {
+                headers: {
+                    /** @description URL the browser is redirected to. */
+                    Location?: string;
+                    [name: string]: unknown;
                 };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -26383,6 +26492,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ProblemDetail"];
                 };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -26399,14 +26515,23 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description Handled sign-in failure: redirect to the frontend login page with a whitelisted ``sso_error`` code; there is no response body. */
+            303: {
                 headers: {
+                    /** @description URL the browser is redirected to. */
+                    Location?: string;
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": unknown;
+                content?: never;
+            };
+            /** @description Success: redirect to the frontend callback URL. The access token is carried in the URL fragment; there is no response body. */
+            307: {
+                headers: {
+                    /** @description URL the browser is redirected to. */
+                    Location?: string;
+                    [name: string]: unknown;
                 };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -26416,6 +26541,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ProblemDetail"];
                 };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -26527,14 +26659,23 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description Handled sign-in failure: redirect to the frontend login page with a whitelisted ``sso_error`` code; there is no response body. */
+            303: {
                 headers: {
+                    /** @description URL the browser is redirected to. */
+                    Location?: string;
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": unknown;
+                content?: never;
+            };
+            /** @description Success: redirect to the frontend callback URL. The access token is carried in the URL fragment; there is no response body. */
+            307: {
+                headers: {
+                    /** @description URL the browser is redirected to. */
+                    Location?: string;
+                    [name: string]: unknown;
                 };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -26544,6 +26685,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ProblemDetail"];
                 };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

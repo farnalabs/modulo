@@ -33,6 +33,7 @@ from modulo.api.mcp_server import (
 )
 from modulo.auth.oauth import OAuthAccessTokenClaims
 from modulo.auth.permissions import reset_authz_enforce, set_authz_enforce
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -50,6 +51,7 @@ def _make_session_context(session: AsyncMock) -> AsyncMock:
 
 def _mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=None)

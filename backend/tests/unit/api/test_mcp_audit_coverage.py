@@ -26,6 +26,7 @@ import pytest
 import modulo.api.mcp_audit as mcp_audit
 import modulo.api.mcp_server as ms
 from modulo.api.mcp_audit import mcp_audited
+from tests.unit.api.mock_session import configure_rls_preamble
 from tests.unit.api.test_mcp_server_coverage_gaps import _AuthContext
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -70,6 +71,7 @@ _callable_object_tool = mcp_audited("widget_created", "widget")(_CallableObjectT
 def _audit_session_mock() -> AsyncMock:
     """Session stand-in supporting the ``async with session.begin()`` block."""
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=None)

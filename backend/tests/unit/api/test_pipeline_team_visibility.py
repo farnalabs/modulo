@@ -46,7 +46,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
-from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -264,6 +264,7 @@ def _binding_for(connector: MagicMock) -> list[dict[str, str]]:
 def _enforcement_session(connector: MagicMock) -> AsyncMock:
     """Session double answering the one query the connector team gate issues."""
     session = AsyncMock()
+    configure_rls_preamble(session)
     # FAR-1639: the RLS preamble calls ``session.in_transaction()`` and write
     # paths call ``session.add()`` with SYNC call sites; a bare AsyncMock child
     # returns an un-awaited coroutine that is always truthy, so the

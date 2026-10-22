@@ -23,7 +23,7 @@ from modulo.core.trigger_engine import TriggerNotFoundError
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.settings import Settings, get_settings
 from tests.unit.api.conftest import make_system_session_mock
-from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -79,6 +79,7 @@ def _auth_headers(role: str = "admin") -> dict[str, str]:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -108,6 +109,7 @@ def _make_mock_session() -> AsyncMock:
 def _make_hmac_session() -> AsyncMock:
     """Session whose trigger carries a real hmac_secret (route-level HMAC runs)."""
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

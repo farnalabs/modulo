@@ -23,7 +23,7 @@ from modulo.api.dependencies import (
     get_db_session,
     get_system_db_session,
     require_feature_anonymous,
-    resolve_anonymous_plan_context,
+    resolve_anonymous_plan_with_tenant,
 )
 from modulo.auth.sso import (
     SSO_ERROR_AUTH_FAILED,
@@ -47,7 +47,6 @@ from modulo.core.audit_coverage import audited_system, bind_audit_org
 from modulo.core.license import verify_license_key
 from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.core.sanitize_log import sanitise_log_value
-from modulo.db.crud.organisation import list_login_active_orgs
 from modulo.db.crud.sso_provider import (
     get_enabled_saml_provider,
     get_provider_by_provider_id,
@@ -69,6 +68,45 @@ _SAML_NOT_FOUND = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="Not Found",
 )
+
+
+def _callback_responses() -> dict[int | str, dict[str, Any]]:
+    """OpenAPI ``responses`` map for the browser-facing SSO callback routes.
+
+    FAR-2012: the OIDC callback and both SAML ACS routes redirect the BROWSER
+    and have no JSON body. Without an explicit declaration FastAPI publishes
+    them as ``200 application/json`` and the generated frontend client
+    (``frontend/src/lib/api/schema.ts``) is built on that fiction.
+
+    Only statuses these routes can actually produce are declared: the success
+    ``307``, the handled-failure ``303`` (raised as :class:`SsoCallbackError`
+    and rendered by the app's registered handler) and the
+    ``handle_db_errors`` ``500`` backstop for an unexpected fault. Both
+    redirects carry a ``Location`` header and an empty body.
+    """
+    location_header: dict[str, Any] = {
+        "Location": {
+            "description": "URL the browser is redirected to.",
+            "schema": {"type": "string"},
+        }
+    }
+    return {
+        status.HTTP_307_TEMPORARY_REDIRECT: {
+            "description": (
+                "Success: redirect to the frontend callback URL. The access token is carried "
+                "in the URL fragment; there is no response body."
+            ),
+            "headers": location_header,
+        },
+        status.HTTP_303_SEE_OTHER: {
+            "description": (
+                "Handled sign-in failure: redirect to the frontend login page with a "
+                "whitelisted ``sso_error`` code; there is no response body."
+            ),
+            "headers": location_header,
+        },
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Internal Server Error"},
+    }
 
 
 def _frontend_url(settings: Settings) -> str:
@@ -208,19 +246,11 @@ class SsoProvidersResponse(BaseModel):
     saml: bool
 
 
-async def _single_login_active_org(session: AsyncSession) -> Organisation | None:
-    """Return THE login-active org when this instance is single-org, else ``None``.
-
-    FAR-1978: the legacy discovery endpoint may only surface org-level provider
-    rows when there is exactly one login-active org — the single-org login path.
-    ``login-context`` uses the same predicate and the SPA calls this endpoint
-    only when ``login-context`` reported ``multi_org=false`` with a resolved
-    org, i.e. exactly one login-active org. Zero orgs (unconfigured) or more
-    than one (multi-tenant) means no single org can be assumed, so the caller
-    must return environment-level configuration only.
-    """
-    orgs = await list_login_active_orgs(session)
-    return orgs[0] if len(orgs) == 1 else None
+# FAR-2059: an unlicensed instance still advertises its configured providers so
+# an SSO-only deployment can sign in, but admin-chosen ``display_name`` values
+# stay hidden from anonymous callers (FAR-1978). The provider_id remains, with
+# this generic label, so the login button still works without naming a tenant.
+_DEGRADED_PROVIDER_LABEL = "Single sign-on"
 
 
 async def _list_enabled_oidc_for_org(
@@ -302,16 +332,6 @@ async def is_saml_available(
     return db_saml_ok or _env_saml_available(settings)
 
 
-async def _anonymous_plan_context(settings: Settings, session: AsyncSession) -> Any:
-    """Resolve the plan context WITHOUT a user (pre-auth login-page surface).
-
-    DEPRECATED: prefer ``resolve_anonymous_plan_context`` from
-    ``modulo.api.dependencies`` — this wrapper is retained for backward
-    compatibility with callers that import from this module directly.
-    """
-    return await resolve_anonymous_plan_context(settings, session)
-
-
 @router.get("/sso/providers")
 @handle_db_errors("sso.sso_providers")
 async def sso_providers(
@@ -323,12 +343,19 @@ async def sso_providers(
 
     Pre-auth discovery endpoint: the login page fetches it BEFORE any user is
     authenticated, so it must never require a user and must never surface an
-    auth error. Plan/feature resolution is anonymous (via
-    ``_anonymous_plan_context``); when the SSO feature is not enabled /
-    unlicensed the endpoint answers a normal 200 with an EMPTY provider list
-    (no 401/402) so the login page simply renders no SSO options. The
-    anonymous path resolves system-level licenses only — org-level licenses
-    are unreachable pre-auth.
+    auth error. Plan/feature resolution is anonymous and resolves over the
+    trusted tenant, so an organisation-scoped Team key enables SSO for the
+    organisation it belongs to (FAR-2060). The plan AND the tenant are resolved
+    ONCE, in the same transaction, and the tenant is reused for the provider
+    listing (no TOCTOU between the entitlement decision and the listing).
+
+    FAR-2059 — degrade, never strand: when NO valid licence resolves at any
+    scope (an expired key is cleared and reads as absent), the endpoint still
+    advertises the configured providers so an SSO-only deployment can sign in;
+    entitlement is enforced post-auth (Community plan -> Team features off). The
+    provider list is suppressed only when a licence DOES resolve but does not
+    grant SSO — the auth gate refuses that case (402) and a button that cannot
+    complete sign-in is worse than no button.
 
     FAR-1978 — the response is SCOPED. ``display_name`` is admin-chosen free
     text and can name a tenant, so an anonymous caller must never read a
@@ -341,17 +368,25 @@ async def sso_providers(
       only — env-var OIDC providers and env-var SAML. No DB provider name is
       listed.
 
+    FAR-2059: on the DEGRADED (no valid licence) path the DB providers are
+    still listed — sign-in must remain reachable — but each is labelled with a
+    generic name instead of the admin's free-text ``display_name``. The
+    licensed path keeps the configured name, as before.
+
     SAML is enabled on the single-org path if any enabled SAML provider exists
     in the DB, or if env-var SAML is fully configured (enabled + license +
     metadata); on the multi-org path only the env-var configuration counts.
     """
-    plan = await _anonymous_plan_context(settings, session)
-    if not plan.feature_enabled("sso"):
+    plan, scoped_org = await resolve_anonymous_plan_with_tenant(settings, session)
+    # FAR-2059: only a DETERMINATE refusal hides the providers. With no valid
+    # licence at all the listing stays visible so SSO-only users can still reach
+    # sign-in; Team features are off post-auth.
+    degraded = not plan.has_license_key()
+    if not plan.feature_enabled("sso") and not degraded:
         return SsoProvidersResponse(oidc=[], saml=False)
 
     try:
         async with session.begin():
-            scoped_org = await _single_login_active_org(session)
             db_oidc_providers: list[Any] = (
                 [] if scoped_org is None else await _list_enabled_oidc_for_org(system_session, session, scoped_org.id)
             )
@@ -359,7 +394,9 @@ async def sso_providers(
             oidc_list: list[dict[str, str]] = [
                 {
                     "provider_id": p.provider_id,
-                    "display_name": p.name or getattr(p, "preset", "custom"),
+                    "display_name": (
+                        _DEGRADED_PROVIDER_LABEL if degraded else (p.name or getattr(p, "preset", "custom"))
+                    ),
                     "preset": getattr(p, "preset", "custom"),
                 }
                 for p in db_oidc_providers
@@ -509,7 +546,7 @@ def _read_oidc_flow_cookie(request: Request, state: str, settings: Settings) -> 
 async def oidc_login(
     provider: str,
     _request: Request,
-    _: object = require_feature_anonymous("sso"),
+    _: object = require_feature_anonymous("sso", allow_degraded_authentication=True),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -533,12 +570,17 @@ async def oidc_login(
     return response
 
 
-@router.get("/oidc/{provider}/callback")
+@router.get(
+    "/oidc/{provider}/callback",
+    status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+    response_class=RedirectResponse,
+    responses=_callback_responses(),
+)
 @handle_db_errors("sso.oidc_callback")
 async def oidc_callback(
     provider: str,
     request: Request,
-    _: object = require_feature_anonymous("sso"),
+    _: object = require_feature_anonymous("sso", allow_degraded_authentication=True),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -728,6 +770,9 @@ async def _read_acs_form(request: Request) -> FormData:
 # resolves, then rebound to the provider's org. An SSO sign-in -> fail closed.
 @router.post(
     "/saml/acs/{provider_id}",
+    status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+    response_class=RedirectResponse,
+    responses=_callback_responses(),
     dependencies=[
         Depends(
             audited_system("saml_acs_attempted", "session", actor_source="pre_auth", fail_closed=True),
@@ -739,7 +784,7 @@ async def _read_acs_form(request: Request) -> FormData:
 async def saml_acs_provider(
     provider_id: str,
     request: Request,
-    _: object = require_feature_anonymous("sso"),
+    _: object = require_feature_anonymous("sso", allow_degraded_authentication=True),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -844,7 +889,7 @@ async def saml_acs_provider(
 async def saml_metadata_provider(
     provider_id: str,
     _request: Request,
-    _: object = require_feature_anonymous("sso"),
+    _: object = require_feature_anonymous("sso", allow_degraded_authentication=True),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -895,7 +940,7 @@ async def saml_metadata_provider(
 async def saml_login_provider(
     provider_id: str,
     _request: Request,
-    _: object = require_feature_anonymous("sso"),
+    _: object = require_feature_anonymous("sso", allow_degraded_authentication=True),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -936,7 +981,7 @@ async def saml_login_provider(
 @handle_db_errors("sso.saml_login")
 async def saml_login(
     _request: Request,
-    _: object = require_feature_anonymous("sso"),
+    _: object = require_feature_anonymous("sso", allow_degraded_authentication=True),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -959,6 +1004,9 @@ async def saml_login(
 # audited(principal_dep=...) to resolve. Actor-less variant, SYSTEM actor.
 @router.post(
     "/saml/acs",
+    status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+    response_class=RedirectResponse,
+    responses=_callback_responses(),
     dependencies=[
         Depends(
             audited_system("saml_acs_attempted", "session", actor_source="pre_auth", fail_closed=True),
@@ -969,7 +1017,7 @@ async def saml_login(
 @handle_db_errors("sso.saml_acs")
 async def saml_acs(
     request: Request,
-    _: object = require_feature_anonymous("sso"),
+    _: object = require_feature_anonymous("sso", allow_degraded_authentication=True),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -1025,7 +1073,7 @@ async def saml_acs(
 @handle_db_errors("sso.saml_metadata")
 async def saml_metadata(
     _request: Request,
-    _: object = require_feature_anonymous("sso"),
+    _: object = require_feature_anonymous("sso", allow_degraded_authentication=True),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),

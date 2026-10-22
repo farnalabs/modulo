@@ -84,6 +84,8 @@ def _make_valid_payload(**overrides: object) -> dict[str, object]:
 
 def _mock_org(settings_json: dict[str, object] | None = None) -> MagicMock:
     org = MagicMock()
+    # FAR-2060: the signed payload claims "test-org"; the tenant must match it.
+    org.id = "test-org"
     org.settings_json = settings_json
     return org
 

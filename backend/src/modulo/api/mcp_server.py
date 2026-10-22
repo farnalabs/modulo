@@ -5264,7 +5264,7 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
         "masked run input_payload (the original run input, sensitive fields "
         "redacted), and deadline_triage[] — the retained triage envelopes "
         "(attempt_key, no_output_reason, sandbox_log_tail, raw_output_tail, "
-        "stdout_length, pr_url, run_attempt_count) that explain what the run's "
+        "raw_output_head, stdout_length, pr_url, run_attempt_count) that explain what the run's "
         "terminaliser observed. Sandbox nodes carry a per-attempt output/log "
         "tail and a non-gating pr_url — a PR URL observed in the retained tail "
         "(heuristic; not anchored to `gh pr create`); delivery_done stays "

@@ -874,9 +874,13 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
     ),
     # --- judge codes (ADR 066 D6) -----------------------------------------
     # A judge that produced NO verdict. These are the failed instrument, not a
-    # failed check: quality aggregates exclude them from denominators. They are
-    # registered here so the first canonicalising consumer renders a real
-    # guidance string instead of "Unknown error".
+    # failed check. The suite-run pass rate, the feedback eval-gap view and
+    # ``list_run_evals`` exclude them from their denominators; the org-scale
+    # aggregates (dashboard trend, admin eval dashboard, variant batches and the
+    # compliance evidence index) still count them via the ``passed`` projection
+    # until the follow-up sweep lands. They are registered here so the first
+    # canonicalising consumer renders a real guidance string instead of
+    # "Unknown error".
     "judge.timeout": ErrorCodeSpec(
         error_class="judge",
         retryable=True,

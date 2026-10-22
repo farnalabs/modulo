@@ -67,6 +67,8 @@ from fastapi import HTTPException
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.unit.api.mock_session import configure_rls_preamble
+
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
 _SRC = _BACKEND_ROOT / "src" / "modulo"
 _BOUND_FUNC = "set_mutation_row_lock_timeout"
@@ -1442,6 +1444,7 @@ def _lock_timeout_error() -> OperationalError:
 def _begin_session() -> AsyncMock:
     """An ``AsyncSession`` double whose ``async with session.begin()`` works."""
     session = AsyncMock(spec=AsyncSession)
+    configure_rls_preamble(session)
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

@@ -64,13 +64,17 @@ _CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES = "in_app_notifications.update_prefer
 # model declared "warning" while every real GET returned "info", publishing an
 # unreachable contract).
 #
-# It is not a process-wide source of truth: the crud read helpers in
-# ``db/crud/notifications.py`` (``get_dashboard_notifications`` and
-# ``get_unread_count``) keep ``min_level="warning"`` signature defaults. Every
-# production caller here passes ``min_level`` explicitly from
-# ``_load_dashboard_level``, so those defaults never decide the user-facing
-# default. Imports flow api -> db, so the crud module cannot read this constant
-# without a cycle.
+# It is not a process-wide source of truth, because imports flow api -> db and
+# the crud module cannot read this constant without a cycle. The crud read
+# helpers in ``db/crud/notifications.py`` (``get_dashboard_notifications`` and
+# ``get_unread_count``) therefore hand-mirror ``min_level="info"`` as their
+# signature defaults: every production caller here passes ``min_level``
+# explicitly from ``_load_dashboard_level``, but those defaults must still
+# agree with this constant so that an internal caller which omits the argument
+# cannot silently narrow the feed or the unread badge below the product
+# default. Changing the product default means changing it here AND in both crud
+# defaults — there is no single place the type system can enforce it
+# (FAR-1914 aligned the two after they had drifted).
 _DEFAULT_DASHBOARD_LEVEL = "info"
 
 
