@@ -168,7 +168,7 @@ class LauncherConfigSource:
                 operator_database_url=operator_database_url,
                 derived_system=derived_system,
             )
-            if value is not None:
+            if value:  # falsy-omission: a blank derived/composed value is never injected
                 resolved[field_name] = value
         return resolved
 
@@ -179,7 +179,10 @@ def _derive_operator_system_url(
 ) -> str | None:
     """Derive the system URL from the operator's app URL when only that is set."""
     if operator_database_url is not None and not operator_system_url:
-        return derive_system_database_url(operator_database_url)
+        # derive_system_database_url returns '' for a password-free URL —
+        # that must be OMITTED (the caller falls back to modulo_app), never
+        # written through as a blank system URL.
+        return derive_system_database_url(operator_database_url) or None
     return None
 
 

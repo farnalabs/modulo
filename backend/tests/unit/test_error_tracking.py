@@ -193,19 +193,39 @@ class TestMissedFireProbeCooldown:
 
 class TestScanOrgMissedFiresRowFiltering:
     async def test_row_with_no_missed_period_is_skipped(self) -> None:
-        """A row whose cadence has not been missed is skipped without an alert."""
+        """A row whose cadence has not been missed is skipped without an alert.
+
+        Real cadence rows flow through the REAL ``_row_missed_period`` — the
+        helper under test is never patched, so an inverted cadence-window
+        comparison would fail here instead of silently passing.
+        """
+        now = datetime.now(UTC)
+        missed_row = _stale_trigger()  # hourly cadence, last fired 2h ago -> missed
+        recent_row = _stale_trigger()
+        recent_row.id = uuid.uuid4()
+        recent_row.last_fired_at = now - timedelta(minutes=30)  # inside cadence + grace
+        fresh_row = _stale_trigger()
+        fresh_row.id = uuid.uuid4()
+        fresh_row.last_fired_at = None
+        fresh_row.created_at = now - timedelta(minutes=10)  # no first scheduled fire yet
         redis_client = AsyncMock()
         with (
-            patch.object(et, "_missed_fire_trigger_rows", new_callable=AsyncMock, return_value=[_stale_trigger()]),
-            patch.object(et, "_row_missed_period", return_value=None),
+            patch.object(
+                et,
+                "_missed_fire_trigger_rows",
+                new_callable=AsyncMock,
+                return_value=[missed_row, recent_row, fresh_row],
+            ),
+            patch.object(et, "_missed_fire_cooldown_ok", new_callable=AsyncMock, return_value=True),
             patch.object(et, "_emit_missed_fire_alert", new_callable=AsyncMock) as emit,
         ):
             emitted = await et._scan_org_missed_fires(
                 MagicMock(),
                 redis_client,
                 ORG,
-                now=datetime.now(UTC),
+                now=now,
                 grace_seconds=0,
             )
-        assert emitted == 0
-        emit.assert_not_awaited()
+        assert emitted == 1  # only the genuinely missed row gets through
+        emit.assert_awaited_once()
+        assert emit.await_args.kwargs["message"].startswith(f"Trigger {missed_row.id}")

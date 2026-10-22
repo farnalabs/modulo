@@ -208,16 +208,28 @@ def test_source_includes_everything_without_environment(
 def test_source_skips_empty_composed_values(
     clean_launcher_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A composed key with no value is omitted rather than injected blank."""
+    """A present-but-blank composed key is omitted rather than injected blank.
+
+    De-stubbed (review finding): the composition with a NO-PASSWORD URL is
+    the case that caused the regression — ``compose_config`` returns a
+    real dict whose ``MODULO_SYSTEM_DATABASE_URL`` is present-but-blank —
+    and the source must omit it, never write ``modulo_system_database_url=''``.
+    """
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
-    import modulo.launcher.config_source as cfg
     import modulo.launcher.secrets_file as sf
 
-    monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
-    monkeypatch.setattr(cfg, "compose_config", lambda *_args, **_kwargs: {})
-    assert not LauncherConfigSource(data_dir)()
+    password_free = LauncherSecrets(postgres_password="", redis_password="redis-pw", state_hmac_key=bytes(range(32)))
+    monkeypatch.setattr(sf, "load_or_create", lambda _path: password_free)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
+    composed = compose_config(_state(), password_free)
+    assert composed["MODULO_SYSTEM_DATABASE_URL"] == ""  # blank key IS present in the composition
+    resolved = LauncherConfigSource(data_dir)()
+    assert "modulo_system_database_url" not in resolved  # blank value omitted, not injected
+    assert resolved  # the non-blank composed values are still injected
+    assert all(resolved.values())
 
 
 def test_source_settings_roundtrip_honours_priority(
