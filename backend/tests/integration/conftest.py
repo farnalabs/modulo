@@ -1,6 +1,7 @@
 """Integration test fixtures — spins up a real Postgres via Testcontainers."""
 
 import asyncio
+import contextlib
 import json
 import os
 import sys
@@ -884,3 +885,51 @@ async def integration_client(db_url: str, app_engine: AsyncEngine) -> AsyncClien
         yield client
 
     app.dependency_overrides.clear()
+
+
+async def dispose_process_global_engines() -> None:
+    """Dispose every process-global async engine and reset its cache.
+
+    Production code keeps one shared engine per process (``db.session``,
+    ``api.dependencies``) plus several module-level caches (``cron_helpers``,
+    ``saq_hooks``, ``saq_worker``). Integration helpers that drive a scenario on
+    a PRIVATE event loop (``asyncio.run``, e.g. the sync pytest-bdd steps in
+    ``test_hitl_reject_bdd.py``) may create one of those engines on that loop;
+    ``asyncio.run`` then closes the loop with asyncpg connections still open, so
+    their graceful-close tasks never complete and the pending
+    ``Connection._cancel`` coroutine surfaces as a
+    ``PytestUnraisableExceptionWarning`` under the warning gate.
+
+    Call this from the coroutine that runs on the private loop, BEFORE the loop
+    closes. Resetting each cache to ``None`` makes the next caller recreate an
+    engine bound to the then-current loop.
+    """
+    from modulo.api import dependencies as api_dependencies
+    from modulo.core import cron_helpers, saq_worker
+    from modulo.core.error_tracking import saq_hooks
+    from modulo.db import session as db_session
+
+    caches: tuple[tuple[object, str], ...] = (
+        (db_session, "_shared_engine"),
+        (api_dependencies, "_engine"),
+        (api_dependencies, "_SYSTEM_ASYNC_ENGINE"),
+        (cron_helpers, "_ENGINE"),
+        (cron_helpers, "_SYSTEM_ENGINE"),
+        (saq_hooks, "_ENGINE"),
+        (saq_worker, "_ASYNC_ENGINE"),
+        (saq_worker, "_SYSTEM_ASYNC_ENGINE"),
+    )
+    seen: set[int] = set()
+    for module, attr in caches:
+        engine = getattr(module, attr, None)
+        if engine is None:
+            continue
+        if id(engine) in seen:
+            setattr(module, attr, None)
+            continue
+        seen.add(id(engine))
+        # A cache may hold an engine already disposed by an earlier test; a
+        # second dispose is a no-op, but never let it mask the reset.
+        with contextlib.suppress(Exception):
+            await engine.dispose()
+        setattr(module, attr, None)
