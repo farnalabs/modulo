@@ -4031,17 +4031,7 @@ async def _reject_unsupported_dispatch_bindings(
     from modulo.connectors.base import connector_binding_operation, connector_type_supports_dispatch
     from modulo.db.models.connector_instance import ConnectorInstance
 
-    target_ids: set[uuid.UUID] = set()
-    for node in nodes:
-        if not isinstance(node, dict) or connector_binding_operation(node) != "dispatch":
-            continue
-        binding = node.get("connector_binding")
-        if not isinstance(binding, dict):
-            continue
-        try:
-            target_ids.add(uuid.UUID(str(binding.get("instance_id"))))
-        except (TypeError, ValueError):
-            continue
+    target_ids = _dispatch_binding_instance_ids(nodes, connector_binding_operation)
     if not target_ids:
         return None
 
@@ -4058,9 +4048,82 @@ async def _reject_unsupported_dispatch_bindings(
         .all()
     )
     found: dict[uuid.UUID, Any] = {row.id: row for row in rows}
+    return _unsupported_dispatch_binding_error(
+        nodes,
+        found,
+        connector_binding_operation,
+        connector_type_supports_dispatch,
+    )
 
+
+def _validate_binding_routing(
+    target: dict[str, Any],
+    probe: dict[str, Any],
+    node_id: str,
+    routes_to_connector: Callable[[dict[str, Any]], bool],
+) -> dict[str, Any] | None:
+    if probe["connector_binding"].get("operation") != "dispatch" or routes_to_connector(probe):
+        return None
+    node_kind = str(target.get("node_type") or "agent")
+    return {
+        "error": "validation_failed",
+        "field": "operation",
+        "detail": (
+            f"Node {node_id} ({node_kind}) does not route its connector_binding to a connector, so "
+            "operation='dispatch' would never fire — use a dispatch or connector node for the dispatch binding"
+        ),
+    }
+
+
+def _validate_effective_binding(
+    target: dict[str, Any],
+    effective_operation: str,
+    connector_type: str,
+    connector_supports_dispatch: bool | None,
+) -> dict[str, Any] | None:
+    if str(target.get("node_type") or "") == "dispatch" and effective_operation != "dispatch":
+        return {
+            "error": "validation_failed",
+            "field": "operation",
+            "detail": "Dispatch nodes require connector_binding.operation='dispatch' "
+            f"(got {effective_operation!r}) — a dispatch node that queries fires no job",
+        }
+    if effective_operation == "dispatch" and connector_supports_dispatch is False:
+        return {
+            "error": "validation_failed",
+            "field": "connector_type",
+            "detail": f"connector type {connector_type!r} does not implement the CI-runner operations "
+            "(trigger_run / get_run_status / get_run_logs / list_runs) a dispatch binding requires",
+        }
+    return None
+
+
+def _dispatch_binding_instance_ids(
+    nodes: list[dict[str, Any]],
+    operation_resolver: Callable[[dict[str, Any]], str],
+) -> set[uuid.UUID]:
+    target_ids: set[uuid.UUID] = set()
     for node in nodes:
-        if not isinstance(node, dict) or connector_binding_operation(node) != "dispatch":
+        if not isinstance(node, dict) or operation_resolver(node) != "dispatch":
+            continue
+        binding = node.get("connector_binding")
+        if not isinstance(binding, dict):
+            continue
+        try:
+            target_ids.add(uuid.UUID(str(binding.get("instance_id"))))
+        except (TypeError, ValueError):
+            continue
+    return target_ids
+
+
+def _unsupported_dispatch_binding_error(
+    nodes: list[dict[str, Any]],
+    found: dict[uuid.UUID, Any],
+    operation_resolver: Callable[[dict[str, Any]], str],
+    supports_dispatch: Callable[[str], bool],
+) -> dict[str, Any] | None:
+    for node in nodes:
+        if not isinstance(node, dict) or operation_resolver(node) != "dispatch":
             continue
         binding = node.get("connector_binding")
         if not isinstance(binding, dict):
@@ -4073,7 +4136,7 @@ async def _reject_unsupported_dispatch_bindings(
         if instance is None:
             continue
         type_id = str(instance.connector_type_id or "").strip()
-        if not type_id or connector_type_supports_dispatch(type_id):
+        if not type_id or supports_dispatch(type_id):
             continue
         return {
             "error": "validation_failed",
@@ -4487,11 +4550,46 @@ def _validate_sandbox_nodes(nodes: list[dict[str, Any]]) -> dict[str, Any] | Non
     return None
 
 
+def _bind_connector_ids(
+    pipeline_id: str,
+    node_id: str,
+    connector_instance_id: str,
+) -> tuple[uuid.UUID, tuple[uuid.UUID, uuid.UUID, uuid.UUID] | None, dict[str, Any] | None]:
+    org_id = _ctx_org_id_val()
+    parsed: list[uuid.UUID | None] = []
+    for value, field in (
+        (pipeline_id, "pipeline_id"),
+        (node_id, "node_id"),
+        (connector_instance_id, "connector_instance_id"),
+    ):
+        identifier, error = _parse_uuid_param(value, field)
+        if error is not None:
+            return org_id, None, error
+        parsed.append(identifier)
+    if any(identifier is None for identifier in parsed):
+        return org_id, None, {"error": "invalid_id", "detail": _MSG_UUID_PARSE_FAILED}
+    return org_id, (parsed[0], parsed[1], parsed[2]), None  # type: ignore[return-value]
+
+
 # FAR-1141: connector-binding operation verbs and CI dispatch selectors the API
 # model enforces via Literal — MCP writes raw graph dicts, so it validates the
 # same vocabulary itself instead of persisting a value the read path rejects.
 _BIND_OPERATIONS = ("query", "write", "dispatch")
 _BIND_DISPATCH_ACTIONS = ("trigger_run", "get_run_status", "get_run_logs", "list_runs")
+
+
+def _validate_binding_arguments(operation: str | None, dispatch_action: str | None) -> dict[str, Any] | None:
+    for value, field, choices in (
+        (operation, "operation", _BIND_OPERATIONS),
+        (dispatch_action, "dispatch_action", _BIND_DISPATCH_ACTIONS),
+    ):
+        if value is not None and value not in choices:
+            return {
+                "error": "validation_failed",
+                "field": field,
+                "detail": f"{field} must be one of {list(choices)}, got {value!r}",
+            }
+    return None
 
 
 def _apply_node_connector_binding(
@@ -4524,18 +4622,9 @@ def _apply_node_connector_binding(
     a job-firing binding is persisted ``idempotent=false`` exactly as the REST
     model forces it.
     """
-    if operation is not None and operation not in _BIND_OPERATIONS:
-        return {
-            "error": "validation_failed",
-            "field": "operation",
-            "detail": f"operation must be one of {list(_BIND_OPERATIONS)}, got {operation!r}",
-        }
-    if dispatch_action is not None and dispatch_action not in _BIND_DISPATCH_ACTIONS:
-        return {
-            "error": "validation_failed",
-            "field": "dispatch_action",
-            "detail": f"dispatch_action must be one of {list(_BIND_DISPATCH_ACTIONS)}, got {dispatch_action!r}",
-        }
+    validation_error = _validate_binding_arguments(operation, dispatch_action)
+    if validation_error is not None:
+        return validation_error
     # WORK ON A DEEP COPY — never mutate the ORM-loaded value in place.
     # ``pipelines.graph_nodes_json`` is a plain JSON column (no Mutable
     # wrapper), so an in-place edit of a loaded node dict is invisible to the
@@ -4583,17 +4672,9 @@ def _apply_node_connector_binding(
     # asked for, with nothing ever firing. The Pydantic model rejects the same
     # shape on the full-graph write (and REST); this bind path writes raw node
     # dicts, so it enforces the rule itself.
-    if binding.get("operation") == "dispatch" and not node_routes_binding_to_connector(probe):
-        node_kind = str(target.get("node_type") or "agent")
-        return {
-            "error": "validation_failed",
-            "field": "operation",
-            "detail": (
-                f"Node {node_id} ({node_kind}) does not route its connector_binding to a connector, so "
-                "operation='dispatch' would never fire — use a dispatch or connector node for the "
-                "dispatch binding"
-            ),
-        }
+    routing_error = _validate_binding_routing(target, probe, node_id, node_routes_binding_to_connector)
+    if routing_error is not None:
+        return routing_error
 
     # Resolve the verb exactly as the engine will route it, delegating to the
     # SHARED resolver (FAR-1141 FIX 6: ``connectors.base.connector_binding_operation``
@@ -4605,20 +4686,14 @@ def _apply_node_connector_binding(
     binding["operation"] = effective_operation
     # ...and the dispatch node's own requirement, also expressed through that
     # resolver's verdict rather than a re-derived default.
-    if str(target.get("node_type") or "") == "dispatch" and effective_operation != "dispatch":
-        return {
-            "error": "validation_failed",
-            "field": "operation",
-            "detail": "Dispatch nodes require connector_binding.operation='dispatch' "
-            f"(got {effective_operation!r}) — a dispatch node that queries fires no job",
-        }
-    if effective_operation == "dispatch" and connector_supports_dispatch is False:
-        return {
-            "error": "validation_failed",
-            "field": "connector_type",
-            "detail": f"connector type {connector_type!r} does not implement the CI-runner operations "
-            "(trigger_run / get_run_status / get_run_logs / list_runs) a dispatch binding requires",
-        }
+    effective_error = _validate_effective_binding(
+        target,
+        effective_operation,
+        connector_type,
+        connector_supports_dispatch,
+    )
+    if effective_error is not None:
+        return effective_error
     if node_fires_dispatch_job(probe):
         # Parity with the REST model's forced ``idempotent=false``: the binding
         # fires a job on the customer's substrate, so the node is never safe to
@@ -4655,18 +4730,11 @@ async def bind_connector_to_node(
 
         from modulo.db.crud.connector_instance import get_connector_instance
 
-        org_id = _ctx_org_id_val()
-        pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
-        if pid_err:
-            return pid_err
-        nid, nid_err = _parse_uuid_param(node_id, "node_id")
-        if nid_err:
-            return nid_err
-        cid, cid_err = _parse_uuid_param(connector_instance_id, "connector_instance_id")
-        if cid_err:
-            return cid_err
-        if pid is None or nid is None or cid is None:
-            return {"error": "invalid_id", "detail": _MSG_UUID_PARSE_FAILED}
+        org_id, ids, id_error = _bind_connector_ids(pipeline_id, node_id, connector_instance_id)
+        if id_error is not None:
+            return id_error
+        assert ids is not None
+        pid, nid, cid = ids
 
         async with _session(org_id) as s:
             # Verify connector exists in org
