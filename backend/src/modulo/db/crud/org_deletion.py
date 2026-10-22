@@ -465,8 +465,8 @@ async def _collect_org_export_in_snapshot(org_id: uuid.UUID, engine: AsyncEngine
         engine = get_shared_engine()
 
     # Create a connection and set REPEATABLE READ isolation via execution_options
-    # BEFORE starting the transaction. execution_options returns a wrapper around
-    # the same connection (sync call; we await to satisfy mypy).
+    # BEFORE starting the transaction. execution_options returns an AsyncConnection
+    # coroutine that must be awaited to get the configured connection wrapper.
     from sqlalchemy.ext.asyncio import AsyncConnection
 
     async with engine.connect() as base_conn:

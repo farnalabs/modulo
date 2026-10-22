@@ -15,7 +15,3 @@ rules:
     severity: ERROR
     paths:
       include: ["**/backend/tests/**"]
-      exclude: [
-        "**/backend/tests/unit/conftest.py",
-        "**/backend/tests/unit/test_org_lock_modes.py",
-      ]

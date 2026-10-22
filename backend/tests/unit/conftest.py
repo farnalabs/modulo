@@ -1,18 +1,11 @@
 """Global fixtures for all unit tests."""
 
-import os
 import sys
 from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-
-# Set required env vars BEFORE any module imports that call get_settings()
-os.environ["DATABASE_URL"] = "postgresql+asyncpg://localhost/modulo-unit-test"
-os.environ["MODULO_SYSTEM_DATABASE_URL"] = "postgresql+asyncpg://localhost/modulo-system-unit-test"
-os.environ["FERNET_KEY"] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-os.environ["SECRET_KEY"] = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
 
 from tests.helpers.audit_session import install_audit_session_double
 from tests.unit._e2b_sandbox_bridge import install_bridge

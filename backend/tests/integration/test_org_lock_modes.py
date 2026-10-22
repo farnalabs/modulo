@@ -14,22 +14,20 @@ analytics consent, OTEL config, runtime flags, licence) to single-statement
 atomic patches — those writers no longer take a ``FOR UPDATE`` pre-lock at all
 (the UPDATE statement's own row lock is statement-scoped, and on the generic
 non-Postgres dialects the patch helper's fallback keeps the lock it needs).
-This file pins BOTH halves: the deletion-FSM sites that must KEEP ``FOR UPDATE``,
-and the converted config writers that must NOT take one.
 
-Only the compiled SQL is asserted (no Postgres is required by this module's own
-tests), but the module lives under ``tests/integration/`` per the task contract.
+FAR-1823 then REMOVED the org-row FOR UPDATE lock from ``export_org_data``:
+live captures now use a read-only REPEATABLE READ snapshot on a separate
+connection, and the stored ``export_bundle_json`` is returned directly without
+any lock. The org-row lock never gave cross-table consistency because child-row
+UPDATEs were never blocked by it — the export reads multiple child tables that
+the org lock does not protect.
+
+This file pins BOTH halves: the deletion-FSM sites that must KEEP ``FOR UPDATE``
+(``request_org_deletion`` FSM re-read, ``confirm_org_deletion``, ``cancel_org_deletion``),
+and the converted config writers + export path that must NOT take one.
 """
 
 from __future__ import annotations
-
-# Set required env vars BEFORE any module imports that call get_settings()
-import os
-
-os.environ["DATABASE_URL"] = "postgresql+asyncpg://localhost/modulo-unit-test"
-os.environ["MODULO_SYSTEM_DATABASE_URL"] = "postgresql+asyncpg://localhost/modulo-system-unit-test"
-os.environ["FERNET_KEY"] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-os.environ["SECRET_KEY"] = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
 
 import uuid
 from typing import Any
@@ -50,12 +48,11 @@ from modulo.db.crud.org_deletion import (
 )
 from modulo.db.crud.organisation import get_organisation
 
-# This module uses only mocks — no Postgres required. The integration mark is
-# removed to avoid the autouse fixture chain that spins up testcontainers.
-# pytestmark = pytest.mark.integration
+pytestmark = pytest.mark.integration
 
 _ORG_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 _ACTOR_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
+
 _ORG_NOT_FOUND = "Organisation not found"
 
 
@@ -84,32 +81,6 @@ class _MissingOrgResult:
 
     def first(self) -> None:
         return None
-
-
-class _ValidOrgThenMissingResult:
-    """Session result that returns a valid org on first call, then missing."""
-
-    def __init__(self) -> None:
-        self._call_count = 0
-
-    def scalar_one_or_none(self) -> Any:
-        self._call_count += 1
-        if self._call_count == 1:
-            # Return a mock org object on first call
-            from unittest.mock import MagicMock
-
-            org = MagicMock()
-            org.id = _ORG_ID
-            org.status = "active"
-            org.deleted_at = None
-            org.deletion_token = None
-            org.deletion_token_expires_at = None
-            org.export_bundle_json = None
-            return org
-        return None
-
-    def first(self) -> Any:
-        return self.scalar_one_or_none()
 
 
 class _GucResult:
@@ -221,7 +192,7 @@ async def test_other_org_deletion_paths_org_lock_stays_for_update() -> None:
             if "FROM organisations" in str(statement) or "FROM ORGANISATIONS" in str(statement).upper():
                 self._org_read_count += 1
                 if self._org_read_count == 1:
-                    # First org read: return valid org
+                    # First org read: return valid org (pre-lock validation)
                     from unittest.mock import MagicMock
 
                     org = MagicMock()
@@ -234,7 +205,7 @@ async def test_other_org_deletion_paths_org_lock_stays_for_update() -> None:
                     result = MagicMock()
                     result.scalar_one_or_none.return_value = org
                     return result
-                # Second org read: return missing
+                # Second org read: return missing (FSM re-read under lock)
                 return _MissingOrgResult()
             return _MissingOrgResult()
 
