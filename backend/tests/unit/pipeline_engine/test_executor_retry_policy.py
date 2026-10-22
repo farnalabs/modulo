@@ -8,6 +8,7 @@ These tests assert the matching rules directly; the execute() integration path
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import ExitStack, asynccontextmanager, contextmanager
@@ -1832,3 +1833,74 @@ def test_attempt_started_at_is_none_when_the_row_has_no_timestamps() -> None:
 def test_attempt_started_at_ignores_a_non_datetime_value() -> None:
     run = SimpleNamespace(dispatched_at="2026-10-20T12:00:00Z", started_at=MagicMock())
     assert _attempt_started_at(run) is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-2025 — the over-budget guard's wiring on the IN-EXECUTE retry path.
+#
+# The execute()-level tests above feed ``_read_retry_attempt_state`` MagicMock
+# run rows, whose ``dispatched_at``/``started_at`` are Mocks rather than
+# datetimes — so ``_attempt_started_at`` returns None and the guard fails OPEN.
+# The ``attempt_consumed_budget=True`` arm (and its warning) was therefore
+# never exercised. These drive the decision with a REAL attempt start and a
+# populated ``_node_timeouts``: refused when the allowance is spent, and still
+# re-dispatched after a fast failure.
+# ---------------------------------------------------------------------------
+
+
+async def _drive_maybe_retry_after_policy(*, elapsed_seconds: float) -> AsyncMock:
+    """Call the in-execute retry decision with a real attempt-start timestamp.
+
+    ``_redispatch_after_policy`` is the ``NoReturn`` re-raise seam in
+    production, so its double raises ``RunRetryPolicyError`` too: a caller that
+    reaches the re-dispatch never returns normally. Returns the double so a
+    refused retry can assert it was never awaited.
+    """
+    executor = PipelineExecutor(MagicMock())
+    executor._claim_token = "tok-claim-abc"
+    executor._node_timeouts = {"node-a": 3300}
+    executor._read_retry_attempt_state = AsyncMock(
+        return_value=(1, "tok-claim-abc", datetime.now(UTC) - timedelta(seconds=elapsed_seconds))
+    )
+    redispatch = AsyncMock(side_effect=RunRetryPolicyError("failed", 2))
+    with patch.object(PipelineExecutor, "_redispatch_after_policy", new=redispatch):
+        await executor._maybe_retry_after_policy(
+            run_id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            pipeline_retry_policy={"on": ["timeout"], "max_retries": 2},
+            final_status="failed",
+            error_code="node_deadline_exceeded",
+            error_detail=None,
+            is_correction_run=False,
+            graph_idempotent=True,
+            graph_json={"nodes": [{"id": "node-a"}], "edges": []},
+            model_backend_hub=None,
+            connector_hub=None,
+            broker=MagicMock(),
+        )
+    return redispatch
+
+
+async def test_maybe_retry_after_policy_refuses_an_over_budget_attempt(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-2025 prove-the-fix: an attempt that spent the whole node budget does
+    not re-dispatch, and the refusal is recorded on the log line that explains
+    why (the run is terminalised by the caller, so this warning is the only
+    trace of the suppressed retry)."""
+    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.executor"):
+        redispatch = await _drive_maybe_retry_after_policy(elapsed_seconds=3300.0)
+
+    redispatch.assert_not_awaited()
+    assert "pipeline.retry_policy_budget_exhausted" in caplog.text
+
+
+async def test_maybe_retry_after_policy_still_redispatches_a_fast_failure() -> None:
+    """FAR-2025 false-positive guard on the in-execute path: the identical call
+    with a 60 s attempt keeps its retry, so the refusal above is attributable to
+    the budget check and nothing else."""
+    with pytest.raises(RunRetryPolicyError) as exc_info:
+        await _drive_maybe_retry_after_policy(elapsed_seconds=60.0)
+
+    assert exc_info.value.status == "failed"
+    assert exc_info.value.max_retries == 2

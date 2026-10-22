@@ -376,7 +376,7 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   `dispatched_at`/`dispatcher`/`heartbeat_at` cleared) and stamped with the
   truthful `harness.worker_lost` code plus a detail naming the shutdown;
   `dispatcher_reconcile` re-dispatches it on its next 60s tick, so an
-  in-flight run at a release is handed back within ~1 minute of   the new worker
+  in-flight run at a release is handed back within ~1 minute of the new worker
   becoming ready – never 30-35 minutes. If a re-run is NOT safe – a
   non-idempotent node-started graph, or a `retry_policy` that forbids it – the
   run is failed in place with the same `harness.worker_lost` code and a detail

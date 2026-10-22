@@ -6724,11 +6724,12 @@ class PipelineExecutor:
     ) -> tuple[int, str | None, datetime | None]:
         """Read the run's attempt count, claim token, and THIS attempt's start.
 
-        ``attempt_started_at`` is ``dispatched_at`` (rewritten on every claim and
-        re-claim, so it is the current attempt's start) falling back to
-        ``started_at``. It is the input to the FAR-2025 over-budget retry guard:
-        an attempt that consumed the graph's node-budget allowance must not be
-        re-dispatched.
+        ``attempt_started_at`` is the LATER of ``dispatched_at`` (rewritten on
+        every claim / re-claim, so it marks the current attempt's start) and
+        ``started_at`` (set once when the first attempt began executing) — see
+        ``_attempt_started_at`` for why the max, not a fallback, is correct. It
+        is the input to the FAR-2025 over-budget retry guard: an attempt that
+        consumed the graph's node-budget allowance must not be re-dispatched.
         """
         node_attempt_count = 0
         current_claim_token: str | None = None
