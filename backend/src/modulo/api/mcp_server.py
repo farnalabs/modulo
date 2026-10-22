@@ -2308,13 +2308,17 @@ def _db_shell_sqlalchemy_response(
     cfg: _DbShellConfig,
     log_key: str,
 ) -> dict[str, Any]:
-    """Render the shell's generic ``SQLAlchemyError`` arm."""
+    """Render the shell's generic ``SQLAlchemyError`` arm.
+
+    Rendering only — the ``except SQLAlchemyError`` arm logs once, before this
+    helper runs, so every failure (including the session-contract branch) is
+    logged exactly once and no path can return this payload unlogged.
+    """
     # FAR-1482: the session-contract guard must run BEFORE the
     # db_errors_to_fallback split — a programming bug is not the generic
     # "failed to <tool>" fallback either.
     if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
         return contract_error
-    _log.exception(cfg.log_constant)
     if cfg.db_errors_to_fallback:
         return _tool_error(cfg.fallback, code="database_unavailable")
     return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
@@ -2377,6 +2381,10 @@ async def _run_db_shell[**TOOL_SHELL_P](
         _log.exception(cfg.log_constant)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError as exc:
+        # Log in the ARM, not in the renderer: the renderer returns early for a
+        # session-contract violation, so a log inside it would leave that path
+        # silent (and a structural scanner cannot see through a helper anyway).
+        _log.exception(cfg.log_constant)
         return _db_shell_sqlalchemy_response(exc, cfg, log_key)
     except Exception as exc:
         _log.exception(cfg.log_constant)

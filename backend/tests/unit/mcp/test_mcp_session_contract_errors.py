@@ -180,3 +180,42 @@ class TestToolPayloadSessionContract(_McpContext):
             await create_schema(name="s")
 
         assert "mcp.create_schema.session_contract_error" in caplog.text, caplog.text
+
+
+class TestShellLogsEverySqlalchemyFailure:
+    """The ladder logs in the ARM, so no renderer branch can return unlogged.
+
+    The session-contract renderer returns before the generic payload is built,
+    which is exactly the branch that used to skip the shell's log when the log
+    lived inside the renderer. ``_log.exception`` now runs before the renderer
+    is called, so this path logs once — and a plain transient failure still
+    logs once, not twice.
+    """
+
+    async def test_session_contract_path_logs_the_shell_constant(self, caplog: pytest.LogCaptureFixture) -> None:
+        constant = "shell session-contract failure"
+
+        @_tool_db_shell(log_constant=constant, integrity_detail=None, fallback="fail")
+        async def handler() -> dict[str, Any]:
+            raise InvalidRequestError(_SESSION_CONTRACT_MSG)
+
+        with caplog.at_level(logging.ERROR, logger="modulo.api.mcp_server"):
+            result = await handler()
+
+        _assert_session_contract(result)
+        shell_records = [record for record in caplog.records if record.name == "modulo.api.mcp_server"]
+        assert [record.getMessage() for record in shell_records] == [constant], shell_records
+
+    async def test_transient_failure_logs_exactly_once(self, caplog: pytest.LogCaptureFixture) -> None:
+        constant = "shell transient failure"
+
+        @_tool_db_shell(log_constant=constant, integrity_detail=None, fallback="fail")
+        async def handler() -> dict[str, Any]:
+            raise SQLAlchemyError("down")
+
+        with caplog.at_level(logging.ERROR, logger="modulo.api.mcp_server"):
+            result = await handler()
+
+        assert result["error"] == "database_unavailable", result
+        shell_records = [record for record in caplog.records if record.name == "modulo.api.mcp_server"]
+        assert [record.getMessage() for record in shell_records] == [constant], shell_records
