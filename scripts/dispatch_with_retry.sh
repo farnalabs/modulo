@@ -31,10 +31,29 @@
 # indefinitely and can outlive the PR's head SHA, so its eventual delivery
 # would already be stale.
 #
-# Retry-After (RFC 9110 delta-seconds or HTTP-date) is honoured verbatim when
-# the server sends one, with no jitter. Without it the delay is exponential
-# backoff (base 10s, per-attempt cap 60s) plus bounded jitter (<= 5s) so
-# many failing jobs do not retry in lockstep and re-saturate the same slots.
+# The numbers are chosen so the WALL-CLOCK BUDGET is the binding constraint and
+# the attempt cap is only a backstop. Scheduled waits are 10s, 20s, 40s then
+# 60s for every later attempt (plus <= 5s jitter): six sleeps put ~250-280s of
+# wall clock on the job, and the wait after the seventh attempt no longer fits
+# the 300s budget, so a saturated trigger gets ~7 attempts spread over ~4 minutes
+# instead of a burst. The cost is bounded by the same budget: a dispatch job
+# can hold a runner for at most 300s of waiting plus the per-attempt curl time
+# (10s connect / 30s total each). The attempt cap of 8 stays above the number
+# the budget permits, so it can never truncate a budget-bound run early — it
+# only guards callers that override DISPATCH_BUDGET_SECONDS upward.
+#
+# Retry-After (RFC 9110 delta-seconds or HTTP-date) is a FLOOR on when the
+# server may next accept, never the retry schedule: the delay is the LARGER of
+# the server's value and this attempt's exponential backoff (base 10s,
+# per-attempt cap 60s) plus bounded jitter (<= 5s) so many failing jobs do not
+# retry in lockstep and re-saturate the same slots. Honouring a SHORT
+# Retry-After verbatim defeats the budget: the Branch Fixer's 429 answers
+# `Retry-After: 5`, so every attempt would wait 5s, the attempt cap would be
+# spent in ~35s of sleep, and DISPATCH_BUDGET_SECONDS would never bind
+# (observed on PR #2165: 8 attempts in 38s, all HTTP 429, CI failure never
+# handed to the fix loop). A Retry-After LONGER than the remaining budget is
+# still honoured as an instruction not to retry early: the loop abandons with
+# the budget warning rather than retrying inside a window the server closed.
 #
 # Failures are NEVER silent: on a failed dispatch the script emits a class-
 # named ::error:: annotation, writes a durable GITHUB_STEP_SUMMARY block, and
@@ -110,14 +129,23 @@ parse_retry_after() {
 
 retry_delay() {
   # $1 = attempt number (1-based), $2 = Retry-After seconds or empty.
-  if [[ -n "$2" ]]; then
+  #
+  # Retry-After is a FLOOR, not the schedule: the delay is the larger of the
+  # server's value and this attempt's exponential backoff (clamped to
+  # DISPATCH_MAX_DELAY, jitter added on top). A short Retry-After therefore
+  # cannot collapse the backoff into a tight loop that exhausts the attempt cap
+  # before the wall-clock budget can bind (see the header).
+  BACKOFF=$(( DISPATCH_BASE_DELAY * (1 << ($1 - 1)) ))
+  if [[ "$BACKOFF" -gt "$DISPATCH_MAX_DELAY" ]]; then BACKOFF="$DISPATCH_MAX_DELAY"; fi
+  BACKOFF=$(( BACKOFF + RANDOM % (DISPATCH_JITTER_MAX + 1) ))
+  # Annotated assignment keeps `set -e` from treating an empty/non-numeric
+  # value as a failed arithmetic expansion; parse_retry_after only ever emits
+  # a non-negative whole number, so `10#` is safe.
+  if [[ -n "$2" ]] && [[ "$((10#$2))" -gt "$BACKOFF" ]]; then
     printf '%s\n' "$2"
     return 0
   fi
-  DELAY=$(( DISPATCH_BASE_DELAY * (1 << ($1 - 1)) ))
-  if [[ "$DELAY" -gt "$DISPATCH_MAX_DELAY" ]]; then DELAY="$DISPATCH_MAX_DELAY"; fi
-  JITTER=$(( RANDOM % (DISPATCH_JITTER_MAX + 1) ))
-  printf '%s\n' "$((DELAY + JITTER))"
+  printf '%s\n' "$BACKOFF"
 }
 
 HEADER_FILE=$(mktemp)
