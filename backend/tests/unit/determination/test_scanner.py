@@ -76,20 +76,42 @@ _GITLAB_API = "https://gitlab.com/api/v4"
 _JIRA_BASE = "https://test-domain.atlassian.net/rest/api/3"
 
 
+def _stub_github(
+    *,
+    user: httpx.Response | None = None,
+    repos: httpx.Response | None = None,
+    pulls: dict[str, httpx.Response] | None = None,
+) -> None:
+    """Install the GitHub endpoints every scan touches: /user, the repos listing, per-repo pulls."""
+    respx.get(f"{_GITHUB_API}/user").mock(user or httpx.Response(200, json={"login": "octocat"}))
+    respx.get(f"{_GITHUB_API}/user/repos").mock(repos or httpx.Response(200, json=[]))
+    for repo_name, response in (pulls or {}).items():
+        respx.get(f"{_GITHUB_API}/repos/{repo_name}/pulls").mock(response)
+
+
+def _stub_gitlab(*, projects: httpx.Response, mrs: httpx.Response | None = None) -> None:
+    """Install the GitLab endpoints every scan touches: /user, projects, per-project MRs, token info."""
+    respx.get(f"{_GITLAB_API}/user").mock(httpx.Response(200, json={"username": "testuser"}))
+    respx.get(f"{_GITLAB_API}/projects").mock(projects)
+    respx.get(path__regex=r".*merge_requests.*").mock(mrs or httpx.Response(200, json=[{"id": 42, "title": "MR 1"}]))
+    respx.get("https://gitlab.com/oauth/token/info").mock(
+        httpx.Response(200, json={"scope": ["read_api", "write_repository", "api"]})
+    )
+
+
 @respx.mock
 async def test_github_scan() -> None:
     ci = _fake_ci("github", creds={"token": "ghp_test"})
     async with _hub(ci) as hub:
         await hub.initialise([ci])
 
-        respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
-        respx.get(f"{_GITHUB_API}/user/repos").mock(
-            httpx.Response(200, json=[{"full_name": "owner/repo1"}, {"full_name": "owner/repo2"}])
+        _stub_github(
+            repos=httpx.Response(200, json=[{"full_name": "owner/repo1"}, {"full_name": "owner/repo2"}]),
+            pulls={
+                "owner/repo1": httpx.Response(200, json=[{"number": 1, "created_at": "2026-06-20T00:00:00Z"}]),
+                "owner/repo2": httpx.Response(200, json=[]),
+            },
         )
-        respx.get(f"{_GITHUB_API}/repos/owner/repo1/pulls").mock(
-            httpx.Response(200, json=[{"number": 1, "created_at": "2026-06-20T00:00:00Z"}])
-        )
-        respx.get(f"{_GITHUB_API}/repos/owner/repo2/pulls").mock(httpx.Response(200, json=[]))
 
         samples = await run_scan(hub)
     repos = [s for s in samples if s.resource == "repos"]
@@ -109,12 +131,7 @@ async def test_gitlab_scan() -> None:
     async with _hub(ci) as hub:
         await hub.initialise([ci])
 
-        respx.get(f"{_GITLAB_API}/user").mock(httpx.Response(200, json={"username": "testuser"}))
-        respx.get(f"{_GITLAB_API}/projects").mock(httpx.Response(200, json=[{"id": 1, "name": "proj1"}]))
-        respx.get(path__regex=r".*merge_requests.*").mock(httpx.Response(200, json=[{"id": 42, "title": "MR 1"}]))
-        respx.get("https://gitlab.com/oauth/token/info").mock(
-            httpx.Response(200, json={"scope": ["read_api", "write_repository", "api"]})
-        )
+        _stub_gitlab(projects=httpx.Response(200, json=[{"id": 1, "name": "proj1"}]))
 
         samples = await run_scan(hub)
     resources = {s.resource for s in samples}
@@ -186,7 +203,7 @@ async def test_unsupported_connector_type_produces_no_samples() -> None:
 async def test_empty_hub_returns_no_samples() -> None:
     hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
     samples = await run_scan(hub)
-    assert not samples
+    assert samples == []
 
 
 @respx.mock
@@ -195,9 +212,8 @@ async def test_connector_query_error_returns_error_in_sample() -> None:
     async with _hub(ci) as hub:
         await hub.initialise([ci])
 
-        respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
         # Repos endpoint fails; pulls won't be queried since repos list is empty
-        respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(500, text="Server Error"))
+        _stub_github(repos=httpx.Response(500, text="Server Error"))
 
         samples = await run_scan(hub)
     errored = [s for s in samples if s.error]
@@ -214,13 +230,14 @@ async def test_connector_with_no_repos_produces_repos_sample() -> None:
     async with _hub(ci) as hub:
         await hub.initialise([ci])
 
-        respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
-        respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(200, json=[]))
+        _stub_github()
 
         samples = await run_scan(hub)
-    assert len(samples) >= 1
-    resources = {s.resource for s in samples}
-    assert "repos" in resources
+    assert len(samples) == 1
+    assert samples[0].resource == "repos"
+    assert samples[0].records == []
+    assert samples[0].sample_count == 0
+    assert samples[0].error is None
 
 
 @respx.mock
@@ -230,9 +247,10 @@ async def test_pull_query_failure_produces_error_sample() -> None:
     async with _hub(ci) as hub:
         await hub.initialise([ci])
 
-        respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
-        respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(200, json=[{"full_name": "owner/repo1"}]))
-        respx.get(f"{_GITHUB_API}/repos/owner/repo1/pulls").mock(httpx.Response(500, text="Server Error"))
+        _stub_github(
+            repos=httpx.Response(200, json=[{"full_name": "owner/repo1"}]),
+            pulls={"owner/repo1": httpx.Response(500, text="Server Error")},
+        )
 
         samples = await run_scan(hub)
     by_resource = {s.resource: s for s in samples}
@@ -252,8 +270,7 @@ async def test_nameless_repo_skips_pull_query() -> None:
     async with _hub(ci) as hub:
         await hub.initialise([ci])
 
-        respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
-        respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(200, json=[{"id": 1}]))
+        _stub_github(repos=httpx.Response(200, json=[{"id": 1}]))
 
         samples = await run_scan(hub)
     resources = {s.resource for s in samples}
@@ -270,12 +287,7 @@ async def test_nameless_project_skips_mr_query() -> None:
     async with _hub(ci) as hub:
         await hub.initialise([ci])
 
-        respx.get(f"{_GITLAB_API}/user").mock(httpx.Response(200, json={"username": "testuser"}))
-        respx.get(f"{_GITLAB_API}/projects").mock(httpx.Response(200, json=[{"id": 1, "name": "proj1"}, {"id": 2}]))
-        respx.get(path__regex=r".*merge_requests.*").mock(httpx.Response(200, json=[{"id": 42, "title": "MR 1"}]))
-        respx.get("https://gitlab.com/oauth/token/info").mock(
-            httpx.Response(200, json={"scope": ["read_api", "write_repository", "api"]})
-        )
+        _stub_gitlab(projects=httpx.Response(200, json=[{"id": 1, "name": "proj1"}, {"id": 2}]))
 
         samples = await run_scan(hub)
     resources = {s.resource for s in samples}
@@ -296,9 +308,10 @@ async def test_multiple_connectors_scanned_independently() -> None:
     async with _hub(ci1) as hub:
         await hub.initialise([ci1, ci2])
 
-        respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(200, json={"login": "octocat"}))
-        respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(200, json=[{"full_name": "owner/repo1"}]))
-        respx.get(f"{_GITHUB_API}/repos/owner/repo1/pulls").mock(httpx.Response(200, json=[]))
+        _stub_github(
+            repos=httpx.Response(200, json=[{"full_name": "owner/repo1"}]),
+            pulls={"owner/repo1": httpx.Response(200, json=[])},
+        )
 
         samples = await run_scan(hub)
     # Both connectors must be sampled, not just one of them
@@ -315,8 +328,10 @@ async def test_health_check_failure_still_attempts_queries_as_error_samples() ->
     async with _hub(ci) as hub:
         await hub.initialise([ci])
 
-        respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(401, text="Unauthorized"))
-        respx.get(f"{_GITHUB_API}/user/repos").mock(httpx.Response(401, text="Unauthorized"))
+        _stub_github(
+            user=httpx.Response(401, text="Unauthorized"),
+            repos=httpx.Response(401, text="Unauthorized"),
+        )
 
         samples = await run_scan(hub)
 
@@ -445,8 +460,8 @@ def test_repo_name_falls_back_to_plain_name() -> None:
 
 
 def test_repo_name_ignores_non_string_values() -> None:
-    assert not _repo_name({"name": 123})
-    assert not _repo_name({})
+    assert _repo_name({"name": 123}) == ""
+    assert _repo_name({}) == ""
 
 
 # ---------------------------------------------------------------------------
