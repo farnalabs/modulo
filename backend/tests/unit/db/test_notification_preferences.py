@@ -388,3 +388,55 @@ class TestAdminScopeVisibility:
         visible = await get_notification(visibility_session, org_id=_ORG, notification_id=row, user_id=_USER)
         assert visible is not None
         assert visible.scope == "admin"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1914: the CRUD level defaults mirror the product default (info)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_one_info_and_one_debug(session: AsyncSession) -> None:
+    expires_at = datetime.now(UTC) + timedelta(days=1)
+    for level in ("info", "debug"):
+        await create_notification(
+            session,
+            org_id=_ORG,
+            scope="org",
+            level=level,
+            category="run.failed",
+            title=f"{level} notification",
+            body="body",
+            expires_at=expires_at,
+        )
+    await session.commit()
+
+
+async def test_dashboard_default_level_includes_info_and_excludes_debug(session: AsyncSession) -> None:
+    """Omitting ``min_level`` must not silently narrow the dashboard feed.
+
+    The argument default mirrors the user-preference default
+    (``_DEFAULT_DASHBOARD_LEVEL`` in ``api/routes/in_app_notifications.py``).
+    With the old ``warning`` floor an info-level notification was hidden from
+    every caller that omitted the argument.
+    """
+    await _seed_one_info_and_one_debug(session)
+
+    dashboard = await get_dashboard_notifications(session, org_id=_ORG, user_id=_USER)
+
+    levels = {n.level for n in dashboard}
+    assert "info" in levels
+    assert "debug" not in levels
+
+
+async def test_unread_default_level_includes_info_and_excludes_debug(session: AsyncSession) -> None:
+    """The unread badge must use the same default as the dashboard feed.
+
+    One info and one debug notification are seeded: a ``warning`` floor counts
+    neither, a ``debug`` floor counts both, and only the product's ``info``
+    default counts exactly one.
+    """
+    await _seed_one_info_and_one_debug(session)
+
+    unread = await get_unread_count(session, org_id=_ORG, user_id=_USER)
+
+    assert unread == 1
