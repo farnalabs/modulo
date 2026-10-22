@@ -28,6 +28,7 @@ from modulo.auth.dependencies import (
 )
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -118,6 +119,7 @@ def _make_mock_session(
 ) -> AsyncMock:
     """Build a mock session that handles team gate + route queries."""
     session = AsyncMock(spec=AsyncSession)
+    configure_rls_preamble(session)
     # FAR-1639: an AsyncMock spec can still return un-awaited coroutines from
     # SYNC call sites like ``session.in_transaction()`` (RLS preamble) and
     # ``session.add()`` (writer paths) — the result is always-truthy, so the
@@ -449,6 +451,7 @@ class TestResolveTriggerTeamScope:
     @staticmethod
     def _session(row: tuple[uuid.UUID | None, str] | None) -> AsyncMock:
         session = AsyncMock(spec=AsyncSession)
+        configure_rls_preamble(session)
         # FAR-1639: sync contract typed explicitly (see _make_mock_session).
         session.in_transaction = MagicMock(return_value=True)
         session.add = MagicMock()
