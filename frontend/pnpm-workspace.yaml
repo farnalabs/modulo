@@ -200,3 +200,6 @@ minimumReleaseAgeExclude:
   - '@primeuix/styled@1.1.0'
   - '@primeuix/utils@0.8.3'
   - 'overlayscrollbars@2.17.0'
+  - '@lucide/vue@1.61.0'
+  - '@primeuix/styled@1.2.0'
+  - '@primeuix/themes@3.1.0'
