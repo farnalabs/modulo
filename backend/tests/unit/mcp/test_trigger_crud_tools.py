@@ -11,6 +11,7 @@ from cryptography.fernet import Fernet
 
 from modulo.api.mcp_server import create_trigger, delete_trigger, get_trigger, update_trigger
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from tests.unit.api.mock_session import make_session_scope
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
@@ -186,7 +187,7 @@ class TestGetTriggerErrors(_AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -538,7 +539,7 @@ class TestUpdateTriggerErrors(_AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -1090,7 +1091,7 @@ class TestDeleteTrigger(_AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),

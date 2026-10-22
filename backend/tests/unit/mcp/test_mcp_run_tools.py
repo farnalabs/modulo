@@ -11,6 +11,7 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from modulo.api.mcp_server import cancel_run, get_run_evals, get_run_status, list_eval_definitions
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
+from tests.unit.api.mock_session import make_session_scope
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -414,7 +415,7 @@ class TestCancelRun(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -700,7 +701,7 @@ class TestGetRunEvals(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -814,7 +815,7 @@ class TestListEvalDefinitions(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -909,7 +910,7 @@ class TestListEvalDefinitions(_AuthContext):
         caller can branch on. Pre-fix it raised ``ValueError`` out of
         ``uuid.UUID(...)``, hit the generic ``except Exception`` arm and came
         back as ``internal_error``; no DB session is opened for it."""
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
 
         result = await list_eval_definitions(pipeline_id="not-a-uuid")
 

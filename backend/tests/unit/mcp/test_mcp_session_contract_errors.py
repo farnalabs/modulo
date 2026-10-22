@@ -32,6 +32,7 @@ from sqlalchemy.exc import InvalidRequestError, MissingGreenlet, PendingRollback
 import modulo.api.mcp_server as ms
 from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
 from modulo.api.mcp_server import _tool_db_shell, create_schema, list_api_keys
+from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import USER_ID, AuthContext, make_session_context
 
 #: The exception message a session-contract violation is built from.
@@ -65,7 +66,7 @@ def _tool_env(**crud: Any):
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)))
         session_factory = stack.enter_context(patch.object(ms, "_session"))
-        session_factory.return_value = make_session_context(AsyncMock())
+        session_factory.return_value = make_session_context(make_session_scope())
         for name, side_effect in crud.items():
             stack.enter_context(patch.object(ms, name, new=AsyncMock(side_effect=side_effect)))
         yield

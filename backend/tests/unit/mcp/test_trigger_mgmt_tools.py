@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.mcp_server import create_trigger, list_triggers
+from tests.unit.api.mock_session import make_session_scope
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PLACEHOLDER_ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -168,7 +169,7 @@ class TestCreateTriggerErrors(_AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -456,7 +457,7 @@ class TestListTriggersErrors(_AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -510,7 +511,7 @@ class TestListTriggersErrors(_AuthContext):
         caller can branch on. Pre-fix it raised ``ValueError`` out of
         ``uuid.UUID(...)``, hit the generic ``except Exception`` arm and came
         back as ``internal_error``; no DB session is opened for it."""
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
 
         result = await list_triggers(pipeline_id="not-a-uuid")
 
