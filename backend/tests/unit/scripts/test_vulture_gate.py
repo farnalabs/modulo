@@ -27,6 +27,7 @@ Coverage here:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -85,7 +86,22 @@ def _run_gate() -> subprocess.CompletedProcess[str]:
     )
 
 
-_LOCK_PATH = str(Path(tempfile.gettempdir()) / "modulo_vulture_gate.lock")
+def _probe_lock_path() -> str:
+    """Lock file for THIS worktree's probe path.
+
+    The probe lives inside this checkout's source tree
+    (``backend/src/modulo/_far252_dead_probe.py``), so two worktrees have two
+    independent probes and nothing to serialise against each other. A single
+    host-wide lock name (``modulo_vulture_gate.lock``) still made them queue:
+    with several agents' worth of worktrees on one machine, one checkout's
+    ~80 s vulture scans became another checkout's lock wait. Scope the name to
+    the repo root so only workers sharing the same probe path contend.
+    """
+    digest = hashlib.sha256(str(REPO_ROOT).encode("utf-8")).hexdigest()[:16]
+    return str(Path(tempfile.gettempdir()) / f"modulo_vulture_gate_{digest}.lock")
+
+
+_LOCK_PATH = _probe_lock_path()
 
 
 @contextmanager
@@ -131,6 +147,16 @@ def _probe_lock(timeout: float = 300.0) -> Iterator[None]:
         os.close(fd)
 
 
+# A full-tree vulture scan is CPU-bound and measured at 23-85 s per scan on a
+# loaded 16-core host; two of these tests run two scans. The suite-wide
+# --timeout (120-180 s) is a budget for ordinary unit tests and is genuinely too
+# tight for this work, so each scan test carries its own explicit budget. This
+# is a margin on real, measured work — not a way to tolerate a hang: a scan that
+# never returns still fails, just at its own bound.
+_SCAN_TEST_TIMEOUT_SECONDS = 600
+
+
+@pytest.mark.timeout(_SCAN_TEST_TIMEOUT_SECONDS)
 @pytest.mark.xdist_group(name="vulture")
 def test_gate_passes_on_clean_tree() -> None:
     with _probe_lock():
@@ -139,6 +165,7 @@ def test_gate_passes_on_clean_tree() -> None:
         assert not result.stdout.strip()
 
 
+@pytest.mark.timeout(_SCAN_TEST_TIMEOUT_SECONDS)
 @pytest.mark.xdist_group(name="vulture")
 def test_gate_blocks_new_dead_function() -> None:
     """The gate's primary purpose: a new dead FUNCTION blocks at 60%."""
@@ -163,6 +190,7 @@ def test_gate_blocks_new_dead_function() -> None:
         assert not clean.stdout.strip()
 
 
+@pytest.mark.timeout(_SCAN_TEST_TIMEOUT_SECONDS)
 @pytest.mark.xdist_group(name="vulture")
 def test_gate_blocks_unused_import_and_unreachable() -> None:
     """The legacy detection levels (import at 90%, unreachable at 100%) still block."""
