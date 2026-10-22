@@ -42,7 +42,7 @@ from modulo.api.middleware.correlation_id import CorrelationIdMiddleware
 from modulo.api.routes.webhooks import router
 from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
 from tests.unit.api.conftest import make_system_session_mock
-from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _TRIGGER_ID = uuid.UUID("00000000-0000-0000-0000-000000000071")
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000072")
@@ -118,6 +118,7 @@ def capture(sink: _RecordingSink) -> Any:
 def _app_session() -> AsyncMock:
     """App-session double: real ``session.begin()`` shape, harmless executes."""
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

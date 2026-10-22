@@ -23,6 +23,7 @@ from modulo.core.feature_flags import CommunityTier, FeatureFlagRegistry
 from modulo.db.models.base import Base
 from modulo.db.models.tier_catalog import FeatureFlagCatalog, TierCatalog
 from modulo.settings import Settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -156,6 +157,7 @@ class TestGetPlanContextFallback:
 
     def _make_session(self) -> AsyncMock:
         session = AsyncMock()
+        configure_rls_preamble(session)
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)

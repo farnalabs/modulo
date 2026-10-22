@@ -143,6 +143,7 @@ def _make_trigger_session() -> AsyncMock:
     """Session whose trigger carries a signing_secret so route-level signature
     validation runs against the real secret."""
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

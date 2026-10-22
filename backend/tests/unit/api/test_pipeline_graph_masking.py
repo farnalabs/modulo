@@ -33,7 +33,7 @@ from modulo.api.middleware.sensitive_mask import (
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
-from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -757,6 +757,7 @@ def _export_session_for(nodes: list[dict[str, Any]]) -> AsyncMock:
     edges_result = MagicMock()
     edges_result.scalars.return_value = []
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.execute = AsyncMock(side_effect=[pipeline_result, edges_result])
     return session
 
@@ -884,6 +885,7 @@ def _import_session(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     monkeypatch.setattr(wix, "get_existing_pipeline_names", AsyncMock(return_value=set()))
     monkeypatch.setattr(wix, "create_agent", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4())))
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.flush = AsyncMock()
     session.begin_nested = MagicMock(return_value=_AsyncNoopContext())
     return session

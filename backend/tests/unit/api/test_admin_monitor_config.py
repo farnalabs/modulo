@@ -11,6 +11,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ADMIN_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -29,6 +30,7 @@ def _admin_principal(role: str = "admin") -> AuthenticatedPrincipal:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

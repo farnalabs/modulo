@@ -34,6 +34,7 @@ from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.db.crud._gate_advisory_lock import with_gate_advisory_lock
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -116,6 +117,7 @@ def _result(
 
 def _make_session(begin_exc: Exception | None = None) -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.add = MagicMock(return_value=None)
     session.flush = AsyncMock(return_value=None)
     session.execute = AsyncMock(return_value=_result())

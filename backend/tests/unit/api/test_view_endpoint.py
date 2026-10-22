@@ -388,6 +388,7 @@ class TestCancelledErrorPropagation:
 
     def _make_session(self) -> AsyncMock:
         session = AsyncMock()
+        configure_rls_preamble(session)
         session.execute = AsyncMock(side_effect=asyncio.CancelledError())
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)

@@ -29,6 +29,7 @@ from pydantic import ValidationError
 
 from modulo.api.routes.pipelines import PipelineGraphNode
 from modulo.core.graph_validator import GraphValidator
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _CI_TYPE = "github_actions_ci"
 
@@ -219,6 +220,7 @@ def test_dispatch_binding_to_the_ci_runner_family_label_is_rejected():
 def _session_returning(rows_by_fragment: dict[str, list[Any]]) -> AsyncMock:
     """Session stub: the first row set whose fragment appears in the SQL wins."""
     session = AsyncMock()
+    configure_rls_preamble(session)
 
     async def _execute(statement: Any, *args: Any, **kwargs: Any) -> Any:
         text = str(statement)

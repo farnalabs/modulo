@@ -28,6 +28,7 @@ from modulo.auth.dependencies import (
 )
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -123,6 +124,7 @@ def _make_session(
     add_side_effect: Callable[[Any], None] | None = None,
 ) -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
+    configure_rls_preamble(session)
     if begin_exc is not None:
         session.begin = MagicMock(return_value=_BeginRaiser(begin_exc))
         return session

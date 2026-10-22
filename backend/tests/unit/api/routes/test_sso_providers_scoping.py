@@ -19,6 +19,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
+from tests.unit.api.mock_session import configure_rls_preamble
 
 from modulo.api.dependencies import get_db_session, get_system_db_session
 from modulo.api.main import app
@@ -80,6 +81,7 @@ def _make_session(*, orgs: list[MagicMock] | None = None, providers: list[MagicM
     selected per statement rather than per call order.
     """
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

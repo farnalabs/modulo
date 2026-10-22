@@ -29,6 +29,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.unit.api.mock_session import configure_rls_preamble
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -37,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 def _make_session(execute_return: Any | None = None) -> AsyncMock:
     """Build a mock session whose execute() returns a scripted result."""
     session = AsyncMock(spec=AsyncSession)
+    configure_rls_preamble(session)
     if execute_return is not None:
         session.execute = AsyncMock(return_value=execute_return)
     return session

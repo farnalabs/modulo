@@ -38,6 +38,7 @@ from modulo.core.license import (
 )
 from modulo.core.registry.crypto import generate_keypair, sign_primitive
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
 
@@ -1300,6 +1301,7 @@ def _principal(org_id: uuid.UUID | None = None) -> AuthenticatedPrincipal:
 
 def _session() -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.begin = MagicMock(return_value=AsyncMock())
     return session
 
