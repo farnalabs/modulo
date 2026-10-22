@@ -89,20 +89,18 @@ def _db_seams(
     *,
     trigger_type: str = "manual",
     graph_json: dict[str, Any] | None = None,
-    claim_count: int = 1,
 ):
     """Patch the DB seams the shared hook's context loader resolves lazily.
 
-    ``claim_count`` is the run row's total claim count — the pre-node hang
-    budget bound (FAR-693 fix) reads it from the already-loaded row. Default
-    1 = a single claim, so the effective attempt count IS
-    ``node_attempt_count`` and the in-execute behaviour is unchanged.
+    FAR-2076: the loader no longer reads a counter — the retry decision reads
+    the durable ``runs.execution_attempt_count`` through
+    ``executor._read_retry_attempt_state`` (mocked per test), so there is one
+    read and one measure.
     """
     run = MagicMock()
     run.trigger_type = trigger_type
     run.pipeline_id = uuid.uuid4()
     run.snapshot_id = uuid.uuid4()
-    run.claim_count = claim_count
     pipeline = MagicMock()
     pipeline.retry_policy = retry_policy if retry_policy is not None else {}
 
@@ -140,7 +138,6 @@ async def _consult_hook(
     trigger_type: str = "manual",
     graph_json: dict[str, Any] | None = None,
     reset_rowcount: int = 1,
-    claim_count: int = 1,
     zero_node: bool = False,
     attempt_started_at: datetime | None = None,
     node_timeouts: dict[str, int] | None = None,
@@ -154,7 +151,7 @@ async def _consult_hook(
     executor._fenced_pending_reset = AsyncMock(return_value=reset_rowcount)
     exec_task = asyncio.create_task(asyncio.sleep(999))
     box = WatchdogRetryOutcome()
-    seams = _db_seams(retry_policy, trigger_type=trigger_type, graph_json=graph_json, claim_count=claim_count)
+    seams = _db_seams(retry_policy, trigger_type=trigger_type, graph_json=graph_json)
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
@@ -1414,28 +1411,27 @@ async def test_script_mode_graph_requires_lease_probe_before_redispatch():
     assert box.requested is False
 
 
-async def test_pre_node_hang_budget_bounded_by_claim_count():
-    """FAR-693 fix: a PRE-node hang (hub init / graph compile — the exact hang
-    sites the zombie watchdog exists for, which happen BEFORE the attempt
-    increment in _prepare_and_stream) exhausts the budget too.
+async def test_pre_node_hang_budget_bounded_by_execution_attempt_count():
+    """A PRE-node hang (hub init / graph compile — the exact hang sites the
+    zombie watchdog exists for) consumes the run-level budget too.
 
-    node_attempt_count stays 0 on every kill, but each watchdog retry consumes
-    a SAQ claim (the re-raised RunRetryPolicyError retries the job, whose
-    re-claim grows claim_count), so the effective attempt count
-    max(node_attempt_count, claim_count - 1) grows per retry cycle and the
-    run terminal-fails once it exceeds max_retries instead of churning pending
-    under the SAQ claim cap. Sequence pinned for max_retries=1: claim 1
-    (effective 0) re-dispatches, claim 2 (effective 1) re-dispatches — the
-    bounded slack of the prescribed counter — and claim 3 (effective 2)
-    terminal-fails."""
-    executor = _make_executor_mock(attempt_count=0)
+    FAR-2076: the durable ``execution_attempt_count`` is stamped when the
+    attempt is ADMITTED — before those hang sites — so it grows once per
+    execution and the run terminal-fails on the execution AFTER the ceiling
+    instead of churning pending under the SAQ claim cap.
+
+    Sequence pinned for ``max_retries=1`` (ceiling 2 executions): after the
+    first admitted attempt (count 1) the watchdog re-dispatches (execution 2);
+    after the second (count 2) it terminal-fails — exactly the invariant, no
+    extra execution. ``claim_count`` is irrelevant and is not passed at all.
+    """
+    executor = _make_executor_mock(attempt_count=1)
     dispatched1, box1, _sleep1 = await _consult_hook(
         executor,
         retry_policy={"on": ["stall"], "max_retries": 1},
         final_status="stalled",
         error_code="executor_stalled",
-        attempt_count=0,
-        claim_count=1,
+        attempt_count=1,
     )
     assert dispatched1 is True
     assert box1.requested is True
@@ -1445,29 +1441,16 @@ async def test_pre_node_hang_budget_bounded_by_claim_count():
         retry_policy={"on": ["stall"], "max_retries": 1},
         final_status="stalled",
         error_code="executor_stalled",
-        attempt_count=0,
-        claim_count=2,
+        attempt_count=2,
     )
-    assert dispatched2 is True
-    assert box2.requested is True
-
-    dispatched3, box3, _sleep3 = await _consult_hook(
-        executor,
-        retry_policy={"on": ["stall"], "max_retries": 1},
-        final_status="stalled",
-        error_code="executor_stalled",
-        attempt_count=0,
-        claim_count=3,
-    )
-    assert dispatched3 is False
-    assert box3.requested is False
+    assert dispatched2 is False
+    assert box2.requested is False
     executor._fenced_pending_reset.assert_not_awaited()
 
 
-async def test_in_execute_budget_unchanged_by_claim_count():
-    """The claim-derived budget term must stay surgical: a run that reached a
-    node (claim_count 1 — a single claim) keeps the in-execute behaviour —
-    the effective attempt count IS node_attempt_count."""
+async def test_in_execute_budget_unchanged_by_the_durable_counter():
+    """A run that reached a node keeps the in-execute behaviour: the effective
+    attempt count IS the durable execution-attempt count."""
     executor = _make_executor_mock(attempt_count=2)
     dispatched, box, _sleep = await _consult_hook(
         executor,
@@ -1475,7 +1458,6 @@ async def test_in_execute_budget_unchanged_by_claim_count():
         final_status="failed",
         error_code="node_deadline_exceeded",
         attempt_count=2,
-        claim_count=1,
     )
     assert dispatched is False
     assert box.requested is False
@@ -1494,7 +1476,6 @@ async def test_context_load_sets_rls_org_and_execution_context():
     run.trigger_type = "manual"
     run.pipeline_id = uuid.uuid4()
     run.snapshot_id = uuid.uuid4()
-    run.claim_count = 2
     pipeline = MagicMock()
     pipeline.retry_policy = {"on": ["timeout"], "max_retries": 1}
     with (
@@ -1511,9 +1492,10 @@ async def test_context_load_sets_rls_org_and_execution_context():
     assert context is not None
     set_rls_org_mock.assert_awaited_once_with(ANY, org_id)
     set_rls_ctx_mock.assert_awaited_once_with(ANY)
-    # The claim count is read from the same row (the pre-node hang budget
-    # bound consumes it) and surfaces in the loaded context.
-    assert context[3] == 2
+    # FAR-2076: no counter is read here — the retry decision reads the durable
+    # ``execution_attempt_count`` from its own row snapshot, so the context is
+    # the policy / trigger / graph triple only.
+    assert len(context) == 3
 
 
 async def test_retry_context_loader_reraises_cancellation() -> None:

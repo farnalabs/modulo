@@ -39,6 +39,7 @@ def _make_run(
     status: str = "pending",
     claim_count: int = 0,
     node_attempt_count: int = 0,
+    execution_attempt_count: int | None = None,
     claim_token: str | None = None,
 ) -> MagicMock:
     run = MagicMock()
@@ -49,6 +50,9 @@ def _make_run(
     run.status = status
     run.claim_count = claim_count
     run.node_attempt_count = node_attempt_count
+    # FAR-2076: the transient-retry budget reads the durable execution counter.
+    # These fixtures model executions that reached a node, so the two agree.
+    run.execution_attempt_count = node_attempt_count if execution_attempt_count is None else execution_attempt_count
     run.claim_token = claim_token
     run.idempotency_key = None
     return run

@@ -70,6 +70,15 @@ from modulo.core.pipeline_engine.error_codes import (
     _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED,
     sanitize_error_text,
 )
+
+# FAR-2076: the ONE retry-budget measure (zero-import leaf module) — shared with
+# the executor, the watchdog, the worker handback and the dispatch adapter, so
+# no path can disagree about how many executions a run has spent.
+from modulo.core.retry_budget import (
+    retry_budget_exhausted,
+    retry_executions_consumed,
+    retry_max_executions,
+)
 from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
 
 # FAR-190 streak engine lives in its own module (extracted so cron_helpers can
@@ -80,6 +89,7 @@ from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
 from modulo.core.trigger_streak import (
     enforce_no_delivery_streaks,
 )
+from modulo.db.crud.run import CAPACITY_MARKERS
 from modulo.db.models.organisation import SYSTEM_ORG_ID
 from modulo.db.models.run import (
     AWAITING_HUMAN_STATUS,
@@ -362,11 +372,12 @@ _DISPATCH_FAILED_ERROR_CODE = "dispatch_failed"
 # into ``harness.unknown`` / "Unknown error".
 _RETRY_BUDGET_EXHAUSTED_ERROR_CODE = _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED
 
-# The capacity-block reason markers (mirrors ``_reconcile_capacity_marker_exclusion``
-# and ``db.crud.run``'s constants). A pending row carrying one of these was
-# CLAIMED then demoted because a slot was full — the claim never executed a
-# node — so the retry-budget gate must not count ``claim_count`` against it.
-_CAPACITY_DEFERRAL_ERROR_CODES = ("org_capacity_limited", "pipeline_capacity")
+# The capacity-block reason markers — the ONE shared vocabulary from
+# ``db.crud.run`` (``CAPACITY_MARKERS``), never a hand-copied literal. A pending
+# row carrying one of these was CLAIMED then demoted because a slot was full —
+# the claim never executed a node — so the retry-budget gate must not treat it
+# as an execution (it also never increments ``execution_attempt_count``).
+_CAPACITY_DEFERRAL_ERROR_CODES = CAPACITY_MARKERS
 
 # Synthetic error_detail for the genuinely detail-less failure writers (P7'):
 # applied ONLY where detail is currently NULL — never overwrites real detail.
@@ -4720,14 +4731,19 @@ def _reconcile_capacity_marker_exclusion(capacity_redispatch_seconds: int) -> An
     """
     from sqlalchemy import and_, or_
 
+    from modulo.db.crud.run import ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELINE_CAPACITY
     from modulo.db.models.run import Run
 
+    # ONE vocabulary: the markers come from ``db.crud.run`` (via the module-level
+    # ``CAPACITY_MARKERS`` import) so a rename can never leave this sweep
+    # matching a literal no writer emits any more.
+    capacity_markers = (ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELINE_CAPACITY)
     return or_(
         Run.error_code.is_(None),
-        Run.error_code.not_in(("org_capacity_limited", "pipeline_capacity")),
+        Run.error_code.not_in(capacity_markers),
         and_(
             Run.status == "pending",
-            Run.error_code.in_(("org_capacity_limited", "pipeline_capacity")),
+            Run.error_code.in_(capacity_markers),
             or_(
                 Run.heartbeat_at.is_(None),
                 Run.heartbeat_at < func_now_minus(capacity_redispatch_seconds),
@@ -5551,25 +5567,27 @@ def _should_redispatch_nodeless(row: Any) -> bool:
     FAR-733: when a stall-covered ``retry_policy`` exists, the decision
     consults the SHARED ``_retry_after_policy`` matcher (the same event
     resolution the in-execute path and watchdog kills use —
-    ``pipeline_engine.watchdog_retry``). The attempt budget uses
-    ``max(0, claim_count - 1)`` (the watchdog path's
-    ``max(node_attempt_count, claim_count - 1)`` where ``node_attempt_count``
-    is 0 for nodeless runs), so nodeless zombie deaths under a stall-covered
-    policy are re-dispatched on exactly the same cycle the watchdog would allow.
+    ``pipeline_engine.watchdog_retry``). FAR-2076: the attempt count is the
+    durable ``runs.execution_attempt_count`` via the shared
+    :func:`modulo.core.retry_budget.retry_executions_consumed`, so nodeless
+    zombie deaths under a stall-covered policy are re-dispatched on exactly the
+    same cycle the watchdog would allow — and never on a ``claim_count``
+    derivation that counted capacity-demoted / resume claims as executions.
 
     Retry budgeting (FAR-509, re-keyed on EVENT CONTENT by the FAR-525 qa
     gate; absent-``on`` re-classified by FAR-649) — the budget bounds
     successful-claim CYCLES (terminal-fail once the adjusted attempt count
     exceeds it; it does NOT bound the enqueue count):
       * ``retry_policy`` covering "stall" (via ``_retry_after_policy``): honor
-        the ``max_retries`` budget. The attempt count is
-        ``max(0, claim_count - 1)`` (the watchdog path's budget for nodeless
-        runs), so a re-dispatch is allowed while this count <= ``max_retries``.
+        the ``max_retries`` budget. The attempt count is the shared
+        ``retry_executions_consumed`` measure, so a re-dispatch is allowed
+        while executions already consumed <= ``max_retries``.
       * ``retry_policy`` absent/None, a non-dict, OR an explicit ``on`` that is
         empty (this includes the ``{}`` column default AND the FAR-525 GUI's
         no-op panel save ``{on: [], max_retries: 0, backoff_schedule: {...}}``):
-        re-dispatch while ``claim_count`` is within the configurable budget
-        (``SAQ_NODELESS_REDISPATCH_BUDGET``, default 4 since FAR-812). Zero nodes have
+        re-dispatch while the durable execution count is within the
+        configurable budget (``SAQ_NODELESS_REDISPATCH_BUDGET``, default 4 since
+        FAR-812). Zero nodes have
         executed, so every re-dispatch is safe; terminal-fail applies once the
         budget is exhausted. The decision keys on the POLICY's EVENT CONTENT
         (what it covers), never on dict non-emptiness — a no-op panel save
@@ -5581,8 +5599,8 @@ def _should_redispatch_nodeless(row: Any) -> bool:
         covering ``"failure"`` re-dispatches under THAT policy's budget, with
         the budget DERIVED from the shared matcher
         (``_retry_after_policy(policy, "failed", "")`` — the failure arm only
-        for an empty code) rather than re-validated by hand, same
-        ``max(0, claim_count - 1)`` attempt count as the stall branch.
+        for an empty code) rather than re-validated by hand, same shared
+        execution-attempt count as the stall branch.
 
     FAR-1088 — why the failure carve-out is safe HERE:
     this function only ever sees nodeless zombies, which executed ZERO nodes
@@ -5622,10 +5640,14 @@ def _should_redispatch_nodeless(row: Any) -> bool:
         # zero-budget / empty-on).
         retry_budget = _retry_after_policy(retry_policy, "stalled", "executor_stalled")
         if retry_budget is not None:
-            # The watchdog path's attempt budget for nodeless runs:
-            # max(node_attempt_count, claim_count - 1) where
-            # node_attempt_count = 0 (no node ever executed).
-            attempt_count = max(0, row.claim_count - 1)
+            # FAR-2076: the ONE shared measure — the durable
+            # ``runs.execution_attempt_count`` (executions of the graph), never
+            # a hand-derived ``claim_count - 1``. ``<= retry_budget`` is the
+            # same boundary as ``not retry_budget_exhausted``; used in this form
+            # so the event-matched budget above stays the authority.
+            attempt_count = retry_executions_consumed(
+                execution_attempt_count=getattr(row, "execution_attempt_count", 0),
+            )
             return bool(attempt_count <= retry_budget)
         # _retry_after_policy returned None: either the policy is malformed /
         # zero-budget / empty-on, or its `on` does not cover "stall".  Check
@@ -5650,7 +5672,9 @@ def _should_redispatch_nodeless(row: Any) -> bool:
             if "failure" in on:
                 failure_budget = _retry_after_policy(retry_policy, "failed", "")
                 if failure_budget is not None:
-                    attempt_count = max(0, row.claim_count - 1)
+                    attempt_count = retry_executions_consumed(
+                        execution_attempt_count=getattr(row, "execution_attempt_count", 0),
+                    )
                     return bool(attempt_count <= failure_budget)
             # Non-empty `on` without "stall"/"failure" coverage (or a
             # failure-covered policy with a 0/malformed budget) — terminal-fail.
@@ -5660,11 +5684,21 @@ def _should_redispatch_nodeless(row: Any) -> bool:
     # No stall coverage (no/empty/None policy, an empty/missing `on`, or the
     # GUI's no-op all-empty panel save): re-dispatch while within the
     # configurable budget (SAQ_NODELESS_REDISPATCH_BUDGET, default 4 since
-    # FAR-812, raised from 2 — FAR-509;
-    # claim_count is 1 for the un-re-dispatched initial claim). This bounds the
-    # successful-claim cycles, NOT the enqueue rate — the rate is throttled in
-    # the repair branch (one re-dispatch per nodeless window per run).
-    return bool(row.claim_count <= int(get_settings().saq_nodeless_redispatch_budget))
+    # FAR-812, raised from 2 — FAR-509; the first admitted attempt counts 1).
+    # This bounds the successful-claim cycles, NOT the enqueue rate — the rate
+    # is throttled in the repair branch (one re-dispatch per nodeless window
+    # per run).
+    #
+    # FAR-2076: measured on the SAME durable execution counter as the policy
+    # branches above, so ``claim_count`` is not consulted anywhere in this
+    # decision (it grows on capacity-demoted and resume claims — neither is an
+    # execution). A nodeless zombie is ``running``, so it passed admission and
+    # its counter is >= 1, preserving the historical "first claim is 1" bound
+    # for the population this branch exists for.
+    consumed = retry_executions_consumed(
+        execution_attempt_count=getattr(row, "execution_attempt_count", 0),
+    )
+    return bool(consumed <= int(get_settings().saq_nodeless_redispatch_budget))
 
 
 def _is_nodeless_redispatch_throttled(row: Any, nodeless_window: int) -> bool:
@@ -6063,6 +6097,18 @@ _TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH = (
     "node exceeded its deadline; dispatch killed and the run re-dispatched"
 )
 _TERMINAL_TRIAGE_REASON_WORKER_LOST = "executor lost (worker handoff)"
+# FAR-2076: the reconcile re-enqueue backstop found the run ALREADY past its
+# retry_policy execution ceiling (the durable ``runs.execution_attempt_count``
+# reached ``1 + max_retries``), so it terminalised the pending row instead of
+# granting another execution. States only what the backstop observed.
+_TERMINAL_TRIAGE_REASON_RETRY_BUDGET_EXHAUSTED = "retry budget exhausted before re-dispatch"
+
+# The STABLE Error Dashboard message for that terminalisation (no run id — the
+# run rides in the ingestion context), so every occurrence lands in ONE group
+# whose count is the alert signal. Mirrors the nodeless-zombie writer above.
+_RETRY_BUDGET_EXHAUSTED_STABLE_MESSAGE = (
+    "dispatcher_reconcile: pending run terminal-failed because its retry_policy execution budget was exhausted"
+)
 # Bounded like ``node_runner._RAW_OUTPUT_MARKER_PERSIST_TIMEOUT``: the run-row
 # lock taken below is client-bounded so a contended row can never stall the
 # caller's terminalisation transaction.
@@ -7766,6 +7812,10 @@ async def _fail_retry_budget_exhausted_run(
     org_id: uuid.UUID,
     *,
     ceiling: int,
+    execution_attempts: int,
+    claim_count: int | None,
+    node_attempt_count: int | None,
+    pipeline_id: uuid.UUID | None,
 ) -> bool:
     """FAR-2076: terminal-fail a pending run the backstop found beyond budget.
 
@@ -7780,39 +7830,87 @@ async def _fail_retry_budget_exhausted_run(
     a row that advanced between the scan and this write is never killed:
 
     * ``status='pending'`` — a claimed/running/terminal row is untouched;
-    * ``GREATEST(node_attempt_count, claim_count - 1) >= :ceiling`` — the SAME
-      ``max(node_attempt_count, claim_count - 1)`` measure as
-      ``worker_handoff.retry_executions_consumed`` (stated in SQL because this
-      is a conditional single-row UPDATE), where ``:ceiling`` is
+    * ``execution_attempt_count >= :ceiling`` — the durable execution counter
+      (the ONE retry-budget authority, FAR-2076), where ``:ceiling`` is
       ``1 + max_retries``.
 
     Capacity-marked rows (``org_capacity_limited`` / ``pipeline_capacity``)
     are excluded by the caller: a capacity demotion consumes a SAQ claim
-    without executing a node, so counting it as an execution would terminal-fail
-    a healthy run that is merely waiting for a slot.
+    without executing the graph — it never increments the counter — so gating
+    on the counter makes that exclusion structural rather than a special case.
+
+    Observability (FAR-2076) — a mass terminalisation must be visible without
+    grepping run rows, mirroring ``_fail_nodeless_run``: an ERROR log, a
+    terminal-path triage marker, and an ingested ``source='saq'`` error with a
+    STABLE message (so every occurrence lands in one Error Dashboard group)
+    carrying the counts in its context. Best-effort on the observability legs:
+    the terminalisation is already in the caller's transaction and must not be
+    undone by a failing alert write.
 
     Returns ``True`` when the row was terminalised by this call.
     """
+    detail = (
+        "Run not re-dispatched: its retry_policy budget is exhausted "
+        f"(execution_attempt_count={execution_attempts} >= ceiling {ceiling}); "
+        "dispatcher_reconcile found it pending with no SAQ job. "
+        f"claim_count={claim_count if claim_count is not None else 'unknown'} "
+        f"node_attempt_count={node_attempt_count if node_attempt_count is not None else 'unknown'}"
+    )
     result = await session.execute(
         text(
             "UPDATE runs SET status='failed', error_code=:code, error_detail=:detail, completed_at=now() "
             "WHERE id=:rid AND organisation_id=:oid AND status='pending' "
-            "AND GREATEST(COALESCE(node_attempt_count, 0), "
-            "GREATEST(COALESCE(claim_count, 0) - 1, 0)) >= :ceiling"
+            "AND COALESCE(execution_attempt_count, 0) >= :ceiling"
         ),
         {
             "rid": str(run_id),
             "oid": str(org_id),
             "code": _RETRY_BUDGET_EXHAUSTED_ERROR_CODE,
-            "detail": (
-                "Run not re-dispatched: its retry_policy budget is exhausted "
-                f"(executions already consumed reached the ceiling of {ceiling}); "
-                "dispatcher_reconcile found it pending with no SAQ job."
-            ),
+            "detail": detail,
             "ceiling": ceiling,
         },
     )
-    return int(getattr(result, "rowcount", 0) or 0) > 0
+    if int(getattr(result, "rowcount", 0) or 0) <= 0:
+        return False
+
+    _log.error(
+        "dispatcher_reconcile.retry_budget_exhausted run=%s org=%s pipeline=%s "
+        "execution_attempts=%s ceiling=%s claim_count=%s node_attempt_count=%s — "
+        "pending run beyond its retry_policy budget; terminal-failed instead of re-dispatched",
+        run_id,
+        org_id,
+        pipeline_id,
+        execution_attempts,
+        ceiling,
+        claim_count,
+        node_attempt_count,
+    )
+    # FAR-1886 B1: a reconcile terminalisation has no in-process attempt marker
+    # to project, so persist the synthetic run-level entry (best-effort).
+    await persist_terminal_triage_marker(
+        session,
+        run_id=run_id,
+        organisation_id=org_id,
+        error_code=_RETRY_BUDGET_EXHAUSTED_ERROR_CODE,
+        reason=_TERMINAL_TRIAGE_REASON_RETRY_BUDGET_EXHAUSTED,
+    )
+    await _ingest_saq_error(
+        session,
+        org_id,
+        function="dispatcher_reconcile",
+        # STABLE message (no run id): one error group whose occurrence count IS
+        # the alert signal for the class; the run id rides in context_json.
+        message=_RETRY_BUDGET_EXHAUSTED_STABLE_MESSAGE,
+        context={
+            "run_id": str(run_id),
+            "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
+            "execution_attempts": execution_attempts,
+            "ceiling": ceiling,
+            "claim_count": claim_count,
+            "node_attempt_count": node_attempt_count,
+        },
+    )
+    return True
 
 
 @dataclass(frozen=True)
@@ -9715,13 +9813,18 @@ async def _reconcile_org(
                 _checkpoint_absent_expr().label("checkpoints_absent"),
                 Run.started_at,
                 Run.claim_count,
-                # FAR-2076: the executions-consumed measure the retry-budget
-                # gate compares against the policy ceiling —
-                # ``worker_handoff.retry_executions_consumed`` reads exactly
-                # these two counters.
+                # FAR-2076: the ONE executions-consumed measure the
+                # retry-budget gate compares against the policy ceiling
+                # (``retry_budget.retry_executions_consumed``). Deliberately
+                # NOT derived from ``claim_count`` (it grows on
+                # capacity-demoted and resume claims) or ``node_attempt_count``
+                # (a pre-node death records nothing).
+                Run.execution_attempt_count,
+                # Selected for the terminal error_detail / triage context only
+                # — never as a budget measure.
                 Run.node_attempt_count,
                 # FAR-2076: the gate excludes capacity-marked pending rows (a
-                # capacity demotion consumes a claim without executing a node).
+                # capacity demotion consumes a claim while executing nothing).
                 Run.error_code,
                 Run.dispatcher,
                 # FAR-1649: consumed by the row-level nodeless recheck
@@ -9753,6 +9856,12 @@ async def _reconcile_org(
                 Run.sandbox_dispatch_state,
                 text("runs.enqueue_failed_at AS enqueue_failed_at"),
                 Pipeline.retry_policy,
+                # FAR-2076: distinguishes "the pipeline has NO retry policy"
+                # (this column NULL, the row present) from "the pipeline row
+                # could not be resolved at all" (this column NULL too, but
+                # because the LEFT JOIN matched nothing) — the latter logs
+                # loudly instead of silently skipping the budget gate.
+                Pipeline.id.label("pipeline_row_id"),
                 # FAR-1740: the per-pipeline max node timeout drives the
                 # claimed-but-nodeless window. The FROZEN snapshot graph is the
                 # graph the run actually executes; the live pipeline node list
@@ -9763,6 +9872,16 @@ async def _reconcile_org(
                 Pipeline.node_timeout_seconds.label("pipeline_node_timeout_seconds"),
             )
             row_select = row_select.join(Pipeline, Pipeline.id == Run.pipeline_id, isouter=True)
+            # FAR-2076: opt OUT of the global soft-delete filter. Without this a
+            # soft-deleted pipeline yields ``retry_policy = NULL`` from the LEFT
+            # JOIN and the retry-budget gate silently skipped — restoring the
+            # original defect for exactly the FAR-1025 in-flight population this
+            # backstop exists to recover (``_saq_retries_for_run`` already opts
+            # out for the same reason). Run / PipelineSnapshot are not
+            # soft-deleted models, so this only widens the Pipeline leg.
+            from modulo.db.soft_delete import include_soft_deleted
+
+            row_select = include_soft_deleted(row_select)
             # FAR-1740: the run's frozen snapshot graph — joined (not a
             # per-row query) so deriving the window is free per row. LEFT join:
             # a run with no snapshot (or a pruned one) still reconciles.
@@ -11256,61 +11375,71 @@ async def _reconcile_one_row(
     # recovery behaviour this leg exists for (durability preserved).
     #
     # Capacity-marked pending rows are EXCLUDED: a capacity demotion consumes
-    # a SAQ claim while executing no node, so ``claim_count - 1`` would count
-    # a non-execution against the budget and terminal-fail a healthy run that
-    # is merely waiting for a free slot. Those rows consume no execution
-    # budget, so they cannot violate the invariant. Every OTHER pending
-    # ``execute_run`` row is in scope — including the FAR-1627 worker-shutdown
-    # handback (which stamps ``harness.worker_lost``) and the enqueue-failed
-    # recovery — so no producer can grant an execution past the ceiling.
-    # A never-dispatched row (``claim_count = 0``) consumes nothing and is
-    # always allowed.
+    # a SAQ claim while executing nothing, so a claim-derived count would
+    # charge a non-execution against the budget and terminal-fail a healthy run
+    # that is merely waiting for a free slot. Those rows consume no execution
+    # budget — they never increment ``execution_attempt_count`` — so they
+    # cannot violate the invariant. Every OTHER pending ``execute_run`` row is
+    # in scope — including the FAR-1627 worker-shutdown handback (which stamps
+    # ``harness.worker_lost``) and the enqueue-failed recovery — so no producer
+    # can grant an execution past the ceiling. A never-dispatched row
+    # (``execution_attempt_count = 0``) consumes nothing and is always allowed.
+    #
+    # The measure is the durable ``runs.execution_attempt_count`` ONLY (FAR-2076).
+    # ``claim_count`` must never be consulted here: it grows on
+    # capacity-demoted and resume claims, so it over-counted healthy runs and
+    # terminal-failed them with budget to spare — the whole-point defect of the
+    # first attempt at this fix.
     is_pending_execution = (
         row.status == "pending"
         and _reconcile_job_type(row.status) == "execute_run"
         and getattr(row, "error_code", None) not in _CAPACITY_DEFERRAL_ERROR_CODES
     )
     if is_pending_execution:
-        from modulo.core.dispatch import (
-            retry_budget_exhausted,
-            retry_executions_consumed,
-            retry_max_executions,
-        )
-
         policy = getattr(row, "retry_policy", None)
+        pipeline_row_id = getattr(row, "pipeline_row_id", None)
+        if policy is None and pipeline_row_id is None:
+            # The LEFT JOIN found no pipeline row at all (hard-deleted), so the
+            # policy genuinely cannot be resolved. Log loudly rather than
+            # silently skipping the gate: a silent skip is exactly how the
+            # original defect hid (a soft-deleted pipeline used to produce this
+            # shape — see the ``include_soft_deleted`` opt-out on the row
+            # select). Behaviour is unchanged (re-dispatch) because no budget
+            # is known; the WARNING is the alarm.
+            _log.warning(
+                "dispatcher_reconcile.retry_budget_unresolvable run=%s org=%s pipeline=%s — "
+                "pipeline row missing, retry_policy cannot be resolved; re-dispatching "
+                "WITHOUT applying the retry-budget ceiling",
+                row.id,
+                org_id,
+                getattr(row, "pipeline_id", None),
+            )
         ceiling = retry_max_executions(policy)
+        consumed = retry_executions_consumed(
+            execution_attempt_count=getattr(row, "execution_attempt_count", 0),
+        )
         # The authority is the shared predicate — it can never disagree with
         # the bound the other granting paths enforce. ``ceiling`` is only
         # needed for the terminal detail, and is non-None whenever the
-        # predicate is True (a policy with no usable budget yields None and
-        # keeps today's behaviour).
+        # predicate is True (a policy with no ceiling yields None and keeps
+        # today's behaviour).
         if ceiling is not None and retry_budget_exhausted(
             policy,
-            node_attempt_count=getattr(row, "node_attempt_count", 0),
-            claim_count=getattr(row, "claim_count", 0),
+            execution_attempt_count=consumed,
         ):
-            consumed = retry_executions_consumed(
-                node_attempt_count=getattr(row, "node_attempt_count", 0),
-                claim_count=getattr(row, "claim_count", 0),
-            )
             terminalized = await _fail_retry_budget_exhausted_run(
                 session,
                 row.id,
                 org_id,
                 ceiling=ceiling,
+                execution_attempts=consumed,
+                claim_count=getattr(row, "claim_count", None),
+                node_attempt_count=getattr(row, "node_attempt_count", None),
+                pipeline_id=getattr(row, "pipeline_id", None),
             )
             if terminalized:
                 summary["retry_budget_exhausted"] = summary.get("retry_budget_exhausted", 0) + 1
                 terminalized_run_ids.append((row.id, org_id))
-                _log.warning(
-                    "dispatcher_reconcile.retry_budget_exhausted run=%s org=%s "
-                    "consumed=%d ceiling=%d — pending run beyond its retry_policy budget; "
-                    "terminal-failed instead of re-dispatched",
-                    row.id,
-                    org_id,
-                    consumed,
-                    ceiling,
-                )
             else:
                 # The guarded UPDATE matched no row: the row advanced between
                 # the scan and this write (claimed, terminal, or already

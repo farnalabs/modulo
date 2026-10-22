@@ -20,11 +20,13 @@ in-execute retry path uses:
    SAQ retries the job and ``claim_run_async`` re-claims the pending run —
    with the same jittered capped backoff (``_retry_backoff_seconds`` + the
    run's ``backoff_schedule``) slept BEFORE the re-raise, mirroring
-   ``_redispatch_after_policy``. The budget counter is
-   ``max(node_attempt_count, claim_count - 1)``: node attempts alone cannot
-   bound a PRE-node hang (hub init / graph compile happen BEFORE the attempt
-   increment), but each watchdog retry consumes a SAQ claim, so the
-   claim-derived term grows one per retry cycle and bounds every hang site.
+   ``_redispatch_after_policy``. FAR-2076: the budget counter is the durable
+   ``runs.execution_attempt_count`` — the number of EXECUTION attempts of the
+   graph, incremented once when an attempt is admitted (before hub init /
+   graph compile). It therefore bounds a PRE-node hang, which
+   ``node_attempt_count`` (incremented later, inside ``_prepare_and_stream``)
+   could not, without ``claim_count``'s over-counting of capacity-demoted and
+   resume claims.
 
 There is exactly ONE mechanism: the watchdogs call the hook this module
 builds, which reuses the live executor instance's own helpers; the wrapper
@@ -207,7 +209,7 @@ async def _load_retry_context_or_none(
     *,
     run_id: uuid.UUID,
     org_id: uuid.UUID,
-) -> tuple[dict[str, Any], str, dict[str, Any] | None, int] | None:
+) -> tuple[dict[str, Any], str, dict[str, Any] | None] | None:
     """Load the retry-decision inputs, degrading a failure to ``None``.
 
     ``CancelledError`` propagates (the watchdog's own cancellation must never be
@@ -262,7 +264,6 @@ async def _attempt_count_if_retryable(
     trigger_type: str,
     graph_json: dict[str, Any] | None,
     claim_token: Any,
-    claim_count: int,
     retry_budget: int,
     final_status: str,
     error_code: str,
@@ -273,33 +274,29 @@ async def _attempt_count_if_retryable(
     FAR-210 correction run, FAR-295 non-idempotent graph, exhausted budget,
     superseded claim, or (FAR-296) a failed script-mode stale-lease probe.
 
-    The budget also bounds PRE-node hangs (hub init / graph compile — the exact
-    hang sites the zombie watchdog exists for): ``node_attempt_count`` only
-    increments in ``executor._prepare_and_stream``, AFTER those sites, so a run
-    hung there reads 0 on every kill. Each watchdog retry consumes a claim (the
-    re-raised ``RunRetryPolicyError`` makes SAQ retry the job, whose re-claim
-    grows ``claim_count``), so ``claim_count - 1`` — the number of PRIOR
-    re-claims — grows one per retry cycle and bounds hangs that never reached a
-    node. For a run that reached a node, ``claim_count`` is 1 and the effective
-    count IS ``node_attempt_count``, so the in-execute path is unchanged.
+    FAR-2076: the budget is measured against the durable
+    ``runs.execution_attempt_count`` (via
+    ``modulo.core.retry_budget.retry_executions_consumed``) — the count of
+    EXECUTION attempts of the graph, stamped when the attempt is admitted. It
+    therefore bounds PRE-node hangs (hub init / graph compile — the exact hang
+    sites the zombie watchdog exists for), which neither the old
+    ``node_attempt_count`` (incremented later, in ``_prepare_and_stream``) nor a
+    claim-derived count could measure correctly: ``claim_count`` also grows on
+    capacity-demoted and resume claims, so it over-counted non-executions.
     """
     is_correction_run = (trigger_type or "") == "correction"
     graph_idempotent = _graph_is_idempotent(graph_json)
     if is_correction_run or not graph_idempotent:
         return None
-    node_attempt_count, current_claim_token, attempt_started_at = await executor._read_retry_attempt_state(
+    execution_attempt_count, current_claim_token, attempt_started_at = await executor._read_retry_attempt_state(
         org_id, run_id
     )
-    # FAR-2076: the ONE shared measure of executions already consumed
-    # (``max(node_attempt_count, claim_count - 1)``) — reused, never re-derived,
-    # so every path that can grant an execution compares against the same
-    # count. See ``modulo.core.dispatch.retry_executions_consumed``.
-    from modulo.core.dispatch import retry_executions_consumed
+    # FAR-2076: the ONE shared measure of executions already consumed — reused,
+    # never re-derived, so every path that can grant an execution compares
+    # against the same count.
+    from modulo.core.retry_budget import retry_executions_consumed
 
-    attempt_count = retry_executions_consumed(
-        node_attempt_count=node_attempt_count,
-        claim_count=claim_count,
-    )
+    attempt_count = retry_executions_consumed(execution_attempt_count=execution_attempt_count)
     superseded = claim_token is not None and current_claim_token is not None and current_claim_token != claim_token
     script_retry_probe_ok = True
     if _graph_has_script_mode(graph_json):
@@ -491,7 +488,7 @@ async def watchdog_retry_after_policy(
     context = await _load_retry_context_or_none(aeng, run_id=run_id, org_id=org_id)
     if context is None:
         return False
-    policy, trigger_type, graph_json, claim_count = context
+    policy, trigger_type, graph_json = context
 
     # THE shared decision (matcher + FAR-1088 zero-node carve-out).
     retry_budget = _resolve_retry_budget(
@@ -528,7 +525,6 @@ async def watchdog_retry_after_policy(
         trigger_type=trigger_type,
         graph_json=graph_json,
         claim_token=claim_token,
-        claim_count=claim_count,
         retry_budget=retry_budget,
         final_status=final_status,
         error_code=error_code,
@@ -572,14 +568,18 @@ async def _load_watchdog_retry_context(
     *,
     run_id: uuid.UUID,
     org_id: uuid.UUID,
-) -> tuple[dict[str, Any], str, dict[str, Any] | None, int] | None:
+) -> tuple[dict[str, Any], str, dict[str, Any] | None] | None:
     """Load the retry-decision inputs for one run (RLS-scoped, one session).
 
-    Returns ``(retry_policy, trigger_type, graph_json, claim_count)`` or
-    ``None`` when the run or its pipeline is missing. Mirrors
-    ``_capture_execution_scalars``: the policy defaults to ``{}`` (no retry)
-    when absent/malformed, and ``claim_count`` defaults to 0 when absent or
-    not an int (the pre-node hang budget bound reads it from this row).
+    Returns ``(retry_policy, trigger_type, graph_json)`` or ``None`` when the
+    run or its pipeline is missing. Mirrors ``_capture_execution_scalars``: the
+    policy defaults to ``{}`` (no retry) when absent/malformed.
+
+    FAR-2076: the run's attempt count is no longer read here — the retry
+    decision reads the durable ``runs.execution_attempt_count`` from the same
+    row snapshot via ``executor._read_retry_attempt_state`` (which also carries
+    the claim token and this attempt's start), so there is one read and one
+    measure.
     """
     from modulo.db.crud.pipeline import get_pipeline
     from modulo.db.crud.run import get_run
@@ -603,6 +603,4 @@ async def _load_watchdog_retry_context(
     raw_policy = getattr(pipeline, "retry_policy", None)
     policy: dict[str, Any] = raw_policy if isinstance(raw_policy, dict) else {}
     trigger_type = str(getattr(run, "trigger_type", "") or "")
-    raw_claim_count = getattr(run, "claim_count", None)
-    claim_count = raw_claim_count if isinstance(raw_claim_count, int) else 0
-    return policy, trigger_type, graph_json if isinstance(graph_json, dict) else None, claim_count
+    return policy, trigger_type, graph_json if isinstance(graph_json, dict) else None

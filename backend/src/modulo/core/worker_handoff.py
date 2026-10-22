@@ -335,6 +335,10 @@ async def _load_handback_row(
             Run.dispatch_phase,
             Run.claim_count,
             Run.node_attempt_count,
+            # FAR-2076: the ONE execution measure. The handback's retry budget
+            # compares against this, never against claim_count (which grows on
+            # capacity-demoted and resume claims).
+            Run.execution_attempt_count,
             Run.node_token_usage,
             Run.started_at,
             Run.dispatched_at,
@@ -356,6 +360,7 @@ async def _load_handback_row(
         dispatch_phase=values["dispatch_phase"],
         claim_count=values["claim_count"],
         node_attempt_count=values["node_attempt_count"],
+        execution_attempt_count=values["execution_attempt_count"],
         node_token_usage=values["node_token_usage"],
         started_at=values["started_at"],
         dispatched_at=values["dispatched_at"],
@@ -379,11 +384,14 @@ def _node_started_policy_allows(row: Any) -> tuple[bool, str]:
     own terminal spelling, ``harness.worker_lost``) nor the stall class (the
     executor-death outcome the nodeless sibling maps to) forbids the re-run,
     and a covered policy still has to have budget left — the shared
-    :func:`retry_executions_consumed` bound (node attempts, or prior SAQ
-    claims for a PRE-node hang: ``max(node_attempt_count, claim_count - 1)``).
+    :func:`modulo.core.retry_budget.retry_executions_consumed` bound, fed from
+    the durable ``runs.execution_attempt_count`` (FAR-2076). That counter is
+    the number of EXECUTION attempts of the graph, so it also bounds a
+    PRE-node death (worker lost during hub init / graph compile) without
+    counting a capacity-demoted or resume claim as an execution.
     """
-    from modulo.core.dispatch import retry_executions_consumed
     from modulo.core.pipeline_engine.executor import _retry_after_policy
+    from modulo.core.retry_budget import retry_executions_consumed
 
     policy = getattr(row, "retry_policy", None)
     if not isinstance(policy, dict) or not policy:
@@ -397,8 +405,7 @@ def _node_started_policy_allows(row: Any) -> tuple[bool, str]:
     if budget is None:
         return False, "the pipeline retry policy covers neither the failure nor the stall class"
     attempt = retry_executions_consumed(
-        node_attempt_count=getattr(row, "node_attempt_count", 0),
-        claim_count=getattr(row, "claim_count", 0),
+        execution_attempt_count=getattr(row, "execution_attempt_count", 0),
     )
     if attempt > budget:
         return False, f"retry budget exhausted (attempt {attempt} > max_retries {budget})"
