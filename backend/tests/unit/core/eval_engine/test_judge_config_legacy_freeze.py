@@ -361,3 +361,282 @@ class TestLegacyExecutionCounter:
             record_legacy_execution(eval_id=uuid.uuid4())
 
         assert any(r.getMessage() == "eval_judge.legacy_rows_count" for r in caplog.records)
+
+
+class TestTypedShapeValidationEdges:
+    """Each structural rejection is a stable code, and the write guard is total.
+
+    These pin the branches the parametrized happy-path sweep does not reach:
+    an unreachable-in-prose config shape must still fail loudly rather than
+    fall through to a stored blob.
+    """
+
+    def _assert_invalid(self, mutate: Any) -> None:
+        config = _typed_config()
+        mutate(config)
+
+        with pytest.raises(JudgeConfigWriteError) as exc_info:
+            validate_typed_judge_config(config)
+
+        assert exc_info.value.code == CODE_INVALID
+
+    def test_a_non_object_config_is_invalid(self) -> None:
+        with pytest.raises(JudgeConfigWriteError) as exc_info:
+            validate_typed_judge_config("not-a-config")
+
+        assert exc_info.value.code == CODE_INVALID
+
+    def test_a_non_object_backing_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: c.update(backing="x"))
+
+    def test_an_unknown_backing_kind_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: c["backing"].update(kind="nope"))
+
+    def test_a_decision_model_backing_is_valid(self) -> None:
+        config = _typed_config()
+        config["backing"] = {"kind": "decision_model", "vendor": "jev"}
+
+        validate_typed_judge_config(config)
+
+        assert config["backing"]["kind"] == "decision_model"
+
+    def test_a_non_object_question_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: c.update(questions=["x"]))
+
+    def test_an_empty_question_id_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: c["questions"][0].update(id=""))
+
+    def test_an_unsupported_question_type_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: c["questions"][0].update(type="matches"))
+
+    def test_a_non_numeric_weight_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: c["questions"][0].update(weight="heavy"))
+
+    def test_a_negative_weight_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: c["questions"][0].update(weight=-1))
+
+    def test_a_non_numeric_min_pass_confidence_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: c["questions"][0].update(min_pass_confidence="x"))
+
+    def test_an_invalid_verdict_kind_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: c.update(verdict_kind="nope"))
+
+    def test_a_non_object_pass_rule_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: c.update(pass_rule="x"))
+
+    def test_a_non_numeric_threshold_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: c.update(pass_rule={"kind": "weighted_score_at_least", "threshold": "x"}))
+
+    def test_an_out_of_range_threshold_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: c.update(pass_rule={"kind": "weighted_score_at_least", "threshold": 2.0}))
+
+    def test_a_non_string_field_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: c.update(field=5))
+
+    def test_a_non_boolean_whole_output_flag_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: c.update(judge_whole_output="yes"))
+
+    def test_a_duplicate_question_id_is_invalid(self) -> None:
+        def _duplicate(config: dict) -> None:
+            config["questions"].append(dict(config["questions"][0]))
+
+        self._assert_invalid(_duplicate)
+
+    def test_a_choice_with_fewer_than_two_options_is_invalid(self) -> None:
+        def _one_option(config: dict) -> None:
+            config["questions"] = [
+                {
+                    "id": "tone",
+                    "type": "choice",
+                    "options": [{"key": "a"}],
+                    "passing_keys": ["a"],
+                    "weight": 1.0,
+                }
+            ]
+
+        self._assert_invalid(_one_option)
+
+    def test_a_choice_without_option_scores_is_valid(self) -> None:
+        config = _typed_config()
+        config["questions"] = [
+            {
+                "id": "tone",
+                "type": "choice",
+                "options": [{"key": "a"}, {"key": "b"}],
+                "passing_keys": ["a"],
+                "weight": 1.0,
+            }
+        ]
+
+        validate_typed_judge_config(config)
+
+        assert "option_scores" not in config["questions"][0]
+
+    def test_a_non_object_choice_option_is_invalid(self) -> None:
+        def _bad_option(config: dict) -> None:
+            config["questions"] = [
+                {
+                    "id": "tone",
+                    "type": "choice",
+                    "options": [{"key": "a"}, "b"],
+                    "passing_keys": ["a"],
+                    "weight": 1.0,
+                }
+            ]
+
+        self._assert_invalid(_bad_option)
+
+    def test_duplicate_choice_option_keys_are_invalid(self) -> None:
+        def _duplicate_keys(config: dict) -> None:
+            config["questions"] = [
+                {
+                    "id": "tone",
+                    "type": "choice",
+                    "options": [{"key": "a"}, {"key": "a"}],
+                    "passing_keys": ["a"],
+                    "weight": 1.0,
+                }
+            ]
+
+        self._assert_invalid(_duplicate_keys)
+
+    def test_passing_keys_outside_the_option_set_are_invalid(self) -> None:
+        def _bad_passing(config: dict) -> None:
+            config["questions"] = [
+                {
+                    "id": "tone",
+                    "type": "choice",
+                    "options": [{"key": "a"}, {"key": "b"}],
+                    "passing_keys": ["c"],
+                    "weight": 1.0,
+                }
+            ]
+
+        self._assert_invalid(_bad_passing)
+
+    def test_a_non_object_option_scores_field_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: _make_choice_question(c, option_scores=["a"]))
+
+    def test_option_scores_naming_an_unknown_option_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: _make_choice_question(c, option_scores={"c": 0.5}))
+
+    def test_a_non_numeric_option_score_is_invalid(self) -> None:
+        self._assert_invalid(lambda c: _make_choice_question(c, option_scores={"a": "high"}))
+
+    def test_valid_option_scores_pass(self) -> None:
+        config = _typed_config()
+        _make_choice_question(config, option_scores={"a": 0.5, "b": 0.0})
+
+        validate_typed_judge_config(config)
+
+        assert config["questions"][0]["option_scores"] == {"a": 0.5, "b": 0.0}
+
+    def test_a_non_finite_level_score_is_invalid(self) -> None:
+        def _nan_level(config: dict) -> None:
+            config["questions"] = [
+                {
+                    "id": "quality",
+                    "type": "score",
+                    "levels": [{"score": float("nan")}, {"score": 5}],
+                    "pass_from": 3,
+                    "weight": 1.0,
+                }
+            ]
+
+        self._assert_invalid(_nan_level)
+
+    def test_a_score_question_with_fewer_than_two_levels_is_invalid(self) -> None:
+        def _one_level(config: dict) -> None:
+            config["questions"] = [
+                {
+                    "id": "quality",
+                    "type": "score",
+                    "levels": [{"score": 1}],
+                    "pass_from": 1,
+                    "weight": 1.0,
+                }
+            ]
+
+        self._assert_invalid(_one_level)
+
+    def test_a_non_object_level_is_invalid(self) -> None:
+        def _bad_level(config: dict) -> None:
+            config["questions"] = [
+                {
+                    "id": "quality",
+                    "type": "score",
+                    "levels": [{"score": 1}, "junk"],
+                    "pass_from": 1,
+                    "weight": 1.0,
+                }
+            ]
+
+        self._assert_invalid(_bad_level)
+
+    def test_a_valid_score_question_passes(self) -> None:
+        config = _typed_config()
+        _make_score_question(config, pass_from=3)
+
+        validate_typed_judge_config(config)
+
+        assert config["questions"][0]["pass_from"] == 3
+
+    def test_a_non_update_write_that_is_not_a_judge_is_accepted(self) -> None:
+        reject_legacy_judge_write(config_json={"pattern": "x"}, is_update=False, new_eval_type="regex")
+
+
+class TestLegacyCounterArms:
+    def test_a_second_execution_reuses_the_cached_counter(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import modulo.core.eval_engine.typed_judge.legacy as legacy
+
+        class _Counter:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def add(self, amount: int, attributes: dict[str, str]) -> None:
+                self.calls += amount
+
+        counter = _Counter()
+        monkeypatch.setattr(legacy, "_legacy_counter", counter)
+
+        record_legacy_execution(eval_id=uuid.uuid4())
+        record_legacy_execution(eval_id=uuid.uuid4())
+
+        assert counter.calls == 2
+
+    def test_a_metrics_provider_failure_falls_back_to_the_log(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import opentelemetry.metrics as otel_metrics
+
+        import modulo.core.eval_engine.typed_judge.legacy as legacy
+
+        monkeypatch.setattr(legacy, "_legacy_counter", None)
+
+        def _broken_provider() -> None:
+            raise RuntimeError("otel unavailable")
+
+        monkeypatch.setattr(otel_metrics, "get_meter_provider", _broken_provider)
+        with caplog.at_level(logging.WARNING):
+            record_legacy_execution(eval_id=uuid.uuid4())
+
+        assert legacy._get_legacy_counter() is None
+
+    def test_a_counter_add_failure_is_logged(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import modulo.core.eval_engine.typed_judge.legacy as legacy
+
+        class _BrokenCounter:
+            def add(self, amount: int, attributes: dict[str, str]) -> None:
+                raise RuntimeError("counter unavailable")
+
+        monkeypatch.setattr(legacy, "_get_legacy_counter", lambda: _BrokenCounter())
+        with caplog.at_level(logging.WARNING):
+            record_legacy_execution(eval_id=uuid.uuid4())
+
+        assert any(r.getMessage() == "eval_judge.legacy_counter_unavailable" for r in caplog.records)

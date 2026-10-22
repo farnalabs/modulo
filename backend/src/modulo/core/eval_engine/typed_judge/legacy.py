@@ -210,85 +210,131 @@ def _validate_backing(config: dict[str, Any]) -> None:
         for forbidden in ("vendor", "model_class"):
             if forbidden in backing:
                 raise _invalid(f"'backing.{forbidden}' is not valid for a model_backend backing")
-    if "confidence_kind" in backing:
-        raise _invalid("'confidence_kind' is derived at execution and is not a request field")
-    if "confidence_kind" in config:
-        raise _invalid("'confidence_kind' is derived at execution and is not a config field")
 
 
-def _validate_question(index: int, question: Any) -> None:
-    if not isinstance(question, dict):
-        raise _invalid(f"config_json.questions[{index}] must be an object")
-    _reject_unknown_keys(question, _ALLOWED_QUESTION, f"config_json.questions[{index}]")
+def _question_id(index: int, question: dict[str, Any]) -> str:
     qid = question.get("id")
     if not isinstance(qid, str) or not qid:
         raise _invalid(f"config_json.questions[{index}].id must be a non-empty string")
-    qtype = question.get("type")
-    if qtype not in _QUESTION_TYPES:
-        raise _invalid(
-            f"question {qid!r} has an unsupported type {qtype!r} (expected one of {sorted(_QUESTION_TYPES)})"
-        )
+    return qid
+
+
+def _validate_question_weight(qid: str, question: dict[str, Any]) -> None:
     weight = question.get("weight", 1.0)
     if isinstance(weight, bool) or not isinstance(weight, (int, float)):
         raise _invalid(f"question {qid!r} has an invalid weight")
     if not math.isfinite(float(weight)) or weight < 0:
         raise _invalid(f"question {qid!r} has an invalid weight")
 
+
+def _validate_min_pass_confidence(qid: str, question: dict[str, Any]) -> None:
     min_pass_confidence = question.get("min_pass_confidence")
-    if min_pass_confidence is not None:
-        if isinstance(min_pass_confidence, bool) or not isinstance(min_pass_confidence, (int, float)):
-            raise _invalid(f"question {qid!r} min_pass_confidence must be a number in [0, 1]")
-        if not math.isfinite(float(min_pass_confidence)) or not 0.0 <= float(min_pass_confidence) <= 1.0:
-            raise _invalid(f"question {qid!r} min_pass_confidence must be a finite number in [0, 1]")
+    if min_pass_confidence is None:
+        return
+    if isinstance(min_pass_confidence, bool) or not isinstance(min_pass_confidence, (int, float)):
+        raise _invalid(f"question {qid!r} min_pass_confidence must be a number in [0, 1]")
+    if not math.isfinite(float(min_pass_confidence)) or not 0.0 <= float(min_pass_confidence) <= 1.0:
+        raise _invalid(f"question {qid!r} min_pass_confidence must be a finite number in [0, 1]")
+
+
+def _choice_option_keys(qid: str, question: dict[str, Any]) -> set[Any]:
+    options = question.get("options")
+    if not isinstance(options, list) or len(options) < 2:
+        raise _invalid(f"choice question {qid!r} requires at least two options")
+    for option in options:
+        if not isinstance(option, dict):
+            raise _invalid(f"choice question {qid!r} options must be objects")
+        _reject_unknown_keys(option, _ALLOWED_OPTION, f"question {qid!r} option")
+    keys = {opt.get("key") for opt in options}
+    if len(keys) < 2 or None in keys:
+        raise _invalid(f"choice question {qid!r} options must be objects with unique 'key' values")
+    return keys
+
+
+def _validate_passing_keys(qid: str, question: dict[str, Any], keys: set[Any]) -> None:
+    passing = question.get("passing_keys")
+    if not isinstance(passing, list) or not set(passing).issubset(keys):
+        raise _invalid(f"choice question {qid!r} passing_keys must be a subset of its option keys")
+
+
+def _validate_one_option_score(qid: str, key: Any, value: Any, keys: set[Any]) -> None:
+    if key not in keys:
+        raise _invalid(f"choice question {qid!r} option_scores names an unknown option {key!r}")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _invalid(f"choice question {qid!r} option score for {key!r} must be a number")
+    if not math.isfinite(float(value)) or not 0.0 <= float(value) <= 1.0:
+        raise _invalid(f"choice question {qid!r} option score for {key!r} must be in [0, 1]")
+
+
+def _validate_option_scores(qid: str, question: dict[str, Any], keys: set[Any]) -> None:
+    option_scores = question.get("option_scores")
+    if option_scores is None:
+        return
+    if not isinstance(option_scores, dict):
+        raise _invalid(f"choice question {qid!r} option_scores must be an object")
+    for key, value in option_scores.items():
+        _validate_one_option_score(qid, key, value, keys)
+
+
+def _validate_choice_question(qid: str, question: dict[str, Any]) -> None:
+    keys = _choice_option_keys(qid, question)
+    _validate_passing_keys(qid, question, keys)
+    _validate_option_scores(qid, question, keys)
+
+
+def _validate_level_value(qid: str, value: Any) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        raise _invalid(f"score question {qid!r} levels must have finite numeric 'score' values")
+
+
+def _score_level_values(qid: str, question: dict[str, Any]) -> list[Any]:
+    levels = question.get("levels")
+    if not isinstance(levels, list) or len(levels) < 2:
+        raise _invalid(f"score question {qid!r} requires at least two ordered levels")
+    for level in levels:
+        if not isinstance(level, dict):
+            raise _invalid(f"score question {qid!r} levels must be objects")
+        _reject_unknown_keys(level, _ALLOWED_LEVEL, f"question {qid!r} level")
+    numeric = [lv.get("score") for lv in levels]
+    for n in numeric:
+        _validate_level_value(qid, n)
+    return numeric
+
+
+def _validate_pass_from(qid: str, question: dict[str, Any], numeric: list[Any]) -> None:
+    pass_from = question.get("pass_from")
+    if pass_from is None:
+        raise _invalid(f"score question {qid!r} must declare 'pass_from'")
+    if (
+        isinstance(pass_from, bool)
+        or not isinstance(pass_from, (int, float))
+        or not math.isfinite(float(pass_from))
+        or not min(float(n) for n in numeric) <= float(pass_from) <= max(float(n) for n in numeric)
+    ):
+        raise _invalid(f"score question {qid!r} pass_from must be one of its declared level scores")
+
+
+def _validate_score_question(qid: str, question: dict[str, Any]) -> None:
+    numeric = _score_level_values(qid, question)
+    _validate_pass_from(qid, question, numeric)
+
+
+def _validate_question(index: int, question: Any) -> None:
+    if not isinstance(question, dict):
+        raise _invalid(f"config_json.questions[{index}] must be an object")
+    _reject_unknown_keys(question, _ALLOWED_QUESTION, f"config_json.questions[{index}]")
+    qid = _question_id(index, question)
+    qtype = question.get("type")
+    if qtype not in _QUESTION_TYPES:
+        raise _invalid(
+            f"question {qid!r} has an unsupported type {qtype!r} (expected one of {sorted(_QUESTION_TYPES)})"
+        )
+    _validate_question_weight(qid, question)
+    _validate_min_pass_confidence(qid, question)
     if qtype == "choice":
-        options = question.get("options")
-        if not isinstance(options, list) or len(options) < 2:
-            raise _invalid(f"choice question {qid!r} requires at least two options")
-        for option in options:
-            if not isinstance(option, dict):
-                raise _invalid(f"choice question {qid!r} options must be objects")
-            _reject_unknown_keys(option, _ALLOWED_OPTION, f"question {qid!r} option")
-        keys = {opt.get("key") for opt in options}
-        if len(keys) < 2 or None in keys:
-            raise _invalid(f"choice question {qid!r} options must be objects with unique 'key' values")
-        passing = question.get("passing_keys")
-        if not isinstance(passing, list) or not set(passing).issubset(keys):
-            raise _invalid(f"choice question {qid!r} passing_keys must be a subset of its option keys")
-        option_scores = question.get("option_scores")
-        if option_scores is not None:
-            if not isinstance(option_scores, dict):
-                raise _invalid(f"choice question {qid!r} option_scores must be an object")
-            for key, value in option_scores.items():
-                if key not in keys:
-                    raise _invalid(f"choice question {qid!r} option_scores names an unknown option {key!r}")
-                if isinstance(value, bool) or not isinstance(value, (int, float)):
-                    raise _invalid(f"choice question {qid!r} option score for {key!r} must be a number")
-                if not math.isfinite(float(value)) or not 0.0 <= float(value) <= 1.0:
-                    raise _invalid(f"choice question {qid!r} option score for {key!r} must be in [0, 1]")
+        _validate_choice_question(qid, question)
     if qtype == "score":
-        levels = question.get("levels")
-        if not isinstance(levels, list) or len(levels) < 2:
-            raise _invalid(f"score question {qid!r} requires at least two ordered levels")
-        for level in levels:
-            if not isinstance(level, dict):
-                raise _invalid(f"score question {qid!r} levels must be objects")
-            _reject_unknown_keys(level, _ALLOWED_LEVEL, f"question {qid!r} level")
-        numeric = [lv.get("score") for lv in levels]
-        if len(numeric) < 2:
-            raise _invalid(f"score question {qid!r} levels must be objects with numeric 'score' values")
-        for n in numeric:
-            if isinstance(n, bool) or not isinstance(n, (int, float)) or not math.isfinite(float(n)):
-                raise _invalid(f"score question {qid!r} levels must have finite numeric 'score' values")
-        pass_from = question.get("pass_from")
-        if pass_from is None:
-            raise _invalid(f"score question {qid!r} must declare 'pass_from'")
-        if (
-            isinstance(pass_from, bool)
-            or not isinstance(pass_from, (int, float))
-            or not math.isfinite(float(pass_from))
-            or not min(float(n) for n in numeric) <= float(pass_from) <= max(float(n) for n in numeric)
-        ):
-            raise _invalid(f"score question {qid!r} pass_from must be one of its declared level scores")
+        _validate_score_question(qid, question)
 
 
 def _derivation_error() -> JudgeConfigWriteError:
@@ -300,6 +346,54 @@ def _derivation_error() -> JudgeConfigWriteError:
         "check, custom_function or human_set.",
         hint="Use a deterministic eval (regex/json_schema/custom_function/human_set) for derivation checks.",
     )
+
+
+def _validate_verdict_kind(config: dict[str, Any]) -> None:
+    verdict_kind = config.get("verdict_kind")
+    if verdict_kind not in _VERDICT_KINDS:
+        raise _invalid(f"config_json.verdict_kind must be one of {sorted(_VERDICT_KINDS)} (got {verdict_kind!r})")
+    if verdict_kind == "derivation":
+        raise _derivation_error()
+
+
+def _validate_question_list(config: dict[str, Any]) -> None:
+    questions = config.get("questions")
+    if not isinstance(questions, list) or not questions:
+        raise _invalid("config_json.questions must be a non-empty list")
+    seen: set[str] = set()
+    for index, question in enumerate(questions):
+        _validate_question(index, question)
+        qid = question["id"]
+        if qid in seen:
+            raise _invalid(f"duplicate question id {qid!r}")
+        seen.add(qid)
+
+
+def _validate_pass_rule(config: dict[str, Any]) -> None:
+    pass_rule = config.get("pass_rule")
+    if not isinstance(pass_rule, dict):
+        raise _invalid("config_json.pass_rule must be an object")
+    if pass_rule.get("kind") != "weighted_score_at_least":
+        raise _invalid("config_json.pass_rule.kind must be 'weighted_score_at_least'")
+    threshold = pass_rule.get("threshold")
+    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+        raise _invalid("config_json.pass_rule.threshold must be a number in [0, 1]")
+    if not math.isfinite(float(threshold)) or not 0.0 <= float(threshold) <= 1.0:
+        raise _invalid("config_json.pass_rule.threshold must be a finite number in [0, 1]")
+
+
+def _validate_judged_field(config: dict[str, Any]) -> None:
+    field = config.get("field", "")
+    if not isinstance(field, str):
+        raise _invalid("config_json.field must be a string")
+    whole_output = config.get("judge_whole_output", False)
+    if not isinstance(whole_output, bool):
+        raise _invalid("config_json.judge_whole_output must be a boolean")
+    if not field and not whole_output:
+        raise _invalid(
+            "config_json.field is required (a dotted path into the output). Whole-output judging "
+            "must be explicit with 'judge_whole_output': true — otherwise the judged payload is empty"
+        )
 
 
 def validate_typed_judge_config(config: Any) -> None:
@@ -323,52 +417,11 @@ def validate_typed_judge_config(config: Any) -> None:
         )
     _reject_unknown_keys(config, _ALLOWED_TOP_LEVEL, "config_json")
     _reject_credential_keys(config, "config_json")
-    if "model_backend_id" in config:
-        raise _invalid(
-            "config_json.model_backend_id is not a typed-dialect key; put the judge backend on "
-            "'backing.model_backend_id' (the only source both call sites read)"
-        )
-    verdict_kind = config.get("verdict_kind")
-    if verdict_kind not in _VERDICT_KINDS:
-        raise _invalid(f"config_json.verdict_kind must be one of {sorted(_VERDICT_KINDS)} (got {verdict_kind!r})")
-    if verdict_kind == "derivation":
-        raise _derivation_error()
-
+    _validate_verdict_kind(config)
     _validate_backing(config)
-
-    questions = config.get("questions")
-    if not isinstance(questions, list) or not questions:
-        raise _invalid("config_json.questions must be a non-empty list")
-    seen: set[str] = set()
-    for index, question in enumerate(questions):
-        _validate_question(index, question)
-        qid = question["id"]
-        if qid in seen:
-            raise _invalid(f"duplicate question id {qid!r}")
-        seen.add(qid)
-
-    pass_rule = config.get("pass_rule")
-    if not isinstance(pass_rule, dict):
-        raise _invalid("config_json.pass_rule must be an object")
-    if pass_rule.get("kind") != "weighted_score_at_least":
-        raise _invalid("config_json.pass_rule.kind must be 'weighted_score_at_least'")
-    threshold = pass_rule.get("threshold")
-    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
-        raise _invalid("config_json.pass_rule.threshold must be a number in [0, 1]")
-    if not math.isfinite(float(threshold)) or not 0.0 <= float(threshold) <= 1.0:
-        raise _invalid("config_json.pass_rule.threshold must be a finite number in [0, 1]")
-
-    field = config.get("field", "")
-    if not isinstance(field, str):
-        raise _invalid("config_json.field must be a string")
-    whole_output = config.get("judge_whole_output", False)
-    if not isinstance(whole_output, bool):
-        raise _invalid("config_json.judge_whole_output must be a boolean")
-    if not field and not whole_output:
-        raise _invalid(
-            "config_json.field is required (a dotted path into the output). Whole-output judging "
-            "must be explicit with 'judge_whole_output': true — otherwise the judged payload is empty"
-        )
+    _validate_question_list(config)
+    _validate_pass_rule(config)
+    _validate_judged_field(config)
 
 
 def reject_legacy_judge_write(
