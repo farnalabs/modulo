@@ -1792,156 +1792,102 @@ async def fire_cron_trigger(
     factory: async_sessionmaker[AsyncSession] | None = None,
     advance_next_fire_at: bool = False,
 ) -> dict[str, Any]:
-    """Fire one cron trigger — create a run, log the TriggerEvent, dispatch it.
+    """Fire one cron trigger — create a run, log the TriggerEvent, dispatch it."""
+    if factory is None:
+        factory = _open_factory()
+    async with factory() as session, session.begin():
+        return await _fire_cron_trigger_in_session(
+            session,
+            trigger_id=trigger_id,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            cron_expression=cron_expression,
+            snapshot_id=snapshot_id,
+            advance_next_fire_at=advance_next_fire_at,
+        )
 
-    SAQ per-item fire job (``advance_next_fire_at=False``, the default): the
-    atomic next_fire_at advance already happened in ``fire_due_triggers`` at
-    enqueue time; this job sets ``last_fired_at`` only.
 
-    ``advance_next_fire_at=True`` preserves the legacy behaviour (CronFireTask,
-    removed in PR C).
-    """
+async def _fire_cron_trigger_in_session(
+    session: AsyncSession,
+    *,
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    cron_expression: str,
+    snapshot_id: uuid.UUID | None,
+    advance_next_fire_at: bool,
+) -> dict[str, Any]:
     from sqlalchemy import update
 
     from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+    from modulo.core.run_admission import evaluate_backpressure
     from modulo.db.crud.run import create_run
     from modulo.db.models.trigger import Trigger
 
-    if factory is None:
-        factory = _open_factory()
-
-    async with factory() as session, session.begin():
-        await _set_rls_org(session, org_id)
-
-        key1, key2 = _uuid_to_lock_keys(trigger_id)
-        lock_result = await session.execute(
-            text(_SQL_TRY_ADVISORY_LOCK),
-            {"key1": key1, "key2": key2},
-        )
-        if not lock_result.scalar_one():
-            return {"status": "skipped", "reason": "trigger_busy"}
-        result = await session.execute(
+    await _set_rls_org(session, org_id)
+    key1, key2 = _uuid_to_lock_keys(trigger_id)
+    lock_result = await session.execute(text(_SQL_TRY_ADVISORY_LOCK), {"key1": key1, "key2": key2})
+    if not lock_result.scalar_one():
+        return {"status": "skipped", "reason": "trigger_busy"}
+    trigger = (
+        await session.execute(
             select(Trigger).where(
                 Trigger.id == trigger_id,
                 Trigger.organisation_id == org_id,
                 Trigger.deleted_at.is_(None),
             )
         )
-        trigger = result.scalar_one_or_none()
-        if trigger is None or not trigger.active:
-            return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
-
-        # Org-wide pause (kill-switch) — checked BEFORE the snapshot auto-create
-        # so a paused org never produces a snapshot. No paused TriggerEvent here
-        # (this is the race backstop only; the create_run gate is the authority).
-        # Degraded on a pre-migration ProgrammingError (not-paused) inside a
-        # savepoint so the per-item transaction is never poisoned.
-        if await _org_is_paused_degraded(session, org_id):
-            return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
-
-        active_count = await _count_active_runs(session, trigger_id)
-        if active_count >= trigger.max_concurrent_runs:
-            return await _concurrency_limit_skip(session, trigger, org_id, active_count)
-
-        # FAR-604 dispatcher backpressure: skip-not-defer when the pipeline's
-        # pending queue is over the depth/age limits (the queue can never
-        # drain onto a wedged admission gate; more rows only ratchet it).
-        from modulo.core.run_admission import evaluate_backpressure
-
-        backpressured, bp_reason = await evaluate_backpressure(session, pipeline_id=pipeline_id)
-        if backpressured:
-            return await _backpressure_skip(session, trigger, org_id, bp_reason)
-
-        skip = await _cron_spend_gate_skip(session, trigger, org_id)
-        if skip is not None:
-            return skip
-
-        # FAR-1519 item 3: an unpinned cron fire freezes the CURRENT live
-        # graph here (auto-create below), exactly like the manual/webhook/
-        # slack/test paths and like this function's own catch-up callers —
-        # never the "latest existing snapshot", which goes stale the moment
-        # the graph is edited and made every post-edit cron run execute the
-        # first snapshot forever. Only an explicit config pin bypasses this.
-        #
-        # FAR-1536: the auto-create and create_run share a SAVEPOINT. Every
-        # return out of this function (including skips) COMMITs the enclosing
-        # transaction, so the pause-race skip below would otherwise persist an
-        # unreferenced snapshot — a row no run points at, minted by a fire that
-        # did nothing. Rolling back to the savepoint restores the invariant
-        # "a fire that skips writes no snapshot" for this path. The skip itself
-        # is unchanged: only the savepoint rolls back, the outer transaction
-        # still commits, so the job still returns skipped (never a failed job
-        # that only becomes a skip after an SAQ retry).
-        try:
-            async with session.begin_nested():
+    ).scalar_one_or_none()
+    if trigger is None or not trigger.active:
+        return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
+    if await _org_is_paused_degraded(session, org_id):
+        return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+    active_count = await _count_active_runs(session, trigger_id)
+    if active_count >= trigger.max_concurrent_runs:
+        return await _concurrency_limit_skip(session, trigger, org_id, active_count)
+    backpressured, bp_reason = await evaluate_backpressure(session, pipeline_id=pipeline_id)
+    if backpressured:
+        return await _backpressure_skip(session, trigger, org_id, bp_reason)
+    skip = await _cron_spend_gate_skip(session, trigger, org_id)
+    if skip is not None:
+        return skip
+    try:
+        async with session.begin_nested():
+            if snapshot_id is None:
+                snapshot_id = await _auto_create_snapshot(session, trigger, org_id, pipeline_id)
                 if snapshot_id is None:
-                    snapshot_id = await _auto_create_snapshot(session, trigger, org_id, pipeline_id)
-                    if snapshot_id is None:
-                        # The no_pipeline TriggerEvent and last_fired_at stamp
-                        # inside _auto_create_snapshot are meant to persist
-                        # (skip-not-defer, review PR #982): leaving the
-                        # savepoint normally RELEASEs it into the outer txn.
-                        return {"status": "skipped", "reason": "pipeline_not_found"}
+                    return {"status": "skipped", "reason": "pipeline_not_found"}
+            config = trigger.config_json or {}
+            from modulo.core.trigger_engine import _warn_unrecognised_config_keys
 
-                config = trigger.config_json or {}
-                from modulo.core.trigger_engine import _warn_unrecognised_config_keys
-
-                _warn_unrecognised_config_keys(trigger_id, config)
-                input_payload = config.get("input_template", {})
-
-                run = await create_run(
-                    session,
-                    org_id=org_id,
-                    pipeline_id=pipeline_id,
-                    snapshot_id=snapshot_id,
-                    trigger_type="cron",
-                    trigger_id=trigger_id,
-                    input_payload=input_payload,
-                )
-        except TriggersPausedError:
-            # TOCTOU race backstop: the org was paused between the early check
-            # and create_run. Skip, no paused TriggerEvent (race backstop only).
-            # The savepoint above rolled back the auto-created snapshot with it.
-            _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
-            return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
-        except PipelineNotRunnableError as exc:
-            # FAR-1528: the pipeline was archived/soft-deleted. Mirrors the
-            # pause skip exactly — quiet typed skip, NO TriggerEvent, NO
-            # last_fired_at write — so an archived pipeline's still-active
-            # trigger is a per-tick skip instead of a job that fails on every
-            # tick (next_fire_at was already advanced at enqueue time).
-            _log.info(_LOG_PIPELINE_NOT_RUNNABLE_SKIP, trigger_id, org_id, exc.state)
-            return {"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON}
-
-        event = await _log_event(
-            session,
-            trigger=trigger,
-            org_id=org_id,
-            result="accepted",
-            run_id=run.id,
-        )
-
-        # last_fired_at reflects an actual fire (run created). next_fire_at is
-        # advanced ONLY at enqueue time (fire_due_triggers) — or here for the
-        # legacy path (pre-PR C).
-        values: dict[str, Any] = {"last_fired_at": datetime.now(UTC)}
-        if advance_next_fire_at:
-            values["next_fire_at"] = compute_next_fire(
-                cron_expression,
-                after=datetime.now(UTC),
-                timezone=trigger.cron_timezone or "UTC",
+            _warn_unrecognised_config_keys(trigger_id, config)
+            input_payload = config.get("input_template", {})
+            run = await create_run(
+                session,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+                snapshot_id=snapshot_id,
+                trigger_type="cron",
+                trigger_id=trigger_id,
+                input_payload=input_payload,
             )
-        await session.execute(update(Trigger).where(Trigger.id == trigger_id).values(**values))
-
-        _log.info("Cron trigger %s fired -> run %s", trigger_id, run.id)
-        return {
-            "status": "fired",
-            "run_id": str(run.id),
-            "event_id": str(event.id),
-            "input_payload": input_payload,
-        }
-
-    return {"status": "error", "reason": "unexpected"}
+    except TriggersPausedError:
+        _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
+        return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+    except PipelineNotRunnableError as exc:
+        _log.info(_LOG_PIPELINE_NOT_RUNNABLE_SKIP, trigger_id, org_id, exc.state)
+        return {"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON}
+    event = await _log_event(session, trigger=trigger, org_id=org_id, result="accepted", run_id=run.id)
+    values: dict[str, Any] = {"last_fired_at": datetime.now(UTC)}
+    if advance_next_fire_at:
+        values["next_fire_at"] = compute_next_fire(
+            cron_expression,
+            after=datetime.now(UTC),
+            timezone=trigger.cron_timezone or "UTC",
+        )
+    await session.execute(update(Trigger).where(Trigger.id == trigger_id).values(**values))
+    _log.info("Cron trigger %s fired -> run %s", trigger_id, run.id)
+    return {"status": "fired", "run_id": str(run.id), "event_id": str(event.id), "input_payload": input_payload}
 
 
 async def _polling_pre_fire_gate(
@@ -6733,6 +6679,34 @@ def _decision_review_identity(latest: Any) -> str | None:
     return str(row_review_id) if row_review_id else None
 
 
+def _parse_decision_payload(payload: Any) -> dict[str, Any] | None:
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (ValueError, TypeError):
+            return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _decision_payload_is_faithful(payload: Any) -> bool:
+    if payload is None:
+        return True
+    parsed = _parse_decision_payload(payload)
+    if parsed is None:
+        return False
+    return parsed.get("action") != "manual_output" or "output" in parsed
+
+
+def _decision_is_consumable(latest: Any, payload: dict[str, Any]) -> bool:
+    if not payload.get("review_id"):
+        return False
+    identity = _decision_review_identity(latest)
+    action = payload.get("action")
+    if identity is not None and identity.startswith(("hitl_review_", "guardrail_conformance")):
+        return action in ("approved", "rejected", "deliver_manual")
+    return action == "manual_output" or action in ("approved", "rejected", "deliver_manual")
+
+
 async def _awaiting_human_has_committed_decision(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -6813,24 +6787,14 @@ async def _awaiting_human_has_committed_decision(
     latest = await _latest_committed_decision_row(session, org_id, run_id)
     if latest is None or latest[0] is None:
         return False
-    payload = latest[1]
-    if isinstance(payload, str):
-        try:
-            payload = json.loads(payload)
-        except (ValueError, TypeError):
-            payload = None
-    if payload is not None and not isinstance(payload, dict):
-        # FAR-541 iteration 3: the guard and ``_committed_decision_resume_data``
-        # must agree — reconstruction returns None for a non-dict payload, so
-        # resuming here would dispatch resume_run with resume_data=None (an
-        # empty decision). SKIP.
+    payload = _parse_decision_payload(latest[1])
+    if latest[1] is not None and payload is None:
+        # FAR-541 iteration 3: the guard and reconstruction must agree — a
+        # corrupted non-dict payload cannot be reconstructed safely.
         return False
-    if isinstance(payload, dict):
-        action = payload.get("action")
-        if action == "manual_output" and "output" not in payload:
-            # A manual-output decision MUST carry its output — otherwise the
-            # manual node resumes with ``{"action": "approved"}`` as its output.
-            return False
+    if not _decision_payload_is_faithful(payload):
+        # A manual-output decision MUST carry its output.
+        return False
     # Gate scoping (FAR-541): the decision must resolve the gate the run is
     # waiting at. See the docstring for the state matrix.
     if await _pending_claimed_review_id(session, org_id, run_id) is not None:
@@ -6863,25 +6827,8 @@ async def _awaiting_human_has_committed_decision(
     # (HITL gates first fired that day), so NO backfill migration is shipped.
     # Ops remedy: stamp the row's ``decision_payload`` manually in the DB (or
     # raise a ticket for the run's owner) to unblock it.
-    if not isinstance(payload, dict) or not payload.get("review_id"):
-        # Unstamped / legacy ""-stamped (falsy) — cannot be verified -> SKIP.
-        return False
-    identity = _decision_review_identity(latest)
-    action = payload.get("action")
-    if identity is not None and identity.startswith(("hitl_review_", "guardrail_conformance")):
-        # GATE / guardrail park: the gate consumer accepts only verdict
-        # actions and the conformance consumer only recognized override
-        # actions — a ``manual_output`` committed at either is not a verdict
-        # that consumer accepts, so resuming it would bounce the run back to
-        # awaiting_human and re-dispatch-loop (FAR-541 iteration 3).
-        return action in ("approved", "rejected", "deliver_manual")
-    # MANUAL-NODE park (the interrupt stamps ``review_id: node_id``): the manual
-    # consumer completes the node on any payload stamped with its node id, so
-    # a committed ``manual_output`` (its ``output`` presence was checked
-    # above) is a legitimately concluded decision whose resume job was lost —
-    # skipping it would wedge the run forever (re-decide 409s, recover-node
-    # bounces). Resume it (FAR-541 iteration 4, FIX A).
-    return action == "manual_output" or action in ("approved", "rejected", "deliver_manual")
+    # Unstamped or consumer-incompatible decisions cannot be verified safely.
+    return payload is not None and _decision_is_consumable(latest, payload)
 
 
 async def _committed_decision_resume_data(
