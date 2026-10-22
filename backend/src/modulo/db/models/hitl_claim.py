@@ -35,6 +35,21 @@ class HitlClaim(OrgScoped):
             postgresql_where=text("decided_by IS NOT NULL AND decision IS NOT NULL"),
             sqlite_where=text("decided_by IS NOT NULL AND decision IS NOT NULL"),
         ),
+        # FAR-2055: the compliance evidence index's decided-gate scan
+        # (compliance/evidence_index.py) filters
+        # ``organisation_id = ? AND decision IS NOT NULL`` and orders by
+        # ``decision_at DESC NULLS LAST`` (an audit-period window adds a
+        # ``decision_at`` range). The per-actor window index above leads on
+        # ``decided_by``, which this query does not filter, so it cannot serve
+        # the scan. Partial: undecided gates never enter - and they are the
+        # growing majority. Mirrors migration 0325.
+        Index(
+            "ix_hitl_claims_org_decision_at",
+            "organisation_id",
+            "decision_at",
+            postgresql_where=text("decision IS NOT NULL"),
+            sqlite_where=text("decision IS NOT NULL"),
+        ),
     )
 
     run_id: Mapped[uuid.UUID] = mapped_column(

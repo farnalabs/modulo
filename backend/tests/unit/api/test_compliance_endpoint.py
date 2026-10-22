@@ -144,11 +144,11 @@ async def session() -> AsyncGenerator[AsyncSession, None]:
     await engine.dispose()
 
 
-async def _seed_minimal_org(session: AsyncSession) -> tuple[uuid.UUID, uuid.UUID]:
+async def _seed_minimal_org(session: AsyncSession, slug: str = "compliance") -> tuple[uuid.UUID, uuid.UUID]:
     org_id = uuid.uuid4()
     account_id = uuid.uuid4()
-    session.add(Organisation(id=org_id, name="Compliance Org", slug="compliance"))
-    session.add(Account(id=account_id, email="admin@compliance.example", display_name="Admin"))
+    session.add(Organisation(id=org_id, name=f"Compliance Org {slug}", slug=slug))
+    session.add(Account(id=account_id, email=f"admin-{slug}@compliance.example", display_name="Admin"))
     await session.flush()
     event = AuditEvent(
         id=uuid.uuid4(),
@@ -257,6 +257,34 @@ class TestEndpointBehaviour:
         assert tuple(entry.artifact_type for entry in restored.artifacts) == INDEXED_ARTIFACT_TYPES
 
 
+@pytest.fixture
+def client_for(session: AsyncSession):
+    """Build a real HTTP client with only the credential/session overridden.
+
+    Module-scoped so both the authorisation tests and the audit-period
+    parameter tests drive the real route (query-param aliases and FastAPI's
+    422 validation only exist there).
+    """
+
+    def _make(role: str, org_id: uuid.UUID, account_id: uuid.UUID) -> AsyncClient:
+        principal = TenantPrincipal(
+            username=f"{role}@compliance.example",
+            organisation_id=org_id,
+            account_id=account_id,
+            org_role=role,
+        )
+
+        async def _principal() -> TenantPrincipal:
+            return principal
+
+        app.dependency_overrides[get_current_tenant_user] = _principal
+        app.dependency_overrides[get_db_session] = lambda: session
+        return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+    yield _make
+    app.dependency_overrides.clear()
+
+
 class TestRequestLevelAuthorisation:
     """Drive the real HTTP route, not the handler.
 
@@ -265,26 +293,6 @@ class TestRequestLevelAuthorisation:
     if the permission gate were removed or downgraded. These go through the app
     with only the credential and session dependencies overridden.
     """
-
-    @pytest.fixture
-    def client_for(self, session: AsyncSession):
-        def _make(role: str, org_id: uuid.UUID, account_id: uuid.UUID) -> AsyncClient:
-            principal = TenantPrincipal(
-                username=f"{role}@compliance.example",
-                organisation_id=org_id,
-                account_id=account_id,
-                org_role=role,
-            )
-
-            async def _principal() -> TenantPrincipal:
-                return principal
-
-            app.dependency_overrides[get_current_tenant_user] = _principal
-            app.dependency_overrides[get_db_session] = lambda: session
-            return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
-
-        yield _make
-        app.dependency_overrides.clear()
 
     async def test_a_viewer_is_forbidden(self, client_for, session: AsyncSession) -> None:
         org_id, account_id = await _seed_minimal_org(session)
@@ -319,3 +327,109 @@ class TestRequestLevelAuthorisation:
         body = response.json()
         assert body["organisation_id"] == str(org_id)
         assert body["pack_version"] == load_mapping_pack().pack_version
+
+
+class TestAuditPeriodParameters:
+    """FAR-2055: ``from`` / ``to`` scope the index and are recorded in it.
+
+    Both the direct handler call (unit-level) and the real HTTP route are
+    exercised: the query-parameter aliases and their 422 validation only exist
+    at the HTTP boundary, so a handler-only test could not see them.
+    """
+
+    async def test_direct_call_records_the_period(self, session: AsyncSession) -> None:
+        org_id, account_id = await _seed_minimal_org(session)
+        principal = TenantPrincipal(
+            username="admin@compliance.example",
+            organisation_id=org_id,
+            account_id=account_id,
+            org_role="admin",
+        )
+        period_from = datetime(2026, 1, 15, 9, 0, 0, tzinfo=UTC)
+        period_to = datetime(2026, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        index = await get_evidence_index_endpoint(
+            session=session,
+            principal=principal,
+            period_from=period_from,
+            period_to=period_to,
+        )
+
+        assert index.period_from == period_from.isoformat()
+        assert index.period_to == period_to.isoformat()
+
+    async def test_direct_call_defaults_to_full_history(self, session: AsyncSession) -> None:
+        org_id, account_id = await _seed_minimal_org(session)
+        principal = TenantPrincipal(
+            username="admin@compliance.example",
+            organisation_id=org_id,
+            account_id=account_id,
+            org_role="admin",
+        )
+
+        index = await get_evidence_index_endpoint(session=session, principal=principal)
+
+        assert index.period_from is None
+        assert index.period_to is None
+
+    async def test_http_route_accepts_from_and_to(self, client_for, session: AsyncSession) -> None:
+        org_id, account_id = await _seed_minimal_org(session)
+        client = client_for("admin", org_id, account_id)
+
+        async with client:
+            response = await client.get(
+                _ROUTE_PATH,
+                params={
+                    "from": "2026-01-15T09:00:00Z",
+                    "to": "2026-01-15T10:00:00Z",
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["period_from"] == "2026-01-15T09:00:00+00:00"
+        assert body["period_to"] == "2026-01-15T10:00:00+00:00"
+
+    async def test_http_route_rejects_an_inverted_period(self, client_for, session: AsyncSession) -> None:
+        org_id, account_id = await _seed_minimal_org(session)
+        client = client_for("admin", org_id, account_id)
+
+        async with client:
+            response = await client.get(
+                _ROUTE_PATH,
+                params={
+                    "from": "2026-01-16T00:00:00Z",
+                    "to": "2026-01-15T00:00:00Z",
+                },
+            )
+
+        assert response.status_code == 422
+        assert "audit period" in response.text
+
+    async def test_http_route_rejects_an_unparseable_datetime(self, client_for, session: AsyncSession) -> None:
+        org_id, account_id = await _seed_minimal_org(session)
+        client = client_for("admin", org_id, account_id)
+
+        async with client:
+            response = await client.get(_ROUTE_PATH, params={"from": "not-a-date"})
+
+        assert response.status_code == 422
+
+    async def test_the_period_never_moves_the_tenant_boundary(self, client_for, session: AsyncSession) -> None:
+        """A period parameter must not become an organisation selector."""
+        mine_org, mine_account = await _seed_minimal_org(session, slug="period-mine")
+        other_org, _other_account = await _seed_minimal_org(session, slug="period-other")
+        client = client_for("admin", mine_org, mine_account)
+
+        async with client:
+            response = await client.get(
+                _ROUTE_PATH,
+                params={
+                    "from": "2026-01-15T09:00:00Z",
+                    "to": "2026-01-15T10:00:00Z",
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.json()["organisation_id"] == str(mine_org)
+        assert response.json()["organisation_id"] != str(other_org)

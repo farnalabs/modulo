@@ -302,6 +302,14 @@ class Run(OrgScoped):
             "error_code",
             postgresql_where=text("error_code IS NOT NULL"),
         ),
+        # FAR-2055: the compliance evidence index counts
+        # ``count(DISTINCT snapshot_id)`` over an org
+        # (compliance/evidence_index.py). The single-column organisation and
+        # snapshot indexes cannot answer that without a heap fetch per run;
+        # this composite makes the aggregate an index-only scan. ``snapshot_id``
+        # is immutable on a run, so the write cost is one narrow entry per run
+        # creation (not one per status transition). Mirrors migration 0325.
+        Index("ix_runs_org_snapshot_id", "organisation_id", "snapshot_id"),
         # FAR-1438 — workspace-input drift compensating sweep
         # (core/cron_helpers.py::_sweep_workspace_input_drift_flags): its
         # bounded SELECT filters status IN (TERMINAL_STATUSES) AND

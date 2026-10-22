@@ -21,6 +21,18 @@ Design rules (each is a requirement, not a preference):
   silently change what was asserted for a past audit period.
 * **No cross-tenant reads.** Every query filters on ``organisation_id``; the
   organisation is always the caller's principal's organisation.
+* **The index can be scoped to an audit period.** ``period_from`` /
+  ``period_to`` bound every artefact aggregate to the half-open interval
+  ``[period_from, period_to)``. The period travels in the response, so a
+  scoped index can never be mistaken for a full-history one. With BOTH unset
+  the index covers the organisation's **full history** - the default, and
+  what every caller got before FAR-2055.
+* **Aggregates are index-served and time-bounded.** The aggregate queries are
+  backed by composite (and, where the query filters a nullable column,
+  partial) indexes declared on the models and shipped by migration 0325; the
+  route additionally caps the transaction with a Postgres
+  ``statement_timeout`` so a mature instance degrades to an actionable error
+  rather than holding a pooled connection open.
 * **The human-oversight count uses the product's own rule.** Whether a gate is
   ``human_only`` is resolved through
   :func:`modulo.db.crud.hitl_review_config.human_only_effective` - the single
@@ -168,6 +180,12 @@ class EvidenceIndex(BaseModel):
     pack_content_hash: str
     pack_published_at: str
     generated_at: datetime
+    # FAR-2055: the audit period this index covers, as half-open interval
+    # ``[period_from, period_to)``. BOTH None means the org's FULL HISTORY -
+    # the index was not scoped. The pair always travels with the response so a
+    # scoped index can never be misread as a full-history one.
+    period_from: str | None
+    period_to: str | None
     product_version: str
     organisation_id: str
     framework_ids: tuple[str, ...]
@@ -234,6 +252,71 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat()
 
 
+def _aware(value: datetime | None) -> datetime | None:
+    """Coerce a naive datetime to UTC; leave an aware value untouched.
+
+    The collectors compare against ``timestamptz`` columns. A caller-supplied
+    naive value (an ISO string without an offset) has no unambiguous instant,
+    so it is read as UTC rather than silently interpreted in the server's local
+    timezone - the same normalisation :func:`_iso` applies on the way out.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+def normalise_audit_period(
+    period_from: datetime | None,
+    period_to: datetime | None,
+) -> tuple[datetime | None, datetime | None]:
+    """Normalise and validate an audit-period pair.
+
+    The interval is half-open, ``[period_from, period_to)``, so
+    ``period_from == period_to`` is a valid (empty) window. Only a start AFTER
+    the end is rejected. The route maps the raised :class:`ValueError` to 422;
+    :func:`build_evidence_index` validates too, so the library surface fails
+    the same way for any other caller.
+    """
+    start = _aware(period_from)
+    end = _aware(period_to)
+    if start is not None and end is not None and start > end:
+        raise ValueError("the audit period start (from) must not be after its end (to)")
+    return start, end
+
+
+def _apply_period(
+    stmt: Any,
+    column: Any,
+    period_from: datetime | None,
+    period_to: datetime | None,
+) -> Any:
+    """Constrain *stmt* to the half-open period on *column*.
+
+    ``[period_from, period_to)``: ``>= from`` and ``< to``. Each bound is
+    optional; a bound of None simply omits that predicate, so an unscoped call
+    applies nothing at all.
+    """
+    if period_from is not None:
+        stmt = stmt.where(column >= period_from)
+    if period_to is not None:
+        stmt = stmt.where(column < period_to)
+    return stmt
+
+
+def _window_suffix(period_from: datetime | None, period_to: datetime | None) -> str:
+    """Describe the audit window for an absence reason ('' when unscoped)."""
+    if period_from is None and period_to is None:
+        return ""
+    legs: list[str] = []
+    if period_from is not None:
+        legs.append(f"on or after {_iso(period_from)}")
+    if period_to is not None:
+        legs.append(f"before {_iso(period_to)}")
+    return " in the requested audit period (" + " and ".join(legs) + ")"
+
+
 # ---------------------------------------------------------------------------
 # Collectors - one per indexed artefact type
 # ---------------------------------------------------------------------------
@@ -243,29 +326,37 @@ async def _collect_audit_chain(
     session: AsyncSession,
     organisation_id: uuid.UUID,
     pack: MappingPack,
+    *,
+    period_from: datetime | None = None,
+    period_to: datetime | None = None,
 ) -> ArtifactEntry:
     location = (
         "GET /api/v1/admin/audit (browse), GET /api/v1/admin/audit/verify (integrity), "
         "GET /api/v1/admin/audit/evidence-pack (signed offline-verifiable export)"
     )
     head = await get_chain_head(session, organisation_id)
-    stats = (
-        await session.execute(
-            select(
-                func.count(AuditEvent.id),
-                func.min(AuditEvent.created_at),
-                func.max(AuditEvent.created_at),
-            ).where(AuditEvent.organisation_id == organisation_id)
-        )
-    ).one()
+    # Served by ix_audit_events_org_created_at (migration 0155): the count and
+    # both min/max bounds are answered from one (organisation_id, created_at)
+    # btree, with the period a range on its second column.
+    stats_stmt = select(
+        func.count(AuditEvent.id),
+        func.min(AuditEvent.created_at),
+        func.max(AuditEvent.created_at),
+    ).where(AuditEvent.organisation_id == organisation_id)
+    stats = (await session.execute(_apply_period(stats_stmt, AuditEvent.created_at, period_from, period_to))).one()
     event_count = int(stats[0] or 0)
     if event_count == 0:
-        # No events at all: the instance genuinely holds nothing to evidence.
+        # No events in this window: the instance holds nothing to evidence for
+        # the period. The reason names the period when one was requested - a
+        # scoped absence must never read as "this org has no audit trail".
         return _absent(
             pack=pack,
             artifact_type=ARTIFACT_AUDIT_CHAIN,
             location=location,
-            reason="this instance holds no audit events for the organisation yet",
+            reason=(
+                "this instance holds no audit events for the organisation"
+                + (_window_suffix(period_from, period_to) or " yet")
+            ),
             detail={"event_count": event_count},
         )
     if head is None:
@@ -278,8 +369,9 @@ async def _collect_audit_chain(
             artifact_type=ARTIFACT_AUDIT_CHAIN,
             location=location,
             reason=(
-                "audit events exist for the organisation but no audit chain head is recorded, "
-                "so chain integrity cannot be evidenced"
+                "audit events exist for the organisation"
+                + _window_suffix(period_from, period_to)
+                + " but no audit chain head is recorded, so chain integrity cannot be evidenced"
             ),
             detail={"event_count": event_count, "chain_head_present": False},
         )
@@ -295,8 +387,17 @@ async def _collect_audit_chain(
         record_count=event_count,
         detail={
             "chain_head_hash": head.last_event_hash,
+            # The chain head is organisation-wide by definition; it is not
+            # period-scoped. event_count IS the windowed count, so the two
+            # numbers can legitimately differ on a scoped index and
+            # event_count_scope states which is which.
             "chain_head_event_count": int(head.event_count),
             "event_count": event_count,
+            "event_count_scope": (
+                "organisation-wide full history"
+                if period_from is None and period_to is None
+                else "organisation-wide, limited to the requested audit period"
+            ),
             "first_event_at": _iso(stats[1]),
             "last_event_at": _iso(stats[2]),
         },
@@ -307,52 +408,69 @@ async def _collect_run_snapshots(
     session: AsyncSession,
     organisation_id: uuid.UUID,
     pack: MappingPack,
+    *,
+    period_from: datetime | None = None,
+    period_to: datetime | None = None,
 ) -> ArtifactEntry:
     location = "GET /api/v1/pipelines/{pipeline_id}/snapshots and the snapshot_id on GET /api/v1/runs/{run_id}"
     # Both legs are filtered here too: a run row can reference a snapshot id,
     # and the join makes the snapshot side reachable independently of the run.
+    # The period is anchored on the RUN's created_at: the evidence is "a run
+    # executed in the period against a frozen snapshot", and a snapshot may be
+    # reused by runs in several periods.
+    # Served by ix_runs_org_snapshot_id (migration 0325): a count(DISTINCT
+    # snapshot_id) over the org is an index-only scan, no heap fetch per run.
+    count_stmt = (
+        select(func.count(func.distinct(Run.snapshot_id)))
+        .join(PipelineSnapshot, PipelineSnapshot.id == Run.snapshot_id)
+        .where(
+            Run.organisation_id == organisation_id,
+            PipelineSnapshot.organisation_id == organisation_id,
+        )
+    )
     snapshot_count = int(
-        (
-            await session.execute(
-                select(func.count(func.distinct(Run.snapshot_id)))
-                .join(PipelineSnapshot, PipelineSnapshot.id == Run.snapshot_id)
-                .where(
-                    Run.organisation_id == organisation_id,
-                    PipelineSnapshot.organisation_id == organisation_id,
-                )
-            )
-        ).scalar_one()
-        or 0
+        (await session.execute(_apply_period(count_stmt, Run.created_at, period_from, period_to))).scalar_one() or 0
     )
     if snapshot_count == 0:
         return _absent(
             pack=pack,
             artifact_type=ARTIFACT_RUN_SNAPSHOT,
             location=location,
-            reason="no run in this instance has executed against a frozen pipeline snapshot",
+            reason=(
+                "no run in this instance has executed against a frozen pipeline snapshot"
+                + _window_suffix(period_from, period_to)
+            ),
         )
 
-    rows = (
-        await session.execute(
-            select(
-                PipelineSnapshot.id,
-                PipelineSnapshot.snapshot_version,
-                PipelineSnapshot.pipeline_id,
-                PipelineSnapshot.created_at,
-            )
-            .join(Run, Run.snapshot_id == PipelineSnapshot.id)
-            # Both legs are filtered: the module's contract is that EVERY query
-            # carries an organisation_id predicate, and the join makes the
-            # snapshot side reachable independently of the run side.
-            .where(
-                Run.organisation_id == organisation_id,
-                PipelineSnapshot.organisation_id == organisation_id,
-            )
-            .distinct()
-            .order_by(PipelineSnapshot.created_at.desc())
-            .limit(_SAMPLE_LIMIT)
+    # Bounded sample: pick the _SAMPLE_LIMIT most recently-run snapshots in a
+    # LIMIT-ed subquery FIRST, then fetch their metadata by primary key. The
+    # previous shape (DISTINCT over the whole join, then ORDER BY + LIMIT)
+    # had to materialise every distinct snapshot before it could sort, so the
+    # "limit" bounded the response but not the work. The subquery is served by
+    # the (organisation_id, created_at) runs index.
+    recent_runs = select(
+        Run.snapshot_id.label("snapshot_id"),
+        func.max(Run.created_at).label("last_run_at"),
+    ).where(Run.organisation_id == organisation_id)
+    recent_runs = _apply_period(recent_runs, Run.created_at, period_from, period_to)
+    recent_snapshots = (
+        recent_runs.group_by(Run.snapshot_id).order_by(func.max(Run.created_at).desc()).limit(_SAMPLE_LIMIT).subquery()
+    )
+    sample_stmt = (
+        select(
+            PipelineSnapshot.id,
+            PipelineSnapshot.snapshot_version,
+            PipelineSnapshot.pipeline_id,
+            PipelineSnapshot.created_at,
         )
-    ).all()
+        .join(recent_snapshots, PipelineSnapshot.id == recent_snapshots.c.snapshot_id)
+        # Both legs are filtered: the module's contract is that EVERY query
+        # carries an organisation_id predicate, and the join makes the
+        # snapshot side reachable independently of the run side.
+        .where(PipelineSnapshot.organisation_id == organisation_id)
+        .order_by(recent_snapshots.c.last_run_at.desc())
+    )
+    rows = (await session.execute(sample_stmt)).all()
     identifiers = [f"pipeline-snapshot:{row[0]}@v{row[1]}" for row in rows]
     return _present(
         pack=pack,
@@ -371,19 +489,24 @@ async def _collect_hitl_decisions(
     session: AsyncSession,
     organisation_id: uuid.UUID,
     pack: MappingPack,
+    *,
+    period_from: datetime | None = None,
+    period_to: datetime | None = None,
 ) -> ArtifactEntry:
     location = (
         "GET /api/v1/hitl/reviews and GET /api/v1/runs/{run_id}/hitl/pending; the "
         "decision is stored on the HITL claim row"
     )
+    # Both legs are served by ix_hitl_claims_org_decision_at (migration 0325):
+    # (organisation_id, decision_at) WHERE decision IS NOT NULL. The pre-existing
+    # per-actor window index leads on decided_by, which neither query filters.
+    by_decision_stmt = select(HitlClaim.decision, func.count(HitlClaim.id)).where(
+        HitlClaim.organisation_id == organisation_id,
+        HitlClaim.decision.is_not(None),
+    )
     by_decision = (
         await session.execute(
-            select(HitlClaim.decision, func.count(HitlClaim.id))
-            .where(
-                HitlClaim.organisation_id == organisation_id,
-                HitlClaim.decision.is_not(None),
-            )
-            .group_by(HitlClaim.decision)
+            _apply_period(by_decision_stmt, HitlClaim.decision_at, period_from, period_to).group_by(HitlClaim.decision)
         )
     ).all()
     counts = {str(row[0]): int(row[1]) for row in by_decision}
@@ -393,29 +516,30 @@ async def _collect_hitl_decisions(
             pack=pack,
             artifact_type=ARTIFACT_HITL_DECISION,
             location=location,
-            reason="no human-in-the-loop gate has been decided in this instance",
+            reason=(
+                "no human-in-the-loop gate has been decided in this instance" + _window_suffix(period_from, period_to)
+            ),
         )
 
+    decided_stmt = select(
+        HitlClaim.id,
+        HitlClaim.decision,
+        HitlClaim.decision_at,
+        HitlClaim.decided_by,
+        HitlClaim.gate_config_json,
+    ).where(
+        HitlClaim.organisation_id == organisation_id,
+        HitlClaim.decision.is_not(None),
+    )
+    decided_stmt = _apply_period(decided_stmt, HitlClaim.decision_at, period_from, period_to)
+    # A scoped window already excludes NULL decision_at rows (NULL cannot
+    # satisfy ``>= from``), so the backward index scan serves the DESC order
+    # directly. Unscoped, ``nulls_last`` is explicit: Postgres sorts NULLs
+    # FIRST under ``DESC``, which would put undated rows at the head of the
+    # scan, report ``latest_decision_at`` as None and fill the truncated window
+    # with rows that carry no decision time at all.
     decided_rows = (
-        await session.execute(
-            select(
-                HitlClaim.id,
-                HitlClaim.decision,
-                HitlClaim.decision_at,
-                HitlClaim.decided_by,
-                HitlClaim.gate_config_json,
-            )
-            .where(
-                HitlClaim.organisation_id == organisation_id,
-                HitlClaim.decision.is_not(None),
-            )
-            # ``nulls_last`` is explicit: Postgres sorts NULLs FIRST under
-            # ``DESC``, which would put undated rows at the head of the scan,
-            # report ``latest_decision_at`` as None and fill the truncated
-            # window with rows that carry no decision time at all.
-            .order_by(HitlClaim.decision_at.desc().nulls_last())
-            .limit(_HITL_SCAN_LIMIT)
-        )
+        await session.execute(decided_stmt.order_by(HitlClaim.decision_at.desc().nulls_last()).limit(_HITL_SCAN_LIMIT))
     ).all()
     human_only_approved = 0
     human_only_total = 0
@@ -458,36 +582,40 @@ async def _collect_eval_results(
     session: AsyncSession,
     organisation_id: uuid.UUID,
     pack: MappingPack,
+    *,
+    period_from: datetime | None = None,
+    period_to: datetime | None = None,
 ) -> ArtifactEntry:
     location = (
         "GET /api/v1/runs/{run_id}/evals and GET /api/v1/eval-suites; each result "
         "records the eval-definition version that scored it"
     )
-    stats = (
-        await session.execute(
-            select(
-                func.count(EvalResult.id),
-                func.sum(case((EvalResult.passed.is_(True), 1), else_=0)),
-                func.max(EvalResult.evaluated_at),
-                func.count(func.distinct(EvalResult.eval_id)),
-            ).where(EvalResult.organisation_id == organisation_id)
-        )
-    ).one()
+    # The count/sum/max legs are served by ix_eval_results_org_evaluated_at
+    # (migration 0218); count(DISTINCT eval_id) by ix_eval_results_org_eval_id
+    # (migration 0325). Both are index-only for the org, and the period is a
+    # range on the second column of the first.
+    stats_stmt = select(
+        func.count(EvalResult.id),
+        func.sum(case((EvalResult.passed.is_(True), 1), else_=0)),
+        func.max(EvalResult.evaluated_at),
+        func.count(func.distinct(EvalResult.eval_id)),
+    ).where(EvalResult.organisation_id == organisation_id)
+    stats = (await session.execute(_apply_period(stats_stmt, EvalResult.evaluated_at, period_from, period_to))).one()
     total = int(stats[0] or 0)
     if total == 0:
         return _absent(
             pack=pack,
             artifact_type=ARTIFACT_EVAL_RESULT,
             location=location,
-            reason="no evaluation has been recorded in this instance",
+            reason=("no evaluation has been recorded in this instance" + _window_suffix(period_from, period_to)),
         )
 
     passed = int(stats[1] or 0)
+    sample_stmt = select(EvalResult.id).where(EvalResult.organisation_id == organisation_id)
     sample_ids = (
         (
             await session.execute(
-                select(EvalResult.id)
-                .where(EvalResult.organisation_id == organisation_id)
+                _apply_period(sample_stmt, EvalResult.evaluated_at, period_from, period_to)
                 .order_by(EvalResult.evaluated_at.desc())
                 .limit(_SAMPLE_LIMIT)
             )
@@ -514,18 +642,20 @@ async def _collect_autonomy_changes(
     session: AsyncSession,
     organisation_id: uuid.UUID,
     pack: MappingPack,
+    *,
+    period_from: datetime | None = None,
+    period_to: datetime | None = None,
 ) -> ArtifactEntry:
     location = (
         "Audit events pipeline.autonomy_promotion_decided and pipeline.autonomy_demoted at GET /api/v1/admin/audit"
     )
+    by_type_stmt = select(AuditEvent.event_type, func.count(AuditEvent.id)).where(
+        AuditEvent.organisation_id == organisation_id,
+        AuditEvent.event_type.in_(AUTONOMY_EVENT_TYPES),
+    )
     by_type = (
         await session.execute(
-            select(AuditEvent.event_type, func.count(AuditEvent.id))
-            .where(
-                AuditEvent.organisation_id == organisation_id,
-                AuditEvent.event_type.in_(AUTONOMY_EVENT_TYPES),
-            )
-            .group_by(AuditEvent.event_type)
+            _apply_period(by_type_stmt, AuditEvent.created_at, period_from, period_to).group_by(AuditEvent.event_type)
         )
     ).all()
     counts = {str(row[0]): int(row[1]) for row in by_type}
@@ -535,17 +665,20 @@ async def _collect_autonomy_changes(
             pack=pack,
             artifact_type=ARTIFACT_AUTONOMY_CHANGE,
             location=location,
-            reason="no pipeline autonomy level has been promoted or demoted in this instance",
+            reason=(
+                "no pipeline autonomy level has been promoted or demoted in this instance"
+                + _window_suffix(period_from, period_to)
+            ),
         )
 
+    sample_stmt = select(AuditEvent.id).where(
+        AuditEvent.organisation_id == organisation_id,
+        AuditEvent.event_type.in_(AUTONOMY_EVENT_TYPES),
+    )
     sample_ids = (
         (
             await session.execute(
-                select(AuditEvent.id)
-                .where(
-                    AuditEvent.organisation_id == organisation_id,
-                    AuditEvent.event_type.in_(AUTONOMY_EVENT_TYPES),
-                )
+                _apply_period(sample_stmt, AuditEvent.created_at, period_from, period_to)
                 .order_by(AuditEvent.created_at.desc())
                 .limit(_SAMPLE_LIMIT)
             )
@@ -638,6 +771,8 @@ async def build_evidence_index(
     *,
     generated_at: datetime | None = None,
     strict: bool = False,
+    period_from: datetime | None = None,
+    period_to: datetime | None = None,
 ) -> EvidenceIndex:
     """Build the per-instance evidence index for *organisation_id*.
 
@@ -646,18 +781,26 @@ async def build_evidence_index(
     ``organisation_id`` explicitly, so the index cannot widen beyond the
     caller's tenant even if a future caller forgets the RLS context.
 
+    ``period_from`` / ``period_to`` scope EVERY artefact aggregate to the
+    half-open interval ``[period_from, period_to)``. Both unset (the default)
+    yields the organisation's **full history** - the only behaviour before
+    FAR-2055 - and the response records that with ``period_from``/
+    ``period_to`` of None. Both bounds are normalised to an aware datetime
+    (naive means UTC) and a start after the end raises :class:`ValueError`.
+
     ``strict=True`` raises :class:`EvidenceIndexIncompleteError` when a mapped
-    artefact type has no records. The default reports the same condition as an
-    ``absent`` entry, which is loud in the payload without making the whole
-    index unavailable.
+    artefact type has no records in the requested window. The default reports
+    the same condition as an ``absent`` entry, which is loud in the payload
+    without making the whole index unavailable.
     """
+    period_from, period_to = normalise_audit_period(period_from, period_to)
     pack = load_mapping_pack()
     artifacts = (
-        await _collect_audit_chain(session, organisation_id, pack),
-        await _collect_run_snapshots(session, organisation_id, pack),
-        await _collect_hitl_decisions(session, organisation_id, pack),
-        await _collect_eval_results(session, organisation_id, pack),
-        await _collect_autonomy_changes(session, organisation_id, pack),
+        await _collect_audit_chain(session, organisation_id, pack, period_from=period_from, period_to=period_to),
+        await _collect_run_snapshots(session, organisation_id, pack, period_from=period_from, period_to=period_to),
+        await _collect_hitl_decisions(session, organisation_id, pack, period_from=period_from, period_to=period_to),
+        await _collect_eval_results(session, organisation_id, pack, period_from=period_from, period_to=period_to),
+        await _collect_autonomy_changes(session, organisation_id, pack, period_from=period_from, period_to=period_to),
         _collect_release_sbom(pack),
         _collect_build_identity(pack),
     )
@@ -686,6 +829,8 @@ async def build_evidence_index(
         pack_content_hash=pack.content_hash(),
         pack_published_at=pack.published_at,
         generated_at=generated_at or datetime.now(UTC),
+        period_from=_iso(period_from),
+        period_to=_iso(period_to),
         product_version=get_version(),
         organisation_id=str(organisation_id),
         framework_ids=pack.framework_ids(),
