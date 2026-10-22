@@ -28,6 +28,7 @@ from modulo.core.eval_engine.execute_suite_run import (
     EVAL_WATCH_EVENT_FAMILIES,
     SuiteRunEmptyDatasetError,
     SuiteRunExecutionError,
+    _case_results,
     _suite_run_transition,
     build_suite_run,
     build_suite_run_tuple,
@@ -899,3 +900,30 @@ class TestFar1729SuiteLoaderSourcePin:
         compiled = captured[0]
         assert "evals" in compiled, f"loader must read the evals table, got: {compiled}"
         assert "eval_definitions" not in compiled, f"loader must not read the frozen table, got: {compiled}"
+
+
+def test_an_unexpected_engine_failure_still_produces_an_error_row() -> None:
+    """Every definition produces exactly one row; a crash is an error row."""
+    run = SimpleNamespace(id=uuid.uuid4(), organisation_id=uuid.uuid4())
+    case = SimpleNamespace(id=uuid.uuid4(), input_payload={"output": "x"})
+    definition = SimpleNamespace(id=uuid.uuid4(), node_id="")
+
+    class _RaisingEngine:
+        def evaluate_result(self, *args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("engine boom")
+
+    results, errored = _case_results(
+        run,
+        case,
+        [definition],
+        _RaisingEngine(),
+        None,
+        None,
+        eval_definition_version=1,
+    )
+
+    assert len(results) == 1
+    assert errored == 1
+    assert results[0].outcome == "error"
+    assert results[0].error_code == "judge.unavailable"
+    assert results[0].score is None

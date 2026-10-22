@@ -70,6 +70,10 @@ class TestConfidenceLabel:
 
         assert label
 
+    def test_an_unknown_kind_is_rejected_rather_than_guessed(self) -> None:
+        with pytest.raises(ValueError, match="Unknown judge confidence kind"):
+            confidence_label("invented")
+
     def test_kinds_are_never_collapsed_into_one_label(self) -> None:
         labels = {confidence_label(kind) for kind in JudgeConfidenceKind}
 

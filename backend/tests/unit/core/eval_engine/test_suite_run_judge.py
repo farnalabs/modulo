@@ -702,3 +702,32 @@ async def test_saq_job_judge_suite_without_active_backend_records_errors(monkeyp
     assert rows[0].error_code == "judge.unavailable"
 
     await engine.dispose()
+
+
+def test_a_raw_backend_not_found_from_a_judge_is_a_configuration_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A judge that leaks the raw hub error is still mapped to no-verdict.
+
+    ``build_model_judge_callable`` normally converts this already; the suite's
+    own arm is the backstop for any other judge adapter.
+    """
+    from modulo.core.model_backend_hub import BackendNotFoundError
+
+    backend_id = uuid.uuid4()
+
+    class _LeakingJudge:
+        def __call__(self, output: dict[str, Any], eval_def: EvalDefinition) -> dict[str, Any]:
+            raise BackendNotFoundError(backend_id)
+
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.llm_judge.build_model_judge_callable",
+        lambda hub, key: _LeakingJudge(),
+    )
+    judge = build_suite_run_model_judge_callable(ModelBackendHub())
+
+    with pytest.raises(JudgeExecutionError) as exc_info:
+        judge({"output": "x"}, _judge_def(uuid.uuid4(), str(backend_id)))
+
+    assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+    assert "not an active model backend" in exc_info.value.detail

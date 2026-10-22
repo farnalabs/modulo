@@ -139,6 +139,15 @@ describe('EvalProposalsQueueView', () => {
     verdict_kind: 'assessment',
   }
 
+  it('seeds a plain JSON config for a non-judge eval type', async () => {
+    const wrapper = mountView()
+    await flush()
+    const vm = wrapper.vm as unknown as { defaultConfigFor: (type: string) => string }
+
+    expect(vm.defaultConfigFor('regex')).toBe('{}')
+    expect(vm.defaultConfigFor('model_judge')).toContain('typed_questions')
+  })
+
   it('POSTs the publish endpoint with snake_case body on submit', async () => {
     const wrapper = mountView()
     await flush()

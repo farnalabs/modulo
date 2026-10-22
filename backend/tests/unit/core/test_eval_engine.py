@@ -18,10 +18,18 @@ from modulo.core.eval_engine import (
     EvalBlockedError,
     EvalDefinition,
     EvalEngine,
+    EvalResult,
     EvalType,
     UnknownEvalTypeError,
+    _result_from_judge_dict,
 )
-from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeOutcome
+from modulo.core.eval_engine.typed_judge import (
+    JudgeErrorCode,
+    JudgeExecutionError,
+    JudgeIdentity,
+    JudgeOutcome,
+    JudgeVerdict,
+)
 
 
 def _make_eval_def(
@@ -755,3 +763,71 @@ class TestBuildSafeJudgeInput:
 
         assert "output" in original
         assert original["output"] == "original"
+
+
+class TestEvalResultProjectionAndJudgeInternals:
+    """The DTO projection guard and the judge-runner's remaining error arms."""
+
+    def test_a_non_dict_payload_is_returned_unchanged_by_the_projection(self) -> None:
+        assert EvalResult._project_passed_from_outcome("already-normalised") == "already-normalised"
+
+    def test_a_judge_verdict_overrides_the_parsed_identity(self) -> None:
+        identity = JudgeIdentity(mechanism="model_backend", judge_backend_id="resolved-backend")
+        judge_verdict = JudgeVerdict(outcome=JudgeOutcome.PASS, judge=identity)
+
+        result = _result_from_judge_dict(
+            {"passed": True, "score": 0.9},
+            uuid4(),
+            "",
+            uuid4(),
+            judge_verdict=judge_verdict,
+        )
+
+        assert result.judge_verdict is not None
+        assert result.judge_verdict.judge.judge_backend_id == "resolved-backend"
+
+    def test_a_keyboard_interrupt_is_never_swallowed_by_the_judge_runner(self) -> None:
+        def _interrupt() -> dict:
+            raise KeyboardInterrupt
+
+        with pytest.raises(KeyboardInterrupt):
+            EvalEngine._run_model_judge_and_parse(
+                _interrupt,
+                (),
+                eval_def=_make_eval_def("model_judge", {"field": "output"}),
+                run_id=uuid4(),
+            )
+
+    def test_a_non_dict_judge_response_becomes_an_error_result(self) -> None:
+        result = EvalEngine._run_model_judge_and_parse(
+            lambda: "prose, not a dict",
+            (),
+            eval_def=_make_eval_def("model_judge", {"field": "output"}),
+            run_id=uuid4(),
+        )
+
+        assert result.outcome is JudgeOutcome.ERROR
+        assert result.judge_verdict is not None
+        assert result.judge_verdict.error_code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    def test_a_judge_config_without_a_field_is_a_configuration_error(self) -> None:
+        engine = EvalEngine()
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            engine._build_safe_judge_input({"output": "x"}, _make_eval_def("model_judge", {}))
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+
+    def test_error_result_is_a_public_no_verdict_constructor(self) -> None:
+        eval_def = _make_eval_def("model_judge", {"field": "output"})
+
+        result = EvalEngine.error_result(
+            eval_def,
+            uuid4(),
+            JudgeErrorCode.JUDGE_TIMEOUT,
+            "timed out",
+        )
+
+        assert result.outcome is JudgeOutcome.ERROR
+        assert result.passed is False
+        assert result.score is None

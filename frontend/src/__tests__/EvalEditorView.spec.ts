@@ -118,6 +118,12 @@ describe('EvalEditorView', () => {
     ;(wrapper.vm as any).form.eval_type = 'custom_function'
     await nextTick()
     expect(textarea.attributes('placeholder')).toBe('views.EvalEditorView.configPlaceholder.custom_function')
+
+    // An empty type must fall back to the model_judge placeholder, not render
+    // a dangling `configPlaceholder.` key.
+    ;(wrapper.vm as any).form.eval_type = ''
+    await nextTick()
+    expect(textarea.attributes('placeholder')).toBe('views.EvalEditorView.configPlaceholder.model_judge')
   })
 })
 

@@ -914,3 +914,32 @@ async def test_dispatch_reject_correction_no_correction_guardrail_returns_none()
         )
 
     assert outcome is None
+
+
+async def test_model_judge_revalidation_family_runs_the_bound_judge() -> None:
+    """The MODEL_JUDGE revalidation branch dispatches to the injected judge."""
+    from modulo.core.eval_engine import EvalEngine
+    from modulo.core.guardrails.correction import _run_different_family_revalidation
+
+    captured: list[dict[str, Any]] = []
+
+    def _judge(output: dict[str, Any], eval_def: EvalDefinition) -> dict[str, Any]:
+        captured.append(output)
+        return {"passed": True, "score": 1.0, "detail": "clean"}
+
+    correction = _correction(
+        revalidation_detector_family=CorrectionDetectorFamily.MODEL_JUDGE.value,
+        revalidation_model_backend_id=str(uuid.uuid4()),
+    )
+
+    result = await _run_different_family_revalidation(
+        EvalEngine(),
+        {"body": "clean"},
+        family=CorrectionDetectorFamily.MODEL_JUDGE,
+        correction=correction,
+        revalidation_config={"rubric": "no secrets", "threshold": 0.5},
+        judge_callable=_judge,
+    )
+
+    assert result.passed is True
+    assert captured
