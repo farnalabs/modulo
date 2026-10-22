@@ -9,6 +9,7 @@ from modulo.model_backends.base import (
     LangChainChatForwardingMixin,
     ModelBackendBase,
     openai_compatible_health_check,
+    validate_backend_endpoint,
 )
 
 COHERE_BASE_URL = "https://api.cohere.ai/v1"
@@ -28,6 +29,7 @@ class CohereBackend(LangChainChatForwardingMixin, ModelBackendBase):
         **default_params: Any,
     ) -> None:
         self._base_url = base_url or COHERE_BASE_URL
+        validate_backend_endpoint(base_url)
         model_kwargs: dict[str, Any] = dict(default_params)
         if base_url:
             model_kwargs["base_url"] = base_url

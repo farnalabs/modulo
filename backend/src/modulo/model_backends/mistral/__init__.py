@@ -9,6 +9,7 @@ from modulo.model_backends.base import (
     LangChainChatForwardingMixin,
     ModelBackendBase,
     openai_compatible_health_check,
+    validate_backend_endpoint,
 )
 
 MISTRAL_BASE_URL = "https://api.mistral.ai/v1"
@@ -28,6 +29,7 @@ class MistralBackend(LangChainChatForwardingMixin, ModelBackendBase):
         **default_params: Any,
     ) -> None:
         self._base_url = endpoint or MISTRAL_BASE_URL
+        validate_backend_endpoint(endpoint)
         model_kwargs: dict[str, Any] = dict(default_params)
         if endpoint:
             model_kwargs["endpoint"] = endpoint

@@ -1116,12 +1116,18 @@ async def get_model_backend_endpoint(
     principal: TenantPrincipal = require_permission(_PERM_MODEL_BACKEND_LIST),
 ) -> ModelBackendResponse:
     base_url: str | None = None
+    mb: Any = None
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             mb = await get_model_backend(session, backend_id)
-            if mb is not None:
+            # FAR-2046: resolve the stored endpoint ONLY after the org check.
+            # Decrypting first constructed the secrets backend (and read the
+            # row's credential JSON) for a row this principal may not read,
+            # turning the IDOR deny into a 500 when the secrets backend cannot
+            # be constructed.
+            if mb is not None and mb.organisation_id == principal.organisation_id:
                 base_urls = await _base_urls_for_backends(session, settings, [mb])
                 base_url = base_urls.get(mb.id)
     except IntegrityError:

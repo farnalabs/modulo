@@ -11,6 +11,7 @@ from modulo.model_backends.base import (
     ModelBackendBase,
     openai_compatible_health_check,
     serialize_structured_output,
+    validate_backend_endpoint,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ class AnthropicBackend(ModelBackendBase):
         **default_params: Any,
     ) -> None:
         self._base_url = anthropic_api_url or ANTHROPIC_BASE_URL
+        validate_backend_endpoint(anthropic_api_url)
         model_kwargs: dict[str, Any] = dict(default_params)
         if anthropic_api_url:
             model_kwargs["anthropic_api_url"] = anthropic_api_url

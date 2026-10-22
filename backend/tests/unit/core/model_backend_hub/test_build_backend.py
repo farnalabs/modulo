@@ -474,11 +474,14 @@ def test_build_backend_passes_custom_endpoint_to_capable_adapter(
 )
 @pytest.mark.anyio
 async def test_capable_adapter_health_check_probes_its_effective_endpoint(
-    provider: str, module_name: str, class_name: str
+    provider: str, module_name: str, class_name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The health check must probe the custom endpoint, not the vendor default."""
     module = __import__(f"modulo.model_backends.{module_name}", fromlist=[class_name])
     health_mock = AsyncMock(return_value=HealthResult(ok=True))
+    # FAR-2046: adapters validate a custom endpoint at construction; resolve the
+    # non-routable test host to a public address so construction clears the gate.
+    monkeypatch.setattr("modulo.core.ssrf._resolve_all_sync", lambda _host: ["93.184.216.34"])
     with patch.object(module, "openai_compatible_health_check", new=health_mock):
         backend = _build_backend(
             provider,

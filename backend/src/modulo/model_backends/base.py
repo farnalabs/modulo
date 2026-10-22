@@ -10,12 +10,30 @@ import httpx
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-from modulo.core.ssrf import pinned_async_client_sync
+from modulo.core.ssrf import pinned_async_client_sync, validate_outbound_url
 
 logger = logging.getLogger(__name__)
 
 HEALTH_CHECK_TIMEOUT = 10.0
 HEALTH_DETAIL_MAX_LENGTH = 500
+
+
+def validate_backend_endpoint(endpoint: str | None) -> None:
+    """Validate an operator-supplied model-backend endpoint (FAR-2046 / FAR-512).
+
+    A custom endpoint handed to a non-OpenAI-compatible adapter must clear the
+    same SSRF gate the OpenAI-compatible path enforces at construction
+    (``OpenAICompatibleBackend.__init__`` → ``pinned_async_client_sync``), so a
+    backend aimed at an internal/private address can never be constructed and
+    used. Only a CUSTOM endpoint is validated: the vendor defaults are trusted,
+    and resolving them here would add a DNS hop to every adapter build.
+
+    Raises ``ValueError`` when the target is private/internal or is not
+    permitted by ``SSRF_ALLOW_PRIVATE_RANGES``.
+    """
+    if endpoint is None:
+        return
+    validate_outbound_url(endpoint)
 
 
 class ProviderUnavailableError(RuntimeError):

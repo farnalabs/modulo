@@ -126,3 +126,69 @@ def test_hub_custom_base_url_still_goes_through_the_ssrf_gate() -> None:
             {"api_key": API_KEY, "base_url": "http://10.1.2.3:8000/v1"},
             {},
         )
+
+
+# FAR-2046: the non-OpenAI-compatible adapters take their endpoint through a
+# provider-specific constructor argument (``anthropic_api_url`` / ``base_url`` /
+# ``endpoint``). Each must clear the same construction-time SSRF gate as
+# ``OpenAICompatibleBackend`` — otherwise a stored custom endpoint is handed
+# straight to the vendor SDK and FAR-512's "an internal-target backend can never
+# be constructed and used" invariant only holds on the OpenAI-compatible path.
+_ADAPTERS = [
+    ("anthropic", "AnthropicBackend", "ChatAnthropic", "anthropic_api_url"),
+    ("cohere", "CohereBackend", "ChatCohere", "base_url"),
+    ("gemini", "GeminiBackend", "ChatGoogleGenerativeAI", "base_url"),
+    ("mistral", "MistralBackend", "ChatMistralAI", "endpoint"),
+]
+
+
+def _adapter(provider: str, class_name: str) -> type:
+    module = __import__(f"modulo.model_backends.{provider}", fromlist=[class_name])
+    return getattr(module, class_name)  # type: ignore[no-any-return]
+
+
+@pytest.mark.parametrize(
+    ("provider", "class_name", "_chat_cls", "endpoint_kwarg"), _ADAPTERS, ids=[a[0] for a in _ADAPTERS]
+)
+@pytest.mark.parametrize("blocked_url", BLOCKED_URLS)
+def test_adapter_construction_raises_for_blocked_custom_endpoint(
+    provider: str, class_name: str, _chat_cls: str, endpoint_kwarg: str, blocked_url: str
+) -> None:
+    """A custom internal endpoint must not be constructible on ANY adapter."""
+    with pytest.raises(ValueError, match="private/internal"):
+        _adapter(provider, class_name)(api_key=API_KEY, model_id="m", **{endpoint_kwarg: blocked_url})
+
+
+@pytest.mark.parametrize(
+    ("provider", "class_name", "_chat_cls", "endpoint_kwarg"), _ADAPTERS, ids=[a[0] for a in _ADAPTERS]
+)
+def test_adapter_construction_accepts_public_custom_endpoint(
+    provider: str, class_name: str, _chat_cls: str, endpoint_kwarg: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Control case: the gate must not block a legitimate public custom endpoint."""
+    from unittest.mock import patch
+
+    monkeypatch.setattr(ssrf, "_resolve_all_sync", lambda _host: ["93.184.216.34"])
+    module = __import__(f"modulo.model_backends.{provider}", fromlist=[class_name])
+    with patch.object(module, _chat_cls) as chat_cls:
+        backend_cls = getattr(module, class_name)
+        backend_cls(api_key=API_KEY, model_id="m", **{endpoint_kwarg: "https://models.example.com/v1"})
+    chat_cls.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("provider", "_class_name", "_chat_cls", "_endpoint_kwarg"), _ADAPTERS, ids=[a[0] for a in _ADAPTERS]
+)
+def test_hub_adapter_custom_endpoint_still_goes_through_the_ssrf_gate(
+    provider: str, _class_name: str, _chat_cls: str, _endpoint_kwarg: str
+) -> None:
+    """The hub feeds the credential endpoint into the adapter gate, not around it."""
+    from modulo.core.model_backend_hub import _build_backend
+
+    with pytest.raises(ValueError, match="private/internal"):
+        _build_backend(
+            provider,
+            "m",
+            {"api_key": API_KEY, "base_url": "http://10.1.2.3:8000/v1"},
+            {},
+        )

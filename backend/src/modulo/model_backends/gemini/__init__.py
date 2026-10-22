@@ -7,6 +7,7 @@ from modulo.model_backends.base import (
     LangChainChatForwardingMixin,
     ModelBackendBase,
     openai_compatible_health_check,
+    validate_backend_endpoint,
 )
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
@@ -26,6 +27,7 @@ class GeminiBackend(LangChainChatForwardingMixin, ModelBackendBase):
         **default_params: Any,
     ) -> None:
         self._base_url = base_url or GEMINI_BASE_URL
+        validate_backend_endpoint(base_url)
         model_kwargs: dict[str, Any] = dict(default_params)
         if base_url:
             model_kwargs["base_url"] = base_url
