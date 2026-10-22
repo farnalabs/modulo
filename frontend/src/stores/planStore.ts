@@ -1,6 +1,12 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { api, getAccessToken } from "../lib/api/client";
+// FAR-2020: imported from the module that OWNS the registry rather than via the
+// api-client re-export. `onAuthChange` is the same function either way, but the
+// client module is stubbed wholesale by ~130 component specs (partial mocks with
+// no such export), and a store that cannot register its listener would throw on
+// creation in every one of them.
+import { onAuthChange } from "../lib/api/auth";
 import { withTimeout } from "../lib/asyncUtils";
 import { formatApiError } from "../lib/api/formatError";
 import { registerSyncHandlers, disposeSyncHandlers } from "./syncRegistry";
@@ -34,6 +40,17 @@ interface PlanPayload {
 
 interface TiersPayload {
   tiers: Array<{ tier_id: string; label: string; rank: number }>;
+}
+
+/**
+ * The caller-scoped `GET /api/v1/auth/permissions` payload (FAR-2020): every
+ * permission name the caller's LIVE org role resolves to, read straight from
+ * the backend registry. The access token deliberately carries no `permissions`
+ * claim (200+ names would bloat every request and go stale on a role change),
+ * so this read is the nav's only source for permission-gated items.
+ */
+interface PermissionsPayload {
+  permissions: string[];
 }
 
 /**
@@ -74,6 +91,20 @@ function currentOrgId(): string | null {
     // No storage / no token helper available: fall back to the unknown bucket.
     return null;
   }
+}
+
+/**
+ * The subject (`sub` claim) a token belongs to. `null` = no token / opaque
+ * token. Used to tell a ROTATED token for the same person (a refresh — same
+ * sub, keep the list) from a different principal (reset), because a same-SPA
+ * login can replace the token without ever passing through `null`.
+ */
+function principalSubject(token: string | null | undefined): string | null {
+  // No token at all is its own answer — never decode an absent/opaque token
+  // into whoever the decoder last saw.
+  if (!token) return null;
+  const sub = decodeJwtPayload(token)?.sub;
+  return typeof sub === "string" && sub.length > 0 ? sub : null;
 }
 
 /**
@@ -324,10 +355,145 @@ export const usePlanStore = defineStore("plan", () => {
   registerSyncHandlers(unsubHandlers, syncingIds, ["team", "license", "plan"], handleSyncEvent);
 
   function disposeHandlers(): void {
+    // FAR-2020: also unhook the principal-change listener, so a disposed store
+    // stops reacting to auth changes (and its closures can be collected).
+    stopAuthListener?.();
     disposeSyncHandlers(unsubHandlers, syncingIds);
   }
 
   const orgOverrides = ref<Record<string, boolean | null>>({});
+
+  // ---------------------------------------------------------------------
+  // FAR-2020: the caller's effective permission names for nav gating.
+  //
+  // Resolved ONCE per session from the caller-scoped registry read, because
+  // the access token carries no `permissions` claim and duplicating the
+  // backend's role -> permission map in the SPA would drift. `permissionsSource`
+  // is the settle state: 'none' = not attempted, 'server' = a payload applied,
+  // 'unavailable' = settled without one (terminal for the session, so a broken
+  // endpoint is not hammered by every component that builds a nav context).
+  // Both resolved states are FAIL CLOSED for gating: the list is the source of
+  // truth, and an empty list denies every permission-gated item.
+  // ---------------------------------------------------------------------
+  const userPermissions = ref<string[]>([]);
+  const permissionsSource = ref<"none" | "server" | "unavailable">("none");
+  let fetchPermissionsPromise: Promise<void> | null = null;
+  // FAR-2020: bumped whenever the SPA's principal changes, so a response that
+  // was in flight across the switch can never be applied to the new session.
+  let permissionsGeneration = 0;
+
+  /**
+   * The principal this store starts out belonging to. Best effort, like
+   * `currentOrgId`: a storage-blocked browser cannot read the token, which is
+   * simply the unknown bucket — never a reason to fail store creation.
+   */
+  function initialPrincipalSubject(): string | null {
+    try {
+      return principalSubject(getAccessToken());
+    } catch (err) {
+      console.warn("[plan] Could not read the access token", err);
+      return null;
+    }
+  }
+
+  let permissionsPrincipalSub = initialPrincipalSubject();
+
+  /**
+   * Drop the cached permission list (FAR-2020). Called when the SPA's principal
+   * changes, so one login can never inherit the previous user's list — the
+   * parallel of `clearFlagCache()` in `clearAccessToken`, but scoped to the
+   * in-memory permission state, which is per-store-instance rather than
+   * persisted.
+   */
+  function resetCallerPermissions(): void {
+    permissionsGeneration += 1;
+    userPermissions.value = [];
+    permissionsSource.value = "none";
+    fetchPermissionsPromise = null;
+  }
+
+  // The choke point: EVERY teardown and login path funnels through
+  // `setAccessToken` / `clearAccessToken`, and both notify these listeners. A
+  // `null` token (logout/expiry) or a different `sub` (another account) resets;
+  // a same-sub rotation (token refresh) keeps the resolved list.
+  //
+  // Registered LAZILY (on the first permissions read) rather than at store
+  // creation: `onAuthChange` reads the stored token as it subscribes, so
+  // subscribing during store creation would open a storage read for every
+  // consumer — including ones that never gate on permissions — and throw where
+  // storage is blocked.
+  let stopAuthListener: (() => void) | null = null;
+
+  function ensurePrincipalListener(): void {
+    if (stopAuthListener) return;
+    try {
+      stopAuthListener = onAuthChange((token) => {
+        const nextSub = principalSubject(token);
+        if (nextSub === permissionsPrincipalSub) return;
+        permissionsPrincipalSub = nextSub;
+        resetCallerPermissions();
+      });
+    } catch (err) {
+      // Best effort: a storage-blocked browser (private mode, disabled cookies)
+      // throws here. The list still resolves and still fails closed; the store
+      // just cannot observe a later principal switch in this session.
+      console.warn("[plan] Could not subscribe to auth changes", err);
+      stopAuthListener = () => {};
+    }
+  }
+
+  async function fetchPermissions(): Promise<void> {
+    if (permissionsSource.value !== "none") return;
+    if (fetchPermissionsPromise) return fetchPermissionsPromise;
+    // Before the request, so a principal switch that lands mid-flight is seen.
+    ensurePrincipalListener();
+    fetchPermissionsPromise = doFetchPermissions();
+    try {
+      await fetchPermissionsPromise;
+    } finally {
+      fetchPermissionsPromise = null;
+    }
+  }
+
+  async function doFetchPermissions(): Promise<void> {
+    const generation = permissionsGeneration;
+    try {
+      const res = await withTimeout(
+        api.GET("/api/v1/auth/permissions"),
+        15000,
+        "Permissions request",
+      );
+      // A principal switch while this was in flight makes the answer stale: the
+      // reset already cleared the state and the new owner's own read owns it.
+      if (generation !== permissionsGeneration) return;
+      const permissions = (res.data as PermissionsPayload | undefined)?.permissions;
+      if (Array.isArray(permissions)) {
+        userPermissions.value = permissions.filter(
+          (name): name is string => typeof name === "string",
+        );
+        permissionsSource.value = "server";
+        return;
+      }
+      // Settled without a payload (4xx / 5xx / timeout / no body): stay fail
+      // closed and record it once — the nav degrades to its empty-list
+      // behaviour rather than throwing or blocking the render. `console.warn`
+      // (not debug) because the lint rule permits only warn/error, and this is
+      // the same best-effort-degraded shape the flag-cache persist path warns
+      // on; it fires at most once per session (permissionsSource is terminal).
+      permissionsSource.value = "unavailable";
+      console.warn(
+        "[plan] Permissions request settled without a payload - permission-gated nav items stay hidden",
+        res.error ?? null,
+      );
+    } catch (e: unknown) {
+      if (generation !== permissionsGeneration) return;
+      permissionsSource.value = "unavailable";
+      console.warn(
+        "[plan] Permissions request failed - permission-gated nav items stay hidden",
+        e,
+      );
+    }
+  }
 
   async function fetchOrgFlagOverride(flagName: string): Promise<boolean | null> {
     try {
@@ -384,7 +550,10 @@ export const usePlanStore = defineStore("plan", () => {
     tierLabels,
     tierRanks,
     orgOverrides,
+    userPermissions,
+    permissionsSource,
     fetchPlan,
+    fetchPermissions,
     featureEnabled,
     getTierLabel,
     isAtMinimumTier,

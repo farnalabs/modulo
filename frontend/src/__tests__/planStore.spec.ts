@@ -4,6 +4,9 @@ import { usePlanStore } from '../stores/planStore'
 import { flagCacheKey, parseFlagCache, serializeFlagCache } from '../config/flagCache'
 import { getHandlers, clearAllRegistrations } from '../stores/syncRegistry'
 import { getAccessToken } from '../lib/api/client'
+// The REAL auth module: the store subscribes to its listener registry, so these
+// tests drive the same `setAccessToken` choke point the app's login path uses.
+import { setAccessToken } from '../lib/api/auth'
 import type { EventBusEvent } from '../types/events'
 
 const mockPlanResponse = {
@@ -972,6 +975,143 @@ describe('usePlanStore', () => {
 
         expect(store.flagsSource).toBe('server')
         expect(warn).not.toHaveBeenCalled()
+      } finally {
+        warn.mockRestore()
+      }
+    })
+  })
+
+  describe('principal-scoped permissions (FAR-2020 — a stale read never crosses a switch)', () => {
+    const PERMISSIONS_PATH = '/api/v1/auth/permissions'
+    const PERMISSIONS_FAILED_WARN =
+      '[plan] Permissions request failed - permission-gated nav items stay hidden'
+
+    /** A minimal opaque-JWT carrying a `sub` claim (the principal identity). */
+    function jwtWithSub(sub: string): string {
+      const encode = (o: object) =>
+        btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+      return `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ sub })}.sig`
+    }
+
+    it('re-reads after a principal switch without registering a second listener', async () => {
+      const { api } = await import('../lib/api/client')
+      vi.mocked(getAccessToken).mockReturnValue(jwtWithSub('first@example.com'))
+      ;(api.GET as any).mockResolvedValue({
+        data: { permissions: ['analytics.query'] },
+        error: null,
+      })
+
+      const store = usePlanStore()
+      await store.fetchPermissions()
+      expect(store.userPermissions).toEqual(['analytics.query'])
+      expect(store.permissionsSource).toBe('server')
+
+      // A second principal signs in on the same SPA: the switch drops the list,
+      // and the next read resolves the new principal's own set.
+      setAccessToken(jwtWithSub('second@example.com'))
+      expect(store.permissionsSource).toBe('none')
+      ;(api.GET as any).mockResolvedValue({
+        data: { permissions: ['pipeline.list'] },
+        error: null,
+      })
+      await store.fetchPermissions()
+      expect(store.userPermissions).toEqual(['pipeline.list'])
+
+      // The listener registered by the FIRST read is still the store's single
+      // subscription: disposing unhooks it, so a later switch must not reset
+      // state. A DUPLICATE registration (the branch the early return prevents)
+      // loses the first unsubscribe handle and leaves that listener live, which
+      // would reset the store here and fail this assertion.
+      store.disposeHandlers()
+      setAccessToken(jwtWithSub('third@example.com'))
+      expect(store.userPermissions).toEqual(['pipeline.list'])
+      expect(store.permissionsSource).toBe('server')
+    })
+
+    it('still resolves and applies the list when subscribing to auth changes throws', async () => {
+      // A storage-blocked browser (private mode, disabled cookies) throws when
+      // the auth module reads the token it hands to a new listener. The store
+      // must degrade — no principal-change observation this session — but the
+      // list itself must still resolve, because that read needs no storage.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+        throw new Error('storage blocked')
+      })
+      try {
+        const { api } = await import('../lib/api/client')
+        ;(api.GET as any).mockResolvedValue({
+          data: { permissions: ['analytics.query'] },
+          error: null,
+        })
+
+        const store = usePlanStore()
+        await store.fetchPermissions()
+
+        expect(store.permissionsSource).toBe('server')
+        expect(store.userPermissions).toEqual(['analytics.query'])
+        expect(warn).toHaveBeenCalledWith(
+          '[plan] Could not subscribe to auth changes',
+          expect.anything(),
+        )
+      } finally {
+        getItem.mockRestore()
+        warn.mockRestore()
+      }
+    })
+
+    it('discards a permissions response that resolves after a principal switch', async () => {
+      const { api } = await import('../lib/api/client')
+      vi.mocked(getAccessToken).mockReturnValue(jwtWithSub('first@example.com'))
+      let resolvePermissions!: (value: { data: unknown; error: null }) => void
+      const inFlight = new Promise<{ data: unknown; error: null }>(resolve => {
+        resolvePermissions = resolve
+      })
+      ;(api.GET as any).mockImplementation((path: string) => {
+        if (path === PERMISSIONS_PATH) return inFlight
+        return Promise.resolve({ data: null, error: null })
+      })
+
+      const store = usePlanStore()
+      const pending = store.fetchPermissions()
+      // The switch lands while the FIRST principal's read is still in flight.
+      setAccessToken(jwtWithSub('second@example.com'))
+      expect(store.permissionsSource).toBe('none')
+
+      resolvePermissions({ data: { permissions: ['system.config.manage'] }, error: null })
+      await pending
+
+      // The stale answer is the PREVIOUS principal's list; applying it would
+      // hand the new session (here: before its own read) another user's access.
+      expect(store.permissionsSource).toBe('none')
+      expect(store.userPermissions).toEqual([])
+    })
+
+    it('discards a failed permissions response that settles after a principal switch', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const { api } = await import('../lib/api/client')
+      vi.mocked(getAccessToken).mockReturnValue(jwtWithSub('first@example.com'))
+      let rejectPermissions!: (err: Error) => void
+      const inFlight = new Promise<{ data: unknown; error: null }>((_resolve, reject) => {
+        rejectPermissions = reject
+      })
+      ;(api.GET as any).mockImplementation((path: string) => {
+        if (path === PERMISSIONS_PATH) return inFlight
+        return Promise.resolve({ data: null, error: null })
+      })
+
+      try {
+        const store = usePlanStore()
+        const pending = store.fetchPermissions()
+        setAccessToken(jwtWithSub('second@example.com'))
+
+        rejectPermissions(new Error('network down'))
+        await pending
+
+        // The stale FAILURE must not terminalise the NEW principal's session —
+        // 'unavailable' is terminal, so its own read would never be attempted.
+        expect(store.permissionsSource).toBe('none')
+        expect(store.userPermissions).toEqual([])
+        expect(warn).not.toHaveBeenCalledWith(PERMISSIONS_FAILED_WARN, expect.anything())
       } finally {
         warn.mockRestore()
       }
