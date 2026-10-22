@@ -235,7 +235,7 @@ async def test_connector_with_no_repos_produces_repos_sample() -> None:
         samples = await run_scan(hub)
     assert len(samples) == 1
     assert samples[0].resource == "repos"
-    assert samples[0].records == []
+    assert not samples[0].records
     assert samples[0].sample_count == 0
     assert samples[0].error is None
 
@@ -460,8 +460,8 @@ def test_repo_name_falls_back_to_plain_name() -> None:
 
 
 def test_repo_name_ignores_non_string_values() -> None:
-    assert _repo_name({"name": 123}) == ""
-    assert _repo_name({}) == ""
+    assert not _repo_name({"name": 123})
+    assert not _repo_name({})
 
 
 # ---------------------------------------------------------------------------
