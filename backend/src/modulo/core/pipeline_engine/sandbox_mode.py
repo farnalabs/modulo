@@ -150,15 +150,18 @@ def derive_sandbox_capabilities(
     runtime-provider type.  When provided, the egress resolution runs under
     THAT provider's tier instead of the historical reference ``e2b`` tier, so
     the certificate matches what dispatch actually enforces for the profile
-    the node is bound to.  A tier that cannot enforce the resolved policy
-    (e.g. ``deny_all`` on ``kubernetes``, where bounded egress is the
-    customer's NetworkPolicy) resolves the capability to ``None`` — fail-closed
-    unknown — instead of certifying an enforcement the provider never
-    performs while dispatch refuses the run.  An unrecognised provider type
-    resolves to the raw value as the tier, which the resolver refuses as an
-    unknown tier (also fail-closed).  When absent (no bound profile, or a
-    direct caller) the reference tier stays ``e2b`` — unchanged legacy
-    behaviour for every existing caller.
+    the node is bound to.  A tier that REFUSES the resolved policy — e.g.
+    ``selected`` on Kubernetes (the rendered policy's allowlist is
+    cluster-level), or ``deny_all`` on ``local`` (no iptables/namespace
+    isolation) — resolves the capability to ``None``, fail-closed unknown,
+    instead of certifying an enforcement the provider never performs; dispatch
+    refuses the run.  A Kubernetes ``deny_all`` is NOT a refusal: it resolves
+    ``False`` and the run proceeds under the DECLARED posture (Modulo authors
+    the NetworkPolicy, the customer's CNI enforces it).  An unrecognised
+    provider type resolves to the raw value as the tier, which the resolver
+    refuses as an unknown tier (also fail-closed).  When absent (no bound
+    profile, or a direct caller) the reference tier stays ``e2b`` — unchanged
+    legacy behaviour for every existing caller.
 
     The derivation is MECHANICAL — it reads the node's actual validated
     configuration, never a declared claim — so a conformance hard-block can

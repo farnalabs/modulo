@@ -59,11 +59,12 @@ _EGRESS_CASES: list[tuple[str | None, str | None, str, bool, str | None, bool, s
     ("selected", "unset", "docker", True, "selected", True, "docker: node selected -> refused"),
     ("unset", "selected", "docker", False, "selected", True, "docker: profile selected -> refused"),
     ("default", "none", "docker", False, "deny_all", False, "docker: node default, profile none -> deny_all"),
-    # T3: all three enforceable
+    # T3: the same substrate as Kubernetes — deny_all is accepted as a DECLARED
+    # posture, selected is a named refusal (cluster-level allowlist).
     ("unset", "unset", "t3", False, None, False, "t3: both unset -> provider default"),
     ("unset", "none", "t3", False, "deny_all", False, "t3: profile none -> deny_all"),
     ("deny_all", "outbound", "t3", False, "deny_all", False, "t3: node deny_all -> deny_all"),
-    ("selected", "unset", "t3", True, "selected", False, "t3: node selected with allowlist"),
+    ("selected", "unset", "t3", True, "selected", True, "t3: node selected with allowlist -> refused"),
     # Local: default posture accepted (host process needs no enforcement),
     # but deny_all and selected cannot be enforced (no iptables/ns).
     ("unset", "unset", "local", False, None, False, "local: default posture accepted"),
@@ -688,6 +689,50 @@ def test_kubernetes_refusal_names_networkpolicy_as_the_remediation() -> None:
     assert "kubernetes" in result.refusal
 
 
+def test_t3_tier_is_registered_in_the_enforcement_matrix() -> None:
+    """The ``t3`` tier name is the SAME K8s substrate as ``kubernetes``.
+
+    FAR-2068: it must therefore declare the identical capability set — a
+    ``deny_all`` declaration accepted as a DECLARED posture, ``selected`` a
+    named refusal.  A ``selected`` entry here would be a declared-but-
+    unenforced claim with no enforcement behind it.
+    """
+    tier_caps = egress_mod._TIER_ENFORCEMENT["t3"]
+
+    assert tier_caps == {"default": True, "deny_all": True, "selected": False}
+
+
+def test_t3_selected_with_allowlist_is_still_refused() -> None:
+    """FAR-2068: ``selected`` is refused on ``t3`` too — a non-empty node
+    allowlist does not help, because the Helm-rendered policy's allowlist is
+    cluster-level and cannot express a per-node allowlist. A refusal asserts
+    no posture."""
+    result = resolve_egress(
+        node_egress_policy="selected",
+        node_egress_allowlist=_SAMPLE_ALLOWLIST,
+        profile_network_policy=None,
+        tier="t3",
+    )
+
+    assert result.refusal is not None
+    assert result.posture is EgressPosture.NONE
+
+
+def test_t3_refusal_names_networkpolicy_as_the_remediation() -> None:
+    """A ``t3`` refusal must be as actionable as a ``kubernetes`` one: it names
+    the customer's NetworkPolicy as where the control actually lives."""
+    result = resolve_egress(
+        node_egress_policy="selected",
+        node_egress_allowlist=_SAMPLE_ALLOWLIST,
+        profile_network_policy=None,
+        tier="t3",
+    )
+
+    assert result.refusal is not None
+    assert "NetworkPolicy" in result.refusal
+    assert "t3" in result.refusal
+
+
 @pytest.mark.parametrize(
     ("tier", "expected_refusal", "expected_posture"),
     [
@@ -702,8 +747,9 @@ def test_kubernetes_flip_leaves_the_other_tiers_unchanged(
     expected_refusal: bool,
     expected_posture: EgressPosture,
 ) -> None:
-    """FAR-2068 touched only the kubernetes tier: a deny_all declaration keeps
-    every other tier's outcome exactly as before."""
+    """FAR-2068 flipped only the K8s substrate's deny-all acceptance: a
+    deny_all declaration keeps every other tier's outcome exactly as before
+    (including ``t3``, the second K8s tier name, which stays DECLARED)."""
     result = resolve_egress(
         node_egress_policy="deny_all",
         node_egress_allowlist=None,

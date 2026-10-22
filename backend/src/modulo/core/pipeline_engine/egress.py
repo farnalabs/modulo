@@ -149,7 +149,14 @@ def spec_egress_for_canonical(policy: str | None) -> str:
 _TIER_ENFORCEMENT: dict[str, dict[str, bool]] = {
     "e2b": {"default": True, "deny_all": True, "selected": True},
     "docker": {"default": True, "deny_all": True, "selected": False},
-    "t3": {"default": True, "deny_all": True, "selected": True},
+    # ``t3`` and ``kubernetes`` are the SAME substrate (the Helm-rendered
+    # NetworkPolicy authored by Modulo and enforced by the customer's CNI), so
+    # they declare the same capability set: a ``deny_all`` declaration is
+    # accepted as a DECLARED posture, while ``selected`` is a NAMED refusal —
+    # the rendered policy's allowlist is cluster-level and cannot express a
+    # per-node allowlist.  Neither tier name may accept ``selected`` without
+    # an enforcement behind it (FAR-2068).
+    "t3": {"default": True, "deny_all": True, "selected": False},
     # Local is a host process: it can provide the unrestricted default
     # posture (no enforcement needed — there is nothing to enforce), but
     # it CANNOT enforce deny_all or selected (no iptables, no network
@@ -174,13 +181,20 @@ _TIER_ENFORCEMENT: dict[str, dict[str, bool]] = {
 # "pick another tier" (FAR-1051). A refusal without this reads as a bare
 # capability gap; with it the operator is told where the control actually
 # lives. Tiers not listed here keep the historical message unchanged.
+#
+# ``t3`` and ``kubernetes`` are the same substrate, so both tier names carry
+# the identical remediation note — a ``selected`` refusal must be as actionable
+# under either name.
+_KUBERNETES_EGRESS_REFUSAL_NOTE = (
+    "on Kubernetes, bounded egress is the customer's NetworkPolicy on the workspace "
+    "namespace (opt-in, requires an enforcing CNI) — the Helm-authored policy's allowlist "
+    "is cluster-level and cannot express a per-node allowlist; the provider deliberately "
+    "enforces nothing inside the pod"
+)
+
 _TIER_REFUSAL_NOTES: dict[str, str] = {
-    "kubernetes": (
-        "on Kubernetes, bounded egress is the customer's NetworkPolicy on the workspace "
-        "namespace (opt-in, requires an enforcing CNI) — the Helm-authored policy's allowlist "
-        "is cluster-level and cannot express a per-node allowlist; the provider deliberately "
-        "enforces nothing inside the pod"
-    ),
+    "kubernetes": _KUBERNETES_EGRESS_REFUSAL_NOTE,
+    "t3": _KUBERNETES_EGRESS_REFUSAL_NOTE,
 }
 
 
