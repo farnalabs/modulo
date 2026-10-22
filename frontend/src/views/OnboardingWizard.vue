@@ -48,9 +48,12 @@
           <div class="h-16 animate-pulse rounded-lg bg-muted" />
         </div>
         <ErrorAlert v-else-if="connectorsError" :message="connectorsError" :on-retry="loadConnectors" />
-        <div v-else-if="connectors.length === 0" class="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          {{ $t('views.OnboardingWizard.no_connectors_found') }} <a href="/settings/connectors" data-testid="onboarding-wizard-create-connector" class="text-primary-text underline">{{ $t('views.OnboardingWizard.create_one') }}</a> {{ $t('views.OnboardingWizard.first_then_come_back') }}
-        </div>
+        <EmptyState v-else-if="connectors.length === 0" :title="$t('views.OnboardingWizard.no_connectors_found')">
+          <p class="text-sm text-muted-foreground">
+            <a href="/settings/connectors" data-testid="onboarding-wizard-create-connector" class="text-primary-text underline">{{ $t('views.OnboardingWizard.create_one') }}</a>
+            {{ $t('views.OnboardingWizard.first_then_come_back') }}
+          </p>
+        </EmptyState>
         <div v-else class="space-y-2">
           <span class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.select_connector_instance') }}</span>
           <button type="button"
@@ -102,7 +105,7 @@
             {{ inferring ? $t('views.SchemaInferenceView.inferring') : $t('views.SchemaInferenceView.infer_schema') }}
           </Button>
         </div>
-        <div v-if="inferError" class="text-sm text-destructive">{{ inferError }}</div>
+        <ErrorAlert v-if="inferError" :message="inferError" :on-retry="inferSchema" />
 
         <div v-if="wizardState.draftSchema" class="rounded-lg border bg-card p-4">
           <h3 class="mb-3 text-sm font-semibold">{{ $t('views.OnboardingWizard.draft_label') }}: {{ wizardState.draftSchema.name }}</h3>
@@ -200,9 +203,7 @@
           <div v-for="n in 4" :key="n" class="h-24 animate-pulse rounded-lg bg-muted" />
         </div>
         <ErrorAlert v-else-if="libraryError" :message="libraryError" :on-retry="loadLibrary" />
-        <div v-else-if="libraryItems.length === 0" class="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          {{ $t('views.OnboardingWizard.no_library_items') }}
-        </div>
+        <EmptyState v-else-if="libraryItems.length === 0" :title="$t('views.OnboardingWizard.no_library_items')" />
         <div v-else class="space-y-2">
           <div class="flex items-center gap-3">
             <input id="onboardingwizard-library-search"
@@ -286,7 +287,7 @@
             {{ creatingPipeline ? $t('views.OnboardingWizard.creating') : $t('views.OnboardingWizard.create_pipeline') }}
           </Button>
         </div>
-        <div v-if="pipelineCreateError" class="text-sm text-destructive">{{ pipelineCreateError }}</div>
+        <ErrorAlert v-if="pipelineCreateError" :message="pipelineCreateError" :on-retry="createPipeline" />
         <div v-if="wizardState.createdPipelineId" class="rounded-lg bg-success/10 p-3 text-sm text-success-text">
           {{ $t('views.OnboardingWizard.pipeline_label') }} "{{ wizardState.pipelineName }}" {{ $t('views.OnboardingWizard.created_suffix') }}.
         </div>
@@ -420,7 +421,7 @@
         <div v-if="runResult" class="rounded-lg bg-success/10 p-3 text-sm text-success-text">
           {{ $t('views.OnboardingWizard.pipeline_started') }} <router-link :to="{ name: 'dashboard' }" data-testid="onboarding-wizard-view-runs" class="underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{{ $t('views.OnboardingWizard.view_runs_on_dashboard') }}</router-link>.
         </div>
-        <div v-if="pipelineRunError" class="text-sm text-destructive">{{ pipelineRunError }}</div>
+        <ErrorAlert v-if="pipelineRunError" :message="pipelineRunError" :on-retry="runPipeline" />
       </div>
     </div>
 
@@ -459,6 +460,7 @@ import { Check, ChartLine, Layers } from '@lucide/vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { useProductAnalytics } from '../composables/useProductAnalytics'
