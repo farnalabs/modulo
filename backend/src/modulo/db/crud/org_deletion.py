@@ -39,6 +39,7 @@ from modulo.db.models.primitive_abuse_report import PrimitiveAbuseReport
 from modulo.db.models.primitive_rating import PrimitiveRating
 from modulo.db.models.publisher import Publisher
 from modulo.db.models.run import TERMINAL_STATUSES, Run
+from modulo.db.rls import set_rls_org
 from modulo.db.session import get_shared_engine
 from modulo.db.soft_delete import include_soft_deleted
 
@@ -163,7 +164,11 @@ async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[
 
     stmt = select(OrgMembership).where(OrgMembership.organisation_id == org_id)
     memberships = (await session.execute(stmt)).scalars().all()
-    pipelines = (await session.execute(select(Pipeline).where(Pipeline.organisation_id == org_id))).scalars().all()
+    pipelines = (
+        (await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.organisation_id == org_id))))
+        .scalars()
+        .all()
+    )
     runs = (await session.execute(select(Run).where(Run.organisation_id == org_id).limit(5000))).scalars().all()
     audit = (
         (await session.execute(select(AuditEvent).where(AuditEvent.organisation_id == org_id).limit(10000)))
@@ -180,7 +185,11 @@ async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[
         .all()
     )
     connectors = (
-        (await session.execute(select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id)))
+        (
+            await session.execute(
+                include_soft_deleted(select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id))
+            )
+        )
         .scalars()
         .all()
     )
@@ -272,6 +281,11 @@ async def request_org_deletion(
        concurrent confirm/cancel may have landed between snapshot and lock.
     4. Transition (status/deleted_at/token/expiry), persist export_bundle_json,
        flush — all under the short lock.
+
+    The snapshot is collected BEFORE the FSM lock, so a write landing between
+    the snapshot and the lock acquisition is not included in the export bundle.
+    Deletion is soft-first with a 24 h cancel path, so the window is bounded
+    and the user can cancel if the export missed a late change.
 
     Returns a dict with `token`, `token_expires_at`, and `export` keys.
     """
@@ -430,58 +444,65 @@ async def cancel_org_deletion(
     return {"status": "active"}
 
 
-async def _collect_org_export_in_snapshot(org_id: uuid.UUID) -> dict[str, Any]:
+async def _collect_org_export_in_snapshot(org_id: uuid.UUID, engine: AsyncEngine | None = None) -> dict[str, Any]:
     """Collect the org export bundle in a read-only REPEATABLE READ snapshot.
 
     This runs on a SEPARATE connection/session from the caller's transaction.
     Postgres rejects SET TRANSACTION ISOLATION LEVEL mid-transaction, so the
     isolation must be established on a fresh connection before its first
-    statement. We use the shared engine to create a connection with
-    REPEATABLE READ isolation via execution_options, set it to READ ONLY,
-    then bind a session to it.
+    statement. We use the shared engine (or injected engine for tests) to create
+    a connection with REPEATABLE READ isolation via execution_options, set it to
+    READ ONLY on Postgres, then bind a session to it.
 
     The snapshot session only reads by org_id; it never attaches the caller's
     ORM object. This ensures the export reflects a consistent point-in-time
     view without blocking concurrent writers.
+
+    NOTE: this function holds a SECOND pooled connection for the export
+    duration. The endpoint is admin-only and bounded by pool_timeout.
     """
-    engine: AsyncEngine = get_shared_engine()
+    if engine is None:
+        engine = get_shared_engine()
 
     # Create a connection and set REPEATABLE READ isolation via execution_options
-    # BEFORE starting the transaction. The context manager manages the connection
-    # lifecycle; execution_options returns a wrapper around the same connection.
+    # BEFORE starting the transaction. execution_options returns a wrapper around
+    # the same connection (sync call; we await to satisfy mypy).
+    from sqlalchemy.ext.asyncio import AsyncConnection
+
     async with engine.connect() as base_conn:
-        conn = await base_conn.execution_options(isolation_level="REPEATABLE READ")
-        async with conn.begin():
+        conn: AsyncConnection = await base_conn.execution_options(isolation_level="REPEATABLE READ")
+
+        # SET TRANSACTION READ ONLY is Postgres-specific; skip on SQLite/MariaDB.
+        dialect = conn.dialect.name
+        if dialect == "postgresql":
             await conn.execute(text("SET TRANSACTION READ ONLY"))
 
-            # Bind a session to this connection for ORM queries.
-            # Use autobegin=True (default) so the session joins the existing transaction.
-            snapshot_factory = async_sessionmaker(
-                bind=conn,
-                class_=AsyncSession,
-                expire_on_commit=False,
-                autocommit=False,
-                autoflush=False,
-                # autobegin=True by default - session will join the connection's transaction
-            )
+        # Bind a session to this connection for ORM queries.
+        snapshot_factory = async_sessionmaker(
+            bind=conn,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autocommit=False,
+            autoflush=False,
+        )
 
-            async with snapshot_factory() as session:
-                # The connection already has an active REPEATABLE READ READ ONLY transaction.
-                # The session will participate in this transaction.
-                # Read the org with include_soft_deleted visibility (same as caller).
-                result = await session.execute(
-                    include_soft_deleted(select(Organisation).where(Organisation.id == org_id))
-                )
-                org = result.scalar_one_or_none()
-                if org is None:
-                    raise ValueError(_ERR_ORG_NOT_FOUND)
+        async with snapshot_factory() as session, session.begin():
+            # The transaction starts on the session (joins the connection's transaction).
+            # Set RLS org context so tenant-scoped reads (pipelines, runs, etc.)
+            # return data on Postgres (RLS) and generic backends (session.info filter).
+            await set_rls_org(session, org_id)
 
-                # Collect the export using the snapshot session.
-                export = await _collect_org_export(session, org)
+            # Read the org with include_soft_deleted visibility (same as caller).
+            result = await session.execute(include_soft_deleted(select(Organisation).where(Organisation.id == org_id)))
+            org = result.scalar_one_or_none()
+            if org is None:
+                raise ValueError(_ERR_ORG_NOT_FOUND)
 
-            # Transaction committed by the connection context manager.
+            # Collect the export using the snapshot session.
+            export = await _collect_org_export(session, org)
 
-    # Connection closed by the outer context manager.
+        # Transaction committed by the session context manager.
+        # Connection closed by the outer context manager.
 
     return export
 

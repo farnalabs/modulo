@@ -37,6 +37,11 @@
 >   `session.get(Run, with_for_update=True)` locked re-read at `7021`, same
 >   reconcile transaction bound).
 >
+> **FAR-1823 (this branch) removed D4's org-row lock** (`export_org_data`): the
+> export now uses a read-only REPEATABLE READ snapshot on a separate connection,
+> so the `.with_for_update()` call site is gone. The counts below reflect this
+> removal (D4 is now "none" in §3).
+>
 > Category C itself is unchanged at **20** sites.
 
 Counts below are **measured**, not estimated. The two enumeration commands are:
@@ -75,6 +80,12 @@ hit; the raw `file:line` set is exactly reproducible from command (1).
 | Raw SQL `FOR UPDATE` in locking DML | 2 |
 | **Total row-lock sites** | **65** |
 | Non-locking `FOR UPDATE` occurrence (RLS policy DDL) | 1 |
+
+> **Note:** The above counts include D4 (`export_org_data`) as a `.with_for_update()` site.
+> FAR-1823 removed that lock (D4 is now "none" in §3). If D4 is excluded, the
+> `.with_for_update(` count is **58**, SQLAlchemy total is **62**, and total
+> row-lock sites is **64**. The inventory below (§3/§5) reflects the post-FAR-1823
+> shape with D4 as "none".
 
 > **Count corrections (FAR-1822 + FAR-1832).** The original audit recorded **63**
 > `.with_for_update(` sites. FAR-1822 (PR #1842, merged 2026-10-15) removed the
@@ -264,8 +275,8 @@ unrelated writer or is held across non-lock work.
 | A – pipeline/trigger serialisation | 19 | 1 (R2) | **20** |
 | B – credential rotation | 10 | 0 | **10** |
 | C – entity CRUD | 20 | 0 | **20** |
-| D – operational/other | 13 | 1 (R1) | **14** |
-| **Total** | **62** | **2** | **64** |
+| D – operational/other | 12 | 1 (R1) | **13** |
+| **Total** | **61** | **2** | **63** |
 
 These are the §3 counts as they stand on this branch: the FAR-1801 authoring snapshot
 with D7 retired by FAR-1822, C1/C2/C3/D14 removed by FAR-1832, D9 retired by
@@ -273,9 +284,10 @@ FAR-1833, **D4's row lock removed by FAR-1823**, and the four post-cutover sites
 `_replace_pipeline_graph_txn`, D15 `_fail_node_deadline_run`, D16
 `_write_terminal_triage_marker`, D17 `_terminalize_aged_nodeless_zombies`).
 FAR-1825 re-ran §1's commands against the branch tip and reads the same **62**
-SQLAlchemy sites, so the inventory and the measurement agree; see §9 and §10.
+SQLAlchemy sites (58 `.with_for_update(` + 4 `with_for_update=`), so the inventory
+and the measurement agree when D4's removed lock is accounted for; see §9 and §10.
 
-Distinct **locked tables** (by frequency): `runs` (heaviest – A5, A6, A7, A14, A15, A18, R2, D10, D15, D16, D17, R1), `organisations` (C5, C6-generic-fallback, **D1–D3**), `pipelines` (A1–A4, A10–A13, A16, A17, A19), `accounts` (B9, C8), `token_families` (B4–B6), `ScheduledReport` (D8), plus
+Distinct **locked tables** (by frequency): `runs` (heaviest – A5, A6, A7, A14, A15, A18, R2, D10, D15, D16, D17, R1), `organisations` (C5, C6-generic-fallback, **D1–D3**; D4 is now "none"), `pipelines` (A1–A4, A10–A13, A16, A17, A19), `accounts` (B9, C8), `token_families` (B4–B6), `ScheduledReport` (D8), plus
 single-use rows for credentials/entities.
 
 ---
@@ -523,20 +535,25 @@ shipped behaviour. The corrections:
    Premises are RE-VALIDATED under the lock because a concurrent confirm/cancel may have
    changed the org state between the snapshot and the lock acquisition.
 5. **Measured counts moved (FAR-1822 + FAR-1823 + FAR-1832 + FAR-1833).** Re-measuring §1 before this
-   branch gives 57 `.with_for_update(` sites (59 SQLAlchemy call sites total once the 2
-   `session.get` kwargs are included, 61 total row-lock sites with the 2 raw SQL sites) – the
-   audit's original 63 was already stale by one when FAR-1822 (PR #1842) removed the
-   `cron_helpers` lock, and FAR-1823 removed one more (D4's org-row lock), and FAR-1832
-   removed four more (old C1, C2, C3, D14 – the locked settings writers are now
-   single-statement atomic patches). **FAR-1833 retires D9** (the spend-ceiling gate's
-   row lock becomes a per-org advisory lock), giving the **56** `.with_for_update(` sites
-   measured on this branch – **58** SQLAlchemy call sites, **60** total row-lock sites.
-   §3/§5/§7 carry the post-change shape; removed row IDs are left as gaps so cross-references
-   stay stable.
-   *Post-cutover re-derivation (FAR-1825):* four more sites landed by other work after
-   that cutover (A19 and the D15–D17 trio in `cron_helpers`), so the branch tip now
-   measures **59** `.with_for_update(` sites, **63** SQLAlchemy call sites, **65** total
-   row-lock sites – see the re-derivation block in §1 and the FAR-1825 section below.
+    branch gives 57 `.with_for_update(` sites (59 SQLAlchemy call sites total once the 2
+    `session.get` kwargs are included, 61 total row-lock sites with the 2 raw SQL sites) – the
+    audit's original 63 was already stale by one when FAR-1822 (PR #1842) removed the
+    `cron_helpers` lock, and FAR-1823 removed one more (D4's org-row lock), and FAR-1832
+    removed four more (old C1, C2, C3, D14 – the locked settings writers are now
+    single-statement atomic patches). **FAR-1833 retires D9** (the spend-ceiling gate's
+    row lock becomes a per-org advisory lock), giving the **56** `.with_for_update(` sites
+    measured on this branch – **58** SQLAlchemy call sites, **60** total row-lock sites.
+    §3/§5/§7 carry the post-change shape; removed row IDs are left as gaps so cross-references
+    stay stable.
+    *Post-cutover re-derivation (FAR-1825):* four more sites landed by other work after
+    that cutover (A19 and the D15–D17 trio in `cron_helpers`), so the branch tip now
+    measures **59** `.with_for_update(` sites, **63** SQLAlchemy call sites, **65** total
+    row-lock sites – see the re-derivation block in §1 and the FAR-1825 section below.
+
+    **Note on D4:** FAR-1823 removed D4's `FOR UPDATE` lock. The `.with_for_update(` count
+    including D4 is 59; excluding D4 it is 58. The SQLAlchemy total including D4 is 63;
+    excluding D4 it is 62. The total row-lock sites including D4 is 65; excluding D4 it is 64.
+    The §3/§5 inventory reflects the post-FAR-1823 shape (D4 = "none").
 
 ### Correction (FAR-1833) – D9 retired: the org spend-ceiling gate is no longer a row lock
 
@@ -578,13 +595,13 @@ that was D9. The residual coupling is therefore a bounded one-way wait, never a 
 This document's own §9 caveat applies: an inventory is a hypothesis. FAR-1825 therefore
 re-ran §1's two commands against the branch tip before changing anything:
 
-| Form | At the branch tip (re-measured) |
-|---|---|
-| `.with_for_update(` | **59** |
-| `session.get(..., with_for_update=True)` | **4** (a 5th kwarg grep hit is the FAR-1914 docstring at `cron_helpers.py:6884`) |
-| SQLAlchemy call sites | **63** |
-| raw locking `FOR UPDATE` | **2** |
-| **total** | **65** |
+| Form | At the branch tip (re-measured) | Post-FAR-1823 (D4 excluded) |
+|---|---|---|
+| `.with_for_update(` | **59** | **58** |
+| `session.get(..., with_for_update=True)` | **4** (a 5th kwarg grep hit is the FAR-1914 docstring at `cron_helpers.py:6884`) | **4** |
+| SQLAlchemy call sites | **63** | **62** |
+| raw locking `FOR UPDATE` | **2** | **2** |
+| **total** | **65** | **64** |
 
 The +4 since the FAR-1833 snapshot are sites added by unrelated work, all outside
 category C: **A19** `api/mcp_server.py::_replace_pipeline_graph_txn` (already self-bounds
@@ -596,6 +613,10 @@ at `cron_helpers.py:9305`, FAR-1601); **D16**
 and **D17** `core/cron_helpers.py::_terminalize_aged_nodeless_zombies` (the FAR-1914
 locked re-read at `7021`, same reconcile transaction bound). Category C remains exactly
 **20** sites.
+
+**Post-FAR-1823 (D4 excluded):** the `.with_for_update(` count is 58, SQLAlchemy
+total is 62, and total row-lock sites is 64. D4 (`export_org_data`) is now "none"
+in §3, so it is not counted as a row-lock site.
 
 **Disposition of every category-C site** (the `txn` column in §3 carries the per-row note):
 

@@ -357,6 +357,36 @@ class TestRequestOrgDeletion:
         assert "model_backends" in export
         assert "exported_at" in export
 
+    async def test_soft_deleted_pipeline_included_in_export(self, db_engine: AsyncEngine) -> None:
+        """Soft-deleted pipelines must appear in the export bundle (FAR-1758)."""
+        from modulo.db.crud.org_deletion import request_org_deletion
+
+        org_id = await _create_org(db_engine, "softdel-pipeline")
+        user_id = await _create_user(db_engine, org_id, "softdel@test.com")
+
+        # Create a pipeline and soft-delete it
+        pid = await _create_pipeline(db_engine, org_id, "Soft-Deleted Pipeline", user_id)
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(
+                text("UPDATE pipelines SET deleted_at = now() WHERE id = :pid"),
+                {"pid": str(pid)},
+            )
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session:
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org_id)},
+            )
+            result = await request_org_deletion(session, org_id, user_id)
+            await session.commit()
+
+        export = result["export"]
+        # The soft-deleted pipeline must be included in the export
+        assert export["pipelines"], "export must contain pipelines"
+        pipeline_names = [p["name"] for p in export["pipelines"]]
+        assert "Soft-Deleted Pipeline" in pipeline_names, "soft-deleted pipeline must be in export"
+
 
 # ── Tests: confirm_org_deletion ─────────────────────────────────────
 
@@ -752,11 +782,11 @@ class TestExportOrgData:
         """Non-blocking proof (fail-first): export_org_data's live-capture path
         must NOT block a concurrent org settings patch.
 
-        A deliberately slow _collect_org_export (monkeypatched to sleep) runs in
-        a read-only REPEATABLE READ snapshot on a separate connection. A concurrent
-        update_org_settings_patch must complete WITHOUT waiting for the export.
-        This test MUST FAIL on the old code (export under FOR UPDATE blocked the
-        patch) and PASS after the fix.
+        A deliberately slow _collect_org_export (monkeypatched to wait on an event)
+        runs in a read-only REPEATABLE READ snapshot on a separate connection. A
+        concurrent update_org_settings_patch must complete WITHOUT waiting for the
+        export. This test MUST FAIL on the old code (export under FOR UPDATE blocked
+        the patch) and PASS after the fix.
         """
         import asyncio
         from types import SimpleNamespace
@@ -768,13 +798,17 @@ class TestExportOrgData:
 
         register_soft_delete_filter()
 
-        # Monkeypatch _collect_org_export to be slow (sleep 500ms).
+        # Event to signal that the export has entered the snapshot and is waiting.
+        export_in_snapshot = asyncio.Event()
+
+        # Monkeypatch _collect_org_export to wait on the event (deterministic sync).
         import modulo.db.crud.org_deletion as org_deletion_mod
 
         original_collect = org_deletion_mod._collect_org_export
 
         async def _slow_collect(session: AsyncSession, org: Any) -> dict[str, Any]:
-            await asyncio.sleep(0.5)
+            export_in_snapshot.set()  # Signal we're in the snapshot
+            await asyncio.sleep(0.5)  # Hold the snapshot
             return await original_collect(session, org)
 
         monkeypatch.setattr(org_deletion_mod, "_collect_org_export", _slow_collect)
@@ -785,15 +819,15 @@ class TestExportOrgData:
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
-        # Start the export in one session (it will sleep in the snapshot).
+        # Start the export in one session (it will wait in the snapshot).
         export_session = factory()
         await export_session.begin()
 
         # Run the export as a background task.
         export_task = asyncio.create_task(export_org_data(export_session, org_id))
 
-        # Give the export time to enter the snapshot and start sleeping.
-        await asyncio.sleep(0.1)
+        # Wait for the export to enter the snapshot (deterministic, no sleep race).
+        await export_in_snapshot.wait()
 
         # Concurrent settings patch in a SEPARATE session — must NOT block.
         patch_session = factory()
@@ -826,9 +860,9 @@ class TestExportOrgData:
         """Non-blocking proof (fail-first): request_org_deletion's snapshot phase
         must NOT block a concurrent org settings patch.
 
-        A deliberately slow _collect_org_export (monkeypatched to sleep) runs in
-        a read-only REPEATABLE READ snapshot on a separate connection BEFORE the
-        FSM lock. A concurrent update_org_settings_patch must complete WITHOUT
+        A deliberately slow _collect_org_export (monkeypatched to wait on an event)
+        runs in a read-only REPEATABLE READ snapshot on a separate connection BEFORE
+        the FSM lock. A concurrent update_org_settings_patch must complete WITHOUT
         waiting for the export. This test MUST FAIL on the old code (export under
         FOR UPDATE blocked the patch) and PASS after the fix.
         """
@@ -842,13 +876,17 @@ class TestExportOrgData:
 
         register_soft_delete_filter()
 
-        # Monkeypatch _collect_org_export to be slow (sleep 500ms).
+        # Event to signal that the export has entered the snapshot and is waiting.
+        export_in_snapshot = asyncio.Event()
+
+        # Monkeypatch _collect_org_export to wait on the event (deterministic sync).
         import modulo.db.crud.org_deletion as org_deletion_mod
 
         original_collect = org_deletion_mod._collect_org_export
 
         async def _slow_collect(session: AsyncSession, org: Any) -> dict[str, Any]:
-            await asyncio.sleep(0.5)
+            export_in_snapshot.set()  # Signal we're in the snapshot
+            await asyncio.sleep(0.5)  # Hold the snapshot
             return await original_collect(session, org)
 
         monkeypatch.setattr(org_deletion_mod, "_collect_org_export", _slow_collect)
@@ -858,7 +896,7 @@ class TestExportOrgData:
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
-        # Start the deletion request in one session (it will sleep in the snapshot).
+        # Start the deletion request in one session (it will wait in the snapshot).
         deletion_session = factory()
         await deletion_session.begin()
         await deletion_session.execute(
@@ -869,8 +907,8 @@ class TestExportOrgData:
         # Run the request_org_deletion as a background task.
         deletion_task = asyncio.create_task(request_org_deletion(deletion_session, org_id, user_id))
 
-        # Give the deletion request time to enter the snapshot and start sleeping.
-        await asyncio.sleep(0.1)
+        # Wait for the export to enter the snapshot (deterministic, no sleep race).
+        await export_in_snapshot.wait()
 
         # Concurrent settings patch in a SEPARATE session — must NOT block.
         patch_session = factory()

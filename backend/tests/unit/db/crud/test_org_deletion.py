@@ -168,7 +168,8 @@ class TestRequestOrgDeletion:
         org = _make_org()
         mock_session.execute = AsyncMock(return_value=_lookup_result(org))
         export = {"organisation": [], "exported_at": "2026-01-01"}
-        with patch("modulo.db.crud.org_deletion._collect_org_export", AsyncMock(return_value=export)) as collect:
+        target = "modulo.db.crud.org_deletion._collect_org_export_in_snapshot"
+        with patch(target, AsyncMock(return_value=export)) as collect:
             from modulo.db.crud.org_deletion import request_org_deletion
 
             result = await request_org_deletion(mock_session, _ORG_ID, _ORG_ID)
@@ -322,7 +323,7 @@ class TestCancelAndExport:
     async def test_export_collects_when_no_cached_bundle(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_lookup_result(_make_org(export_bundle_json=None)))
         collected = {"organisation": []}
-        with patch("modulo.db.crud.org_deletion._collect_org_export", AsyncMock(return_value=collected)):
+        with patch("modulo.db.crud.org_deletion._collect_org_export_in_snapshot", AsyncMock(return_value=collected)):
             from modulo.db.crud.org_deletion import export_org_data
 
             assert await export_org_data(mock_session, _ORG_ID) == collected

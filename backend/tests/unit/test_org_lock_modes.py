@@ -23,6 +23,14 @@ tests), but the module lives under ``tests/integration/`` per the task contract.
 
 from __future__ import annotations
 
+# Set required env vars BEFORE any module imports that call get_settings()
+import os
+
+os.environ["DATABASE_URL"] = "postgresql+asyncpg://localhost/modulo-unit-test"
+os.environ["MODULO_SYSTEM_DATABASE_URL"] = "postgresql+asyncpg://localhost/modulo-system-unit-test"
+os.environ["FERNET_KEY"] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+os.environ["SECRET_KEY"] = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
+
 import uuid
 from typing import Any
 
@@ -48,7 +56,6 @@ from modulo.db.crud.organisation import get_organisation
 
 _ORG_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 _ACTOR_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
-
 _ORG_NOT_FOUND = "Organisation not found"
 
 
