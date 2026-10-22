@@ -617,6 +617,14 @@ function isMetadataHost(host: string): boolean {
   if (normalized.startsWith('169.254.')) return true
   if (normalized === '100.100.100.200' || normalized === 'fd00:ec2::254') return true
   if (normalized.startsWith('::ffff:169.254.')) return true
+  // IPv4-mapped IPv6 in hex form ([::ffff:a9fe:a9fe] normalises here).
+  const mapped = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+  if (mapped) {
+    const high = parseInt(mapped[1], 16)
+    const low = parseInt(mapped[2], 16)
+    const ipv4 = `${(high >> 8) & 255}.${high & 255}.${(low >> 8) & 255}.${low & 255}`
+    if (ipv4.startsWith('169.254.') || ipv4 === '100.100.100.200') return true
+  }
   // IPv6 link-local (fe80::/10)
   return /^fe[89ab][0-9a-f]:/.test(normalized)
 }
@@ -852,11 +860,11 @@ function buildDefaultParams(): Record<string, unknown> {
     }
   }
   // FAR-2046: base_url is endpoint configuration, not a model parameter — it
-  // travels as a top-level field and is persisted beside the API key. Providers
-  // that do not expose the field (azure_openai, custom) keep any legacy value.
-  if (showBaseUrl.value) {
-    delete params.base_url
-  }
+  // travels as a top-level field and is persisted beside the API key. Strip it
+  // for EVERY provider: for a provider outside the capability map the server
+  // drops an unchanged legacy value, and sending it back would look like a new
+  // endpoint and be rejected.
+  delete params.base_url
   return params
 }
 

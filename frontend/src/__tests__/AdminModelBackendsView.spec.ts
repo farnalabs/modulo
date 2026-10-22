@@ -236,6 +236,8 @@ describe('AdminModelBackendsView — create', () => {
     ['http://169.254.169.254/latest/meta-data', 'cloud metadata'],
     ['http://2852039166/latest/meta-data', 'cloud metadata'],
     ['http://0x7f000001/v1', 'http(s) URL'],
+    ['http://[::ffff:169.254.169.254]/v1', 'cloud metadata'],
+    ['http://[::ffff:a9fe:a9fe]/v1', 'cloud metadata'],
     ['http://example.com/v1', 'Allow plain HTTP'],
     ['https://user:pass@example.com/v1', 'http(s) URL'],
     ['https://example.com/v1?x=1', 'http(s) URL'],
@@ -594,6 +596,33 @@ describe('AdminModelBackendsView — edit', () => {
     const body = mockPatch.mock.calls[0][1].body
     expect(body.base_url).toBe('https://new.internal.example/v1')
     expect(body.api_key).toBe('sk-fresh')
+  })
+
+  it('edits an incapable-provider legacy row and strips its legacy endpoint', async () => {
+    mockBackendsGet([
+      backend('mb-1', {
+        provider: 'anthropic',
+        default_params: { base_url: 'https://legacy.internal.example/v1', temperature: 0.7 },
+      }),
+    ])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openEdit(wrapper, 'mb-1')
+
+    // The Base URL field is not shown for a provider outside the capability map.
+    expect(wrapper.find('[data-testid="admin-model-backends-edit-base-url"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="admin-model-backends-edit-display-name"]').setValue('Renamed')
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    expect(mockPatch).toHaveBeenCalledTimes(1)
+    const body = mockPatch.mock.calls[0][1].body
+    expect(body.display_name).toBe('Renamed')
+    expect(body.default_params).toEqual({ temperature: 0.7 })
+    expect(body.base_url).toBeUndefined()
   })
 
   it('cancel closes the edit form', async () => {
