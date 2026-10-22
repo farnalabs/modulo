@@ -436,18 +436,20 @@ def test_cert_vs_actual_egress_capability(
 # --- FAR-1051: the certificate follows the profile's RESOLVED provider tier ---
 
 
-def test_kubernetes_profile_none_certifies_the_declared_deny_all() -> None:
-    """FAR-1051 / FAR-2068: profile network_policy='none' on a KUBERNETES
-    profile used to certify an enforcement the tier refused. Since FAR-2068 the
-    resolver ACCEPTS the deny-all as a DECLARED posture (Modulo authors the
-    Helm NetworkPolicy; the customer's CNI enforces it), so the certificate is
-    a real restrictive ``False`` — matching what dispatch now does."""
+def test_kubernetes_profile_declared_deny_all_is_unknown_for_certification() -> None:
+    """FAR-2068: a K8s deny-all is a DECLARED posture, so it must not certify.
+
+    The resolver accepts the declaration (Modulo authors the Helm
+    NetworkPolicy; the customer's CNI enforces it), but Modulo never observes
+    that enforcement. A block guardrail must therefore see UNKNOWN
+    (fail-closed), never a certified ``sandbox.egress`` deny.
+    """
     caps = derive_sandbox_capabilities(
         {"node_type": "sandbox_agent"},
         profile_network_policy="none",
         provider_type="kubernetes",
     )
-    assert caps[SANDBOX_CAPABILITY_EGRESS] is False
+    assert caps[SANDBOX_CAPABILITY_EGRESS] is None
 
 
 def test_kubernetes_profile_default_posture_certifies_egress_allowed() -> None:
@@ -522,8 +524,12 @@ def test_cert_vs_actual_matches_the_kubernetes_dispatch_tier(
         assert certified is None, f"{description}: refused but certified={certified!r}"
     elif runtime.policy is None:
         assert certified is True, f"{description}: None policy but certified={certified!r}"
-    else:
+    elif runtime.posture is EgressPosture.ENFORCED_BY_SUBSTRATE:
         assert certified is False, f"{description}: policy={runtime.policy!r} but certified={certified!r}"
+    else:
+        # FAR-2068: a restrictive posture the substrate does not itself enforce
+        # (e.g. the K8s DECLARED deny-all) can never be certified as a deny.
+        assert certified is None, f"{description}: posture={runtime.posture!r} but certified={certified!r}"
 
 
 def test_non_sandbox_node_returns_empty_caps() -> None:
@@ -689,6 +695,29 @@ def test_kubernetes_refusal_names_networkpolicy_as_the_remediation() -> None:
     assert "kubernetes" in result.refusal
 
 
+def test_kubernetes_selected_without_allowlist_returns_the_tier_refusal() -> None:
+    """FAR-2068: the TIER refusal wins over 'requires a non-empty allowlist'.
+
+    On a tier that refuses ``selected`` the allowlist is irrelevant, so the
+    unactionable allowlist message must not mask the NetworkPolicy
+    remediation.
+    """
+    result = resolve_egress(
+        node_egress_policy="selected",
+        node_egress_allowlist=None,
+        profile_network_policy=None,
+        tier="kubernetes",
+    )
+
+    assert result.refusal is not None
+    assert "NetworkPolicy" in result.refusal
+    assert "non-empty allowlist" not in result.refusal
+    # The reworded capability list never claims enforcement for a declared
+    # posture (``deny_all`` is accepted, not enforced).
+    assert "available enforcement on this tier" not in result.refusal
+    assert "accepted policies on this tier" in result.refusal
+
+
 def test_t3_tier_is_registered_in_the_enforcement_matrix() -> None:
     """The ``t3`` tier name is the SAME K8s substrate as ``kubernetes``.
 
@@ -788,7 +817,7 @@ def test_other_tiers_keep_their_historical_refusal_message() -> None:
 
     assert result.refusal is not None
     assert "NetworkPolicy" not in result.refusal
-    assert "available enforcement on this tier" in result.refusal
+    assert "accepted policies on this tier" in result.refusal
 
 
 # --- FAR-1690: typed egress posture (never a boolean) ------------------------

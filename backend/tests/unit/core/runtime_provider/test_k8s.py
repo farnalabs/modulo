@@ -320,6 +320,45 @@ class TestCreateWorkspace:
         # Nothing is enforced inside the pod: no exec subresource is opened.
         ws_core.connect_get_namespaced_pod_exec.assert_not_called()
 
+    async def test_egress_none_logs_the_declared_posture_and_prerequisite(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """FAR-2068: accepting a K8s deny-all is not silent.
+
+        The WARNING records that the posture is ``declared`` and names its
+        prerequisite, so an operator never reads provisioning as proof Modulo
+        enforced egress.
+        """
+        core = AsyncMock()
+        core.read_namespaced_pod.return_value = _pod("Running")
+        provider = _provider(core=core)
+        with caplog.at_level("WARNING", logger="modulo.core.runtime_provider.k8s"):
+            await provider.create_workspace(_spec(egress_policy="none"))
+
+        records = [r for r in caplog.records if r.message == "k8s.egress.declared_posture"]
+        assert len(records) == 1
+        record = records[0]
+        assert record.levelname == "WARNING"
+        assert record.egress_posture == "declared"
+        assert "workspaceNetworkPolicy.enabled" in record.prerequisite
+        assert "enforcing CNI" in record.prerequisite
+        assert record.organisation_id
+
+    async def test_selected_egress_is_refused_at_provisioning(self) -> None:
+        """FAR-2068: a direct caller cannot create a pod for ``selected``.
+
+        Provisioning validates egress as well as ``apply_isolation``, so the
+        typed refusal fires BEFORE any pod is created.
+        """
+        core = AsyncMock()
+        core.read_namespaced_pod.return_value = _pod("Running")
+        provider = _provider(core=core)
+
+        with pytest.raises(ProviderCapabilityUnsupportedError, match="NetworkPolicy"):
+            await provider.create_workspace(_spec(egress_policy="selected"))
+
+        core.create_namespaced_pod.assert_not_called()
+
     async def test_create_builds_hardened_pod_and_returns_tracked_ref(self) -> None:
         core = AsyncMock()
         core.read_namespaced_pod.return_value = _pod("Running")

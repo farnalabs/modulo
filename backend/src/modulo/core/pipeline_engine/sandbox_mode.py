@@ -155,25 +155,32 @@ def derive_sandbox_capabilities(
     cluster-level), or ``deny_all`` on ``local`` (no iptables/namespace
     isolation) — resolves the capability to ``None``, fail-closed unknown,
     instead of certifying an enforcement the provider never performs; dispatch
-    refuses the run.  A Kubernetes ``deny_all`` is NOT a refusal: it resolves
-    ``False`` and the run proceeds under the DECLARED posture (Modulo authors
-    the NetworkPolicy, the customer's CNI enforces it).  An unrecognised
-    provider type resolves to the raw value as the tier, which the resolver
-    refuses as an unknown tier (also fail-closed).  When absent (no bound
-    profile, or a direct caller) the reference tier stays ``e2b`` — unchanged
-    legacy behaviour for every existing caller.
+    refuses the run.  A Kubernetes ``deny_all`` is NOT a refusal: dispatch
+    proceeds under the DECLARED posture (Modulo authors the NetworkPolicy, the
+    customer's CNI enforces it) — but because Modulo never observes that
+    enforcement, the capability is ``None`` (unknown), NOT ``False``.  A
+    restrictive policy certifies ``False`` only when the tier establishes the
+    posture through its own refusal-contract path
+    (``EgressPosture.ENFORCED_BY_SUBSTRATE``); ``DECLARED`` / ``METADATA_ONLY``
+    / ``NONE`` resolve unknown so a block guardrail can never certify a deny
+    the substrate did not prove.  An unrecognised provider type resolves to
+    the raw value as the tier, which the resolver refuses as an unknown tier
+    (also fail-closed).  When absent (no bound profile, or a direct caller)
+    the reference tier stays ``e2b`` — unchanged legacy behaviour for every
+    existing caller.
 
     The derivation is MECHANICAL — it reads the node's actual validated
-    configuration, never a declared claim — so a conformance hard-block can
-    CERTIFY what is genuinely enforced (egress, read-only workspace, scoped git
-    credentials) and fails CLOSED (unknown) for anything not yet a real,
-    validated, enforced surface. The polarity here is raw (True = present /
-    risked for egress and write_files; True = the scoped guarantee holds for
-    git_credentials); the conformance manifest reader inverts the deny-pair
-    (``conformance._add_sandbox_surface``) because a block guardrail's
-    ``required_capabilities`` on the write/egress surface is a deny/negative
-    guarantee, while ``sandbox.git_credentials`` is a positive guarantee and is
-    stamped as-is. Non-sandbox nodes contribute an empty profile.
+    configuration plus the tier's establishment posture — so a conformance
+    hard-block CERTIFIES only what is genuinely enforced (egress,
+    read-only workspace, scoped git credentials) and fails CLOSED (unknown)
+    for anything not a real, validated, substrate-proven surface. The polarity
+    here is raw (True = present / risked for egress and write_files; True = the
+    scoped guarantee holds for git_credentials); the conformance manifest
+    reader inverts the deny-pair (``conformance._add_sandbox_surface``) because
+    a block guardrail's ``required_capabilities`` on the write/egress surface
+    is a deny/negative guarantee, while ``sandbox.git_credentials`` is a
+    positive guarantee and is stamped as-is. Non-sandbox nodes contribute an
+    empty profile.
     """
     node_type = node_def.get("node_type")
     if node_type is not None and node_type != "sandbox_agent":
@@ -204,7 +211,7 @@ def derive_sandbox_capabilities(
     if isinstance(raw_egress, str) and raw_egress and raw_egress not in _SANDBOX_EGRESS_POLICIES:
         caps[SANDBOX_CAPABILITY_EGRESS] = None
     else:
-        from modulo.core.pipeline_engine.egress import resolve_egress
+        from modulo.core.pipeline_engine.egress import EgressPosture, resolve_egress
 
         _tier = "e2b"
         if isinstance(provider_type, str) and provider_type.strip():
@@ -225,8 +232,16 @@ def derive_sandbox_capabilities(
             # Provider default -- egress is allowed.
             caps[SANDBOX_CAPABILITY_EGRESS] = True
         elif _egress_res.policy in ("deny_all", "selected"):
-            # Egress is restricted.
-            caps[SANDBOX_CAPABILITY_EGRESS] = False
+            # Egress is restricted. FAR-2068: a restrictive posture is only a
+            # certifyable DENY when the substrate itself establishes it via
+            # its refusal-contract path. A DECLARED / METADATA_ONLY / NONE
+            # posture (e.g. a K8s deny-all: Modulo authors the Helm
+            # NetworkPolicy, the customer's CNI enforces it) asserts nothing
+            # Modulo observed, so the capability is UNKNOWN (fail-closed) --
+            # never a certified "sandbox.egress" guarantee.
+            caps[SANDBOX_CAPABILITY_EGRESS] = (
+                False if _egress_res.posture is EgressPosture.ENFORCED_BY_SUBSTRATE else None
+            )
         else:
             # Unknown resolved policy -- fail-closed.
             caps[SANDBOX_CAPABILITY_EGRESS] = None

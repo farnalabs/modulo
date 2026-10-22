@@ -618,14 +618,16 @@ async def _get_profile_or_404(session: AsyncSession, profile_id: uuid.UUID) -> E
     return profile
 
 
-def _sse_event(event: str, detail: str) -> str:
-    data = json.dumps(
-        {
-            "event": event,
-            "detail": detail,
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
-    )
+def _sse_event(event: str, detail: str, **extra: object) -> str:
+    payload: dict[str, object] = {
+        "event": event,
+        "detail": detail,
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+    # Additive fields (e.g. the FAR-2068 ``egress_posture`` signal) ride on the
+    # same event envelope; existing events are unchanged.
+    payload.update(extra)
+    data = json.dumps(payload)
     return f"data: {data}\n\n"
 
 
@@ -713,6 +715,37 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
     )
 
 
+def _egress_posture_event(profile: EnvironmentProfile) -> str | None:
+    """SSE event recording a DECLARED egress posture (FAR-2068), else ``None``.
+
+    A profile whose resolved posture is ``declared`` (a Kubernetes deny-all:
+    Modulo authors the Helm NetworkPolicy, the customer's CNI enforces it)
+    must not read as verification of egress. The event is additive — it makes
+    the prerequisite visible in the operator's test stream without changing
+    any existing event.
+    """
+    from modulo.core.pipeline_engine.egress import EgressPosture, resolve_egress
+    from modulo.core.runtime_provider import egress_tier_for_provider_type
+
+    _provider_type = (profile.provider_type or "").strip().lower()
+    _tier = egress_tier_for_provider_type(_provider_type) or _provider_type
+    _egress = resolve_egress(
+        node_egress_policy=None,
+        node_egress_allowlist=None,
+        profile_network_policy=profile.network_policy,
+        tier=_tier,
+    )
+    if _egress.refusal is not None or _egress.posture is not EgressPosture.DECLARED:
+        return None
+    return _sse_event(
+        "egress_posture",
+        "Egress posture is declared, not verified: it requires workspaceNetworkPolicy.enabled "
+        "and an enforcing CNI on the cluster. This test proves the workspace runs; it does not "
+        "verify egress enforcement.",
+        posture=EgressPosture.DECLARED.value,
+    )
+
+
 def _sandbox_failure_event(exc: Exception) -> str | None:
     """The SSE 'failed' event for a classified sandbox failure, else None."""
     from modulo.core.pipeline_engine.sandbox_errors import (  # nosemgrep: inline-import-route-files
@@ -762,6 +795,11 @@ async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str
             return
 
         spec = _build_workspace_spec(profile)
+        # FAR-2068: an accepted DECLARED posture is announced before provisioning
+        # so the test never reads as verification of egress enforcement.
+        posture_event = _egress_posture_event(profile)
+        if posture_event is not None:
+            yield posture_event
         provider_ref = await provider.create_workspace(spec)
         yield _sse_event("provisioned", f"Workspace created via {type(provider).__name__}: {provider_ref}")
         await asyncio.sleep(0.3)

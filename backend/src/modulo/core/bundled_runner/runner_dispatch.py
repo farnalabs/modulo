@@ -564,10 +564,11 @@ def _workspace_spec_for_dispatch(
 
     # FAR-1690: record the TYPED egress posture on the workspace, never a
     # boolean. On this route the reachable tiers (docker, kubernetes) yield
-    # ``enforced_by_substrate`` for a restrictive docker policy and ``none``
-    # for the unrestricted default; the value names HOW the posture is
-    # established so a permissive tier is never read as an enforcement it
-    # does not perform.
+    # ``enforced_by_substrate`` for a restrictive docker policy, ``declared``
+    # for a Kubernetes ``deny_all`` (Modulo authors the Helm NetworkPolicy, the
+    # customer's CNI enforces it), and ``none`` for the unrestricted default;
+    # the value names HOW the posture is established so a permissive tier is
+    # never read as an enforcement it does not perform.
     metadata["modulo.egress.posture"] = egress_resolved.posture.value
 
     # Map canonical policy to WorkspaceSpec egress_policy vocabulary

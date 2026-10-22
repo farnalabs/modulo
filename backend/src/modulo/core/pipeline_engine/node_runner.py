@@ -11161,10 +11161,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # the canonical resolver can apply the node→profile→provider-default
         # precedence chain. FAR-1051: the TIER is the resolved provider type
         # ("e2b" on the legacy route — unchanged; "kubernetes" for a
-        # Kubernetes-bound profile), so a tier that cannot enforce the policy
-        # (e.g. deny_all/selected on Kubernetes, where bounded egress is the
-        # customer's NetworkPolicy) refuses here by name instead of
-        # certifying an enforcement the provider never performs.
+        # Kubernetes-bound profile), so a tier that cannot accept the policy
+        # (``selected`` on Kubernetes, where bounded egress is the customer's
+        # NetworkPolicy) refuses here by name instead of certifying an
+        # enforcement the provider never performs. A Kubernetes ``deny_all`` is
+        # NOT refused: it resolves under the DECLARED posture (Modulo authors
+        # the Helm NetworkPolicy, the customer's CNI enforces it).
         from modulo.core.pipeline_engine.egress import resolve_egress
 
         _egress_tier = _resolved_provider

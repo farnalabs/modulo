@@ -143,17 +143,23 @@ def spec_egress_for_canonical(policy: str | None) -> str:
 
 # --- Tier capability matrix (declare once) --------------------------------
 
-# Each tier declares which *canonical* egress policies it can enforce.
-# ``True`` means the tier supports enforcement; ``False`` means it cannot
-# and will return a ``refusal`` instead.
+# Each tier declares which *canonical* egress policies it ACCEPTS and which
+# establishment posture a restrictive acceptance carries (see
+# ``_TIER_RESTRICTIVE_POSTURE``). ``True`` means the tier accepts the policy
+# and establishes a posture for it (enforced by the substrate, or DECLARED for
+# a manifest the customer's substrate is expected to enforce); ``False`` means
+# it cannot and will return a ``refusal`` instead.
 _TIER_ENFORCEMENT: dict[str, dict[str, bool]] = {
     "e2b": {"default": True, "deny_all": True, "selected": True},
     "docker": {"default": True, "deny_all": True, "selected": False},
-    # ``t3`` and ``kubernetes`` are the SAME substrate (the Helm-rendered
-    # NetworkPolicy authored by Modulo and enforced by the customer's CNI), so
-    # they declare the same capability set: a ``deny_all`` declaration is
-    # accepted as a DECLARED posture, while ``selected`` is a NAMED refusal —
-    # the rendered policy's allowlist is cluster-level and cannot express a
+    # ``t3`` is the DECLARED vocabulary ALIAS of the same substrate, kept for
+    # direct callers (no provider maps to it — ``egress_tier_for_provider_type``
+    # returns ``kubernetes``).  It is not a profile option; it exists so a
+    # caller that spells the substrate that way resolves identically instead of
+    # failing closed as an unknown tier.  ``t3`` and ``kubernetes`` therefore
+    # declare the same capability set: a ``deny_all`` declaration is accepted
+    # as a DECLARED posture, while ``selected`` is a NAMED refusal — the
+    # rendered policy's allowlist is cluster-level and cannot express a
     # per-node allowlist.  Neither tier name may accept ``selected`` without
     # an enforcement behind it (FAR-2068).
     "t3": {"default": True, "deny_all": True, "selected": False},
@@ -262,10 +268,12 @@ class EgressResolution:
         "selected"``.  ``None`` otherwise.
 
     ``refusal``
-        Non-``None`` when the resolved policy **cannot be enforced** on the
-        given tier.  Carries a clear, actionable reason string naming the
-        profile/node values and the alternatives.  A refusal is NEVER a
-        silent downgrade and NEVER a silent grant.
+        Non-``None`` when the resolved policy **is not accepted** on the
+        given tier (it cannot be enforced there, or its establishment
+        posture is not one the tier can honour).  Carries a clear,
+        actionable reason string naming the profile/node values and the
+        alternatives.  A refusal is NEVER a silent downgrade and NEVER a
+        silent grant.
 
     ``posture``
         The TYPED provenance of the resolved posture (:class:`EgressPosture`,
@@ -303,8 +311,12 @@ def resolve_egress(
     the node nor the profile — the profile model carries no allowlist
     field today), a refusal is returned.  Never a silent downgrade.
 
-    **Tier capability check.**  A tier that cannot enforce the resolved
-    policy returns ``refusal`` set with a clear, actionable reason.
+    **Tier capability check.**  A tier that does not ACCEPT the resolved
+    policy returns ``refusal`` set with a clear, actionable reason.  This
+    check runs BEFORE the allowlist check, so a ``selected`` request on a
+    tier that refuses it reports the tier refusal (with its remediation,
+    where one exists) rather than the unactionable "requires a non-empty
+    allowlist" message.
     """
     # --- Validate raw inputs against their vocabularies before mapping ---
     # An unrecognised value is a refusal (fail-closed): a typo'd or
@@ -347,6 +359,38 @@ def resolve_egress(
     # Resolve effective allowlist: node explicit -> profile (not yet available
     # on the profile model -> None).  Allowlist only matters for "selected".
     effective_allowlist: list[dict[str, str | int]] | None = None
+
+    # Tier capability check — covers both named policies and the provider
+    # default (None).  A tier that declares "default: False" (e.g. local)
+    # cannot accept even the provider-default posture and must refuse.
+    #
+    # This check runs BEFORE the "selected requires an allowlist" check
+    # (FAR-2068): on a tier that refuses ``selected`` the allowlist is
+    # irrelevant, and reporting "requires a non-empty allowlist" would be the
+    # wrong, unactionable message — the operator needs the tier refusal that
+    # names where the control actually lives (e.g. the customer's
+    # NetworkPolicy on Kubernetes).
+    tier_caps = _TIER_ENFORCEMENT.get(tier)
+    if tier_caps is None:
+        return EgressResolution(
+            policy=effective,
+            allowlist=None,
+            refusal=f"unknown tier {tier!r}; cannot determine enforcement capability",
+            posture=EgressPosture.NONE,
+        )
+    if not tier_caps.get(effective if effective is not None else "default", False):
+        _note = _TIER_REFUSAL_NOTES.get(tier)
+        return EgressResolution(
+            policy=effective,
+            allowlist=None,
+            refusal=(
+                f"tier {tier!r} does not accept egress policy {effective!r}; "
+                f"accepted policies on this tier: "
+                f"{[k for k, v in tier_caps.items() if v]}" + (f"; {_note}" if _note else "")
+            ),
+            posture=EgressPosture.NONE,
+        )
+
     if effective == "selected":
         # Prefer node's allowlist; fall through to profile (which currently
         # carries no allowlist -- verify in db/models/environment_profile.py).
@@ -364,30 +408,6 @@ def resolve_egress(
                 ),
                 posture=EgressPosture.NONE,
             )
-
-    # Tier capability check — covers both named policies and the provider
-    # default (None).  A tier that declares "default: False" (e.g. local)
-    # cannot enforce even the provider-default posture and must refuse.
-    tier_caps = _TIER_ENFORCEMENT.get(tier)
-    if tier_caps is None:
-        return EgressResolution(
-            policy=effective,
-            allowlist=effective_allowlist,
-            refusal=f"unknown tier {tier!r}; cannot determine enforcement capability",
-            posture=EgressPosture.NONE,
-        )
-    if not tier_caps.get(effective if effective is not None else "default", False):
-        _note = _TIER_REFUSAL_NOTES.get(tier)
-        return EgressResolution(
-            policy=effective,
-            allowlist=effective_allowlist,
-            refusal=(
-                f"tier {tier!r} cannot enforce egress policy {effective!r}; "
-                f"available enforcement on this tier: "
-                f"{[k for k, v in tier_caps.items() if v]}" + (f"; {_note}" if _note else "")
-            ),
-            posture=EgressPosture.NONE,
-        )
 
     return EgressResolution(
         policy=effective,

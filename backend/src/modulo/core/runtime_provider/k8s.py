@@ -32,8 +32,10 @@ Security posture (the reason this tier exists)
   records the posture as ``declared`` — it never observes traffic. A
   selected-mode request is REFUSED with the typed
   :class:`ProviderCapabilityUnsupportedError` naming NetworkPolicy as the
-  remediation: the rendered policy's allowlist is cluster-level and cannot
-  express a per-node allowlist. Never a silent downgrade.
+  remediation — at PROVISIONING (:meth:`create_workspace`, so a direct caller
+  cannot create a pod first) and again at isolation time
+  (:meth:`apply_isolation`): the rendered policy's allowlist is cluster-level
+  and cannot express a per-node allowlist. Never a silent downgrade.
 
 Auth and config
 ---------------
@@ -542,12 +544,45 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         a process restart by construction). Provision failure reclaims the pod
         best-effort before re-raising, so a failed create never leaks one.
 
-        An ``egress_policy`` of ``none`` is a DECLARED posture: Modulo authors
-        the NetworkPolicy rendered from ``deploy/helm/modulo``, the cluster CNI
-        enforces it, and nothing is enforced inside the pod here. A
-        ``selected`` claim is refused at isolation time
-        (:meth:`apply_isolation`); provisioning proceeds for both.
+        Egress is validated here as well as in :meth:`apply_isolation` so a
+        DIRECT caller cannot provision a pod for a policy this tier refuses
+        before isolation runs:
+
+        - ``none`` is ACCEPTED as a DECLARED posture: Modulo authors the
+          NetworkPolicy rendered from ``deploy/helm/modulo``, the customer's
+          CNI enforces it, and nothing is enforced inside the pod here. A
+          WARNING records that the posture is declared and its prerequisite
+          (``workspaceNetworkPolicy.enabled`` + an enforcing CNI).
+        - ``selected`` is REFUSED at provisioning with the same typed
+          :class:`ProviderCapabilityUnsupportedError` that
+          :meth:`apply_isolation` raises — the rendered policy's allowlist is
+          cluster-level and cannot express a per-node allowlist.
         """
+        egress = (spec.egress_policy or "").strip().lower()
+        if egress == "selected":
+            raise ProviderCapabilityUnsupportedError(
+                "The Kubernetes tier cannot enforce a selected-mode egress claim inside the "
+                "workspace pod: the Helm-authored NetworkPolicy's allowlist is cluster-level and "
+                "cannot express a per-node allowlist. Bounded egress on this tier is the "
+                "customer's NetworkPolicy on the workspace namespace (opt-in, requires a CNI "
+                "that enforces NetworkPolicy; FAR-1051). Configure it there and use a policy "
+                "this tier can enforce."
+            )
+        if egress == "none":
+            # Fail-loudly-with-a-log (best-effort posture, never a silent
+            # downgrade): the deny-all is a DECLARED posture the customer's
+            # substrate must enforce, so an operator reading logs is told the
+            # prerequisite instead of assuming Modulo enforced it.
+            _log.warning(
+                "k8s.egress.declared_posture",
+                extra={
+                    "egress_posture": "declared",
+                    "organisation_id": str(spec.organisation_id),
+                    "environment_profile_id": str(spec.environment_profile_id),
+                    "run_id": str(spec.run_id) if spec.run_id is not None else None,
+                    "prerequisite": "workspaceNetworkPolicy.enabled + an enforcing CNI",
+                },
+            )
         core = await self._get_core()
         image = spec.image_ref.strip() if spec.image_ref else self._default_image
         pod_name = f"{_WORKSPACE_POD_PREFIX}{uuid.uuid4().hex[:_UUID_TRUNC_LEN]}"
@@ -1161,7 +1196,9 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         An egress ``none`` claim is NOT enforced here either, but it is a
         DECLARED posture rather than a refusal: Modulo authors the
         NetworkPolicy from ``deploy/helm/modulo``, the customer's CNI enforces
-        it, and no in-pod step is attempted.
+        it, and no in-pod step is attempted. ``selected`` is refused here too
+        (defence-in-depth after :meth:`create_workspace`'s provisioning-time
+        refusal) so a direct caller can never reach an unenforced claim.
         """
         egress = (policy.egress_policy or "").strip().lower()
         if egress == "selected":

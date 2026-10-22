@@ -791,11 +791,38 @@ class TestProfileTestEndpoint:
         assert "destroyed" in resp.text
         assert "unknown tier" not in resp.text.lower()
 
-    def test_profile_test_kubernetes_none_refuses_naming_networkpolicy(self, client: TestClient) -> None:
-        """FAR-1051: the unenforceable posture on Kubernetes refuses (fail
-        closed) and the refusal names where the control actually lives —
-        never a silent downgrade to outbound."""
+    def test_profile_test_kubernetes_none_accepts_and_announces_declared_posture(self, client: TestClient) -> None:
+        """FAR-2068: a K8s deny-all is ACCEPTED as a DECLARED posture.
+
+        The test provisions normally and the stream carries an additive
+        ``egress_posture`` event, so an operator test never reads as
+        verification of egress enforcement (the prerequisite is named).
+        """
         fake = _fake_profile(provider_type="kubernetes", network_policy="none")
+        hub = self._stub_hub("kubernetes")
+        with (
+            patch(f"{_ROUTES}.get_environment_profile") as mock_get,
+            patch(f"{_ROUTES}.set_rls_org"),
+            patch(f"{_ROUTES}._get_hub", return_value=hub),
+        ):
+            mock_get.return_value = fake
+            resp = client.post(f"{self.URL}/{_PROFILE_ID}/test")
+        assert resp.status_code == 200
+        body = resp.text
+        assert "failed" not in body
+        assert "refused" not in body.lower()
+        # Accepted: the run proceeds through provisioning and command execution.
+        assert "provisioned" in body
+        assert "command_complete" in body
+        # Additive posture signal: declared + its prerequisite.
+        assert '"event": "egress_posture"' in body
+        assert '"posture": "declared"' in body
+        assert "workspaceNetworkPolicy" in body
+
+    def test_profile_test_kubernetes_selected_still_refuses(self, client: TestClient) -> None:
+        """FAR-2068: ``selected`` remains a named refusal on the K8s tier,
+        before provisioning — the accepted deny-all did not loosen it."""
+        fake = _fake_profile(provider_type="kubernetes", network_policy="selected")
         hub = self._stub_hub("kubernetes")
         with (
             patch(f"{_ROUTES}.get_environment_profile") as mock_get,

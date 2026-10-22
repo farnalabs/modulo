@@ -3,8 +3,10 @@
 Runs the shared checks from ``_conformance.py`` (the ADR 040 ABC contract:
 create/exec/stream/log-tail/destroy/status) plus the Kubernetes-specific
 clauses the portable suite cannot express (pod Ready condition, PSA
-``restricted`` admission, typed egress refusal, no post-destroy log
-retention), plus the NEGATIVE suite:
+``restricted`` admission, the egress contract — a ``none`` declaration
+accepted as a DECLARED posture with no in-pod step, and a ``selected``
+request refused typed — no post-destroy log retention), plus the NEGATIVE
+suite:
 
 1. a deliberately broken adapter (fabricates exit-code 0 for every command)
    must FAIL the suite - that is what proves the gate has teeth;
@@ -126,15 +128,43 @@ async def test_read_log_tail_after_destroy_is_empty(k8s_cluster: K8sConformanceC
     assert not tail, f"a post-destroy log read must be empty on k8s (no retention window), got {tail!r}"
 
 
-async def test_egress_none_refused_with_typed_error(k8s_cluster: K8sConformanceCluster) -> None:
-    """Error-envelope clause: unenforceable egress fails TYPED, never a silent downgrade."""
-    spec = conformance_workspace_spec()
-    spec.egress_policy = "none"
+async def test_egress_none_accepted_and_selected_refused(k8s_cluster: K8sConformanceCluster) -> None:
+    """Egress-contract clause (FAR-2068): accept the declaration, refuse the claim.
+
+    (a) ``none`` is ACCEPTED as a DECLARED posture at BOTH seams —
+    ``create_workspace`` provisions normally and ``apply_isolation`` performs
+    no in-pod egress step. Modulo authors the Helm NetworkPolicy; the
+    customer's CNI enforces it.
+    (b) ``selected`` still raises the typed
+    ``ProviderCapabilityUnsupportedError`` naming NetworkPolicy at both seams,
+    so the gate keeps its teeth against a silent downgrade.
+    """
+    from unittest.mock import patch
+
+    provider = k8s_cluster.provider
+
+    async def _no_in_pod_exec(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("an egress 'none' declaration must not run an in-pod enforcement step")
+
+    none_spec = conformance_workspace_spec()
+    none_spec.egress_policy = "none"
+    with patch.object(provider, "exec_command", _no_in_pod_exec):
+        ref = await provider.create_workspace(none_spec)
+        try:
+            await provider.apply_isolation(ref, none_spec, IsolationPolicy(egress_policy="none"))
+        finally:
+            await destroy_workspace_quietly(provider, ref)
+
+    selected_spec = conformance_workspace_spec()
+    selected_spec.egress_policy = "selected"
     with pytest.raises(ProviderCapabilityUnsupportedError, match="NetworkPolicy"):
-        await k8s_cluster.provider.create_workspace(spec)
-    policy = IsolationPolicy(egress_policy="none")
+        await provider.create_workspace(selected_spec)
     with pytest.raises(ProviderCapabilityUnsupportedError, match="NetworkPolicy"):
-        await k8s_cluster.provider.apply_isolation("unused-ref", spec, policy)
+        await provider.apply_isolation(
+            "unused-ref",
+            selected_spec,
+            IsolationPolicy(egress_policy="selected", egress_allowlist=[{"host": "api.github.com", "port": 443}]),
+        )
 
 
 async def test_get_workspace_status_unknown_ref_is_terminated(k8s_cluster: K8sConformanceCluster) -> None:

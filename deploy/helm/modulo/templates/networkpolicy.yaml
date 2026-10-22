@@ -3,14 +3,17 @@
   Workspace egress NetworkPolicy (FAR-1690, substrate-authoring posture).
 
   On the Kubernetes (T3) tier bounded egress is NOT enforced inside the
-  workspace pod — the pod's network is owned by the cluster CNI, and the
-  K8s runtime provider deliberately refuses an in-pod deny-all/allowlist
-  request (naming NetworkPolicy as the remediation). This template is that
-  remediation: Modulo AUTHORS the policy as a Helm-rendered manifest and the
-  customer's CNI enforces it. The egress posture Modulo records for this is
-  `declared` (see `EgressPosture` in
+  workspace pod — the pod's network is owned by the cluster CNI. The K8s
+  runtime provider ACCEPTS a deny-all request as a DECLARED posture and
+  names NetworkPolicy as its prerequisite; it refuses only an in-pod
+  selected-mode/allowlist request (the rendered policy's allowlist is
+  cluster-level and cannot express a per-node allowlist). This template is
+  the authoring layer for that declared deny-all: Modulo AUTHORS the policy
+  as a Helm-rendered manifest and the customer's CNI enforces it. The egress
+  posture Modulo records for this is `declared` (see `EgressPosture` in
   backend/src/modulo/core/pipeline_engine/egress.py) — Modulo declares the
-  policy; it never observes the substrate's traffic.
+  policy; it never observes the substrate's traffic, and the deny-all is
+  never certified as an enforced guarantee.
 
   Scope:
     - selects the workspace pods via the label the runtime provider stamps
