@@ -3307,70 +3307,89 @@ class PipelineExecutor:
         guardrail-typed, log a WARNING naming the eval id — this would be
         a silent block→warn downgrade from a rejected backfill binding.
         """
-        # The column is typed ``list[dict] | None``. Anything else is a
-        # corrupt/foreign JSON value; a snapshot that carries a fingerprint
-        # already failed closed on it at run start (db.crud.run), so reaching
-        # here with a non-list means an UNFINGERPRINTED (§6.1 case ii) value
-        # — degrade to the legacy live fallback rather than silently
-        # evaluating a zero-gate universe.
-        if policy_gate_pins is not None and not isinstance(policy_gate_pins, list):
-            _log.warning(
-                "eval_defs.policy_gate_pins_malformed",
-                extra={"pipeline_id": str(pipeline_id), "value_type": type(policy_gate_pins).__name__},
-            )
-            policy_gate_pins = None
+        policy_gate_pins = PipelineExecutor._normalise_policy_gate_pins(policy_gate_pins, pipeline_id)
         pinned_universe = policy_gate_pins is not None
-        pinned_by_eval: dict[str, dict[str, Any]] = {}
-        if pinned_universe:
-            for entry in policy_gate_pins or []:
-                if isinstance(entry, dict):
-                    entry_eval = entry.get("eval_id")
-                    if entry_eval and str(entry_eval) not in pinned_by_eval:
-                        pinned_by_eval[str(entry_eval)] = entry
-
+        pinned_by_eval = PipelineExecutor._index_policy_gate_pins(policy_gate_pins)
         eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
         for eval_row, policy_gate in eval_rows:
-            node_key = str(eval_row.node_id) if eval_row.node_id else ""
-            if not node_key:
-                continue
-            pin = pinned_by_eval.get(str(eval_row.id)) if pinned_universe else None
-            failure_behaviour, gate_id, gate_version, gate_node_id, evaluation_mode = (
-                PipelineExecutor._resolve_governed_gate(
-                    eval_row,
-                    policy_gate,
-                    pin,
-                    pinned_universe=pinned_universe,
-                    pipeline_id=pipeline_id,
-                )
-            )
-            eval_defs_by_node.setdefault(node_key, []).append(
-                EvalDefDTO(
-                    id=eval_row.id,
-                    org_id=org_id,
-                    pipeline_id=eval_row.pipeline_id,
-                    node_id=node_key,
-                    name=eval_row.name or "",
-                    eval_type=eval_row.eval_type,
-                    config=eval_row.config_json,
-                    failure_behaviour=failure_behaviour,
-                    pass_threshold=eval_row.pass_threshold,
-                    suite_id=eval_row.suite_id,
-                    version=eval_row.version,
-                    # FAR-1102 chunk 4: PolicyGate metadata for decision-record
-                    # construction.  None when no gate governs this run (no
-                    # pin / disabled / soft-deleted / guardrail-typed Evals /
-                    # backfill-rejected bindings) — no PolicyGateDecision row
-                    # is written then (FAR-967 chunk 10, criteria 8/9).
-                    policy_gate_id=gate_id,
-                    policy_gate_version=gate_version,
-                    policy_gate_node_id=gate_node_id,
-                    # FAR-939 chunk 12: the governing gate's evaluation mode
-                    # (None when no gate governs). Drives the shared-helper
-                    # skip for human-mode gates.
-                    policy_gate_evaluation_mode=evaluation_mode,
-                )
+            PipelineExecutor._append_eval_definition(
+                eval_defs_by_node,
+                eval_row,
+                policy_gate,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+                pin=pinned_by_eval.get(str(eval_row.id)) if pinned_universe else None,
+                pinned_universe=pinned_universe,
             )
         return eval_defs_by_node
+
+    @staticmethod
+    def _normalise_policy_gate_pins(
+        pins: list[dict[str, Any]] | None,
+        pipeline_id: uuid.UUID,
+    ) -> list[dict[str, Any]] | None:
+        """Accept only the persisted pin-list shape; malformed pins use legacy resolution."""
+        if pins is None or isinstance(pins, list):
+            return pins
+        _log.warning(
+            "eval_defs.policy_gate_pins_malformed",
+            extra={"pipeline_id": str(pipeline_id), "value_type": type(pins).__name__},
+        )
+        return None
+
+    @staticmethod
+    def _index_policy_gate_pins(pins: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+        indexed: dict[str, dict[str, Any]] = {}
+        for entry in pins or []:
+            if not isinstance(entry, dict):
+                continue
+            eval_id = entry.get("eval_id")
+            if eval_id and str(eval_id) not in indexed:
+                indexed[str(eval_id)] = entry
+        return indexed
+
+    @staticmethod
+    def _append_eval_definition(
+        definitions: dict[str, list[EvalDefDTO]],
+        eval_row: Eval,
+        policy_gate: PolicyGate | None,
+        *,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        pin: dict[str, Any] | None,
+        pinned_universe: bool,
+    ) -> None:
+        node_key = str(eval_row.node_id) if eval_row.node_id else ""
+        if not node_key:
+            return
+        failure_behaviour, gate_id, gate_version, gate_node_id, evaluation_mode = (
+            PipelineExecutor._resolve_governed_gate(
+                eval_row,
+                policy_gate,
+                pin,
+                pinned_universe=pinned_universe,
+                pipeline_id=pipeline_id,
+            )
+        )
+        definitions.setdefault(node_key, []).append(
+            EvalDefDTO(
+                id=eval_row.id,
+                org_id=org_id,
+                pipeline_id=eval_row.pipeline_id,
+                node_id=node_key,
+                name=eval_row.name or "",
+                eval_type=eval_row.eval_type,
+                config=eval_row.config_json,
+                failure_behaviour=failure_behaviour,
+                pass_threshold=eval_row.pass_threshold,
+                suite_id=eval_row.suite_id,
+                version=eval_row.version,
+                policy_gate_id=gate_id,
+                policy_gate_version=gate_version,
+                policy_gate_node_id=gate_node_id,
+                policy_gate_evaluation_mode=evaluation_mode,
+            )
+        )
 
     @staticmethod
     def _frozen_gated_eval_modes(
@@ -7662,33 +7681,7 @@ class PipelineExecutor:
             return await self._handle_graph_interrupt(interrupts, state, ctx)
         mapped = _map_lg_event(lg_event, ctx.node_ids)
         if mapped is not None:
-            event_type, payload = mapped
-            # Zombie-run protection: the first real node dispatch is the
-            # signal that pre-node setup finished — stands down the
-            # execute_run watchdog (pipeline_execution.zombie_watchdog).
-            if not state.first_node_signalled:
-                state.first_node_signalled = True
-                # FAR-893: update phase tracker so the watchdog logs the transition.
-                # FAR-1649: bind the shared constant (dependency-free leaf
-                # ``dispatch_phases``) so the write site and every
-                # reconcile/age-gate predicate share ONE definition — a
-                # bare literal here could desynchronise from the
-                # ``:first_node_phase`` bind params silently.
-                _tracker = self._dispatch_phase_tracker
-                if _tracker is not None:
-                    _tracker.enter_phase(PHASE_FIRST_NODE_DISPATCHED)
-                if self.on_first_progress is not None:
-                    self.on_first_progress()
-            # FAR-369 absolute node-deadline watchdog: signal per-node
-            # start/completion (by node_id) so the deadline watchdog can
-            # hold each node to its own timeout_seconds independent of
-            # idle/activity. ``on_node_started`` runs for BOTH the first
-            # and every later node (unlike on_first_progress).
-            if event_type == "node_started" and self.on_node_started is not None:
-                self.on_node_started(str(payload.get("node_id", "")))
-            elif event_type == "node_completed" and self.on_node_completed is not None:
-                self.on_node_completed(str(payload.get("node_id", "")))
-            ctx.broker.publish(event_type, payload)
+            self._publish_mapped_stream_event(mapped, state, ctx)
         event_kind = lg_event.get("event", "")
         # Capture node output for agent_signal trigger firing.
         if event_kind == "on_chain_end":
@@ -7698,6 +7691,26 @@ class PipelineExecutor:
         elif event_kind == "on_llm_end":
             _accumulate_llm_tokens(lg_event, state.node_token_usage, ctx.guard, ctx.node_token_budgets)
         return None
+
+    def _publish_mapped_stream_event(
+        self,
+        mapped: tuple[str, dict[str, Any]],
+        state: _StreamState,
+        ctx: _StreamContext,
+    ) -> None:
+        event_type, payload = mapped
+        if not state.first_node_signalled:
+            state.first_node_signalled = True
+            tracker = self._dispatch_phase_tracker
+            if tracker is not None:
+                tracker.enter_phase(PHASE_FIRST_NODE_DISPATCHED)
+            if self.on_first_progress is not None:
+                self.on_first_progress()
+        if event_type == "node_started" and self.on_node_started is not None:
+            self.on_node_started(str(payload.get("node_id", "")))
+        elif event_type == "node_completed" and self.on_node_completed is not None:
+            self.on_node_completed(str(payload.get("node_id", "")))
+        ctx.broker.publish(event_type, payload)
 
     def _stream_policy_outcome(
         self,
