@@ -22,6 +22,7 @@ from cryptography.fernet import Fernet
 import modulo.core.notifier as notifier_mod
 from modulo.core.events.notification_events import NOTIFIER_SESSION_KEY, _isoformat
 from modulo.core.notifier import Notifier
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG = uuid.UUID("8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70")
 
@@ -44,7 +45,7 @@ async def _drain_broadcast_tasks() -> None:
 
 
 def _session_factory_double() -> MagicMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -122,7 +123,9 @@ class TestDispatchInlineWiring:
         assert event["notification_id"] == str(notification.id)
         # ...and the session was marked notifier-owned so the listener's own
         # Redis leg stays suppressed (the other half of no-double-publish).
-        session.info.__setitem__.assert_any_call(NOTIFIER_SESSION_KEY, True)
+        # ``info`` is a real dict on the contract-correct session double, so
+        # assert the effect the production write produced.
+        assert session.info[NOTIFIER_SESSION_KEY] is True
 
     async def test_mapper_failure_fires_no_broadcast(self) -> None:
         """Rollback of the in-app transaction: no phantom Redis message."""

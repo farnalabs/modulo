@@ -8,6 +8,7 @@ import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from modulo.core import error_tracking as et
+from tests.unit.api.mock_session import make_session_scope
 
 
 def _redis_mock(method: str) -> MagicMock:
@@ -50,7 +51,12 @@ async def test_check_missed_fire_alerts_redis_close_failure(caplog) -> None:
         patch.object(et, "get_settings", return_value=MagicMock(redis_url="redis://localhost")),
         caplog.at_level(logging.WARNING, logger="modulo.core.error_tracking"),
     ):
-        result = await et.check_missed_fire_alerts(MagicMock(), org_id=None)
+        # ``aengine.connect()`` must yield a connection whose ``execute``
+        # returns a real Result (sync readers) - a bare MagicMock chain leaks
+        # AsyncMock coroutines through the async context manager.
+        engine = MagicMock()
+        engine.connect.return_value = make_session_scope()
+        result = await et.check_missed_fire_alerts(engine, org_id=None)
     assert result == 0
     records = _failure_records(caplog, "error_tracking.missed_fire_redis_close_failed")
     assert len(records) == 1

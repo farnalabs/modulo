@@ -1155,9 +1155,17 @@ def test_tail_process_with_none_stderr() -> None:
         stdout=subprocess.PIPE,
         stderr=None,
     )
-    tail_proc = _TailProcess(proc)
-    tail_proc.wait(timeout=10)
-    assert tail_proc.stderr_tail() is None
+    try:
+        tail_proc = _TailProcess(proc)
+        tail_proc.wait(timeout=10)
+        assert tail_proc.stderr_tail() is None
+    finally:
+        # Close every Popen pipe: an unclosed handle is an unraisable
+        # ResourceWarning at GC, which the unit suite escalates.
+        if proc.stdout:
+            proc.stdout.close()
+        if proc.stderr:
+            proc.stderr.close()
 
 
 def test_tail_process_with_stderr() -> None:
@@ -1172,16 +1180,24 @@ def test_tail_process_with_stderr() -> None:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    tail_proc = _TailProcess(proc)
-    tail_proc.wait(timeout=10)
-    # The drain thread reads stderr asynchronously, so join it (as the
-    # sibling _StderrTail tests do) before reading the tail. Otherwise this
-    # races the child's exit and text() can observe an empty buffer.
-    assert tail_proc._tail is not None
-    tail_proc._tail._thread.join(timeout=10)
-    tail = tail_proc.stderr_tail()
-    assert tail is not None
-    assert "err" in tail
+    try:
+        tail_proc = _TailProcess(proc)
+        tail_proc.wait(timeout=10)
+        # The drain thread reads stderr asynchronously, so join it (as the
+        # sibling _StderrTail tests do) before reading the tail. Otherwise
+        # this races the child's exit and text() can observe an empty buffer.
+        assert tail_proc._tail is not None
+        tail_proc._tail._thread.join(timeout=10)
+        tail = tail_proc.stderr_tail()
+        assert tail is not None
+        assert "err" in tail
+    finally:
+        # Close every Popen pipe: an unclosed handle is an unraisable
+        # ResourceWarning at GC, which the unit suite escalates.
+        if proc.stdout:
+            proc.stdout.close()
+        if proc.stderr:
+            proc.stderr.close()
 
 
 # ---------------------------------------------------------------------------

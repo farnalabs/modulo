@@ -29,6 +29,7 @@ from sqlalchemy.exc import OperationalError
 
 from modulo.api.models.error import ErrorEventInput
 from modulo.core import dispatch
+from tests.unit.api.mock_session import configure_redis_client, make_redis_client
 
 RUN_ID = "fb4b1368-68ca-4125-8091-ca8d7c25839e"
 ORG_ID = "18348064-eca3-4aa7-be96-8f6c9123efd0"
@@ -980,7 +981,7 @@ class TestEnqueueSaq:
         queue_instance.job = AsyncMock(return_value=None)
         queue_instance.job_id.return_value = JOB_ID
         redis_cls = MagicMock()
-        redis_client = redis_cls.from_url.return_value
+        redis_client = configure_redis_client(redis_cls.from_url.return_value)
         redis_client.aclose = AsyncMock(return_value=None)
 
         with (
@@ -1013,7 +1014,7 @@ class TestEnqueueSaq:
         queue_instance.job = AsyncMock(return_value=None)
         queue_instance.job_id.return_value = JOB_ID
         redis_cls = MagicMock()
-        redis_client = redis_cls.from_url.return_value
+        redis_client = configure_redis_client(redis_cls.from_url.return_value)
         redis_client.aclose = AsyncMock(return_value=None)
 
         with (
@@ -1066,7 +1067,7 @@ class TestEnqueueSaq:
         queue_instance.enqueue = enqueue_mock
         queue_instance.job = AsyncMock(return_value=None)
         redis_cls = MagicMock()
-        redis_client = redis_cls.from_url.return_value
+        redis_client = configure_redis_client(redis_cls.from_url.return_value)
         redis_client.aclose = AsyncMock(return_value=None)
 
         with (
@@ -1094,7 +1095,7 @@ class TestEnqueueSaq:
         queue_instance.job = AsyncMock(return_value=SimpleNamespace(id=JOB_ID))
         queue_instance.job_id.return_value = JOB_ID
         redis_cls = MagicMock()
-        redis_client = redis_cls.from_url.return_value
+        redis_client = configure_redis_client(redis_cls.from_url.return_value)
         redis_client.aclose = AsyncMock(return_value=None)
 
         with (
@@ -1407,7 +1408,7 @@ class TestReconcileF6aRecovery:
             ]
         )
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = MagicMock()
         q.name = "runs"
         q.job_id.side_effect = lambda key: f"saq:job:runs:{key}"
@@ -1454,7 +1455,7 @@ class TestReconcileF6aRecovery:
             ]
         )
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = MagicMock()
         q.name = "runs"
         q.job_id.side_effect = lambda key: f"saq:job:runs:{key}"
@@ -1501,7 +1502,7 @@ class TestReconcileF6aRecovery:
         )
         session.terminalizer_rows["claim_cap_exhausted"] = [row.id]
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = MagicMock()
         q.name = "runs"
         q.job_id.side_effect = lambda key: f"saq:job:runs:{key}"
@@ -1548,7 +1549,7 @@ class TestReconcileF6aRecovery:
             ]
         )
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = MagicMock()
         q.name = "runs"
         q.job_id.side_effect = lambda key: f"saq:job:runs:{key}"

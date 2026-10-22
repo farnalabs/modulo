@@ -159,9 +159,81 @@ def make_empty_execute_result(*, scalar_value: int | None = None) -> MagicMock:
     return result
 
 
+def async_context_manager() -> MagicMock:
+    """A sync-called async context manager (the shape ``session.begin()`` returns)."""
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=None)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return cm
+
+
+def configure_transaction_begin(session: AsyncMock) -> AsyncMock:
+    """Make ``session.begin()`` obey the real contract.
+
+    ``AsyncSession.begin()`` is a SYNC method returning an async context
+    manager. On a bare AsyncMock it is async, so ``async with session.begin()``
+    gets a coroutine - and the call leaks a never-awaited coroutine at GC.
+    """
+    session.begin = MagicMock(return_value=async_context_manager())
+    return session
+
+
+async def _empty_async_iterator(*_args: Any, **_kwargs: Any) -> Any:
+    """An empty async iterator - the shape ``redis.asyncio.scan_iter`` returns.
+
+    ``scan_iter`` is an async GENERATOR method: calling it returns an async
+    iterator synchronously, not a coroutine. An AsyncMock child returns a
+    coroutine instead, which an ``async for`` caller cannot iterate.
+    """
+    for _item in ():
+        yield
+
+
+def configure_redis_client(client: Any) -> Any:
+    """Make ``scan_iter`` obey the async-generator contract on a redis double."""
+    client.scan_iter = MagicMock(side_effect=_empty_async_iterator)
+    return client
+
+
+def make_redis_client() -> AsyncMock:
+    """An ``AsyncRedis`` double whose ``scan_iter`` returns an async iterator."""
+    return configure_redis_client(AsyncMock())
+
+
+def make_session_scope() -> AsyncMock:
+    """A session double that is its own async context manager.
+
+    ``async with session as bound`` then binds the session itself, matching
+    ``async with async_sessionmaker()() as session`` in production. Without
+    this, ``AsyncMock.__aenter__`` returns a fresh MagicMock and the sync
+    ``bound.begin()`` call becomes a never-awaited coroutine.
+    """
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+    # Permissive read result: a test that does not stub a SELECT observes a
+    # truthy row (the historical bare-AsyncMock behaviour) without leaking a
+    # never-awaited coroutine. Stub ``execute`` explicitly where the shape
+    # matters.
+    session.execute = AsyncMock(return_value=MagicMock())
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    return session
+
+
+def make_session_factory() -> MagicMock:
+    """A stand-in for ``async_sessionmaker``: calling it yields a session scope."""
+    return MagicMock(return_value=make_session_scope())
+
+
 def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = False) -> AsyncMock:
     """Configure AsyncSession contracts, requiring explicit query results by default."""
     configure_rls_preamble(session)
+    configure_transaction_begin(session)
+    # AsyncSession.get() is async and returns a row or None. AsyncMock's
+    # default awaited result is ANOTHER AsyncMock, so a caller that reads
+    # ``row.some_datetime.isoformat()`` leaks a never-awaited coroutine. A real
+    # (sync) MagicMock row keeps that read sync; tests stub ``get`` explicitly
+    # when the row shape matters.
+    session.get = AsyncMock(return_value=MagicMock())
     session.add = MagicMock()
     session.add_all = MagicMock()
     session.expunge = MagicMock()

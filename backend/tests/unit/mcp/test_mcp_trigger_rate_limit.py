@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from modulo.api.mcp_server import trigger_pipeline
 from modulo.core.rate_limiter import TokenBucketRegistry
+from tests.unit.api.mock_session import make_session_scope
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -226,7 +227,7 @@ class TestTriggerPipelineToolRateLimit(_AuthContext):
         mock_run.id = run_id
         mock_run.langgraph_thread_id = thread_id
         mock_create_run.return_value = mock_run
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
 
         result = await trigger_pipeline(pipeline_id=str(pipeline_id))
 
@@ -265,7 +266,7 @@ class TestTriggerPipelineSnapshotLockBusy(_AuthContext):
         from modulo.core.exceptions import SnapshotLockNotAvailableError
 
         mock_snapshot.side_effect = SnapshotLockNotAvailableError("busy")
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
 
         result = await trigger_pipeline(pipeline_id=str(uuid.uuid4()))
 

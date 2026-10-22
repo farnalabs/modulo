@@ -54,6 +54,7 @@ from modulo.api.mcp_server import (
     update_trigger,
 )
 from modulo.api.team_scope import TeamGateDenial, evaluate_team_gate
+from tests.unit.api.mock_session import configure_mock_session, make_session_scope
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -72,7 +73,7 @@ def _make_session_context(session: AsyncMock) -> AsyncMock:
 
 def _make_execute_result(value: Any) -> AsyncMock:
     """A session.execute() result whose sync scalar_one_or_none() returns *value*."""
-    result = AsyncMock()
+    result = MagicMock()
     result.scalar_one_or_none = MagicMock(return_value=value)
     return result
 
@@ -193,7 +194,7 @@ class TestTriggerPipelineTeamScope(_AuthContext):
         pipeline_id = uuid.uuid4()
         mock_pipeline = MagicMock()
         mock_pipeline.owner_team_id = _TEAM_B
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server.get_pipeline") as mock_get_pipeline,
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -216,7 +217,7 @@ class TestTriggerPipelineTeamScope(_AuthContext):
         pipeline_id = uuid.uuid4()
         mock_pipeline = MagicMock()
         mock_pipeline.owner_team_id = _TEAM_A
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_snap = MagicMock()
         mock_snap.graph_json = {"nodes": {"n1": {}}}
         mock_run = MagicMock()
@@ -244,7 +245,7 @@ class TestTriggerPipelineTeamScope(_AuthContext):
         pipeline_id = uuid.uuid4()
         mock_pipeline = MagicMock()
         mock_pipeline.owner_team_id = _TEAM_B  # other team — still allowed for org-wide key
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_snap = MagicMock()
         mock_snap.graph_json = {"nodes": {"n1": {}}}
         mock_run = MagicMock()
@@ -272,7 +273,7 @@ class TestPipelineGraphTeamScope(_AuthContext):
     async def test_team_scoped_key_cannot_read_other_teams_graph(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)) as mock_owner,
@@ -289,7 +290,7 @@ class TestPipelineGraphTeamScope(_AuthContext):
     async def test_org_wide_key_reads_graph_regardless_of_owner(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(None)
         pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
@@ -307,7 +308,7 @@ class TestRunToolsTeamScope(_AuthContext):
     async def test_get_run_status_blocked_for_other_teams_run(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         run_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server.get_run") as mock_get_run,
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -323,7 +324,7 @@ class TestRunToolsTeamScope(_AuthContext):
         _ctx_team_id.set(_TEAM_A)
         run_id = uuid.uuid4()
         run = _make_run(pipeline_id=uuid.uuid4(), status="complete", owner_team_id=_TEAM_A)
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server.get_run") as mock_get_run,
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -339,7 +340,7 @@ class TestRunToolsTeamScope(_AuthContext):
     async def test_get_run_output_blocked_for_other_teams_run(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         run_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server.get_run") as mock_get_run,
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -354,7 +355,7 @@ class TestRunToolsTeamScope(_AuthContext):
     async def test_get_run_evals_blocked_for_other_teams_run(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         run_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server.get_run") as mock_get_run,
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -371,7 +372,7 @@ class TestRunToolsTeamScope(_AuthContext):
     async def test_cancel_run_blocked_for_other_teams_run(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         run_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.db.crud.run.get_run") as mock_get_run,
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -394,7 +395,7 @@ class TestRunToolsTeamScope(_AuthContext):
         # pipeline's owner team and still blocks the cross-team read.
         _ctx_team_id.set(_TEAM_A)
         run_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server.get_run") as mock_get_run,
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -416,7 +417,7 @@ class TestRunToolsTeamScope(_AuthContext):
         _ctx_team_id.set(_TEAM_A)
         run_id = uuid.uuid4()
         run = _make_run(pipeline_id=uuid.uuid4(), status="complete", owner_team_id=None)
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server.get_run") as mock_get_run,
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -448,7 +449,7 @@ class TestUpdatePipelineGraphTeamScope(_OperatorAuthContext):
         pipeline_id = uuid.uuid4()
         mock_pipeline = MagicMock()
         mock_pipeline.owner_team_id = _TEAM_B
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.routes.pipelines._is_privileged", return_value=False),
@@ -469,7 +470,12 @@ class TestUpdatePipelineGraphTeamScope(_OperatorAuthContext):
         pipeline_id = uuid.uuid4()
         mock_pipeline = MagicMock()
         mock_pipeline.owner_team_id = _TEAM_A
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+
+        # The graph-write transaction re-reads the pipeline FOR UPDATE; the
+        # locked row must be the SAME pipeline (a bare AsyncMock result made
+        # this read a truthy leaked coroutine, which is not a contract).
+        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=mock_pipeline)))
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.routes.pipelines._is_privileged", return_value=False),
@@ -496,7 +502,7 @@ class TestBindConnectorToNodeTeamScope(_OperatorAuthContext):
         pipeline_id = uuid.uuid4()
         mock_pipeline = MagicMock()
         mock_pipeline.owner_team_id = _TEAM_B
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         connector = MagicMock()
         connector.organisation_id = _PLACEHOLDER_ORG_ID
         session.execute.return_value = _make_execute_result(mock_pipeline)
@@ -526,7 +532,7 @@ class TestBindConnectorToNodeTeamScope(_OperatorAuthContext):
         mock_pipeline = MagicMock()
         mock_pipeline.owner_team_id = _TEAM_A
         mock_pipeline.graph_nodes_json = []
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         connector = MagicMock()
         connector.organisation_id = _PLACEHOLDER_ORG_ID
         # The connector belongs to the PIPELINE's team: this test is about the
@@ -561,7 +567,7 @@ class TestListDeletePipelineTeamScope(_OperatorAuthContext):
     async def test_delete_pipeline_blocked_for_other_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
@@ -576,7 +582,7 @@ class TestListDeletePipelineTeamScope(_OperatorAuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_list_pipelines_passes_team_id_for_team_scoped_key(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_page = MagicMock()
         mock_page.items = []
         mock_page.total = 0
@@ -596,7 +602,7 @@ class TestListDeletePipelineTeamScope(_OperatorAuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_list_pipelines_passes_none_team_id_for_org_wide_key(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(None)
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_page = MagicMock()
         mock_page.items = []
         mock_page.total = 0
@@ -617,7 +623,7 @@ class TestListDeletePipelineTeamScope(_OperatorAuthContext):
     async def test_list_runs_blocked_for_other_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
@@ -630,7 +636,7 @@ class TestListDeletePipelineTeamScope(_OperatorAuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_list_runs_passes_team_id_when_no_pipeline_filter(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_page = MagicMock()
         mock_page.items = []
         mock_page.total = 0
@@ -655,7 +661,7 @@ class TestListPendingHitlTeamScope(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_list_pending_hitl_filters_by_team_for_team_scoped_key(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         total_result = MagicMock()
         total_result.scalar_one.return_value = 0
         gates_result = MagicMock()
@@ -671,7 +677,7 @@ class TestListPendingHitlTeamScope(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_list_pending_hitl_org_wide_key_no_team_filter(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(None)
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         total_result = MagicMock()
         total_result.scalar_one.return_value = 1
         gates_result = MagicMock()
@@ -694,7 +700,7 @@ class TestTriggerTeamScope(_OperatorAuthContext):
     async def test_create_trigger_blocked_for_other_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         scope = SimpleNamespace(owner_team_id=_TEAM_B, visibility="org")
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -709,7 +715,7 @@ class TestTriggerTeamScope(_OperatorAuthContext):
     async def test_list_triggers_blocked_for_other_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
@@ -722,7 +728,7 @@ class TestTriggerTeamScope(_OperatorAuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_list_triggers_passes_team_id_when_no_pipeline_filter(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_page = MagicMock()
         mock_page.items = []
         mock_page.total = 0
@@ -745,7 +751,7 @@ class TestTriggerTeamScope(_OperatorAuthContext):
         trigger_id = uuid.uuid4()
         trigger = MagicMock()
         trigger.pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         session.execute.return_value = _make_execute_result(trigger)
         scope = SimpleNamespace(owner_team_id=_TEAM_B, visibility="team")
         with (
@@ -763,7 +769,7 @@ class TestTriggerTeamScope(_OperatorAuthContext):
         trigger_id = uuid.uuid4()
         trigger = MagicMock()
         trigger.pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         session.execute.return_value = _make_execute_result(trigger)
         scope = SimpleNamespace(owner_team_id=_TEAM_B, visibility="team")
         with (
@@ -782,7 +788,7 @@ class TestQueryAnalyticsTeamScope(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_query_analytics_passes_team_id_for_team_scoped_key(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.mcp_server.get_settings", return_value=MagicMock()),
@@ -818,7 +824,7 @@ class TestReviewHitlTeamScope(_OperatorAuthContext):
     ) -> None:
         _ctx_team_id.set(_TEAM_A)
         run_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server.get_run") as mock_get_run,
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -842,7 +848,7 @@ class TestReviewHitlTeamScope(_OperatorAuthContext):
         # a different concept from the run's owner.
         _ctx_team_id.set(_TEAM_A)
         run_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server.get_run") as mock_get_run,
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -865,7 +871,7 @@ class TestReviewHitlTeamScope(_OperatorAuthContext):
         # pipeline owner — a NULL stamp never widens the boundary.
         _ctx_team_id.set(_TEAM_A)
         run_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server.get_run") as mock_get_run,
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -892,7 +898,7 @@ class TestReviewHitlTeamScope(_OperatorAuthContext):
         claimed = MagicMock()
         claimed.claim_token = "tok-123"
         claimed.expires_at = None
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server.get_run") as mock_get_run,
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -917,7 +923,7 @@ class TestListTriggerEventsTeamScope(_AuthContext):
     async def test_cross_team_pipeline_filter_blocked(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
@@ -933,7 +939,7 @@ class TestListTriggerEventsTeamScope(_AuthContext):
         trigger_id = uuid.uuid4()
         trigger = MagicMock()
         trigger.pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         session.execute.return_value = _make_execute_result(trigger)
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -955,7 +961,7 @@ class TestListTriggerEventsTeamScope(_AuthContext):
         """
         _ctx_team_id.set(_TEAM_A)
         trigger_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         session.execute.return_value = _make_execute_result(None)
         with patch("modulo.api.mcp_server._session") as mock_session:
             mock_session.return_value = _make_session_context(session)
@@ -972,7 +978,7 @@ class TestListTriggerEventsTeamScope(_AuthContext):
         trigger_id = uuid.uuid4()
         trigger = MagicMock()
         trigger.pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         total_result = MagicMock()
         total_result.scalar_one_or_none.return_value = 0
         rows_result = MagicMock()
@@ -1009,7 +1015,7 @@ class TestListTriggerEventsTeamScope(_AuthContext):
         from sqlalchemy.dialects import postgresql
 
         _ctx_team_id.set(_TEAM_A)
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         total_result = MagicMock()
         total_result.scalar_one_or_none.return_value = 0
         rows_result = MagicMock()
@@ -1040,7 +1046,7 @@ class TestResourceTeamScope(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_resource_pipelines_passes_team_id(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_page = MagicMock()
         mock_page.items = []
         mock_page.total = 0
@@ -1060,7 +1066,7 @@ class TestResourceTeamScope(_AuthContext):
         pipeline_id = uuid.uuid4()
         pipeline = MagicMock()
         pipeline.owner_team_id = _TEAM_B
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.mcp_server.get_pipeline", AsyncMock(return_value=pipeline)),
@@ -1080,7 +1086,7 @@ class TestResourceTeamScope(_AuthContext):
         pipeline_id = uuid.uuid4()
         pipeline = MagicMock()
         pipeline.owner_team_id = _TEAM_B
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.mcp_server.get_pipeline", AsyncMock(return_value=pipeline)),
@@ -1096,7 +1102,7 @@ class TestResourceTeamScope(_AuthContext):
     ) -> None:
         _ctx_team_id.set(_TEAM_A)
         pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
@@ -1114,7 +1120,7 @@ class TestResourceTeamScope(_AuthContext):
     ) -> None:
         _ctx_team_id.set(_TEAM_A)
         pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
@@ -1132,7 +1138,7 @@ class TestResourceTeamScope(_AuthContext):
     async def test_resource_run_blocked_for_other_teams_run(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         run_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.mcp_server.get_run") as mock_get_run,
@@ -1151,7 +1157,7 @@ class TestResourceTeamScope(_AuthContext):
     ) -> None:
         _ctx_team_id.set(_TEAM_A)
         run_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.mcp_server.get_run") as mock_get_run,
@@ -1172,7 +1178,7 @@ class TestResourceTeamScope(_AuthContext):
         gate.required_team_id = None
         gate_result = MagicMock()
         gate_result.scalar_one_or_none.return_value = gate
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         session.execute = AsyncMock(return_value=gate_result)
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -1191,7 +1197,7 @@ class TestListPendingHitlTeamFilterSQL(_AuthContext):
         from sqlalchemy.dialects import postgresql
 
         _ctx_team_id.set(_TEAM_A)
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         total_result = MagicMock()
         total_result.scalar_one.return_value = 0
         gates_result = MagicMock()
@@ -1238,7 +1244,7 @@ class TestCrudTeamFilterSQL:
 
         team = uuid.uuid4()
         folder = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         captured: list = []
         count_result = MagicMock()
         count_result.scalar_one.return_value = 0
@@ -1265,7 +1271,7 @@ class TestCrudTeamFilterSQL:
         from modulo.db.crud.run import list_runs as db_list_runs
 
         team = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         captured: list = []
         count_result = MagicMock()
         count_result.scalar_one_or_none.return_value = 0
@@ -1293,7 +1299,7 @@ class TestCrudTeamFilterSQL:
         from modulo.db.crud.trigger import list_triggers as db_list_triggers
 
         team = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         captured: list = []
         rows_result = MagicMock()
         rows_result.scalars.return_value.all.return_value = []
@@ -1336,7 +1342,7 @@ class TestUserTeamPrivateDenial:
         member: bool = False,
         user_id: uuid.UUID | None = _PLACEHOLDER_USER_ID,
     ) -> TeamGateDenial | None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with (
             patch("modulo.api.team_scope.team_membership_exists", AsyncMock(return_value=member)),
         ):
@@ -1395,7 +1401,7 @@ class TestTriggerUserTeamGate(_OperatorAuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_create_trigger_denied_for_non_member(self, mock_validate_auth: AsyncMock) -> None:
         pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         scope = SimpleNamespace(owner_team_id=_TEAM_A, visibility="team")
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -1413,7 +1419,7 @@ class TestTriggerUserTeamGate(_OperatorAuthContext):
         trigger_id = uuid.uuid4()
         trigger = MagicMock()
         trigger.pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         session.execute.return_value = _make_execute_result(trigger)
         scope = SimpleNamespace(owner_team_id=_TEAM_A, visibility="team")
         with (
@@ -1432,7 +1438,7 @@ class TestTriggerUserTeamGate(_OperatorAuthContext):
         trigger_id = uuid.uuid4()
         trigger = MagicMock()
         trigger.pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         session.execute.return_value = _make_execute_result(trigger)
         scope = SimpleNamespace(owner_team_id=_TEAM_A, visibility="team")
         with (
@@ -1452,7 +1458,7 @@ class TestTriggerUserTeamGate(_OperatorAuthContext):
         trigger_id = uuid.uuid4()
         trigger = MagicMock()
         trigger.pipeline_id = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         session.execute.return_value = _make_execute_result(trigger)
         scope = SimpleNamespace(owner_team_id=_TEAM_A, visibility="team")
         with (
@@ -1494,7 +1500,7 @@ class TestTriggerUserMembershipGate(_OperatorAuthContext):
             )
         )
         stack.enter_context(
-            patch("modulo.api.mcp_server._session", MagicMock(return_value=_make_session_context(AsyncMock())))
+            patch("modulo.api.mcp_server._session", MagicMock(return_value=_make_session_context(make_session_scope())))
         )
         return stack
 
@@ -1576,7 +1582,7 @@ class TestPipelineTeamGateHelper(_AuthContext):
     """
 
     async def test_absent_row_returns_pipeline_not_found(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with patch(
             "modulo.db.crud.team_scope.pipeline_team_scope_team_blind",
             AsyncMock(return_value=None),
@@ -1589,7 +1595,7 @@ class TestPipelineTeamGateHelper(_AuthContext):
 
     async def test_team_scoped_key_on_own_team_row_passes(self) -> None:
         _ctx_team_id.set(_TEAM_A)
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         scope = SimpleNamespace(owner_team_id=_TEAM_A, visibility="team")
         with patch(
             "modulo.db.crud.team_scope.pipeline_team_scope_team_blind",

@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.runtime_config import mint_budget
 from modulo.core.runtime_config.mint_budget import consume_agent_mint_budget
+from tests.unit.api.mock_session import configure_mock_session
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_STEM = "0242_org_mint_budget_usage"
@@ -218,7 +219,7 @@ class TestBudgetWallet:
     async def test_guard_error_fails_open(
         self, sessionmakers: async_sessionmaker[AsyncSession], budget_env: int
     ) -> None:
-        exploding_session = AsyncMock()
+        exploding_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         exploding_session.execute = AsyncMock(side_effect=RuntimeError("db unavailable"))
 
         allowed = await consume_agent_mint_budget(exploding_session, _ORG_ID, n=1)

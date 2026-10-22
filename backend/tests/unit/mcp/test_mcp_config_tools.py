@@ -20,6 +20,7 @@ from modulo.core.documentation_indexer import DocEntry
 from modulo.core.feature_flags import FeatureFlag
 from modulo.core.housekeeping import Candidate, CategoryResult, Scanner
 from modulo.db.models.secret import Secret
+from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import AuthContext, make_session_context
 
 
@@ -82,7 +83,7 @@ class TestGetOrgConfigErrors(_SystemAdminContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_org_config(section="bogus")
 
@@ -98,7 +99,7 @@ class TestGetOrgConfigErrors(_SystemAdminContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_list_config.side_effect = ProgrammingError("SELECT 1", {}, Exception("no table"))
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_org_config()
 
@@ -119,7 +120,7 @@ class TestGetOrgConfigSuccess(_SystemAdminContext):
             _make_config(key="default_plan", value="team"),
             _make_config(key="feature_flags:parallel_branches", value={"enabled": True}),
         ]
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_org_config()
 
@@ -141,7 +142,7 @@ class TestGetOrgConfigSuccess(_SystemAdminContext):
             _make_config(key="fernet_key", value="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
             _make_config(key="app_name", value="modulo"),
         ]
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_org_config()
 
@@ -162,7 +163,7 @@ class TestGetOrgConfigSuccess(_SystemAdminContext):
             _make_config(key="assistant_config:enabled", value="true"),
             _make_config(key="default_plan", value="team"),
         ]
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_org_config(section="assistant")
 
@@ -179,7 +180,7 @@ class TestGetOrgConfigSuccess(_SystemAdminContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_org_config()
 
@@ -213,7 +214,7 @@ class TestGetAvailableFeaturesErrors(AuthContext):
     ) -> None:
         mock_get_settings.return_value = MagicMock()
         mock_resolve.side_effect = ProgrammingError("SELECT 1", {}, Exception("no table"))
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_available_features()
 
@@ -243,7 +244,7 @@ class TestGetAvailableFeaturesSuccess(AuthContext):
             FeatureFlag(name="sso", description="SSO", tier="team", currently_active=False),
         ]
         mock_resolve.return_value = plan_ctx
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_available_features()
 
@@ -434,7 +435,7 @@ class TestListHousekeepingErrors(_SystemAdminContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -452,7 +453,7 @@ class TestListHousekeepingErrors(_SystemAdminContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_scan.side_effect = ProgrammingError("SELECT 1", {}, Exception("no table"))
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await list_housekeeping()
 
@@ -477,7 +478,7 @@ class TestListHousekeepingSuccess(_SystemAdminContext):
             entity_type="secret",
         )
         mock_scan.return_value = [CategoryResult("orphan_secrets", [candidate])]
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await list_housekeeping(limit=100)
 
@@ -557,7 +558,7 @@ class TestListHousekeepingAuthz(AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         # AuthContext's default role is "operator" — below the admin floor.
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         mock_scan.return_value = []
         result = await list_housekeeping()
         assert result["error"] == "insufficient_scope"
@@ -579,7 +580,7 @@ class TestListHousekeepingAuthz(AuthContext):
         """
         from modulo.api.mcp_server import _ctx_is_system_admin
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         mock_scan.return_value = []
         _ctx_is_system_admin.set(True)
         try:
@@ -599,7 +600,7 @@ class TestListHousekeepingAuthz(AuthContext):
     ) -> None:
         from modulo.api.mcp_server import _ctx_role
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         mock_scan.return_value = []
         _ctx_role.set("admin")  # passes the org-role floor, but is NOT system admin
         result = await list_housekeeping()
@@ -618,7 +619,7 @@ class TestListHousekeepingAuthz(AuthContext):
         from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
 
         mock_scan.return_value = []
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
         try:
@@ -645,7 +646,7 @@ class TestListHousekeepingAuthz(AuthContext):
         """
         from modulo.api.mcp_server import _ctx_role
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         mock_scan.return_value = []
         _ctx_role.set("admin")  # org admin, but NOT system admin
         with caplog.at_level(logging.WARNING, logger="modulo.api.mcp_server"):
@@ -677,7 +678,7 @@ class TestPerformHousekeepingErrors(_SystemAdminContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -692,7 +693,7 @@ class TestPerformHousekeepingErrors(_SystemAdminContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await perform_housekeeping(items=[{"id": "abc123"}])
 
@@ -708,7 +709,7 @@ class TestPerformHousekeepingErrors(_SystemAdminContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await perform_housekeeping(items=[{"id": "abc123", "entity_type": "bogus_type"}])
 
@@ -724,7 +725,7 @@ class TestPerformHousekeepingErrors(_SystemAdminContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await perform_housekeeping(items=[{"id": "abc123", "entity_type": "invalid_org_fk"}])
 
@@ -853,7 +854,7 @@ class TestPerformHousekeepingAuthz(AuthContext):
     ) -> None:
         from modulo.api.mcp_server import _ctx_role
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         _ctx_role.set("admin")  # passes the org-role floor, but is NOT system admin
         result = await perform_housekeeping(items=[{"id": "x", "entity_type": "secret"}])
         assert result["error"] == "insufficient_scope"

@@ -22,6 +22,7 @@ from modulo.api.mcp_server import (
     get_pipeline_reviews,
     list_hitl_reviews,
 )
+from tests.unit.api.mock_session import make_session_scope
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
@@ -208,7 +209,7 @@ class TestGetHitlReview(_AuthContext):
         manager.get_gate = AsyncMock(return_value=None)
         mock_hitl_manager.return_value = manager
         mock_get_run.return_value = run
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
 
         out = await get_hitl_review(run_id=str(run.id), review_id="missing")
 
@@ -226,7 +227,7 @@ class TestGetHitlReview(_AuthContext):
     ) -> None:
         run_id = str(uuid.uuid4())
         mock_get_run.return_value = None
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
 
         out = await get_hitl_review(run_id=run_id, review_id="hitl_review_a_b")
 
@@ -270,7 +271,7 @@ class TestGetPipelineGates(_AuthContext):
         bare_edge.hitl_review_config = None
         mock_owner_team.return_value = None
         mock_graph.return_value = ([], [bare_edge])
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
 
         out = await get_pipeline_reviews(pipeline_id=str(pid))
 
@@ -299,7 +300,7 @@ class TestGetPipelineGates(_AuthContext):
         gated.hitl_review_config = config
         mock_owner_team.return_value = None
         mock_graph.return_value = (["node-a"], [gated])
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
 
         out = await get_pipeline_reviews(pipeline_id=str(pid))
 
@@ -324,7 +325,7 @@ class TestGetPipelineGates(_AuthContext):
         pid = str(uuid.uuid4())
         mock_owner_team.return_value = None
         mock_graph.return_value = None
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
 
         out = await get_pipeline_reviews(pipeline_id=pid)
 
@@ -472,7 +473,7 @@ class TestHitlInspectionBranches(_AuthContext):
         mock_load_run: AsyncMock,
     ) -> None:
         mock_load_run.return_value = _TEAM_SCOPE_ERROR
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
         rid = str(uuid.uuid4())
         out = await get_hitl_review(run_id=rid, review_id="hitl_review_a_b")
         assert out["error"] == "team_boundary_violation"
@@ -496,7 +497,7 @@ class TestHitlInspectionBranches(_AuthContext):
         manager.get_gate = AsyncMock(return_value=gate)
         mock_hitl_manager.return_value = manager
         mock_get_run.return_value = run
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
 
         out = await get_hitl_review(run_id=str(run.id), review_id="hitl_review_a_b")
 
@@ -546,7 +547,7 @@ class TestHitlInspectionBranches(_AuthContext):
             pid = uuid.uuid4()
             # Owner team differs from the team-scoped key -> boundary violation.
             mock_owner_team.return_value = uuid.uuid4()
-            mock_session.return_value = _make_session_context(AsyncMock())
+            mock_session.return_value = _make_session_context(make_session_scope())
 
             out = await get_pipeline_reviews(pipeline_id=str(pid))
 
