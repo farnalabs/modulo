@@ -1856,6 +1856,7 @@ async def zombie_watchdog(
     exec_task.cancel()
     if stall_requested is not None:
         stall_requested.set()
+
     # FAR-1088: this kill fires ONLY pre-first-progress (the watchdog waits for
     # ``first_progress`` above and only reaches here on timeout), so the run
     # executed ZERO nodes by construction — pass ``zero_node=True`` so a
