@@ -77,6 +77,6 @@ Feature: At-rest Secret Storage (Secrets Backend)
     When I ask the factory for the "consul" secret backend
     Then a ValueError is raised mentioning "fernet"
 
-  Scenario: An unlicensed external backend falls back to the Fernet store
+  Scenario: An unlicensed external backend is not downgraded to the Fernet store
     When I ask the factory for the "vault" secret backend without a license
-    Then the factory returns a Fernet backend
+    Then the factory refuses to substitute a Fernet backend
