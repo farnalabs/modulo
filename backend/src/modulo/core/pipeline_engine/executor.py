@@ -56,6 +56,14 @@ from modulo.core.audit_logger.labels import (
 )
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.cost_controller.finalize import FinalizeMetricSink, derive_node_type_map, finalize_cost
+from modulo.core.dispatch import (
+    # Re-exported under its historical private name: the bound lives ONCE in
+    # ``modulo.core.dispatch`` and existing callers/tests read it here.
+    RETRY_POLICY_MAX_RETRIES as _RETRY_POLICY_MAX_RETRIES,  # noqa: F401
+)
+from modulo.core.dispatch import (
+    retry_policy_max_retries,
+)
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.eval_engine import (
     EvalBlockedError,
@@ -262,7 +270,8 @@ GUARDRAIL_EVAL_TYPE = "guardrail"
 #                 because the FAR-228 idempotency gate (guard A) skips an
 #                 already-delivered node on re-execution.
 _RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure", "eval_failed"})
-_RETRY_POLICY_MAX_RETRIES = 5
+# ``_RETRY_POLICY_MAX_RETRIES`` is imported (aliased) from ``modulo.core.dispatch``
+# above — the ONE definition, shared with every other retry-budget consumer.
 
 # FAR-939 chunk 12 (M4, §3.3 run-frozen): key under which the fire-time
 # evaluation modes of the gate's source node are stamped onto the claim's
@@ -630,12 +639,8 @@ def _retry_after_policy(
     """
     if not isinstance(policy, dict):
         return None
-    max_retries = policy.get("max_retries", 0)
-    if isinstance(max_retries, bool) or not isinstance(max_retries, int):
-        return None
-    if not 0 <= max_retries <= _RETRY_POLICY_MAX_RETRIES:
-        return None
-    if max_retries == 0:
+    max_retries = retry_policy_max_retries(policy)
+    if max_retries is None or max_retries == 0:
         return None
     events = policy.get("on")
     if events is None:
@@ -2023,6 +2028,31 @@ def _can_fenced_requeue(
     if _is_non_retryable_error_code(error_code):
         return False
     return node_attempt_count < retries and not superseded and not stalled and script_lease_ok and graph_idempotent
+
+
+def _transient_retry_allowance(configured: int, retry_policy: Any) -> int:
+    """Bound the in-execute transient retry by the pipeline's policy (FAR-2076).
+
+    ``_can_fenced_requeue`` compares ``node_attempt_count < retries`` and
+    ``retries`` used to be ``settings.saq_run_retries`` ONLY — so the
+    in-execute transient path could grant executions the pipeline's
+    ``retry_policy`` had already refused (the run-level policy path and the
+    transport were each counting a different budget).
+
+    Returns ``min(configured, execution ceiling)`` where the ceiling is
+    ``1 + max_retries`` (the total executions the policy authorises, this
+    attempt included). ``node_attempt_count`` — the value compared against
+    the returned bound — counts executions, so ``consumed < 1 + max_retries``
+    permits exactly ``1 + max_retries`` executions in total. A policy with no
+    usable budget (absent/malformed/absent ``max_retries``) returns the
+    configured value unchanged: no policy means existing behaviour.
+    """
+    from modulo.core.dispatch import retry_max_executions
+
+    max_executions = retry_max_executions(retry_policy)
+    if max_executions is None:
+        return configured
+    return min(configured, max_executions)
 
 
 # FAR-2025: a retry must not re-run an attempt that has already consumed the
@@ -5669,6 +5699,7 @@ class PipelineExecutor:
                     connector_hub=connector_hub,
                     broker=broker,
                     stall_requested=self._stall_requested,
+                    pipeline_retry_policy=pipeline_retry_policy,
                 )
                 gate_suppressed, final_status, error_code, error_detail = self._apply_transient_decision(
                     transient,
@@ -5818,6 +5849,7 @@ class PipelineExecutor:
         connector_hub: Any | None,
         broker: RunEventBroker,
         stall_requested: asyncio.Event | None,
+        pipeline_retry_policy: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Decide how a transient node-cancelled / sandbox-failed run recovers.
 
@@ -5849,6 +5881,11 @@ class PipelineExecutor:
         from modulo.settings import get_settings
 
         retries = int(get_settings().saq_run_retries)
+        # FAR-2076: the transport allowance (settings.saq_run_retries) is one
+        # budget; the pipeline's retry_policy is the other. Bound this path by
+        # the policy ceiling so a transient retry can never grant an execution
+        # the policy refuses. No policy => unchanged.
+        retries = _transient_retry_allowance(retries, pipeline_retry_policy)
         (
             node_attempt_count,
             current_token,

@@ -290,7 +290,16 @@ async def _attempt_count_if_retryable(
     node_attempt_count, current_claim_token, attempt_started_at = await executor._read_retry_attempt_state(
         org_id, run_id
     )
-    attempt_count: int = max(node_attempt_count, claim_count - 1)
+    # FAR-2076: the ONE shared measure of executions already consumed
+    # (``max(node_attempt_count, claim_count - 1)``) — reused, never re-derived,
+    # so every path that can grant an execution compares against the same
+    # count. See ``modulo.core.dispatch.retry_executions_consumed``.
+    from modulo.core.dispatch import retry_executions_consumed
+
+    attempt_count = retry_executions_consumed(
+        node_attempt_count=node_attempt_count,
+        claim_count=claim_count,
+    )
     superseded = claim_token is not None and current_claim_token is not None and current_claim_token != claim_token
     script_retry_probe_ok = True
     if _graph_has_script_mode(graph_json):

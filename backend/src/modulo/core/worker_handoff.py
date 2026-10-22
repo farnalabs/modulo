@@ -378,9 +378,11 @@ def _node_started_policy_allows(row: Any) -> tuple[bool, str]:
     A NON-EMPTY ``on`` that covers neither the failure class (the handback's
     own terminal spelling, ``harness.worker_lost``) nor the stall class (the
     executor-death outcome the nodeless sibling maps to) forbids the re-run,
-    and a covered policy still has to have budget left — the watchdog's
-    pre-node attempt bound ``max(node_attempt_count, claim_count - 1)``.
+    and a covered policy still has to have budget left — the shared
+    :func:`retry_executions_consumed` bound (node attempts, or prior SAQ
+    claims for a PRE-node hang: ``max(node_attempt_count, claim_count - 1)``).
     """
+    from modulo.core.dispatch import retry_executions_consumed
     from modulo.core.pipeline_engine.executor import _retry_after_policy
 
     policy = getattr(row, "retry_policy", None)
@@ -394,7 +396,10 @@ def _node_started_policy_allows(row: Any) -> tuple[bool, str]:
         budget = _retry_after_policy(policy, "stalled", "executor_stalled")
     if budget is None:
         return False, "the pipeline retry policy covers neither the failure nor the stall class"
-    attempt = max(int(getattr(row, "node_attempt_count", 0) or 0), max(0, int(row.claim_count) - 1))
+    attempt = retry_executions_consumed(
+        node_attempt_count=getattr(row, "node_attempt_count", 0),
+        claim_count=getattr(row, "claim_count", 0),
+    )
     if attempt > budget:
         return False, f"retry budget exhausted (attempt {attempt} > max_retries {budget})"
     return True, ""
