@@ -159,26 +159,56 @@ class LauncherConfigSource:
         composed = compose_config(state, secrets)
         operator_database_url = os.environ.get("DATABASE_URL")
         operator_system_url = os.environ.get("MODULO_SYSTEM_DATABASE_URL")
-        derived_system = (
-            derive_system_database_url(operator_database_url)
-            if operator_database_url is not None and not operator_system_url
-            else None
-        )
+        derived_system = _derive_operator_system_url(operator_database_url, operator_system_url)
         resolved: dict[str, Any] = {}
         for env_name, field_name in _COMPOSED_FIELDS.items():
-            if env_name == "DATABASE_URL" and operator_database_url:
-                # The operator's URL wins for the app; the system URL is
-                # handled below (derived from the operator's URL so the
-                # pair stays on one Postgres instance).
-                continue
-            if env_name == "MODULO_SYSTEM_DATABASE_URL" and operator_database_url:
-                if derived_system:
-                    resolved[field_name] = derived_system
-                continue
-            value = composed.get(env_name, "")
-            if not value:
-                continue
-            if os.environ.get(env_name):
-                continue  # the operator's environment variable wins
-            resolved[field_name] = value
+            value = _resolve_composed_field(
+                env_name,
+                composed,
+                operator_database_url=operator_database_url,
+                derived_system=derived_system,
+            )
+            if value:  # falsy-omission: a blank derived/composed value is never injected
+                resolved[field_name] = value
         return resolved
+
+
+def _derive_operator_system_url(
+    operator_database_url: str | None,
+    operator_system_url: str | None,
+) -> str | None:
+    """Derive the system URL from the operator's app URL when only that is set."""
+    if operator_database_url is not None and not operator_system_url:
+        # derive_system_database_url returns '' for a password-free URL —
+        # that must be OMITTED (the caller falls back to modulo_app), never
+        # written through as a blank system URL.
+        return derive_system_database_url(operator_database_url) or None
+    return None
+
+
+def _resolve_composed_field(
+    env_name: str,
+    composed: dict[str, str],
+    *,
+    operator_database_url: str | None,
+    derived_system: str | None,
+) -> str | None:
+    """Return the composed value for one field, or None when it must not be set.
+
+    Handles the operator-override cases: the operator's app URL wins, and the
+    system URL is derived from the operator's URL so the pair stays on one
+    Postgres instance.
+    """
+    if env_name == "DATABASE_URL" and operator_database_url:
+        # The operator's URL wins for the app; the system URL is handled by
+        # the branch below (derived from the operator's URL so the pair stays
+        # on one Postgres instance).
+        return None
+    if env_name == "MODULO_SYSTEM_DATABASE_URL" and operator_database_url:
+        return derived_system
+    value = composed.get(env_name, "")
+    if not value:
+        return None
+    if os.environ.get(env_name):
+        return None  # the operator's environment variable wins
+    return value

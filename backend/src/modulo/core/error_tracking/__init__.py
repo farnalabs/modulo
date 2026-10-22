@@ -1077,10 +1077,6 @@ async def check_missed_fire_alerts(
 
     Returns the number of alerts emitted.
     """
-    from sqlalchemy import select
-
-    from modulo.db.models.organisation import Organisation
-
     emitted = 0
     now = datetime.now(UTC)
     redis_client: AsyncRedis | None = None
@@ -1095,12 +1091,7 @@ async def check_missed_fire_alerts(
             socket_connect_timeout=5,
             socket_keepalive=True,
         )
-        async with aengine.connect() as c:
-            if org_id is not None:
-                org_ids: list[uuid.UUID] = [org_id]
-            else:
-                result = await c.execute(select(Organisation.id))
-                org_ids = [row[0] for row in result.all()]
+        org_ids = await _resolve_missed_fire_org_ids(aengine, org_id)
         if not org_ids:
             return 0
 
@@ -1109,17 +1100,13 @@ async def check_missed_fire_alerts(
         factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
         for oid in org_ids:
             oid_uuid = uuid.UUID(str(oid))
-            rows = await _missed_fire_trigger_rows(factory, oid_uuid)
-            for row in rows:
-                period = _row_missed_period(row, now, grace_seconds)
-                if period is None:
-                    continue
-                if not await _missed_fire_cooldown_ok(redis_client, str(oid_uuid), row.id):
-                    continue
-                message = f"Trigger {row.id} ({row.trigger_type}) has not fired for >= {period}s"
-                fingerprint = ErrorIngestionService.fingerprint(message=message, source="saq")
-                await _emit_missed_fire_alert(factory, oid_uuid, row, period, message=message, fingerprint=fingerprint)
-                emitted += 1
+            emitted += await _scan_org_missed_fires(
+                factory,
+                redis_client,
+                oid_uuid,
+                now=now,
+                grace_seconds=grace_seconds,
+            )
         return emitted
     except asyncio.CancelledError:
         raise
@@ -1132,9 +1119,51 @@ async def check_missed_fire_alerts(
         # Guarded with ``is not None`` (never ``return``: a bare return here would
         # swallow the in-flight return value / exception).
         if redis_client is not None:
-            try:
-                await redis_client.aclose()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.warning("error_tracking.missed_fire_redis_close_failed", exc_info=True)
+            await _close_redis_quietly(redis_client)
+
+
+async def _resolve_missed_fire_org_ids(aengine: Any, org_id: uuid.UUID | None) -> list[Any]:
+    """Return the org ids to probe: the caller's single org or every org."""
+    from sqlalchemy import select
+
+    from modulo.db.models.organisation import Organisation
+
+    if org_id is not None:
+        return [org_id]
+    async with aengine.connect() as c:
+        result = await c.execute(select(Organisation.id))
+        return [row[0] for row in result.all()]
+
+
+async def _scan_org_missed_fires(
+    factory: Any,
+    redis_client: AsyncRedis,
+    oid_uuid: uuid.UUID,
+    *,
+    now: datetime,
+    grace_seconds: int,
+) -> int:
+    """Emit missed-fire alerts for one org, returning the count emitted."""
+    emitted = 0
+    rows = await _missed_fire_trigger_rows(factory, oid_uuid)
+    for row in rows:
+        period = _row_missed_period(row, now, grace_seconds)
+        if period is None:
+            continue
+        if not await _missed_fire_cooldown_ok(redis_client, str(oid_uuid), row.id):
+            continue
+        message = f"Trigger {row.id} ({row.trigger_type}) has not fired for >= {period}s"
+        fingerprint = ErrorIngestionService.fingerprint(message=message, source="saq")
+        await _emit_missed_fire_alert(factory, oid_uuid, row, period, message=message, fingerprint=fingerprint)
+        emitted += 1
+    return emitted
+
+
+async def _close_redis_quietly(redis_client: AsyncRedis) -> None:
+    """Close the probe's Redis client, never masking an in-flight outcome."""
+    try:
+        await redis_client.aclose()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("error_tracking.missed_fire_redis_close_failed", exc_info=True)
