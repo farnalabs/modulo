@@ -4733,8 +4733,10 @@ async def bind_connector_to_node(
         org_id, ids, id_error = _bind_connector_ids(pipeline_id, node_id, connector_instance_id)
         if id_error is not None:
             return id_error
-        assert ids is not None
-        pid, nid, cid = ids
+        # _bind_connector_ids returns (None, error) only on failure, already
+        # handled above; cast narrows for mypy without an assert inside the
+        # except-Exception block (SonarCloud S5779).
+        pid, nid, cid = cast(tuple[uuid.UUID, uuid.UUID, uuid.UUID], ids)
 
         async with _session(org_id) as s:
             # Verify connector exists in org
