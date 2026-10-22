@@ -28,7 +28,7 @@ from starlette import status
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory, require_permission
 from modulo.core.events import relay as relay_mod
-from modulo.core.events.event_bus import get_event_bus
+from modulo.core.events.event_bus import EventBus, get_event_bus
 from modulo.core.events.listeners import next_event_version
 from modulo.core.events.notification_events import build_notification_event
 from modulo.db.models.notification import Notification
@@ -175,6 +175,88 @@ async def _untrack_connection(org_id: str, queue: asyncio.Queue[dict[str, Any]])
                 del _active_connections[org_id]
 
 
+def _stream_org_id(principal: TenantPrincipal) -> str:
+    """Return the principal's organisation id, or refuse the stream with 403."""
+    org_id = str(principal.organisation_id) if principal.organisation_id else ""
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot open SSE stream: user is not assigned to an organisation.",
+        )
+    return org_id
+
+
+async def _acquire_relay(
+    relay: Any,
+    org_id: str,
+    queue: asyncio.Queue[dict[str, Any]],
+    event_bus: EventBus,
+) -> Any | None:
+    """Acquire the org's relay refcount, dropping the relay on a non-fatal fault.
+
+    Fail-open: a relay problem must never reject the stream — local delivery
+    still works without it. ``CancelledError`` is not a relay fault: unwind the
+    connection bookkeeping and re-raise so ASGI's cancellation is honoured.
+    """
+    try:
+        relay.acquire(org_id)
+    except asyncio.CancelledError:
+        await event_bus.unsubscribe(org_id, queue)
+        await _untrack_connection(org_id, queue)
+        raise
+    except Exception:
+        _log.warning("sse.relay_acquire_failed", extra={"org_id": org_id}, exc_info=True)
+        return None
+    return relay
+
+
+async def _release_relay(relay: Any, org_id: str) -> None:
+    """Release the org's relay refcount; a release fault is logged, never raised."""
+    try:
+        await relay.release(org_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("sse.relay_release_failed", extra={"org_id": org_id}, exc_info=True)
+
+
+async def _pump_events(
+    request: Request,
+    queue: asyncio.Queue[dict[str, Any]],
+    zombie_timeout: float,
+    org_id: str,
+    event_bus: EventBus,
+    relay: Any | None,
+) -> AsyncGenerator[str, None]:
+    """Pull events from the queue and write them to the stream.
+
+    Two cleanup paths:
+      1. **Graceful disconnect** — ASGI sends CancelledError when the
+         client closes the connection. Caught here.
+      2. **Zombie disconnect** — keepalive heartbeat catches hard drops
+         (network failure, killed tab). Since ``queue.get()`` returns the
+         instant an event is published, the timer only fires when nothing
+         is changing — zero wakeups during active use.
+    """
+    yield ": connected\n\n"
+    try:
+        while not await request.is_disconnected():
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=zombie_timeout)
+                yield f"event: resource_changed\ndata: {json.dumps(event)}\n\n"
+            except TimeoutError:
+                yield ": heartbeat\n\n"
+    except Exception:
+        # CancelledError is a BaseException, so ASGI cancellation is never
+        # caught here - it propagates and the ``finally`` below still cleans up.
+        _log.warning("sse.event_loop_error", exc_info=True)
+    finally:
+        await event_bus.unsubscribe(org_id, queue)
+        await _untrack_connection(org_id, queue)
+        if relay is not None:
+            await _release_relay(relay, org_id)
+
+
 @router.get(
     "/api/v1/events",
     operation_id="stream_events",
@@ -195,12 +277,7 @@ async def sse_event_stream(
     Usage:
         curl -N -H "Authorization: Bearer <token>" http://localhost:8000/api/v1/events
     """
-    org_id = str(principal.organisation_id) if principal.organisation_id else ""
-    if not org_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cannot open SSE stream: user is not assigned to an organisation.",
-        )
+    org_id = _stream_org_id(principal)
 
     event_bus = get_event_bus()
     queue = await event_bus.subscribe(org_id, maxsize=256)
@@ -221,60 +298,21 @@ async def sse_event_stream(
     # stream — local delivery still works without it.
     relay = await _ensure_relay()
     if relay is not None:
-        try:
-            relay.acquire(org_id)
-        except asyncio.CancelledError:
-            await event_bus.unsubscribe(org_id, queue)
-            await _untrack_connection(org_id, queue)
-            raise
-        except Exception:
-            _log.warning("sse.relay_acquire_failed", extra={"org_id": org_id}, exc_info=True)
-            relay = None
-
-    headers = {
-        "Cache-Control": "no-cache, no-store",
-        "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",
-    }
-
-    zombie_timeout = settings.modulo_sse_zombie_timeout_seconds
-
-    async def _pump() -> AsyncGenerator[str, None]:
-        """Pull events from the queue and write them to the stream.
-
-        Two cleanup paths:
-          1. **Graceful disconnect** — ASGI sends CancelledError when the
-             client closes the connection. Caught here.
-          2. **Zombie disconnect** — keepalive heartbeat catches hard drops
-             (network failure, killed tab). Since ``queue.get()`` returns the
-             instant an event is published, the timer only fires when nothing
-             is changing — zero wakeups during active use.
-        """
-        yield ": connected\n\n"
-        try:
-            while not await request.is_disconnected():
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=zombie_timeout)
-                    yield f"event: resource_changed\ndata: {json.dumps(event)}\n\n"
-                except TimeoutError:
-                    yield ": heartbeat\n\n"
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.warning("sse.event_loop_error", exc_info=True)
-        finally:
-            await event_bus.unsubscribe(org_id, queue)
-            await _untrack_connection(org_id, queue)
-            if relay is not None:
-                try:
-                    await relay.release(org_id)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.warning("sse.relay_release_failed", extra={"org_id": org_id}, exc_info=True)
+        relay = await _acquire_relay(relay, org_id, queue, event_bus)
 
     return StreamingResponse(
-        _pump(),
+        _pump_events(
+            request,
+            queue,
+            settings.modulo_sse_zombie_timeout_seconds,
+            org_id,
+            event_bus,
+            relay,
+        ),
         media_type="text/event-stream",
-        headers=headers,
+        headers={
+            "Cache-Control": "no-cache, no-store",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )

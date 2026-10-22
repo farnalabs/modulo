@@ -2,7 +2,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from functools import wraps
-from typing import NoReturn, ParamSpec, TypeVar
+from typing import Any, NoReturn, ParamSpec, TypeVar
 
 import pydantic
 from fastapi import HTTPException, status
@@ -62,215 +62,266 @@ MSG_SESSION_CONTRACT = (
 )
 
 
+#: Signature of one ``_EXCEPTION_HANDLERS`` arm: it either raises the mapped
+#: ``HTTPException`` or re-raises the original exception. Never returns.
+_ExcHandler = Callable[[Any, str], NoReturn]
+
+
+def _reraise(exc: BaseException, _log_prefix: str) -> NoReturn:
+    """Propagate a passthrough exception untouched.
+
+    ``CancelledError`` (a ``BaseException``, not an ``Exception``),
+    ``StorageExhaustedError`` and ``HTTPException`` are not DB faults - they
+    must reach the caller unchanged.
+    """
+    raise exc
+
+
+def _handle_integrity_error(_exc: IntegrityError, log_prefix: str) -> NoReturn:
+    """Map a constraint violation to 409 Conflict."""
+    _log.exception("%s.integrity_error", log_prefix)
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Resource conflict. The operation could not be completed.",
+    ) from None
+
+
+def _handle_programming_error(_exc: ProgrammingError, log_prefix: str) -> NoReturn:
+    """Map a missing-schema / unsupported-feature error to 501."""
+    _log.exception("%s.programming_error", log_prefix)
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Feature is not available. Run database migrations to enable it.",
+    ) from None
+
+
+def _handle_pending_rollback(exc: PendingRollbackError, log_prefix: str) -> NoReturn:
+    """Map a failed-transaction session state to a TRANSIENT 503.
+
+    Subclass of ``InvalidRequestError``, but a TRANSIENT-fault signal: an
+    earlier statement failed and the session was never rolled back, so the
+    next statement on it refuses to run. The underlying fault (server
+    disconnect, serialization failure, pool timeout) is often transient, so
+    answer 503 and emit the same structured ``db_transient`` record as the
+    SQLAlchemyError backstop. MUST stay ahead of the InvalidRequestError arm
+    (MRO), which would otherwise file this outage as a 500 programming bug -
+    the inverse of the FAR-1408 fix.
+    """
+    _log.exception("%s.pending_rollback_error", log_prefix)
+    log_service_unavailable(
+        "db_transient",
+        exc,
+        route=log_prefix,
+        detail="transient database error (PendingRollbackError)",
+    )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Database temporarily unavailable.",
+    ) from None
+
+
+def _handle_invalid_request(_exc: InvalidRequestError, log_prefix: str) -> NoReturn:
+    """Map a session-contract violation to 500 - a local programming error.
+
+    ``InvalidRequestError`` is a subclass of ``SQLAlchemyError`` and is a
+    session-contract violation, NOT a database outage. MUST stay ahead of the
+    SQLAlchemyError arm or the 503 backstop would both mislabel it to the
+    client AND write a misleading ``db_transient`` service-unavailability
+    record (FAR-1408).
+    """
+    _log.exception("%s.session_contract_error", log_prefix)
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=MSG_SESSION_CONTRACT,
+    ) from None
+
+
+def _handle_sqlalchemy_error(exc: SQLAlchemyError, log_prefix: str) -> NoReturn:
+    """Map a generic database error to 503, except a bounded lock timeout (409).
+
+    SQLSTATE 55P03 (``lock_not_available`` - a bounded ``lock_timeout``
+    expiring) is a busy-row conflict rather than an outage: the engine is
+    healthy and re-issuing may succeed, so it answers 409 (see
+    ``_MSG_LOCK_TIMEOUT``) instead of the generic 503 the rest of this arm
+    returns. Only the status for that one SQLSTATE differs; the class ordering
+    above is unchanged.
+    """
+    if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
+        _log.warning("%s.lock_timeout", log_prefix)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_MSG_LOCK_TIMEOUT,
+        ) from None
+    _log.exception("%s.db_error", log_prefix)
+    log_service_unavailable(
+        "db_transient",
+        exc,
+        route=log_prefix,
+        detail="transient database error (handle_db_errors backstop)",
+    )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Database temporarily unavailable.",
+    ) from None
+
+
+def _handle_pydantic_error(_exc: pydantic.ValidationError, log_prefix: str) -> NoReturn:
+    """Map a Pydantic validation failure to 422."""
+    _log.exception("%s.validation_error", log_prefix)
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail="Data validation failed.",
+    ) from None
+
+
+def _handle_manual_node_output_schema_error(exc: ManualNodeOutputSchemaError, _log_prefix: str) -> NoReturn:
+    """Surface a manual-node output-schema refusal as 422 with its own detail."""
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=str(exc),
+    ) from None
+
+
+def _handle_pipeline_not_runnable(exc: PipelineNotRunnableError, log_prefix: str) -> NoReturn:
+    """Map the ``create_run`` pipeline-state gate refusal to 409 (FAR-1528/FAR-1552).
+
+    A domain refusal, NOT a server-side bug: 409 Conflict with the same detail
+    shape every sibling route that translates it itself already answers
+    (``pipeline_not_runnable_http``), so a chain-less route such as
+    ``variant_batches.re_fire_batch`` reads identically instead of falling
+    through to the generic 500 backstop.
+    """
+    _log.warning(
+        "%s.pipeline_not_runnable pipeline=%s state=%s",
+        log_prefix,
+        exc.pipeline_id,
+        exc.state,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"Cannot create run: pipeline {exc.pipeline_id} is {exc.state}",
+    ) from None
+
+
+def _handle_triggers_paused(exc: TriggersPausedError, log_prefix: str) -> NoReturn:
+    """Map the org-wide ``triggers_paused`` kill-switch refusal to 409 (FAR-1589).
+
+    A domain refusal an admin can lift, NOT a server-side bug: the same status
+    family as the sibling ``create_run``-gate refusals. The routes that handle
+    pause themselves (webhooks/slack) swallow it into their own
+    ``{"status": "paused"}`` payload inside the endpoint body, so they never
+    reach this arm with the exception type; a route that converts it to an
+    ``HTTPException`` passes through the passthrough arm untouched regardless.
+    """
+    _log.warning(
+        "%s.triggers_paused org=%s trigger=%s",
+        log_prefix,
+        exc.org_id,
+        exc.trigger_id,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"Cannot create run: triggers are paused for organisation {exc.org_id}",
+    ) from None
+
+
+def _handle_org_deleted(exc: OrgDeletedError, log_prefix: str) -> NoReturn:
+    """Map the soft-deleted / missing-org guard to 409 / 404 (FAR-1589).
+
+    The guard in ``create_run`` fires for EVERY run origin (manual included -
+    it is deliberately not pause-exempt), and ``variant_batches.re_fire_batch``
+    carries no route-local chain, so this previously fell through to the
+    generic 500 backstop. Statuses and detail strings are byte-identical to the
+    sibling ``except OrgDeletedError`` arms in routes/runs.py (trigger + rerun)
+    and routes/triggers.py (test trigger).
+    """
+    _log.warning(
+        "%s.org_deleted org=%s deleted=%s",
+        log_prefix,
+        exc.org_id,
+        exc.deleted,
+    )
+    if exc.deleted:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot create run: organisation {exc.org_id} is deleted",
+        ) from None
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Cannot create run: organisation {exc.org_id} not found",
+    ) from None
+
+
+def _handle_unexpected_error(_exc: Exception, log_prefix: str) -> NoReturn:
+    """Backstop: log the unexpected failure and answer a generic 500."""
+    _log.exception("%s.unexpected_error", log_prefix)
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=MSG_UNEXPECTED_ERROR,
+    ) from None
+
+
+#: Ordered exception-class -> handler table for :func:`_translate_wrapped_exception`.
+#:
+#: The order IS the contract (MRO: specific classes before their bases) and is
+#: identical to the ``except`` chain it replaced: ``IntegrityError`` -> 409,
+#: ``ProgrammingError`` -> 501, ``PendingRollbackError`` -> 503,
+#: ``InvalidRequestError`` -> 500, ``SQLAlchemyError`` -> 503,
+#: ``pydantic.ValidationError`` -> 422, ``ManualNodeOutputSchemaError`` -> 422,
+#: ``PipelineNotRunnableError`` -> 409, ``TriggersPausedError`` -> 409,
+#: ``OrgDeletedError`` -> 409/404. Passthrough arms re-raise for
+#: ``CancelledError`` / ``StorageExhaustedError`` / ``HTTPException``; anything
+#: unmatched falls through to the ``Exception`` -> 500 backstop.
+#: The classifier walks this in sequence, so the ``isinstance`` semantics and the
+#: arm order are exactly those of the original chain - never reorder it.
+_EXCEPTION_HANDLERS: tuple[tuple[type[BaseException], _ExcHandler], ...] = (
+    (asyncio.CancelledError, _reraise),
+    (IntegrityError, _handle_integrity_error),
+    (ProgrammingError, _handle_programming_error),
+    (PendingRollbackError, _handle_pending_rollback),
+    (InvalidRequestError, _handle_invalid_request),
+    (SQLAlchemyError, _handle_sqlalchemy_error),
+    (pydantic.ValidationError, _handle_pydantic_error),
+    (ManualNodeOutputSchemaError, _handle_manual_node_output_schema_error),
+    (StorageExhaustedError, _reraise),
+    (HTTPException, _reraise),
+    (PipelineNotRunnableError, _handle_pipeline_not_runnable),
+    (TriggersPausedError, _handle_triggers_paused),
+    (OrgDeletedError, _handle_org_deleted),
+)
+
+
 def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
     """Map one exception escaped from the endpoint body to its HTTP response.
 
     The except-class -> status mapping and its order are the contract this
-    module exists to enforce (IntegrityError->409, ProgrammingError->501,
-    PendingRollbackError->503, InvalidRequestError->500, SQLAlchemyError->503,
-    pydantic.ValidationError->422, PipelineNotRunnableError->409,
-    TriggersPausedError->409, OrgDeletedError->409/404; passthrough
-    re-raises for CancelledError / StorageExhaustedError / HTTPException;
-    Exception->500). The chain below preserves the original except order -
-    never reorder it (MRO: specific classes before their bases).
+    module exists to enforce - see :data:`_EXCEPTION_HANDLERS`, whose sequence
+    reproduces the original ``except`` chain exactly (MRO: specific classes
+    before their bases; never reorder it). Each arm's within-class rationale
+    lives on its handler; the parity tests in
+    ``tests/unit/api/test_db_error_handling.py`` fail if any detail string
+    drifts from its sibling route.
 
-    Three within-class refinements sit on the arms below:
-
-    * ``PendingRollbackError`` (a subclass of ``InvalidRequestError``) gets its
-      own 503 arm BEFORE the ``InvalidRequestError`` arm: it signals a
-      TRANSIENT fault left behind by an earlier failure (the session was never
-      rolled back, so the next statement refuses to run), so it maps to the
-      same 503 + ``log_service_unavailable("db_transient", ...)`` record as the
-      ``SQLAlchemyError`` backstop - NOT the 500 programming-error arm below.
-    * ``InvalidRequestError`` (a subclass of ``SQLAlchemyError``) gets its own
-      arm BEFORE the base ``SQLAlchemyError`` arm: it is a session-contract
-      violation (a programming error), so it maps to 500 with an accurate
-      detail and is logged as an unexpected error - it must NOT reach the 503
-      backstop's ``log_service_unavailable("db_transient", ...)`` record,
-      which would file a local bug as a database outage.
-    * SQLSTATE 55P03 (``lock_not_available`` - a bounded ``lock_timeout``
-      expiring) on the ``SQLAlchemyError`` arm maps to 409, not 503. It is a
-      busy-row conflict rather than a database outage, so the class ordering
-      above is unchanged - only the status for that one SQLSTATE differs.
-
-    Three DOMAIN exceptions are mapped ahead of the ``Exception->500``
-    backstop (FAR-1528/FAR-1552/FAR-1589). Each gate lives in ``create_run``
-    (or its pre-flight helpers), so a route that reaches one WITHOUT its own
-    ``except`` chain - ``variant_batches.re_fire_batch`` is the observed one -
-    fell through to the backstop and answered a generic 500 for a refusal that
-    is a typed 4xx everywhere a sibling route translates it. Mapping them here
-    covers every chain-less route generically instead of one patch per route.
-    Routes that DO translate them themselves raise an ``HTTPException`` (or
-    swallow the error into their own payload, as the webhook/slack paused
-    paths do), so the explicit handlers keep their own mapping and are never
-    double-handled:
-
-    * ``PipelineNotRunnableError`` -> 409, detail byte-identical to
-      ``modulo.api.routes.runs.pipeline_not_runnable_http``.
-    * ``OrgDeletedError`` -> 409 when the org is soft-deleted, 404 when it is
-      missing; both details byte-identical to the ``except OrgDeletedError``
-      arms in ``routes/runs.py`` (trigger + rerun) and ``routes/triggers.py``
-      (test trigger).
-    * ``TriggersPausedError`` -> 409. No REST route answers it today (the
-      webhook/slack pre-flights swallow it into a 200 ``{"status": "paused"}``
-      event write), so the status follows the ``create_run``-gate family it
-      belongs to: a refusal an admin can lift, never a server-side bug.
-
-    The parity tests in ``tests/unit/api/test_db_error_handling.py`` fail if
-    any of these detail strings drift from their sibling routes.
+    The ``try: raise exc`` wrapper installs *exc* as the thread's currently
+    handled exception, so each handler's ``_log.exception`` records the real
+    traceback even when this classifier is called from outside an ``except``
+    block (several payload surfaces call it that way).
     """
     try:
         raise exc
-    except asyncio.CancelledError:
-        raise
-    except IntegrityError:
-        _log.exception("%s.integrity_error", log_prefix)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Resource conflict. The operation could not be completed.",
-        ) from None
-    except ProgrammingError:
-        _log.exception("%s.programming_error", log_prefix)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        ) from None
-    except PendingRollbackError as exc:
-        # Subclass of InvalidRequestError, but a TRANSIENT-fault signal: an
-        # earlier statement failed and the session was never rolled back, so
-        # the next statement on it refuses to run. The underlying fault
-        # (server disconnect, serialization failure, pool timeout) is often
-        # transient, so answer 503 and emit the same structured ``db_transient``
-        # record as the SQLAlchemyError backstop. MUST precede the
-        # InvalidRequestError arm below (MRO), which would otherwise file this
-        # outage as a 500 programming bug - the inverse of the FAR-1408 fix.
-        _log.exception("%s.pending_rollback_error", log_prefix)
-        log_service_unavailable(
-            "db_transient",
-            exc,
-            route=log_prefix,
-            detail="transient database error (PendingRollbackError)",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
-        ) from None
-    except InvalidRequestError:
-        # Session-contract violation (subclass of SQLAlchemyError) - a local
-        # programming error, NOT a database outage. MUST precede the
-        # SQLAlchemyError arm below or the 503 backstop would both mislabel it
-        # to the client AND write a misleading ``db_transient`` service-
-        # unavailability record (FAR-1408).
-        _log.exception("%s.session_contract_error", log_prefix)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_SESSION_CONTRACT,
-        ) from None
-    except SQLAlchemyError as exc:
-        if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
-            # lock_timeout expired on a bounded row lock (55P03): the DB is
-            # healthy, this transaction just could not take the lock. Clear,
-            # non-generic answer - see _MSG_LOCK_TIMEOUT for why this is 409
-            # rather than the generic 503 the rest of this arm returns.
-            _log.warning("%s.lock_timeout", log_prefix)
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=_MSG_LOCK_TIMEOUT,
-            ) from None
-        _log.exception("%s.db_error", log_prefix)
-        log_service_unavailable(
-            "db_transient",
-            exc,
-            route=log_prefix,
-            detail="transient database error (handle_db_errors backstop)",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
-        ) from None
-    except pydantic.ValidationError:
-        _log.exception("%s.validation_error", log_prefix)
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Data validation failed.",
-        ) from None
-    except ManualNodeOutputSchemaError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(exc),
-        ) from None
-    except StorageExhaustedError:
-        raise
-    except HTTPException:
-        raise
-    except PipelineNotRunnableError as exc:
-        # FAR-1528/FAR-1552: the create_run pipeline-state gate (archived /
-        # soft-deleted, Paused when FAR-1530 lands) refused the run. A domain
-        # refusal, NOT a server-side bug: 409 Conflict with the same detail
-        # shape every sibling route that translates it itself already answers
-        # (``pipeline_not_runnable_http``), so a chain-less route such as
-        # ``variant_batches.re_fire_batch`` reads identically instead of
-        # falling through to the generic 500 backstop below.
-        _log.warning(
-            "%s.pipeline_not_runnable pipeline=%s state=%s",
-            log_prefix,
-            exc.pipeline_id,
-            exc.state,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Cannot create run: pipeline {exc.pipeline_id} is {exc.state}",
-        ) from None
-    except TriggersPausedError as exc:
-        # FAR-1589: the org-wide ``triggers_paused`` kill-switch gate
-        # (``ensure_triggers_resumable``, reached via ``create_run``). A domain
-        # refusal an admin can lift, NOT a server-side bug: 409 Conflict, the
-        # same status family as the sibling ``create_run``-gate refusals above
-        # and below. The routes that handle pause themselves (webhooks/slack)
-        # swallow it into their own ``{"status": "paused"}`` payload inside the
-        # endpoint body, so they never reach this arm with the exception type;
-        # a route that converts it to an ``HTTPException`` would pass through
-        # the passthrough arm untouched regardless.
-        _log.warning(
-            "%s.triggers_paused org=%s trigger=%s",
-            log_prefix,
-            exc.org_id,
-            exc.trigger_id,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Cannot create run: triggers are paused for organisation {exc.org_id}",
-        ) from None
-    except OrgDeletedError as exc:
-        # FAR-1589: the soft-deleted / missing-org guard in ``create_run``
-        # fires for EVERY run origin (manual included - it is deliberately not
-        # pause-exempt), and ``variant_batches.re_fire_batch`` carries no
-        # route-local chain, so this fell through to the generic 500 backstop.
-        # Statuses and detail strings are byte-identical to the sibling
-        # ``except OrgDeletedError`` arms in routes/runs.py (trigger + rerun)
-        # and routes/triggers.py (test trigger): 409 for a soft-deleted org,
-        # 404 when the org row is gone entirely.
-        _log.warning(
-            "%s.org_deleted org=%s deleted=%s",
-            log_prefix,
-            exc.org_id,
-            exc.deleted,
-        )
-        if exc.deleted:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Cannot create run: organisation {exc.org_id} is deleted",
-            ) from None
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Cannot create run: organisation {exc.org_id} not found",
-        ) from None
-    except Exception:
-        _log.exception("%s.unexpected_error", log_prefix)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR,
-        ) from None
+    except Exception:  # NOSONAR - installs exc so _log.exception keeps the traceback; arm classifies, never swallows
+        # ``Exception``, not ``BaseException`` (S5754): every caller of the
+        # classifier passes an ``Exception`` instance (all of them catch
+        # ``Exception``), and the passthrough arms' action IS to re-raise
+        # unchanged - so an exception that is not an ``Exception`` escapes
+        # here identically to how the ``_reraise`` arm would return it.
+        for exc_type, handler in _EXCEPTION_HANDLERS:
+            if isinstance(exc, exc_type):
+                handler(exc, log_prefix)
+        # No arm matched: the ``Exception`` -> 500 backstop. Every caller passes
+        # an ``Exception`` (the type contract above), so this is always reached
+        # for an unclassified failure.
+        _handle_unexpected_error(exc, log_prefix)
 
 
 async def prime_stream[T](

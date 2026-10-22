@@ -504,6 +504,28 @@ describe('PipelineEditorView — branch coverage sweep', () => {
     wrapper.unmount()
   })
 
+  it('findLegacyHitlDescriptionIssues tolerates falsy entries and legacy source/target keys', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    const nodes = [null, { id: 'h1', node_type: 'hitl', hitl_config: { description: 'Short' } }]
+    const edges = [
+      null,
+      { source: 's1', target: 't1', hitl_review_config: { label: 'Gate', description: 'Short' } },
+      { hitl_review_config: { label: 'Gate', description: 'Short' } },
+    ]
+
+    const issues = vm.findLegacyHitlDescriptionIssues(nodes, edges)
+    expect(issues).toHaveLength(3)
+    expect(issues.some((i: any) => i.kind === 'node')).toBe(true)
+    expect(issues.some((i: any) => i.key === 'edge:#s1->#t1')).toBe(true)
+    expect(issues.some((i: any) => i.key === 'edge:#?->#?')).toBe(true)
+    wrapper.unmount()
+  })
+
   // -- syncRetryPolicyFromPipeline: schedule with out-of-range values --
   it('syncRetryPolicyFromPipeline clamps out-of-range schedule values', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
