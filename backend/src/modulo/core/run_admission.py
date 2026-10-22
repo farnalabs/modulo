@@ -18,6 +18,12 @@ The 2026-09-04 PR Reviewer admission wedge (66 queued, zero starts for 13+h,
 All three mechanisms are independent: the sweep never touches pending rows,
 coalescing only folds UNSTARTED pending runs, and backpressure only refuses
 NEW rows.
+
+This module also owns the CI-failure coalesce KEY derivation and the in-flight
+leg of that gate (:func:`derive_ci_failure_coalesce_key`,
+:func:`has_in_flight_ci_failure_run`). The gate itself lives in the trigger
+engine; the in-flight leg lives here because it reads run state and mirrors this
+module's admission primitives.
 """
 
 from __future__ import annotations
@@ -1100,6 +1106,100 @@ def coalesce_enabled(trigger_config: dict[str, Any] | None) -> bool:
     if not trigger_config:
         return True
     return trigger_config.get("coalesce_pending") is not False
+
+
+#: Backstop on the in-flight leg of CI-failure coalescing (see
+#: :func:`has_in_flight_ci_failure_run`). The in-flight leg holds suppression
+#: while a same-key run is non-terminal, at ANY age — but a permanently stuck
+#: non-terminal row must not suppress forever, so a run older than this bound no
+#: longer counts and the age-based window takes over again.
+#:
+#: Derivation: the longest legitimate single run is bounded by the node budget
+#: times the number of dispatch attempts. The Branch Fixer's ``sandbox_agent``
+#: node carries ``timeout_seconds = 3300`` and the node-deadline watchdog may
+#: re-dispatch it once, so one run can live ~6600s (110 min). Two hours (7200s)
+#: covers that plus dispatch/queue/latency slack. In practice the periodic sweeps
+#: reclaim a genuinely stuck run far sooner (FAR-2005 reaps a node-started run
+#: whose SAQ heartbeat stopped at ~5 min; the legacy arm at 30 min), so this bound
+#: is a defence against those sweeps themselves being broken, not the normal path.
+CI_FAILURE_INFLIGHT_BACKSTOP_SECONDS = 2 * 60 * 60  # 2 hours
+
+
+async def has_in_flight_ci_failure_run(
+    session: Any,
+    *,
+    pipeline_id: uuid.UUID,
+    coalesce_key: str,
+    backstop_seconds: int = CI_FAILURE_INFLIGHT_BACKSTOP_SECONDS,
+    now: datetime | None = None,
+) -> bool:
+    """Whether a run for *coalesce_key* is still non-terminal (in flight).
+
+    The age window the CI-failure gate keys on is anchored on the PREVIOUS
+    DELIVERY, not on the run that delivery created. A repeat delivery therefore
+    looked brand new the moment the window elapsed, even when the run it was
+    meant to deduplicate was still executing — minting a second full Branch
+    Fixer run for the identical work unit and doubling its sandbox concurrency
+    consumption. This predicate is the missing signal: it holds suppression for
+    as long as ANY run created from the same coalesce key is non-terminal, with
+    the age window as a secondary bound rather than the primary gate.
+
+    Identity is derived, never stored twice: each candidate run's own stored
+    ``input_payload`` is fed through :func:`derive_ci_failure_coalesce_key`, so a
+    run matches only when it was created for the same PR **and** the same head
+    SHA. A new commit therefore never matches (its own key differs), and a run
+    whose payload carries no ``headSha`` (a different trigger on the same
+    pipeline) derives ``None`` and is never a blocker.
+
+    Scope is the PIPELINE, not the trigger: two triggers dispatching the same
+    pipeline for one work item are still one work unit.
+
+    Only NON-TERMINAL rows count (:data:`ACTIVE_RUN_STATUSES` — queued,
+    running, claimed, awaiting a human, parked, unknown-outcome). A terminal run
+    never suppresses: its work is over and a same-head repeat is a genuinely new
+    decision (the pre-existing trade-off documented on
+    ``TriggerEngine._coalesce_ci_failure``). ``backstop_seconds`` bounds the
+    scan so a permanently stuck row cannot suppress forever.
+
+    Fail-open by design: this is a suppression hint, not an admission
+    authority, so an unreadable query must never refuse every dispatch. On a
+    read failure the caller falls through to the pre-existing age decision and
+    this function LOGS — it never returns "in flight" for an unknown answer.
+    """
+    anchor = now or datetime.now(UTC)
+    created_after = anchor - timedelta(seconds=max(int(backstop_seconds), 0))
+    # The bounded-scan bound is imported rather than re-declared so the two
+    # conventions cannot drift (``db.crud.coalesce_pending_run`` scans the same
+    # way for its non-Postgres branch).
+    from modulo.db.crud.run import COALESCE_CANDIDATE_LIMIT
+
+    try:
+        rows: Any = (
+            await session.execute(
+                select(Run.input_payload)
+                .where(
+                    Run.pipeline_id == pipeline_id,
+                    Run.status.in_(ACTIVE_RUN_STATUSES),
+                    Run.cancellation_requested.is_(False),
+                    Run.created_at >= created_after,
+                )
+                .order_by(Run.created_at.desc())
+                .limit(COALESCE_CANDIDATE_LIMIT)
+            )
+        ).all()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "ci_failure_coalesce.inflight_check_failed pipeline=%s key=%s "
+            "(falling through to the age-based window; a dispatch is not blocked "
+            "on an unreadable query)",
+            pipeline_id,
+            coalesce_key,
+            exc_info=True,
+        )
+        return False
+    return any(derive_ci_failure_coalesce_key(row[0]) == coalesce_key for row in rows)
 
 
 # ---------------------------------------------------------------------------
