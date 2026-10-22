@@ -1,0 +1,19 @@
+{
+  "nodes": [
+    {"id": "start", "node_type": "placeholder", "label": "Start", "connector_type": null, "required_capabilities": []},
+    {"id": "planning", "node_type": "manual", "label": "Planning (Ticket Triage)", "connector_type": null, "required_capabilities": []},
+    {"id": "end", "node_type": "placeholder", "label": "End", "connector_type": null, "required_capabilities": []}
+  ],
+  "edges": [
+    {"source": "planning", "target": "end", "edge_type": "normal", "hitl_review": false}
+  ],
+  "automation_suggestions": [
+    {"stage": "planning", "suggestion": "Auto-assign issues to team members based on workload and expertise", "connector_type": "jira"}
+  ],
+  "expected_findings_categories": ["stage", "automation", "transition", "overview"],
+  "expected_stage_findings": ["Planning stage detected"],
+  "expected_automation_findings": ["No CI/CD configuration detected"],
+  "expected_bottleneck_findings": [],
+  "expected_transition_findings": ["Issue lifecycle observed"],
+  "expected_overview_findings": ["SDLC stages detected"]
+}
