@@ -70,6 +70,45 @@ _SAML_NOT_FOUND = HTTPException(
 )
 
 
+def _callback_responses() -> dict[int | str, dict[str, Any]]:
+    """OpenAPI ``responses`` map for the browser-facing SSO callback routes.
+
+    FAR-2012: the OIDC callback and both SAML ACS routes redirect the BROWSER
+    and have no JSON body. Without an explicit declaration FastAPI publishes
+    them as ``200 application/json`` and the generated frontend client
+    (``frontend/src/lib/api/schema.ts``) is built on that fiction.
+
+    Only statuses these routes can actually produce are declared: the success
+    ``307``, the handled-failure ``303`` (raised as :class:`SsoCallbackError`
+    and rendered by the app's registered handler) and the
+    ``handle_db_errors`` ``500`` backstop for an unexpected fault. Both
+    redirects carry a ``Location`` header and an empty body.
+    """
+    location_header: dict[str, Any] = {
+        "Location": {
+            "description": "URL the browser is redirected to.",
+            "schema": {"type": "string"},
+        }
+    }
+    return {
+        status.HTTP_307_TEMPORARY_REDIRECT: {
+            "description": (
+                "Success: redirect to the frontend callback URL. The access token is carried "
+                "in the URL fragment; there is no response body."
+            ),
+            "headers": location_header,
+        },
+        status.HTTP_303_SEE_OTHER: {
+            "description": (
+                "Handled sign-in failure: redirect to the frontend login page with a "
+                "whitelisted ``sso_error`` code; there is no response body."
+            ),
+            "headers": location_header,
+        },
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Internal Server Error"},
+    }
+
+
 def _frontend_url(settings: Settings) -> str:
     """Derive the frontend base URL (delegates to the shared resolver)."""
     from modulo.api.frontend_url import resolve_frontend_url
@@ -531,7 +570,12 @@ async def oidc_login(
     return response
 
 
-@router.get("/oidc/{provider}/callback")
+@router.get(
+    "/oidc/{provider}/callback",
+    status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+    response_class=RedirectResponse,
+    responses=_callback_responses(),
+)
 @handle_db_errors("sso.oidc_callback")
 async def oidc_callback(
     provider: str,
@@ -726,6 +770,9 @@ async def _read_acs_form(request: Request) -> FormData:
 # resolves, then rebound to the provider's org. An SSO sign-in -> fail closed.
 @router.post(
     "/saml/acs/{provider_id}",
+    status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+    response_class=RedirectResponse,
+    responses=_callback_responses(),
     dependencies=[
         Depends(
             audited_system("saml_acs_attempted", "session", actor_source="pre_auth", fail_closed=True),
@@ -957,6 +1004,9 @@ async def saml_login(
 # audited(principal_dep=...) to resolve. Actor-less variant, SYSTEM actor.
 @router.post(
     "/saml/acs",
+    status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+    response_class=RedirectResponse,
+    responses=_callback_responses(),
     dependencies=[
         Depends(
             audited_system("saml_acs_attempted", "session", actor_source="pre_auth", fail_closed=True),
