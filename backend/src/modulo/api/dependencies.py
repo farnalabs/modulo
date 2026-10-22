@@ -750,12 +750,23 @@ def require_feature_anonymous(
 
     ``allow_degraded_authentication`` (FAR-2059) opts an AUTHENTICATION entry
     point into the degrade-never-strand policy: when NO valid licence resolves
-    at any scope (an expired key is cleared by ``get_license`` and is therefore
-    indistinguishable from an absent one here), the request is allowed through
-    so the user can sign in; entitlement is enforced post-auth, where the plan
-    resolves to Community and every Team feature stays off. A licence that DOES
-    resolve but does not grant the feature is a determinate entitlement
-    decision, so it keeps returning 402 with a scope-naming detail.
+    at any scope (a key lapsed past ``license.LICENCE_GRACE_DAYS`` is cleared by
+    ``get_license`` and is therefore indistinguishable from an absent one
+    here), the request is allowed through so the user can sign in; entitlement
+    is enforced post-auth, where the plan resolves to Community and every Team
+    feature stays off. A licence that DOES resolve but does not grant the
+    feature is a determinate entitlement decision, so it keeps returning 402
+    with a scope-naming detail.
+
+    INVARIANT — "there is no licence state in which no administrator can reach
+    the licence screen": this gate is deliberately ROLE-BLIND. At the IdP
+    hand-off there is no identity yet, so every sign-in (admin or not) is
+    allowed through on the degraded path; the admin then reaches
+    ``GET /api/v1/admin/license`` (guarded by an org-admin permission, never by
+    a licence) and installs a new key. Never make this branch depend on a plan
+    having a key, and never put a licence gate on the licence endpoint — either
+    change turns a lapse into a lockout with no way back in. The invariant is
+    pinned by ``tests/unit/api/test_sso_licence_admin_invariant.py``.
 
     Returns 402 Payment Required when the feature is unavailable — never 401.
     The gate is fail-closed: if plan resolution itself fails, the resolver

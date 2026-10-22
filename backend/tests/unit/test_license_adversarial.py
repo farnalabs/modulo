@@ -25,6 +25,7 @@ from hypothesis import strategies as st
 
 from modulo.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
+    LICENCE_GRACE_DAYS,
     LicenseError,
     parse_and_verify,
     set_public_key,
@@ -124,10 +125,14 @@ class TestTamperedSignature:
 
 
 class TestExpiredKey:
-    """Prove expired license keys are rejected."""
+    """Prove licences lapsed past the fixed delivery grace are rejected.
+
+    FAR-2059: capability expiry is ``expires_at + LICENCE_GRACE_DAYS``; a key
+    inside that window still verifies and grants its tier.
+    """
 
     def test_expired_key_rejected(self, authority_keys: dict[str, str], valid_payload: dict[str, Any]) -> None:
-        past = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+        past = (datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 1)).isoformat()
         payload = {**valid_payload, "expires_at": past}
         payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
         payload_b64 = base64.urlsafe_b64encode(payload_bytes).rstrip(b"=").decode()
@@ -139,13 +144,31 @@ class TestExpiredKey:
         assert result.valid is False
         assert "expired" in (result.error or "").lower()
 
-    def test_expired_boundary_just_before(self, authority_keys: dict[str, str]) -> None:
+    def test_expiry_inside_grace_is_accepted(self, authority_keys: dict[str, str]) -> None:
+        """One second past ``expires_at`` is inside the grace: still valid."""
         now = datetime.now(UTC)
         one_second_ago = (now - timedelta(seconds=1)).isoformat()
         payload = {
             "tier": "team",
             "features": [],
             "expires_at": one_second_ago,
+            "org_id": "00000000-0000-0000-0000-000000000001",
+        }
+        payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+        payload_b64 = base64.urlsafe_b64encode(payload_bytes).rstrip(b"=").decode()
+        sig = sign_primitive(payload, authority_keys["private_key"])
+        sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sig)).rstrip(b"=").decode()
+        key = f"{payload_b64}.{sig_b64}"
+
+        result = parse_and_verify(key)
+        assert result.valid is True
+
+    def test_expiry_just_past_grace_is_rejected(self, authority_keys: dict[str, str]) -> None:
+        just_past = (datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS, seconds=1)).isoformat()
+        payload = {
+            "tier": "team",
+            "features": [],
+            "expires_at": just_past,
             "org_id": "00000000-0000-0000-0000-000000000001",
         }
         payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
@@ -359,8 +382,8 @@ class TestClockSkewBoundary:
         assert result.valid is False
         assert "Invalid expires_at" in (result.error or "")
 
-    def test_clock_skew_after_expiry_fails(self, authority_keys: dict[str, str]) -> None:
-        past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+    def test_clock_skew_past_grace_fails(self, authority_keys: dict[str, str]) -> None:
+        past = (datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS, hours=1)).isoformat()
         payload = {
             "tier": "team",
             "features": [],

@@ -34,7 +34,9 @@ pluggable store. The ``SecretsBackend`` ABC exposes async ``get_secret`` /
 ``set_secret``
 / ``delete_secret``; the factory selects ``fernet`` (default, Fernet-encrypted
 rows in the ``secrets`` table), ``vault`` (HashiCorp Vault) or ``aws`` (Secrets
-Manager), with a license gate for external backends. ``fernet_rotation.py``
+Manager). The ``external_secrets`` entitlement gates *changing* the backend
+configuration, not building the configured one (FAR-2059 / FAR-2060).
+``fernet_rotation.py``
 re-encrypts every encrypted store to a new key with an ``old_key`` fallback for
 no-downtime rotation. Infra-only surface - no UI route, so it is tracked here
 rather than in the manifest registry.
@@ -49,8 +51,11 @@ rather than in the manifest registry.
       ``backend_name`` / ``MODULO_SECRETS_BACKEND`` (``fernet`` default,
       ``vault``, ``aws``); unknown name → ``ValueError`` listing the choices
 - [x] External backends (``vault`` / ``aws``) are license-gated via the
-      centralized ``external_secrets`` feature flag and fall back to
-      ``fernet`` when unlicensed (logged)
+      centralized ``external_secrets`` feature flag on the CONFIGURATION
+      surface only; licence state never decides the runtime resolution path,
+      so a configured backend is never silently downgraded to ``fernet`` on a
+      lapse (FAR-2059 / FAR-2060) - an unconfigured external backend fails
+      hard in its own constructor instead
 - [x] ``fernet`` backend encrypts values with ``cryptography.fernet.Fernet``
       and persists them in the ``secrets`` table with an
       ``(organisation_id, key)`` scope
@@ -78,11 +83,13 @@ rather than in the manifest registry.
 
 ## Known Gaps
 
-- **External backends require a paid plan.** ``vault`` / ``aws`` are
-  license-gated; ``fernet`` is the only community-tier store, and their
-  live-service construction remains unit-tested only -
-  ``secrets_backend.feature`` (added 2026-09-19) locks the Fernet store, the
-  factory, and the unlicensed fallback end to end instead.
+- **Changing to an external backend requires a paid plan.** ``vault`` /
+  ``aws`` configuration is license-gated, while a backend already configured
+  keeps resolving credentials through itself on a lapse (FAR-2059 /
+  FAR-2060). Their live-service construction remains unit-tested only -
+  ``secrets_backend.feature`` (added 2026-09-19) locks the Fernet store and
+  the factory, including the no-unlicensed-downgrade invariant, end to end
+  instead.
 
 ## QA History
 
