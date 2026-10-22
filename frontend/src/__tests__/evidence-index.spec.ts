@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { useEvidenceStore } from '../stores/evidence'
 import type { components } from '../lib/api/schema'
 
 const { mockGet } = vi.hoisted(() => ({ mockGet: vi.fn() }))
@@ -52,6 +53,28 @@ const REFRESHED_INDEX: EvidenceIndex = {
       ...INDEX.artifacts[0],
       record_count: 5,
       location: 'audit-events-new.ndjson',
+    },
+  ],
+}
+
+const EMPTY_INDEX: EvidenceIndex = {
+  ...INDEX,
+  complete: false,
+  missing_artifact_types: ['release_sbom', 'decision_records'],
+  artifacts: [],
+}
+
+const INCOMPLETE_ARTIFACT_INDEX: EvidenceIndex = {
+  ...INDEX,
+  complete: false,
+  artifacts: [
+    {
+      ...INDEX.artifacts[0],
+      status: 'missing',
+      provenance: 'derived',
+      record_count: null,
+      location: '',
+      absence_reason: 'The source was not available.',
     },
   ],
 }
@@ -133,5 +156,59 @@ describe('EvidenceIndexView', () => {
     expect(wrapper.text()).toContain('Evidence index is temporarily unavailable.')
     expect(wrapper.text()).not.toContain('2026.02')
     expect(wrapper.find('[data-testid="evidence-index-refresh"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('renders the empty artefact state and plural missing-artifact message', async () => {
+    mockGet.mockResolvedValueOnce(success(EMPTY_INDEX))
+
+    const wrapper = mountView()
+    await settle()
+
+    expect(wrapper.find('[data-testid="evidence-index-loading"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('No indexed artefacts')
+    expect(wrapper.text()).toContain('This instance has not produced any evidence artefacts yet.')
+    expect(wrapper.text()).toContain('2 artefact types are missing from the index.')
+    expect(wrapper.find('table').exists()).toBe(false)
+  })
+
+  it('renders missing artifact details and the non-complete coverage state', async () => {
+    mockGet.mockResolvedValueOnce(success(INCOMPLETE_ARTIFACT_INDEX))
+
+    const wrapper = mountView()
+    await settle()
+
+    expect(wrapper.text()).toContain('Incomplete')
+    expect(wrapper.text()).toContain('missing')
+    expect(wrapper.text()).toContain('The source was not available.')
+    expect(wrapper.text()).toContain('—')
+  })
+
+  it('reports fallback HTTP errors when the API omits an error detail', async () => {
+    mockGet.mockResolvedValueOnce({ data: undefined, error: '', response: { status: 500, ok: false } })
+      .mockResolvedValueOnce({ data: undefined, error: '', response: undefined })
+
+    const wrapper = mountView()
+    await settle()
+    expect(wrapper.text()).toContain('HTTP 500')
+
+    await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
+    await settle()
+    expect(wrapper.text()).toContain('HTTP 0')
+  })
+
+  it('ignores a concurrent fetch while the first request is loading', async () => {
+    let resolveRequest!: (value: unknown) => void
+    mockGet.mockReturnValue(new Promise((resolve) => { resolveRequest = resolve }))
+
+    const wrapper = mountView()
+    await wrapper.vm.$nextTick()
+    const store = useEvidenceStore()
+
+    void store.fetchIndex()
+    await store.fetchIndex()
+    expect(mockGet).toHaveBeenCalledTimes(1)
+
+    resolveRequest(success(INDEX))
+    await settle()
   })
 })
