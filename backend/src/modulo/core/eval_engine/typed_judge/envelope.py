@@ -247,7 +247,9 @@ def _coerce_questions(raw: Any) -> list[QuestionVerdict]:
         ) from exc
 
 
-def from_judge_callable_dict(
+# S3776: one normalisation contract covering the typed and legacy dialects;
+# splitting the dialect arms would obscure the single entry point.
+def from_judge_callable_dict(  # NOSONAR
     raw: Any,
     *,
     judge: JudgeIdentity | None = None,
@@ -347,7 +349,9 @@ def from_judge_callable_dict(
 # ---------------------------------------------------------------------------
 
 
-def _question_answer_score(question: dict[str, Any], answer: Any) -> tuple[bool, float]:
+# S3776: one exhaustive per-question-type scorer; each arm is the documented
+# answer contract, and helpers would be meaningless in isolation.
+def _question_answer_score(question: dict[str, Any], answer: Any) -> tuple[bool, float]:  # NOSONAR
     """Return ``(passed, score)`` for one typed question's answer."""
     raw_qid = question.get("id")
     qid = str(raw_qid) if raw_qid is not None else "?"
@@ -423,7 +427,9 @@ def _question_answer_score(question: dict[str, Any], answer: Any) -> tuple[bool,
     )
 
 
-def aggregate_typed_answers(
+# S3776: one documented ADR 066 D4 aggregation rule; splitting the veto, mean
+# and threshold arms would hide the contract they jointly implement.
+def aggregate_typed_answers(  # NOSONAR
     questions: list[dict[str, Any]],
     answers: dict[str, Any],
     pass_rule: dict[str, Any] | None = None,

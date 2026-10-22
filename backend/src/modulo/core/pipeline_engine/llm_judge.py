@@ -207,7 +207,9 @@ def run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
         raise
 
 
-def build_model_judge_callable(
+# S3776: one sync->async judge bridge with a documented timeout/error ladder;
+# the nested judge is intentionally colocated with the identity it stamps.
+def build_model_judge_callable(  # NOSONAR
     hub: Any,
     backend_id_str: str,
 ) -> ModelJudgeCallable:

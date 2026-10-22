@@ -2138,7 +2138,9 @@ def _tool_sqlalchemy_error(exc: SQLAlchemyError, log_key: str) -> dict[str, Any]
     return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
 
 
-def _tool_exception_error(msg: str, exc: BaseException, log_key: str) -> dict[str, Any]:
+# S3776: one ordered classification ladder; splitting it would scatter the
+# documented precedence contract across helpers meaningless in isolation.
+def _tool_exception_error(msg: str, exc: BaseException, log_key: str) -> dict[str, Any]:  # NOSONAR
     """Map an exception that escaped a tool body to a SPECIFIC, branchable code.
 
     FAR-1502: the consuming agent branches on the ``error`` code, so an
@@ -2267,7 +2269,9 @@ def _db_shell_integrity_response(exc: IntegrityError, cfg: _DbShellConfig) -> di
     return {"error": "conflict", "detail": cfg.integrity_detail.format(orig=exc.orig)}
 
 
-async def _run_db_shell[**TOOL_SHELL_P](
+# S3776: mirrors the per-tool except ladder verbatim; one cohesive clause list
+# whose order is the contract (see the module docstring).
+async def _run_db_shell[**TOOL_SHELL_P](  # NOSONAR
     fn: Callable[TOOL_SHELL_P, Awaitable[dict[str, Any]]],
     cfg: _DbShellConfig,
     *args: TOOL_SHELL_P.args,

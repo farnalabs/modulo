@@ -216,7 +216,9 @@ def _validate_backing(config: dict[str, Any]) -> None:
         raise _invalid("'confidence_kind' is derived at execution and is not a config field")
 
 
-def _validate_question(index: int, question: Any) -> None:
+# S3776: one exhaustive typed-question schema validator; every branch is a
+# distinct 422 rejection, so splitting it would scatter the schema.
+def _validate_question(index: int, question: Any) -> None:  # NOSONAR
     if not isinstance(question, dict):
         raise _invalid(f"config_json.questions[{index}] must be an object")
     _reject_unknown_keys(question, _ALLOWED_QUESTION, f"config_json.questions[{index}]")
@@ -302,7 +304,9 @@ def _derivation_error() -> JudgeConfigWriteError:
     )
 
 
-def validate_typed_judge_config(config: Any) -> None:
+# S3776: the single write-chokepoint validator; its ordered rejections ARE the
+# documented contract and must stay in one place.
+def validate_typed_judge_config(config: Any) -> None:  # NOSONAR
     """Validate the typed dialect's shape at the write chokepoint.
 
     S1 validates the structural envelope (dialect marker, questions, backing,
