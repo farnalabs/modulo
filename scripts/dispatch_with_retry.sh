@@ -122,7 +122,7 @@ parse_retry_after() {
   esac
   RETRY_EPOCH=$(date -u -d "$1" +%s 2>/dev/null) || return 0
   RETRY_NOW=$(date +%s)
-  if [ "$RETRY_EPOCH" -gt "$RETRY_NOW" ]; then
+  if [[ "$RETRY_EPOCH" -gt "$RETRY_NOW" ]]; then
     printf '%s\n' "$((RETRY_EPOCH - RETRY_NOW))"
   fi
 }
@@ -136,12 +136,12 @@ retry_delay() {
   # cannot collapse the backoff into a tight loop that exhausts the attempt cap
   # before the wall-clock budget can bind (see the header).
   BACKOFF=$(( DISPATCH_BASE_DELAY * (1 << ($1 - 1)) ))
-  if [ "$BACKOFF" -gt "$DISPATCH_MAX_DELAY" ]; then BACKOFF="$DISPATCH_MAX_DELAY"; fi
+  if [[ "$BACKOFF" -gt "$DISPATCH_MAX_DELAY" ]]; then BACKOFF="$DISPATCH_MAX_DELAY"; fi
   BACKOFF=$(( BACKOFF + RANDOM % (DISPATCH_JITTER_MAX + 1) ))
   # Annotated assignment keeps `set -e` from treating an empty/non-numeric
   # value as a failed arithmetic expansion; parse_retry_after only ever emits
   # a non-negative whole number, so `10#` is safe.
-  if [ -n "$2" ] && [ "$((10#$2))" -gt "$BACKOFF" ]; then
+  if [[ -n "$2" ]] && [[ "$((10#$2))" -gt "$BACKOFF" ]]; then
     printf '%s\n' "$2"
     return 0
   fi
@@ -159,7 +159,7 @@ LAST_HTTP=""
 LAST_CLASS=""
 LAST_DETAIL="unknown"
 
-while [ "$ATTEMPTS" -lt "$DISPATCH_MAX_ATTEMPTS" ]; do
+while [[ "$ATTEMPTS" -lt "$DISPATCH_MAX_ATTEMPTS" ]]; do
   ATTEMPTS=$((ATTEMPTS + 1))
   # TIMESTAMP and HMAC are recomputed on every attempt: the server enforces a
   # +/-300s replay window on X-Modulo-Timestamp, so a signature computed once
@@ -178,15 +178,15 @@ while [ "$ATTEMPTS" -lt "$DISPATCH_MAX_ATTEMPTS" ]; do
     -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
     -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
     -d "${DISPATCH_BODY}") || HTTP_CODE="000"
-  [ -n "$HTTP_CODE" ] || HTTP_CODE="000"
+  [[ -n "$HTTP_CODE" ]] || HTTP_CODE="000"
   BODY_RESP=$(cat "${BODY_FILE}" 2>/dev/null || true)
   LAST_HTTP="$HTTP_CODE"
 
   # ---- acceptance ----
-  if [ "${HTTP_CODE:0:1}" = "2" ]; then
-    if [ "$HTTP_CODE" = "202" ] || [ "$DISPATCH_ACCEPT_ANY_2XX" = "1" ]; then
+  if [[ "${HTTP_CODE:0:1}" == "2" ]]; then
+    if [[ "$HTTP_CODE" == "202" ]] || [[ "$DISPATCH_ACCEPT_ANY_2XX" == "1" ]]; then
       RESP_STATUS=$(printf '%s' "$BODY_RESP" | jq -r '.status // "accepted"' 2>/dev/null || printf 'accepted')
-      if [ "$RESP_STATUS" = "coalesced" ]; then
+      if [[ "$RESP_STATUS" == "coalesced" ]]; then
         # FAR-1034 handled no-op: duplicate delivery for the same key
         # within the coalesce window — intentionally no new run. Not an
         # error, not retried.
@@ -198,7 +198,7 @@ while [ "$ATTEMPTS" -lt "$DISPATCH_MAX_ATTEMPTS" ]; do
       break
     fi
   fi
-  if [ "$HTTP_CODE" = "400" ] && [ "$DISPATCH_DUP_400_IS_OK" = "1" ] && printf '%s' "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
+  if [[ "$HTTP_CODE" == "400" ]] && [[ "$DISPATCH_DUP_400_IS_OK" == "1" ]] && printf '%s' "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
     # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
     # engine's byte-level idempotency guard (DuplicateWebhookError) — the
     # identical payload was already ACCEPTED within the ~5-min dedup window
@@ -212,26 +212,26 @@ while [ "$ATTEMPTS" -lt "$DISPATCH_MAX_ATTEMPTS" ]; do
   # ---- classification for the retry decision ----
   LAST_CLASS=$(classify_http "$HTTP_CODE")
   LAST_DETAIL=$(printf '%s' "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || printf 'unknown')
-  [ -n "$LAST_DETAIL" ] || LAST_DETAIL="unknown"
+  [[ -n "$LAST_DETAIL" ]] || LAST_DETAIL="unknown"
 
-  if [ "$LAST_CLASS" = "terminal" ]; then
+  if [[ "$LAST_CLASS" == "terminal" ]]; then
     echo "::warning::${DISPATCH_LABEL} returned HTTP ${HTTP_CODE} (non-retryable): ${LAST_DETAIL}"
     break
   fi
 
   DISPATCH_ELAPSED=$(( $(date +%s) - DISPATCH_STARTED ))
   DISPATCH_REMAINING=$(( DISPATCH_BUDGET_SECONDS - DISPATCH_ELAPSED ))
-  if [ "$ATTEMPTS" -ge "$DISPATCH_MAX_ATTEMPTS" ]; then
+  if [[ "$ATTEMPTS" -ge "$DISPATCH_MAX_ATTEMPTS" ]]; then
     echo "::warning::${DISPATCH_LABEL} returned HTTP ${HTTP_CODE} (${LAST_CLASS}) on attempt ${ATTEMPTS}/${DISPATCH_MAX_ATTEMPTS} — attempt cap reached"
     break
   fi
-  if [ "$DISPATCH_REMAINING" -le 0 ]; then
+  if [[ "$DISPATCH_REMAINING" -le 0 ]]; then
     echo "::warning::${DISPATCH_LABEL} returned HTTP ${HTTP_CODE} (${LAST_CLASS}) — ${DISPATCH_BUDGET_SECONDS}s dispatch budget exhausted after ${DISPATCH_ELAPSED}s"
     break
   fi
   RETRY_AFTER=$(grep -i '^retry-after:' "${HEADER_FILE}" 2>/dev/null | tail -1 | cut -d: -f2- | tr -d '\r' | sed 's/^[[:space:]]*//' || true)
   DISPATCH_DELAY=$(retry_delay "$ATTEMPTS" "$(parse_retry_after "${RETRY_AFTER}")")
-  if [ "$DISPATCH_DELAY" -gt "$DISPATCH_REMAINING" ]; then
+  if [[ "$DISPATCH_DELAY" -gt "$DISPATCH_REMAINING" ]]; then
     echo "::warning::${DISPATCH_LABEL} returned HTTP ${HTTP_CODE} (${LAST_CLASS}); the next attempt needs ${DISPATCH_DELAY}s but only ${DISPATCH_REMAINING}s of the ${DISPATCH_BUDGET_SECONDS}s budget remain — not waiting"
     break
   fi
@@ -242,7 +242,7 @@ done
 # Invoked indirectly via `trap ... EXIT` — shellcheck cannot see that call.
 # shellcheck disable=SC2317
 write_result_file() {
-  if [ -n "$DISPATCH_RESULT_FILE" ]; then
+  if [[ -n "$DISPATCH_RESULT_FILE" ]]; then
     {
       printf 'DISPATCH_LAST_HTTP=%q\n' "$LAST_HTTP"
       printf 'DISPATCH_LAST_CLASS=%q\n' "$LAST_CLASS"
@@ -255,7 +255,7 @@ write_result_file() {
 }
 trap 'write_result_file; rm -f "${HEADER_FILE}" "${BODY_FILE}"' EXIT
 
-if [ "$DISPATCHED" != "true" ]; then
+if [[ "$DISPATCHED" != "true" ]]; then
   DISPATCH_ELAPSED=$(( $(date +%s) - DISPATCH_STARTED ))
   # Name the CLASS of failure, not just its HTTP code: capacity saturation
   # is an operational backlog an operator drains, while a terminal error is
@@ -283,7 +283,7 @@ if [ "$DISPATCHED" != "true" ]; then
   # A durable trace that survives the log window: the summary is attached to
   # the failed job itself, so "the fixer/reviewer was never dispatched" is
   # readable without grepping a log that may be gone.
-  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     {
       echo "### ${DISPATCH_LABEL} dispatch failed: ${DISPATCH_FAILURE}"
       echo ""

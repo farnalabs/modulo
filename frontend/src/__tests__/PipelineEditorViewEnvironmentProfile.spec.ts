@@ -206,7 +206,10 @@ describe('PipelineEditorView - environment profile selector', () => {
 
     const status = wrapper.find(STATUS)
     expect(status.exists()).toBe(true)
-    expect(status.attributes('role')).toBe('status')
+    // <output> carries the implicit status role; an explicit role="status"
+    // must not be reintroduced (Web:S6819).
+    expect(status.element.tagName).toBe('OUTPUT')
+    expect(status.attributes('role')).toBeUndefined()
     expect(status.text()).toContain('Staging Docker')
     expect(status.text()).toContain(MESSAGES.components.RunnerTier.bundled_docker)
     wrapper.unmount()

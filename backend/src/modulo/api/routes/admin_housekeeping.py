@@ -1,7 +1,8 @@
 """Admin housekeeping routes — list and delete cleanup candidates."""
 
 import logging
-from typing import Annotated
+import uuid
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -138,6 +139,75 @@ async def list_housekeeping(
     return HousekeepingScanResponse(categories=categories_list, total_count=total)
 
 
+def _group_cleanup_items(items: list[CleanupItem]) -> dict[str, list[str]]:
+    """Group requested items by entity type, preserving request order."""
+    grouped: dict[str, list[str]] = {}
+    for item in items:
+        grouped.setdefault(item.entity_type, []).append(item.id)
+    return grouped
+
+
+def _integrity_error_entry(exc: IntegrityError, entity_type: str, eid: str) -> dict[str, str]:
+    """Translate a per-item ``IntegrityError`` into its structured error entry."""
+    _log.exception(_CODE_ADMIN_HOUSEKEEPING_PERFORM_CLEANUP)
+    _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
+    if is_policy_gate_decision_fk_error(exc):
+        return {
+            "id": eid,
+            "entity_type": entity_type,
+            "error": (
+                f"Cannot delete {entity_type} {eid}: governance decision records present"
+                " — archive or purge policy_gate_decisions first"
+            ),
+            "blocked_by": "policy_gate_decisions",
+        }
+    return {"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"}
+
+
+async def _delete_cleanup_item(
+    session: AsyncSession,
+    model_cls: type[Any],
+    eid: str,
+    entity_type: str,
+    organisation_id: uuid.UUID,
+) -> tuple[int, dict[str, str] | None]:
+    """Delete one item in its own savepoint; return ``(deleted, error_entry)``.
+
+    FAR-1857: count only AFTER the savepoint released. ``delete_one_in_savepoint``
+    returns True only once the DELETE (flushed on savepoint exit) has committed,
+    so an FK RESTRICT refusal cannot be counted as a deletion. Shared with the
+    MCP path so the two cannot drift.
+    """
+    try:
+        if await delete_one_in_savepoint(session, model_cls, eid, organisation_id):
+            return 1, None
+        return 0, None
+    except IntegrityError as exc:
+        return 0, _integrity_error_entry(exc, entity_type, eid)
+
+
+async def _cleanup_entity_type(
+    session: AsyncSession,
+    entity_type: str,
+    ids: list[str],
+    organisation_id: uuid.UUID,
+) -> tuple[int, list[dict[str, str]]]:
+    """Delete every id in one entity-type group, collecting structured errors."""
+    if entity_type in NON_DELETABLE_ENTITY_TYPES:
+        return 0, [{"entity_type": entity_type, "error": "Surfaced for triage only — not auto-deleted."}]
+    model_cls = ENTITY_MODEL_MAP.get(entity_type)
+    if model_cls is None:
+        return 0, [{"entity_type": entity_type, "error": f"Unknown entity type: {entity_type}"}]
+    deleted_count = 0
+    errors: list[dict[str, str]] = []
+    for eid in ids:
+        deleted, error = await _delete_cleanup_item(session, model_cls, eid, entity_type, organisation_id)
+        deleted_count += deleted
+        if error is not None:
+            errors.append(error)
+    return deleted_count, errors
+
+
 @router.post(
     "/cleanup",
     dependencies=[
@@ -159,10 +229,7 @@ async def perform_cleanup(
 ) -> CleanupResponse:
     deleted_count = 0
     errors: list[dict[str, str]] = []
-
-    grouped: dict[str, list[str]] = {}
-    for item in req.items:
-        grouped.setdefault(item.entity_type, []).append(item.id)
+    grouped = _group_cleanup_items(req.items)
 
     try:
         async with session.begin():
@@ -170,48 +237,9 @@ async def perform_cleanup(
             await set_rls_execution_context(session)
 
             for entity_type, ids in grouped.items():
-                if entity_type in NON_DELETABLE_ENTITY_TYPES:
-                    errors.append(
-                        {
-                            "entity_type": entity_type,
-                            "error": "Surfaced for triage only — not auto-deleted.",
-                        }
-                    )
-                    continue
-                model_cls = ENTITY_MODEL_MAP.get(entity_type)
-                if model_cls is None:
-                    errors.append({"entity_type": entity_type, "error": f"Unknown entity type: {entity_type}"})
-                    continue
-
-                for eid in ids:
-                    try:
-                        # FAR-1857: count only AFTER the savepoint released.
-                        # ``delete_one_in_savepoint`` returns True only once
-                        # the DELETE (flushed on savepoint exit) has committed,
-                        # so an FK RESTRICT refusal cannot be counted as a
-                        # deletion. Shared with the MCP path so the two cannot
-                        # drift.
-                        if await delete_one_in_savepoint(session, model_cls, eid, principal.organisation_id):
-                            deleted_count += 1
-                    except IntegrityError as exc:
-                        _log.exception(_CODE_ADMIN_HOUSEKEEPING_PERFORM_CLEANUP)
-                        _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
-                        if is_policy_gate_decision_fk_error(exc):
-                            errors.append(
-                                {
-                                    "id": eid,
-                                    "entity_type": entity_type,
-                                    "error": (
-                                        f"Cannot delete {entity_type} {eid}: governance decision records present"
-                                        " — archive or purge policy_gate_decisions first"
-                                    ),
-                                    "blocked_by": "policy_gate_decisions",
-                                }
-                            )
-                        else:
-                            errors.append(
-                                {"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"}
-                            )
+                deleted, group_errors = await _cleanup_entity_type(session, entity_type, ids, principal.organisation_id)
+                deleted_count += deleted
+                errors.extend(group_errors)
     except ProgrammingError:
         _log.exception(_CODE_ADMIN_HOUSEKEEPING_PERFORM_CLEANUP)
         raise HTTPException(
