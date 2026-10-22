@@ -27,6 +27,7 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.permissions import PERMISSIONS
 from modulo.auth.team_rbac import org_role_level
 from modulo.settings import get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -71,12 +72,7 @@ def _system_only_keys_from_the_live_app() -> set[str]:
 
 
 def _make_session() -> AsyncMock:
-    session = AsyncMock(spec=AsyncSession)
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=begin_cm)
-    return session
+    return configure_mock_session(AsyncMock(spec=AsyncSession))
 
 
 @pytest.fixture
