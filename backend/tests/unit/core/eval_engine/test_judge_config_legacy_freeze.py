@@ -582,7 +582,7 @@ class TestTypedShapeValidationEdges:
         assert config["questions"][0]["pass_from"] == 3
 
     def test_a_non_update_write_that_is_not_a_judge_is_accepted(self) -> None:
-        reject_legacy_judge_write(config_json={"pattern": "x"}, is_update=False, new_eval_type="regex")
+        assert reject_legacy_judge_write(config_json={"pattern": "x"}, is_update=False, new_eval_type="regex") is None
 
 
 class TestLegacyCounterArms:
