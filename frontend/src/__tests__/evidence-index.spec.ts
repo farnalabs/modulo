@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { useEvidenceStore } from '../stores/evidence'
 import type { components } from '../lib/api/schema'
 
 const { mockGet } = vi.hoisted(() => ({ mockGet: vi.fn() }))
@@ -12,6 +11,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import EvidenceIndexView from '../views/EvidenceIndexView.vue'
+import { useEvidenceStore } from '../stores/evidence'
 
 type EvidenceIndex = components['schemas']['EvidenceIndex']
 
@@ -171,6 +171,26 @@ describe('EvidenceIndexView', () => {
     expect(wrapper.find('table').exists()).toBe(false)
   })
 
+  it('renders an absent artefact with its reason and no record count', async () => {
+    mockGet.mockResolvedValueOnce(success({
+      ...INDEX,
+      artifacts: [
+        {
+          ...INDEX.artifacts[0],
+          status: 'absent',
+          record_count: null,
+          absence_reason: 'Not produced yet',
+        },
+      ],
+    }))
+
+    const wrapper = mountView()
+    await settle()
+
+    expect(wrapper.text()).toContain('Not produced yet')
+    expect(wrapper.text()).toContain('—')
+  })
+
   it('renders missing artifact details and the non-complete coverage state', async () => {
     mockGet.mockResolvedValueOnce(success(INCOMPLETE_ARTIFACT_INDEX))
 
@@ -196,19 +216,45 @@ describe('EvidenceIndexView', () => {
     expect(wrapper.text()).toContain('HTTP 0')
   })
 
-  it('ignores a concurrent fetch while the first request is loading', async () => {
+  it('does not issue a second request while the first is still in flight', async () => {
     let resolveRequest!: (value: unknown) => void
     mockGet.mockReturnValue(new Promise((resolve) => { resolveRequest = resolve }))
 
-    const wrapper = mountView()
-    await wrapper.vm.$nextTick()
     const store = useEvidenceStore()
-
-    void store.fetchIndex()
+    const first = store.fetchIndex()
     await store.fetchIndex()
+
     expect(mockGet).toHaveBeenCalledTimes(1)
+    expect(store.isLoading).toBe(true)
 
     resolveRequest(success(INDEX))
-    await settle()
+    await first
+    expect(store.isLoading).toBe(false)
+  })
+
+  it('surfaces the HTTP status when the problem detail has no message', async () => {
+    mockGet.mockResolvedValueOnce({
+      data: undefined,
+      error: { type: 'urn:problem:modulo:internal_error', title: 'Internal Error', status: 500, detail: '' },
+      response: { status: 500, ok: false },
+    })
+
+    const store = useEvidenceStore()
+    await store.fetchIndex()
+
+    expect(store.error).toBe('HTTP 500')
+  })
+
+  it('falls back to HTTP 0 when the response is missing entirely', async () => {
+    mockGet.mockResolvedValueOnce({
+      data: undefined,
+      error: { type: 'urn:problem:modulo:internal_error', title: 'Internal Error', status: 500, detail: '' },
+      response: undefined,
+    })
+
+    const store = useEvidenceStore()
+    await store.fetchIndex()
+
+    expect(store.error).toBe('HTTP 0')
   })
 })
