@@ -115,6 +115,11 @@ class TestCallableDialect:
 
         assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
 
+    def test_a_non_numeric_legacy_score_is_dropped(self) -> None:
+        verdict = from_judge_callable_dict({"passed": True, "score": "not-a-number"})
+
+        assert verdict.score is None
+
     def test_a_non_finite_legacy_score_is_malformed(self) -> None:
         with pytest.raises(JudgeExecutionError) as exc_info:
             from_judge_callable_dict({"passed": True, "score": float("nan")})
@@ -341,3 +346,343 @@ class TestTypedAggregation:
             )
 
         assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+
+class TestDialectCoercionEdges:
+    """Every malformed envelope field is a coded error, never an inferred verdict."""
+
+    def test_an_explicit_judge_identity_wins_over_the_payload(self) -> None:
+        from modulo.core.eval_engine.typed_judge import JudgeIdentity
+
+        verdict = from_judge_callable_dict(
+            {"passed": True, "judge": {"judge_backend_id": "payload"}},
+            judge=JudgeIdentity(judge_backend_id="explicit"),
+        )
+
+        assert verdict.judge.judge_backend_id == "explicit"
+
+    def test_a_non_dict_judge_payload_defaults_the_identity(self) -> None:
+        verdict = from_judge_callable_dict({"passed": True, "judge": "not-a-dict"})
+
+        assert verdict.judge.mechanism == "model_backend"
+
+    def test_an_invalid_judge_identity_is_malformed(self) -> None:
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            from_judge_callable_dict({"passed": True, "judge": {"bogus": 1}})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    def test_an_unknown_confidence_kind_is_malformed(self) -> None:
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            from_judge_callable_dict({"outcome": "pass", "confidence_kind": "invented"})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    def test_a_null_score_is_absent_not_zero(self) -> None:
+        verdict = from_judge_callable_dict({"outcome": "pass", "score": None})
+
+        assert verdict.score is None
+
+    def test_a_null_detail_becomes_an_empty_string(self) -> None:
+        typed = from_judge_callable_dict({"outcome": "pass", "detail": None})
+        legacy = from_judge_callable_dict({"passed": True, "detail": None})
+
+        assert not typed.detail
+        assert not legacy.detail
+
+    def test_the_question_list_defaults_to_empty(self) -> None:
+        verdict = from_judge_callable_dict({"outcome": "pass"})
+
+        assert not verdict.questions
+
+    def test_a_non_list_question_field_is_malformed(self) -> None:
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            from_judge_callable_dict({"outcome": "pass", "questions": "one"})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    def test_an_invalid_question_record_is_malformed(self) -> None:
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            from_judge_callable_dict({"outcome": "pass", "questions": [{"bogus": 1}]})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    def test_an_error_verdict_with_a_score_is_malformed(self) -> None:
+        """The envelope invariant is enforced at construction, then coded."""
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            from_judge_callable_dict({"outcome": "error", "score": 0.5, "error_code": "judge.timeout"})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+
+class TestQuestionScoringEdges:
+    """The per-type scorer's malformed-answer and option-score branches."""
+
+    def _aggregate(
+        self,
+        questions: list[dict[str, Any]],
+        answers: dict[str, Any],
+        threshold: float = 0.5,
+    ) -> tuple[list[QuestionVerdict], float | None, bool]:
+        from modulo.core.eval_engine.typed_judge import aggregate_typed_answers
+
+        return aggregate_typed_answers(
+            questions,
+            answers,
+            {"kind": "weighted_score_at_least", "threshold": threshold},
+        )
+
+    def test_a_choice_option_score_overrides_the_binary_score(self) -> None:
+        questions = [
+            {
+                "id": "tone",
+                "type": "choice",
+                "options": [{"key": "a"}, {"key": "b"}],
+                "passing_keys": ["a"],
+                "option_scores": {"a": 0.4, "b": 0.1},
+                "weight": 1.0,
+            }
+        ]
+
+        verdicts, aggregate, passed = self._aggregate(questions, {"tone": "a"}, threshold=0.2)
+
+        assert verdicts[0].passed is True
+        assert verdicts[0].confidence == pytest.approx(0.4)
+        assert aggregate == pytest.approx(0.4)
+        assert passed is True
+
+    def test_a_null_option_score_falls_back_to_the_binary_score(self) -> None:
+        questions = [
+            {
+                "id": "tone",
+                "type": "choice",
+                "options": [{"key": "a"}, {"key": "b"}],
+                "passing_keys": ["a"],
+                "option_scores": {"a": None},
+                "weight": 1.0,
+            }
+        ]
+
+        verdicts, _, _ = self._aggregate(questions, {"tone": "a"})
+
+        assert verdicts[0].confidence == pytest.approx(1.0)
+
+    def test_a_non_list_passing_keys_is_a_configuration_error(self) -> None:
+        questions = [{"id": "tone", "type": "choice", "passing_keys": "a", "options": []}]
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(questions, {"tone": "a"})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+
+    def test_non_dict_levels_are_skipped_then_too_few_levels_is_a_config_error(self) -> None:
+        questions = [
+            {
+                "id": "quality",
+                "type": "score",
+                "levels": [{"score": 1}, "junk"],
+                "pass_from": 1,
+                "weight": 1.0,
+            }
+        ]
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(questions, {"quality": 1})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+
+    def test_a_null_level_score_is_skipped(self) -> None:
+        questions = [
+            {
+                "id": "quality",
+                "type": "score",
+                "levels": [{"score": None}, {"score": 2}, {"score": 4}],
+                "pass_from": 2,
+                "weight": 1.0,
+            }
+        ]
+
+        verdicts, _, passed = self._aggregate(questions, {"quality": 2}, threshold=1.0)
+
+        assert verdicts[0].passed is True
+        assert verdicts[0].confidence == pytest.approx(0.0)
+        assert passed is False
+
+    def test_equal_level_bounds_normalise_to_zero(self) -> None:
+        questions = [
+            {
+                "id": "quality",
+                "type": "score",
+                "levels": [{"score": 5}, {"score": 5}],
+                "pass_from": 5,
+                "weight": 1.0,
+            }
+        ]
+
+        verdicts, _, passed = self._aggregate(questions, {"quality": 5}, threshold=0.0)
+
+        assert verdicts[0].confidence == pytest.approx(0.0)
+        assert passed is True
+
+    def test_a_null_score_answer_is_a_malformed_response(self) -> None:
+        questions = [
+            {
+                "id": "quality",
+                "type": "score",
+                "levels": [{"score": 1}, {"score": 5}],
+                "pass_from": 3,
+                "weight": 1.0,
+            }
+        ]
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(questions, {"quality": None})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    def test_a_non_numeric_score_answer_is_a_malformed_response(self) -> None:
+        questions = [
+            {
+                "id": "quality",
+                "type": "score",
+                "levels": [{"score": 1}, {"score": 5}],
+                "pass_from": 3,
+                "weight": 1.0,
+            }
+        ]
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(questions, {"quality": "high"})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    def test_a_missing_pass_from_is_a_configuration_error(self) -> None:
+        questions = [
+            {
+                "id": "quality",
+                "type": "score",
+                "levels": [{"score": 1}, {"score": 5}],
+                "weight": 1.0,
+            }
+        ]
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(questions, {"quality": 3})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+
+    def test_an_unsupported_question_type_is_a_configuration_error(self) -> None:
+        questions = [{"id": "odd", "type": "matches", "weight": 1.0}]
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(questions, {"odd": "yes"})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+
+    def test_a_question_without_an_id_is_a_configuration_error(self) -> None:
+        questions = [{"type": "noul", "weight": 1.0}]
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(questions, {})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+
+    def test_a_null_question_id_is_labelled_unknown_in_an_error(self) -> None:
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate([{"id": None, "type": "noul", "weight": 1.0}], {"None": "yes"})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+        assert "'?'" in exc_info.value.detail
+
+    def test_a_non_primitive_answer_is_not_recorded(self) -> None:
+        questions = [
+            {
+                "id": "tone",
+                "type": "choice",
+                "options": [{"key": "a"}, {"key": "b"}],
+                "passing_keys": ["a"],
+                "weight": 1.0,
+            }
+        ]
+
+        verdicts, _, _ = self._aggregate(questions, {"tone": ("a",)})
+
+        assert verdicts[0].answer is None
+
+    def test_a_null_weight_is_a_configuration_error(self) -> None:
+        questions = [{"id": "optional", "type": "noul", "weight": None}]
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(questions, {"optional": True})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+
+    def test_a_negative_weight_is_a_configuration_error(self) -> None:
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate([{"id": "q", "type": "noul", "weight": -1}], {"q": True})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+
+    def test_a_non_numeric_weight_is_a_configuration_error(self) -> None:
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate([{"id": "q", "type": "noul", "weight": "heavy"}], {"q": True})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+
+    def test_a_non_finite_weight_is_a_configuration_error(self) -> None:
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate([{"id": "q", "type": "noul", "weight": float("nan")}], {"q": True})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+
+    def test_a_zero_weight_question_is_excluded_from_the_mean(self) -> None:
+        questions = [{"id": "q", "type": "noul", "weight": 0}]
+
+        verdicts, aggregate, passed = self._aggregate(questions, {"q": True})
+
+        assert aggregate is None
+        assert passed is True
+        assert verdicts[0].passed is True
+
+    def test_a_nan_threshold_is_a_configuration_error(self) -> None:
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate([{"id": "q", "type": "noul", "weight": 1.0}], {"q": True}, threshold=float("nan"))
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+
+
+class TestTypedResponseParsing:
+    def test_a_response_without_an_answers_object_is_malformed(self) -> None:
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            verdict_from_typed_response(
+                "{}",
+                questions=[],
+                pass_rule={"kind": "weighted_score_at_least", "threshold": 0.5},
+            )
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    def test_a_non_object_response_is_malformed(self) -> None:
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            verdict_from_typed_response(
+                "[]",
+                questions=[],
+                pass_rule={"kind": "weighted_score_at_least", "threshold": 0.5},
+            )
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+
+class TestPromptBuilder:
+    def test_the_prompt_embeds_every_question_and_the_pass_rule(self) -> None:
+        from modulo.core.eval_engine.typed_judge import build_typed_judge_prompt
+
+        prompt = build_typed_judge_prompt(
+            [{"id": "tone", "type": "noul", "instructions": "neutral?", "criteria": ["calm"]}],
+            {"kind": "weighted_score_at_least", "threshold": 0.5},
+            "the output",
+        )
+
+        assert '"id": "tone"' in prompt
+        assert '"threshold": 0.5' in prompt
+        assert "the output" in prompt

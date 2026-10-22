@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -247,6 +248,115 @@ def _coerce_questions(raw: Any) -> list[QuestionVerdict]:
         ) from exc
 
 
+def _coerce_judge_identity(raw: dict[str, Any], judge: JudgeIdentity | None) -> JudgeIdentity:
+    """Resolve the verdict's judge identity, preferring the caller-supplied one."""
+    if judge is not None:
+        return judge
+    raw_identity = raw.get("judge")
+    if not isinstance(raw_identity, dict):
+        return JudgeIdentity()
+    try:
+        return JudgeIdentity.model_validate(raw_identity)
+    except ValueError as exc:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            f"judge returned an invalid identity: {type(exc).__name__}",
+        ) from exc
+
+
+def _coerce_outcome(raw: Any) -> JudgeOutcome:
+    try:
+        return JudgeOutcome(str(raw or "error"))
+    except ValueError as exc:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            f"judge returned an unknown outcome: {raw!r}",
+        ) from exc
+
+
+def _coerce_error_code(raw: Any) -> JudgeErrorCode | None:
+    if not raw:
+        return None
+    try:
+        return JudgeErrorCode(str(raw))
+    except ValueError as exc:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            f"judge returned an unknown error_code: {raw!r}",
+        ) from exc
+
+
+def _coerce_confidence_kind(raw: Any, default: JudgeConfidenceKind) -> JudgeConfidenceKind:
+    try:
+        return JudgeConfidenceKind(str(raw or default))
+    except ValueError as exc:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            f"judge returned an unknown confidence_kind: {raw!r}",
+        ) from exc
+
+
+def _coerce_text(raw: Any) -> str:
+    """Render an optional text field as a string (``None`` becomes ``""``)."""
+    return "" if raw is None else str(raw)
+
+
+def _build_typed_verdict(
+    raw: dict[str, Any],
+    *,
+    identity: JudgeIdentity,
+    default_confidence_kind: JudgeConfidenceKind,
+) -> JudgeVerdict:
+    """Build the verdict for the typed dialect (``outcome``/``error_code``)."""
+    outcome = _coerce_outcome(raw.get("outcome"))
+    error_code = _coerce_error_code(raw.get("error_code"))
+    confidence_kind = _coerce_confidence_kind(raw.get("confidence_kind"), default_confidence_kind)
+    try:
+        return JudgeVerdict(
+            outcome=outcome,
+            score=_coerce_score(raw.get("score")),
+            detail=_coerce_text(raw.get("detail")),
+            questions=_coerce_questions(raw.get("questions")),
+            confidence=_coerce_score(raw.get("confidence")),
+            confidence_kind=confidence_kind,
+            judge=identity,
+            escalated=bool(raw.get("escalated", False)),
+            error_code=error_code,
+        )
+    except ValueError as exc:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            f"judge returned an invalid verdict envelope: {exc}",
+        ) from exc
+
+
+def _build_legacy_verdict(
+    raw: dict[str, Any],
+    *,
+    identity: JudgeIdentity,
+    default_confidence_kind: JudgeConfidenceKind,
+) -> JudgeVerdict:
+    """Build the verdict for the legacy dialect (``passed``/``score``/``detail``).
+
+    The shape is unchanged, but ``passed`` must be a REAL boolean.
+    ``bool("false")`` is True, so a small model (or an injected output steering
+    it) could otherwise flip a gate.
+    """
+    raw_passed = raw.get("passed", False)
+    if not isinstance(raw_passed, bool):
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            f"judge returned a non-boolean 'passed' ({type(raw_passed).__name__})",
+        )
+    return JudgeVerdict(
+        outcome=JudgeOutcome.PASS if raw_passed else JudgeOutcome.FAIL,
+        score=_coerce_score(raw.get("score")),
+        detail=_coerce_text(raw.get("detail")),
+        judge=identity,
+        confidence_kind=default_confidence_kind,
+    )
+
+
 def from_judge_callable_dict(
     raw: Any,
     *,
@@ -268,77 +378,17 @@ def from_judge_callable_dict(
             f"judge returned {type(raw).__name__}, expected a dict",
         )
 
-    identity = judge
-    if identity is None:
-        raw_identity = raw.get("judge")
-        if isinstance(raw_identity, dict):
-            try:
-                identity = JudgeIdentity.model_validate(raw_identity)
-            except ValueError as exc:
-                raise JudgeExecutionError(
-                    JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
-                    f"judge returned an invalid identity: {type(exc).__name__}",
-                ) from exc
-        else:
-            identity = JudgeIdentity()
-
+    identity = _coerce_judge_identity(raw, judge)
     if raw.get("outcome") is not None or raw.get("error_code") is not None:
-        try:
-            outcome = JudgeOutcome(str(raw.get("outcome") or "error"))
-        except ValueError as exc:
-            raise JudgeExecutionError(
-                JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
-                f"judge returned an unknown outcome: {raw.get('outcome')!r}",
-            ) from exc
-        try:
-            error_code = JudgeErrorCode(str(raw["error_code"])) if raw.get("error_code") else None
-        except ValueError as exc:
-            raise JudgeExecutionError(
-                JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
-                f"judge returned an unknown error_code: {raw.get('error_code')!r}",
-            ) from exc
-        try:
-            confidence_kind = JudgeConfidenceKind(str(raw.get("confidence_kind") or default_confidence_kind))
-        except ValueError as exc:
-            raise JudgeExecutionError(
-                JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
-                f"judge returned an unknown confidence_kind: {raw.get('confidence_kind')!r}",
-            ) from exc
-        detail = "" if raw.get("detail") is None else str(raw.get("detail"))
-        try:
-            return JudgeVerdict(
-                outcome=outcome,
-                score=_coerce_score(raw.get("score")),
-                detail=detail,
-                questions=_coerce_questions(raw.get("questions")),
-                confidence=_coerce_score(raw.get("confidence")),
-                confidence_kind=confidence_kind,
-                judge=identity,
-                escalated=bool(raw.get("escalated", False)),
-                error_code=error_code,
-            )
-        except ValueError as exc:
-            raise JudgeExecutionError(
-                JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
-                f"judge returned an invalid verdict envelope: {exc}",
-            ) from exc
-
-    # Legacy dialect: ``{passed, score, detail}`` — unchanged shape, but
-    # ``passed`` must be a REAL boolean. ``bool("false")`` is True, so a small
-    # model (or an injected output steering it) could otherwise flip a gate.
-    raw_passed = raw.get("passed", False)
-    if not isinstance(raw_passed, bool):
-        raise JudgeExecutionError(
-            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
-            f"judge returned a non-boolean 'passed' ({type(raw_passed).__name__})",
+        return _build_typed_verdict(
+            raw,
+            identity=identity,
+            default_confidence_kind=default_confidence_kind,
         )
-    raw_detail = raw.get("detail")
-    return JudgeVerdict(
-        outcome=JudgeOutcome.PASS if raw_passed else JudgeOutcome.FAIL,
-        score=_coerce_score(raw.get("score")),
-        detail="" if raw_detail is None else str(raw_detail),
-        judge=identity,
-        confidence_kind=default_confidence_kind,
+    return _build_legacy_verdict(
+        raw,
+        identity=identity,
+        default_confidence_kind=default_confidence_kind,
     )
 
 
@@ -347,80 +397,233 @@ def from_judge_callable_dict(
 # ---------------------------------------------------------------------------
 
 
-def _question_answer_score(question: dict[str, Any], answer: Any) -> tuple[bool, float]:
-    """Return ``(passed, score)`` for one typed question's answer."""
+def _question_label(question: dict[str, Any]) -> str:
+    """Return the question's id for error detail (``"?"`` when it has none)."""
     raw_qid = question.get("id")
-    qid = str(raw_qid) if raw_qid is not None else "?"
-    qtype = question.get("type")
-    if qtype == "noul":
-        # NEVER truthiness: a model returning the STRING "false" (or "no",
-        # "False", "0") would otherwise flip a gate to pass. A `noul` answer is
-        # a real boolean or the response is malformed.
-        if not isinstance(answer, bool):
-            raise JudgeExecutionError(
-                JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
-                f"question {qid!r} expects a boolean answer, got {type(answer).__name__}",
-            )
-        return answer, 1.0 if answer else 0.0
-    if qtype == "choice":
-        passing_keys = question.get("passing_keys") or []
-        if not isinstance(passing_keys, list):
-            raise JudgeExecutionError(
-                JudgeErrorCode.JUDGE_CONFIGURATION,
-                f"question {qid!r} has a non-list 'passing_keys'",
-            )
-        option_scores = question.get("option_scores") or {}
-        passed = answer in passing_keys
-        if isinstance(option_scores, dict) and answer in option_scores:
-            option_score = _finite_float(
-                option_scores[answer],
-                field=f"question {qid!r} option score",
-                code=JudgeErrorCode.JUDGE_CONFIGURATION,
-            )
-            return passed, option_score if option_score is not None else (1.0 if passed else 0.0)
-        return passed, 1.0 if passed else 0.0
-    if qtype == "score":
-        levels = question.get("levels") or []
-        numeric: list[float] = []
-        for level in levels:
-            if not isinstance(level, dict):
-                continue
-            level_score = _finite_float(
-                level.get("score"),
-                field=f"question {qid!r} level score",
-                code=JudgeErrorCode.JUDGE_CONFIGURATION,
-            )
-            if level_score is not None:
-                numeric.append(level_score)
-        if len(numeric) < 2:
-            raise JudgeExecutionError(
-                JudgeErrorCode.JUDGE_CONFIGURATION,
-                f"score question {qid!r} declares fewer than two ordered levels",
-            )
-        lo, hi = min(numeric), max(numeric)
-        value = _finite_float(answer, field=f"question {qid!r} answer")
-        if value is None:
-            raise JudgeExecutionError(
-                JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
-                f"question {qid!r} expects a numeric level",
-            )
-        pass_from = _finite_float(
-            question.get("pass_from"),
-            field=f"question {qid!r} pass_from",
+    return str(raw_qid) if raw_qid is not None else "?"
+
+
+def _binary_score(passed: bool) -> float:
+    return 1.0 if passed else 0.0
+
+
+def _noul_answer(qid: str, answer: Any) -> tuple[bool, float]:
+    """Score a ``noul`` answer.
+
+    NEVER truthiness: a model returning the STRING "false" (or "no", "False",
+    "0") would otherwise flip a gate to pass. A ``noul`` answer is a real
+    boolean or the response is malformed.
+    """
+    if not isinstance(answer, bool):
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            f"question {qid!r} expects a boolean answer, got {type(answer).__name__}",
+        )
+    return answer, _binary_score(answer)
+
+
+def _choice_passing_keys(question: dict[str, Any], qid: str) -> list[Any]:
+    passing_keys = question.get("passing_keys") or []
+    if not isinstance(passing_keys, list):
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_CONFIGURATION,
+            f"question {qid!r} has a non-list 'passing_keys'",
+        )
+    return passing_keys
+
+
+def _choice_option_score(
+    question: dict[str, Any],
+    qid: str,
+    answer: Any,
+    passed: bool,
+) -> float:
+    option_scores = question.get("option_scores") or {}
+    if isinstance(option_scores, dict) and answer in option_scores:
+        option_score = _finite_float(
+            option_scores[answer],
+            field=f"question {qid!r} option score",
             code=JudgeErrorCode.JUDGE_CONFIGURATION,
         )
-        if pass_from is None:
-            raise JudgeExecutionError(
-                JudgeErrorCode.JUDGE_CONFIGURATION,
-                f"score question {qid!r} must declare pass_from",
-            )
-        passed = value >= pass_from
-        normalised = 0.0 if hi == lo else (value - lo) / (hi - lo)
-        return passed, max(0.0, min(1.0, normalised))
+        if option_score is not None:
+            return option_score
+    return _binary_score(passed)
+
+
+def _choice_answer(question: dict[str, Any], qid: str, answer: Any) -> tuple[bool, float]:
+    passing_keys = _choice_passing_keys(question, qid)
+    passed = answer in passing_keys
+    return passed, _choice_option_score(question, qid, answer, passed)
+
+
+def _numeric_level_scores(question: dict[str, Any], qid: str) -> list[float]:
+    levels = question.get("levels") or []
+    numeric: list[float] = []
+    for level in levels:
+        if not isinstance(level, dict):
+            continue
+        level_score = _finite_float(
+            level.get("score"),
+            field=f"question {qid!r} level score",
+            code=JudgeErrorCode.JUDGE_CONFIGURATION,
+        )
+        if level_score is not None:
+            numeric.append(level_score)
+    return numeric
+
+
+def _score_bounds(question: dict[str, Any], qid: str) -> tuple[float, float]:
+    numeric = _numeric_level_scores(question, qid)
+    if len(numeric) < 2:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_CONFIGURATION,
+            f"score question {qid!r} declares fewer than two ordered levels",
+        )
+    return min(numeric), max(numeric)
+
+
+def _required_pass_from(question: dict[str, Any], qid: str) -> float:
+    pass_from = _finite_float(
+        question.get("pass_from"),
+        field=f"question {qid!r} pass_from",
+        code=JudgeErrorCode.JUDGE_CONFIGURATION,
+    )
+    if pass_from is None:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_CONFIGURATION,
+            f"score question {qid!r} must declare pass_from",
+        )
+    return pass_from
+
+
+def _normalise_level(value: float, lo: float, hi: float) -> float:
+    if hi == lo:
+        return 0.0
+    return max(0.0, min(1.0, (value - lo) / (hi - lo)))
+
+
+def _score_answer(question: dict[str, Any], qid: str, answer: Any) -> tuple[bool, float]:
+    lo, hi = _score_bounds(question, qid)
+    value = _finite_float(answer, field=f"question {qid!r} answer")
+    if value is None:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            f"question {qid!r} expects a numeric level",
+        )
+    pass_from = _required_pass_from(question, qid)
+    return value >= pass_from, _normalise_level(value, lo, hi)
+
+
+def _question_answer_score(question: dict[str, Any], answer: Any) -> tuple[bool, float]:
+    """Return ``(passed, score)`` for one typed question's answer."""
+    qid = _question_label(question)
+    qtype = question.get("type")
+    if qtype == "noul":
+        return _noul_answer(qid, answer)
+    if qtype == "choice":
+        return _choice_answer(question, qid, answer)
+    if qtype == "score":
+        return _score_answer(question, qid, answer)
     raise JudgeExecutionError(
         JudgeErrorCode.JUDGE_CONFIGURATION,
         f"question {qid!r} has an unsupported type {qtype!r}",
     )
+
+
+@dataclass(frozen=True)
+class _QuestionAggregate:
+    """One question's verdict plus its contribution to the weighted mean."""
+
+    verdict: QuestionVerdict
+    vetoed: bool
+    weighted_total: float
+    weight_sum: float
+
+
+def _pass_threshold(pass_rule: dict[str, Any] | None) -> float:
+    raw_threshold = (pass_rule or {}).get("threshold")
+    if isinstance(raw_threshold, bool) or not isinstance(raw_threshold, (int, float)):
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_CONFIGURATION,
+            "pass_rule.threshold is required and must be a number in [0, 1]; "
+            "a missing threshold would make every aggregate pass",
+        )
+    threshold = float(raw_threshold)
+    if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_CONFIGURATION,
+            f"pass_rule.threshold must be a finite number in [0, 1] (got {threshold})",
+        )
+    return threshold
+
+
+def _question_weight(question: dict[str, Any], qid: str) -> float:
+    weight = _finite_float(
+        question.get("weight", 1.0),
+        field=f"question {qid!r} weight",
+        code=JudgeErrorCode.JUDGE_CONFIGURATION,
+    )
+    if weight is None:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_CONFIGURATION,
+            f"question {qid!r} weight is required",
+        )
+    if weight < 0:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_CONFIGURATION,
+            f"question {qid!r} weight must be non-negative",
+        )
+    return weight
+
+
+def _answer_verdict(
+    question: dict[str, Any],
+    qid: str,
+    answer: Any,
+    passed: bool,
+    qscore: float,
+) -> QuestionVerdict:
+    return QuestionVerdict(
+        question_id=qid,
+        answer=answer if isinstance(answer, (str, int, float, bool)) else None,
+        passed=passed,
+        confidence=qscore,
+        detail="" if passed else str(question.get("name") or question.get("instructions") or ""),
+    )
+
+
+def _aggregate_question(question: dict[str, Any], answers: dict[str, Any]) -> _QuestionAggregate:
+    """Score one question and fold it into the aggregate inputs."""
+    qid = str(question.get("id", ""))
+    if not qid:
+        raise JudgeExecutionError(JudgeErrorCode.JUDGE_CONFIGURATION, "a typed question has no id")
+    if qid not in answers:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            f"judge did not answer question {qid!r}",
+        )
+    answer = answers[qid]
+    passed, qscore = _question_answer_score(question, answer)
+    verdict = _answer_verdict(question, qid, answer, passed, qscore)
+    if bool(question.get("required", False)):
+        # D4: required questions gate; they never contribute to the mean.
+        return _QuestionAggregate(verdict=verdict, vetoed=not passed, weighted_total=0.0, weight_sum=0.0)
+    weight = _question_weight(question, qid)
+    return _QuestionAggregate(
+        verdict=verdict,
+        vetoed=False,
+        weighted_total=qscore * weight,
+        weight_sum=weight,
+    )
+
+
+def _aggregate_passed(vetoed: bool, aggregate: float | None, threshold: float) -> bool:
+    if vetoed:
+        return False
+    if aggregate is None:
+        # All-required set: every required question passed (none vetoed).
+        return True
+    return aggregate >= threshold
 
 
 def aggregate_typed_answers(
@@ -439,76 +642,19 @@ def aggregate_typed_answers(
     questions the verdict is the required set alone (pass iff none vetoed). A
     missing answer is a malformed response, never an empty judgment.
     """
-    raw_threshold = (pass_rule or {}).get("threshold")
-    if isinstance(raw_threshold, bool) or not isinstance(raw_threshold, (int, float)):
-        raise JudgeExecutionError(
-            JudgeErrorCode.JUDGE_CONFIGURATION,
-            "pass_rule.threshold is required and must be a number in [0, 1]; "
-            "a missing threshold would make every aggregate pass",
-        )
-    threshold = float(raw_threshold)
-    if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
-        raise JudgeExecutionError(
-            JudgeErrorCode.JUDGE_CONFIGURATION,
-            f"pass_rule.threshold must be a finite number in [0, 1] (got {threshold})",
-        )
-
+    threshold = _pass_threshold(pass_rule)
     verdicts: list[QuestionVerdict] = []
     weighted_total = 0.0
     weight_sum = 0.0
     vetoed = False
     for question in questions:
-        qid = str(question.get("id", ""))
-        if not qid:
-            raise JudgeExecutionError(JudgeErrorCode.JUDGE_CONFIGURATION, "a typed question has no id")
-        if qid not in answers:
-            raise JudgeExecutionError(
-                JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
-                f"judge did not answer question {qid!r}",
-            )
-        passed, qscore = _question_answer_score(question, answers[qid])
-        required = bool(question.get("required", False))
-        if required:
-            if not passed:
-                vetoed = True
-            # D4: required questions gate; they never contribute to the mean.
-        else:
-            weight = _finite_float(
-                question.get("weight", 1.0),
-                field=f"question {qid!r} weight",
-                code=JudgeErrorCode.JUDGE_CONFIGURATION,
-            )
-            if weight is None:
-                raise JudgeExecutionError(
-                    JudgeErrorCode.JUDGE_CONFIGURATION,
-                    f"question {qid!r} weight is required",
-                )
-            if weight < 0:
-                raise JudgeExecutionError(
-                    JudgeErrorCode.JUDGE_CONFIGURATION,
-                    f"question {qid!r} weight must be non-negative",
-                )
-            if weight > 0:
-                weighted_total += qscore * weight
-                weight_sum += weight
-        verdicts.append(
-            QuestionVerdict(
-                question_id=qid,
-                answer=answers[qid] if isinstance(answers[qid], (str, int, float, bool)) else None,
-                passed=passed,
-                confidence=qscore,
-                detail="" if passed else str(question.get("name") or question.get("instructions") or ""),
-            )
-        )
+        item = _aggregate_question(question, answers)
+        verdicts.append(item.verdict)
+        vetoed = vetoed or item.vetoed
+        weighted_total += item.weighted_total
+        weight_sum += item.weight_sum
     aggregate = (weighted_total / weight_sum) if weight_sum > 0 else None
-    if vetoed:
-        passed = False
-    elif aggregate is None:
-        # All-required set: every required question passed (none vetoed).
-        passed = True
-    else:
-        passed = aggregate >= threshold
-    return verdicts, aggregate, passed
+    return verdicts, aggregate, _aggregate_passed(vetoed, aggregate, threshold)
 
 
 def build_typed_judge_prompt(
