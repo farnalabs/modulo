@@ -80,10 +80,22 @@ The schema validator mode is resolved from (in priority order):
 3. `MODULO_SCHEMA_VALIDATOR_MODE` env var (first-boot seed only)
 4. `"lenient"` (hard default)
 
-To set the mode, write the value directly: no admin endpoint or MCP tool
-currently exposes this key. To set the mode instance-wide, write the
-`system_config` row. `value` is a JSONB column, so the string must be
-JSON-encoded:
+To set the mode, write the value directly. No MCP tool exposes this key,
+and there is no endpoint dedicated to it, but the generic admin config
+API accepts any key: `PUT /api/v1/system-admin/config/{key}` (requires the
+`system.config.manage` permission) performs an unfiltered upsert, so an
+instance operator can set it with a JSON string body:
+
+```bash
+curl -X PUT "$MODULO_URL/api/v1/system-admin/config/schema_validator_mode" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"value": "strict"}'
+```
+
+To set the mode instance-wide without the admin API, write the
+`system_config` row directly. `value` is a JSONB column, so the string
+must be JSON-encoded:
 
 ```sql
 INSERT INTO system_config (key, value)
