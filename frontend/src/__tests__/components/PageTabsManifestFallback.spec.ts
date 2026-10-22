@@ -73,7 +73,7 @@ describe('PageTabs — manifest without routes (FAR-47 fallback)', () => {
       { label: 'Spend Limits', to: '/admin/costs/limits' },
     ])
 
-    const links = wrapper.findAll('[data-testid="router-link-stub"]')
+    const links = wrapper.findAll('.page-tab')
     expect(links).toHaveLength(2)
     // No route metadata means no tab can be resolved as plan-locked…
     expect(wrapper.findAll('.page-tab.locked')).toHaveLength(0)

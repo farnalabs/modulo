@@ -16,7 +16,7 @@
         :aria-selected="isActive(entry.tab.to) ? 'true' : 'false'"
         :aria-label="entry.lock ? entry.lock.aria : undefined"
         :title="entry.lock ? entry.lock.tooltip : undefined"
-        v-bind="entry.lock ? { 'data-testid': 'page-tab-locked' } : {}"
+        :data-testid="entry.lock ? 'page-tab-locked' : 'page-tab'"
       >
         <!-- FAR-47: a plan-locked tab keeps its space in the bar (never
              removed) and leads with the padlock; the tab itself links to the

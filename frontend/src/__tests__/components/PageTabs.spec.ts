@@ -76,8 +76,10 @@ describe('PageTabs', () => {
       { label: 'Proposals', to: '/evals/proposals' },
     ]
     const wrapper = createWrapper(tabs)
-    const links = wrapper.findAll('[data-testid="router-link-stub"]')
+    const links = wrapper.findAll('.page-tab')
     expect(links).toHaveLength(2)
+    expect(links[0].attributes('data-testid')).toBe('page-tab')
+    expect(links[1].attributes('data-testid')).toBe('page-tab')
     expect(links[0].text()).toContain('Evals')
     expect(links[1].text()).toContain('Proposals')
   })
@@ -88,7 +90,7 @@ describe('PageTabs', () => {
       { label: 'Proposals', to: '/evals/proposals' },
     ]
     const wrapper = createWrapper(tabs, '/evals/editor')
-    const links = wrapper.findAll('[data-testid="router-link-stub"]')
+    const links = wrapper.findAll('.page-tab')
     expect(links[0].classes()).toContain('active')
     expect(links[1].classes()).not.toContain('active')
   })
@@ -99,7 +101,7 @@ describe('PageTabs', () => {
       { label: 'Proposals', to: '/evals/proposals' },
     ]
     const wrapper = createWrapper(tabs, '/evals/editor')
-    const links = wrapper.findAll('[data-testid="router-link-stub"]')
+    const links = wrapper.findAll('.page-tab')
     expect(links[0].attributes('aria-current')).toBe('page')
     expect(links[1].attributes('aria-current')).toBeUndefined()
   })
@@ -110,14 +112,14 @@ describe('PageTabs', () => {
       { label: 'Proposals', to: '/evals/proposals' },
     ]
     const wrapper = createWrapper(tabs, '/evals/editor')
-    const links = wrapper.findAll('[data-testid="router-link-stub"]')
+    const links = wrapper.findAll('.page-tab')
     expect(links[0].attributes('aria-selected')).toBe('true')
     expect(links[1].attributes('aria-selected')).toBe('false')
   })
 
   it('renders an empty state when no tabs provided', () => {
     const wrapper = createWrapper([])
-    const links = wrapper.findAll('[data-testid="router-link-stub"]')
+    const links = wrapper.findAll('.page-tab')
     expect(links).toHaveLength(0)
   })
 
@@ -183,7 +185,7 @@ describe('PageTabs', () => {
       { label: 'Proposals', to: '/evals/proposals' },
     ]
     const wrapper = createWrapper(tabs, '/evals/proposals')
-    const links = wrapper.findAll('[data-testid="router-link-stub"]')
+    const links = wrapper.findAll('.page-tab')
     expect(links[0].classes()).not.toContain('active')
     expect(links[1].classes()).toContain('active')
   })
