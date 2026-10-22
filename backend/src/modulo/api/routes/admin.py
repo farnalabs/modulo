@@ -3045,6 +3045,10 @@ async def _eval_by_type(session: AsyncSession, org_id: uuid.UUID) -> list[TypeBr
             Eval.organisation_id == org_id,
             Eval.eval_type != "guardrail",
             Eval.deleted_at.is_(None),
+            # ADR 066 D18: an instrument failure is not a failed check. Keep
+            # outer-joined definitions with no results (NULL IS DISTINCT FROM
+            # 'error' is TRUE) while dropping judge error rows from the counts.
+            EvalResult.outcome.is_distinct_from("error"),
         )
         .group_by(
             Eval.eval_type,
