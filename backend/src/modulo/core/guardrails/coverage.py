@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import shlex
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -74,14 +76,43 @@ def initial_loop_coverage(*, configured: bool) -> LoopCoverage:
     )
 
 
+_OPENCODE_EXECUTABLE = re.compile(r"(?i)(?:^|[\\/])opencode(?:\.exe)?$")
+
+
+def _command_tokens(command: str) -> list[str]:
+    """Tokenize POSIX, Windows, and wrapper command spellings conservatively."""
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        tokens = command.split()
+    return [token.strip("\\\"'") for token in tokens]
+
+
+def _is_opencode_executable(token: str) -> bool:
+    normalized = token.replace("\\\\", "/")
+    return bool(_OPENCODE_EXECUTABLE.search(normalized)) or normalized.casefold() in {"opencode", "opencode.exe"}
+
+
 def runtime_supports_tool_events(command: str) -> bool:
-    """Return whether the command names the supported opencode plugin runtime.
+    """Return whether a supported opencode executable appears in a command.
 
     The bridge is not a generic stdout parser: production enforcement depends on
     the runtime's tool-hook contract. Commands for another runtime therefore
     remain explicitly degraded instead of being wrapped and falsely certified.
+    Wrapper launchers are allowed because the actual executable may be the second
+    or later command token; the executable must be followed by the ``run``
+    subcommand so an incidental argument named ``opencode`` is not enough.
     """
-    return any(token in command.split() for token in ("opencode", "opencode.exe"))
+    tokens = _command_tokens(command)
+    if not tokens:
+        return False
+    ignored_command_names = {"echo", "printf", "python", "python3", "node", "sh", "bash", "cmd", "powershell"}
+    if tokens[0].casefold() in ignored_command_names:
+        return False
+    return any(
+        _is_opencode_executable(token) and index + 1 < len(tokens) and tokens[index + 1] == "run"
+        for index, token in enumerate(tokens)
+    )
 
 
 def bridge_plugin_source() -> str:
@@ -93,6 +124,10 @@ def bridge_plugin_source() -> str:
     """
     return """const endpoint = () => process.env.MODULO_BRIDGE_ENDPOINT || "";
 
+function persistenceFailure(value) {
+  return value && typeof value === "object" && value.reason === "coverage_persistence_failed";
+}
+
 async function decide(event) {
   const base = endpoint();
   if (!base) return { action: "pass", blocked: false, reason: "bridge_endpoint_missing" };
@@ -103,6 +138,9 @@ async function decide(event) {
       body: JSON.stringify(event),
     });
     const value = await response.json();
+    if (persistenceFailure(value)) {
+      return { action: "block", blocked: true, reason: "coverage_persistence_failed" };
+    }
     return value && typeof value === "object"
       ? value
       : { action: "pass", blocked: false, reason: "bridge_invalid_response" };
@@ -141,7 +179,8 @@ export default function moduloBridgePlugin() {
         return { args: decision.masked_args };
       }
       if ((decision.action === "block" && decision.blocked) || decision.action === "escalate") {
-        throw new Error(`Modulo loop guardrail ${decision.action} refused tool ${toolName(input)}`);
+        const reason = decision.reason || "unspecified";
+        throw new Error(`Modulo loop guardrail ${decision.action} refused tool ${toolName(input)}: ${reason}`);
       }
       return;
     },

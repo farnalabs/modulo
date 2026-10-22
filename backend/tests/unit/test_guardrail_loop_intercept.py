@@ -23,7 +23,12 @@ import pytest
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType
 from modulo.core.guardrails import FieldRedactionMode, FieldRedactionPolicy
 from modulo.core.guardrails import loop_intercept as li
-from modulo.core.guardrails.coverage import LoopCoverage, LoopCoverageState, bridge_plugin_source
+from modulo.core.guardrails.coverage import (
+    LoopCoverage,
+    LoopCoverageState,
+    bridge_plugin_source,
+    runtime_supports_tool_events,
+)
 from modulo.core.guardrails.loop_intercept import (
     DEFAULT_LOOP_INTERCEPT_PATTERNS,
     MAX_LOOP_INTERCEPT_ARGS_BYTES,
@@ -158,6 +163,24 @@ def test_config_error_validation_helper():
 # ---------------------------------------------------------------------------
 # Pattern matching + event serialisation
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "/usr/local/bin/opencode run --auto",
+        '"/opt/opencode/bin/opencode" run --auto',
+        r'"C:\\Program Files\\OpenCode\\opencode.exe" run --auto',
+        r'wrapper "C:\\Program Files\\OpenCode\\opencode.exe" run --auto',
+    ],
+)
+def test_runtime_supports_absolute_and_wrapped_opencode_commands(command: str):
+    assert runtime_supports_tool_events(command)
+
+
+@pytest.mark.parametrize("command", ["echo opencode run", "notopencode run", "python script.py"])
+def test_runtime_supports_tool_events_rejects_unrelated_commands(command: str):
+    assert not runtime_supports_tool_events(command)
 
 
 def test_tool_pattern_matching():
@@ -603,6 +626,104 @@ def test_runtime_plugin_source_emits_authenticated_tool_events():
     assert '"tool.execute.before"' in source
     assert '"tool.execute.after"' in source
     assert "fetch(`${base}/intercept`" in source
+
+
+async def test_runtime_plugin_source_uses_loader_contract_harness(tmp_path: Path):
+    """Exercise the production OpenCode plugin factory and hook contract.
+
+    The installed OpenCode binary is a long-lived server process and does not
+    expose a bounded plugin-loader command. This harness mirrors the loader's
+    supported contract: import the default export, invoke it as a factory with
+    the loader input, validate both hook callables, and invoke hooks through the
+    loader-shaped input/output path. It is intentionally separate from the
+    direct hook test below so an export/factory/return-shape regression fails.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node runtime is required for the loader contract harness")
+    plugin = tmp_path / "bridge-plugin.mjs"
+    plugin.write_text(bridge_plugin_source(), encoding="utf-8")
+    harness = tmp_path / "loader-contract.mjs"
+    harness.write_text(
+        """import plugin from './bridge-plugin.mjs';
+
+// This is the supported external-plugin loader contract used by OpenCode:
+// accept a function export (or {server}), invoke it with PluginInput/options,
+// then require the returned hooks object to expose callable hook bindings.
+function asServer(value) {
+  if (typeof value === 'function') return value;
+  if (value && typeof value === 'object' && typeof value.server === 'function') return value.server;
+  throw new TypeError('Plugin export is not a function');
+}
+async function loadExternalPlugin(module) {
+  const servers = Object.values(module).map(asServer);
+  const input = { client: {}, project: {}, worktree: '.', directory: '.', $: undefined };
+  const loaded = [];
+  for (const server of servers) loaded.push(await server(input, {}));
+  return loaded;
+}
+const [hooks] = await loadExternalPlugin(await import('./bridge-plugin.mjs'));
+if (!hooks || typeof hooks !== 'object') throw new Error('plugin factory must return an object');
+for (const name of ['tool.execute.before', 'tool.execute.after']) {
+  if (typeof hooks[name] !== 'function') throw new Error(`${name} must be callable`);
+}
+await hooks['tool.execute.before']({ tool: 'git push', args: { ref: 'main' } });
+await hooks['tool.execute.after']({ tool: 'git push', args: { ref: 'main' } }, { ok: true });
+process.stdout.write('loader-contract-complete');
+""",
+        encoding="utf-8",
+    )
+    result = await asyncio.to_thread(
+        subprocess.run,
+        [node, str(harness)],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, "MODULO_BRIDGE_ENDPOINT": ""},
+        timeout=30,
+    )
+    assert result.stdout == "loader-contract-complete"
+
+
+async def test_runtime_plugin_fails_closed_on_coverage_persistence_failure(tmp_path: Path):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node runtime is required for the production plugin proof")
+
+    async def _failing_sink(_coverage: LoopCoverage) -> None:
+        raise RuntimeError("storage unavailable")
+
+    server = li.LoopInterceptCallbackServer(
+        EvalEngine(),
+        [_guardrail(action="warn")],
+        _cfg(),
+        coverage_sink=_failing_sink,
+    )
+    port = await server.start()
+    try:
+        plugin = tmp_path / "bridge-plugin.mjs"
+        plugin.write_text(bridge_plugin_source(), encoding="utf-8")
+        probe = tmp_path / "persistence-failure.mjs"
+        probe.write_text(
+            """import plugin from './bridge-plugin.mjs';
+const hooks = plugin({});
+await hooks['tool.execute.before']({tool: 'git push', args: {ref: 'main'}});
+""",
+            encoding="utf-8",
+        )
+        result = await asyncio.to_thread(
+            subprocess.run,
+            [node, str(probe)],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "MODULO_BRIDGE_ENDPOINT": f"http://127.0.0.1:{port}"},
+            timeout=30,
+        )
+        assert result.returncode != 0
+        assert "coverage_persistence_failed" in result.stderr
+    finally:
+        await server.close()
 
 
 async def test_runtime_plugin_source_produces_event_in_real_node_subprocess(tmp_path: Path):

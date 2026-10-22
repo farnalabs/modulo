@@ -784,7 +784,12 @@ class _BridgeHTTPHandler(BaseHTTPRequestHandler):
             decision = future.result(timeout=max_wait)
         except LoopCoveragePersistenceError:
             self._respond(
-                {"action": "pass", "blocked": False, "masked_args": None, "reason": "coverage_persistence_failed"},
+                {
+                    "action": "block",
+                    "blocked": True,
+                    "masked_args": None,
+                    "reason": "coverage_persistence_failed",
+                },
                 503,
             )
             return

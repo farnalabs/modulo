@@ -49,6 +49,7 @@ import json
 import os
 import subprocess  # nosec B404 — subprocess is stdlib-only (sandbox file); only used to exec the configured agent command (no shell=True)
 import sys
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -239,9 +240,24 @@ class BridgeClient:
             with urllib.request.urlopen(request, timeout=self._timeout) as response:  # noqa: S310  # nosec B310 - the endpoint is the Modulo-side callback (loopback/config), not an arbitrary URL
                 body = response.read().decode("utf-8", "replace")
                 decision = json.loads(body)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 503:
+                try:
+                    decision = json.loads(exc.read().decode("utf-8", "replace"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    return {
+                        "action": "block",
+                        "blocked": True,
+                        "masked_args": None,
+                        "reason": "coverage_persistence_failed",
+                    }
+            else:
+                reason = f"bridge_error:{type(exc).__name__}"
+                return {"action": "pass", "blocked": False, "masked_args": None, "reason": reason}
         except Exception as exc:
             reason = f"bridge_error:{type(exc).__name__}"
             return {"action": "pass", "blocked": False, "masked_args": None, "reason": reason}
+
         if not isinstance(decision, dict):
             return {"action": "pass", "blocked": False, "masked_args": None, "reason": "bridge_error:non-dict"}
         return decision
@@ -276,7 +292,7 @@ class BridgeClient:
         if action == "escalate":
             return False, None, "escalate"
         if action == "block":
-            if decision.get("blocked"):
+            if decision.get("blocked") or decision.get("reason") == "coverage_persistence_failed":
                 return False, None, "block"
             # blocked=False -> server downgraded the block; proceed, do not refuse.
             return True, None, "block"
