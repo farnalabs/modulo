@@ -71,7 +71,7 @@ class TestCoercionHelpers:
         assert _coerce_score("high") is None
 
     def test_coerce_questions_absent_is_empty(self) -> None:
-        assert _coerce_questions(None) == []
+        assert not _coerce_questions(None)
 
     def test_coerce_questions_non_list_is_malformed(self) -> None:
         with pytest.raises(JudgeExecutionError) as exc_info:
@@ -398,7 +398,7 @@ class TestLegacyConfigValidationEdges:
         config = _base_config()
         config["backing"] = {"kind": "decision_model", "vendor": "Jev", "model_class": "system-1"}
 
-        validate_typed_judge_config(config)
+        assert validate_typed_judge_config(config) is None
 
     def test_a_choice_question_without_option_scores_is_accepted(self) -> None:
         config = _base_config()
@@ -411,7 +411,7 @@ class TestLegacyConfigValidationEdges:
             }
         ]
 
-        validate_typed_judge_config(config)
+        assert validate_typed_judge_config(config) is None
 
     def test_choice_option_scores_may_be_empty(self) -> None:
         config = _base_config()
@@ -425,7 +425,7 @@ class TestLegacyConfigValidationEdges:
             }
         ]
 
-        validate_typed_judge_config(config)
+        assert validate_typed_judge_config(config) is None
 
     def test_a_choice_option_score_within_range_is_accepted(self) -> None:
         config = _base_config()
@@ -439,7 +439,7 @@ class TestLegacyConfigValidationEdges:
             }
         ]
 
-        validate_typed_judge_config(config)
+        assert validate_typed_judge_config(config) is None
 
     def test_a_score_question_with_an_in_range_pass_from_is_accepted(self) -> None:
         config = _base_config()
@@ -453,7 +453,7 @@ class TestLegacyConfigValidationEdges:
             }
         ]
 
-        validate_typed_judge_config(config)
+        assert validate_typed_judge_config(config) is None
 
     def test_a_duplicate_question_id_is_rejected(self) -> None:
         config = _base_config()
@@ -474,17 +474,20 @@ class TestLegacyConfigValidationEdges:
 
 class TestLegacyWriteGuardEdges:
     def test_a_non_judge_write_does_not_validate(self) -> None:
-        reject_legacy_judge_write(config_json={"legacy": True}, new_eval_type="regex")
+        assert reject_legacy_judge_write(config_json={"legacy": True}, new_eval_type="regex") is None
 
     def test_a_typed_replacement_of_a_legacy_row_is_validated(self) -> None:
         legacy_config = {"field": "output", "model_backend_id": str(uuid.uuid4())}
         typed = _base_config()
 
-        reject_legacy_judge_write(
-            config_json=typed,
-            stored_config=legacy_config,
-            stored_eval_type="model_judge",
-            is_update=True,
+        assert (
+            reject_legacy_judge_write(
+                config_json=typed,
+                stored_config=legacy_config,
+                stored_eval_type="model_judge",
+                is_update=True,
+            )
+            is None
         )
 
     def test_an_edited_legacy_row_is_read_only(self) -> None:
