@@ -104,6 +104,10 @@ class TestUpgradePostgres:
         assert table == "hitl_claims"
         assert tuple(columns) == ("organisation_id", "decision_at")
         assert str(kwargs["postgresql_where"]) == "decision IS NOT NULL"
+        # The SQLite half is what ``create_all`` builds the unit-test schema
+        # from, so the predicate must be declared for BOTH dialects - the
+        # model-side parity test below asserts the same pair.
+        assert str(kwargs["sqlite_where"]) == "decision IS NOT NULL"
         assert kwargs.get("if_not_exists") is True
 
     def test_runs_index_is_the_org_snapshot_composite(self) -> None:
@@ -129,7 +133,7 @@ class TestUpgradeNonPostgres:
     def test_creates_nothing_on_sqlite(self) -> None:
         rec = _OpRecorder("sqlite").run("upgrade")
 
-        assert rec.index_calls == []
+        assert not rec.index_calls
 
 
 class TestDowngrade:

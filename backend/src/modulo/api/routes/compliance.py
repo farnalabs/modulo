@@ -23,7 +23,11 @@ request on a pooled connection.
 
 DB failures are translated by ``@handle_db_errors`` (ProgrammingError to 501,
 SQLAlchemyError to 503, IntegrityError to 409, HTTPException re-raised,
-Exception to 500).
+Exception to 500). A ``statement_timeout`` expiry (SQLSTATE 57014) is answered
+by this module's own arm as a 503 carrying the audit-period remedy, preceded by
+a structured ``service_unavailable`` record with ``reason=statement_timeout``
+so a persistently slow instance is visible in the error trail rather than only
+to the caller.
 """
 
 from __future__ import annotations
@@ -37,6 +41,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.compliance.evidence_index import (
@@ -62,6 +67,11 @@ _MSG_TIMEOUT = (
     "Narrow the audit period with the 'from' and 'to' parameters and retry."
 )
 
+#: Structured-log / log-prefix key for this route. One spelling, used by BOTH
+#: the ``@handle_db_errors`` backstop and the timeout arm's own record, so the
+#: two cannot drift apart in the persisted ``service_unavailable`` trail.
+_LOG_PREFIX = "compliance.evidence_index"
+
 #: Admin-only: the index aggregates org-wide audit evidence. See the
 #: registration comment in ``modulo.auth.permissions``.
 _CODE_EVIDENCE_INDEX_READ = "compliance.evidence_index.read"
@@ -85,7 +95,7 @@ async def _bound_statement_timeout(session: AsyncSession) -> None:
 
 
 @router.get("/evidence-index", response_model=EvidenceIndex)
-@handle_db_errors("compliance.evidence_index")
+@handle_db_errors(_LOG_PREFIX)
 async def get_evidence_index_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_EVIDENCE_INDEX_READ),
@@ -159,6 +169,19 @@ async def get_evidence_index_endpoint(
             )
     except DBAPIError as exc:
         if is_statement_timeout(exc):
+            # Operationally visible, not just a client-facing 503: an instance
+            # whose evidence index routinely exceeds the bound is a capacity
+            # signal (an unbounded org, or a missing index), and the generic
+            # DB path's ``log_service_unavailable("db_transient", ...)`` never
+            # runs for this arm because it answers before that backstop. The
+            # distinct reason code keeps a timeout queryable separately from a
+            # genuine database outage in the persisted trail.
+            log_service_unavailable(
+                "statement_timeout",
+                exc,
+                route=_LOG_PREFIX,
+                detail=f"evidence index exceeded its {_EVIDENCE_INDEX_STATEMENT_TIMEOUT_MS} ms statement_timeout bound",
+            )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=_MSG_TIMEOUT,
