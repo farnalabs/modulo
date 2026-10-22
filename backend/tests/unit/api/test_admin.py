@@ -17,6 +17,7 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.team import TeamUpdateOutcome
 from modulo.db.models.account import KIND_SERVICE
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -56,7 +57,11 @@ def _make_settings() -> Settings:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct double: the permission dependency's authz-enforce read
+    # calls ``result.scalar_one_or_none()`` (SYNC on a real Result) and the RLS
+    # preamble reads ``in_transaction()``/``get_bind()``/``add()`` synchronously;
+    # a bare AsyncMock turns each into a never-awaited coroutine.
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -1219,7 +1224,10 @@ class TestBillingOverviewAggregation:
             call_index += 1
             return result
 
-        mock_session = AsyncMock()
+        # Contract-correct double: the RLS preamble reads ``in_transaction()``
+        # / ``get_bind()`` / ``add()`` synchronously (``set_rls_org`` is patched
+        # here, but ``resolve_authz_enforce`` still runs against this session).
+        mock_session = configure_rls_preamble(AsyncMock())
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -1263,7 +1271,10 @@ class TestBillingOverviewAggregation:
             result.scalar.return_value = 0
             return result
 
-        mock_session = AsyncMock()
+        # Contract-correct double: the RLS preamble reads ``in_transaction()``
+        # / ``get_bind()`` / ``add()`` synchronously (``set_rls_org`` is patched
+        # here, but ``resolve_authz_enforce`` still runs against this session).
+        mock_session = configure_rls_preamble(AsyncMock())
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)

@@ -355,9 +355,6 @@ async def create_or_update_eval(
 
     Returns the persisted ``Eval`` row instance.
     """
-    from modulo.db.models.eval import Eval
-    from modulo.db.models.policy_gate import PolicyGate
-
     opts = write_options if write_options is not None else EvalWriteOptions()
     eval_suite_id = opts.eval_suite_id
     existing_eval_id = opts.existing_eval_id
@@ -374,7 +371,55 @@ async def create_or_update_eval(
     )
 
     # --- Branch on eval type BEFORE calling validate_binding ---
+    pg_action = _resolve_pg_action(
+        eval_type=eval_type,
+        org_id=org_id,
+        node_id=node_id,
+        existing_eval_id=existing_eval_id,
+        failure_behaviour=failure_behaviour,
+        config_json=config_json,
+    )
 
+    # --- Eval row persistence ---
+    eval_row = await _persist_eval_row(
+        session,
+        org_id=org_id,
+        account_id=account_id,
+        pipeline_id=pipeline_id,
+        node_id=node_id,
+        name=name,
+        eval_type=eval_type,
+        config_json=config_json,
+        pass_threshold=pass_threshold,
+        suite_id=suite_id,
+        eval_suite_id=eval_suite_id,
+        existing_eval_id=existing_eval_id,
+        existing_row=existing_row,
+    )
+
+    # --- PolicyGate persistence (branch 2 only) ---
+    await _upsert_policy_gate(
+        session,
+        org_id=org_id,
+        node_id=node_id,
+        eval_type=eval_type,
+        eval_id=eval_row.id,
+        pg_action=pg_action,
+        evaluation_mode=evaluation_mode,
+    )
+    return eval_row
+
+
+def _resolve_pg_action(
+    *,
+    eval_type: str,
+    org_id: uuid.UUID,
+    node_id: uuid.UUID | None,
+    existing_eval_id: uuid.UUID | None,
+    failure_behaviour: str,
+    config_json: dict[str, Any],
+) -> str | None:
+    """Validate the binding branch and return the PolicyGate action (or None)."""
     if eval_type == "guardrail":
         # Branch 1: guardrail — config-vocabulary validator only, no PolicyGate
         validate_guardrail_request(
@@ -382,9 +427,9 @@ async def create_or_update_eval(
             config_json=config_json,
         )
         _reject_unbound_output_point_guardrail(node_id=node_id, config_json=config_json)
-        pg_action = None
+        return None
 
-    elif node_id is not None:
+    if node_id is not None:
         # Branch 2: node-scoped non-guardrail — call validate_binding
         pg_id = existing_eval_id or uuid.uuid4()
         pg_fields = {
@@ -399,38 +444,41 @@ async def create_or_update_eval(
             "eval_type": eval_type,
         }
         validate_binding(pg_fields, ev_fields)
-        pg_action = failure_behaviour or "warn"
+        return failure_behaviour or "warn"
 
-    else:
-        # Branch 3: suite-scoped non-guardrail — no PolicyGate
-        pg_action = None
+    # Branch 3: suite-scoped non-guardrail — no PolicyGate
+    return None
 
-    # --- Eval row persistence ---
+
+async def _persist_eval_row(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    node_id: uuid.UUID | None,
+    name: str,
+    eval_type: str,
+    config_json: dict[str, Any],
+    pass_threshold: float | None,
+    suite_id: str | None,
+    eval_suite_id: uuid.UUID | None,
+    existing_eval_id: uuid.UUID | None,
+    existing_row: Any = None,
+) -> Any:
+    """Persist the Eval row (update path when ``existing_eval_id`` is given).
+
+    ``existing_row`` is the row the judge gate already loaded for this update
+    (``_enforce_judge_config_write``), so the update path reuses it instead of
+    issuing the same SELECT twice.
+    """
+    from modulo.db.models.eval import Eval
 
     if existing_eval_id is not None:
-        # UPDATE path — reuse the row the judge gate already loaded, snapshot,
-        # bump version
         existing = existing_row
         if existing is not None:
-            # Eval row exists (backfilled) — update it
-            existing.pre_version_raw = {"config_json": existing.config_json}
-            existing.version = (existing.version or 1) + 1
-            existing.pipeline_id = pipeline_id
-            existing.node_id = node_id
-            existing.name = name
-            existing.eval_type = eval_type
-            existing.config_json = config_json
-            existing.pass_threshold = pass_threshold  # type: ignore[assignment]
-            existing.suite_id = suite_id
-            if eval_suite_id is not None:
-                existing.eval_suite_id = eval_suite_id
-            await session.flush()
-            eval_row = existing
-        else:
-            # Eval row does not exist yet (first-time redirect) — create it
-            eval_row = Eval(
-                id=existing_eval_id,
-                organisation_id=org_id,
+            _apply_eval_update(
+                existing,
                 pipeline_id=pipeline_id,
                 node_id=node_id,
                 name=name,
@@ -439,15 +487,14 @@ async def create_or_update_eval(
                 pass_threshold=pass_threshold,
                 suite_id=suite_id,
                 eval_suite_id=eval_suite_id,
-                account_id=account_id,
-                version=1,
             )
-            session.add(eval_row)
             await session.flush()
-    else:
-        # CREATE path — version=1
-        eval_row = Eval(
-            organisation_id=org_id,
+            return existing
+        row = _build_eval_row(
+            Eval,
+            eval_id=existing_eval_id,
+            org_id=org_id,
+            account_id=account_id,
             pipeline_id=pipeline_id,
             node_id=node_id,
             name=name,
@@ -456,50 +503,145 @@ async def create_or_update_eval(
             pass_threshold=pass_threshold,
             suite_id=suite_id,
             eval_suite_id=eval_suite_id,
-            account_id=account_id,
-            version=1,
         )
-        session.add(eval_row)
-        await session.flush()
+    else:
+        row = _build_eval_row(
+            Eval,
+            eval_id=None,
+            org_id=org_id,
+            account_id=account_id,
+            pipeline_id=pipeline_id,
+            node_id=node_id,
+            name=name,
+            eval_type=eval_type,
+            config_json=config_json,
+            pass_threshold=pass_threshold,
+            suite_id=suite_id,
+            eval_suite_id=eval_suite_id,
+        )
+    session.add(row)
+    await session.flush()
+    return row
 
-    # --- PolicyGate persistence (branches 2 only) ---
 
-    if pg_action is not None and node_id is not None and eval_type != "guardrail":
-        # Upsert PolicyGate for this eval
-        existing_gate = (
-            await session.execute(
-                select(PolicyGate).where(
-                    PolicyGate.eval_id == eval_row.id,
-                    PolicyGate.organisation_id == org_id,
-                    PolicyGate.deleted_at.is_(None),
-                )
+def _apply_eval_update(
+    existing: Eval,
+    *,
+    pipeline_id: uuid.UUID,
+    node_id: uuid.UUID | None,
+    name: str,
+    eval_type: str,
+    config_json: dict[str, Any],
+    pass_threshold: float | None,
+    suite_id: str | None,
+    eval_suite_id: uuid.UUID | None,
+) -> None:
+    """Apply the UPDATE path's field writes to an existing Eval row."""
+    # Eval row exists (backfilled) — update it
+    existing.pre_version_raw = {"config_json": existing.config_json}
+    existing.version = (existing.version or 1) + 1
+    existing.pipeline_id = pipeline_id
+    existing.node_id = node_id
+    existing.name = name
+    existing.eval_type = eval_type
+    existing.config_json = config_json
+    existing.pass_threshold = pass_threshold  # type: ignore[assignment]
+    existing.suite_id = suite_id
+    if eval_suite_id is not None:
+        existing.eval_suite_id = eval_suite_id
+
+
+def _build_eval_row(
+    eval_model: type[Eval],
+    *,
+    eval_id: uuid.UUID | None,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    node_id: uuid.UUID | None,
+    name: str,
+    eval_type: str,
+    config_json: dict[str, Any],
+    pass_threshold: float | None,
+    suite_id: str | None,
+    eval_suite_id: uuid.UUID | None,
+) -> Eval:
+    """Construct a new Eval row (version=1)."""
+    fields: dict[str, Any] = {
+        "organisation_id": org_id,
+        "pipeline_id": pipeline_id,
+        "node_id": node_id,
+        "name": name,
+        "eval_type": eval_type,
+        "config_json": config_json,
+        "pass_threshold": pass_threshold,
+        "suite_id": suite_id,
+        "eval_suite_id": eval_suite_id,
+        "account_id": account_id,
+        "version": 1,
+    }
+    if eval_id is not None:
+        fields["id"] = eval_id
+    return eval_model(**fields)
+
+
+async def _upsert_policy_gate(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    node_id: uuid.UUID | None,
+    eval_type: str,
+    eval_id: Any,
+    pg_action: str | None,
+    evaluation_mode: str | None,
+) -> None:
+    """Upsert the PolicyGate row for branch 2 (no-op for other branches)."""
+    if pg_action is None or node_id is None or eval_type == "guardrail":
+        return
+
+    from modulo.db.models.policy_gate import PolicyGate
+
+    existing_gate = (
+        await session.execute(
+            select(PolicyGate).where(
+                PolicyGate.eval_id == eval_id,
+                PolicyGate.organisation_id == org_id,
+                PolicyGate.deleted_at.is_(None),
             )
-        ).scalar_one_or_none()
+        )
+    ).scalar_one_or_none()
 
-        if existing_gate is not None:
-            # Update existing gate.
-            existing_gate.action = pg_action
-            existing_gate.node_id = node_id
-            # FAR-939 chunk 12 §3.1: ``None`` means *preserve the live
-            # mode* — an update surface that does not carry the field
-            # (the MCP write seam) must never reset a human-approval gate
-            # to automatic. Callers that carry it (the REST update route)
-            # pass the resolved live value, so an explicit write lands.
-            if evaluation_mode is not None:
-                existing_gate.evaluation_mode = evaluation_mode
-        else:
-            # Create new gate — fresh gates are automatic unless the
-            # caller passes a mode explicitly.
-            gate = PolicyGate(
+    if existing_gate is not None:
+        _apply_gate_update(existing_gate, node_id=node_id, pg_action=pg_action, evaluation_mode=evaluation_mode)
+    else:
+        session.add(
+            PolicyGate(
                 organisation_id=org_id,
-                eval_id=eval_row.id,
+                eval_id=eval_id,
                 node_id=node_id,
                 action=pg_action,
                 evaluation_mode=evaluation_mode or "automatic",
                 version=1,
             )
-            session.add(gate)
+        )
 
-        await session.flush()
+    await session.flush()
 
-    return eval_row
+
+def _apply_gate_update(
+    existing_gate: Any,
+    *,
+    node_id: uuid.UUID,
+    pg_action: str,
+    evaluation_mode: str | None,
+) -> None:
+    """Apply the UPDATE path's field writes to an existing PolicyGate row."""
+    existing_gate.action = pg_action
+    existing_gate.node_id = node_id
+    # FAR-939 chunk 12 §3.1: ``None`` means *preserve the live mode* — an
+    # update surface that does not carry the field (the MCP write seam) must
+    # never reset a human-approval gate to automatic. Callers that carry it
+    # (the REST update route) pass the resolved live value, so an explicit
+    # write lands.
+    if evaluation_mode is not None:
+        existing_gate.evaluation_mode = evaluation_mode

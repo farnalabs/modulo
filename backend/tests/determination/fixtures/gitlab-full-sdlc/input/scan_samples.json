@@ -1,0 +1,45 @@
+{
+  "samples": [
+    {
+      "connector_id": "33333333-3333-3333-3333-333333333333",
+      "connector_type": "gitlab",
+      "resource": "projects",
+      "records": [
+        {"id": 1, "name": "backend-service", "path_with_namespace": "group/backend-service", "description": "Core backend with .gitlab-ci.yml"},
+        {"id": 2, "name": "web-app", "path_with_namespace": "group/web-app", "description": "Frontend application"}
+      ],
+      "sample_count": 2,
+      "error": null
+    },
+    {
+      "connector_id": "33333333-3333-3333-3333-333333333333",
+      "connector_type": "gitlab",
+      "resource": "mrs",
+      "records": [
+        {"id": 5, "title": "Add user authentication", "created_at": "2026-10-16T11:00:00Z", "project": "group/backend-service"},
+        {"id": 12, "title": "Update dependencies", "created_at": "2026-10-19T16:45:00Z", "project": "group/web-app"}
+      ],
+      "sample_count": 2,
+      "error": null
+    },
+    {
+      "connector_id": "44444444-4444-4444-4444-444444444444",
+      "connector_type": "jira",
+      "resource": "issues",
+      "records": [
+        {
+          "id": "GRP-50",
+          "key": "GRP-50",
+          "fields": {"status": {"name": "To Do"}, "summary": "Sprint planning for Q4"}
+        },
+        {
+          "id": "GRP-51",
+          "key": "GRP-51",
+          "fields": {"status": {"name": "In Progress"}, "summary": "Refactor database layer"}
+        }
+      ],
+      "sample_count": 2,
+      "error": null
+    }
+  ]
+}

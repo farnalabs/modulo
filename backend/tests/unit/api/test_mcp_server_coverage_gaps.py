@@ -168,6 +168,11 @@ def _mock_session() -> AsyncMock:
     # child turns into a dangling coroutine.
     session.in_transaction = MagicMock(return_value=True)
     session.add = MagicMock()
+    # ``execute()`` must return a plain-``MagicMock`` result: an AsyncMock
+    # return makes the SYNC result reads (``scalar_one_or_none`` / ``first`` /
+    # ``scalars``) orphan a never-awaited coroutine. Default to "no rows";
+    # individual tests overwrite this with their own result or side_effect.
+    session.execute = AsyncMock(return_value=_make_execute_result())
     nested_cm = MagicMock()
     nested_cm.__aenter__ = AsyncMock(return_value=None)
     nested_cm.__aexit__ = AsyncMock(return_value=False)
@@ -1752,14 +1757,30 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         nodes, edges = self._valid_graph()
         pipeline = MagicMock()
         pipeline.owner_team_id = None
+        pipeline.graph_nodes_json = []
+
+        async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+            # FAR-1845 re-reads the pipeline under FOR UPDATE before the write;
+            # the row exists here, so only the graph write itself returns None.
+            if getattr(stmt, "_for_update_arg", None) is not None:
+                return _make_execute_result(scalar_one_or_none=pipeline)
+            return _make_execute_result()
+
+        session = _mock_session()
+        session.execute = AsyncMock(side_effect=_execute)
+        replace = AsyncMock(return_value=None)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
             patch("modulo.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
-            patch("modulo.db.crud.pipeline.replace_pipeline_graph", new=AsyncMock(return_value=None)),
+            patch("modulo.db.crud.pipeline.replace_pipeline_graph", new=replace),
         ):
             result = await update_pipeline_graph(pipeline_id=str(uuid.uuid4()), nodes=nodes, edges=edges)
         assert result["error"] == "pipeline_not_found"
+        # The not-found envelope must come from the WRITE returning None, not
+        # from short-circuiting on the row lock re-read.
+        replace.assert_awaited_once()
 
     async def test_pipeline_gone_before_the_row_lock_returns_not_found(self) -> None:
         """FAR-1845: the transaction re-reads the pipeline under ``FOR UPDATE``.

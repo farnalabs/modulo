@@ -1,0 +1,17 @@
+{
+  "nodes": [
+    {"id": "start", "node_type": "placeholder", "label": "Start", "connector_type": null, "required_capabilities": []},
+    {"id": "development", "node_type": "agent", "label": "Development (Code Generation)", "connector_type": "github", "required_capabilities": ["read", "write"]},
+    {"id": "end", "node_type": "placeholder", "label": "End", "connector_type": null, "required_capabilities": []}
+  ],
+  "edges": [
+    {"source": "development", "target": "end", "edge_type": "normal", "hitl_review": false}
+  ],
+  "automation_suggestions": [],
+  "expected_findings_categories": ["stage", "automation", "overview"],
+  "expected_stage_findings": ["Development stage detected"],
+  "expected_automation_findings": ["No CI/CD configuration detected"],
+  "expected_bottleneck_findings": [],
+  "expected_transition_findings": [],
+  "expected_overview_findings": ["SDLC stages detected"]
+}

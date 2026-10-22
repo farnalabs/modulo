@@ -129,26 +129,43 @@ def _is_producer_downstream(
     """
     if producer_node_id == binding_node_id:
         return False
+    return _bfs_reaches(
+        binding_node_id,
+        producer_node_id,
+        _build_edge_adjacency(edges),
+    )
 
-    # Build adjacency list (source -> [targets])
+
+def _coerce_node_uuid(value: Any) -> uuid.UUID:
+    """Coerce a graph node id (UUID or string) to a UUID."""
+    return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
+
+
+def _build_edge_adjacency(edges: list[dict[str, Any]]) -> dict[uuid.UUID, list[uuid.UUID]]:
+    """Build a source -> [targets] adjacency map, skipping incomplete edges."""
     adj: dict[uuid.UUID, list[uuid.UUID]] = {}
     for edge in edges:
         src = edge.get("source_node_id")
         tgt = edge.get("target_node_id")
         if src is None or tgt is None:
             continue
-        src_uuid = uuid.UUID(str(src)) if not isinstance(src, uuid.UUID) else src
-        tgt_uuid = uuid.UUID(str(tgt)) if not isinstance(tgt, uuid.UUID) else tgt
-        adj.setdefault(src_uuid, []).append(tgt_uuid)
+        adj.setdefault(_coerce_node_uuid(src), []).append(_coerce_node_uuid(tgt))
+    return adj
 
-    # BFS from binding_node
-    visited: set[uuid.UUID] = {binding_node_id}
-    queue: deque[uuid.UUID] = deque([binding_node_id])
+
+def _bfs_reaches(
+    start: uuid.UUID,
+    target: uuid.UUID,
+    adj: dict[uuid.UUID, list[uuid.UUID]],
+) -> bool:
+    """Return True when ``target`` is reachable from ``start`` along the edges."""
+    visited: set[uuid.UUID] = {start}
+    queue: deque[uuid.UUID] = deque([start])
 
     while queue:
         current = queue.popleft()
         for neighbor in adj.get(current, []):
-            if neighbor == producer_node_id:
+            if neighbor == target:
                 return True
             if neighbor not in visited:
                 visited.add(neighbor)

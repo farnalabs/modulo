@@ -13,6 +13,7 @@ import os
 import subprocess
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -1108,4 +1109,72 @@ class TestRunEvidenceProbeErrorPaths:
                 run_id=uuid.uuid4(),
                 node_id=str(_NODE_A),
                 organisation_id=_TEST_ORG,
+            )
+
+
+class TestSweepDeadlineAndCancellation:
+    async def test_outer_sweep_breaks_when_run_targets_signals_deadline(self, monkeypatch) -> None:
+        """When a run's node walk reports the deadline elapsed, the sweep stops."""
+        runs = [SimpleNamespace(id=uuid.uuid4()), SimpleNamespace(id=uuid.uuid4())]
+        blobs = {run.id: SimpleNamespace(outputs={}, telemetry={}) for run in runs}
+        summary: dict[str, int] = {"scanned": 0, "probed": 0}
+
+        async def _deadline_hit(*_args, **_kwargs) -> bool:
+            return True
+
+        monkeypatch.setattr(evidence, "_sweep_run_targets", _deadline_hit)
+        monkeypatch.setattr(evidence.time, "monotonic", lambda: 0.0)
+
+        await evidence._sweep_noop_targets(
+            runs,
+            set(),
+            blobs,
+            provider=None,
+            session_factory=None,
+            deadline=100.0,
+            summary=summary,
+        )
+        assert summary["scanned"] == 1
+
+    async def test_run_targets_returns_true_when_deadline_passes(self, monkeypatch) -> None:
+        """A probe that lands past the deadline makes the walk report True."""
+        run = SimpleNamespace(id=uuid.uuid4(), organisation_id=uuid.uuid4())
+        blobs = SimpleNamespace(outputs={}, telemetry={})
+
+        monkeypatch.setattr(evidence, "_declared_success_nodes", lambda _o, _t: ["n1"])
+
+        async def _noop_probe(**_kwargs) -> None:
+            return None
+
+        monkeypatch.setattr(evidence, "_probe_and_record", _noop_probe)
+        monkeypatch.setattr(evidence.time, "monotonic", lambda: 200.0)
+
+        summary: dict[str, int] = {"probed": 0}
+        result = await evidence._sweep_run_targets(
+            run,
+            set(),
+            blobs,
+            provider=None,
+            session_factory=None,
+            deadline=100.0,
+            summary=summary,
+        )
+        assert result is True
+        assert summary["probed"] == 1
+
+    async def test_probe_and_record_reraises_cancellation(self, monkeypatch) -> None:
+        """A CancelledError from the probe is re-raised, never swallowed."""
+
+        async def _cancelled(**_kwargs):
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(evidence, "run_evidence_probe", _cancelled)
+        run = SimpleNamespace(id=uuid.uuid4(), organisation_id=uuid.uuid4())
+        with pytest.raises(asyncio.CancelledError):
+            await evidence._probe_and_record(
+                provider=None,
+                session_factory=None,
+                run=run,
+                node_id="n1",
+                summary={},
             )

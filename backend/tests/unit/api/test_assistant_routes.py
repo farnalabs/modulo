@@ -2264,6 +2264,18 @@ def test_tool_result_content_without_result_or_error() -> None:
     assert assistant_routes._tool_result_content({}) == json.dumps("")
 
 
+def _timeout_without_leaking_awaitable(awaitable: Any, *args: Any, **kwargs: Any) -> Any:
+    """``asyncio.wait_for`` stand-in that times out and closes the awaitable.
+
+    Callers evaluate ``event.wait()`` BEFORE handing it to ``wait_for``; raising
+    straight from the double leaves that coroutine un-awaited, which surfaces as
+    ``PytestUnraisableExceptionWarning: coroutine object Event.wait`` at GC.
+    Closing it reproduces the timeout without leaking.
+    """
+    awaitable.close()
+    raise TimeoutError
+
+
 def test_await_permission_decision_timeout_returns_empty() -> None:
     sid = str(uuid.uuid4())
     preset_event = asyncio.Event()
@@ -2272,7 +2284,10 @@ def test_await_permission_decision_timeout_returns_empty() -> None:
     async def _scenario() -> list[dict[str, Any]]:
         with (
             patch("modulo.api.routes.assistant.asyncio.Event", return_value=preset_event),
-            patch("modulo.api.routes.assistant.asyncio.wait_for", side_effect=TimeoutError),
+            patch(
+                "modulo.api.routes.assistant.asyncio.wait_for",
+                side_effect=_timeout_without_leaking_awaitable,
+            ),
         ):
             return await assistant_routes._await_permission_decision(
                 None, sid, "req-timeout", [{"id": "t", "name": "n", "args": {}}], "/"
@@ -2286,7 +2301,10 @@ def test_wait_for_ui_command_results_timeout_returns_empty() -> None:
     sid = str(uuid.uuid4())
 
     async def _scenario() -> list[dict[str, Any]]:
-        with patch("modulo.api.routes.assistant.asyncio.wait_for", side_effect=TimeoutError):
+        with patch(
+            "modulo.api.routes.assistant.asyncio.wait_for",
+            side_effect=_timeout_without_leaking_awaitable,
+        ):
             return await assistant_routes._wait_for_ui_command_results(None, sid, asyncio.Event())
 
     results = asyncio.run(_scenario())

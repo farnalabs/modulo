@@ -176,71 +176,111 @@ def _build_email(
     degrades to the original plain label-only format.
     """
     subject = _SUBJECT_TEMPLATE.format(gate_label=gate_label)
-
-    # --- build the briefing section (only when available) ---
-    # Collect raw (unescaped) values so we can bound the plain text first.
-    briefing_raw: list[tuple[str, str]] = []  # (label, value) pairs
-
-    if briefing:
-        desc = briefing.get("description")
-        if desc:
-            briefing_raw.append(("Description", desc))
-
-        reason = briefing.get("reason")
-        if reason:
-            briefing_raw.append(("Reason", reason))
-
-        cr = briefing.get("condition_result")
-        if isinstance(cr, dict):
-            expression = cr.get("expression", "")
-            value = cr.get("value", "")
-            briefing_raw.append(("Condition", f"{expression} = {value}"))
-
-        artifacts = briefing.get("artifacts")
-        if isinstance(artifacts, list) and artifacts:
-            first = artifacts[0]
-            summary = first.get("summary", "")
-            if summary:
-                briefing_raw.append(("Artifact", summary))
-
-    # --- compose final body ---
-    if briefing_raw:
-        # Build plain text and truncate BEFORE escaping — no truncated
-        # HTML entities.  slice_with_marker is the shared helper from
-        # hitl_context (same marker-within-cap semantics as everywhere else).
-        plain_sections = [f"{label}: {value}" for label, value in briefing_raw]
-        bounded_text = slice_with_marker("\n".join(plain_sections), _EMAIL_BODY_BUDGET_CHARS)
-        body_text = f"A HITL gate is awaiting review.\n\nGate: {gate_label}\n{bounded_text}\n\nReview: {run_url}"
-        # Rebuild HTML from the truncated plain text — split each line
-        # into label and value, then escape individually so no HTML
-        # entity can be split by truncation.
-        sections_html = []
-        for line in bounded_text.split("\n"):
-            parts = line.split(": ", 1)
-            if len(parts) == 2:
-                label, value = parts
-                sections_html.append(f"<p><strong>{html.escape(label + ':')}</strong> {html.escape(value)}</p>")
-        briefing_html_block = "\n".join(sections_html)
-        body_html = (
-            "<html><body>"
-            "<p>A HITL gate is awaiting review.</p>"
-            f"<p><strong>Gate:</strong> {html.escape(gate_label)}</p>"
-            f"{briefing_html_block}"
-            f"<p><strong>Review:</strong> "
-            f'<a href="{html.escape(run_url, quote=True)}">{html.escape(run_url)}</a></p>'
-            "</body></html>"
-        )
+    pairs = _collect_briefing_pairs(briefing)
+    if pairs:
+        body_html, body_text = _render_briefing_body(gate_label, run_url, pairs)
     else:
-        body_text = f"A HITL gate is awaiting review.\n\nGate: {gate_label}\nRun: {run_url}"
-        body_html = (
-            "<html><body>"
-            "<p>A HITL gate is awaiting review.</p>"
-            f"<p>Gate: {html.escape(gate_label)}<br>"
-            f'Run: <a href="{html.escape(run_url, quote=True)}">{html.escape(run_url)}</a></p>'
-            "</body></html>"
-        )
-
+        body_html, body_text = _render_plain_body(gate_label, run_url)
     return subject, body_html, body_text
+
+
+def _collect_briefing_pairs(
+    briefing: HitlReviewContext | dict[str, Any] | None,
+) -> list[tuple[str, str]]:
+    """Collect the raw (unescaped) briefing label/value pairs to render."""
+    pairs: list[tuple[str, str]] = []
+    if not briefing:
+        return pairs
+
+    desc = briefing.get("description")
+    if desc:
+        pairs.append(("Description", desc))
+
+    reason = briefing.get("reason")
+    if reason:
+        pairs.append(("Reason", reason))
+
+    condition = _condition_pair(briefing)
+    if condition is not None:
+        pairs.append(condition)
+
+    artifact = _artifact_pair(briefing)
+    if artifact is not None:
+        pairs.append(artifact)
+    return pairs
+
+
+def _condition_pair(briefing: HitlReviewContext | dict[str, Any]) -> tuple[str, str] | None:
+    """Render the condition-result briefing pair, or None when absent."""
+    cr = briefing.get("condition_result")
+    if not isinstance(cr, dict):
+        return None
+    expression = cr.get("expression", "")
+    value = cr.get("value", "")
+    return ("Condition", f"{expression} = {value}")
+
+
+def _artifact_pair(briefing: HitlReviewContext | dict[str, Any]) -> tuple[str, str] | None:
+    """Render the first artifact's summary pair, or None when absent."""
+    artifacts = briefing.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        return None
+    summary = artifacts[0].get("summary", "")
+    if not summary:
+        return None
+    return ("Artifact", summary)
+
+
+def _render_briefing_body(
+    gate_label: str,
+    run_url: str,
+    pairs: list[tuple[str, str]],
+) -> tuple[str, str]:
+    """Render the briefing body as ``(body_html, body_text)``."""
+    # Build plain text and truncate BEFORE escaping — no truncated
+    # HTML entities.  slice_with_marker is the shared helper from
+    # hitl_context (same marker-within-cap semantics as everywhere else).
+    plain_sections = [f"{label}: {value}" for label, value in pairs]
+    bounded_text = slice_with_marker("\n".join(plain_sections), _EMAIL_BODY_BUDGET_CHARS)
+    body_text = f"A HITL gate is awaiting review.\n\nGate: {gate_label}\n{bounded_text}\n\nReview: {run_url}"
+    # Rebuild HTML from the truncated plain text — split each line
+    # into label and value, then escape individually so no HTML
+    # entity can be split by truncation.
+    briefing_html_block = _render_briefing_sections(bounded_text)
+    body_html = (
+        "<html><body>"
+        "<p>A HITL gate is awaiting review.</p>"
+        f"<p><strong>Gate:</strong> {html.escape(gate_label)}</p>"
+        f"{briefing_html_block}"
+        f"<p><strong>Review:</strong> "
+        f'<a href="{html.escape(run_url, quote=True)}">{html.escape(run_url)}</a></p>'
+        "</body></html>"
+    )
+    return body_html, body_text
+
+
+def _render_briefing_sections(bounded_text: str) -> str:
+    """Render truncated plain-text briefing lines as escaped HTML paragraphs."""
+    sections_html: list[str] = []
+    for line in bounded_text.split("\n"):
+        parts = line.split(": ", 1)
+        if len(parts) == 2:
+            label, value = parts
+            sections_html.append(f"<p><strong>{html.escape(label + ':')}</strong> {html.escape(value)}</p>")
+    return "\n".join(sections_html)
+
+
+def _render_plain_body(gate_label: str, run_url: str) -> tuple[str, str]:
+    """Render the legacy label-only body as ``(body_html, body_text)``."""
+    body_text = f"A HITL gate is awaiting review.\n\nGate: {gate_label}\nRun: {run_url}"
+    body_html = (
+        "<html><body>"
+        "<p>A HITL gate is awaiting review.</p>"
+        f"<p>Gate: {html.escape(gate_label)}<br>"
+        f'Run: <a href="{html.escape(run_url, quote=True)}">{html.escape(run_url)}</a></p>'
+        "</body></html>"
+    )
+    return body_html, body_text
 
 
 async def send_hitl_email_alerts(

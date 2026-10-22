@@ -632,12 +632,8 @@ async def _evaluate_once(
     now = time.time()
 
     # 1. SAQ worker liveness — is ANY worker live on ANY configured queue?
-    any_live = False
     try:
-        for queue_name in _configured_queues(settings):
-            if await _live_worker_count(redis, queue_name) > 0:
-                any_live = True
-                break
+        any_live = await _any_worker_live(settings, redis)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -645,45 +641,16 @@ async def _evaluate_once(
         return state
 
     conditions: list[str] = []
-    if any_live:
-        state.all_dead_since = None
-    else:
-        if state.all_dead_since is None:
-            state.all_dead_since = now
-        dead_for = now - state.all_dead_since
-        if dead_for >= settings.watchdog_worker_stale_seconds:
-            conditions.append(
-                f"no live SAQ worker on any queue for {dead_for:.0f}s "
-                f"(stale threshold {settings.watchdog_worker_stale_seconds}s)"
-            )
-        else:
-            _log.info("watchdog.workers_dead_detected dead_for=%.0fs", dead_for)
+    worker_condition = _worker_stale_condition(settings, state, any_live=any_live, now=now)
+    if worker_condition is not None:
+        conditions.append(worker_condition)
 
     # 2. System-cron liveness — fire_due_triggers heartbeat fresh anywhere?
     #    Sustained/debounced (tri-state): a single stale tick must not alert.
-    cron_fresh: bool | None
-    try:
-        cron_fresh = await _cron_heartbeat_fresh(redis)
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        _log.warning("watchdog.cron_read_failed: %s", exc)
-        cron_fresh = None  # undeterminable: fail-open, leave the timer unchanged
-
-    if cron_fresh is True:
-        state.cron_stale_since = None
-    elif cron_fresh is False:
-        if state.cron_stale_since is None:
-            state.cron_stale_since = now
-        cron_stale_for = now - state.cron_stale_since
-        if cron_stale_for >= settings.watchdog_worker_stale_seconds:
-            conditions.append(
-                f"system-cron (fire_due_triggers) heartbeat stale fleet-wide for "
-                f"{cron_stale_for:.0f}s (stale threshold {settings.watchdog_worker_stale_seconds}s)"
-            )
-        else:
-            _log.info("watchdog.cron_stale_detected stale_for=%.0fs", cron_stale_for)
-    # cron_fresh is None -> undeterminable: append nothing, leave the timer as-is.
+    cron_fresh = await _read_cron_fresh(redis)
+    cron_condition = _cron_stale_condition(settings, state, cron_fresh=cron_fresh, now=now)
+    if cron_condition is not None:
+        conditions.append(cron_condition)
 
     # Boot grace: suppress BOTH the alert and the recovery edge for the first
     # _WATCHDOG_BOOT_GRACE_SECONDS after loop start. Suppressing _maybe_alert
@@ -696,6 +663,73 @@ async def _evaluate_once(
 
     await _maybe_alert(settings, redis, conditions)
     return state
+
+
+async def _any_worker_live(settings: Settings, redis: aioredis.Redis) -> bool:
+    """True when any configured queue has at least one live worker."""
+    for queue_name in _configured_queues(settings):
+        if await _live_worker_count(redis, queue_name) > 0:
+            return True
+    return False
+
+
+def _worker_stale_condition(
+    settings: Settings,
+    state: _LivenessState,
+    *,
+    any_live: bool,
+    now: float,
+) -> str | None:
+    """Update the all-dead timer; return the stale condition when threshold hit."""
+    if any_live:
+        state.all_dead_since = None
+        return None
+    if state.all_dead_since is None:
+        state.all_dead_since = now
+    dead_for = now - state.all_dead_since
+    if dead_for >= settings.watchdog_worker_stale_seconds:
+        return (
+            f"no live SAQ worker on any queue for {dead_for:.0f}s "
+            f"(stale threshold {settings.watchdog_worker_stale_seconds}s)"
+        )
+    _log.info("watchdog.workers_dead_detected dead_for=%.0fs", dead_for)
+    return None
+
+
+async def _read_cron_fresh(redis: aioredis.Redis) -> bool | None:
+    """Read the system-cron heartbeat freshness, or None when undeterminable."""
+    try:
+        return await _cron_heartbeat_fresh(redis)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.warning("watchdog.cron_read_failed: %s", exc)
+        return None  # undeterminable: fail-open, leave the timer unchanged
+
+
+def _cron_stale_condition(
+    settings: Settings,
+    state: _LivenessState,
+    *,
+    cron_fresh: bool | None,
+    now: float,
+) -> str | None:
+    """Update the cron-stale timer; return the stale condition when threshold hit."""
+    if cron_fresh is True:
+        state.cron_stale_since = None
+        return None
+    if cron_fresh is False:
+        if state.cron_stale_since is None:
+            state.cron_stale_since = now
+        cron_stale_for = now - state.cron_stale_since
+        if cron_stale_for >= settings.watchdog_worker_stale_seconds:
+            return (
+                f"system-cron (fire_due_triggers) heartbeat stale fleet-wide for "
+                f"{cron_stale_for:.0f}s (stale threshold {settings.watchdog_worker_stale_seconds}s)"
+            )
+        _log.info("watchdog.cron_stale_detected stale_for=%.0fs", cron_stale_for)
+    # cron_fresh is None -> undeterminable: append nothing, leave the timer as-is.
+    return None
 
 
 async def run_worker_liveness_watchdog(settings: Settings | None = None) -> None:
