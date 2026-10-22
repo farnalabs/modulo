@@ -219,6 +219,16 @@ _RUN_CONCURRENCY_MAX = 100
 # stamp off runs reaching a HITL gate — FAR-604 D4).
 _COALESCE_KEY_FIELD = "_coalesce_key"
 COALESCE_KEY_FIELD = _COALESCE_KEY_FIELD
+# FAR-1034 in-flight suppression: the reserved payload field carrying the
+# CI-failure coalesce key (``ci-failure:pr:<n>:sha:<sha>``). Stamped AFTER the
+# reserved-key strip, exactly like ``_coalesce_key``, so it survives a trigger's
+# ``payload_mapping`` (which REPLACES the payload wholesale when non-empty).
+# Without this stamp the in-flight leg would re-derive the key from the mapped
+# payload and silently find nothing whenever the mapping renames or drops
+# ``prNumber`` / ``headSha`` — the fix would be inert in exactly the
+# deployments that observed the duplicate-run incident.
+_CI_FAILURE_COALESCE_KEY_FIELD = "_ci_failure_coalesce_key"
+CI_FAILURE_COALESCE_KEY_FIELD = _CI_FAILURE_COALESCE_KEY_FIELD
 # Bounded candidate scan for non-Postgres backends (no server-side JSON path
 # filter available): pending runs of ONE pipeline only. Public alias (qa F15):
 # the HITL gate-coalescing scan imports the SAME cap so the two bounded-scan
@@ -244,6 +254,32 @@ def read_coalesce_key(payload: Any) -> str | None:
     if not isinstance(payload, dict):
         return None
     value = payload.get(_COALESCE_KEY_FIELD)
+    return str(value) if value else None
+
+
+def read_ci_failure_coalesce_key(payload: Any) -> str | None:
+    """Read the CI-failure coalesce key off a stored run input payload.
+
+    Mirrors :func:`read_coalesce_key`: accepts the raw stored payload — a dict,
+    a JSON string (some backends hand back TEXT), or None — and returns the key
+    string or None when absent/falsy/foreign-shaped.
+
+    The key is engine-stamped at run creation (``create_run`` →
+    ``_inject_engine_payload_keys``) from the POST-guardrail payload, BEFORE a
+    trigger's ``payload_mapping`` can drop ``prNumber`` / ``headSha``. Reading
+    the stamp is therefore robust to any mapping; the in-flight leg's
+    ``derive_ci_failure_coalesce_key`` fallback only serves legacy rows created
+    before the stamp existed (and rows whose payload happened to pass through
+    verbatim).
+    """
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (ValueError, TypeError):
+            payload = None
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get(_CI_FAILURE_COALESCE_KEY_FIELD)
     return str(value) if value else None
 
 
@@ -322,7 +358,8 @@ def _strip_reserved_keys(input_payload: dict[str, Any]) -> dict[str, Any]:
     """Remove reserved system keys from ``input_payload`` before hash + storage.
 
     Reserved keys (``_work_item_id``, ``_modulo.work_item``,
-    ``_feedback_correction``, ``_coalesce_key``) are system-managed and must
+    ``_feedback_correction``, ``_coalesce_key``,
+    ``_ci_failure_coalesce_key``) are system-managed and must
     never be forgeable via webhook payloads or manual POST /runs bodies.
     Stripping centrally in ``create_run`` (the single chokepoint all paths
     funnel through) BEFORE the hash means an injected reserved key neither
@@ -1813,6 +1850,7 @@ def _inject_engine_payload_keys(
     stored_payload: dict[str, Any],
     feedback_correction: dict[str, Any] | None,
     coalesce_key: str | None,
+    ci_failure_coalesce_key: str | None = None,
 ) -> dict[str, Any]:
     """Stamp engine-only payload keys AFTER the reserved-key strip (never forgeable).
 
@@ -1826,11 +1864,19 @@ def _inject_engine_payload_keys(
     strip (system-managed, never forgeable) so the pending run is findable by
     coalesce_pending_run. Included in input_hash like the rest of the stored
     payload.
+
+    ``ci_failure_coalesce_key`` (FAR-1034): the PR + head-SHA identity of a
+    CI-failure delivery, stamped AFTER the strip so it survives a trigger's
+    ``payload_mapping`` (which replaces the payload wholesale). The in-flight
+    suppression leg reads it back via ``read_ci_failure_coalesce_key``; without
+    it the leg would silently re-derive from the mapped payload and never match.
     """
     if feedback_correction is not None:
         stored_payload["_feedback_correction"] = feedback_correction
     if coalesce_key is not None:
         stored_payload[_COALESCE_KEY_FIELD] = coalesce_key
+    if ci_failure_coalesce_key is not None:
+        stored_payload[_CI_FAILURE_COALESCE_KEY_FIELD] = ci_failure_coalesce_key
     return stored_payload
 
 
@@ -2149,6 +2195,7 @@ async def create_run(
     variant_config_snapshot: dict[str, Any] | None = None,
     feedback_correction: dict[str, Any] | None = None,
     coalesce_key: str | None = None,
+    ci_failure_coalesce_key: str | None = None,
     # FAR-153 / §15.1 — run grouping (retry/resume attempts) + the
     # resume-as-child thread override:
     #
@@ -2263,7 +2310,12 @@ async def create_run(
     guardrail_observed_by_eval = interception.observed_by_eval
     guardrail_summary_dict = interception.summary_json
 
-    stored_payload = _inject_engine_payload_keys(stored_payload, feedback_correction, coalesce_key)
+    stored_payload = _inject_engine_payload_keys(
+        stored_payload,
+        feedback_correction,
+        coalesce_key,
+        ci_failure_coalesce_key,
+    )
 
     # FAR-153 / §15.1 — thread resolution: the resume path passes its
     # parent's thread via the ``thread_id`` override so the child CONTINUES

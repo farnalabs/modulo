@@ -47,8 +47,20 @@ from modulo.core.trigger_engine import (
     PipelineBackpressureError,
     TriggerEngine,
 )
+from modulo.db.crud.run import (
+    CI_FAILURE_COALESCE_KEY_FIELD,
+    create_run,
+    read_ci_failure_coalesce_key,
+)
 from modulo.db.models.base import Base
+from modulo.db.models.eval import Eval
+from modulo.db.models.journey import Journey
+from modulo.db.models.organisation import Organisation
+from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.team import Team
+from modulo.db.models.variant_group import VariantGroup
 
 ORG_ID = uuid.UUID("18348064-eca3-4aa7-be96-8f6c9123efd0")
 OTHER_ORG_ID = uuid.UUID("2b6d9f0a-1c3e-4d5b-8a7f-9e0d1c2b3a4c")
@@ -451,6 +463,27 @@ class TestDeriveWebhookCoalesceKey:
         assert derive_webhook_coalesce_key(push_a) == derive_webhook_coalesce_key(push_b)
 
 
+class TestReadCiFailureCoalesceKey:
+    """The stored-row reader must be robust to every shape a payload can take."""
+
+    def test_reads_the_engine_stamp(self) -> None:
+        payload = {"mapped": "x", CI_FAILURE_COALESCE_KEY_FIELD: "ci-failure:pr:7:sha:s"}
+        assert read_ci_failure_coalesce_key(payload) == "ci-failure:pr:7:sha:s"
+
+    def test_json_text_payload(self) -> None:
+        assert (
+            read_ci_failure_coalesce_key('{"' + CI_FAILURE_COALESCE_KEY_FIELD + '": "ci-failure:pr:7:sha:s"}')
+            == "ci-failure:pr:7:sha:s"
+        )
+
+    def test_absent_or_foreign_shapes_return_none(self) -> None:
+        assert read_ci_failure_coalesce_key({"prNumber": 7}) is None
+        assert read_ci_failure_coalesce_key({CI_FAILURE_COALESCE_KEY_FIELD: ""}) is None
+        assert read_ci_failure_coalesce_key("not json") is None
+        assert read_ci_failure_coalesce_key(None) is None
+        assert read_ci_failure_coalesce_key(["list"]) is None
+
+
 class TestDeriveCiFailureCoalesceKey:
     def test_ci_failure_payload_derives_key(self) -> None:
         payload = {
@@ -549,7 +582,19 @@ class TestCiFailureInflightSuppression:
     async def session(self) -> AsyncGenerator[AsyncSession, None]:
         engine: AsyncEngine = create_async_engine("sqlite+aiosqlite://", echo=False)
         async with engine.begin() as conn:
-            tables = [t for t in Base.metadata.sorted_tables if t.name in {"runs", "organisations"}]
+            # The full set create_run touches on the sqlite path (mirrors
+            # tests/unit/db/test_journey_create_run.py) so the stamping cases can
+            # exercise the REAL create_run, not a hand-rolled row.
+            tables = [
+                Organisation.__table__,
+                Pipeline.__table__,
+                Team.__table__,
+                Run.__table__,
+                PipelineSnapshot.__table__,
+                Journey.__table__,
+                VariantGroup.__table__,
+                Eval.__table__,
+            ]
             await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
             await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
         maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -709,6 +754,55 @@ class TestCiFailureInflightSuppression:
             )
         assert in_flight is False
         assert "ci_failure_coalesce.inflight_check_failed" in caplog.text
+
+    async def test_payload_without_head_sha_is_never_a_blocker(self, session: AsyncSession) -> None:
+        # A non-terminal run whose payload carries no headSha (a different
+        # trigger on the same pipeline, or the `force: true` opt-out) derives no
+        # key and must never suppress a CI-failure delivery.
+        self._seed(
+            session,
+            status="running",
+            created_at=self._ago(minutes=30),
+            payload={"prNumber": 777, "mapped": "no-sha"},
+        )
+        await session.commit()
+        assert not await has_in_flight_ci_failure_run(
+            session,
+            pipeline_id=PIPELINE_ID,
+            coalesce_key="ci-failure:pr:777:sha:abc123",
+        )
+
+    async def test_engine_stamped_key_matches_after_a_wholesale_payload_mapping(self, session: AsyncSession) -> None:
+        """The stored row's key survives a non-empty payload_mapping.
+
+        A non-empty ``payload_mapping`` REPLACES the payload wholesale, so the
+        stored payload has no ``prNumber`` / ``headSha``. Before the stamp the
+        in-flight leg re-derived from that mapped payload, got ``None`` and was
+        silently inert in exactly the deployments the fix targets. This drives
+        the REAL ``create_run`` (the storage seam) and then asks the predicate,
+        so it fails if the stamp is dropped.
+        """
+        session.add(Organisation(id=ORG_ID, name="org", slug=f"org-{ORG_ID}"))
+        session.add(Pipeline(id=PIPELINE_ID, organisation_id=ORG_ID, name="p", account_id=ORG_ID, visibility="org"))
+        await session.commit()
+
+        ci_key = "ci-failure:pr:777:sha:abc123"
+        run = await create_run(
+            session,
+            org_id=ORG_ID,
+            pipeline_id=PIPELINE_ID,
+            snapshot_id=SNAPSHOT_ID,
+            trigger_type="webhook",
+            # The mapped payload: prNumber/headSha were renamed away.
+            input_payload={"pr": 777, "sha": "abc123"},
+            ci_failure_coalesce_key=ci_key,
+        )
+        await session.commit()
+
+        stored = (await session.execute(select(Run.input_payload).where(Run.id == run.id))).scalar_one()
+        assert "prNumber" not in stored
+        assert stored[CI_FAILURE_COALESCE_KEY_FIELD] == ci_key
+        assert await has_in_flight_ci_failure_run(session, pipeline_id=PIPELINE_ID, coalesce_key=ci_key)
 
     async def test_cancelled_query_propagates_not_falls_open(self) -> None:
         # ``asyncio.CancelledError`` is a ``BaseException``, not an

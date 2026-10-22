@@ -965,6 +965,11 @@ class TriggerEngine:
             # redact-action guardrail's masks are reflected in the mapped input.
             mapping: dict[str, str] = cfg.get("payload_mapping", {})
             input_payload = _apply_payload_mapping(post_guardrail_payload, mapping)
+            # FAR-1034: derive the CI-failure key from the PRE-mapping payload and
+            # stamp it on the run, so the in-flight suppression leg can still match
+            # after a non-empty ``payload_mapping`` has replaced the stored payload
+            # wholesale (dropping/renaming ``prNumber`` / ``headSha``).
+            ci_failure_coalesce_key = derive_ci_failure_coalesce_key(post_guardrail_payload)
 
             # Rate limit check
             rate_limit = await self._resolve_rate_limit_state(
@@ -981,6 +986,7 @@ class TriggerEngine:
                 input_payload=input_payload,
                 payload_hash=dedup_hash,
                 rate_limit=rate_limit,
+                ci_failure_coalesce_key=ci_failure_coalesce_key,
             )
             _log.info("Webhook accepted for trigger %s → run %s", trigger_id, run.id)
 
@@ -1121,6 +1127,10 @@ class TriggerEngine:
             # mapping source is kept consistent with handle_webhook).
             mapping: dict[str, str] = cfg.get("payload_mapping", {})
             input_payload = _apply_payload_mapping(post_guardrail_payload, mapping)
+            # FAR-1034: stamp the CI-failure identity PRE-mapping (same reason as
+            # handle_webhook); a replayed run is the same work unit and must count
+            # as in flight for a later delivery.
+            ci_failure_coalesce_key = derive_ci_failure_coalesce_key(post_guardrail_payload)
 
             # Rate limit check
             rate_limit = await self._resolve_rate_limit_state(
@@ -1139,6 +1149,7 @@ class TriggerEngine:
                 payload_hash=payload_hash,
                 rate_limit=rate_limit,
                 is_replay=True,
+                ci_failure_coalesce_key=ci_failure_coalesce_key,
             )
 
             return run, trigger_event, input_payload
@@ -1777,6 +1788,7 @@ class TriggerEngine:
         payload_hash: str,
         rate_limit: _RateLimitState,
         is_replay: bool | None = None,
+        ci_failure_coalesce_key: str | None = None,
     ) -> tuple[Run, TriggerEvent]:
         """Create the run for a webhook/replay delivery and audit + store payload.
 
@@ -1864,6 +1876,7 @@ class TriggerEngine:
                 work_item_refs=refs,
                 is_replay=is_replay,
                 coalesce_key=coalesce_key,
+                ci_failure_coalesce_key=ci_failure_coalesce_key,
             )
         except RateLimitConflictError as exc:
             _log.warning(

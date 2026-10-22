@@ -1117,11 +1117,20 @@ def coalesce_enabled(trigger_config: dict[str, Any] | None) -> bool:
 #: Derivation: the longest legitimate single run is bounded by the node budget
 #: times the number of dispatch attempts. The Branch Fixer's ``sandbox_agent``
 #: node carries ``timeout_seconds = 3300`` and the node-deadline watchdog may
-#: re-dispatch it once, so one run can live ~6600s (110 min). Two hours (7200s)
-#: covers that plus dispatch/queue/latency slack. In practice the periodic sweeps
-#: reclaim a genuinely stuck run far sooner (FAR-2005 reaps a node-started run
-#: whose SAQ heartbeat stopped at ~5 min; the legacy arm at 30 min), so this bound
-#: is a defence against those sweeps themselves being broken, not the normal path.
+#: re-dispatch it once, so one run can live ~6600s (110 min) of EXECUTION. Two
+#: hours (7200s) covers that plus dispatch/latency slack.
+#:
+#: The bound deliberately measures wall-clock age from creation, not execution
+#: time, so it also covers QUEUE WAIT before the run starts: a pending Branch
+#: Fixer run held beyond 2h (a degraded sweep plus a saturated pipeline — the
+#: 66-queued-13h regime this module's header documents) ages out of the leg
+#: like a stuck run. That is the intended fail-open direction: the age window
+#: takes over and a genuinely new delivery is admitted rather than suppressed
+#: forever. In practice FAR-604/FAR-1999 refuse rather than queue indefinitely,
+#: and the periodic sweeps reclaim a stuck run far sooner (FAR-2005 reaps a
+#: node-started run whose SAQ heartbeat stopped at ~5 min; the legacy arm at 30
+#: min), so this bound is a defence against those sweeps themselves being
+#: broken, not the normal path.
 CI_FAILURE_INFLIGHT_BACKSTOP_SECONDS = 2 * 60 * 60  # 2 hours
 
 
@@ -1144,12 +1153,22 @@ async def has_in_flight_ci_failure_run(
     as long as ANY run created from the same coalesce key is non-terminal, with
     the age window as a secondary bound rather than the primary gate.
 
-    Identity is derived, never stored twice: each candidate run's own stored
-    ``input_payload`` is fed through :func:`derive_ci_failure_coalesce_key`, so a
-    run matches only when it was created for the same PR **and** the same head
+    Identity is read from each candidate run's stored ``input_payload``. The
+    key is engine-stamped at run creation (``create_run`` →
+    ``_inject_engine_payload_keys``) from the POST-guardrail CI-failure payload,
+    AFTER a trigger's ``payload_mapping`` has run — a non-empty mapping REPLACES
+    the payload wholesale, so re-deriving from the stored row would silently
+    find nothing whenever the mapping renames or drops ``prNumber`` /
+    ``headSha``. :func:`modulo.db.crud.run.read_ci_failure_coalesce_key` reads
+    that stamp first; :func:`derive_ci_failure_coalesce_key` is the fallback for
+    legacy rows created before the stamp existed (and for any row whose payload
+    passed through verbatim).
+
+    A run matches only when it was created for the same PR **and** the same head
     SHA. A new commit therefore never matches (its own key differs), and a run
-    whose payload carries no ``headSha`` (a different trigger on the same
-    pipeline) derives ``None`` and is never a blocker.
+    whose stamped/derived key is ``None`` (a different trigger on the same
+    pipeline, or a CI-failure delivery that carried no ``headSha``) is never a
+    blocker.
 
     Scope is the PIPELINE, not the trigger: two triggers dispatching the same
     pipeline for one work item are still one work unit.
@@ -1170,8 +1189,9 @@ async def has_in_flight_ci_failure_run(
     created_after = anchor - timedelta(seconds=max(int(backstop_seconds), 0))
     # The bounded-scan bound is imported rather than re-declared so the two
     # conventions cannot drift (``db.crud.coalesce_pending_run`` scans the same
-    # way for its non-Postgres branch).
-    from modulo.db.crud.run import COALESCE_CANDIDATE_LIMIT
+    # way for its non-Postgres branch). The key reader is imported for the same
+    # reason: the stamp's field name is owned by the CRUD layer.
+    from modulo.db.crud.run import COALESCE_CANDIDATE_LIMIT, read_ci_failure_coalesce_key
 
     try:
         rows: Any = (
@@ -1180,15 +1200,16 @@ async def has_in_flight_ci_failure_run(
                 .where(
                     Run.pipeline_id == pipeline_id,
                     Run.status.in_(ACTIVE_RUN_STATUSES),
-                    Run.cancellation_requested.is_(False),
+                    # ``IS NOT TRUE`` rather than ``IS false``: a run is
+                    # cancelled only when the flag is EXPLICITLY true, so a NULL
+                    # or dialect-rendered default still counts as not-cancelled.
+                    Run.cancellation_requested.is_not(True),
                     Run.created_at >= created_after,
                 )
                 .order_by(Run.created_at.desc())
                 .limit(COALESCE_CANDIDATE_LIMIT)
             )
         ).all()
-    except asyncio.CancelledError:
-        raise
     except Exception:
         _log.warning(
             "ci_failure_coalesce.inflight_check_failed pipeline=%s key=%s "
@@ -1199,7 +1220,13 @@ async def has_in_flight_ci_failure_run(
             exc_info=True,
         )
         return False
-    return any(derive_ci_failure_coalesce_key(row[0]) == coalesce_key for row in rows)
+
+    def _row_key(payload: Any) -> str | None:
+        # The engine-stamped key is authoritative (it survived payload_mapping);
+        # the derivation is the legacy/verbatim-payload fallback.
+        return read_ci_failure_coalesce_key(payload) or derive_ci_failure_coalesce_key(payload)
+
+    return any(_row_key(row[0]) == coalesce_key for row in rows)
 
 
 # ---------------------------------------------------------------------------
