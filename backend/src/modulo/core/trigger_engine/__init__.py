@@ -60,7 +60,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, NoReturn
 
 from fastapi import HTTPException
 from sqlalchemy import delete, func, select, text
@@ -80,6 +80,7 @@ from modulo.core.run_admission import (
     derive_ci_failure_coalesce_key,
     derive_webhook_coalesce_key,
     evaluate_backpressure,
+    has_in_flight_ci_failure_run,
 )
 from modulo.db.crud.pipeline_snapshot_versioning import (
     resolve_snapshot_for_channel,
@@ -678,6 +679,19 @@ class TriggerEngine:
         * ci.yml's notify-main-failure sends headSha=github.sha, so a manually
           re-dispatched main CI run failing at the SAME sha within the window
           is suppressed — same broken commit, same work unit.
+
+        The window alone only covers the period after the PREVIOUS DELIVERY, not
+        the lifetime of the run that delivery created. A Branch Fixer run can
+        live far longer than the window (a 3300s sandbox node budget with one
+        watchdog re-dispatch is ~110 minutes vs a 1-hour default window), so a
+        same-key delivery arriving after the window elapsed used to mint a
+        second full run while the first was still executing — doubling the
+        pipeline's sandbox concurrency consumption for one work unit. The
+        in-flight leg (:func:`modulo.core.run_admission.has_in_flight_ci_failure_run`)
+        closes that gap: suppression holds while ANY same-key run is still
+        non-terminal, at any age, with the window kept as the primary fast path
+        and an absolute age backstop so a permanently stuck run cannot suppress
+        forever.
         """
         ci_key = derive_ci_failure_coalesce_key(post_guardrail_payload)
         if ci_key is None or not coalesce_enabled(cfg):
@@ -708,19 +722,64 @@ class TriggerEngine:
                 trigger_id,
             )
             ci_is_new = True
-        if ci_is_new:
-            return
+        if not ci_is_new:
+            await self._suppress_ci_failure(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                payload_hash=dedup_hash,
+                ci_key=ci_key,
+                reason=f"inside the {ci_window}s coalesce window",
+            )
+        # The marker was absent/expired — but the run it was protecting may
+        # still be executing. Hold the suppression for the run's whole lifetime,
+        # not just the window (fail-open: the helper logs and answers False when
+        # it cannot read run state, so an unavailable read never blocks a
+        # dispatch).
+        if await has_in_flight_ci_failure_run(
+            session,
+            pipeline_id=trigger.pipeline_id,
+            coalesce_key=ci_key,
+        ):
+            await self._suppress_ci_failure(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                payload_hash=dedup_hash,
+                ci_key=ci_key,
+                reason="a run for the same PR + head SHA is still in flight",
+            )
+
+    async def _suppress_ci_failure(
+        self,
+        session: AsyncSession,
+        *,
+        trigger: Trigger,
+        org_id: uuid.UUID,
+        payload_hash: str,
+        ci_key: str,
+        reason: str,
+    ) -> NoReturn:
+        """Record + raise the FAR-1034 CI-failure no-op (single write site).
+
+        The ``coalesced`` TriggerEvent and the ``CiFailureCoalescedError`` are
+        the audited contract the webhook route commits and acks; both suppression
+        legs (age window, in-flight run) go through here so the event shape can
+        never drift between them. The distinguishing reason is logged, never
+        folded into ``error_detail`` — that field is the stable
+        ``ci_failure_coalesced:<key>`` marker consumers match on.
+        """
         _log.info(
-            "Webhook CI-failure coalesced for trigger %s (%s) — suppressed for %ss",
-            trigger_id,
+            "Webhook CI-failure coalesced for trigger %s (%s) — %s",
+            trigger.id,
             ci_key,
-            ci_window,
+            reason,
         )
         await self._log_event(
             session,
             trigger=trigger,
             org_id=org_id,
-            payload_hash=dedup_hash,
+            payload_hash=payload_hash,
             result="coalesced",
             error_detail=f"ci_failure_coalesced:{ci_key}",
         )
@@ -906,6 +965,11 @@ class TriggerEngine:
             # redact-action guardrail's masks are reflected in the mapped input.
             mapping: dict[str, str] = cfg.get("payload_mapping", {})
             input_payload = _apply_payload_mapping(post_guardrail_payload, mapping)
+            # FAR-1034: derive the CI-failure key from the PRE-mapping payload and
+            # stamp it on the run, so the in-flight suppression leg can still match
+            # after a non-empty ``payload_mapping`` has replaced the stored payload
+            # wholesale (dropping/renaming ``prNumber`` / ``headSha``).
+            ci_failure_coalesce_key = derive_ci_failure_coalesce_key(post_guardrail_payload)
 
             # Rate limit check
             rate_limit = await self._resolve_rate_limit_state(
@@ -922,6 +986,7 @@ class TriggerEngine:
                 input_payload=input_payload,
                 payload_hash=dedup_hash,
                 rate_limit=rate_limit,
+                ci_failure_coalesce_key=ci_failure_coalesce_key,
             )
             _log.info("Webhook accepted for trigger %s → run %s", trigger_id, run.id)
 
@@ -1062,6 +1127,10 @@ class TriggerEngine:
             # mapping source is kept consistent with handle_webhook).
             mapping: dict[str, str] = cfg.get("payload_mapping", {})
             input_payload = _apply_payload_mapping(post_guardrail_payload, mapping)
+            # FAR-1034: stamp the CI-failure identity PRE-mapping (same reason as
+            # handle_webhook); a replayed run is the same work unit and must count
+            # as in flight for a later delivery.
+            ci_failure_coalesce_key = derive_ci_failure_coalesce_key(post_guardrail_payload)
 
             # Rate limit check
             rate_limit = await self._resolve_rate_limit_state(
@@ -1080,6 +1149,7 @@ class TriggerEngine:
                 payload_hash=payload_hash,
                 rate_limit=rate_limit,
                 is_replay=True,
+                ci_failure_coalesce_key=ci_failure_coalesce_key,
             )
 
             return run, trigger_event, input_payload
@@ -1718,6 +1788,7 @@ class TriggerEngine:
         payload_hash: str,
         rate_limit: _RateLimitState,
         is_replay: bool | None = None,
+        ci_failure_coalesce_key: str | None = None,
     ) -> tuple[Run, TriggerEvent]:
         """Create the run for a webhook/replay delivery and audit + store payload.
 
@@ -1805,6 +1876,7 @@ class TriggerEngine:
                 work_item_refs=refs,
                 is_replay=is_replay,
                 coalesce_key=coalesce_key,
+                ci_failure_coalesce_key=ci_failure_coalesce_key,
             )
         except RateLimitConflictError as exc:
             _log.warning(
