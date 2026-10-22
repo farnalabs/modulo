@@ -20,7 +20,6 @@ from modulo.compliance.artifacts import (
     COVERAGE_GAP,
     COVERAGE_SATISFIED,
     COVERAGE_SUPPORTED,
-    COVERAGE_VALUES,
     INDEXED_ARTIFACT_TYPES,
     NON_SELF_COVERAGE_VALUES,
     PROVENANCE_CUSTOMER_SUPPLIED,
@@ -174,7 +173,11 @@ class TestShippedPackContent:
 
         for framework_id, framework in pack.frameworks.items():
             counts = pack.coverage_counts()[framework_id]
-            assert tuple(counts) == COVERAGE_VALUES
+            # ``counts`` summing to exactly the row count proves no row was
+            # silently dropped or double-counted when its attribution was
+            # made. (Asserting the dict's KEY SHAPE here would only restate
+            # production's ``dict.fromkeys(COVERAGE_VALUES, 0)`` - it can
+            # never fail, so it proves nothing.)
             assert sum(counts.values()) == len(framework.rows)
 
         # A single "compliant" verdict would mean every row in every framework
@@ -248,7 +251,16 @@ class TestShippedPackContent:
 
 class TestContentHash:
     def test_hash_is_stable_across_loads(self) -> None:
-        assert load_mapping_pack().content_hash() == load_mapping_pack().content_hash()
+        first = load_mapping_pack()
+        load_mapping_pack.cache_clear()
+        second = load_mapping_pack()
+
+        # The two loads are genuinely independent rebuilds: ``load_mapping_pack``
+        # is ``lru_cache``d, so calling it twice WITHOUT clearing returns the
+        # same object and "equality" proves nothing. After a ``cache_clear``
+        # both rebuilds must still hash identically.
+        assert first is not second
+        assert first.content_hash() == second.content_hash()
 
     def test_hash_changes_when_an_assertion_changes(self) -> None:
         pack = load_mapping_pack()
@@ -266,6 +278,32 @@ class TestContentHash:
         }
         changed = MappingPack.model_validate({**pack.model_dump(), "frameworks": changed_frameworks})
 
+        assert changed.content_hash() != pack.content_hash()
+
+    def test_hash_changes_when_only_a_notes_field_changes(self) -> None:
+        """``notes`` is part of the pack's asserted content.
+
+        The hash must not exclude it: a silent edit to a reviewer-facing note
+        is as much an unbumped assertion change as an edit to
+        ``modulo_control``.
+        """
+        pack = load_mapping_pack()
+        target = pack.rows[0].id
+        changed_frameworks = {
+            framework_id: framework.model_copy(
+                update={
+                    "rows": tuple(
+                        row.model_copy(update={"notes": "a reviewer-facing note"}) if row.id == target else row
+                        for row in framework.rows
+                    )
+                }
+            )
+            for framework_id, framework in pack.frameworks.items()
+        }
+        changed = MappingPack.model_validate({**pack.model_dump(), "frameworks": changed_frameworks})
+
+        # Precondition: the edit actually landed on the target row's notes.
+        assert changed.rows[0].notes == "a reviewer-facing note"
         assert changed.content_hash() != pack.content_hash()
 
 
