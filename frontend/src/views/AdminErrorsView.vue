@@ -9,10 +9,9 @@
     <!-- Instance scope (FAR-1547): system admins can switch the dashboard to
          the SYSTEM_ORG_ID sentinel partition (instance-level / unattributed
          errors). Hidden entirely for tenant users — they can never read it. -->
-    <div
+    <fieldset
       v-if="isSystemAdmin"
-      class="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2"
-      role="group"
+      class="m-0 mb-4 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-0 p-0"
       :aria-label="$t('views.AdminErrorsView.scope_group_label')"
       data-testid="admin-errors-scope"
     >
@@ -47,7 +46,7 @@
       >
         {{ $t('views.AdminErrorsView.scope_instance_hint') }}
       </p>
-    </div>
+    </fieldset>
 
     <div
       v-if="!isInstanceScope && starvationItems.length > 0"
@@ -88,8 +87,12 @@
     </FilterBar>
 
     <!-- Skeleton rows (STATE-3): the shared DataTable renders pulse placeholders,
-         so a slow fetch never shows an unqualified indeterminate spinner. -->
-    <div v-if="loading" class="table-wrapper" data-testid="admin-errors-loading">
+         so a slow fetch never shows an unqualified indeterminate spinner.
+         Decorative only: DataTable's horizontally scrollable wrapper has no
+         focusable content while loading, which axe flags as
+         `scrollable-region-focusable`, so hide the subtree from assistive tech
+         (same pattern as AdminAuditView / SchemaListView skeletons). -->
+    <div v-if="loading" class="table-wrapper" aria-hidden="true" data-testid="admin-errors-loading">
       <DataTable :columns="columns" :rows="[]" :loading="true" :loading-rows="5" :row-clickable="false" />
     </div>
 

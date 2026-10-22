@@ -182,14 +182,12 @@
                   </div>
 
                   <!-- Toggle disable confirmation (mirrors delete-confirmation pattern) -->
-                  <div
+                  <dialog
                     v-if="gateToggleConfirming"
-                    ref="gateToggleDialogRef"
-                    role="dialog"
-                    aria-modal="true"
+                    open
                     :aria-label="$t('views.EvalEditorView.policyGate.toggleDisableConfirm')"
                     data-testid="policy-gate-toggle-confirm-dialog"
-                    class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs"
+                    class="static m-0 flex w-full items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-foreground"
                     @keydown="onGateToggleDialogKeydown"
                   >
                     <span>
@@ -215,7 +213,7 @@
                     >
                       {{ $t('common.no') }}
                     </button>
-                  </div>
+                  </dialog>
 
                   <!-- Delete gate button -->
                   <div v-if="policyGate.exists" class="flex items-center gap-2">
@@ -232,13 +230,11 @@
                       </button>
                     </template>
                     <template v-else>
-                      <div
-                        ref="gateDialogRef"
-                        role="dialog"
-                        aria-modal="true"
+                      <dialog
+                        open
                         :aria-label="$t('views.EvalEditorView.policyGate.deleteConfirm')"
                         data-testid="policy-gate-confirm-dialog"
-                        class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs"
+                        class="static m-0 flex w-full items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-foreground"
                         @keydown="onGateDialogKeydown"
                       >
                         <span>
@@ -264,7 +260,7 @@
                         >
                           {{ $t('common.no') }}
                         </button>
-                      </div>
+                      </dialog>
                     </template>
                   </div>
 
@@ -291,14 +287,12 @@
               </div>
 
               <!-- Dirty-gate confirm dialog -->
-              <div
+              <dialog
                 v-if="dirtyConfirmVisible"
-                ref="dirtyConfirmDialogRef"
-                role="dialog"
-                aria-modal="true"
+                open
                 :aria-label="$t('views.EvalEditorView.policyGate.dirtyConfirmAriaLabel')"
                 data-testid="dirty-confirm-dialog"
-                class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs"
+                class="static m-0 flex w-full items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-foreground"
                 @keydown="onDirtyDialogKeydown"
               >
                 <span>{{ $t('views.EvalEditorView.policyGate.unsavedChangesConfirm') }}</span>
@@ -319,7 +313,7 @@
                 >
                   {{ $t('views.EvalEditorView.policyGate.dirtyConfirmStay') }}
                 </button>
-              </div>
+              </dialog>
 
               <div class="flex items-center gap-2 pt-2">
               <Button :disabled="!canSave || saving" data-testid="eval-editor-save" @click="saveEval">
@@ -540,18 +534,15 @@ const gatePendingEvalId = ref<string | null>(null)
 const gateDeleteConfirming = ref(false)
 const gateDeleteBtnRef = ref<HTMLElement | null>(null)
 const gateDeleteConfirmBtnRef = ref<HTMLElement | null>(null)
-const gateDialogRef = ref<HTMLElement | null>(null)
 const evalGateActions = ref<Record<string, string>>({})
 
 // Operator enable/disable toggle state (CO-5)
 const gateToggleBusy = ref(false)
 const gateToggleConfirming = ref(false)
-const gateToggleDialogRef = ref<HTMLElement | null>(null)
 const gateToggleConfirmBtnRef = ref<HTMLElement | null>(null)
 
 // §3.2 dirty-gate confirm dialog state
 const dirtyConfirmVisible = ref(false)
-const dirtyConfirmDialogRef = ref<HTMLElement | null>(null)
 const dirtyConfirmProceedBtnRef = ref<HTMLElement | null>(null)
 let dirtyConfirmResolve: ((value: boolean) => void) | null = null
 
@@ -603,11 +594,9 @@ function resetForm() {
   gateError.value = false
   gateDeleteConfirming.value = false
   gateDeleteBtnRef.value = null
-  gateDialogRef.value = null
   gatePendingEvalId.value = null
   gateToggleBusy.value = false
   gateToggleConfirming.value = false
-  gateToggleDialogRef.value = null
   // Reset dirty-gate confirm dialog (§3.2)
   dirtyConfirmVisible.value = false
   if (dirtyConfirmResolve) {
@@ -911,26 +900,13 @@ async function deleteEval(id: string) {
   }
 }
 
-// §3.3 focus trap for the delete-confirmation dialog
+// These confirmation strips are inline (non-modal) elements inside the form:
+// Escape cancels them, but Tab stays in the document's natural order — a Tab
+// trap would strand keyboard users in a two-button strip. aria-modal is
+// likewise omitted because the form behind the strip is not inert.
 function onGateDialogKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
     cancelGateDelete()
-    return
-  }
-  if (e.key === 'Tab' && gateDialogRef.value) {
-    const focusable = gateDialogRef.value.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )
-    if (focusable.length === 0) return
-    const first = focusable[0]
-    const last = focusable[focusable.length - 1]
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault()
-      last.focus()
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault()
-      first.focus()
-    }
   }
 }
 
@@ -966,25 +942,10 @@ function resolveDirtyConfirm(proceed: boolean) {
   }
 }
 
+// Non-modal inline strip: Escape only (no Tab trap — see onGateDialogKeydown).
 function onDirtyDialogKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
     resolveDirtyConfirm(false)
-    return
-  }
-  if (e.key === 'Tab' && dirtyConfirmDialogRef.value) {
-    const focusable = dirtyConfirmDialogRef.value.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )
-    if (focusable.length === 0) return
-    const first = focusable[0]
-    const last = focusable[focusable.length - 1]
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault()
-      last.focus()
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault()
-      first.focus()
-    }
   }
 }
 
@@ -1091,25 +1052,10 @@ function cancelToggleGate() {
   })
 }
 
+// Non-modal inline strip: Escape only (no Tab trap — see onGateDialogKeydown).
 function onGateToggleDialogKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
     cancelToggleGate()
-    return
-  }
-  if (e.key === 'Tab' && gateToggleDialogRef.value) {
-    const focusable = gateToggleDialogRef.value.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )
-    if (focusable.length === 0) return
-    const first = focusable[0]
-    const last = focusable[focusable.length - 1]
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault()
-      last.focus()
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault()
-      first.focus()
-    }
   }
 }
 

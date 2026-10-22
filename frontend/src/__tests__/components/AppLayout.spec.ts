@@ -230,7 +230,9 @@ describe('AppLayout', () => {
       expect(pending.exists()).toBe(true)
       // A labelled live region with a non-interactive hamburger affordance, so
       // an attempted tap reads as pending nav rather than a dead blank slot.
-      expect(pending.attributes('role')).toBe('status')
+      // The native <output> carries the implicit status role (Web:S6819).
+      expect(pending.element.tagName).toBe('OUTPUT')
+      expect(pending.attributes('role')).toBeUndefined()
       expect(pending.attributes('aria-busy')).toBe('true')
       expect(pending.find('[data-testid="mobile-nav-pending-hamburger"]').exists()).toBe(true)
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)

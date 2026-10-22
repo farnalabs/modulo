@@ -26,6 +26,12 @@ async def observe_node(
     If an observation already exists for this (run_id, node_id) pair,
     it is returned unchanged (idempotent).
     """
+    # FAR-1825: the observation lock is the request transaction's first row
+    # lock (REST observe-node). Bound it so a contended row raises 55P03 (409)
+    # rather than holding a pooled connection open indefinitely.
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
     result = await session.execute(
         select(NodeObservation)
         .where(

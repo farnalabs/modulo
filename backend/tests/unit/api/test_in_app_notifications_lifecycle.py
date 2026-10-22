@@ -39,6 +39,7 @@ once its arm is deleted, and the escalation raises.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator, Generator, Sequence
 from contextlib import AbstractContextManager, contextmanager
@@ -233,6 +234,10 @@ def _notification_client(
             yield TestClient(app), actor
     finally:
         column.nullable = original_nullable
+        # Dispose the per-test engine: an undisposed aiosqlite pool leaves its
+        # ``Connection`` objects to be finalised at interpreter shutdown, which
+        # pytest reports as a PytestUnraisableExceptionWarning.
+        asyncio.run(engine.dispose())
         app.dependency_overrides.clear()
 
 

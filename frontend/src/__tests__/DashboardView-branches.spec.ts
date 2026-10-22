@@ -674,16 +674,36 @@ describe('DashboardView branches — team expansion', () => {
     // Team breakdown needs isTeam; the row must render for this branch
     const teamRow = wrapper.find('[data-testid="dashboard-team-row-team-a"]')
     expect(teamRow.exists()).toBe(true)
-    expect(teamRow.attributes('aria-expanded')).toBe('false')
+    // The native button inside the row owns the expandable semantics
+    // (Web:S6819); the row itself is only a mouse-click convenience.
+    const toggle = teamRow.find('button')
+    expect(teamRow.attributes('role')).toBeUndefined()
+    expect(teamRow.attributes('tabindex')).toBeUndefined()
+    expect(toggle.exists()).toBe(true)
+    expect(toggle.attributes('aria-expanded')).toBe('false')
 
-    await teamRow.trigger('click')
+    await toggle.trigger('click')
     await flushPromises()
-    expect(teamRow.attributes('aria-expanded')).toBe('true')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
 
     // Toggle again to collapse
+    await toggle.trigger('click')
+    await flushPromises()
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+
+    // The row itself remains a mouse-click convenience (no role/tabindex) with
+    // matching keyboard equivalents (Web:MouseEventWithoutKeyboardEquivalentCheck).
     await teamRow.trigger('click')
     await flushPromises()
-    expect(teamRow.attributes('aria-expanded')).toBe('false')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+
+    // Its keyboard handlers toggle the same row.
+    await teamRow.trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    await teamRow.trigger('keydown', { key: ' ' })
+    await flushPromises()
+    expect(toggle.attributes('aria-expanded')).toBe('true')
 
     wrapper.unmount()
   })

@@ -42,8 +42,7 @@
     </div>
 
     <!-- Async status + release result: one polite live region (A11Y). -->
-    <div
-      role="status"
+    <output
       aria-live="polite"
       class="mt-1 flex flex-wrap items-center gap-2 text-xs"
       data-testid="pipeline-editor-snapshot-lock-status"
@@ -56,7 +55,7 @@
         {{ $t('views.PipelineEditorView.snapshot_lock_not_held') }}
       </span>
       <span v-if="releaseResultText" class="font-medium text-foreground">{{ releaseResultText }}</span>
-    </div>
+    </output>
 
     <!-- Failures (load or release, including the typed 403): assertive region. -->
     <div

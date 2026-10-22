@@ -831,7 +831,10 @@ describe('StatCard delta arrow', () => {
     expect(fallback.text()).toContain('→')
     expect(fallback.text()).toContain('0')
     expect(fallback.attributes('title')).toBe('No prior period data')
-    expect(fallback.attributes('aria-label')).toBe('No prior period data')
+    // Web:S6819: it is text, not an image — no role="img". The accessible
+    // name comes from visible text plus a visually-hidden label.
+    expect(fallback.attributes('role')).toBeUndefined()
+    expect(fallback.find('.sr-only').text()).toBe('No prior period data')
     // No basis to judge direction → muted, never a sign-colored success/destructive.
     expect(fallback.classes()).toContain('text-muted-foreground')
     expect(wrapper.text()).not.toContain('%')
@@ -853,9 +856,11 @@ describe('StatCard delta arrow', () => {
     // Absolute change shown despite the % being a hyphen (no baseline).
     expect(fallback.text()).toContain('▲')
     expect(fallback.text()).toContain('+788')
-    // A11y: the arrow is exposed alongside the absolute change; aria-label + title
-    // provide an accessible name for the no-baseline state (role="img" removed per S6819).
-    expect(fallback.attributes('aria-label')).toBe('No prior period data')
+    // A11y: the arrow is hidden, the absolute change is exposed, and a
+    // visually-hidden label names the no-baseline state (role="img" removed
+    // per Web:S6819).
+    expect(fallback.attributes('role')).toBeUndefined()
+    expect(fallback.find('.sr-only').text()).toBe('No prior period data')
     expect(fallback.attributes('title')).toBe('No prior period data')
     expect(wrapper.text()).not.toContain('%')
   })

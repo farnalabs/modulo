@@ -34,6 +34,7 @@ import math
 import uuid
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, NamedTuple
@@ -43,6 +44,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.agent_event_evidence import heartbeat_liveness_seconds, parse_step_finish_evidence
 from modulo.core.analytics import record_run_facts
 from modulo.core.cost_controller import check_and_record_spend, check_pipeline_circuit_breaker
 from modulo.core.cost_controller.breakdown.aggregate import build_cost_breakdown, clamp_reported
@@ -148,6 +150,7 @@ __all__ = [
     "finalize_cost",
     "finalize_failed_run",
     "load_live_components",
+    "salvage_cancelled_run_cost",
 ]
 
 
@@ -3052,11 +3055,32 @@ async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, or
     cumulative sets (``run.outputs_json`` + ``run.node_token_usage`` +
     ``run.node_telemetry_json``) and passes THOSE to ``finalize_cost`` (§4.2
     DATA SOURCE PINNED). A streamed run that HAS PAUSED at least once has
-    stored sets → a partial breakdown + ONE ledger row. A NEVER-PAUSED in-flight
-    run has NO stored sets → its accrued cost is FORFEITED and only the
-    ``cost_components_partial_spend_lost`` diagnostic log fires (run_id only —
-    the cancel process lacks the in-memory dicts, so the accrued segment count
-    is never determinable).
+    stored sets → a partial breakdown + ONE ledger row.
+
+    A NEVER-PAUSED in-flight run has NO stored sets. FAR-1914 B1 does NOT
+    attribute anything on this REQUEST path: the executor has not observed the
+    cancellation yet (it notices on its next heartbeat), so its retained
+    attempt marker does not exist at this point — reading markers here finds
+    nothing and would record $0 as though no work happened. This path records a
+    ``cost_components.cancel_salvage_deferred`` diagnostic — a normal,
+    expected deferral, NOT a forfeiture; the genuine forfeiture signal
+    (``cost_components_partial_spend_lost``) is reserved for the terminal paths
+    that really cannot attribute anything. The salvage lives in
+    :func:`salvage_cancelled_run_cost`, which the executor wrapper calls AFTER
+    the cancelled executor task has settled and its marker is persisted.
+
+    TWO SETTLED OUTCOMES INTENTIONALLY SKIP THAT SALVAGE (round-3 M6), so a
+    $0 cancelled run is explainable rather than silent:
+
+    * a genuine worker-shutdown cancellation — ``_resolve_cancel_outcome``
+      re-raises ``CancelledError`` so SAQ retries the job, and the wrapper
+      never reaches the post-settle salvage call (it logs
+      ``pipeline_execution.cancel_cost_salvage_skipped`` on that branch);
+    * a generic executor failure — ``_handle_executor_failure`` terminal-fails
+      the run with a raw status write that carries no cost, and that path does
+      not call this salvage either.
+
+    No cost is fabricated in either case.
 
     Both stored output columns are re-fed (FAR-125 P1b): the reassembled
     outputs as the segment and the reassembled telemetry as the split signal
@@ -3072,7 +3096,12 @@ async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, or
     # for the re-feed decision + the segment payload below.
     stored_blobs = await read_run_blobs(session, run_id=run_id, organisation_id=run.organisation_id)
     if not (stored_blobs.outputs or run.node_token_usage or stored_blobs.telemetry):
-        _log.warning("cost_components_partial_spend_lost", extra={"run_id": str(run_id)})
+        # The request path cannot see the killed attempt's marker yet (the
+        # executor writes it only after it observes the cancellation) — so
+        # there is nothing to attribute HERE. Never fabricate; the post-settle
+        # path owns the salvage. This is a NORMAL deferral on every cancel, so
+        # it must not masquerade as the genuine forfeiture diagnostic.
+        _log.info("cost_components.cancel_salvage_deferred", extra={"run_id": str(run_id)})
         return
     node_type_map = await _load_node_type_map(session, run.snapshot_id)
     await finalize_cost(
@@ -3088,34 +3117,400 @@ async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, or
     )
 
 
+def _attributed_cost_present(run: Run) -> bool:
+    """True when the run already carries an attributed cost (salvage is a no-op).
+
+    The post-settle salvage is a COMPENSATING write; it must never overwrite or
+    duplicate a cost the normal finalize (or an earlier salvage) already
+    recorded. A zero-total with no breakdown means the run was finalised as an
+    empty segment (the pre-FAR-1914 "$0" outcome) — that IS salvageable.
+    """
+    total = getattr(run, "total_cost_usd", None)
+    if total is not None:
+        try:
+            if Decimal(str(total)) > 0:
+                return True
+        except (ArithmeticError, TypeError, ValueError):
+            return True
+    breakdown = getattr(run, "cost_breakdown", None)
+    return bool(breakdown)
+
+
+async def salvage_cancelled_run_cost(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> None:
+    """Attribute a SETTLED cancelled run's retained spend evidence (FAR-1914).
+
+    Called by the executor wrapper only AFTER the cancelled executor task has
+    settled (``_await_executor_task`` awaits it in its ``finally``) and the
+    sandbox node has persisted its cancellation marker. That ordering is the
+    whole point: the API/MCP cancel REQUEST runs before the executor observes
+    the cancel, so a request-path read finds no marker and would record $0.
+
+    Guards, in order:
+
+    * run exists and is terminal ``cancelled`` (a superseded executor whose run
+      continues is left to its successor);
+    * no cost is already attributed (never overwrite/duplicate a real
+      finalize);
+    * a retained sandbox attempt marker exists (the proof the attempt ran);
+    * the marker carries an agent-reported COST or a delivery sentinel — token
+      counters alone are not attributable and are never collected (FAR-1914
+      M4: the former implementation collected tokens then discarded them).
+
+    The derived sandbox line is written ONLY when the run has a retained
+    sandbox attempt AND its ``heartbeat_at`` proves a positive liveness window
+    (``started_at < heartbeat_at``; see
+    :func:`modulo.core.agent_event_evidence.heartbeat_liveness_seconds`). A
+    missing heartbeat means NO sandbox duration — never ``completed_at`` or
+    ``now()``. Nothing provable ⇒ nothing written.
+
+    FAR-1313 lock bound: this is a COMPENSATING write on the hot ``runs`` row
+    inside the caller's transaction, so the transaction-scoped
+    ``set_mutation_row_lock_timeout`` is issued FIRST — before the row lock
+    ``update_run_status`` takes — making a contended row surface as a bounded
+    55P03 instead of queuing on wall-clock.
+    """
+    # FAR-1313: bound every row-lock wait this salvage takes, at the ENTRY
+    # POINT and before any lock (Postgres-only; a no-op on SQLite fixtures).
+    await set_mutation_row_lock_timeout(session)
+    run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
+    if run is None:
+        return
+    if getattr(run, "status", None) != "cancelled":
+        return
+    if _attributed_cost_present(run):
+        return
+    stored_blobs = await read_run_blobs(session, run_id=run_id, organisation_id=run.organisation_id)
+    salvage = _salvage_from_markers(stored_blobs.markers)
+    if not salvage.has_evidence:
+        return
+    has_sandbox_attempt = _has_sandbox_attempt_evidence(stored_blobs.markers)
+    wall_hours = _cancel_liveness_wall_hours(run) if has_sandbox_attempt else None
+    await _write_derived_deadline_terminal(
+        session,
+        run=run,
+        run_id=run_id,
+        org_id=org_id,
+        status="cancelled",
+        error_code=getattr(run, "error_code", None),
+        error_detail=getattr(run, "error_detail", None),
+        wall_hours=wall_hours,
+        derived_from="cancel_liveness_window",
+        sandbox_evidence=has_sandbox_attempt,
+        salvage=salvage,
+    )
+
+
+@dataclass(frozen=True)
+class _SalvagedAttemptEvidence:
+    """Agent-reported spend recovered from retained attempt markers.
+
+    FAR-1914 B1: a killed sandbox node never writes ``output.json``, so the
+    normal self-report (``cost_estimate_usd`` / ``model_cost_usd``) never
+    exists. Its retained raw-output marker may hold the opencode
+    ``step_finish`` events, each carrying the agent's own ``cost``.
+
+    ``agent_cost_usd`` is ``None`` when no usable per-step cost was found —
+    never coerced to zero. Token counters are deliberately NOT carried
+    (FAR-1914 M4): they are display-only and the salvage cannot persist them
+    consistently, so collecting them would be collect-and-drop.
+
+    ``has_evidence`` gates the salvage: a recovered COST, or the full-line
+    delivery sentinel (which proves the side effect happened). A bare PR url
+    does NOT gate — it is non-gating evidence (FAR-1914 C1).
+    """
+
+    node_ids: tuple[str, ...]
+    agent_cost_usd: Decimal | None
+    delivery_done: bool
+
+    @property
+    def has_evidence(self) -> bool:
+        return self.agent_cost_usd is not None or self.delivery_done
+
+
+def _salvage_from_markers(markers: dict[str, Any] | None) -> _SalvagedAttemptEvidence:
+    """Recover the killed attempt's own spend from retained markers.
+
+    Every retained marker's ``raw_output`` is parsed by the SHARED, langgraph-free
+    :func:`modulo.core.agent_event_evidence.parse_step_finish_evidence` — the
+    same reader the node runner uses, reading the ``part``-nested shape the
+    shipped CLI emits. Costs are SUMMED across attempts: each attempt really
+    did burn them. Tokens are intentionally discarded (see the dataclass).
+
+    Fail-open: a non-dict ``markers`` value, a marker without ``raw_output``,
+    or a malformed line yields nothing — never an exception on the terminal
+    path.
+    """
+    if not isinstance(markers, dict):
+        return _SalvagedAttemptEvidence((), None, False)
+    node_ids: list[str] = []
+    cost_total = Decimal(0)
+    found_cost = False
+    delivery_done = False
+    for marker in markers.values():
+        if not isinstance(marker, dict):
+            continue
+        node_id = marker.get("node_id")
+        if isinstance(node_id, str) and node_id and node_id not in node_ids:
+            node_ids.append(node_id)
+        raw_output = marker.get("raw_output")
+        _tokens, cost = parse_step_finish_evidence(raw_output if isinstance(raw_output, str) else None)
+        if cost is not None:
+            cost_total += cost
+            found_cost = True
+        if marker.get("delivery_done") is True:
+            delivery_done = True
+    accepted = clamp_reported(cost_total) if found_cost else None
+    return _SalvagedAttemptEvidence(
+        node_ids=tuple(node_ids),
+        agent_cost_usd=accepted[0] if accepted is not None else None,
+        delivery_done=delivery_done,
+    )
+
+
+def _has_sandbox_attempt_evidence(markers: dict[str, Any] | None, *, node_id: str | None = None) -> bool:
+    """True when the run retains proof the relevant SANDBOX attempt actually ran.
+
+    FAR-1914 M3 / round-2 A: the derived sandbox line is BILLABLE, so it may
+    only be written when the run proves a sandbox attempt existed. A generic
+    ``_modulo_marker`` is NOT that proof: the connector idempotency markers
+    (delivered / intent / no-delivery) carry ``_modulo_marker: True`` with no
+    sandbox output at all, so accepting the flag alone billed a
+    cancelled connector-only run E2B sandbox time for its whole heartbeat
+    window.
+
+    A marker proves a sandbox attempt when it names a NODE and carries either
+    the sandbox ``deadline_triage`` signature or one of the sandbox output
+    fields only the sandbox retention writer stamps
+    (:data:`_SANDBOX_OUTPUT_FIELDS`). A run-level synthetic triage marker
+    (``node_id`` ``None``, written by the age gate / stranded-pending /
+    worker-lost terminalisers) is EXCLUDED: it cannot prove the node that ran
+    was a sandbox node, and its four output-shaped fields are empty
+    placeholders, not a retained tail.
+
+    *node_id* (FAR-1914 round-3 M1) scopes the proof to the node the credited
+    duration belongs to. The node-deadline watchdog credits the KILLED node's
+    configured timeout, so it must name that node: a run-scoped YES from some
+    other node's earlier marker would bill the killed connector/HTTP/agent
+    node as if it had been a sandbox. Age-gate and cancel salvage pass no
+    ``node_id`` — their duration is the run's own liveness window, so a
+    per-attempt sandbox marker ANYWHERE in the run is the right proof.
+    """
+    if not isinstance(markers, dict):
+        return False
+    for marker in markers.values():
+        if not isinstance(marker, dict):
+            continue
+        if node_id is not None and marker.get("node_id") != node_id:
+            continue
+        if _marker_proves_sandbox_attempt(marker):
+            return True
+    return False
+
+
+#: Marker fields the SANDBOX retention writer stamps (``node_runner``'s
+#: ``_write_raw_output_marker``). Connector idempotency markers carry none of
+#: them; a run-level synthetic triage marker carries empty placeholders but no
+#: node id (see :func:`_has_sandbox_attempt_evidence`).
+_SANDBOX_OUTPUT_FIELDS: tuple[str, ...] = (
+    "raw_output",
+    "sandbox_log_tail",
+    "stdout_length",
+    "no_output_reason",
+)
+
+
+def _marker_proves_sandbox_attempt(marker: dict[str, Any]) -> bool:
+    """Whether ONE retained marker is sandbox-attempt evidence (FAR-1914 A)."""
+    node_id = marker.get("node_id")
+    names_a_node = isinstance(node_id, str) and bool(node_id.strip())
+    if not names_a_node:
+        # Run-level synthetic triage marker: no node identity, so nothing ties
+        # it to a sandbox execution. Never billable on its own.
+        return False
+    if marker.get("deadline_triage") is True:
+        return True
+    return any(field in marker for field in _SANDBOX_OUTPUT_FIELDS)
+
+
+def _cancel_liveness_wall_hours(run: Run) -> float | None:
+    """The PROVEN liveness window for a cancelled run, in hours (FAR-1914 B1).
+
+    Shares the age gate's proof (``agent_event_evidence.heartbeat_liveness_seconds``):
+    ``started_at`` to the LAST liveness proof (``min(heartbeat_at,
+    completed_at)``). ``heartbeat_at`` MUST be present and strictly past
+    ``started_at`` — the pre-FAR-1914 implementation fell back to
+    ``completed_at``/``now()``, which credits wall-clock time the run never
+    proved it was alive for. Returns ``None`` when the window is not provable,
+    so no duration is fabricated.
+    """
+    started = getattr(run, "started_at", None)
+    heartbeat = getattr(run, "heartbeat_at", None)
+    completed = getattr(run, "completed_at", None)
+    seconds = heartbeat_liveness_seconds(started, heartbeat, completed)
+    if seconds is None:
+        return None
+    return seconds / 3600.0
+
+
+def _salvage_breakdown_entry(salvage: _SalvagedAttemptEvidence) -> dict[str, Any]:
+    """The ``self_reported`` breakdown entry for salvaged agent spend.
+
+    Provenance is the cost table's own ``self_reported`` class (``reported``):
+    the number came from the agent's own event stream, not from a Modulo
+    observation. It is therefore NON-BILLABLE — declared money never enters
+    ``total_cost_usd`` (FAR-1780) — but it is now VISIBLE on the breakdown of a
+    killed run instead of vanishing with the missing ``output.json``.
+    """
+    amount = salvage.agent_cost_usd or Decimal(0)
+    basis: dict[str, Any] = {
+        "reported": float(amount),
+        "raw_reported": float(amount),
+        "node_count": len(salvage.node_ids),
+        "salvaged_from": "retained_raw_output_step_finish",
+    }
+    return {
+        "component": "model_tokens",
+        "display_name": "Model cost (self-reported, salvaged from retained output)",
+        "source": "self_reported",
+        "billable": False,
+        PROVENANCE_KEY: PROVENANCE_REPORTED,
+        "amount_usd": _entry_amount(amount),
+        "formula_applied": "reported",
+        "rate_usd": None,
+        "basis": basis,
+    }
+
+
+def _assemble_derived_breakdown(
+    *,
+    run_id: uuid.UUID,
+    status: str,
+    wall_hours: float | None,
+    derived_from: str,
+    sandbox_evidence: bool,
+    salvage: _SalvagedAttemptEvidence | None,
+) -> tuple[Decimal, list[dict[str, Any]]] | None:
+    """Build the derived-cost breakdown, or ``None`` when nothing is provable.
+
+    Extracted from :func:`_write_derived_deadline_terminal` (S3776). The derived
+    sandbox line is BILLABLE, so a proven duration is written only when
+    *sandbox_evidence* also exists; a duration without that proof is withheld
+    with a loud log. The salvaged agent-reported line (``self_reported``,
+    non-billable) is appended whenever the markers carried a usable cost. An
+    empty breakdown means nothing can be attributed — the caller writes nothing
+    rather than fabricating a terminal.
+
+    Returns ``(total, breakdown)`` where *total* is the BILLABLE derived total
+    (a clamp marker is prepended when it hit :data:`COST_COLUMN_CAP`).
+    """
+    total = Decimal(0)
+    breakdown: list[dict[str, Any]] = []
+    clamped = False
+    has_duration = wall_hours is not None and math.isfinite(wall_hours) and wall_hours > 0
+    if has_duration and not sandbox_evidence:
+        _log.warning(
+            "cost_finalize.derived_sandbox_cost_withheld",
+            extra={
+                "run_id": str(run_id),
+                "status": status,
+                "wall_clock_hours": wall_hours,
+                "derived_from": derived_from,
+                "reason": "no_sandbox_attempt_marker",
+            },
+        )
+    if has_duration and sandbox_evidence:
+        rate = _e2b_rate()
+        total = Decimal(str(wall_hours)) * rate
+        if total > COST_COLUMN_CAP:
+            total = COST_COLUMN_CAP
+            clamped = True
+        breakdown.append(
+            {
+                "component": "sandbox_infra",
+                "display_name": "Sandbox Infrastructure",
+                "source": "derived",
+                "amount_usd": _entry_amount(total),
+                "formula_applied": "rate * wall_clock_hours",
+                "rate_usd": str(rate),
+                "basis": {
+                    "wall_clock_hours": wall_hours,
+                    "derived_from": derived_from,
+                },
+            }
+        )
+    if salvage is not None and salvage.agent_cost_usd is not None:
+        breakdown.append(_salvage_breakdown_entry(salvage))
+    if not breakdown:
+        _log.warning("cost_finalize.no_attributable_cost", extra={"run_id": str(run_id)})
+        return None
+    if clamped:
+        breakdown.insert(0, dict(TOTAL_CLAMPED_MARKER))
+    return total, breakdown
+
+
 async def _write_derived_deadline_terminal(
     session: AsyncSession,
     *,
     run: Run,
     run_id: uuid.UUID,
     org_id: uuid.UUID,
-    error_code: str,
-    error_detail: str,
-    wall_hours: float,
+    status: str = "failed",
+    error_code: str | None,
+    error_detail: str | None,
+    wall_hours: float | None,
     derived_from: str,
+    sandbox_evidence: bool,
+    salvage: _SalvagedAttemptEvidence | None = None,
 ) -> None:
-    """Write DERIVED sandbox cost for a terminal-failed run (FAR-1993).
+    """Write DERIVED sandbox cost (FAR-1993) + salvaged agent cost (FAR-1914).
 
     A terminal writer that never ran the normal finalize (the node-deadline
-    watchdog, the reconcile age gate) leaves the run with no cost, so nothing
-    contributes a ``wall_clock_time_ms`` to the cost machinery and the normal
-    finalize computes $0 — while the sandbox really did run for a duration the
-    caller has proven independently. This writer attributes that spend at the
-    RUN level, explicitly marked ``source="derived"`` with
+    watchdog, the reconcile age gate, the cancel path) leaves the run with no
+    cost, so nothing contributes a ``wall_clock_time_ms`` to the cost machinery
+    and the normal finalize computes $0 — while the sandbox really did run for
+    a duration the caller has proven independently. This writer attributes that
+    spend at the RUN level, explicitly marked ``source="derived"`` with
     ``basis.derived_from = derived_from`` so it is never confused with
     agent-reported (``self_reported``) or component-calculated spend. The label
     says WHICH liveness proof produced the duration (the node's configured
     deadline for the node-deadline watchdog; the run's last heartbeat for the
-    reconcile age gate) — provenance travels with the number.
+    reconcile age gate / cancel path) — provenance travels with the number.
+
+    FAR-1914 B1: *salvage* carries the killed attempt's own agent-reported
+    spend (recovered from its retained ``step_finish`` events). It is appended
+    as a ``self_reported`` entry with ``provenance: reported`` and
+    ``billable: false`` — the cost table's own semantics for declared money
+    (FAR-1780) — so it is VISIBLE on a run that previously reported a bare
+    zero, without inflating ``total_cost_usd`` with an agent declaration.
+
+    *wall_hours* is optional: the deadline/age-gate callers always supply a
+    proven duration; the cancel path supplies the run's last-liveness window,
+    which may be unavailable. When neither a duration nor a salvaged cost
+    exists, NOTHING is written (no fabricated spend).
+
+    *sandbox_evidence* (round-2 B) is the caller's verdict from the retained
+    markers (:func:`_has_sandbox_attempt_evidence`). The derived sandbox line
+    is BILLABLE, so it is written only when that proof exists: a deadline kill
+    of a non-sandbox node, or an age gate over a pipeline that never dispatched
+    a sandbox node, leaves no per-attempt sandbox marker and must not be billed
+    sandbox time. A duration WITHOUT the proof is withheld with a log rather
+    than silently dropped. (Round-3 M1: the deadline caller scopes that verdict
+    to the KILLED node; the age gate/cancel callers keep it run-scoped.)
+
+    Round-2 minor 2: this writer runs on an ALREADY-terminated run, so the
+    recorded ``completed_at`` is PRESERVED. ``update_run_status`` re-stamps it
+    for every terminal status, which would move the terminal time forward at
+    salvage/re-attribution time and inflate the recorded duration.
 
     The function name is historical: it was introduced for the deadline path
-    and now serves any terminal-failed run whose liveness-proven duration is
-    known.
+    and now serves any terminal-failed/cancelled run whose liveness-proven
+    duration and/or retained evidence is known.
 
     The status/cost write is SHAPE-IDENTICAL to ``_write_empty_terminal`` —
     total 0 there, the derived total here — so no new raw UPDATE is invented.
@@ -3134,84 +3529,117 @@ async def _write_derived_deadline_terminal(
     wedge with no node progress long before the bound fires, so crediting the
     full bound would OVERSTATE spend and could falsely trip the spend ceiling);
     it passes ``min(heartbeat_at, completed_at) - started_at`` instead, from
-    the run's own last-liveness stamp.
+    the run's own last-liveness stamp — the same basis the cancel path uses.
     """
-    rate = _e2b_rate()
-    total = Decimal(str(wall_hours)) * rate
-    if total > COST_COLUMN_CAP:
-        total = COST_COLUMN_CAP
-        clamped = True
-    else:
-        clamped = False
-    breakdown: list[dict[str, Any]] = [
-        {
-            "component": "sandbox_infra",
-            "display_name": "Sandbox Infrastructure",
-            "source": "derived",
-            "amount_usd": _entry_amount(total),
-            "formula_applied": "rate * wall_clock_hours",
-            "rate_usd": str(rate),
-            "basis": {
-                "wall_clock_hours": wall_hours,
-                "derived_from": derived_from,
-            },
-        }
-    ]
-    if clamped:
-        breakdown.insert(0, dict(TOTAL_CLAMPED_MARKER))
+    assembled = _assemble_derived_breakdown(
+        run_id=run_id,
+        status=status,
+        wall_hours=wall_hours,
+        derived_from=derived_from,
+        sandbox_evidence=sandbox_evidence,
+        salvage=salvage,
+    )
+    if assembled is None:
+        # Nothing provable — do not write a fabricated terminal.
+        return
+    total, breakdown = assembled
     _log.warning(
         "cost_finalize.derived_deadline_cost",
         extra={
             "run_id": str(run_id),
+            "status": status,
             "wall_clock_hours": wall_hours,
             "total_cost_usd": str(total),
+            "salvaged_agent_cost_usd": str(salvage.agent_cost_usd) if salvage and salvage.agent_cost_usd else None,
         },
     )
-    await update_run_status(
+    # Round-2 minor 2: `update_run_status` re-stamps `completed_at` for a
+    # terminal status. This run is ALREADY terminal, so the recorded terminal
+    # time must survive the compensating write — capture it first, then restore
+    # it on the returned row (the same session-mapped instance the caller
+    # loaded) and flush.
+    recorded_completed_at = getattr(run, "completed_at", None)
+    updated_run = await update_run_status(
         session,
         run_id,
-        "failed",
+        status,
         error_code=error_code,
         error_detail=error_detail,
         total_cost_usd=total,
         cost_breakdown=breakdown,
         total_tokens=0,
     )
+    if recorded_completed_at is not None:
+        target_run = updated_run if updated_run is not None else run
+        target_run.completed_at = recorded_completed_at
+        await session.flush()
     # FAR-1993: the terminal ledger write — same pattern and same ordering as
     # ``_fallback_finalize`` (write, then ledger, then analytics). This is what
     # makes the derived spend visible to the spend ceiling, the daily ledger
     # (``org_daily_run_counts``) and the circuit breaker. ``run_date`` is
     # ``None`` for a zero total / missing ``started_at``, so no ledger row is
-    # written in that case.
+    # written in that case (a salvage-only breakdown legitimately totals 0).
+    await _write_derived_ledger_block(
+        session,
+        run=run,
+        run_id=run_id,
+        org_id=org_id,
+        status=status,
+        total=total,
+        error_code=error_code,
+        error_detail=error_detail,
+    )
+    await _record_terminal_analytics(session, run, status, {}, writer=_WRITER_EARLY_RETURN)
+
+
+async def _write_derived_ledger_block(
+    session: AsyncSession,
+    *,
+    run: Run,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    status: str,
+    total: Decimal,
+    error_code: str | None,
+    error_detail: str | None,
+) -> None:
+    """The terminal ledger write for a derived-cost run (FAR-1993).
+
+    Extracted from :func:`_write_derived_deadline_terminal` so that writer's
+    error handling does not pile onto its cognitive complexity (S3776). A
+    whole-transaction lock abort is re-raised (the outer transaction is
+    aborted, so the ownership layer must own it); any other ledger failure is
+    logged and swallowed, exactly as before.
+    """
     run_date = _ledger_run_date(True, total, run)
-    if run_date is not None:
-        try:
-            await _ledger_block(
-                session,
-                run_id=run_id,
-                org_id=org_id,
-                status="failed",
-                total=total,
-                owner_team_id=run.owner_team_id,
-                run_date=run_date,
-                finalize_fields={
-                    "error_code": error_code,
-                    "error_detail": error_detail,
-                    "total_cost_usd": total,
-                },
-                session_factory=None,
-                claim_token=None,
-                metric_sink=None,
-            )
-        except asyncio.CancelledError:
+    if run_date is None:
+        return
+    try:
+        await _ledger_block(
+            session,
+            run_id=run_id,
+            org_id=org_id,
+            status=status,
+            total=total,
+            owner_team_id=run.owner_team_id,
+            run_date=run_date,
+            finalize_fields={
+                "error_code": error_code,
+                "error_detail": error_detail,
+                "total_cost_usd": total,
+            },
+            session_factory=None,
+            claim_token=None,
+            metric_sink=None,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if is_lock_abort(exc):
+            # Do NOT swallow a whole-transaction lock abort — the outer
+            # transaction is aborted, so the ownership layer must own it.
             raise
-        except Exception as exc:
-            if is_lock_abort(exc):
-                # Do NOT swallow a whole-transaction lock abort — the outer
-                # transaction is aborted, so the ownership layer must own it.
-                raise
-            _log.exception("cost_ledger.derived_deadline_block_failed", extra={"run_id": str(run_id)})
-    await _record_terminal_analytics(session, run, "failed", {}, writer=_WRITER_EARLY_RETURN)
+        _log.exception("cost_ledger.derived_deadline_block_failed", extra={"run_id": str(run_id)})
 
 
 async def _finalize_failed_run(
@@ -3223,6 +3651,7 @@ async def _finalize_failed_run(
     error_detail: str,
     derived_sandbox_wall_hours: float | None,
     derived_from: str,
+    killed_node_id: str | None = None,
 ) -> None:
     """Body of :func:`finalize_failed_run` (fail-open envelope lives there)."""
     run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
@@ -3231,11 +3660,25 @@ async def _finalize_failed_run(
         return
     stored_blobs = await read_run_blobs(session, run_id=run_id, organisation_id=run.organisation_id)
     if not (stored_blobs.outputs or run.node_token_usage or stored_blobs.telemetry):
-        if (
+        # FAR-1914 B1: the killed attempt's retained marker is the only
+        # surviving spend record. Recover the agent's own per-step cost from it
+        # and report it alongside the FAR-1993 derived sandbox cost, so a
+        # productive-but-killed run stops reporting a bare zero.
+        salvage = _salvage_from_markers(stored_blobs.markers)
+        # Round-2 B: the derived sandbox line is billable, so it rides only on
+        # a retained SANDBOX attempt marker — not on the duration alone. A
+        # non-sandbox node killed at its deadline (or an age-gated pipeline
+        # with no sandbox node) has no such marker. Round-3 M1: when the
+        # caller names the killed node (the deadline watchdog), the marker must
+        # belong to THAT node; an age-gate/cancel caller leaves it None because
+        # its duration is the run's own liveness window (run-scoped proof).
+        sandbox_evidence = _has_sandbox_attempt_evidence(stored_blobs.markers, node_id=killed_node_id)
+        has_derived_duration = (
             derived_sandbox_wall_hours is not None
             and math.isfinite(derived_sandbox_wall_hours)
             and derived_sandbox_wall_hours > 0
-        ):
+        )
+        if has_derived_duration or salvage.has_evidence:
             await _write_derived_deadline_terminal(
                 session,
                 run=run,
@@ -3243,12 +3686,14 @@ async def _finalize_failed_run(
                 org_id=org_id,
                 error_code=error_code,
                 error_detail=error_detail,
-                wall_hours=derived_sandbox_wall_hours,
+                wall_hours=derived_sandbox_wall_hours if has_derived_duration else None,
                 derived_from=derived_from,
+                sandbox_evidence=sandbox_evidence,
+                salvage=salvage if salvage.has_evidence else None,
             )
             return
-        # No node data AND no derived wall-clock: nothing can be attributed.
-        # Same diagnostic + outcome as the cancel path (accrued spend forfeited).
+        # No node data, no proven duration AND no retained evidence: nothing can
+        # be attributed (never fabricate). Same diagnostic as before.
         _log.warning("cost_components_partial_spend_lost", extra={"run_id": str(run_id)})
         return
     # A run WITH real node data goes through the normal component build — never
@@ -3278,6 +3723,7 @@ async def finalize_failed_run(
     error_detail: str,
     derived_sandbox_wall_hours: float | None = None,
     derived_from: str = "node_deadline_watchdog",
+    killed_node_id: str | None = None,
 ) -> None:
     """Finalise a run already terminalised ``failed`` by a raw writer (FAR-1993).
 
@@ -3292,12 +3738,29 @@ async def finalize_failed_run(
     number, the cost is attributed at the RUN level from that DERIVED duration.
     The caller supplies the duration and its proof: the node's configured
     deadline (the watchdog fired because the node ran to it) or the run's
-    heartbeat-proven liveness window (the reconcile age gate). This is not
-    agent-reported telemetry. *derived_from* labels WHICH proof produced it and
+    heartbeat-proven liveness window (the reconcile age gate). FAR-1914 B1 also
+    folds in the killed attempt's own agent-reported spend, recovered from its
+    retained raw-output marker (``self_reported`` provenance, non-billable), so
+    a productive-but-killed run stops reporting a bare zero. This is not
+    server-measured telemetry. *derived_from* labels WHICH proof produced it and
     defaults to ``"node_deadline_watchdog"``, preserving the deadline path's
     provenance exactly; the age gate passes
     ``"reconcile_age_gate_heartbeat"``. See
     :func:`_write_derived_deadline_terminal` for the provenance marker.
+
+    Round-2 B: the proven duration is only CREDITED when the run also retains
+    a sandbox-attempt marker (:func:`_has_sandbox_attempt_evidence`). A
+    non-sandbox node that blew its deadline has a heartbeat window but no
+    sandbox attempt, so it writes no sandbox line; the salvaged agent cost (if
+    any) is still recorded.
+
+    Round-3 M1: *killed_node_id* (the node-deadline watchdog's killed node)
+    scopes that proof to the node whose configured deadline supplied the
+    duration. A sandbox marker for a DIFFERENT node is not evidence this node
+    ran in a sandbox: without the scope, an earlier sandbox node's marker let
+    the kill of a later connector/HTTP/agent node credit the killed node's
+    timeout as sandbox spend. The age gate and cancel salvage omit it (their
+    duration is the run's liveness window, so run-scoped evidence is correct).
 
     FAIL-OPEN: this is a compensating write on a path that has already
     terminalised the run, so ordinary failures log and are swallowed.
@@ -3316,6 +3779,7 @@ async def finalize_failed_run(
             error_detail=error_detail,
             derived_sandbox_wall_hours=derived_sandbox_wall_hours,
             derived_from=derived_from,
+            killed_node_id=killed_node_id,
         )
     except asyncio.CancelledError:
         raise

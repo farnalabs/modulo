@@ -1212,3 +1212,65 @@ def test_replay_webhook_required_refs_missing_persists_event_after_unwind(client
     assert fresh_aexit.await_count == 1
     assert fresh_aexit.await_args.args == (None, None, None)
     assert not any(isinstance(obj, WebhookPayload) for obj in added)
+
+
+def test_replay_webhook_snapshot_creation_failure_returns_500(client: TestClient) -> None:
+    """A None snapshot is a hard 500: the replay cannot proceed without one."""
+    with (
+        patch(
+            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+    ):
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{uuid.uuid4()}",
+            headers=_auth_headers("admin"),
+        )
+
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == "Failed to create pipeline snapshot for webhook replay"
+
+
+def test_replay_webhook_inactive_trigger_skips_pause_precheck() -> None:
+    """An inactive trigger is not run through the org-wide pause pre-check."""
+    mock_session = _make_mock_session()
+    system_session = make_system_session_mock(trigger_config={"hmac_secret": _HMAC_SECRET}, trigger_active=False)
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_system_db_session] = override_system_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as engine,
+            patch("modulo.api.routes.webhooks.dispatch_run"),
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock) as resume,
+        ):
+            engine.return_value = (_make_mock_run(), None, {})
+            resp = TestClient(app).post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{uuid.uuid4()}",
+                headers=_auth_headers("admin"),
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 202
+    resume.assert_not_awaited()

@@ -30,7 +30,11 @@ from modulo.api.constants import (
     MSG_RESOURCE_ALREADY_EXISTS,
     MSG_UNEXPECTED_ERROR,
 )
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
 from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import (
     _get_engine,
@@ -370,6 +374,13 @@ def _deadline_triage_from_markers(
     loaded. It is DATA, never a cause: an attempt proves one started, not why
     the run stopped. Both the REST and MCP detail surfaces pass it, so their
     entry shapes stay identical.
+
+    Round-2 minor 3: ``pr_url`` is projected too. It is NON-GATING evidence:
+    a PR URL observed in the retained tail (heuristic; not anchored to
+    ``gh pr create`` — the marker's ``_extract_pr_url`` takes the first
+    URL-shaped token it finds, which may be a quoted/listed URL). It never
+    arms the idempotency gate — ``delivery_done`` remains the sentinel-only
+    field — and it is never used as a delivery or cost gate.
     """
     if not isinstance(markers, dict):
         return []
@@ -390,6 +401,11 @@ def _deadline_triage_from_markers(
                 "stdout_length": marker.get("stdout_length"),
                 "stderr_length": marker.get("stderr_length"),
                 "delivery_done": marker.get("delivery_done") is True,
+                # Heuristic, non-gating: the first PR URL observed in the
+                # retained tail — NOT proof this attempt ran `gh pr create`
+                # (a quoted/list URL matches too). Never consulted for
+                # delivery, retry, or cost decisions.
+                "pr_url": marker.get("pr_url"),
                 "run_attempt_count": run_attempt_count,
             }
         )
@@ -1117,6 +1133,11 @@ class RunResponse(BaseModel):
     # node_deadline_exceeded) is triageable from the run page even though no
     # node envelope reached the Agent Return Contract columns. Empty list
     # when the run has no such marker; None on a failed read.
+    #
+    # Round-2 minor 3: entries also carry ``pr_url`` — a PR URL observed in the
+    # retained tail (heuristic; not anchored to ``gh pr create``) and
+    # NON-GATING evidence (``delivery_done`` stays sentinel-only, so a url can
+    # never suppress a retry or license a cost).
     #
     # FAR-1886 B1: entries also carry ``run_attempt_count`` (the run's
     # ``runs.node_attempt_count``, read from the run row), and every
@@ -2027,10 +2048,16 @@ async def _cancel_run(session: AsyncSession, principal: TenantPrincipal, run_id:
     """Request cancellation for a run, finalizing cost for non-paused runs.
 
     Runs inside the caller's transaction (RLS already set). PAUSED-then-
-    cancelled class (awaiting_human/claimed) runs NO finalize (§4.2). A STREAMED
-    running run cancelled cross-process is routed through finalize_cost,
-    re-reading the STORED cumulative sets; a NEVER-PAUSED in-flight run has none
-    and forfeits its accrued cost (cost_components_partial_spend_lost log).
+    cancelled class (awaiting_human/claimed/hitl_parked) runs NO finalize (§4.2).
+    A STREAMED running run cancelled cross-process is routed through
+    finalize_cancelled_run, re-reading the STORED cumulative sets; a
+    NEVER-PAUSED in-flight run has none on THIS request path, so it records
+    the normal ``cost_components.cancel_salvage_deferred`` diagnostic here —
+    but its docket is NOT forfeited: after the executor settles (it observes
+    the cancellation on its next heartbeat),
+    ``pipeline_execution._salvage_cancelled_run_cost`` reads the executor's
+    persisted attempt marker and attributes marker-provable spend (FAR-1914
+    C2).
 
     FAR-1610 lock bound: this is a REQUEST path on the hot ``runs`` row, and the
     FIRST lock in the caller's transaction is ``request_cancellation``'s
@@ -3133,7 +3160,10 @@ async def observe_run_node(
         ) from None
 
     except SQLAlchemyError as exc:
+        # FAR-1825: ``observe_node`` bounds the observation-row lock, so 55P03
+        # is reachable here — a busy row is a 409 conflict, not the 503 below.
         raise_session_contract_error(exc, _CODE_RUNS_OBSERVE_RUN_NODE)
+        raise_lock_timeout_conflict_if(exc, _CODE_RUNS_OBSERVE_RUN_NODE)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -59,12 +59,12 @@
   </template>
 </Select>
         <p v-if="submitted && !form.provider_type" id="envprofile-form-provider-error" role="alert" class="mt-1 text-xs text-destructive">{{ $t('views.EnvironmentProfileForm.provider_type_is_required') }}</p>
-        <p v-if="formTierLabel" id="envprofile-form-tier-hint" role="status" class="mt-1 text-xs text-muted-foreground">
+        <output v-if="formTierLabel" id="envprofile-form-tier-hint" class="mt-1 block text-xs text-muted-foreground">
           <span
             class="mr-1 inline-block rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary-text"
             data-testid="envprofile-form-tier-badge"
           >{{ formTierLabel }}</span>
-        </p>
+        </output>
       </div>
 
       <div>

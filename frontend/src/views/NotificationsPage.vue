@@ -76,25 +76,22 @@
     </output>
 
     <!-- States -->
-    <output
-      v-if="loading"
-      class="block space-y-2"
-      aria-busy="true"
-      :aria-label="$t('views.NotificationsPage.loading_notifications')"
-      data-testid="notifications-loading"
-    >
-      <div
-        v-for="n in 3"
-        :key="`notifications-skeleton-${n}`"
-        class="rounded-lg border bg-card p-4"
-      >
-        <div class="space-y-2">
-          <SkeletonBlock height-class="h-4 w-48" />
-          <SkeletonBlock height-class="h-3 w-72" />
-          <SkeletonBlock height-class="h-3 w-40" />
+    <div v-if="loading" data-testid="notifications-loading">
+      <output class="sr-only" aria-live="polite">{{ $t('views.NotificationsPage.loading_notifications') }}</output>
+      <div class="space-y-2" aria-busy="true">
+        <div
+          v-for="n in 3"
+          :key="`notifications-skeleton-${n}`"
+          class="rounded-lg border bg-card p-4"
+        >
+          <div class="space-y-2">
+            <SkeletonBlock height-class="h-4 w-48" />
+            <SkeletonBlock height-class="h-3 w-72" />
+            <SkeletonBlock height-class="h-3 w-40" />
+          </div>
         </div>
       </div>
-    </output>
+    </div>
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadNotifications" />
     <EmptyState v-else-if="notifications.length === 0" :title="$t('views.NotificationsPage.no_notifications')" :description="$t('views.NotificationsPage.no_notifications_matching_filters')">
       <button type="button" data-testid="notifications-clear-filters" class="text-sm text-primary-text hover:underline" @click="resetFilters">{{ $t('views.NotificationsPage.clear_filters') }}</button>

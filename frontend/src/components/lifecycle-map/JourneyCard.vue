@@ -27,6 +27,8 @@
         stroke="currentColor"
         stroke-width="2"
         class="shrink-0 text-muted-foreground"
+        aria-hidden="true"
+        focusable="false"
       >
         <path d="m9 18 6-6-6-6" />
       </svg>

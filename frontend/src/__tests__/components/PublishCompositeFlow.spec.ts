@@ -36,6 +36,11 @@ function makePort(overrides: Partial<ParameterPort> = {}): ParameterPort {
   }
 }
 
+/** The native `close` event is queued as a task (see the jsdom dialog shim). */
+function flushCloseEvent(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 function mountFlow(ports: ParameterPort[] = [makePort()]) {
   return mount(PublishCompositeFlow, {
     props: { compositeId: 'comp-1', ports },
@@ -215,9 +220,99 @@ describe('PublishCompositeFlow', () => {
     expect(wrapper.text()).toContain('Name & Description')
   })
 
-  it('closes via backdrop click', async () => {
+  it('names the modal dialog with a stable, non-step-varying heading', async () => {
     const wrapper = mountFlow()
-    await wrapper.find('.fixed.inset-0').trigger('click')
+    await flushPromises()
+    const dialog = wrapper.find('dialog')
+    expect(dialog.attributes('aria-labelledby')).toBe('publish-composite-title')
+    const title = wrapper.find('#publish-composite-title')
+    expect(title.exists()).toBe(true)
+    expect(title.text()).toBe('Publish composite')
+    // The name must not change with the step.
+    await advanceToStep(wrapper, 2)
+    expect(wrapper.find('#publish-composite-title').text()).toBe('Publish composite')
+  })
+
+  it('closes via a backdrop click on the modal dialog', async () => {
+    const wrapper = mountFlow()
+    await flushPromises()
+    // Web:S6819: the backdrop is the native <dialog> (opened with showModal),
+    // not a div with role=button. A click on ::backdrop targets the dialog.
+    const dialog = wrapper.find('dialog')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.attributes('role')).toBeUndefined()
+    expect((dialog.element as HTMLDialogElement).open).toBe(true)
+    await dialog.trigger('click')
+    await flushCloseEvent()
     expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+
+  it('closes on Escape dispatched from the focused element inside the modal dialog', async () => {
+    const wrapper = mount(PublishCompositeFlow, {
+      props: { compositeId: 'comp-1', ports: [makePort()] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const dialog = wrapper.find('dialog')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.attributes('role')).toBeUndefined()
+    const dialogEl = dialog.element as HTMLDialogElement
+    // A real modal dialog is open and owns focus — the premise the Escape
+    // assertion depends on. (`showModal()` is implemented by the jsdom shim.)
+    expect(dialogEl.open).toBe(true)
+    const focused = document.activeElement as HTMLElement | null
+    expect(focused).not.toBeNull()
+    expect(dialogEl.contains(focused)).toBe(true)
+
+    focused!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    await flushCloseEvent()
+
+    // The dialog actually closed, rather than merely emitting a close event.
+    expect(dialogEl.open).toBe(false)
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('returns focus to the trigger when the modal closes', async () => {
+    const trigger = document.createElement('button')
+    trigger.textContent = 'Open publish flow'
+    document.body.appendChild(trigger)
+    trigger.focus()
+    expect(document.activeElement).toBe(trigger)
+
+    const wrapper = mount(PublishCompositeFlow, {
+      props: { compositeId: 'comp-1', ports: [makePort()] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const dialogEl = wrapper.find('dialog').element as HTMLDialogElement
+    const focused = document.activeElement as HTMLElement
+    expect(dialogEl.contains(focused)).toBe(true)
+
+    await wrapper.find('dialog').trigger('click')
+    await flushPromises()
+
+    expect(dialogEl.open).toBe(false)
+    expect(document.activeElement).toBe(trigger)
+    wrapper.unmount()
+    trigger.remove()
+  })
+
+  it('unmounts safely while the modal is open and remounts cleanly', async () => {
+    const wrapper = mountFlow()
+    await flushPromises()
+    expect((wrapper.find('dialog').element as HTMLDialogElement).open).toBe(true)
+    expect(() => wrapper.unmount()).not.toThrow()
+    expect(document.querySelector('dialog')).toBeNull()
+
+    // A fresh instance must still open its modal — an unmount that left modal
+    // state behind would break this mount.
+    const remounted = mountFlow()
+    await flushPromises()
+    expect((remounted.find('dialog').element as HTMLDialogElement).open).toBe(true)
+    remounted.unmount()
   })
 })

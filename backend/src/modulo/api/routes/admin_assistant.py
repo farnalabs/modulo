@@ -13,7 +13,11 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -640,7 +644,11 @@ async def set_org_context_source(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        # FAR-1825: ``_upsert_context_source`` bounds the context-source row
+        # lock, so 55P03 is reachable here — a busy row is a 409 conflict, not
+        # the 503 below.
         raise_session_contract_error(exc, _CODE_ADMIN_ASSISTANT_SET_ORG_CONTEXT_SOURCE)
+        raise_lock_timeout_conflict_if(exc, _CODE_ADMIN_ASSISTANT_SET_ORG_CONTEXT_SOURCE)
         logger.exception(_CODE_ADMIN_ASSISTANT_SET_ORG_CONTEXT_SOURCE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

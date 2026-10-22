@@ -159,6 +159,31 @@ KNOWN_FIXES: tuple[KnownFix, ...] = (
             "node timeout."
         ),
     ),
+    # A node-deadline kill is NOT a "session interrupted" case: the watchdog
+    # ends the dispatch without the wrapper's fallback string ever being
+    # written, so ``session_interrupted_no_output`` above can never match it.
+    # ``match_known_fixes`` scans ``error_detail`` only, and the two
+    # terminalisers (the in-process watchdog and the FAR-1999 durable reaper)
+    # both name the node-deadline bound — the shared substring is the
+    # signature. Without this entry a deadline-killed run rendered NO
+    # known-fix panel even though the remedy is well understood.
+    KnownFix(
+        fix_id="node_deadline_exceeded",
+        signature="node-deadline",
+        title="Node did not complete within its configured timeout_seconds (node-deadline kill)",
+        body=(
+            "The node-deadline watchdog ended the dispatch because the node did not "
+            "complete within its configured `timeout_seconds`; the cause is not "
+            "asserted. Read the run's `deadline_triage` entries and error_detail "
+            "before choosing a fix. If the agent was still producing output, it "
+            "simply ran out of budget: raise that node's `timeout_seconds` (a "
+            "sandbox node is capped at 3300s by E2B) or shrink the task. If the "
+            "triage entry shows no agent output at all, treat the "
+            "`no_output_reason` as the lead: a provider/session fault needs a "
+            "different fix from a genuinely long task."
+        ),
+        link="https://github.com/farnalabs/modulo/blob/main/docs/troubleshooting.md",
+    ),
     KnownFix(
         fix_id="sandbox_timeout_exceeds_e2b_cap",
         signature="SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP",
@@ -426,15 +451,20 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="sandbox",
         retryable=True,
         alert_severity="warning",
-        guidance="E2B provisioner rate-limited sandbox creation (429); the run will be retried.",
+        guidance=(
+            "E2B provisioner rate-limited sandbox creation (429) and the retry budget"
+            " is exhausted; this run failed terminally. Re-run once the provisioner"
+            " quota recovers."
+        ),
     ),
     _CODE_SANDBOX_QUEUE_TIMEOUT: ErrorCodeSpec(
         error_class="sandbox",
         retryable=True,
         alert_severity="warning",
         guidance=(
-            "Sandbox provisioning was retried but the rate-limit retry budget"
-            " was exhausted within the node timeout window."
+            "Sandbox provisioning did not complete: either the rate-limit retry"
+            " budget was exhausted (repeated 429s), or the provisioning watchdog"
+            " fired because sandbox creation never returned within its bound."
         ),
     ),
     # FAR-510: a sandbox_agent node whose synthetic failure path (generic
@@ -749,7 +779,10 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="capacity",
         retryable=True,
         alert_severity=None,
-        guidance="Queued — waiting for org capacity.",
+        guidance=(
+            "Org capacity exhausted: the run is queued waiting for org capacity, or"
+            " failed terminally because its retries ran out while the org cap stayed full."
+        ),
     ),
     "capacity.pipeline": ErrorCodeSpec(
         error_class="capacity",

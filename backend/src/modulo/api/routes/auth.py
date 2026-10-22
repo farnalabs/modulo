@@ -16,7 +16,11 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_CSRF_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.middleware.csrf import CsrfMiddleware
 from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
@@ -740,16 +744,33 @@ async def _audit_invite_consumed_fail_open(
     org_id: uuid.UUID,
     invitation_id: uuid.UUID,
 ) -> None:
-    """Record ``invite_consumed``; an audit failure never fails enrollment."""
+    """Record ``invite_consumed``; an audit failure never fails enrollment.
+
+    FAR-1825: ``append_audit_event`` takes the per-org audit-chain-head row
+    lock (``FOR UPDATE``) and the accept-invite transaction now bounds its
+    lock waits, so a contended chain head can raise SQLSTATE 55P03.
+
+    The append is already savepoint-contained: every attempt inside
+    ``append_audit_event`` runs in its own ``session.begin_nested()``, so a
+    55P03 rolls back only that attempt and never poisons the caller's
+    transaction. This outer savepoint is explicit defence-in-depth: it states
+    the fail-open helper's guarantee locally, so the enrollment cannot be
+    silently discarded (COMMIT degrading to ROLLBACK) even if that inner seam
+    changes. It is not what prevents the poisoning today.
+    """
     try:
-        await append_audit_event(
-            session,
-            org_id=org_id,
-            event_type="invite_consumed",
-            resource_type="invitation",
-            resource_id=invitation_id,
-            payload_json={"invitation_id": str(invitation_id)},
-        )
+        # Defence-in-depth: ``append_audit_event`` already savepoints each
+        # attempt; this outer savepoint makes the fail-open guarantee explicit
+        # here rather than dependent on that inner seam.
+        async with session.begin_nested():
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type="invite_consumed",
+                resource_type="invitation",
+                resource_id=invitation_id,
+                payload_json={"invitation_id": str(invitation_id)},
+            )
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -930,7 +951,11 @@ async def accept_invite(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "auth.accept_invite")
+        # FAR-1825: the accept-invite transaction's first row lock is bounded
+        # (``get_valid_by_token_hash``), so 55P03 is reachable here — a busy
+        # invitation row is a 409 conflict, not the 503 below.
+        raise_session_contract_error(exc, _CODE_AUTH_ACCEPT_INVITE)
+        raise_lock_timeout_conflict_if(exc, _CODE_AUTH_ACCEPT_INVITE)
         _log.exception(_CODE_AUTH_ACCEPT_INVITE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

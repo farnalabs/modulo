@@ -100,6 +100,12 @@ async def update_schema(
     parameters: list[dict[str, Any]] | None = None,
     version: int,
 ) -> ParameterSchema | None:
+    # FAR-1825: bound the request transaction's first row lock. Reached by the
+    # REST PATCH / parameter-schema PUT and the MCP update tool; a contended
+    # parameter-schema row must surface 55P03 (409), never an unbounded wait.
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
     result = await session.execute(
         select(ParameterSchema)
         .where(

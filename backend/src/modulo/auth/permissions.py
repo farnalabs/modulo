@@ -229,6 +229,16 @@ PERMISSIONS: dict[str, str] = {
     # Reads are viewer-floor; managing the redaction rules is admin-only.
     "evidence.read": "viewer",
     "evidence.redaction.manage": "admin",
+    # The per-instance compliance evidence index (FAR-2036) is an org-wide
+    # audit artefact: it aggregates the audit chain, every run snapshot, every
+    # HITL decision, eval results and autonomy changes for the whole
+    # organisation, so it is admin-only (like ``audit.manage`` and the signed
+    # evidence-pack export, not like the viewer-level ``audit.list`` browse).
+    # The key lives in its own ``compliance.`` namespace deliberately: it is
+    # NOT a near-miss of the viewer-level ``evidence.read`` (a typo that drops
+    # the namespace resolves to nothing and fails closed at import rather than
+    # silently inheriting another key's role).
+    "compliance.evidence_index.read": "admin",
     "admin.trigger_events": "admin",
     "admin.queue_metrics": "admin",
     "admin.notification.manage": "admin",

@@ -516,7 +516,110 @@ jobs:
           merged_prs=""
           conflict_prs=""
           noop_prs=""
+          closeable_prs=""
+          unproven_prs=""
           migration_skip_prs=""
+
+          # Per-PR duplicate verdicts from classify_duplicate below, as
+          # "<pr>\t<close|keep>\t<evidence>". Written before anything is closed so
+          # the closure comment can state the evidence it acted on (FAR-2064).
+          : > /tmp/duplicate_verdicts.txt
+
+          # Refresh origin/main so the duplicate content check compares against
+          # the current upstream tip rather than the checkout snapshot. A failed
+          # refresh is not fatal: classify_duplicate falls back to the local main
+          # branch and, if neither is resolvable, keeps the PR open.
+          if ! git fetch origin main >/dev/null 2>&1; then
+            echo "::warning::could not refresh origin/main before the duplicate content check - falling back to the local main branch"
+          fi
+
+          # --- FAR-2064: a no-op squash is not proof a PR is already on main ---
+          # `git diff --cached --quiet` after `git merge --squash` only says
+          # nothing was STAGED. That can mean the content is on main, but it can
+          # equally mean an EARLIER PR in this same batch already contributed the
+          # content (it is then in the queue branch, not yet on main), that the
+          # branch was rebuilt, or that the merge produced nothing for some other
+          # reason. Treating the no-op as "already on main" closed six live PRs
+          # on 2026-10-21 (#2163/FAR-1866, #2157/FAR-1887, #2151/FAR-2012,
+          # #2158/FAR-2049, #2150/FAR-2051, #2152/FAR-2053) - every one had
+          # commits upstream did not - and the closures marked six Linear tickets
+          # Done. The only true positive that day (#2164/FAR-2048) had an EMPTY
+          # diff, where "nothing to merge" was correct.
+          #
+          # So: never close on the no-op alone. classify_duplicate below runs a
+          # content check and prints "<close|keep>\t<evidence>"; only a POSITIVE
+          # confirmation of "nothing upstream that main lacks" is closeable, and
+          # anything unproven or unevaluable stays OPEN with an annotation (fail
+          # open - an open PR costs a re-check next pass, a wrong close loses the
+          # work and marks a ticket Done).
+          #
+          # The check reads the SAME `pr-<n>` ref the squash-merge above consumed,
+          # so it can never reason about a different commit than the one that
+          # produced the no-op. Exit statuses are captured explicitly because this
+          # step runs under `bash -e` (`git diff --quiet` exits 1 for "differs").
+          classify_duplicate() {
+            local num="${1}"
+            local ref="pr-${num}" base diff_rc plus cherry_out
+            local -a paths=()
+            if ! git rev-parse --verify --quiet "refs/heads/${ref}" >/dev/null; then
+              printf 'keep\t%s\n' "the PR head ref ${ref} is not available locally, so its content could not be compared with main"
+              return 0
+            fi
+            base=$(git rev-parse --verify --quiet origin/main || git rev-parse --verify --quiet main || true)
+            if [ -z "${base}" ]; then
+              printf 'keep\t%s\n' "neither origin/main nor main is available to compare the PR against"
+              return 0
+            fi
+            if ! git merge-base "${base}" "${ref}" >/dev/null 2>&1; then
+              printf 'keep\t%s\n' "the PR head shares no merge base with main, so its content could not be compared"
+              return 0
+            fi
+            # (1) Empty diff at the merge base: the PR contributes nothing at all.
+            # This is the leg the #2164 control legitimately closed on.
+            diff_rc=0
+            git diff --quiet "${base}...${ref}" || diff_rc=$?
+            if [ "${diff_rc}" -eq 0 ]; then
+              printf 'close\t%s\n' "the PR has an empty diff against main (nothing to merge)"
+              return 0
+            fi
+            if [ "${diff_rc}" -ne 1 ]; then
+              printf 'keep\t%s\n' "comparing the PR against main failed (git diff exited ${diff_rc})"
+              return 0
+            fi
+            # (2) Every path the PR touches already matches main byte for byte.
+            # This is the shape a squash merge leaves behind, where patch-ids
+            # cannot match because the commits were combined into one.
+            mapfile -t paths < <(git diff --name-only "${base}...${ref}" 2>/dev/null || true)
+            if [ "${#paths[@]}" -gt 0 ]; then
+              diff_rc=0
+              git diff --quiet "${base}" "${ref}" -- "${paths[@]}" || diff_rc=$?
+              if [ "${diff_rc}" -eq 0 ]; then
+                printf 'close\t%s\n' "every path the PR changes is already identical on main"
+                return 0
+              fi
+            fi
+            # (3) Commits not in main by id, but each with a patch-equivalent
+            # commit upstream. Any '+' means real content main does not have.
+            if ! cherry_out=$(git cherry "${base}" "${ref}" 2>/dev/null); then
+              printf 'keep\t%s\n' "git cherry could not be computed against main"
+              return 0
+            fi
+            if [ -z "${cherry_out}" ]; then
+              if git merge-base --is-ancestor "${ref}" "${base}" 2>/dev/null; then
+                printf 'close\t%s\n' "the PR head is already an ancestor of main"
+                return 0
+              fi
+              printf 'keep\t%s\n' "git cherry lists no commits ahead of main, which is ambiguous rather than proof"
+              return 0
+            fi
+            plus=$(printf '%s\n' "${cherry_out}" | grep -c '^+' || true)
+            if [ "${plus}" -eq 0 ]; then
+              printf 'close\t%s\n' "every commit on the PR is already upstream by patch-id"
+              return 0
+            fi
+            printf 'keep\t%s\n' "${plus} commit(s) on the PR are not upstream (git cherry marks them '+'), so the no-op does not prove the changes are on main"
+            return 0
+          }
 
           # Migration-number gate (pre-merge, per PR). A PR that adds a migration
           # file whose numeric prefix is already held by a DIFFERENT filename does
@@ -667,14 +770,25 @@ jobs:
 
             echo "Attempting squash-merge into merge-queue..."
             if git merge --squash "pr-$NUM" 2>&1; then
-              # A no-op squash merge (nothing staged) means the PR's changes are already
-              # present in main/merge-queue (e.g. a duplicate PR merged earlier). Do NOT
-              # count it as merged: no commit was created, so the downstream
-              # 'git log main..merge-queue' would be empty and 'Merge source PRs' would
-              # fail under `set -e -o pipefail` when grep finds no PR number.
+              # A no-op squash merge (nothing staged) does NOT establish that the
+              # PR's changes are on main - see the classify_duplicate comment
+              # above. Either way nothing is committed: no commit means the
+              # downstream 'git log main..merge-queue' would not name this PR, so
+              # it is never counted as merged here. It is recorded as a duplicate
+              # CANDIDATE, and only a positive content check makes it closeable.
               if git diff --cached --quiet; then
-                echo "PR #$NUM has no changes relative to merge-queue (already on main) -- recording as duplicate."
+                VERDICT=$(classify_duplicate "$NUM")
+                DUP_STATE=${VERDICT%%$'\t'*}
+                DUP_EVIDENCE=${VERDICT#*$'\t'}
+                printf '%s\t%s\t%s\n' "$NUM" "$DUP_STATE" "$DUP_EVIDENCE" >> /tmp/duplicate_verdicts.txt
                 noop_prs="$noop_prs $NUM"
+                echo "PR #$NUM has no changes to merge -- duplicate candidate: $DUP_STATE ($DUP_EVIDENCE)"
+                if [ "$DUP_STATE" = "close" ]; then
+                  closeable_prs="$closeable_prs $NUM"
+                else
+                  unproven_prs="$unproven_prs $NUM"
+                  echo "::warning::PR #$NUM produced no changes to merge but is NOT proven to be on main ($DUP_EVIDENCE) - keeping it OPEN for the next pass."
+                fi
               else
                 git commit -m "squash! Merge PR #$NUM: $TITLE"
                 echo "PR #$NUM merged successfully."
@@ -691,12 +805,16 @@ jobs:
           merged_prs=$(echo "$merged_prs" | xargs)
           conflict_prs=$(echo "$conflict_prs" | xargs)
           noop_prs=$(echo "$noop_prs" | xargs)
+          closeable_prs=$(echo "$closeable_prs" | xargs)
+          unproven_prs=$(echo "$unproven_prs" | xargs)
           migration_skip_prs=$(echo "$migration_skip_prs" | xargs)
 
           # Store PR numbers in files for later steps
           echo "$merged_prs" > /tmp/merged_prs.txt
           echo "$conflict_prs" > /tmp/conflict_prs.txt
           echo "$noop_prs" > /tmp/noop_prs.txt
+          echo "$closeable_prs" > /tmp/closeable_prs.txt
+          echo "$unproven_prs" > /tmp/unproven_prs.txt
           echo "$migration_skip_prs" > /tmp/migration_collision_prs.txt
 
           migration_skip_count=0
@@ -708,122 +826,143 @@ jobs:
             echo "merged_prs=$merged_prs"
             echo "conflict_prs=$conflict_prs"
             echo "noop_prs=$noop_prs"
+            echo "closeable_prs=$closeable_prs"
+            echo "unproven_prs=$unproven_prs"
             echo "migration_collision_prs=$migration_skip_prs"
             echo "merged_count=$(echo "$merged_prs" | wc -w)"
             echo "conflict_count=$(echo "$conflict_prs" | wc -w)"
             echo "noop_count=$(echo "$noop_prs" | wc -w)"
+            echo "closeable_count=$(echo "$closeable_prs" | wc -w)"
+            echo "unproven_count=$(echo "$unproven_prs" | wc -w)"
             echo "migration_collision_count=$migration_skip_count"
           } >> "$GITHUB_OUTPUT"
 
           echo ""
           echo "=== Results ==="
           echo "Merged: $merged_prs"
-          echo "Duplicates (no changes to merge): $noop_prs"
+          echo "No changes to merge: $noop_prs"
+          echo "  confirmed already on main (closeable): $closeable_prs"
+          echo "  NOT confirmed on main (kept open): $unproven_prs"
           echo "Conflicts: $conflict_prs"
           echo "Excluded (migration-number collision): $migration_skip_prs"
           if [ "$migration_skip_count" -gt 0 ]; then
             echo "::warning::Excluded $migration_skip_count PR(s) from this batch for migration-number collisions: $migration_skip_prs - the rest of the batch continues."
           fi
+          if [ -n "$unproven_prs" ]; then
+            echo "::warning::Kept $unproven_prs open: each produced no changes to merge, but its content was not proven to be on main. They are re-checked next pass."
+          fi
 
-      - name: Close duplicate PRs (changes already on main)
-        if: steps.merge.outputs.noop_count != '0' && steps.merge.outputs.noop_count != ''
+      - name: Close duplicate PRs (changes confirmed already on main)
+        if: steps.merge.outputs.closeable_count != '0' && steps.merge.outputs.closeable_count != ''
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          # Audit trail: every bot closure must post its reason, and a comment
-          # failure must never be silenced -- a silent close is indistinguishable
-          # from a buggy or malicious one (see AGENTS.md Lessons Learned, PR #2092).
-          # The close itself stays best-effort (duplicate PRs whose changes are
-          # already on main genuinely should close), but a failed comment is an
-          # ::error:: annotation so it is loudly visible, not a quiet warning.
+          # FAR-2064: only PRs the merge step POSITIVELY confirmed have nothing
+          # upstream that main lacks appear in /tmp/closeable_prs.txt. A no-op
+          # squash merge on its own is not proof - trusting it closed six live PRs
+          # on 2026-10-21 - so unproven PRs are never listed here; they stay open
+          # and are annotated in the merge step instead.
+          #
+          # Audit trail: every bot closure must post its reason STATING THE
+          # EVIDENCE, and the close is conditional on that comment landing -- a
+          # silent close is indistinguishable from a buggy or malicious one (see
+          # AGENTS.md Lessons Learned, PR #2092), and a reason without its
+          # evidence cannot be checked by a reader.
           # The list holds bare PR numbers (whitespace-separated integers), so
           # iterating over words is intended; a line-oriented read would add a
           # missing-file failure path for no benefit.
           # shellcheck disable=SC2013
-          for NUM in $(cat /tmp/noop_prs.txt 2>/dev/null); do
-            echo "  Closing duplicate PR #$NUM (changes already on main)..."
-            CLOSE_REASON="Auto-closed by the merge queue as a duplicate: this PR's changes are already on main (merged via another PR), so squash-merging it into the queue produced no commit. If this was a mistake, reopen the PR and re-request a review."
-            if ! gh pr comment "$NUM" --body "$CLOSE_REASON" > /dev/null 2>&1; then
-              echo "::error::closure comment failed for PR #$NUM - closing without audit-trail comment. Reason NOT posted: $CLOSE_REASON"
+          for NUM in $(cat /tmp/closeable_prs.txt 2>/dev/null); do
+            EVIDENCE=$(awk -F '\t' -v n="$NUM" '$1 == n { print $3 }' /tmp/duplicate_verdicts.txt 2>/dev/null)
+            if [ -z "$EVIDENCE" ]; then
+              # No recorded evidence is precisely the uncertainty this check
+              # exists to refuse: post nothing, close nothing.
+              echo "::error::PR #$NUM is listed as closeable but no verdict evidence was recorded for it - leaving it OPEN."
+              continue
             fi
-            gh pr close "$NUM" 2>/dev/null || true
+            echo "  Closing duplicate PR #$NUM (evidence: $EVIDENCE)..."
+            CLOSE_REASON="Auto-closed by the merge queue as a duplicate. Evidence: $EVIDENCE. Squash-merging this PR into the queue branch produced no commit, and a content check against main positively confirmed the PR has nothing upstream that main lacks. If this was a mistake, reopen the PR and re-request a review."
+            COMMENT_URL=$(gh pr comment "$NUM" --body "$CLOSE_REASON" 2>&1) || COMMENT_URL=""
+            if [ -z "$COMMENT_URL" ]; then
+              echo "::error::closure comment failed for PR #$NUM - leaving the PR OPEN rather than closing without an audit trail. Reason NOT posted: $CLOSE_REASON"
+              continue
+            fi
+            echo "  Posted closure reason for PR #$NUM: $COMMENT_URL"
+            if ! gh pr close "$NUM"; then
+              echo "::error::failed to close PR #$NUM after posting the closure reason ($COMMENT_URL) - it stays open."
+            fi
           done
 
       - name: Notify fixer of conflicts
         if: steps.merge.outputs.conflict_count != '0' && steps.merge.outputs.conflict_count != ''
         env:
-          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
-          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          DISPATCH_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_LABEL: "Modulo Branch Fixer"
           # Needed by the undelivered-notification fallback below (FAR-1939):
           # `gh pr comment` authenticates with the job's GITHUB_TOKEN, which
           # carries pull-requests:write (see the job's permissions block).
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured -- skipping notification"; exit 0; fi
+          if [ -z "$DISPATCH_URL" ]; then echo "No webhook URL configured -- skipping notification"; exit 0; fi
           CONFLICTS=$(cat /tmp/conflict_prs.txt 2>/dev/null || echo "")
+          # taskKind marks this as a CONFLICT task so the Branch Fixer selects the
+          # conflict task profile (ONE long attempt) rather than the CI-failure
+          # retry ladder — the same structural marker pr-conflict-reconcile.yml
+          # sends (FAR-1956). Without it the `phase` alone left the receiver to
+          # guess the task kind; FAR-2033 measured 13 budget-hit runs here that
+          # inherited the wrong profile. Extra payload keys flow through
+          # harmlessly; an absent marker keeps the ladder, so older dispatches
+          # keep working.
           BODY=$(jq -n \
             --arg repo "${{ github.repository }}" \
             --arg phase "merge-conflict" \
+            --arg taskKind "conflict" \
             --arg conflictPrs "$CONFLICTS" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            '{repository: $repo, phase: $phase, conflictPrs: $conflictPrs, runUrl: $run_url}')
-          # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5 attempts).
-          # TIMESTAMP and HMAC are recomputed per attempt: the server enforces a
-          # +/-300s replay window on X-Modulo-Timestamp.
-          DISPATCHED="false"
-          LAST_HTTP=""
-          for i in 1 2 3 4 5; do
-            TIMESTAMP=$(date +%s)
-            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
-            RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "$WEBHOOK_URL" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "$BODY")
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-            LAST_HTTP="$HTTP_CODE"
-            if [ "$HTTP_CODE" = "202" ]; then
-              echo "Fixer notified of conflicts in PRs: $CONFLICTS"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "400" ] && echo "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
-              # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
-              # engine's byte-level idempotency guard (DuplicateWebhookError) —
-              # the identical delivery was already ACCEPTED within the ~5-min
-              # dedup window (a concurrent run or a workflow re-run). A handled
-              # no-op, NOT a dispatch failure.
-              echo "::notice::Branch Fixer duplicate delivery suppressed (identical merge-conflict payload already accepted within the dedup window)"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-              DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
-              sleep "$DELAY"
-            else
-              DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: ${DETAIL}"
-              break
-            fi
-          done
-          if [ "$DISPATCHED" != "true" ]; then
-            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
+            '{repository: $repo, phase: $phase, taskKind: $taskKind, conflictPrs: $conflictPrs, runUrl: $run_url}')
+          # One shared retry policy (scripts/dispatch_with_retry.sh): 429
+          # (capacity) and 000/502/503/504 (transient) retry with exponential
+          # backoff + jitter, bounded by an attempt cap AND a 300s wall-clock
+          # budget and honouring Retry-After; every other status is terminal.
+          # The 400 "Duplicate webhook payload" handled no-op (FAR-1097) and
+          # the per-attempt timestamp+HMAC signing (the server enforces a
+          # +/-300s replay window on X-Modulo-Timestamp) are the script's
+          # defaults, mirroring the inline ladder this replaced. The script
+          # exits 1 when the dispatch is never delivered, and it writes
+          # machine-readable results (last HTTP / class / detail / attempt
+          # count) to DISPATCH_RESULT_FILE so the durable comments below cite
+          # the real values. The caller's own success flag is DISPATCH_OK, kept
+          # distinct from the script's DISPATCH_DELIVERED in that file.
+          DISPATCH_RESULT_FILE="/tmp/last_dispatch_result_conflicts.env"
+          rm -f "${DISPATCH_RESULT_FILE}"
+          DISPATCH_OK="false"
+          if DISPATCH_RESULT_FILE="${DISPATCH_RESULT_FILE}" \
+             DISPATCH_BODY="${BODY}" bash scripts/dispatch_with_retry.sh; then
+            DISPATCH_OK="true"
+            echo "Fixer notified of conflicts in PRs: $CONFLICTS"
+          fi
+          if [ "$DISPATCH_OK" != "true" ]; then
+            # shellcheck disable=SC1090
+            source "${DISPATCH_RESULT_FILE}" 2>/dev/null || true
+            LAST_HTTP="${DISPATCH_LAST_HTTP:-unknown}"
+            DETAIL="${DISPATCH_LAST_DETAIL:-unknown}"
             # FAR-1939: an undelivered notification must never be SILENT, and it
             # must be attributable to the PR(s) it concerns. On 2026-10-13 (run
-            # 39026353546) all five attempts returned HTTP 429 ("Concurrent run
+            # 39026353546) every attempt returned HTTP 429 ("Concurrent run
             # limit of 5 reached") and the only trace was this ::error:: inside
             # an already-failing run's log - PR #1925 stayed conflicted with
             # nothing on the PR, or anywhere durable, saying the Branch Fixer
             # had never been asked to reconcile it. So: name the PR(s) in the
             # annotation AND leave a durable comment on each of them, then keep
-            # failing this step (the durable signal is the fix; the retry count
-            # and backoff are deliberately unchanged).
+            # failing this step. The retry policy itself (cap, budget, backoff)
+            # is the SHARED one now.
             echo "::error::Branch Fixer webhook dispatch failed for PR(s) ${CONFLICTS} (HTTP ${LAST_HTTP}: ${DETAIL}) — merge-conflict notification was not delivered."
             for NUM in $CONFLICTS; do
               [ -z "$NUM" ] && continue
-              UNDELIVERED_BODY="The merge queue could NOT deliver its merge-conflict notification to the Branch Fixer for this PR: all 5 webhook attempts failed (last HTTP ${LAST_HTTP}: ${DETAIL}). Until the conflict is reconciled, this PR stays conflicted and the queue keeps skipping it. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              UNDELIVERED_BODY="The merge queue could NOT deliver its merge-conflict notification to the Branch Fixer for this PR: every webhook attempt failed (last HTTP ${LAST_HTTP}: ${DETAIL}). Until the conflict is reconciled, this PR stays conflicted and the queue keeps skipping it. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               if gh pr comment "$NUM" --body "$UNDELIVERED_BODY" > /dev/null 2>&1; then
                 echo "::notice::PR #$NUM: posted a comment recording that the Branch Fixer was never notified."
               else
@@ -1098,8 +1237,9 @@ jobs:
         # must be reported even if the batch later fails validation.
         if: always() && (steps.merge.outputs.migration_collision_count != '0' || steps.migration_heads.outputs.offenders_found == 'true')
         env:
-          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
-          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          DISPATCH_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_LABEL: "Modulo Branch Fixer"
           # Needed by the durable comments below: `gh pr comment` authenticates
           # with the job's GITHUB_TOKEN, which carries pull-requests:write.
           GH_TOKEN: ${{ github.token }}
@@ -1112,8 +1252,8 @@ jobs:
           fi
 
           # Durable, attributable record on every excluded PR, posted BEFORE (and
-          # independently of) the webhook. The old detector exited early when
-          # WEBHOOK_URL was unset, which with skip-instead-of-abort would leave a
+          # independently of) the webhook. The old detector exited early when the
+          # webhook URL was unset, which with skip-instead-of-abort would leave a
           # PR silently excluded from every batch with no trace on the PR itself.
           DETAILS=$(cat /tmp/migration_collision_details.txt 2>/dev/null || true)
           for NUM in $COLLISIONS; do
@@ -1139,57 +1279,44 @@ jobs:
             fi
           done
 
-          if [ -z "$WEBHOOK_URL" ]; then
+          if [ -z "$DISPATCH_URL" ]; then
             echo "No webhook URL configured -- skipping Branch Fixer notification (the PR comment above is the durable record)."
             exit 0
           fi
 
           echo "Migration-collision PRs excluded from the batch: $COLLISIONS"
+          # taskKind marks this as a CONFLICT task so the Branch Fixer selects the
+          # conflict task profile (ONE long attempt) rather than the CI-failure
+          # retry ladder — the same structural marker pr-conflict-reconcile.yml
+          # sends (FAR-1956). A migration-number collision is conflict-class work:
+          # renumber the migration and rebase/merge main, not a generic CI-failure
+          # fix. Without this marker FAR-2033 measured 8 budget-hit runs on this
+          # path inheriting the wrong profile. Extra payload keys flow through
+          # harmlessly; an absent marker keeps the ladder.
           BODY=$(jq -n \
             --arg repo "${{ github.repository }}" \
             --arg phase "migration-collision" \
+            --arg taskKind "conflict" \
             --arg collisionPrs "$COLLISIONS" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            '{repository: $repo, phase: $phase, collisionPrs: $collisionPrs, runUrl: $run_url}')
-          # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5 attempts).
-          DISPATCHED="false"
-          LAST_HTTP=""
-          for i in 1 2 3 4 5; do
-            TIMESTAMP=$(date +%s)
-            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
-            RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "$WEBHOOK_URL" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "$BODY")
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-            LAST_HTTP="$HTTP_CODE"
-            if [ "$HTTP_CODE" = "202" ]; then
-              echo "Fixer notified of migration collisions in PRs: $COLLISIONS"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "400" ] && echo "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
-              # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
-              # engine's byte-level idempotency guard (DuplicateWebhookError) -
-              # the identical delivery was already ACCEPTED within the ~5-min
-              # dedup window (a concurrent run or a workflow re-run). A handled
-              # no-op, NOT a dispatch failure.
-              echo "::notice::Branch Fixer duplicate delivery suppressed (identical migration-collision payload already accepted within the dedup window)"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-              DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
-              sleep "$DELAY"
-            else
-              DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: ${DETAIL}"
-              break
-            fi
-          done
-          if [ "$DISPATCHED" != "true" ]; then
-            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
+            '{repository: $repo, phase: $phase, taskKind: $taskKind, collisionPrs: $collisionPrs, runUrl: $run_url}')
+          # One shared retry policy (scripts/dispatch_with_retry.sh) - see the
+          # merge-conflict notify step above for the contract. The script exits
+          # 1 when the dispatch is never delivered and writes the real last
+          # HTTP / class / detail / attempt count to DISPATCH_RESULT_FILE.
+          DISPATCH_RESULT_FILE="/tmp/last_dispatch_result_migration.env"
+          rm -f "${DISPATCH_RESULT_FILE}"
+          DISPATCH_OK="false"
+          if DISPATCH_RESULT_FILE="${DISPATCH_RESULT_FILE}" \
+             DISPATCH_BODY="${BODY}" bash scripts/dispatch_with_retry.sh; then
+            DISPATCH_OK="true"
+            echo "Fixer notified of migration collisions in PRs: $COLLISIONS"
+          fi
+          if [ "$DISPATCH_OK" != "true" ]; then
+            # shellcheck disable=SC1090
+            source "${DISPATCH_RESULT_FILE}" 2>/dev/null || true
+            LAST_HTTP="${DISPATCH_LAST_HTTP:-unknown}"
+            DETAIL="${DISPATCH_LAST_DETAIL:-unknown}"
             # FAR-1939: an undelivered notification must never be SILENT, and it
             # must be attributable to the PR(s) it concerns (see the merge-
             # conflict notify step above for the incident). The excluded PR(s)
@@ -1198,7 +1325,7 @@ jobs:
             echo "::error::Branch Fixer webhook dispatch failed for PR(s) ${COLLISIONS} (HTTP ${LAST_HTTP}: ${DETAIL}) — migration-collision notification was not delivered."
             for NUM in $COLLISIONS; do
               [ -z "$NUM" ] && continue
-              UNDELIVERED_BODY="The merge queue could NOT deliver its migration-number-collision notification to the Branch Fixer for this PR: all 5 webhook attempts failed (last HTTP ${LAST_HTTP}: ${DETAIL}). This PR has been EXCLUDED from the merge batch and its migration must be renumbered before it can land. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              UNDELIVERED_BODY="The merge queue could NOT deliver its migration-number-collision notification to the Branch Fixer for this PR: every webhook attempt failed (last HTTP ${LAST_HTTP}: ${DETAIL}). This PR has been EXCLUDED from the merge batch and its migration must be renumbered before it can land. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               if gh pr comment "$NUM" --body "$UNDELIVERED_BODY" > /dev/null 2>&1; then
                 echo "::notice::PR #$NUM: posted a comment recording that the Branch Fixer was never notified."
               else
@@ -2172,18 +2299,22 @@ jobs:
       - name: Notify branch-fixer on CI failure
         if: failure() && steps.merge.outputs.merged_count != '0'
         env:
-          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
-          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          DISPATCH_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_LABEL: "Modulo Branch Fixer"
           # Needed by the undelivered-notification fallback below (FAR-1939):
           # `gh pr comment` authenticates with the job's GITHUB_TOKEN, which
           # carries pull-requests:write (see the job's permissions block).
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured -- skipping notification"; exit 0; fi
+          if [ -z "$DISPATCH_URL" ]; then echo "No webhook URL configured -- skipping notification"; exit 0; fi
           MERGED=$(cat /tmp/merged_prs.txt 2>/dev/null || echo "")
           CONFLICTS=$(cat /tmp/conflict_prs.txt 2>/dev/null || echo "")
           FAILURE_DESC=$(cat /tmp/failure_description.txt 2>/dev/null || echo "CI check failed")
+          # Deliberately NO taskKind: this is a CI-failure task, so the absent
+          # marker must keep selecting the CI-failure retry ladder. Only the
+          # conflict-class dispatches above carry `taskKind: conflict` (FAR-2033).
           BODY=$(jq -n \
             --arg repo "${{ github.repository }}" \
             --arg phase "ci-failure" \
@@ -2193,45 +2324,23 @@ jobs:
             --arg failure_description "$FAILURE_DESC" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             '{repository: $repo, phase: $phase, branchName: $branchName, mergedPrs: $merged_prs, conflictPrs: $conflict_prs, failureDescription: $failure_description, runUrl: $run_url}')
-          # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5 attempts).
-          DISPATCHED="false"
-          LAST_HTTP=""
-          for i in 1 2 3 4 5; do
-            TIMESTAMP=$(date +%s)
-            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
-            RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "$WEBHOOK_URL" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "$BODY")
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-            LAST_HTTP="$HTTP_CODE"
-            if [ "$HTTP_CODE" = "202" ]; then
-              echo "Fixer notified of CI failure"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "400" ] && echo "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
-              # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
-              # engine's byte-level idempotency guard (DuplicateWebhookError) —
-              # the identical delivery was already ACCEPTED within the ~5-min
-              # dedup window (a concurrent run or a workflow re-run). A handled
-              # no-op, NOT a dispatch failure.
-              echo "::notice::Branch Fixer duplicate delivery suppressed (identical CI-failure payload already accepted within the dedup window)"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-              DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
-              sleep "$DELAY"
-            else
-              DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: ${DETAIL}"
-              break
-            fi
-          done
-          if [ "$DISPATCHED" != "true" ]; then
-            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
+          # One shared retry policy (scripts/dispatch_with_retry.sh) - see the
+          # merge-conflict notify step above for the contract. The script exits
+          # 1 when the dispatch is never delivered and writes the real last
+          # HTTP / class / detail / attempt count to DISPATCH_RESULT_FILE.
+          DISPATCH_RESULT_FILE="/tmp/last_dispatch_result_ci_failure.env"
+          rm -f "${DISPATCH_RESULT_FILE}"
+          DISPATCH_OK="false"
+          if DISPATCH_RESULT_FILE="${DISPATCH_RESULT_FILE}" \
+             DISPATCH_BODY="${BODY}" bash scripts/dispatch_with_retry.sh; then
+            DISPATCH_OK="true"
+            echo "Fixer notified of CI failure"
+          fi
+          if [ "$DISPATCH_OK" != "true" ]; then
+            # shellcheck disable=SC1090
+            source "${DISPATCH_RESULT_FILE}" 2>/dev/null || true
+            LAST_HTTP="${DISPATCH_LAST_HTTP:-unknown}"
+            DETAIL="${DISPATCH_LAST_DETAIL:-unknown}"
             # FAR-1939: an undelivered notification must never be SILENT, and it
             # must be attributable to the PR(s) it concerns (see the merge-
             # conflict notify step for the incident). The affected PRs are the
@@ -2242,7 +2351,7 @@ jobs:
             echo "::error::Branch Fixer webhook dispatch failed for PR(s) ${AFFECTED} (HTTP ${LAST_HTTP}: ${DETAIL}) — merge-queue CI-failure notification was not delivered."
             for NUM in $AFFECTED; do
               [ -z "$NUM" ] && continue
-              UNDELIVERED_BODY="The merge queue could NOT deliver its CI-failure notification to the Branch Fixer for this PR: all 5 webhook attempts failed (last HTTP ${LAST_HTTP}: ${DETAIL}). The combined validation on the merge-queue branch failed (${FAILURE_DESC}), so nothing was merged and no fix was dispatched. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              UNDELIVERED_BODY="The merge queue could NOT deliver its CI-failure notification to the Branch Fixer for this PR: every webhook attempt failed (last HTTP ${LAST_HTTP}: ${DETAIL}). The combined validation on the merge-queue branch failed (${FAILURE_DESC}), so nothing was merged and no fix was dispatched. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               if gh pr comment "$NUM" --body "$UNDELIVERED_BODY" > /dev/null 2>&1; then
                 echo "::notice::PR #$NUM: posted a comment recording that the Branch Fixer was never notified."
               else

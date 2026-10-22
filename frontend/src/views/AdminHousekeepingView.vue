@@ -11,32 +11,29 @@
         </template>
       </PageHeader>
 
-      <output
-        v-if="loading"
-        class="block space-y-4"
-        aria-busy="true"
-        :aria-label="$t('common.loading')"
-        data-testid="hk-loading"
-      >
-        <div
-          v-for="n in 3"
-          :key="`hk-skeleton-${n}`"
-          class="rounded-lg border bg-card shadow-sm"
-        >
-          <div class="flex items-center gap-3 border-b px-4 py-3">
-            <SkeletonBlock height-class="h-4 w-4" />
-            <div class="flex-1 space-y-2">
-              <SkeletonBlock height-class="h-4 w-40" />
-              <SkeletonBlock height-class="h-3 w-64" />
+      <div v-if="loading" data-testid="hk-loading">
+        <output class="sr-only" aria-live="polite">{{ $t('common.loading') }}</output>
+        <div class="space-y-4" aria-busy="true">
+          <div
+            v-for="n in 3"
+            :key="`hk-skeleton-${n}`"
+            class="rounded-lg border bg-card shadow-sm"
+          >
+            <div class="flex items-center gap-3 border-b px-4 py-3">
+              <SkeletonBlock height-class="h-4 w-4" />
+              <div class="flex-1 space-y-2">
+                <SkeletonBlock height-class="h-4 w-40" />
+                <SkeletonBlock height-class="h-3 w-64" />
+              </div>
+              <SkeletonBlock height-class="h-4 w-16" />
             </div>
-            <SkeletonBlock height-class="h-4 w-16" />
-          </div>
-          <div class="space-y-3 px-4 py-3">
-            <SkeletonBlock height-class="h-3 w-full" />
-            <SkeletonBlock height-class="h-3 w-5/6" />
+            <div class="space-y-3 px-4 py-3">
+              <SkeletonBlock height-class="h-3 w-full" />
+              <SkeletonBlock height-class="h-3 w-5/6" />
+            </div>
           </div>
         </div>
-      </output>
+      </div>
 
       <ErrorAlert
         v-else-if="error"

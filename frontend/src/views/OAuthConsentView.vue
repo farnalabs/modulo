@@ -45,14 +45,15 @@
         {{ $t('views.OAuthConsentView.approved_redirecting') }}
       </output>
 
-      <output
+      <div
         v-if="declined"
-        class="block rounded-xl border bg-card p-6 space-y-2 shadow-sm"
+        class="rounded-xl border bg-card p-6 space-y-2 shadow-sm"
         data-testid="oauth-consent-declined"
       >
+        <output class="sr-only" aria-live="polite">{{ $t('views.OAuthConsentView.declined_title') }}</output>
         <p class="text-lg font-semibold">{{ $t('views.OAuthConsentView.declined_title') }}</p>
         <p class="text-sm text-muted-foreground">{{ $t('views.OAuthConsentView.declined_description') }}</p>
-      </output>
+      </div>
 
       <div v-if="!hasToken && !declined" class="rounded-xl border bg-card p-6 space-y-4 shadow-sm">
         <p class="text-sm text-muted-foreground">{{ $t('views.OAuthConsentView.login_required') }}</p>
@@ -61,13 +62,14 @@
         </Button>
       </div>
 
-      <output
+      <div
         v-else-if="hasToken && !declined && loadingContext"
-        class="block rounded-xl border bg-card p-6 shadow-sm"
+        class="rounded-xl border bg-card p-6 shadow-sm"
         data-testid="oauth-consent-loading"
       >
-        <p class="text-sm text-muted-foreground">{{ $t('views.OAuthConsentView.loading_request') }}</p>
-      </output>
+        <output class="sr-only" aria-live="polite">{{ $t('views.OAuthConsentView.loading_request') }}</output>
+        <p class="text-sm text-muted-foreground" aria-busy="true">{{ $t('views.OAuthConsentView.loading_request') }}</p>
+      </div>
 
       <div v-else-if="hasToken && !declined && context" class="rounded-xl border bg-card p-6 space-y-4 shadow-sm">
         <div class="space-y-1">

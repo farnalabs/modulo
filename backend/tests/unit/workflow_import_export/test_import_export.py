@@ -40,7 +40,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 import yaml
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 
 import modulo.core.workflow_import_export as mod
 from modulo.core.pipeline_engine.git_content import GitContentRefError
@@ -1118,8 +1118,16 @@ async def test_export_pipeline_bundle_omits_binding_with_invisible_backend(
 
 
 def _bindings_ctx() -> SimpleNamespace:
+    session = AsyncMock()
+    # FAR-1825: the binding replace runs in a SAVEPOINT; a bare AsyncMock child
+    # returns a coroutine (not an async context manager), which would make the
+    # fail-open arm swallow a TypeError instead of exercising the replace.
+    nested = MagicMock()
+    nested.__aenter__ = AsyncMock(return_value=None)
+    nested.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested)
     return SimpleNamespace(
-        session=AsyncMock(),
+        session=session,
         org_id=uuid.uuid4(),
         created_by=uuid.uuid4(),
         warnings=[],
@@ -2564,6 +2572,13 @@ def _make_ctx(overrides_model_backends: dict[str, str], rows: list[MagicMock]):
     execute_result.scalars.return_value = rows
     session = MagicMock(name="Session")
     session.execute = AsyncMock(return_value=execute_result)
+    # The binding replace runs inside a SAVEPOINT (FAR-1825). A bare MagicMock
+    # child would return a truthy ``__aexit__`` result and SUPPRESS the raised
+    # error, hiding the fail-open warning this fixture exists to assert.
+    nested = MagicMock(name="NestedTransaction")
+    nested.__aenter__ = AsyncMock(return_value=None)
+    nested.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested)
     return SimpleNamespace(
         session=session,
         org_id=_ORG_ID,
@@ -2802,3 +2817,143 @@ async def test_apply_agent_bindings_persist_cancelled_propagates(monkeypatch: py
 
     with pytest.raises(asyncio.CancelledError):
         await mod._apply_agent_bindings(ctx, agent, ad, {"mb-export": _make_model_backend(uuid.uuid4())}, ctx.warnings)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1825: the binding replace is now bounded, so a contended Agent row can
+# raise SQLSTATE 55P03. The import path is FAIL-OPEN for bindings, but a
+# swallowed 55P03 would abort the caller's transaction — every later statement
+# would then fail and the import could report success around a dead
+# transaction. A SAVEPOINT confines the failure to the bindings.
+# ---------------------------------------------------------------------------
+
+
+class _LockTimeoutDriverError(Exception):
+    """Driver-error double carrying an asyncpg ``sqlstate``."""
+
+    def __init__(self, state: str) -> None:
+        super().__init__(f"driver error {state}")
+        self.sqlstate = state
+
+
+def _lock_timeout_error() -> OperationalError:
+    return OperationalError("SELECT ... FOR UPDATE", {}, _LockTimeoutDriverError("55P03"))
+
+
+class _PoisonTrackingSession(_FakeSession):
+    """Session double modelling Postgres's savepoint-recovery semantics.
+
+    ``in_savepoint`` counts active savepoints. A caller that raises the 55P03
+    WITHOUT one poisons the transaction (``aborted``); a caller that wraps the
+    failing statement in a savepoint leaves the transaction usable. This is what
+    makes the import-savepoint regression test fail on the pre-fix code.
+    """
+
+    def __init__(self, *execute_results: Any) -> None:
+        super().__init__(*execute_results)
+        self.in_savepoint = 0
+        self.aborted = False
+        self.begin_nested = Mock(side_effect=self._begin_nested)
+
+    def _begin_nested(self) -> Any:
+        session = self
+
+        class _Nested:
+            async def __aenter__(self) -> None:
+                session.in_savepoint += 1
+
+            async def __aexit__(
+                self,
+                exc_type: type[BaseException] | None,
+                exc: BaseException | None,
+                tb: object,
+            ) -> bool:
+                session.in_savepoint -= 1
+                return False
+
+        return _Nested()
+
+
+@pytest.mark.asyncio
+async def test_persist_bindings_savepoints_a_lock_timeout_and_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 55P03 from ``replace_agent_bindings`` rolls back only the bindings."""
+    ctx = _make_ctx({}, rows=[])
+    monkeypatch.setattr(mod, "replace_agent_bindings", AsyncMock(side_effect=_lock_timeout_error()))
+
+    await mod._persist_bindings(
+        ctx,
+        "agent-lock",
+        uuid.uuid4(),
+        [
+            {
+                "_backend_id": uuid.uuid4(),
+                "_account_id": _ACCOUNT_ID,
+                "target_env_var": "OPENAI_API_KEY",
+                "source_field": "api_key",
+            }
+        ],
+        ctx.warnings,
+    )
+
+    ctx.session.begin_nested.assert_called_once()
+    assert len(ctx.warnings) == 1
+    assert "runner bindings were not imported" in ctx.warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_materialize_import_keeps_pipeline_and_agent_when_binding_replace_lock_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A contended Agent row degrades to a warning — the import still lands.
+
+    Fails on the pre-FAR-1825 code: the un-savepointed 55P03 aborts the
+    surrounding transaction, so the pipeline/agent writes cannot commit even
+    though the failure was swallowed into a warning. The session double models
+    that: ``replace_agent_bindings`` marks the transaction poisoned when no
+    SAVEPOINT is active, and the later ``create_pipeline`` write refuses to run
+    on a poisoned transaction.
+    """
+    created = _patch_crud(monkeypatch)
+    created["agent"].return_value = SimpleNamespace(id=uuid.uuid4(), name="Agent A")
+    backend = _make_model_backend(uuid.uuid4())
+    binding_rows = MagicMock()
+    binding_rows.scalars.return_value = [backend]
+    session = _PoisonTrackingSession(binding_rows)
+
+    async def _create_pipeline(_session: object, **_kwargs: object) -> SimpleNamespace:
+        assert not session.aborted, "the import transaction was poisoned by the swallowed 55P03"
+        return SimpleNamespace(id=uuid.uuid4())
+
+    created["pipeline"].side_effect = _create_pipeline
+
+    async def _lock_timeout_in_savepoint(*_args: object, **_kwargs: object) -> None:
+        if session.in_savepoint == 0:
+            # No savepoint: the 55P03 aborts the CALLER's transaction.
+            session.aborted = True
+        raise _lock_timeout_error()
+
+    monkeypatch.setattr(mod, "replace_agent_bindings", _lock_timeout_in_savepoint)
+
+    bundle = _make_bundle(
+        agents=[
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Agent A",
+                "prompt_template": "pt",
+                "model_backend_bindings": [
+                    {
+                        "model_backend_name": backend.name,
+                        "target_env_var": "openai_api_key",
+                        "source_field": "api_key",
+                    }
+                ],
+            }
+        ]
+    )
+
+    result = await materialize_import(session, _ORG_ID, _ACCOUNT_ID, bundle)
+
+    assert created["agent"].await_count == 1
+    assert created["pipeline"].await_count == 1
+    assert result["agent_count"] == 1
+    assert any("runner bindings were not imported" in warning for warning in result["warnings"])

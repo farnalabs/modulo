@@ -383,24 +383,22 @@
             </Button>
           </header>
 
-          <output
-            v-if="setsLoading"
-            class="block space-y-2"
-            aria-busy="true"
-            :aria-label="$t('views.ParameterSchemasView.loading_sets')"
-          >
-            <div
-              v-for="n in 4"
-              :key="`paramschema-sets-skeleton-${n}`"
-              class="flex items-center justify-between rounded-lg border bg-card px-4 py-3"
-            >
-              <div class="space-y-2">
-                <SkeletonBlock height-class="h-4 w-40" />
-                <SkeletonBlock height-class="h-3 w-56" />
+          <div v-if="setsLoading">
+            <output class="sr-only" aria-live="polite">{{ $t('views.ParameterSchemasView.loading_sets') }}</output>
+            <div class="space-y-2" aria-busy="true">
+              <div
+                v-for="n in 4"
+                :key="`paramschema-sets-skeleton-${n}`"
+                class="flex items-center justify-between rounded-lg border bg-card px-4 py-3"
+              >
+                <div class="space-y-2">
+                  <SkeletonBlock height-class="h-4 w-40" />
+                  <SkeletonBlock height-class="h-3 w-56" />
+                </div>
+                <SkeletonBlock height-class="h-6 w-24" />
               </div>
-              <SkeletonBlock height-class="h-6 w-24" />
             </div>
-          </output>
+          </div>
           <ErrorAlert v-else-if="setsError" :message="setsError" :on-retry="loadSets" />
 
           <div v-else-if="sets.length === 0" class="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
@@ -598,22 +596,20 @@
 
         <!-- References Tab -->
         <TabPanel value="references" class="space-y-4 pt-4">
-          <output
-            v-if="refsLoading"
-            class="block space-y-4"
-            aria-busy="true"
-            :aria-label="$t('views.ParameterSchemasView.loading_references')"
-          >
-            <div class="space-y-2">
-              <SkeletonBlock height-class="h-4 w-56" />
-              <SkeletonBlock height-class="h-4 w-64" />
-              <SkeletonBlock height-class="h-4 w-48" />
+          <div v-if="refsLoading">
+            <output class="sr-only" aria-live="polite">{{ $t('views.ParameterSchemasView.loading_references') }}</output>
+            <div class="space-y-4" aria-busy="true">
+              <div class="space-y-2">
+                <SkeletonBlock height-class="h-4 w-56" />
+                <SkeletonBlock height-class="h-4 w-64" />
+                <SkeletonBlock height-class="h-4 w-48" />
+              </div>
+              <div class="space-y-2 pt-2">
+                <SkeletonBlock height-class="h-4 w-56" />
+                <SkeletonBlock height-class="h-4 w-64" />
+              </div>
             </div>
-            <div class="space-y-2 pt-2">
-              <SkeletonBlock height-class="h-4 w-56" />
-              <SkeletonBlock height-class="h-4 w-64" />
-            </div>
-          </output>
+          </div>
           <ErrorAlert v-else-if="refsError" :message="refsError" :on-retry="loadReferences" />
 
           <template v-else>

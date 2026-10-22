@@ -53,7 +53,10 @@ def _make_settings() -> Settings:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # A bare ``AsyncMock`` returns an AsyncMock from ``execute()`` and from the
+    # SYNC ``in_transaction()`` / ``get_bind()`` / ``add()`` reads used by the
+    # RLS preamble and ``resolve_authz_enforce``, each orphaning a coroutine.
+    session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=None)

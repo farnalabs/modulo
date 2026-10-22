@@ -20,51 +20,40 @@
       <!-- FAR-1234: point-in-time run metadata resolved when the list loads.
            The notification body still says what the trigger knew; this line
            says what the linked run looks like NOW. -->
-      <p
+      <output
         v-if="hasRunState"
         data-testid="notification-run-state"
         class="mt-1 flex flex-wrap items-center gap-x-1 text-xs"
         :class="runStateClass"
-        role="status"
         aria-live="polite"
       >
         <span class="font-medium">{{ runStateLabel }}</span>
         <span v-if="cancelReasonText" class="text-muted-foreground">{{ cancelReasonText }}</span>
-      </p>
+      </output>
 
       <!-- HITL awaiting affordance: only while the linked run can still be
            reviewed. A terminal run (cancelled/failed/…) demotes this to an
            explanatory label so a stale request never reads as live work. -->
-      <div
+      <output
         v-if="hitlAffordance"
         class="mt-2 flex items-center gap-2 rounded-md px-3 py-2 text-xs"
         :class="hitlAffordanceClass"
-        role="status"
         aria-live="polite"
       >
-        <svg
+        <Info
           v-if="isHitlActionable"
-          xmlns="http://www.w3.org/2000/svg"
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
+          :size="14"
           class="shrink-0 text-muted-foreground"
           aria-hidden="true"
-        >
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="12" y1="8" x2="12" y2="12"/>
-          <line x1="12" y1="16" x2="12.01" y2="16"/>
-        </svg>
+        />
         <span>{{ hitlAffordance }}</span>
-      </div>
+      </output>
 
       <div class="mt-2 flex items-center gap-2">
         <router-link
           v-if="notification.action_url"
           :to="notification.action_url"
+          data-testid="notification-action-link"
           class="text-xs font-medium text-primary-text hover:underline"
         >
           {{ isHitlAwaiting ? $t('components.NotificationCard.awaiting_hitl_view_run') : $t('components.NotificationCard.view') }}
@@ -77,6 +66,7 @@
     <div class="notification-actions absolute right-2 top-2 gap-1">
       <button
         type="button"
+        data-testid="notification-review-later"
         class="rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
         :aria-label="$t('components.NotificationCard.review_later')"
         @click="$emit('review-later', notification.id)"
@@ -85,6 +75,7 @@
       </button>
       <button
         type="button"
+        data-testid="notification-dismiss"
         class="rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-destructive transition-colors"
         :aria-expanded="showDismiss"
         :aria-label="$t('components.NotificationCard.dismiss_this_notification')"
@@ -110,6 +101,7 @@ import type { NotificationResponse } from "../lib/api/notifications";
 import { dismissNotification } from "../lib/api/notifications";
 import DismissDialog from "./DismissDialog.vue";
 import { formatRelativeTime } from "../lib/formatDate";
+import { Info } from "@lucide/vue";
 import { runStatusLabel, cancelReasonLabel } from "../utils/runUtils";
 
 const props = defineProps<{
@@ -213,7 +205,7 @@ async function onDismiss(scope: "self" | "scope") {
     showDismiss.value = false;
     emit("dismissed", props.notification.id);
   } catch (e: unknown) {
-    dismissError.value = e instanceof Error ? e.message : "Failed to dismiss notification";
+    dismissError.value = e instanceof Error ? e.message : t("components.NotificationCard.failed_to_dismiss_notification");
   }
 }
 </script>

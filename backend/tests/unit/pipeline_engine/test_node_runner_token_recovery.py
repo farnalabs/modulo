@@ -35,11 +35,15 @@ def _step_finish(
     cache_write: int | None = None,
     cost: float = 0.01,
 ) -> dict[str, Any]:
-    """One opencode ``step_finish`` JSONL event, shaped as the CLI emits it."""
+    """One opencode ``step_finish`` JSONL event, shaped as the CLI emits it.
+
+    FAR-1914 M2: the CLI nests BOTH ``cost`` and ``tokens`` under ``part``;
+    the top-level shape was never emitted and is no longer parsed.
+    """
     tokens: dict[str, Any] = {"total": total, "input": input_tokens, "output": output_tokens, "reasoning": 0}
     if cache_read is not None or cache_write is not None:
         tokens["cache"] = {"read": cache_read or 0, "write": cache_write or 0}
-    return {"type": "step_finish", "part": {"cost": cost}, "tokens": tokens, "cost": cost}
+    return {"type": "step_finish", "part": {"cost": cost, "tokens": tokens}}
 
 
 def _blob(events: list[dict[str, Any]]) -> str:
@@ -83,7 +87,7 @@ def test_malformed_and_partial_json_lines_are_skipped() -> None:
         [
             '{"type":"step_finish","tokens":{"total":999',  # truncated JSON
             "not json at all",
-            json.dumps({"type": "step_finish", "tokens": {"total": -5, "input": "many", "output": None}}),
+            json.dumps({"type": "step_finish", "part": {"tokens": {"total": -5, "input": "many", "output": None}}}),
             json.dumps({"type": "step_finish"}),  # no tokens object
             json.dumps(good),
         ]
@@ -104,7 +108,7 @@ def test_non_event_payloads_mentioning_step_finish_are_skipped() -> None:
     raw = "\n".join(
         [
             json.dumps(["step_finish"]),  # valid JSON, not an object
-            json.dumps({"type": "step_finish_extra", "tokens": {"total": 999}}),  # wrong type
+            json.dumps({"type": "step_finish_extra", "part": {"tokens": {"total": 999}}}),  # wrong type
             json.dumps(_step_finish(total=5, input_tokens=2, output_tokens=3)),
         ]
     )
@@ -119,7 +123,7 @@ def test_invalid_cache_counter_is_skipped_without_dropping_its_sibling() -> None
     raw = json.dumps(
         {
             "type": "step_finish",
-            "tokens": {"total": 10, "input": 6, "output": 4, "cache": {"read": 3, "write": None}},
+            "part": {"tokens": {"total": 10, "input": 6, "output": 4, "cache": {"read": 3, "write": None}}},
         }
     )
 

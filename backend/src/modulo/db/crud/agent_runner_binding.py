@@ -108,6 +108,13 @@ async def replace_agent_bindings(
 
     validated = _validate_specs(bindings_specs, backends_by_id)
 
+    # FAR-1825: bound the request transaction before its first row lock. The
+    # agent-binding save route and the workflow-import path both reach this
+    # lock inside a caller-owned transaction; a contended agent row must expire
+    # as 55P03 (a visible 409) rather than wait unbounded.
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
     # Serialise concurrent saves on the agent row (transaction-scoped).
     await session.execute(select(Agent.id).where(Agent.id == agent_id).with_for_update())
 

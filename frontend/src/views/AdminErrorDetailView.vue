@@ -17,28 +17,27 @@
       </div>
     </header>
 
-    <output
-      v-if="loading"
-      class="block space-y-4"
-      aria-busy="true"
-      :aria-label="$t('common.loading')"
-      data-testid="admin-error-detail-loading"
-    >
-      <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div v-for="n in 3" :key="'summary-' + n" class="card p-4">
-          <div class="h-3 w-20 animate-pulse rounded bg-muted" />
-          <div class="mt-2 h-5 w-16 animate-pulse rounded bg-muted" />
+    <div v-if="loading" data-testid="admin-error-detail-loading">
+      <!-- Live region carries only the status text; the skeleton blocks are
+           layout, not phrasing content, so they are siblings. -->
+      <output class="sr-only" aria-live="polite">{{ $t('common.loading') }}</output>
+      <div class="space-y-4" aria-busy="true">
+        <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div v-for="n in 3" :key="'summary-' + n" class="card p-4">
+            <div class="h-3 w-20 animate-pulse rounded bg-muted" />
+            <div class="mt-2 h-5 w-16 animate-pulse rounded bg-muted" />
+          </div>
+        </div>
+        <div class="card p-4">
+          <SkeletonBlock height-class="h-5 w-32" />
+          <SkeletonBlock class="mt-3" height-class="h-9 w-64" />
+        </div>
+        <div class="card p-4">
+          <SkeletonBlock height-class="h-5 w-48" />
+          <SkeletonBlock class="mt-2" height-class="h-16 w-full" />
         </div>
       </div>
-      <div class="card p-4">
-        <SkeletonBlock height-class="h-5 w-32" />
-        <SkeletonBlock class="mt-3" height-class="h-9 w-64" />
-      </div>
-      <div class="card p-4">
-        <SkeletonBlock height-class="h-5 w-48" />
-        <SkeletonBlock class="mt-2" height-class="h-16 w-full" />
-      </div>
-    </output>
+    </div>
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadDetail" />
     <template v-else-if="group">
       <div
@@ -192,9 +191,14 @@
 
       <div class="card p-4">
         <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminErrorDetailView.raw_events', { count: eventsTotal }) }}</h2>
-        <output v-if="eventsLoading" class="block space-y-2 py-2" :aria-label="$t('common.loading')" data-testid="admin-error-detail-events-loading">
-          <SkeletonBlock v-for="n in 3" :key="'event-skeleton-' + n" height-class="h-12 w-full" />
-        </output>
+        <div v-if="eventsLoading" class="py-2" data-testid="admin-error-detail-events-loading">
+          <!-- Live region carries only the status text; the skeleton blocks are
+               layout, not phrasing content, so they are siblings. -->
+          <output class="sr-only" aria-live="polite">{{ $t('common.loading') }}</output>
+          <div class="space-y-2" aria-busy="true">
+            <SkeletonBlock v-for="n in 3" :key="'event-skeleton-' + n" height-class="h-12 w-full" />
+          </div>
+        </div>
         <EmptyState
           v-else-if="events.length === 0"
           :title="$t('views.AdminErrorDetailView.no_raw_events_loaded')"

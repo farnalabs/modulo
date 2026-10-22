@@ -8,7 +8,7 @@
       data-testid="onboarding-banner-trigger"
     >
       <div class="relative h-10 w-10 shrink-0">
-        <svg class="h-10 w-10 -rotate-90" viewBox="0 0 32 32">
+        <svg class="h-10 w-10 -rotate-90" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
           <circle cx="16" cy="16" r="14" fill="none" stroke="hsl(var(--border))" stroke-width="3" />
           <circle
             cx="16" cy="16" r="14"
@@ -35,6 +35,7 @@
         class="h-4 w-4 shrink-0 text-muted-foreground transition-transform"
         :class="{ 'rotate-180': expanded }"
         xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        aria-hidden="true" focusable="false"
       >
         <polyline points="6 9 12 15 18 9" />
       </svg>
@@ -55,11 +56,11 @@
             :data-testid="`onboarding-action-${action.id}`"
           >
             <div class="flex h-6 w-6 shrink-0 items-center justify-center">
-              <svg v-if="action.completed" class="h-5 w-5 text-success-text" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <svg v-if="action.completed" class="h-5 w-5 text-success-text" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" focusable="false">
                 <circle cx="12" cy="12" r="10" />
                 <path d="m9 12 2 2 4-4" />
               </svg>
-              <svg v-else-if="action.skipped" class="h-5 w-5 text-muted-foreground" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <svg v-else-if="action.skipped" class="h-5 w-5 text-muted-foreground" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
                 <circle cx="12" cy="12" r="10" />
                 <line x1="8" y1="12" x2="16" y2="12" />
               </svg>

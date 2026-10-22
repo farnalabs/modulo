@@ -29,7 +29,7 @@
 # image is re-scanned and the seed/docs digest constants advance with it.
 # Pin by DIGEST ONLY (no :tag) so the base image reference is unambiguous and
 # cannot silently drift to a different tag.
-ARG BASE_IMAGE=debian@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5
+ARG BASE_IMAGE=debian@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308
 
 FROM ${BASE_IMAGE}
 

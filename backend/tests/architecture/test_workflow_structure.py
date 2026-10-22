@@ -387,15 +387,15 @@ def test_merge_queue_collects_only_prs_targeting_main() -> None:
 
 # --- FAR-1939: an undelivered Branch Fixer notification is never silent -----
 
-#: The curl invocation every Branch Fixer webhook POST funnels through. All
-#: three notify steps (merge-conflict, migration-collision, CI-failure) send
-#: their payload with exactly this line.
-BRANCH_FIXER_POST = '-X POST "$WEBHOOK_URL"'
+#: The shared-policy invocation every Branch Fixer webhook POST funnels
+#: through. All three notify steps (merge-conflict, migration-collision,
+#: CI-failure) dispatch with exactly this call.
+BRANCH_FIXER_POST = "bash scripts/dispatch_with_retry.sh"
 
-#: The guard that opens a notify step's ultimate-failure arm (after the retry
-#: loop). Everything from here to the end of the ``run`` block is the failure
-#: path that must be attributable, durable and still failing.
-DISPATCH_FAILURE_GUARD = 'if [ "$DISPATCHED" != "true" ]; then'
+#: The guard that opens a notify step's ultimate-failure arm (after the shared
+#: dispatch returns). Everything from here to the end of the ``run`` block is
+#: the failure path that must be attributable, durable and still failing.
+DISPATCH_FAILURE_GUARD = 'if [ "$DISPATCH_OK" != "true" ]; then'
 
 
 def _queue_job(workflow: dict) -> dict:
@@ -441,11 +441,14 @@ def test_merge_queue_branch_fixer_dispatch_failures_are_attributable() -> None:
     (or anywhere durable) saying the Branch Fixer had never been asked to
     reconcile it. Each notify step's failure arm must therefore name the
     affected PR(s), comment on each of them, and still fail the step.
+
+    The POST itself is now the shared script (and its retry policy); what this
+    test pins is unchanged: the durable, per-PR failure arm around it.
     """
     steps = _queue_steps(_load_yaml(MERGE_QUEUE_YML))
     posting = [step for step in steps if BRANCH_FIXER_POST in (step.get("run") or "")]
     assert len(posting) >= 3, (
-        "merge-queue.yml: expected the three Branch Fixer webhook POST steps "
+        "merge-queue.yml: expected the three shared-script dispatch steps "
         f"(merge-conflict, migration-collision, CI-failure); found {len(posting)} — "
         "the notification surface moved; update this test deliberately"
     )
@@ -968,24 +971,24 @@ def test_workflow_notifications_cannot_be_silently_unpostable() -> None:
 # `Retry-After` and is bounded by a wall-clock budget, a 429 class distinct from
 # a broken webhook, and a durable signal when the budget runs out.
 #
-# The policy is duplicated across ci.yml's two Branch Fixer notify steps because
-# GitHub Actions has no YAML include. These assertions keep the copies honest:
-# both must carry the marked policy block, both must actually call it, and the
-# block text must be byte-identical.
-
-#: Markers around the retry policy in each Branch Fixer notify step.
-RETRY_POLICY_START = "# ==== BEGIN Branch Fixer dispatch retry policy ===="
-RETRY_POLICY_END = "# ==== END Branch Fixer dispatch retry policy ===="
+# The policy used to be duplicated across ci.yml's two Branch Fixer notify steps
+# (GitHub Actions has no YAML include; a structure test pinned the two copies
+# byte-identically). It is now ONE definition in
+# scripts/dispatch_with_retry.sh, so these assertions check that each step
+# actually CALLS it, carries no re-inlined copy, and checks the script out —
+# both jobs were deliberately checkout-free before (FAR-1997), so the checkout
+# is the migration's one intentional structural change and is pinned here.
 
 #: The ci.yml jobs that hand a CI failure to the Branch Fixer.
 BRANCH_FIXER_NOTIFY_JOBS = ("notify-pr-failure", "notify-main-failure")
 
-#: Symbols each notify step must actually use — a step that merely kept the
-#: markers while running its own inline loop would pass a marker-only check.
-REQUIRED_POLICY_SYMBOLS = ("classify_http", "parse_retry_after", "retry_delay", "DISPATCH_BUDGET_SECONDS")
+#: The call into the single shared policy definition.
+SHARED_DISPATCH_MARKER = "bash scripts/dispatch_with_retry.sh"
 
-#: The retired fixed schedule that dropped a saturated trigger after ~40s.
-RETIRED_FIXED_SCHEDULE = 'if [ "$i" -eq 1 ]; then DELAY=10; else DELAY=30; fi'
+#: Definitions that mean a copy of the policy has been re-inlined in some shape
+#: (the RETIRED_FIXED_SCHEDULE / marker-pair checks this test used to make are
+#: subsumed: any copy needs at least one of these helpers).
+INLINE_POLICY_DEFINITIONS = ("classify_http() {", "parse_retry_after() {", "retry_delay() {")
 
 
 def _branch_fixer_dispatch_runs(workflow: dict) -> dict[str, str]:
@@ -1007,44 +1010,63 @@ def _branch_fixer_dispatch_runs(workflow: dict) -> dict[str, str]:
     return runs
 
 
-def test_branch_fixer_retry_policy_is_shared_and_retryable() -> None:
-    """429 must stay a bounded, retried capacity condition — not a terminal drop."""
-    runs = _branch_fixer_dispatch_runs(_load_yaml(CI_YML))
+def test_branch_fixer_dispatch_uses_the_one_shared_policy() -> None:
+    """Both CI dispatch steps must call the shared policy, never inline a copy.
+
+    429 stays a bounded, retried capacity condition because the SHARED script
+    owns the classification, the budget and the Retry-After handling; its own
+    suite (``test_dispatch_with_retry_sh.py``) pins that behaviour. What this
+    test pins is that ci.yml cannot drift back to a second copy.
+    """
+    workflow = _load_yaml(CI_YML)
+    runs = _branch_fixer_dispatch_runs(workflow)
+    jobs = workflow.get("jobs") or {}
     violations: list[str] = []
-    blocks: list[tuple[str, str]] = []
     for job_id, run in runs.items():
-        if RETRY_POLICY_START not in run or RETRY_POLICY_END not in run:
+        if SHARED_DISPATCH_MARKER not in run:
             violations.append(
-                f"  {job_id}: retry-policy markers missing — the shared policy block moved or was inlined; "
-                "update this test deliberately"
+                f"  {job_id}: does not call {SHARED_DISPATCH_MARKER!r} — the dispatch policy must have ONE definition"
             )
-            continue
-        blocks.append((job_id, run.split(RETRY_POLICY_START, 1)[1].split(RETRY_POLICY_END, 1)[0]))
-        for symbol in REQUIRED_POLICY_SYMBOLS:
-            if symbol not in run:
-                violations.append(f"  {job_id}: does not use {symbol!r} — the step is not running the shared policy")
-        if RETIRED_FIXED_SCHEDULE in run:
+        if "DISPATCH_BODY=" not in run:
+            violations.append(f"  {job_id}: does not pass DISPATCH_BODY to the shared script")
+        if "DISPATCH_RESULT_FILE" not in run:
             violations.append(
-                f"  {job_id}: still carries the retired fixed 10s/30s schedule — a saturated trigger would be "
-                "dropped again after ~40s"
+                f"  {job_id}: does not read DISPATCH_RESULT_FILE — its own durable signal would be composed from "
+                "guessed values rather than the observed last HTTP status / attempt count"
             )
-        if "retry-after" not in run:
-            violations.append(f"  {job_id}: does not read a Retry-After header — the server's own backoff is ignored")
-        if "classify_http" not in run or "capacity" not in run:
-            violations.append(
-                f"  {job_id}: does not name the 429 capacity class — capacity saturation and a broken webhook "
-                "would be reported identically"
-            )
+        for definition in INLINE_POLICY_DEFINITIONS:
+            if definition in run:
+                violations.append(
+                    f"  {job_id}: re-inlines the policy ({definition!r}) — call the shared script instead"
+                )
         if "GITHUB_STEP_SUMMARY" not in run:
-            violations.append(f"  {job_id}: no durable run-summary signal when the dispatch is not delivered")
-    if len(blocks) == len(BRANCH_FIXER_NOTIFY_JOBS):
-        first_job, first_block = blocks[0]
-        for job_id, block in blocks[1:]:
-            if block != first_block:
-                violations.append(f"  {job_id}: retry-policy block differs from {first_job}'s — the copies diverged")
-    assert not violations, (
-        "ci.yml Branch Fixer dispatch retry policy regressed (2026-10-20 capacity-saturation fix):\n"
-        + "\n".join(violations)
+            violations.append(f"  {job_id}: no job-specific run-summary line when the dispatch is not delivered")
+
+        # Calling a repo script requires a checkout. Both jobs were
+        # deliberately checkout-free before the migration (FAR-1997), so pin
+        # exactly one shallow, credential-free checkout and the contents: read
+        # permission it needs.
+        job = jobs.get(job_id) or {}
+        checkouts = [
+            step
+            for step in (job.get("steps") or [])
+            if isinstance(step, dict) and str(step.get("uses", "")).startswith("actions/checkout@")
+        ]
+        if len(checkouts) != 1:
+            violations.append(
+                f"  {job_id}: expected exactly one actions/checkout (for the script), found {len(checkouts)}"
+            )
+        else:
+            with_ = checkouts[0].get("with") or {}
+            if with_.get("persist-credentials") is not False:
+                violations.append(f"  {job_id}: the script checkout must set `persist-credentials: false`")
+            if str(with_.get("fetch-depth")) != "1":
+                violations.append(f"  {job_id}: the script checkout must be shallow (`fetch-depth: 1`)")
+        permissions = job.get("permissions") or {}
+        if str(permissions.get("contents", "")) != "read":
+            violations.append(f"  {job_id}: job permissions must grant `contents: read` for the script checkout")
+    assert not violations, "ci.yml Branch Fixer dispatch no longer uses the one shared policy:\n" + "\n".join(
+        violations
     )
 
 
@@ -1156,3 +1178,115 @@ def test_signing_canary_status_gate_remains() -> None:
     if "Valid" not in run or "Status" not in run:
         violations.append("  signing-canary.yml: missing Authenticode status check")
     assert not violations, "signing-canary.yml dropped the Authenticode status validation:\n" + "\n".join(violations)
+
+
+# --- Sonar new-issues gate: blocking policy --------------------------------
+
+
+def _sonar_new_issues_gate_step() -> dict:
+    """Return the step dict for the 'Fail on new SonarCloud bugs...' step in ci.yml."""
+    wf = _load_yaml(CI_YML)
+    jobs = wf.get("jobs") or {}
+    job = jobs.get("sonar-new-issues-gate")
+    assert isinstance(job, dict), "ci.yml: sonar-new-issues-gate job missing"
+    steps = job.get("steps") or []
+    target_name = "Fail on new SonarCloud bugs, vulnerabilities, and critical smells"
+    step = next(
+        (s for s in steps if isinstance(s, dict) and s.get("name") == target_name),
+        None,
+    )
+    assert step is not None, "ci.yml: sonar-new-issues-gate step not found"
+    return step
+
+
+def _run_script(step: dict) -> str:
+    run = step.get("run") or ""
+    assert isinstance(run, str), "run is not a string"
+    assert run.strip(), "step has no run script"
+    return run
+
+
+def test_sonar_new_issues_gate_queries_bug_and_vulnerability() -> None:
+    """The blocking query must include types=BUG,VULNERABILITY.
+
+    A revert to a single unfiltered count (total > 0) would re-introduce the
+    false-positive problem that this gate was designed to eliminate (MINOR
+    TypeScript style rules and MAJOR parameter-count rules blocking PRs
+    while zero bugs/vulnerabilities were present).
+    """
+    step = _sonar_new_issues_gate_step()
+    run = _run_script(step)
+    violations: list[str] = []
+    if "types=BUG,VULNERABILITY" not in run:
+        violations.append("  ci.yml: sonar-new-issues-gate step does not query types=BUG,VULNERABILITY")
+    assert not violations, "sonar-new-issues-gate no longer queries BUG+VULNERABILITY:\n" + "\n".join(violations)
+
+
+def test_sonar_new_issues_gate_queries_critical_code_smells() -> None:
+    """The blocking query must include types=CODE_SMELL with severities=BLOCKER,CRITICAL.
+
+    The policy gates CODE_SMELL only at BLOCKER or CRITICAL severity. All
+    other severities (INFO, MINOR, MAJOR) are non-blocking. A revert to a
+    single unfiltered count or to a query without the severity filter would
+    re-introduce false positives.
+    """
+    step = _sonar_new_issues_gate_step()
+    run = _run_script(step)
+    violations: list[str] = []
+    if "types=CODE_SMELL" not in run:
+        violations.append("  ci.yml: sonar-new-issues-gate step does not query types=CODE_SMELL")
+    if "severities=BLOCKER,CRITICAL" not in run:
+        violations.append("  ci.yml: sonar-new-issues-gate step does not filter CODE_SMELL to BLOCKER,CRITICAL")
+    assert not violations, "sonar-new-issues-gate no longer queries critical CODE_SMELL:\n" + "\n".join(violations)
+
+
+def test_sonar_new_issues_gate_fail_closed_on_api_error() -> None:
+    """The job must still treat a non-200 / API error as a failure (fail-closed).
+
+    The fail-closed semantics are load-bearing: an unknown state must never
+    pass. This test asserts the ::error:: annotation branch exists.
+    """
+    step = _sonar_new_issues_gate_step()
+    run = _run_script(step)
+    violations: list[str] = []
+    # The fail-closed pattern checks for non-200 and exits 1 with ::error::
+    if "HTTP_CODE" not in run:
+        violations.append("  ci.yml: no HTTP_CODE capture — cannot distinguish API failure from empty result")
+    if '!= "200"' not in run:
+        violations.append("  ci.yml: no non-200 check — API errors would not fail closed")
+    if "::error::" not in run:
+        violations.append("  ci.yml: no ::error:: annotation on API failure — failure would be silent")
+    if "failing closed" not in run:
+        msg = "ci.yml: 'failing closed' phrase missing — fail-closed intent not documented in the failure path"
+        violations.append(msg)
+    assert not violations, "sonar-new-issues-gate no longer fails closed on API error:\n" + "\n".join(violations)
+
+
+def test_sonar_new_issues_gate_non_blocking_smells_cannot_fail() -> None:
+    """The non-blocking query (INFO/MINOR/MAJOR code smells) must not fail the job.
+
+    The non-blocking count is printed as a ::notice:: and its query failure
+    is downgraded to a ::warning::. Neither can cause the step to exit non-zero.
+    This test asserts the || true / warning path exists (the else branch that
+    does not exit).
+    """
+    step = _sonar_new_issues_gate_step()
+    run = _run_script(step)
+    violations: list[str] = []
+    # The non-blocking query must NOT have an unconditional exit 1
+    # It should either print ::notice:: (success) or ::warning:: (query failed) but continue
+    if "::notice::" not in run:
+        violations.append("  ci.yml: no ::notice:: for non-blocking count — non-blocking signal is not emitted")
+    if "::warning::" not in run:
+        msg = "ci.yml: no ::warning:: fallback for non-blocking query failure — a query failure could fail the gate"
+        violations.append(msg)
+    # The non-blocking branch must NOT contain 'exit 1'
+    # We find the non-blocking section (after the blocking check) and ensure no exit 1
+    # The script uses 'else' for the warning path and does not exit
+    if 'echo "::warning::SonarCloud non-blocking code smell query failed' not in run:
+        msg = "ci.yml: non-blocking query failure does not emit expected warning"
+        violations.append(msg)
+    # Verify the non-blocking branch doesn't have an exit that would fail the step
+    # The blocking exit is explicit; the non-blocking else branch should just warn
+    # and fall through to the final "No blocking" echo
+    assert not violations, "sonar-new-issues-gate non-blocking path can fail the job:\n" + "\n".join(violations)

@@ -282,16 +282,19 @@ describe('SettingsNotificationsView', () => {
     expect(selectedLevel(wrapper)).toBe('error')
   })
 
-  it('falls back to warning when GET omits or invalidates the dashboard_level', async () => {
+  it('falls back to info when GET omits or invalidates the dashboard_level', async () => {
+    // The fallback mirrors the backend's default (FAR-2024), so a missing or
+    // unrecognised level renders as the same value the backend returns for an
+    // account that has stored nothing.
     okGet({ notification_opt_outs: { 'run.failed': false } })
     const omitted = await mountView()
-    expect(selectedLevel(omitted)).toBe('warning')
+    expect(selectedLevel(omitted)).toBe('info')
     omitted.unmount()
 
     okGet({ dashboard_level: 'nonsense', notification_opt_outs: { 'run.failed': false } })
     const invalid = await mountView()
     // (b) an unrecognised level never reaches the control.
-    expect(selectedLevel(invalid)).toBe('warning')
+    expect(selectedLevel(invalid)).toBe('info')
   })
 
   it('marks the saving switch busy and names the in-flight state in text', async () => {

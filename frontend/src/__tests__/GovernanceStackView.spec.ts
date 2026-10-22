@@ -306,6 +306,30 @@ describe('GovernanceStackView — per-level isolation', () => {
     expect(wrapper.find('[data-testid="governance-level-ready-telemetry"]').exists()).toBe(true)
   })
 
+  it('groups the restricted notice natively, keeping the level name as its accessible name', async () => {
+    mockDefaults({
+      '/api/v1/connectors': {
+        data: undefined,
+        error: { status: 403, detail: 'forbidden' },
+        response: { status: 403 },
+      },
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    const block = wrapper.find('[data-testid="governance-level-restricted-tools"]')
+    // Web:S6819 - the grouping is a native <fieldset>, not a div with
+    // role="group". The visually-hidden legend carries the raw level name, so
+    // the group is still announced as "Tools" without a second visible heading.
+    expect(block.element.tagName).toBe('FIELDSET')
+    expect(block.attributes('role')).toBeUndefined()
+    const legend = block.find('legend')
+    expect(legend.exists()).toBe(true)
+    expect(legend.classes()).toContain('sr-only')
+    expect(legend.text()).toBe('Tools')
+  })
+
   it('marks a 402 feature-gated level restricted as well', async () => {
     mockDefaults({
       '/api/v1/libraries': {
