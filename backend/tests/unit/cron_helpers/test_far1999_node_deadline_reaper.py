@@ -28,15 +28,22 @@ Covered:
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import Column, MetaData, Table, Text, Uuid, select, text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from modulo.core import cron_helpers as ch
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
+from modulo.db.models.base import Base
+from modulo.db.models.run import Run
+from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, RunNodeOutput
 
 ORG = uuid.uuid4()
 STALE_WINDOW_SECONDS = 600
@@ -467,3 +474,198 @@ class TestRowLoopReaperWiring:
         reaper.assert_not_awaited()
         assert summary["node_started_executor_lost"] == 1
         assert not terminalized
+
+
+# ---------------------------------------------------------------------------
+# FAR-2052: a bookkeeping ``__final__`` row is NOT node progress
+# ---------------------------------------------------------------------------
+# The zero-progress legs mean "no NODE finalised a store row". The managed
+# workspace-input audit (FAR-801) writes ``(run_id, '__mwi_audit__',
+# '__final__')`` BEFORE any node runs, so an unscoped ``__final__`` leg made a
+# run whose inputs were merely resolved read as already-progressing: the
+# nodeless repairs and this reaper skipped a run that never completed a node.
+# These tests execute the REAL predicates against REAL seeded rows, so the
+# verdict is observed rather than injected as a hand-set flag.
+
+
+def _run_row(*, org_id: uuid.UUID, run_number: int, thread_id: str) -> dict[str, Any]:
+    """One insertable ``runs`` row carrying the NOT-NULL columns only."""
+    return {
+        "id": uuid.uuid4(),
+        "organisation_id": org_id,
+        "pipeline_id": uuid.uuid4(),
+        "snapshot_id": uuid.uuid4(),
+        "trigger_type": "manual",
+        "run_number": run_number,
+        "input_hash": f"{run_number:064d}",
+        "langgraph_thread_id": thread_id,
+        "status": "running",
+        "started_at": datetime.now(UTC),
+    }
+
+
+def _final_row(
+    org_id: uuid.UUID, run_row: dict[str, Any], node_id: str, outputs: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """One insertable ``__final__`` row for *run_row* and *node_id*.
+
+    *outputs* is the row's ``outputs_json`` payload — real audit rows and the
+    run-metadata row always carry one (the metadata row's is CHECK-enforced).
+    """
+    return {
+        "organisation_id": org_id,
+        "run_id": run_row["id"],
+        "node_id": node_id,
+        "attempt_key": FINAL_ATTEMPT_KEY,
+        "outputs_json": outputs,
+    }
+
+
+@pytest.fixture
+async def final_row_db() -> AsyncGenerator[dict[str, Any], None]:
+    """Three runs against a real (in-memory SQLite) ``run_node_outputs`` schema.
+
+    * ``audit_only`` — an otherwise zero-progress run whose ONLY ``__final__``
+      row is the pre-node workspace-input audit (the FAR-2052 defect case).
+    * ``real_node`` — the same audit row PLUS a genuine completed node's row.
+    * ``meta_only`` — only the run-metadata bookkeeping row.
+    """
+    engine = create_async_engine("sqlite+aiosqlite://", echo=False)
+    checkpoints = Table(
+        "checkpoints",
+        MetaData(),
+        Column("organisation_id", Uuid),
+        Column("thread_id", Text),
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(
+            lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[Run.__table__, RunNodeOutput.__table__])
+        )
+        await conn.run_sync(lambda sync_conn: checkpoints.create(sync_conn, checkfirst=True))
+    org_id = uuid.uuid4()
+    runs = {
+        "audit_only": _run_row(org_id=org_id, run_number=1, thread_id="thread-audit"),
+        "real_node": _run_row(org_id=org_id, run_number=2, thread_id="thread-real"),
+        "meta_only": _run_row(org_id=org_id, run_number=3, thread_id="thread-meta"),
+    }
+    async with engine.begin() as conn:
+        await conn.execute(Run.__table__.insert(), list(runs.values()))
+        await conn.execute(
+            RunNodeOutput.__table__.insert(),
+            [
+                # FAR-801's pre-node audit row: the ONLY __final__ row of
+                # ``audit_only`` (it carries the resolved-input payload, exactly
+                # like the production write).
+                _final_row(org_id, runs["audit_only"], AUDIT_NODE_ID, {"workspace_inputs": []}),
+                # The same audit row on a run that also completed a node.
+                _final_row(org_id, runs["real_node"], AUDIT_NODE_ID, {"workspace_inputs": []}),
+                _final_row(org_id, runs["real_node"], "node-1"),
+                _final_row(
+                    org_id,
+                    runs["meta_only"],
+                    META_NODE_ID,
+                    {"empty_outputs": False, "empty_telemetry": False},
+                ),
+            ],
+        )
+    try:
+        yield {"engine": engine, "runs": runs}
+    finally:
+        await engine.dispose()
+
+
+async def _outputs_absent(engine: Any, run_id: uuid.UUID) -> bool:
+    """The reconcile scan's ``outputs_absent`` flag for one run, from real rows."""
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                select(Run.id, ch._final_row_absent_expr().label("outputs_absent")).where(Run.id == run_id)
+            )
+        ).one()
+    return bool(row.outputs_absent)
+
+
+class TestBookkeepingFinalRowIsNotProgress:
+    """FAR-2052 — only a real node's ``__final__`` row disproves zero progress."""
+
+    async def test_audit_only_run_reports_no_node_final_row(self, final_row_db: dict[str, Any]) -> None:
+        flags = await _outputs_absent(final_row_db["engine"], final_row_db["runs"]["audit_only"]["id"])
+        assert flags is True
+
+    async def test_run_metadata_row_alone_is_not_node_progress(self, final_row_db: dict[str, Any]) -> None:
+        flags = await _outputs_absent(final_row_db["engine"], final_row_db["runs"]["meta_only"]["id"])
+        assert flags is True
+
+    async def test_a_real_node_final_row_is_not_zero_progress(self, final_row_db: dict[str, Any]) -> None:
+        flags = await _outputs_absent(final_row_db["engine"], final_row_db["runs"]["real_node"]["id"])
+        assert flags is False
+
+    async def test_reaper_classifier_selects_the_audit_only_run(self, final_row_db: dict[str, Any]) -> None:
+        row = _node_started_run(phase_entered_at=datetime.now(UTC) - timedelta(minutes=90))
+        row.outputs_absent = await _outputs_absent(final_row_db["engine"], final_row_db["runs"]["audit_only"]["id"])
+        assert ch._is_node_started_no_progress_row(row) is True
+
+    async def test_reaper_path_terminalises_the_audit_only_run(self, final_row_db: dict[str, Any]) -> None:
+        """The reaper's own chokepoint, fed the DB-derived flag."""
+        run = _node_started_run(phase_entered_at=datetime.now(UTC) - timedelta(minutes=90))
+        flags = await _outputs_absent(final_row_db["engine"], final_row_db["runs"]["audit_only"]["id"])
+        session = _ReaperSession(run, outputs_absent=flags)
+        summary: dict[str, Any] = {"node_deadline_reaped": 0}
+        with patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock):
+            reaped = await ch._fail_node_deadline_run(
+                session,
+                run.id,
+                ORG,
+                summary,
+                stale_window=STALE_WINDOW_SECONDS,
+                node_budget_seconds=NODE_BUDGET_SECONDS,
+            )
+
+        assert reaped is True
+        assert run.status == "failed"
+        assert run.error_code == ch._NODE_DEADLINE_EXCEEDED_ERROR_CODE
+
+    async def test_reaper_path_leaves_the_real_node_run_alone(self, final_row_db: dict[str, Any]) -> None:
+        run = _node_started_run(phase_entered_at=datetime.now(UTC) - timedelta(minutes=90))
+        flags = await _outputs_absent(final_row_db["engine"], final_row_db["runs"]["real_node"]["id"])
+        session = _ReaperSession(run, outputs_absent=flags)
+        summary: dict[str, Any] = {"node_deadline_reaped": 0}
+        with patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock):
+            reaped = await ch._fail_node_deadline_run(
+                session,
+                run.id,
+                ORG,
+                summary,
+                stale_window=STALE_WINDOW_SECONDS,
+                node_budget_seconds=NODE_BUDGET_SECONDS,
+            )
+
+        assert reaped is False
+        assert run.status == "running"
+        assert summary["node_deadline_reaped"] == 0
+
+    async def test_raw_zero_progress_shape_selects_only_bookkeeping_only_runs(
+        self, final_row_db: dict[str, Any]
+    ) -> None:
+        """The raw-SQL twin (nodeless router / age gate / SAQ sweep) agrees."""
+        async with final_row_db["engine"].connect() as conn:
+            selected = {
+                uuid.UUID(str(value))
+                for (value,) in (
+                    await conn.execute(
+                        # Static template + str.replace (never f-string/``+``) keeps
+                        # the statement text identical to the one the router, age
+                        # gate and SAQ sweep assemble.
+                        text("SELECT id FROM runs WHERE __SHAPE__".replace("__SHAPE__", ch._ZERO_PROGRESS_SHAPE_SQL)),
+                        {
+                            "final_key": FINAL_ATTEMPT_KEY,
+                            "first_node_phase": PHASE_FIRST_NODE_DISPATCHED,
+                        },
+                    )
+                ).all()
+            }
+
+        runs = final_row_db["runs"]
+        assert runs["audit_only"]["id"] in selected
+        assert runs["meta_only"]["id"] in selected
+        assert runs["real_node"]["id"] not in selected

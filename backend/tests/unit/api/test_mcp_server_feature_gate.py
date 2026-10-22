@@ -84,7 +84,11 @@ def _make_settings() -> Settings:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct children: the consent-approve path reaches the real
+    # ``create_authorization_code``, whose ``session.add(...)`` is SYNC — a bare
+    # AsyncMock child orphans the call coroutine (and ``execute()`` returning an
+    # AsyncMock leaks the SYNC result reads too).
+    session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=None)
@@ -589,8 +593,8 @@ def test_pre_auth_authorize_is_denied_not_401_when_flag_off() -> None:
         patch("modulo.api.mcp_server.set_rls_org", new=AsyncMock()),
         patch("modulo.auth.oauth.get_oauth_client_by_client_id", new=AsyncMock(return_value=_mock_client())),
         patch("modulo.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=False)),
-        patch("modulo.auth.oauth.normalize_scopes", new=AsyncMock(return_value=["trigger:run"])),
-        patch("modulo.auth.oauth.validate_client_scopes", new=AsyncMock(return_value=["trigger:run"])),
+        patch("modulo.auth.oauth.normalize_scopes", new=MagicMock(return_value=["trigger:run"])),
+        patch("modulo.auth.oauth.validate_client_scopes", new=MagicMock(return_value=["trigger:run"])),
         _pre_auth_client() as c,
     ):
         resp = c.get("/mcp/oauth/authorize", params=_AUTHORIZE_QUERY)
@@ -607,8 +611,8 @@ def test_pre_auth_authorize_redirects_to_consent_when_flag_on() -> None:
         patch("modulo.api.mcp_server.set_rls_org", new=AsyncMock()),
         patch("modulo.auth.oauth.get_oauth_client_by_client_id", new=AsyncMock(return_value=_mock_client())),
         patch("modulo.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=True)),
-        patch("modulo.auth.oauth.normalize_scopes", new=AsyncMock(return_value=["trigger:run"])),
-        patch("modulo.auth.oauth.validate_client_scopes", new=AsyncMock(return_value=["trigger:run"])),
+        patch("modulo.auth.oauth.normalize_scopes", new=MagicMock(return_value=["trigger:run"])),
+        patch("modulo.auth.oauth.validate_client_scopes", new=MagicMock(return_value=["trigger:run"])),
         patch("modulo.auth.oauth.create_consent_state", new=AsyncMock()),
         _pre_auth_client() as c,
     ):
@@ -630,8 +634,8 @@ def test_pre_auth_authorize_writes_no_consent_state_when_flag_off() -> None:
         patch("modulo.api.mcp_server.set_rls_org", new=AsyncMock()),
         patch("modulo.auth.oauth.get_oauth_client_by_client_id", new=AsyncMock(return_value=_mock_client())),
         patch("modulo.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=False)),
-        patch("modulo.auth.oauth.normalize_scopes", new=AsyncMock(return_value=["trigger:run"])),
-        patch("modulo.auth.oauth.validate_client_scopes", new=AsyncMock(return_value=["trigger:run"])),
+        patch("modulo.auth.oauth.normalize_scopes", new=MagicMock(return_value=["trigger:run"])),
+        patch("modulo.auth.oauth.validate_client_scopes", new=MagicMock(return_value=["trigger:run"])),
         patch("modulo.auth.oauth.create_consent_state", new=AsyncMock()) as mock_create_state,
         _pre_auth_client() as c,
     ):

@@ -203,19 +203,37 @@ The cadence gap described above (no per-organisation **time** bound, only a row
 budget) was closed by FAR-1525 (PR #1342): each org's reconcile pass now runs
 under its own timeout at `DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS` (default 30,
 min 1, max 119), clamped to the tick's remaining budget minus a 15 s tail
-reserve for facts/sweeps. On expiry the org's transaction rolls back, a truthful
-`status='timeout'` / `org_timeouts` marker names the org, and the loop
-continues – one hung org can no longer consume the whole inner deadline.
+reserve for facts/sweeps – one hung org can no longer consume the whole inner
+deadline. FAR-1643 then split what "expiry" means, because the production
+deferrals were localised to time spent PROCESSING rows, and a rollback there
+discarded work that was already done. Today there are two distinct paths:
+
+1. **Row-loop deferral (the expected path):** once less than an adaptive margin –
+   `min(5s, max(0.25s, slice/2))` – remains in the org's slice, the per-row loop
+   stops STARTING rows, counts the unstarted rows in the distinct
+   `row_loop_time_deferred` tick counter, and returns normally. The rows and
+   terminalizers it already repaired COMMIT, the remainder drains on the next
+   60 s tick, and the tick stays `ok` by design (a partial pass is not a
+   failure; the counter plus the WARNING is the visibility).
+2. **Hard backstop:** the caller's `asyncio.timeout` is untouched and still
+   fires when a SINGLE row overruns the slice on its own. Then the org's
+   transaction rolls back, a truthful `status='timeout'` / `org_timeouts`
+   marker names the org, and the loop continues with the remaining orgs.
 
 ## Follow-ups
 
-- **Done (FAR-1525, PR #1342):** a per-organisation **time** bound inside
-  `dispatcher_reconcile`. The row budget from FAR-1425 caps *how much* work one
-  organisation can do, but a single hung await could still eat the whole
-  95-second deadline (the seven timeout ticks above) – now each pass is cut at
-  `DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS` (default 30 s), clamped to the
-  tick's remaining budget minus a tail reserve for facts/sweeps, and the tick
-  records a truthful timeout marker and continues.
+- **Done (FAR-1525, PR #1342; refined by FAR-1643):** a per-organisation
+  **time** bound inside `dispatcher_reconcile`. The row budget from FAR-1425
+  caps *how much* work one organisation can do, but a single hung await could
+  still eat the whole 95-second deadline (the seven timeout ticks above) – now
+  each pass is cut at `DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS` (default 30 s),
+  clamped to the tick's remaining budget minus a tail reserve for facts/sweeps.
+  Since FAR-1643 the two expiry paths are distinct: a row loop that reaches the
+  slice defers the remaining rows (`row_loop_time_deferred`), commits the
+  processed prefix and keeps the tick `ok`, while a single row that overruns the
+  slice on its own is still cut by the `asyncio.timeout` backstop – that path
+  rolls back and records the truthful `status='timeout'` / `org_timeouts`
+  marker – and the loop continues.
 - **Needs human:** obtain a Fly metrics token (or read the dashboard) and
   confirm CPU/memory saturation on the worker during a run-heavy window; if it
   is not saturated, the connection-loss hypothesis (item 2 above) becomes the

@@ -14,6 +14,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -70,7 +71,11 @@ def _make_agent() -> MagicMock:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct double: the permission dependency's authz-enforce read
+    # calls ``result.scalar_one_or_none()`` (SYNC on a real Result) and the RLS
+    # preamble reads ``in_transaction()``/``get_bind()``/``add()`` synchronously;
+    # a bare AsyncMock turns each into a never-awaited coroutine.
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -309,6 +314,18 @@ def test_update_agent_reassigns_input_output_schemas(client: TestClient) -> None
     agent = _make_agent()
     new_input = uuid.uuid4()
     new_output = uuid.uuid4()
+    # The PATCH resolves each requested (schema_id, "latest", org) pair before
+    # writing. Serve a resolved row: without an explicit stub the empty default
+    # result would be a genuine 422, not a schema reassignment.
+    mock_session = _make_mock_session()
+    resolved = MagicMock()
+    resolved.scalar_one_or_none.return_value = object()
+    mock_session.execute = AsyncMock(return_value=resolved)
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_db_session] = override_session
     with (
         patch(f"{_AGENT_PATCH_PREFIX}get_agent", return_value=agent),
         patch(f"{_AGENT_PATCH_PREFIX}update_agent", return_value=agent) as mock_update,

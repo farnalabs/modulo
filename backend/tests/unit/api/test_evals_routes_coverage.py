@@ -26,6 +26,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -77,7 +78,11 @@ class _BeginRaiser:
 
 
 def _make_session(begin_exc: Exception | None = None) -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct double: the RLS preamble reads ``in_transaction()`` /
+    # ``get_bind()`` / ``add()`` synchronously, so those must be sync mocks —
+    # a bare AsyncMock turns each call into a never-awaited coroutine. The
+    # ``execute`` contract is stubbed explicitly below.
+    session = configure_rls_preamble(AsyncMock())
     if begin_exc is not None:
         session.begin = MagicMock(return_value=_BeginRaiser(begin_exc))
         return session

@@ -359,11 +359,16 @@ class TestHealthCheckNoExceptionLeak:
             patch("modulo.api.routes.health.get_settings", return_value=_make_health_settings()),
             patch("modulo.api.routes.health.get_or_create_engine") as mock_engine,
         ):
+            # ``engine.connect`` must return the ASYNC context manager itself
+            # (a sync lambda), not an AsyncMock child: awaiting the coroutine
+            # ``AsyncMock.connect()`` returns is not an ``async with`` target and
+            # the coroutine is orphaned (see the checkpointer test below).
             conn_cm = AsyncMock()
+            conn_cm.__aenter__ = AsyncMock(return_value=conn_cm)
+            conn_cm.__aexit__ = AsyncMock(return_value=None)
             conn_cm.execute.side_effect = ConnectionError("host=10.0.0.54 port=5432 dbname=modulo")
             engine = AsyncMock()
-            engine.connect.return_value.__aenter__.return_value = conn_cm
-            engine.connect.return_value.__aexit__.return_value = None
+            engine.connect = lambda: conn_cm
             mock_engine.return_value = engine
 
             result = await _check_database()
@@ -434,10 +439,11 @@ class TestHealthCheckNoExceptionLeak:
             patch("modulo.api.routes.health.get_or_create_engine") as mock_engine,
         ):
             conn_cm = AsyncMock()
+            conn_cm.__aenter__ = AsyncMock(return_value=conn_cm)
+            conn_cm.__aexit__ = AsyncMock(return_value=None)
             conn_cm.execute.side_effect = OSError("Connection refused")
             engine = AsyncMock()
-            engine.connect.return_value.__aenter__.return_value = conn_cm
-            engine.connect.return_value.__aexit__.return_value = None
+            engine.connect = lambda: conn_cm
             mock_engine.return_value = engine
 
             result = await _check_database()

@@ -1117,6 +1117,15 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
     five bounded-failure counters plus ``orgs_deferred``. Before them the
     detail ended at ``rows_deferred``, so the exact class of bounded failure
     was invisible to the alert.
+
+    FAR-1643: ``row_loop_time_deferred`` (rows not STARTED because the org's
+    slice was about to cut the row loop) is DISTINCT from ``rows_deferred``
+    (orgs / row-budget cap markers) - a time-deferred org commits its
+    processed prefix and stays ``ok``, so folding the two counters together
+    would make the two classes indistinguishable. ``row_loop_slowest_row_ms``
+    (the tick's slowest single row) is the per-row instrumentation that lets
+    the next deferral identify a pathological row rather than assuming a
+    uniform per-row cost. Both default to 0.
     """
     return (
         f"scanned={stats.get('scanned', 0)}, repaired={stats.get('repaired', 0)}, "
@@ -1145,6 +1154,12 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
         f"terminalize_capped={stats.get('terminalize_capped', 0)}, "
         f"facts_deferred={stats.get('facts_deferred', 0)}, "
         f"rows_deferred={stats.get('rows_deferred', 0)}, "
+        # FAR-1643: time-deferral is a DISTINCT class from the row-budget cap
+        # above (the processed prefix commits, the tick stays ok), so they are
+        # rendered as separate counters. The slowest-row gauge is the per-row
+        # instrumentation for the next occurrence.
+        f"row_loop_time_deferred={stats.get('row_loop_time_deferred', 0)}, "
+        f"row_loop_slowest_row_ms={stats.get('row_loop_slowest_row_ms', 0)}, "
         f"org_timeouts={stats.get('org_timeouts', 0)}, "
         f"orgs_deferred={stats.get('orgs_deferred', 0)}, "
         f"org_lock_timeouts={stats.get('org_lock_timeouts', 0)}, "

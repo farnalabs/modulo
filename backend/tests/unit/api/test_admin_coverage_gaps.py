@@ -714,7 +714,12 @@ def test_reset_password_success(api: tuple[TestClient, AsyncMock], monkeypatch: 
     monkeypatch.setattr(admin, "get_account_by_id", AsyncMock(return_value=account))
     monkeypatch.setattr(admin, "get_membership_by_account_and_org", AsyncMock(return_value=_membership()))
     monkeypatch.setattr(admin, "list_families_for_account", AsyncMock(return_value=[]))
-    monkeypatch.setattr("modulo.core.audit_logger.append_audit_event", AsyncMock())
+    # Patch the name ``admin`` actually calls (it is imported into the route
+    # module), not the defining module: patching only ``modulo.core.audit_logger``
+    # left the real audit append running, where ``async with
+    # session.begin_nested()`` on the AsyncMock session raised (swallowed by the
+    # route's fail-open audit guard) and orphaned the begin_nested coroutine.
+    monkeypatch.setattr(admin, "append_audit_event", AsyncMock())
     resp = client.post(f"/api/v1/admin/users/{_TARGET_USER_ID}/reset-password")
     assert resp.status_code == 200
     data = resp.json()

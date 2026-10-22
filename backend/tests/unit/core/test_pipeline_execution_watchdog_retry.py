@@ -950,6 +950,150 @@ async def test_deadline_kill_gets_no_failure_carve_out():
 
 
 # ---------------------------------------------------------------------------
+# FAR-2053 — the delivery veto on the stall path
+# ---------------------------------------------------------------------------
+
+#: A marker row carrying the FAR-228 delivery sentinel — the run's side effect
+#: (an email, a PR) already happened on an EARLIER attempt.
+_DELIVERED_MARKERS: dict[str, Any] = {"node-a": {"delivery_done": True, "pr_url": "https://example.test/pr/1"}}
+#: The same shape with the sentinel explicitly false — an attempt that ran but
+#: delivered nothing.
+_UNDELIVERED_MARKERS: dict[str, Any] = {"node-a": {"delivery_done": False}}
+
+
+def _markers_seam(markers: dict[str, Any] | None = None, *, read_error: Exception | None = None):
+    """Patch the repo marker reader the delivery veto resolves lazily.
+
+    ``watchdog_retry._read_run_markers`` imports ``read_run_markers`` at call
+    time, so patching the owning module's attribute intercepts it.
+    """
+    if read_error is not None:
+        return patch("modulo.db.crud.run_node_outputs.read_run_markers", AsyncMock(side_effect=read_error))
+    return patch("modulo.db.crud.run_node_outputs.read_run_markers", AsyncMock(return_value=markers))
+
+
+async def _drive_zombie_stall(
+    retry_policy: dict[str, Any],
+    *,
+    markers: dict[str, Any] | None = None,
+    read_error: Exception | None = None,
+    attempt_count: int = 1,
+) -> tuple[AsyncMock, WatchdogRetryOutcome, MagicMock, AsyncMock]:
+    """Fire the REAL setup-grace zombie watchdog at a stalled run once.
+
+    Returns ``(fail_run_terminal, outcome_box, executor, marker_reader)`` so
+    each test asserts the terminal-fail / re-dispatch decision and whether the
+    delivery probe was consulted at all.
+    """
+    executor = _make_executor_mock(attempt_count=attempt_count)
+    fail = AsyncMock(return_value=True)
+    exec_task = asyncio.create_task(asyncio.sleep(999))
+    hook, box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
+    seams = _db_seams(retry_policy)
+    markers_seam = _markers_seam(markers, read_error=read_error)
+    with contextlib.ExitStack() as stack:
+        for seam in seams:
+            stack.enter_context(seam)
+        marker_reader = stack.enter_context(markers_seam)
+        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        await zombie_watchdog(
+            MagicMock(),
+            "run-1",
+            "org-1",
+            asyncio.Event(),
+            exec_task=exec_task,
+            stall_requested=asyncio.Event(),
+            grace_seconds=0.01,
+            retry_hook=hook,
+        )
+    exec_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await exec_task
+    return fail, box, executor, marker_reader
+
+
+async def test_delivered_then_stalled_run_is_not_redispatched():
+    """FAR-2053: a run whose marker rows already record a delivery is NOT
+    re-dispatched when it stalls — it terminal-fails with the stall path's own
+    writer instead, because re-dispatching re-executes the graph from the start
+    and would repeat the side effect."""
+    fail, box, executor, marker_reader = await _drive_zombie_stall(
+        {"on": ["stall"], "max_retries": 2}, markers=_DELIVERED_MARKERS
+    )
+    fail.assert_awaited_once()
+    assert fail.await_args.kwargs["error_code"] == "executor_stalled"
+    assert box.requested is False
+    executor._fenced_pending_reset.assert_not_awaited()
+    marker_reader.assert_awaited_once()
+
+
+async def test_undelivered_stall_still_redispatches():
+    """FAR-2053 regression arm: with the delivery probe present but recording
+    no delivery, the stall re-dispatches EXACTLY as before (fenced reset + the
+    outcome box set), so the veto cannot quietly disable stall retries."""
+    fail, box, executor, marker_reader = await _drive_zombie_stall(
+        {"on": ["stall"], "max_retries": 2}, markers=_UNDELIVERED_MARKERS
+    )
+    fail.assert_not_awaited()
+    assert box.requested is True
+    assert box.final_status == "stalled"
+    assert box.retry_budget == 2
+    executor._fenced_pending_reset.assert_awaited_once()
+    marker_reader.assert_awaited_once()
+
+
+async def test_delivery_probe_failure_vetoes_the_redispatch():
+    """FAR-2053 fail direction: an unreadable delivery record must not license
+    a re-dispatch. The probe failure is absorbed (it never raises into the
+    watchdog path) and the run terminal-fails."""
+    fail, box, executor, _marker_reader = await _drive_zombie_stall(
+        {"on": ["stall"], "max_retries": 2}, read_error=RuntimeError("markers unreadable")
+    )
+    fail.assert_awaited_once()
+    assert fail.await_args.kwargs["error_code"] == "executor_stalled"
+    assert box.requested is False
+    executor._fenced_pending_reset.assert_not_awaited()
+
+
+async def test_delivery_veto_is_opt_in_per_call_site():
+    """The veto is a FLAG, not a global rule: consulting the same delivered
+    markers with ``veto_if_delivered`` unset re-dispatches, and never reads the
+    marker rows at all. This is what keeps the node-deadline path (which does
+    not pass the flag) behaviourally unchanged."""
+    executor = _make_executor_mock(attempt_count=1)
+    seams = _db_seams({"on": ["stall"], "max_retries": 2})
+    with contextlib.ExitStack() as stack:
+        for seam in seams:
+            stack.enter_context(seam)
+        marker_reader = stack.enter_context(_markers_seam(_DELIVERED_MARKERS))
+        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        dispatched, box, _sleep = await _consult_hook(
+            executor,
+            retry_policy={"on": ["stall"], "max_retries": 2},
+            final_status="stalled",
+            error_code="executor_stalled",
+            zero_node=True,
+        )
+    assert dispatched is True
+    assert box.requested is True
+    marker_reader.assert_not_awaited()
+
+
+async def test_delivery_probe_reraises_cancellation():
+    """Worker/job shutdown is not ours to swallow: a CancelledError from the
+    probe propagates instead of being absorbed into a veto decision."""
+    with (
+        patch(
+            "modulo.core.pipeline_engine.watchdog_retry._read_run_markers",
+            AsyncMock(side_effect=asyncio.CancelledError()),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await wr._run_already_delivered(MagicMock(), run_id=uuid.uuid4(), org_id=uuid.uuid4())
+
+
+# ---------------------------------------------------------------------------
 # The wrapper seam — RunRetryPolicyError re-raise (the SAQ re-enqueue)
 # ---------------------------------------------------------------------------
 

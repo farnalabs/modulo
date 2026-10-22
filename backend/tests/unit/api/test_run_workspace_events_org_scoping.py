@@ -21,6 +21,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -40,11 +41,15 @@ def _make_settings() -> Settings:
 
 @pytest.fixture
 def mock_session() -> AsyncMock:
-    session = AsyncMock(spec=AsyncSession)
+    # The permission gate reads ``result.scalar_one_or_none()`` (SYNC) and
+    # ``set_rls_org`` reads ``in_transaction()``/``get_bind()`` (SYNC) — bare
+    # AsyncMock children orphan a never-awaited coroutine per request.
+    session = configure_rls_preamble(AsyncMock(spec=AsyncSession))
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    session.execute = AsyncMock(return_value=make_empty_execute_result())
     return session
 
 

@@ -162,8 +162,9 @@ class MappingPack(BaseModel):
     def content_hash(self) -> str:
         """Deterministic SHA-256 over the pack's asserted content.
 
-        Covers the pack version and every row's fields, so an edit to any
-        assertion changes the hash even if ``pack_version`` was not bumped.
+        Covers the pack version and every row's fields — ``notes`` included —
+        so an edit to any assertion (even a reviewer-facing note) changes the
+        hash even if ``pack_version`` was not bumped.
         """
         payload: dict[str, Any] = {
             "pack_version": self.pack_version,
@@ -173,7 +174,7 @@ class MappingPack(BaseModel):
                     "name": framework.name,
                     "source": framework.source,
                     "scope_note": framework.scope_note,
-                    "rows": [row.model_dump(mode="json", exclude={"notes"}) for row in framework.rows],
+                    "rows": [row.model_dump(mode="json") for row in framework.rows],
                 }
                 for framework in self.frameworks.values()
             ],

@@ -25,6 +25,7 @@ from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.db.crud.team import TeamUpdateOutcome
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -50,11 +51,22 @@ def _make_settings() -> Settings:
 
 
 def _make_session(*, count_result: int = 0) -> AsyncMock:
-    session = AsyncMock()
+    # ``set_rls_org``/``set_rls_user_context`` call ``in_transaction()`` and
+    # ``get_bind()`` SYNCHRONOUSLY; a bare AsyncMock child returns a
+    # never-awaited coroutine on every route call. ``add()`` is sync too.
+    session = configure_rls_preamble(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # ``append_audit_event`` opens ``async with session.begin_nested()``; a bare
+    # AsyncMock child returns a coroutine, which fails as an async context
+    # manager AND leaks (the audit path is best-effort, so the failure was
+    # swallowed while the coroutine stayed un-awaited).
+    nested_cm = AsyncMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested_cm)
 
     def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
         result = MagicMock()

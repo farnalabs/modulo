@@ -21,6 +21,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -55,13 +56,20 @@ def _make_mock_endpoint(**overrides: object) -> MagicMock:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct double: the RLS preamble reads ``in_transaction()`` /
+    # ``get_bind()`` / ``add()`` synchronously — a bare AsyncMock turns each
+    # call into a never-awaited coroutine.
+    session = configure_rls_preamble(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
     session.add = MagicMock()
     session.flush = AsyncMock()
+    # The permission dependency's authz-enforce read is the SYNC
+    # ``result.scalar_one_or_none()``, so the default execute result must be a
+    # plain ``MagicMock``, never an AsyncMock child.
+    session.execute = AsyncMock(return_value=make_empty_execute_result())
     return session
 
 
