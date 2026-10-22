@@ -286,3 +286,171 @@ def test_a_typed_config_without_a_backing_id_does_not_fall_back_to_the_top_level
     )
 
     assert llm_judge._judge_backend_id(eval_def.config) is None
+
+
+# ---------------------------------------------------------------------------
+# Failure classification and the remaining parse branches
+# ---------------------------------------------------------------------------
+
+
+class _RaisingBackend:
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    async def invoke(self, messages: list[Any], **kwargs: Any) -> Any:
+        raise self._exc
+
+
+class _RaisingHub:
+    def __init__(self, exc: BaseException) -> None:
+        self._backend = _RaisingBackend(exc)
+
+    async def get(self, backend_id: uuid.UUID, **kwargs: Any) -> _RaisingBackend:
+        return self._backend
+
+
+class _PlainBackend:
+    """Backend whose invoke returns a bare string (no ``.content``)."""
+
+    def __init__(self, content: str) -> None:
+        self._content = content
+
+    async def invoke(self, messages: list[Any], **kwargs: Any) -> str:
+        return self._content
+
+
+class _PlainHub:
+    def __init__(self, content: str) -> None:
+        self._backend = _PlainBackend(content)
+
+    async def get(self, backend_id: uuid.UUID, **kwargs: Any) -> _PlainBackend:
+        return self._backend
+
+
+def test_a_nan_json_constant_is_a_malformed_response() -> None:
+    judge = llm_judge.build_model_judge_callable(
+        _FakeHub('{"passed": true, "score": NaN}'),
+        str(uuid.uuid4()),
+    )
+
+    with pytest.raises(JudgeExecutionError) as exc_info:
+        judge({"content": "some output"}, _make_eval_def())
+
+    assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+
+def test_a_non_object_json_response_is_a_malformed_response() -> None:
+    judge = llm_judge.build_model_judge_callable(_FakeHub("[]"), str(uuid.uuid4()))
+
+    with pytest.raises(JudgeExecutionError) as exc_info:
+        judge({"content": "some output"}, _make_eval_def())
+
+    assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+
+def test_a_plain_string_response_is_parsed_like_a_message_content() -> None:
+    judge = llm_judge.build_model_judge_callable(
+        _PlainHub('{"passed": true, "score": 0.5}'),
+        str(uuid.uuid4()),
+    )
+
+    assert judge({"content": "some output"}, _make_eval_def())["passed"] is True
+
+
+def test_a_typed_config_builds_the_typed_prompt_and_parses_its_verdict() -> None:
+    eval_def = _make_eval_def(
+        config={
+            "answer_contract": "typed_questions",
+            "backing": {"kind": "model_backend", "model_backend_id": str(uuid.uuid4())},
+            "questions": [{"id": "q", "type": "noul", "weight": 1.0, "instructions": "ok?"}],
+            "pass_rule": {"kind": "weighted_score_at_least", "threshold": 0.5},
+        }
+    )
+    judge = llm_judge.build_model_judge_callable(_FakeHub('{"answers": {"q": true}}'), str(uuid.uuid4()))
+
+    result = judge({"content": "some output"}, eval_def)
+
+    assert result["outcome"] == "pass"
+
+
+def test_an_unknown_backend_is_a_configuration_error() -> None:
+    from modulo.core.model_backend_hub import BackendNotFoundError
+
+    backend_id = uuid.uuid4()
+    judge = llm_judge.build_model_judge_callable(_RaisingHub(BackendNotFoundError(backend_id)), str(backend_id))
+
+    with pytest.raises(JudgeExecutionError) as exc_info:
+        judge({"content": "some output"}, _make_eval_def())
+
+    assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+    assert "not an active" in exc_info.value.detail
+
+
+def test_an_unclassified_backend_failure_is_a_judge_unavailable_error() -> None:
+    judge = llm_judge.build_model_judge_callable(_RaisingHub(RuntimeError("boom")), str(uuid.uuid4()))
+
+    with pytest.raises(JudgeExecutionError) as exc_info:
+        judge({"content": "some output"}, _make_eval_def())
+
+    assert exc_info.value.code is JudgeErrorCode.JUDGE_UNAVAILABLE
+    assert "no verdict was produced" in exc_info.value.detail
+
+
+def test_a_keyboard_interrupt_is_never_swallowed() -> None:
+    judge = llm_judge.build_model_judge_callable(_RaisingHub(KeyboardInterrupt()), str(uuid.uuid4()))
+
+    with pytest.raises(KeyboardInterrupt):
+        judge({"content": "some output"}, _make_eval_def())
+
+
+def test_classify_provider_exception_names_a_missing_backend_configuration() -> None:
+    class BackendNotFoundError(Exception):
+        pass
+
+    assert llm_judge._classify_provider_exception(BackendNotFoundError()) is JudgeErrorCode.JUDGE_CONFIGURATION
+
+
+@pytest.mark.parametrize(
+    ("provider_code", "expected"),
+    [
+        ("provider.authentication", JudgeErrorCode.PROVIDER_AUTHENTICATION),
+        ("provider.billing", JudgeErrorCode.PROVIDER_BILLING),
+        ("model.insufficient_funds", JudgeErrorCode.JUDGE_UNAVAILABLE),
+        (None, JudgeErrorCode.JUDGE_UNAVAILABLE),
+    ],
+)
+def test_classify_provider_exception_reuses_the_run_taxonomy(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_code: str | None,
+    expected: JudgeErrorCode,
+) -> None:
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.model_backend_errors.non_retryable_provider_code",
+        lambda _message: provider_code,
+    )
+
+    assert llm_judge._classify_provider_exception(RuntimeError("x")) is expected
+
+
+def test_classify_provider_exception_fails_open_when_the_classifier_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _broken(_message: str) -> str:
+        raise RuntimeError("classifier unavailable")
+
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.model_backend_errors.non_retryable_provider_code",
+        _broken,
+    )
+
+    assert llm_judge._classify_provider_exception(RuntimeError("x")) is JudgeErrorCode.JUDGE_UNAVAILABLE
+
+
+def test_a_typed_config_with_a_non_dict_backing_has_no_backend_id() -> None:
+    assert llm_judge._judge_backend_id({"answer_contract": "typed_questions", "backing": "x"}) is None
+
+
+def test_the_guarded_judge_content_wins_over_the_flat_field() -> None:
+    """The engine's delimited content is used when present, the flat field otherwise."""
+    assert llm_judge._judge_content({"content": "raw"}, {"_judge_content": "guarded"}) == "guarded"
+    assert llm_judge._judge_content({"content": "raw"}, {"field": "content"}) == "raw"

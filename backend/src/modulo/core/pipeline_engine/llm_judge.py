@@ -207,6 +207,189 @@ def run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
         raise
 
 
+def _malformed_backend_id_judge(backend_id_str: str, detail: str) -> ModelJudgeCallable:
+    """Build the fail-closed judge for a non-UUID ``model_backend_id``."""
+    malformed_identity = JudgeIdentity(mechanism="model_backend", judge_backend_id=backend_id_str)
+
+    def _config_error_judge(
+        output: dict[str, Any],
+        eval_def: EvalDefinition,
+    ) -> dict[str, Any]:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_CONFIGURATION,
+            detail,
+            judge=malformed_identity,
+        )
+
+    return _config_error_judge
+
+
+def _judge_content(output: dict[str, Any], config: dict[str, Any]) -> Any:
+    """Return the content to judge.
+
+    The engine's guarded-input helper exposes the delimited content here; fall
+    back to the legacy flat field for a direct caller.
+    """
+    content = config.get("_judge_content")
+    if content is not None:
+        return content
+    field = config.get("field", "")
+    return output.get(field, "")
+
+
+def _build_judge_prompt(config: dict[str, Any], content: Any) -> str:
+    if config.get("answer_contract") == TYPED_ANSWER_CONTRACT:
+        questions = config.get("questions") or []
+        return build_typed_judge_prompt(questions, config.get("pass_rule"), str(content))
+    return (
+        "Evaluate the following output and return JSON with keys passed "
+        "(bool), score (float 0-1), detail (str).\n\n"
+        f"Output:\n{content}"
+    )
+
+
+def _backend_not_found_error(
+    backend_id: uuid.UUID,
+    identity: JudgeIdentity,
+) -> JudgeExecutionError:
+    detail = (
+        f"model_judge eval's model_backend_id {backend_id} is not an active "
+        "model backend for this organisation; fix the eval definition's "
+        "config['model_backend_id'] (or the typed backing)"
+    )
+    _log.error(
+        "model_judge.unknown_model_backend_id",
+        extra={"model_backend_id": str(backend_id), "detail": detail},
+    )
+    return JudgeExecutionError(JudgeErrorCode.JUDGE_CONFIGURATION, detail, judge=identity)
+
+
+def _provider_failure(
+    backend_id: uuid.UUID,
+    identity: JudgeIdentity,
+    exc: BaseException,
+) -> JudgeExecutionError:
+    code = _classify_provider_exception(exc)
+    _log.error(
+        "model_judge.provider_failure",
+        extra={
+            "model_backend_id": str(backend_id),
+            "error_code": code.value,
+            "exception_type": type(exc).__name__,
+        },
+    )
+    return JudgeExecutionError(
+        code,
+        f"model judge backend failed ({code.value}); no verdict was produced",
+        judge=identity,
+    )
+
+
+def _backend_failure(
+    backend_id: uuid.UUID,
+    identity: JudgeIdentity,
+    exc: BaseException,
+) -> JudgeExecutionError:
+    """Map a failed backend call onto the judge error vocabulary."""
+    from modulo.core.model_backend_hub import BackendNotFoundError
+
+    if isinstance(exc, BackendNotFoundError):
+        return _backend_not_found_error(backend_id, identity)
+    return _provider_failure(backend_id, identity, exc)
+
+
+def _invoke_judge(
+    hub: Any,
+    backend_id: uuid.UUID,
+    messages: list[Any],
+    identity: JudgeIdentity,
+) -> Any:
+    """Run the bounded backend call, mapping every failure to a coded error."""
+    try:
+        return run_coroutine_sync(invoke_backend(hub, backend_id, messages))
+    except TimeoutError as exc:
+        detail = _timeout_detail()
+        _log.error(
+            "model_judge.timeout",
+            extra={
+                "model_backend_id": str(backend_id),
+                "detail": detail,
+            },
+        )
+        raise JudgeExecutionError(JudgeErrorCode.JUDGE_TIMEOUT, detail, judge=identity) from exc
+    except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+        raise
+    except Exception as exc:
+        raise _backend_failure(backend_id, identity, exc) from exc
+
+
+def _response_text(response: Any) -> str:
+    return response.content if hasattr(response, "content") else str(response)
+
+
+def _parse_typed_judge_response(
+    text: str,
+    config: dict[str, Any],
+    identity: JudgeIdentity,
+) -> dict[str, Any]:
+    verdict = verdict_from_typed_response(
+        text,
+        questions=config.get("questions") or [],
+        pass_rule=config.get("pass_rule"),
+        judge=identity,
+        confidence_kind=JudgeConfidenceKind.MODEL_SELF_REPORTED,
+    )
+    return verdict.to_json()
+
+
+def _parse_legacy_judge_response(text: str, identity: JudgeIdentity) -> dict[str, Any]:
+    try:
+        parsed = json.loads(text, parse_constant=_reject_json_constant)
+    except ValueError as exc:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            "judge returned a non-JSON response; no verdict was produced",
+            judge=identity,
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            "judge returned a non-object JSON response; no verdict was produced",
+            judge=identity,
+        )
+    raw_passed = parsed.get("passed", False)
+    if not isinstance(raw_passed, bool):
+        # A string "false"/"no"/"0" is truthy in Python — never coerce.
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            f"judge returned a non-boolean 'passed' ({type(raw_passed).__name__})",
+            judge=identity,
+        )
+    detail = parsed.get("detail", "")
+    return {
+        "passed": raw_passed,
+        "score": parsed.get("score"),
+        "detail": str(detail) if detail is not None else "",
+    }
+
+
+def _run_judge(
+    output: dict[str, Any],
+    eval_def: EvalDefinition,
+    hub: Any,
+    backend_id: uuid.UUID,
+    identity: JudgeIdentity,
+) -> dict[str, Any]:
+    config = eval_def.config
+    content = _judge_content(output, config)
+    prompt = _build_judge_prompt(config, content)
+    response = _invoke_judge(hub, backend_id, [HumanMessage(content=prompt)], identity)
+    text = _response_text(response)
+    if config.get("answer_contract") == TYPED_ANSWER_CONTRACT:
+        return _parse_typed_judge_response(text, config, identity)
+    return _parse_legacy_judge_response(text, identity)
+
+
 def build_model_judge_callable(
     hub: Any,
     backend_id_str: str,
@@ -242,20 +425,7 @@ def build_model_judge_callable(
             "model_judge.malformed_model_backend_id",
             extra={"model_backend_id": backend_id_str, "detail": detail},
         )
-
-        malformed_identity = JudgeIdentity(mechanism="model_backend", judge_backend_id=backend_id_str)
-
-        def _config_error_judge(
-            output: dict[str, Any],
-            eval_def: EvalDefinition,
-        ) -> dict[str, Any]:
-            raise JudgeExecutionError(
-                JudgeErrorCode.JUDGE_CONFIGURATION,
-                detail,
-                judge=malformed_identity,
-            )
-
-        return _config_error_judge
+        return _malformed_backend_id_judge(backend_id_str, detail)
 
     identity = JudgeIdentity(mechanism="model_backend", judge_backend_id=str(backend_id))
 
@@ -263,110 +433,7 @@ def build_model_judge_callable(
         output: dict[str, Any],
         eval_def: EvalDefinition,
     ) -> dict[str, Any]:
-        config = eval_def.config
-        # The engine's guarded-input helper exposes the delimited content here;
-        # fall back to the legacy flat field for a direct caller.
-        content = config.get("_judge_content")
-        if content is None:
-            field = config.get("field", "")
-            content = output.get(field, "")
-
-        typed = config.get("answer_contract") == TYPED_ANSWER_CONTRACT
-        if typed:
-            questions = config.get("questions") or []
-            prompt = build_typed_judge_prompt(questions, config.get("pass_rule"), str(content))
-        else:
-            prompt = (
-                "Evaluate the following output and return JSON with keys passed "
-                "(bool), score (float 0-1), detail (str).\n\n"
-                f"Output:\n{content}"
-            )
-        messages = [HumanMessage(content=prompt)]
-        try:
-            response = run_coroutine_sync(invoke_backend(hub, backend_id, messages))
-        except TimeoutError as exc:
-            detail = _timeout_detail()
-            _log.error(
-                "model_judge.timeout",
-                extra={
-                    "model_backend_id": str(backend_id),
-                    "detail": detail,
-                },
-            )
-            raise JudgeExecutionError(JudgeErrorCode.JUDGE_TIMEOUT, detail, judge=identity) from exc
-        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
-            raise
-        except Exception as exc:
-            from modulo.core.model_backend_hub import BackendNotFoundError
-
-            if isinstance(exc, BackendNotFoundError):
-                detail = (
-                    f"model_judge eval's model_backend_id {backend_id} is not an active "
-                    "model backend for this organisation; fix the eval definition's "
-                    "config['model_backend_id'] (or the typed backing)"
-                )
-                _log.error(
-                    "model_judge.unknown_model_backend_id",
-                    extra={"model_backend_id": str(backend_id), "detail": detail},
-                )
-                raise JudgeExecutionError(
-                    JudgeErrorCode.JUDGE_CONFIGURATION,
-                    detail,
-                    judge=identity,
-                ) from exc
-            code = _classify_provider_exception(exc)
-            _log.error(
-                "model_judge.provider_failure",
-                extra={
-                    "model_backend_id": str(backend_id),
-                    "error_code": code.value,
-                    "exception_type": type(exc).__name__,
-                },
-            )
-            raise JudgeExecutionError(
-                code,
-                f"model judge backend failed ({code.value}); no verdict was produced",
-                judge=identity,
-            ) from exc
-
-        text = response.content if hasattr(response, "content") else str(response)
-        if typed:
-            verdict = verdict_from_typed_response(
-                text,
-                questions=config.get("questions") or [],
-                pass_rule=config.get("pass_rule"),
-                judge=identity,
-                confidence_kind=JudgeConfidenceKind.MODEL_SELF_REPORTED,
-            )
-            return verdict.to_json()
-        try:
-            parsed = json.loads(text, parse_constant=_reject_json_constant)
-        except ValueError as exc:
-            raise JudgeExecutionError(
-                JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
-                "judge returned a non-JSON response; no verdict was produced",
-                judge=identity,
-            ) from exc
-        if not isinstance(parsed, dict):
-            raise JudgeExecutionError(
-                JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
-                "judge returned a non-object JSON response; no verdict was produced",
-                judge=identity,
-            )
-        raw_passed = parsed.get("passed", False)
-        if not isinstance(raw_passed, bool):
-            # A string "false"/"no"/"0" is truthy in Python — never coerce.
-            raise JudgeExecutionError(
-                JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
-                f"judge returned a non-boolean 'passed' ({type(raw_passed).__name__})",
-                judge=identity,
-            )
-        detail = parsed.get("detail", "")
-        return {
-            "passed": raw_passed,
-            "score": parsed.get("score"),
-            "detail": str(detail) if detail is not None else "",
-        }
+        return _run_judge(output, eval_def, hub, backend_id, identity)
 
     return _judge
 
