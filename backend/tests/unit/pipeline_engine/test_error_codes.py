@@ -949,6 +949,48 @@ def test_match_known_fixes_never_raises_on_pathological_input():
     assert not match_known_fixes(Explodes())
 
 
+def test_match_known_fixes_positive_node_deadline_watchdog_detail():
+    """A node-deadline kill surfaces its own fix from the recorded detail.
+
+    The text is the EXACT shape ``_fail_overdue_node`` writes for an
+    in-process deadline kill. Before this entry existed, the only KnownFix
+    that MENTIONED the node timeout was ``session_interrupted_no_output`` —
+    and its signature ("session interrupted") never appears in this detail,
+    so a deadline-killed run showed no known-fix panel at all even though
+    the remedy (raise ``timeout_seconds`` or shrink the task) was documented.
+    """
+    detail = (
+        "Node 'agent-1' did not complete within its configured timeout_seconds "
+        "(3300s) — node-deadline watchdog ended the dispatch. The cause is "
+        "not asserted here; retained deadline_triage evidence is conditional, not "
+        "guaranteed."
+    )
+    matches = match_known_fixes(detail)
+    assert {fix.fix_id for fix in matches} == {"node_deadline_exceeded"}
+    fix = matches[0]
+    # The body must name the actionable lever, not merely restate the error.
+    assert "timeout_seconds" in fix.body
+    assert "raise" in fix.body.lower()
+
+
+def test_match_known_fixes_positive_node_deadline_reaper_detail():
+    """The FAR-1999 durable reaper's detail is the SAME failure class.
+
+    It is written by a different terminaliser (``cron_helpers``) with
+    different prose, but an operator must get the same guidance; the shared
+    signature has to cover both shapes.
+    """
+    detail = (
+        "Node started (dispatch_phase=first_node_dispatched) but produced no node envelope "
+        "(no checkpoint, output or token usage) by its node deadline (3300s "
+        "from 2026-10-20T18:00:00+00:00); reaped by dispatcher_reconcile's durable node-deadline "
+        "bound (FAR-1999). pipeline=abc, trigger=None, claim_count=1, "
+        "dispatch_phase_elapsed=3305.0s"
+    )
+    matches = match_known_fixes(detail)
+    assert {fix.fix_id for fix in matches} == {"node_deadline_exceeded"}
+
+
 def test_node_deadline_guidance_states_the_observable_not_an_assumed_cause():
     """FAR-1886 B2: the registry guidance must not assert WHY the node was
     killed. Live triage (2026-10-20) showed deadlined nodes were often

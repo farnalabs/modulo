@@ -1142,10 +1142,19 @@ jobs:
     # gate. A PR that introduces one or two new smells still passes every
     # rating condition - which is how 74 reliability-impact issues (mostly
     # python:S7503) accumulated on main. This gate closes that hole: query the
-    # SonarCloud API for THIS PR's analysis and fail on ANY new unresolved
-    # issue. Fail-closed by design: an API error, an unexpected HTTP status,
+    # SonarCloud API for THIS PR's analysis and fail on the blocking subset
+    # below. Fail-closed by design: an API error, an unexpected HTTP status,
     # or a response without a numeric .total fails the job - it never passes
     # on unknown state, and it carries no continue-on-error.
+    #
+    # Gated issue types/severities (policy):
+    # - BUG and VULNERABILITY at ANY severity
+    # - CODE_SMELL only at BLOCKER or CRITICAL
+    # All other CODE_SMELL (INFO, MINOR, MAJOR) pass. Rationale: a 15-run
+    # sample of 61 blocked issues contained zero bugs and zero vulnerabilities;
+    # they were MINOR TypeScript style rules and MAJOR parameter-count rules,
+    # while CRITICAL python:S3776 cognitive complexity is the smell class that
+    # predicts defects.
     #
     # PR-analysis-only: there is no pullRequest analysis on push to main, so
     # the job runs on pull_request events only. The path gate is STEP-level
@@ -1163,7 +1172,7 @@ jobs:
     runs-on: ubicloud-standard-2
     timeout-minutes: 5
     steps:
-      - name: Fail on any new SonarCloud issue in this PR
+      - name: Fail on new SonarCloud bugs, vulnerabilities, and critical smells
         if: needs.changes.outputs.sonar == 'true'
         shell: bash
         env:
@@ -1184,13 +1193,12 @@ jobs:
           BODY="$(mktemp)"
           CURL_ERR="$(mktemp)"
           trap 'rm -f "$BODY" "$CURL_ERR"' EXIT
-          API="${SONAR_HOST}/api/issues/search?componentKeys=${SONAR_COMPONENT}&pullRequest=${PR_NUMBER}&resolved=false&ps=1"
-          # Basic auth: the token is the username, the password is empty.
-          # Capture the HTTP status explicitly (no -f): a guard must distinguish
-          # "API failed" from "no issues", and every non-200 fails closed below.
+
+          # Query 1: BUG + VULNERABILITY at ANY severity
+          API_BV="${SONAR_HOST}/api/issues/search?componentKeys=${SONAR_COMPONENT}&pullRequest=${PR_NUMBER}&resolved=false&types=BUG,VULNERABILITY&ps=1"
           set +e
           HTTP_CODE=$(curl -sS --max-time 30 -u "${SONAR_TOKEN}:" \
-            -o "$BODY" -w '%{http_code}' "$API" 2>"$CURL_ERR")
+            -o "$BODY" -w '%{http_code}' "$API_BV" 2>"$CURL_ERR")
           CURL_RC=$?
           set -e
           if [ "$CURL_RC" -ne 0 ]; then
@@ -1201,20 +1209,70 @@ jobs:
             echo "::error::SonarCloud issues API returned HTTP ${HTTP_CODE} (expected 200); failing closed. Body: $(head -c 500 "$BODY")"
             exit 1
           fi
-          TOTAL=$(jq -r '.total' "$BODY" 2>/dev/null || echo "unparsed")
-          if ! [[ "$TOTAL" =~ ^[0-9]+$ ]]; then
-            echo "::error::Unexpected SonarCloud API response (no numeric .total); failing closed. Body: $(head -c 500 "$BODY")"
+          TOTAL_BV=$(jq -r '.total' "$BODY" 2>/dev/null || echo "unparsed")
+          if ! [[ "$TOTAL_BV" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unexpected SonarCloud API response (no numeric .total for BUG/VULNERABILITY); failing closed. Body: $(head -c 500 "$BODY")"
             exit 1
           fi
-          if [ "$TOTAL" -gt 0 ]; then
-            echo "::error::PR ${PR_NUMBER} introduces ${TOTAL} new SonarCloud issue(s) (unresolved on this PR's analysis). The free Sonar way gate has no issue-count condition, so this CI gate is what blocks them."
-            # Best-effort detail listing; the job already fails either way.
-            curl -sS --max-time 30 -u "${SONAR_TOKEN}:" \
-              "${SONAR_HOST}/api/issues/search?componentKeys=${SONAR_COMPONENT}&pullRequest=${PR_NUMBER}&resolved=false&ps=100" \
-              | jq -r '.issues[]? | "- \(.severity) [\(.rule)] \(.component): \(.message)"' 2>/dev/null || true
+
+          # Query 2: CODE_SMELL at BLOCKER or CRITICAL
+          API_CS="${SONAR_HOST}/api/issues/search?componentKeys=${SONAR_COMPONENT}&pullRequest=${PR_NUMBER}&resolved=false&types=CODE_SMELL&severities=BLOCKER,CRITICAL&ps=1"
+          set +e
+          HTTP_CODE=$(curl -sS --max-time 30 -u "${SONAR_TOKEN}:" \
+            -o "$BODY" -w '%{http_code}' "$API_CS" 2>"$CURL_ERR")
+          CURL_RC=$?
+          set -e
+          if [ "$CURL_RC" -ne 0 ]; then
+            echo "::error::SonarCloud issues API request failed (curl exit ${CURL_RC}): $(cat "$CURL_ERR" 2>/dev/null || echo 'no stderr'); failing closed."
             exit 1
           fi
-          echo "No new SonarCloud issues on PR ${PR_NUMBER}."
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::SonarCloud issues API returned HTTP ${HTTP_CODE} (expected 200); failing closed. Body: $(head -c 500 "$BODY")"
+            exit 1
+          fi
+          TOTAL_CS=$(jq -r '.total' "$BODY" 2>/dev/null || echo "unparsed")
+          if ! [[ "$TOTAL_CS" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unexpected SonarCloud API response (no numeric .total for CODE_SMELL BLOCKER/CRITICAL); failing closed. Body: $(head -c 500 "$BODY")"
+            exit 1
+          fi
+
+          BLOCKING_TOTAL=$((TOTAL_BV + TOTAL_CS))
+          if [ "$BLOCKING_TOTAL" -gt 0 ]; then
+            echo "::error::PR ${PR_NUMBER} introduces ${BLOCKING_TOTAL} blocking SonarCloud issue(s) (BUG/VULNERABILITY: ${TOTAL_BV}, CODE_SMELL BLOCKER/CRITICAL: ${TOTAL_CS}) (unresolved on this PR's analysis). The free Sonar way gate has no issue-count condition, so this CI gate is what blocks them."
+            # Best-effort detail listing for blocking issues
+            echo "--- Blocking issues ---"
+            # BUG + VULNERABILITY
+            if [ "$TOTAL_BV" -gt 0 ]; then
+              curl -sS --max-time 30 -u "${SONAR_TOKEN}:" \
+                "${SONAR_HOST}/api/issues/search?componentKeys=${SONAR_COMPONENT}&pullRequest=${PR_NUMBER}&resolved=false&types=BUG,VULNERABILITY&ps=100" \
+                | jq -r '.issues[]? | "BUG/VULN: \(.severity) [\(.rule)] \(.component): \(.message)"' 2>/dev/null || true
+            fi
+            # CODE_SMELL BLOCKER/CRITICAL
+            if [ "$TOTAL_CS" -gt 0 ]; then
+              curl -sS --max-time 30 -u "${SONAR_TOKEN}:" \
+                "${SONAR_HOST}/api/issues/search?componentKeys=${SONAR_COMPONENT}&pullRequest=${PR_NUMBER}&resolved=false&types=CODE_SMELL&severities=BLOCKER,CRITICAL&ps=100" \
+                | jq -r '.issues[]? | "SMELL: \(.severity) [\(.rule)] \(.component): \(.message)"' 2>/dev/null || true
+            fi
+            exit 1
+          fi
+
+          # Non-blocking count (INFO/MINOR/MAJOR code smells) - visible but never failing
+          API_NB="${SONAR_HOST}/api/issues/search?componentKeys=${SONAR_COMPONENT}&pullRequest=${PR_NUMBER}&resolved=false&types=CODE_SMELL&severities=INFO,MINOR,MAJOR&ps=1"
+          set +e
+          HTTP_CODE=$(curl -sS --max-time 30 -u "${SONAR_TOKEN}:" \
+            -o "$BODY" -w '%{http_code}' "$API_NB" 2>"$CURL_ERR")
+          CURL_RC=$?
+          set -e
+          if [ "$CURL_RC" -eq 0 ] && [ "$HTTP_CODE" = "200" ]; then
+            TOTAL_NB=$(jq -r '.total' "$BODY" 2>/dev/null || echo "unparsed")
+            if [[ "$TOTAL_NB" =~ ^[0-9]+$ ]] && [ "$TOTAL_NB" -gt 0 ]; then
+              echo "::notice::PR ${PR_NUMBER} introduces ${TOTAL_NB} non-blocking code smell(s) (INFO/MINOR/MAJOR) - not gated."
+            fi
+          else
+            echo "::warning::SonarCloud non-blocking code smell query failed (curl exit ${CURL_RC}, HTTP ${HTTP_CODE}); not failing the gate."
+          fi
+
+          echo "No blocking SonarCloud issues on PR ${PR_NUMBER}."
 
   coverage-gate:
     # Enforces a coverage threshold on the lines each PR actually changes
@@ -1596,6 +1654,10 @@ jobs:
     permissions:
       actions: write
       pull-requests: write
+      # The checkout below fetches scripts/dispatch_with_retry.sh; job-level
+      # permissions replace the workflow-level `contents: read`, so it must be
+      # granted explicitly or the checkout fails.
+      contents: read
     # Guard predicate below is NEEDS-AWARE, not step-level `failure()`
     # (contains(needs.*.result, 'failure') || cancelled()). Step-level
     # `failure()` sees only THIS job's own previous steps: with every product
@@ -1779,6 +1841,19 @@ jobs:
       # manual-delivery — are unaffected and still suppress stale, duplicate
       # and hand-managed dispatches.
 
+      # The dispatch policy is shared code (scripts/dispatch_with_retry.sh), so
+      # this job needs a checkout of exactly that one file. It carries the SAME
+      # guard as the dispatch step on purpose: the job runs on every PR, and an
+      # unconditional checkout would give the "Trigger Branch Fixer" check a
+      # failure mode (checkout error) even when every guard below suppresses
+      # the dispatch and CI is green.
+      - name: Check out the dispatch script
+        if: (contains(needs.*.result, 'failure') || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted != 'true' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
       - name: Trigger Modulo Branch Fixer
         if: (contains(needs.*.result, 'failure') || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted != 'true' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         env:
@@ -1787,11 +1862,11 @@ jobs:
           BRANCH: ${{ github.event.pull_request.head.ref }}
           PR_NUM: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
-          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          DISPATCH_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_LABEL: "Modulo Branch Fixer"
         shell: bash
         run: |
-          TIMESTAMP=$(date +%s)
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           # jq -n --arg/--argjson JSON-escapes every value, so a crafted branch
           # name (legal in git refnames, e.g. containing '"') cannot inject
@@ -1821,106 +1896,98 @@ jobs:
             '{branchName: $branchName, prNumber: $prNumber, headSha: $headSha, runUrl: $runUrl, failureDescription: $failureDescription, fingerprint: $fingerprint}')
           echo "PR #${PR_NUM} on branch '${BRANCH}' -- CI checks failed."
           echo "Sending to Modulo Branch Fixer pipeline..."
-          # Bounded backpressure retry. The webhook returns HTTP 429 when the
-          # Branch Fixer trigger's concurrency slots are exhausted and 503
-          # when the app is shedding load; 502/504 are gateway-side
-          # unavailability of the same class. Those are transient, so retry
-          # them on a patient but strictly bounded schedule - 3 attempts
-          # total, 10s then 30s - and then fail the step LOUDLY: a dispatch
-          # failure is never swallowed silently.
+          # ONE shared retry policy: scripts/dispatch_with_retry.sh. It is the
+          # single definition of the classification (429 = capacity saturation,
+          # 000/502/503/504 = transient, every other non-2xx = terminal), the
+          # bounded retry (attempt cap AND a 300s wall-clock budget),
+          # Retry-After handling and exponential backoff with jitter - so this
+          # step no longer carries a second copy that can silently diverge from
+          # its sibling. On an undelivered dispatch the script emits its own
+          # class-named ::error:: and a durable run summary; the failure arm
+          # below adds what only this job knows (the PR it concerns, and the
+          # exit-code contract).
           #
-          # HTTP 000 is curl's sentinel for a transport failure (no response
-          # at all). It is retried on the same schedule: it belongs to the
-          # same "server not reachable right now" class, and the
-          # `|| RESPONSE=""` below is what stops `bash -e` (GitHub Actions
-          # adds it to `run:` steps) from aborting the loop on the first curl
-          # error - without it a transient webhook blip permanently lost the
-          # dispatch. Every other status is non-retryable and fails loudly:
-          # in particular HTTP 500/501 are deliberately NOT retried, because a
-          # deterministic server-side error cannot be fixed by retrying and a
-          # retry only delays the loud failure annotation.
-          #
-          # TIMESTAMP and HMAC are recomputed on every attempt: the server
-          # enforces a +/-300s replay window on X-Modulo-Timestamp, so a
-          # signature computed once would fall outside the window after the
-          # 10s/30s sleeps.
-          MAX_ATTEMPTS=3
-          DISPATCHED="false"
-          LAST_HTTP=""
-          BODY_RESP=""
-          ATTEMPTS=0
-          for i in $(seq 1 "$MAX_ATTEMPTS"); do
-            TIMESTAMP=$(date +%s)
-            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
-            RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "${WEBHOOK_URL}" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "${BODY}") || RESPONSE=""
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            # A failed curl writes no body, so tail -1 is empty; normalise it to
-            # the HTTP 000 sentinel the retry/no-op branches key off.
-            [ -n "$HTTP_CODE" ] || HTTP_CODE="000"
-            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-            LAST_HTTP="$HTTP_CODE"
-            ATTEMPTS="$i"
-            if [ "$HTTP_CODE" = "202" ]; then
-              RESP_STATUS=$(echo "$BODY_RESP" | jq -r '.status // "accepted"')
-              if [ "$RESP_STATUS" = "coalesced" ]; then
-                # FAR-1034 handled no-op: duplicate CI-failure for the same
-                # PR + head SHA within the coalesce window — intentionally no
-                # new run. Not an error, not retried.
-                echo "::notice::Modulo Branch Fixer coalesced (duplicate CI-failure for same PR + head SHA — suppressed)"
-              else
-                echo "Modulo Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
-              fi
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "400" ] && echo "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
-              # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
-              # engine's byte-level idempotency guard (DuplicateWebhookError) —
-              # the identical delivery was already ACCEPTED within the ~5-min
-              # dedup window (a concurrent run or a workflow re-run). It is a
-              # handled no-op, NOT a dispatch failure; retrying would only
-              # re-hit the same window.
-              echo "::notice::Modulo Branch Fixer duplicate delivery suppressed (identical payload already accepted within the dedup window)"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" = "502" ] || [ "$HTTP_CODE" = "503" ] || [ "$HTTP_CODE" = "504" ] || [ "$HTTP_CODE" = "000" ]; then
-              if [ "$i" -lt "$MAX_ATTEMPTS" ]; then
-                if [ "$i" -eq 1 ]; then DELAY=10; else DELAY=30; fi
-                echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE (attempt $i/${MAX_ATTEMPTS}) — retrying in ${DELAY}s"
-                sleep "$DELAY"
-              else
-                echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE on the final attempt ($i/${MAX_ATTEMPTS}) — no attempts left"
-              fi
-            else
-              echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
-              break
-            fi
-          done
+          # The bound itself (attempt cap + 300s wall-clock budget) lives in
+          # the script. To override it, set DISPATCH_BUDGET_SECONDS /
+          # DISPATCH_MAX_ATTEMPTS in the workflow environment — both the script
+          # and this step read the same value from there.
+
+          # Run the shared policy. DISPATCH_RESULT_FILE is how the script hands
+          # the outcome back: last HTTP status, failure class, detail, attempt
+          # count and elapsed time, so this job's own durable signals are
+          # composed from observed values rather than a local counter.
+          DISPATCH_RESULT_FILE="$(mktemp)"
+          if DISPATCH_RESULT_FILE="${DISPATCH_RESULT_FILE}" \
+             DISPATCH_BODY="${BODY}" bash scripts/dispatch_with_retry.sh; then
+            DISPATCHED="true"
+          else
+            DISPATCHED="false"
+          fi
+          # shellcheck disable=SC1090
+          source "${DISPATCH_RESULT_FILE}" 2>/dev/null || true
+          LAST_HTTP="${DISPATCH_LAST_HTTP:-unknown}"
+          LAST_CLASS="${DISPATCH_LAST_CLASS:-}"
+          LAST_DETAIL="${DISPATCH_LAST_DETAIL:-unknown}"
+          ATTEMPTS="${DISPATCH_ATTEMPTS:-unknown}"
+          DISPATCH_ELAPSED="${DISPATCH_BUDGET_ELAPSED:-unknown}"
           if [ "$DISPATCHED" != "true" ]; then
-            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-            echo "::error::Branch Fixer webhook dispatch failed after ${ATTEMPTS} attempt(s) (last HTTP ${LAST_HTTP}: ${DETAIL}) — CI failure was not handed to the autonomous fix loop."
-            # FAR-1997: this job is dispatch-only — it has NO actions/checkout
-            # step — so `gh` cannot infer the repository from a git remote, and
-            # `gh pr comment "$PR_NUM"` alone dies with "fatal: not a git
-            # repository" before it reaches the API. Passing the repository
-            # explicitly is the whole fix; it is also why no checkout is added.
+            # Name the CLASS of failure, not just its HTTP code: capacity
+            # saturation is an operational backlog an operator drains, while a
+            # terminal error is a broken request or credential nobody is
+            # waiting on. The two need different actions, so the annotation,
+            # the run summary and the PR comment all carry the distinction.
+            case "$LAST_CLASS" in
+              capacity)
+                DISPATCH_FAILURE="capacity saturated"
+                DISPATCH_CAUSE="the Branch Fixer trigger is at its concurrent-run limit (HTTP ${LAST_HTTP}), so the webhook was refused because the app is busy - not because anything is broken"
+                DISPATCH_ACTION="Drain in-flight Branch Fixer runs (or raise the trigger's \`max_concurrent_runs\`), then re-run this CI job to hand the failure over."
+                ;;
+              transient)
+                DISPATCH_FAILURE="webhook unreachable"
+                DISPATCH_CAUSE="the Branch Fixer webhook or a gateway in front of it was unavailable (HTTP ${LAST_HTTP}) for the whole retry budget"
+                DISPATCH_ACTION="Check that app.modulo.run is healthy and that MODULO_BRANCH_FIXER_WEBHOOK_URL points at it, then re-run this CI job."
+                ;;
+              *)
+                DISPATCH_FAILURE="non-retryable rejection"
+                DISPATCH_CAUSE="the Branch Fixer webhook rejected the request outright (HTTP ${LAST_HTTP}) - retrying cannot help"
+                DISPATCH_ACTION="Check MODULO_BRANCH_FIXER_HMAC_SECRET and the webhook payload; this needs a code or configuration fix, not a retry."
+                ;;
+            esac
+            echo "::error::Branch Fixer webhook dispatch failed — ${DISPATCH_FAILURE} after ${ATTEMPTS} attempt(s) in ${DISPATCH_ELAPSED}s (last HTTP ${LAST_HTTP}: ${LAST_DETAIL}). CI failure was not handed to the autonomous fix loop."
+            # The shared script has already written the durable summary block
+            # (failure class, attempt count, last HTTP status, cause, remedy)
+            # to this job's run summary. Add only what the script cannot know:
+            # this job's own consequence in the fix loop.
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              {
+                echo ""
+                echo "- PR: #${PR_NUM} — **the CI failure was not handed to the autonomous fix loop**."
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+            # FAR-1997: the job now checks out ONLY scripts/dispatch_with_retry.sh
+            # (the dispatch policy is shared code, not an inline loop), but the
+            # repository is still passed explicitly to every `gh` command. It
+            # works identically with a checkout and keeps the command
+            # independent of what the checkout leaves in the working tree -
+            # FAR-1997 was an unqualified `gh pr comment` dying with "fatal:
+            # not a git repository" before it reached the API.
             #
             # A dispatch failure whose notice cannot be posted leaves a stalled
             # fix loop indistinguishable from a working one, so an unpostable
             # notice is a HARD error (its own non-zero exit code), never a
             # warning annotation: exit 1 = dispatch failed but the PR was told,
             # exit 2 = dispatch failed AND the PR could not be told.
-            if ! gh pr comment "$PR_NUM" --repo "$REPO" --body "## Branch Fixer Dispatch Failed
+            if ! gh pr comment "$PR_NUM" --repo "$REPO" --body "## Branch Fixer Dispatch Failed — ${DISPATCH_FAILURE}
 
-            The CI failure notification could not be delivered to the Branch Fixer pipeline after multiple retries.
+            The CI failure notification could not be delivered to the Branch Fixer pipeline after ${ATTEMPTS} attempt(s) over ${DISPATCH_ELAPSED}s.
 
             **HTTP status:** \`${LAST_HTTP}\`
-            **Detail:** ${DETAIL}
+            **Detail:** ${LAST_DETAIL}
+            **Why:** ${DISPATCH_CAUSE}
 
-            The automated fix loop is **not active** for this PR. Manual investigation may be needed."; then
+            ${DISPATCH_ACTION}
+
+            The automated fix loop is **not active** for this PR."; then
               echo "::error::Failed to post dispatch-failure comment on PR #${PR_NUM} — the stalled fix loop could not be announced."
               exit 2
             fi
@@ -1962,7 +2029,21 @@ jobs:
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
+      # The checkout below fetches scripts/dispatch_with_retry.sh; job-level
+      # permissions replace the workflow-level `contents: read`.
+      contents: read
     steps:
+      # The dispatch policy is shared code, so this job checks out exactly that
+      # one file. Same guard as the dispatch step: a main run that is cancelled
+      # rather than failed does nothing here, and should not fail on a checkout
+      # either.
+      - name: Check out the dispatch script
+        if: contains(needs.*.result, 'failure')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
       - name: Trigger Modulo Branch Fixer
         # Only dispatch on a real failure. A manually cancelled main run is an
         # intentional action, not a CI break, so we must not dispatch the
@@ -1973,12 +2054,12 @@ jobs:
         # fixer job which use the same pattern).
         if: contains(needs.*.result, 'failure')
         env:
-          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
-          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          DISPATCH_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_LABEL: "Modulo Branch Fixer"
           MAIN_SHA: ${{ github.sha }}
         shell: bash
         run: |
-          TIMESTAMP=$(date +%s)
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           # headSha (FAR-1034): mirrors the notify-pr-failure payload so the
           # Branch Fixer trigger can coalesce repeated failures at the same
@@ -1993,84 +2074,61 @@ jobs:
             --arg fingerprint "${FINGERPRINT}" \
             '{branchName: $branchName, prNumber: $prNumber, headSha: $headSha, runUrl: $runUrl, failureDescription: $failureDescription, fingerprint: $fingerprint}')
           echo "CI checks failed on main (${{ github.sha }}) -- dispatching Branch Fixer."
-          # Bounded backpressure retry, identical to notify-pr-failure's loop
-          # above (one retry policy for one endpoint). The webhook returns HTTP
-          # 429 when the Branch Fixer trigger's concurrency slots are exhausted
-          # and 503 when the app is shedding load; 502/504 are gateway-side
-          # unavailability of the same class. Those are transient, so retry
-          # them on a patient but strictly bounded schedule - 3 attempts
-          # total, 10s then 30s - and then fail the step LOUDLY: a dispatch
-          # failure is never swallowed silently.
+          # ONE shared retry policy: scripts/dispatch_with_retry.sh — the same
+          # single definition the sibling PR-failure step calls. It owns the
+          # classification (429 = capacity saturation, 000/502/503/504 =
+          # transient, every other non-2xx = terminal), the bounded retry
+          # (attempt cap AND a 300s wall-clock budget), Retry-After handling and
+          # exponential backoff with jitter. On an undelivered dispatch it
+          # emits its own class-named ::error:: and a durable run summary; the
+          # failure arm below adds this job's own consequence.
           #
-          # HTTP 000 is curl's sentinel for a transport failure (no response
-          # at all). It is retried on the same schedule: it belongs to the
-          # same "server not reachable right now" class, and the
-          # `|| RESPONSE=""` below is what stops `bash -e` (GitHub Actions
-          # adds it to `run:` steps) from aborting the loop on the first curl
-          # error - without it a transient webhook blip permanently lost the
-          # dispatch. Every other status is non-retryable and fails loudly:
-          # in particular HTTP 500/501 are deliberately NOT retried, because a
-          # deterministic server-side error cannot be fixed by retrying and a
-          # retry only delays the loud failure annotation.
-          #
-          # TIMESTAMP and HMAC are recomputed on every attempt: the server
-          # enforces a +/-300s replay window on X-Modulo-Timestamp, so a
-          # signature computed once would fall outside the window after the
-          # 10s/30s sleeps.
-          MAX_ATTEMPTS=3
-          DISPATCHED="false"
-          LAST_HTTP=""
-          BODY_RESP=""
-          ATTEMPTS=0
-          for i in $(seq 1 "$MAX_ATTEMPTS"); do
-            TIMESTAMP=$(date +%s)
-            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
-            RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "${WEBHOOK_URL}" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "${BODY}") || RESPONSE=""
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            # A failed curl writes no body, so tail -1 is empty; normalise it to
-            # the HTTP 000 sentinel the retry/no-op branches key off.
-            [ -n "$HTTP_CODE" ] || HTTP_CODE="000"
-            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-            LAST_HTTP="$HTTP_CODE"
-            ATTEMPTS="$i"
-            if [ "$HTTP_CODE" = "202" ]; then
-              RESP_STATUS=$(echo "$BODY_RESP" | jq -r '.status // "accepted"')
-              if [ "$RESP_STATUS" = "coalesced" ]; then
-                echo "::notice::Branch Fixer coalesced (duplicate CI-failure for same sha — suppressed)"
-              else
-                echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
-              fi
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "400" ] && echo "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
-              # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
-              # engine's byte-level idempotency guard (DuplicateWebhookError) —
-              # the identical delivery was already ACCEPTED within the ~5-min
-              # dedup window (a concurrent run or a workflow re-run). It is a
-              # handled no-op, NOT a dispatch failure.
-              echo "::notice::Branch Fixer duplicate delivery suppressed (identical payload already accepted within the dedup window)"
-              DISPATCHED="true"
-              break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" = "502" ] || [ "$HTTP_CODE" = "503" ] || [ "$HTTP_CODE" = "504" ] || [ "$HTTP_CODE" = "000" ]; then
-              if [ "$i" -lt "$MAX_ATTEMPTS" ]; then
-                if [ "$i" -eq 1 ]; then DELAY=10; else DELAY=30; fi
-                echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/${MAX_ATTEMPTS}) — retrying in ${DELAY}s"
-                sleep "$DELAY"
-              else
-                echo "::warning::Branch Fixer returned HTTP $HTTP_CODE on the final attempt ($i/${MAX_ATTEMPTS}) — no attempts left"
-              fi
-            else
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
-              break
-            fi
-          done
+          # The bound itself (attempt cap + 300s wall-clock budget) lives in
+          # the script. To override it, set DISPATCH_BUDGET_SECONDS /
+          # DISPATCH_MAX_ATTEMPTS in the workflow environment — both the script
+          # and this step read the same value from there.
+
+          # Run the shared policy. DISPATCH_RESULT_FILE is how the script hands
+          # the outcome back: last HTTP status, failure class, detail, attempt
+          # count and elapsed time, so this job's own durable signal is
+          # composed from observed values rather than a local counter.
+          DISPATCH_RESULT_FILE="$(mktemp)"
+          if DISPATCH_RESULT_FILE="${DISPATCH_RESULT_FILE}" \
+             DISPATCH_BODY="${BODY}" bash scripts/dispatch_with_retry.sh; then
+            DISPATCHED="true"
+          else
+            DISPATCHED="false"
+          fi
+          # shellcheck disable=SC1090
+          source "${DISPATCH_RESULT_FILE}" 2>/dev/null || true
+          LAST_HTTP="${DISPATCH_LAST_HTTP:-unknown}"
+          LAST_CLASS="${DISPATCH_LAST_CLASS:-}"
+          LAST_DETAIL="${DISPATCH_LAST_DETAIL:-unknown}"
+          ATTEMPTS="${DISPATCH_ATTEMPTS:-unknown}"
+          DISPATCH_ELAPSED="${DISPATCH_BUDGET_ELAPSED:-unknown}"
           if [ "$DISPATCHED" != "true" ]; then
-            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
-            echo "::error::Branch Fixer webhook dispatch failed after ${ATTEMPTS} attempt(s) (last HTTP ${LAST_HTTP}: ${DETAIL}) — main CI failure was not handed to the autonomous fix loop."
+            # Name the CLASS of failure, not just its HTTP code: capacity
+            # saturation is an operational backlog an operator drains, while a
+            # terminal error is a broken request or credential nobody is
+            # waiting on. The cause and remedy live in the shared script's own
+            # annotation and summary, so this job only names the class and its
+            # own consequence (a main failure has no PR to comment on).
+            case "$LAST_CLASS" in
+              capacity) DISPATCH_FAILURE="capacity saturated" ;;
+              transient) DISPATCH_FAILURE="webhook unreachable" ;;
+              *) DISPATCH_FAILURE="non-retryable rejection" ;;
+            esac
+            echo "::error::Branch Fixer webhook dispatch failed — ${DISPATCH_FAILURE} after ${ATTEMPTS} attempt(s) in ${DISPATCH_ELAPSED}s (last HTTP ${LAST_HTTP}: ${LAST_DETAIL}). Main CI failure was not handed to the autonomous fix loop."
+            # A main failure has no PR to comment on, so the run summary is the
+            # durable signal that the fixer was never dispatched. The shared
+            # script has already written the block (class, attempts, last HTTP,
+            # cause, remedy) to this job's summary; add this job's consequence.
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              {
+                echo ""
+                echo "- **The main CI failure was not handed to the autonomous fix loop.**"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
             exit 1
           fi
           # Explicit success exit: the dispatch was accepted (202) or was a

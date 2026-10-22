@@ -17,6 +17,7 @@ from modulo.core.library_service import (
     ContributionNotFoundError,
 )
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -34,7 +35,11 @@ def _make_settings() -> Settings:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct double: the RLS preamble reads ``in_transaction()`` /
+    # ``get_bind()`` / ``add()`` synchronously, so those must be sync mocks —
+    # a bare AsyncMock turns each call into a never-awaited coroutine. The
+    # ``execute`` result is already a plain ``MagicMock`` below.
+    session = configure_rls_preamble(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

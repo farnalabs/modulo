@@ -264,9 +264,9 @@
         </svg>
         {{ copySuccess ? $t('components.SsoProviderForm.copied') : $t('components.SsoProviderForm.copy_callback_url') }}
       </button>
-      <span v-if="copySuccess" class="ml-2 text-xs text-primary-text" role="status" aria-live="polite" data-testid="sso-callback-url-copied">
+      <output v-if="copySuccess" class="ml-2 text-xs text-primary-text" aria-live="polite" data-testid="sso-callback-url-copied">
         {{ $t('components.SsoProviderForm.copied') }}
-      </span>
+      </output>
     </div>
 
     <!-- Provisioning mode -->

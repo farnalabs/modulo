@@ -340,9 +340,9 @@
               role="alert"
               aria-live="assertive"
             />
-            <div v-if="telemetrySaved" data-testid="onboarding-wizard-telemetry-saved" class="mt-3 rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success-text" role="status">
+            <output v-if="telemetrySaved" data-testid="onboarding-wizard-telemetry-saved" class="mt-3 block rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success-text">
               {{ $t('views.OnboardingWizard.telemetry_enabled_success') }}
-            </div>
+            </output>
             <div class="mt-6 flex items-center justify-center gap-3">
               <Button
                 v-if="!telemetryForbidden"

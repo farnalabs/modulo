@@ -739,6 +739,16 @@ _TRANSIENT_DBAPI_ORIG_CLASSES = frozenset(
 # is capped.
 _WATCHDOG_AWAIT_BOUND_SECONDS = 5.0
 
+#: FAR-1914 B2: how long the node-deadline watchdog lets the CANCELLED executor
+#: run its cancellation cleanup before terminalising the run. The cleanup is
+#: the sandbox node's bounded retention pass: a first drain (5s) + the
+#: cancel-delivery grace (0.5s) + the second/final drain (5s) + a log-tail
+#: fetch (5s) + a marker persist (5s) — 20.5s worst case, so 25s covers it
+#: with headroom. Without this wait the terminal write can land BEFORE the
+#: marker, and a run killed seconds after opening its PR is recorded as a bare
+#: failure.
+_EXECUTOR_CANCEL_SETTLE_SECONDS = 25.0
+
 
 class ClaimSupersededError(Exception):
     """A fenced heartbeat/lease write matched zero rows — this executor must abort.
@@ -1700,6 +1710,7 @@ async def _maybe_watchdog_retry(
     final_status: str,
     error_code: str,
     zero_node: bool = False,
+    veto_if_delivered: bool = False,
 ) -> bool:
     """Consult the shared watchdog-retry hook (FAR-690 / FAR-693); fail closed.
 
@@ -1710,16 +1721,28 @@ async def _maybe_watchdog_retry(
     prevent a run from reaching a terminal state.
 
     ``zero_node`` (FAR-1088) opts the caller into the zero-node failure
-    carve-out and is forwarded ONLY when set, so hooks without the parameter
-    keep the exact two-argument call shape. Only the zombie watchdog passes it
-    (zero nodes by construction — it fires pre-first-progress).
+    carve-out; passed ONLY by the zombie watchdog (zero nodes by construction —
+    it fires pre-first-progress).
+
+    ``veto_if_delivered`` (FAR-2053) opts the caller into the delivery veto —
+    refuse to re-dispatch a run whose markers already record a delivery.
+    Passed ONLY by the zombie watchdog: that path's kill is the one reached by
+    a re-dispatched attempt that delivered on a PRIOR attempt, and it is the
+    one whose re-dispatch has no other delivery guard. The FAR-369
+    node-deadline path does not pass it and is unchanged.
+
+    Both flags are forwarded ONLY when set, so hooks without the parameters
+    keep the exact two-argument call shape.
     """
     if retry_hook is None:
         return False
+    forwarding: dict[str, bool] = {}
+    if zero_node:
+        forwarding["zero_node"] = True
+    if veto_if_delivered:
+        forwarding["veto_if_delivered"] = True
     try:
-        if zero_node:
-            return bool(await retry_hook(final_status, error_code, zero_node=True))
-        return bool(await retry_hook(final_status, error_code))
+        return bool(await retry_hook(final_status, error_code, **forwarding))
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -1769,6 +1792,16 @@ async def zombie_watchdog(
     consult additionally opts into the zero-node failure carve-out — a
     ``failure``-covered policy re-dispatches a zero-node death here exactly as
     the cron path does (see the ``zero_node=True`` call below).
+
+    FAR-2053: the consult also opts into the DELIVERY VETO
+    (``veto_if_delivered=True``). A run that delivered on an EARLIER attempt
+    keeps its ``delivery_done`` markers across the pending-reset, so the
+    renewed pre-node stall of a delivered run is reachable here and nowhere
+    else; re-dispatching it would re-execute the graph from the start and risk
+    a second delivery. When a marker records ``delivery_done`` the hook
+    refuses, and this watchdog terminal-fails the run with
+    ``executor_stalled`` exactly as it would without policy coverage (a probe
+    read failure vetoes too — fail closed).
 
     FAR-893: *dispatch_tracker* (optional) reports the executor's progress
     through the claim→first-node-dispatch phases.  When the grace period
@@ -1835,6 +1868,12 @@ async def zombie_watchdog(
         final_status="stalled",
         error_code=EXECUTOR_STALLED_ERROR_CODE,
         zero_node=True,
+        # FAR-2053: a run re-dispatched after an earlier attempt DELIVERED
+        # (its marker rows carry ``delivery_done``) must not be re-run from the
+        # start — the side effect already happened. That prior delivery is only
+        # visible here, on a renewed pre-node stall, so this is the path that
+        # has to read it.
+        veto_if_delivered=True,
     ):
         return
     await fail_run_terminal(
@@ -1975,6 +2014,7 @@ async def _record_derived_deadline_cost(
     *,
     error_detail: str,
     derived_sandbox_wall_hours: float,
+    killed_node_id: str,
 ) -> None:
     """Book the DERIVED sandbox cost for a node-deadline-killed run (FAR-1993).
 
@@ -1989,6 +2029,11 @@ async def _record_derived_deadline_cost(
     fired because the node ran to its deadline, so the node really did occupy
     the sandbox for approximately that long.
 
+    Round-3 M1: *killed_node_id* travels with the duration so finalize can
+    require a sandbox-attempt marker for THAT node. A run-scoped marker (some
+    earlier sandbox node) must not license crediting the killed
+    connector/HTTP/agent node's timeout as sandbox spend.
+
     Called only AFTER ``fail_run_terminal`` returned ``True``: the terminal
     write actually landed, so this is a compensating write on an already-failed
     run. Never on the re-dispatch branch — that run continues and will be
@@ -1997,12 +2042,18 @@ async def _record_derived_deadline_cost(
     Fail-open: any failure logs and is swallowed so a completed terminal
     failure is never turned into a raised error. ``asyncio.CancelledError`` is
     re-raised (worker shutdown is not ours to swallow).
+
+    FAR-1313 lock bound: the FINALIZING write takes the hot ``runs`` row lock
+    (``update_run_status``) inside this transaction, so the transaction-scoped
+    ``set_mutation_row_lock_timeout`` is issued FIRST, before any lock.
     """
     from modulo.core.cost_controller.finalize import finalize_failed_run
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 
     try:
         factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
         async with factory() as session, session.begin():
+            await set_mutation_row_lock_timeout(session)
             await set_rls_org(session, uuid.UUID(org_id))
             await finalize_failed_run(
                 session,
@@ -2011,12 +2062,174 @@ async def _record_derived_deadline_cost(
                 error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
                 error_detail=error_detail,
                 derived_sandbox_wall_hours=derived_sandbox_wall_hours,
+                killed_node_id=killed_node_id,
             )
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.warning(
             "pipeline_execution.deadline_cost_record_failed run=%s",
+            run_id,
+            exc_info=True,
+        )
+
+
+async def _write_node_deadline_triage_marker(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    redispatched: bool,
+) -> None:
+    """The RLS-scoped write body of :func:`_persist_node_deadline_triage`."""
+    from modulo.core.cron_helpers import (
+        _TERMINAL_TRIAGE_REASON_NODE_DEADLINE,
+        _TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH,
+        persist_redispatch_triage_marker,
+        persist_terminal_triage_marker,
+    )
+
+    factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+    run_uuid = uuid.UUID(run_id)
+    org_uuid = uuid.UUID(org_id)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_uuid)
+        if redispatched:
+            await persist_redispatch_triage_marker(
+                session,
+                run_id=run_uuid,
+                organisation_id=org_uuid,
+                error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+                # States only what this path observed. The run is still alive,
+                # so the note must never claim it was terminalised.
+                reason=_TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH,
+            )
+        else:
+            await persist_terminal_triage_marker(
+                session,
+                run_id=run_uuid,
+                organisation_id=org_uuid,
+                error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+                # The SAME reason (and the same synthetic key) the FAR-1999
+                # durable reaper writes, so a run reaped by either path is
+                # explained identically on the run page.
+                reason=_TERMINAL_TRIAGE_REASON_NODE_DEADLINE,
+            )
+
+
+async def _persist_node_deadline_triage(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    redispatched: bool,
+) -> None:
+    """Best-effort run-page triage marker for a node-deadline watchdog kill.
+
+    Both FAR-369 outcomes previously left the run page with nothing:
+
+    * TERMINAL (``redispatched=False``) — the kill terminal-fails with
+      ``node_deadline_exceeded``, but ``fail_run_terminal`` persists a
+      run-level marker only for ``harness.worker_lost``, and the sandbox
+      cancellation handler's per-attempt marker is not guaranteed (the node may
+      never have produced an envelope, and the process may die before the
+      marker lands). ``deadline_triage`` could therefore be ``[]`` for exactly
+      the failure that surface exists to explain.
+    * RE-DISPATCH (``redispatched=True``) — the kill returns early and the retry
+      hook's fenced pending-reset NULLs ``error_code``; the only durable
+      fingerprint is ``runs.node_deadline_watchdog_fired_count``, which is
+      analytics-only and absent from the run response.
+
+    The terminal branch writes the SAME marker the FAR-1999 reaper writes; the
+    re-dispatch branch writes a sibling marker under a DISTINCT attempt key
+    whose prose does not claim terminalisation (see
+    ``cron_helpers.persist_redispatch_triage_marker``).
+
+    Best-effort by design: the terminal write / re-dispatch it describes has
+    already committed, so a marker failure must never surface — it is logged
+    and swallowed, bounded by ``_TERMINAL_TRIAGE_PERSIST_TIMEOUT`` (the status
+    write always wins). ``asyncio.CancelledError`` is re-raised: worker
+    shutdown is not ours to swallow.
+    """
+    from modulo.core.cron_helpers import _TERMINAL_TRIAGE_PERSIST_TIMEOUT
+
+    try:
+        await asyncio.wait_for(
+            _write_node_deadline_triage_marker(aeng, run_id, org_id, redispatched=redispatched),
+            timeout=_TERMINAL_TRIAGE_PERSIST_TIMEOUT,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "pipeline_execution.node_deadline_triage_failed run=%s redispatched=%s",
+            run_id,
+            redispatched,
+            exc_info=True,
+        )
+
+
+async def _salvage_cancelled_run_cost(aengine: AsyncEngine, run_id: str, org_id: str) -> None:
+    """Attribute a settled CANCELLED run's marker-provable spend (FAR-1914 C2).
+
+    Called from ``run_executor_with_watchdog`` only AFTER the executor task has
+    settled and the run row has been re-read: the cancelled executor's sandbox
+    node has already run its bounded retention pass and persisted its attempt
+    marker (the API/MCP cancel REQUEST path cannot see that marker — it runs in
+    a separate process and re-records nothing the executor has not yet written;
+    see ``finalize_cancelled_run``). Salvaging here is the ONLY point where a
+    never-paused cancelled run's spend can be attributed honestly.
+
+    Gated on the re-read status being ``cancelled``: a watchdog terminal-fail
+    path lands here with the run already ``failed`` (its deadline cost is
+    handled by ``_record_derived_deadline_cost``), a superseded run is owned by
+    its successor and a re-dispatched run is ``pending`` — all delegated to
+    finalize's own unloadable-status guard, so this is the one benign call-site
+    gate on top.
+
+    TWO PATHS NEVER REACH THIS CALL (round-3 M6) — both leave a $0 cancelled
+    run by design, with no fabricated spend:
+
+    * a genuine WORKER-SHUTDOWN cancellation — ``_resolve_cancel_outcome``
+      re-raises ``CancelledError`` so SAQ retries the job, and the wrapper
+      returns before the post-settle salvage. It emits
+      ``pipeline_execution.cancel_cost_salvage_skipped`` so the $0 outcome is
+      explainable;
+    * a GENERIC EXECUTOR FAILURE — ``_handle_executor_failure`` writes the
+      terminal ``failed`` status via a raw writer with no cost columns and does
+      not call this salvage.
+
+    :func:`modulo.core.cost_controller.finalize.finalize_cancelled_run` names
+    the same two skip points on the request-path side.
+
+    Fail-open: any failure logs and is swallowed so the already-terminal
+    cancelled run is never turned into a raised error. ``asyncio.CancelledError``
+    is re-raised (worker shutdown is not ours to swallow).
+
+    FAR-1313 lock bound: the salvage write takes the hot ``runs`` row lock
+    (``update_run_status``) inside this transaction, so the transaction-scoped
+    ``set_mutation_row_lock_timeout`` is issued FIRST, before any lock — a
+    contended row then surfaces as a bounded 55P03 rather than an unbounded
+    wall-clock wait on a shutdown path.
+    """
+    from modulo.core.cost_controller.finalize import salvage_cancelled_run_cost
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    try:
+        factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
+        async with factory() as session, session.begin():
+            await set_mutation_row_lock_timeout(session)
+            await set_rls_org(session, uuid.UUID(org_id))
+            await salvage_cancelled_run_cost(
+                session,
+                run_id=uuid.UUID(run_id),
+                org_id=uuid.UUID(org_id),
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "pipeline_execution.cancel_cost_salvage_failed run=%s",
             run_id,
             exc_info=True,
         )
@@ -2054,6 +2267,13 @@ async def _fail_overdue_node(
     analytics whether it re-dispatches or terminal-fails, and the marker
     survives the re-dispatch (neither the claim nor the pending-reset touches
     the column).
+
+    Each branch then writes the run-page evidence for its own outcome
+    (``_persist_node_deadline_triage``): the terminal branch the same run-level
+    triage marker the FAR-1999 reaper writes, and the re-dispatch branch a
+    sibling marker whose prose says the run was re-dispatched, never that it
+    was terminalised. Both are best-effort — a marker failure is logged and
+    swallowed so it can never delay or undo the outcome it describes.
     """
     exceeded = [nid for nid, (dl, _to) in node_deadlines.items() if dl <= time.monotonic()]
     exceeded.sort(key=lambda nid: node_deadlines[nid][0])
@@ -2080,7 +2300,23 @@ async def _fail_overdue_node(
     if await _maybe_watchdog_retry(
         retry_hook, run_id, final_status="failed", error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE
     ):
+        # The retry hook's fenced pending-reset nulls ``error_code`` and the run
+        # is now owned by a successor attempt, so the run page has no trace of
+        # this kill. Persist the re-dispatch note BEFORE returning (best-effort:
+        # the re-dispatch already committed and must never be delayed or
+        # undone by an observability write).
+        await _persist_node_deadline_triage(aeng, run_id, org_id, redispatched=True)
         return
+    # FAR-1914 B2: on the TERMINAL branch only, give the cancelled executor a
+    # SHORT BOUNDED window to run its cancellation cleanup before the run is
+    # terminalised — node_runner drains the sandbox tail one final time and
+    # persists the delivery/triage marker (including a ``pr_url`` opened
+    # seconds before the kill). ``asyncio.wait`` (never ``await exec_task``) so
+    # the expected CancelledError is not re-raised here; a cleanup failure or a
+    # timed-out cleanup must not stop the terminal write below. This is placed
+    # AFTER the retry consult on purpose: the consult stands down on
+    # ``exec_task.done()``, so settling first would disable re-dispatch.
+    await asyncio.wait({exec_task}, timeout=_EXECUTOR_CANCEL_SETTLE_SECONDS)
     error_detail = (
         f"Node '{node_id}' did not complete within its configured timeout_seconds "
         f"({_timeout}s) — node-deadline watchdog ended the dispatch. The cause is "
@@ -2095,6 +2331,13 @@ async def _fail_overdue_node(
         error_detail=error_detail,
     )
     if terminal_written:
+        # A terminal deadline kill writes no run-level triage marker of its own
+        # (``fail_run_terminal`` persists one for ``harness.worker_lost`` only)
+        # and the sandbox cancel handler's per-attempt marker is not guaranteed,
+        # so write the entry the FAR-1999 reaper writes. Triage first: the run
+        # page's explanation should land even if the (slower) cost booking
+        # below fails.
+        await _persist_node_deadline_triage(aeng, run_id, org_id, redispatched=False)
         # FAR-1993: the run is now terminally failed but the raw writer recorded
         # no cost. Attribute the node's configured deadline as DERIVED sandbox
         # spend (the sandbox really did run for approximately that long — this
@@ -2106,6 +2349,7 @@ async def _fail_overdue_node(
             org_id,
             error_detail=error_detail,
             derived_sandbox_wall_hours=_timeout / 3600.0,
+            killed_node_id=node_id,
         )
 
 
@@ -2382,6 +2626,11 @@ async def run_executor_with_watchdog(
     # re-claim a pending run — see watchdog_retry). The hook fails CLOSED to
     # the terminal fail, so this can never prevent a run from reaching a
     # terminal state.
+    #
+    # FAR-2053: ONE hook, two call sites with different opt-ins — the zombie
+    # watchdog passes ``zero_node=True`` + ``veto_if_delivered=True``, the
+    # node-deadline watchdog passes neither. The delivery veto is deliberately
+    # stall-only; widening it is a separate decision, not a wiring default.
     watchdog_retry_hook: Callable[[str, str], Awaitable[Any]] | None = None
     watchdog_retry_outcome: Any = None
     if _watchdog_retry_enabled_for_job(job):
@@ -2487,6 +2736,14 @@ async def run_executor_with_watchdog(
     # and the run row status. A watchdog/supersession/heartbeat cancellation
     # leaves exec_result None — fall back to the run row.
     result_status = await _resolve_result_status(aeng, run_id, org_id, exec_result, rid)
+    if result_status == "cancelled":
+        # FAR-1914 C2: the executor task is settled at this point, so its
+        # cancelled sandbox node has persisted the retention marker. Salvage
+        # the marker-provable spend now (an API-path finalize cannot see this
+        # marker). finalize's own guards make every non-attributable case a
+        # no-op; a failed/pending/superseded run is filtered here before the
+        # session even opens.
+        await _salvage_cancelled_run_cost(aeng, run_id, org_id)
     return _executor_status_response(result_status)
 
 
@@ -2856,6 +3113,15 @@ async def _resolve_cancel_outcome(
             rid,
         )
     else:
+        # FAR-1914 round-3 M6: a genuine worker-shutdown cancellation re-raises
+        # so SAQ retries the job — which means the post-settle cost salvage is
+        # skipped. Say so, so a $0 cancelled run is explainable rather than
+        # looking like the salvage silently failed.
+        _log.warning(
+            "pipeline_execution.cancel_cost_salvage_skipped run=%s reason=worker_shutdown "
+            "— post-settle marker salvage is not reached; no cost fabricated",
+            rid,
+        )
         raise asyncio.CancelledError
 
 

@@ -28,7 +28,6 @@ from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.audit_coverage import audit_session
 from modulo.core.mcp.tool_pinning import ObservationResult, ToolPinningError
 from modulo.db.crud.base import PageResult
 from modulo.db.models.external_agent import ExternalAgent
@@ -120,15 +119,16 @@ def client() -> Generator[TestClient, None, None]:
     async def _override_db() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
-    async def _override_audit() -> AsyncGenerator[AsyncMock, None]:
-        yield AsyncMock()
-
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = _override_db
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = _principal
     app.dependency_overrides[get_current_tenant_user] = _principal
-    app.dependency_overrides[audit_session] = _override_audit
+    # The isolated ``audited(...)`` session is NOT overridden here: the global
+    # autouse ``_isolated_audit_session`` fixture installs the contract-correct
+    # ``_AuditTestSession`` double. A local override yielding a bare ``AsyncMock``
+    # made ``async with session.begin()`` orphan a never-awaited coroutine on
+    # every audited request (PytestUnraisableExceptionWarning flood).
     try:
         yield TestClient(app)
     finally:

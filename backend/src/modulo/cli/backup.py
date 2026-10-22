@@ -168,12 +168,15 @@ def _parse_org_id(raw: str | None) -> uuid.UUID | None:
 
 
 def _jsonb(value: Any) -> Jsonb | None:
-    """Adapt a restored JSON value for a ``jsonb`` column.
+    """Re-adapt an exported JSON value for a JSONB parameter.
 
-    The checkpoint JSON exports decode into Python objects (dict/list), and
-    psycopg does NOT adapt a bare dict for a parameter — it raises
-    "cannot adapt type 'dict'" at execute time. The value must be wrapped
-    explicitly; ``None`` stays SQL NULL.
+    ``SELECT *`` returns JSONB columns as decoded Python objects, so the
+    restore path receives dicts/lists (and any other JSON scalar). psycopg has
+    no default dumper for those (``ProgrammingError: cannot adapt type
+    'dict'``), which made a restore of any archive containing a checkpoint row
+    fail outright. The value must be wrapped explicitly; ``None`` stays SQL
+    NULL rather than becoming ``Jsonb(None)`` (which would decode to JSON
+    ``'null'``).
     """
     return None if value is None else Jsonb(value)
 

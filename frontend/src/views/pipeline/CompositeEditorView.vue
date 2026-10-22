@@ -1,10 +1,15 @@
 <template>
   <BackLink to="/library" :label="$t('views.CompositeEditorView.back_to_library')" />
   <div class="flex h-[calc(100vh-3.5rem)]">
-    <output v-if="loading" class="flex flex-1 flex-col gap-4 p-6" :aria-label="$t('views.CompositeEditorView.loading_canvas')">
-      <SkeletonBlock height-class="h-8 w-64" />
-      <SkeletonBlock height-class="flex-1 w-full" />
-    </output>
+    <div v-if="loading" class="flex flex-1 flex-col gap-4 p-6">
+      <!-- The live region carries only the loading status; the skeleton
+           blocks are layout, not phrasing content, so they are siblings. -->
+      <output class="sr-only" aria-live="polite">{{ $t('views.CompositeEditorView.loading_canvas') }}</output>
+      <div class="flex flex-1 flex-col gap-4" aria-busy="true">
+        <SkeletonBlock height-class="h-8 w-64" />
+        <SkeletonBlock height-class="flex-1 w-full" />
+      </div>
+    </div>
 
     <div v-else-if="pageError" class="flex flex-1 items-center justify-center p-6">
       <ErrorAlert :message="pageError" :on-retry="retry" />
@@ -93,13 +98,17 @@
     </template>
 
     <!-- Save as composite dialog -->
-    <div role="button" tabindex="0" :aria-label="$t('views.CompositeEditorView.close_dialog')" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+    <dialog
       v-if="showSaveAsComposite"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      @click.self="showSaveAsComposite = false"
+      ref="saveAsDialogRef"
+      aria-labelledby="composite-save-as-title"
+      class="w-full max-w-lg border-0 bg-transparent p-0 text-foreground backdrop:bg-black/50"
+      @click.self="closeSaveAsDialog"
+      @keydown.escape="closeSaveAsDialog"
+      @close="showSaveAsComposite = false"
     >
       <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-base font-semibold">{{ $t('views.CompositeEditorView.save_as_composite') }}</h3>
+        <h3 id="composite-save-as-title" class="mb-4 text-base font-semibold">{{ $t('views.CompositeEditorView.save_as_composite') }}</h3>
         <div class="space-y-4">
           <div>
             <label for="compositeeditorview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.CompositeEditorView.name') }}</label>
@@ -126,7 +135,7 @@
             <button type="button"
               data-testid="composite-save-as-cancel"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
-              @click="showSaveAsComposite = false"
+              @click="closeSaveAsDialog"
             >
               {{ $t('views.CompositeEditorView.cancel') }}
             </button>
@@ -136,7 +145,7 @@
           </div>
         </div>
       </div>
-    </div>
+    </dialog>
 
     <!-- Publish Composite Flow -->
     <PublishCompositeFlow
@@ -150,7 +159,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow } from '@vue-flow/core'
@@ -190,11 +199,33 @@ const rawEdges = ref<any[]>([])
 const ports = ref<ParameterPort[]>([])
 const showPortPanel = ref(true)
 const showSaveAsComposite = ref(false)
+const saveAsDialogRef = ref<HTMLDialogElement | null>(null)
 const showPublishFlow = ref(false)
 const saveAsName = ref('')
 const saveAsDescription = ref('')
 const saveAsError = ref<string | null>(null)
 const saving = ref(false)
+
+// A bare `<dialog open>` keeps the UA's fit-content sizing, so `fixed inset-0`
+// never stretches it and the backdrop is unreachable. showModal() makes it a
+// real modal: viewport-sized layout, an inert background and native Escape.
+// flush:'post' waits for the v-if branch to render the element.
+watch(
+  showSaveAsComposite,
+  (isOpen) => {
+    if (isOpen) openSaveAsDialog()
+  },
+  { immediate: true, flush: 'post' },
+)
+
+function openSaveAsDialog(): void {
+  const dialog = saveAsDialogRef.value
+  if (dialog && !dialog.open) dialog.showModal()
+}
+
+function closeSaveAsDialog(): void {
+  saveAsDialogRef.value?.close()
+}
 
 const nodeTypes = { agent: 'agent', manual: 'manual', composite: 'composite', dispatch: 'dispatch' }
 
@@ -321,7 +352,7 @@ async function handleSaveAs() {
         })),
       },
     })
-    showSaveAsComposite.value = false
+    closeSaveAsDialog()
     router.push({ name: 'library' })
   } catch (e: unknown) {
     saveAsError.value = formatApiError(e)

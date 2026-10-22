@@ -601,8 +601,10 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     expect(wrapper.find('[data-testid="policy-gate-confirm-dialog"]').exists()).toBe(false)
   })
 
-  // Finding 3: Dialog has role="dialog", aria-modal, Escape-dismiss, Tab-trap.
-  it('has role="dialog" and aria-modal="true" on the confirmation dialog (finding 3)', async () => {
+  // Finding 3 (review follow-up): the confirmation is an inline, non-modal
+  // strip — a native <dialog> that must NOT claim aria-modal, because the form
+  // behind it stays interactive and is not inert.
+  it('uses a native non-modal <dialog> without aria-modal for the inline confirmation (finding 3)', async () => {
     evalsList = [evalItem({ id: 'eval-1' })]
     gateResponses['eval-1'] = ok({ id: 'g1', action: 'block', version: 1 })
     const wrapper = mountView()
@@ -616,8 +618,11 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
 
     const dialog = wrapper.find('[data-testid="policy-gate-confirm-dialog"]')
     expect(dialog.exists()).toBe(true)
-    expect(dialog.attributes('role')).toBe('dialog')
-    expect(dialog.attributes('aria-modal')).toBe('true')
+    expect(dialog.element.tagName).toBe('DIALOG')
+    expect(dialog.attributes('role')).toBeUndefined()
+    // Non-modal: the surrounding form is neither inert nor covered, so the
+    // strip must not advertise itself as a modal dialog.
+    expect(dialog.attributes('aria-modal')).toBeUndefined()
     expect(dialog.attributes('aria-label')).toBeTruthy()
   })
 
@@ -643,7 +648,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     expect(apiDELETE).not.toHaveBeenCalled()
   })
 
-  it('traps Tab focus within the confirmation dialog (finding 3)', async () => {
+  it('leaves Tab in the natural document order for the non-modal confirmation strip (finding 3)', async () => {
     evalsList = [evalItem({ id: 'eval-1' })]
     gateResponses['eval-1'] = ok({ id: 'g1', action: 'block', version: 1 })
     const wrapper = mountView()
@@ -657,30 +662,20 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
 
     const dialog = wrapper.find('[data-testid="policy-gate-confirm-dialog"]')
     expect(dialog.exists()).toBe(true)
+    expect(dialog.element.tagName).toBe('DIALOG')
+    expect(dialog.attributes('role')).toBeUndefined()
 
-    // Structural verification: the dialog element has the @keydown handler wired,
-    // which contains the Tab-trap logic. jsdom does not support focus tracking
-    // on non-input elements, so we verify the handler exists in the source.
-    const source = readFileSync(
-      join(__dirname, '..', 'views', 'EvalEditorView.vue'),
-      'utf-8',
-    )
-    // The dialog div must have role="dialog" and aria-modal="true".
-    expect(dialog.attributes('role')).toBe('dialog')
-    expect(dialog.attributes('aria-modal')).toBe('true')
+    // A non-modal strip must not hijack Tab: the keydown is not prevented and
+    // focus is free to leave the strip.
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    dialog.element.dispatchEvent(tab)
+    await flush()
+    expect(tab.defaultPrevented).toBe(false)
 
-    // The source must contain the focus-trap handler that intercepts Tab.
-    expect(source).toContain('onGateDialogKeydown')
-    expect(source).toContain("e.key === 'Tab'")
-    expect(source).toContain("e.key === 'Escape'")
-    expect(source).toContain('e.preventDefault()')
-    expect(source).toContain('focusable[0]') // first focusable
-    expect(source).toContain('last.focus()') // wrap to last
-
-    // The dialog must have two focusable buttons (Confirm and No) for the
-    // trap to have targets.
-    const buttons = dialog.findAll('button')
-    expect(buttons.length).toBe(2)
+    // Escape still cancels the strip.
+    dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flush()
+    expect(wrapper.find('[data-testid="policy-gate-confirm-dialog"]').exists()).toBe(false)
   })
 
   // Finding 4: Dirty-gate guard prompts on cancel and eval-switch.
@@ -703,8 +698,9 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
 
     const dialog = wrapper.find('[data-testid="dirty-confirm-dialog"]')
     expect(dialog.exists()).toBe(true)
-    expect(dialog.attributes('role')).toBe('dialog')
-    expect(dialog.attributes('aria-modal')).toBe('true')
+    expect(dialog.element.tagName).toBe('DIALOG')
+    expect(dialog.attributes('role')).toBeUndefined()
+    expect(dialog.attributes('aria-modal')).toBeUndefined()
     expect(dialog.text()).toContain('unsaved policy gate changes')
 
     // "Keep editing" keeps the form intact.
@@ -851,7 +847,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     expect(blockChecked(wrapper)).toBe(true)
   })
 
-  it('traps Tab focus within the dirty-confirm dialog (finding 4)', async () => {
+  it('leaves Tab in the natural document order for the non-modal dirty-confirm strip (finding 4)', async () => {
     evalsList = [evalItem({ id: 'eval-1' })]
     gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
     const wrapper = mountView()
@@ -868,21 +864,14 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
 
     const dialog = wrapper.find('[data-testid="dirty-confirm-dialog"]')
     expect(dialog.exists()).toBe(true)
-    expect(dialog.attributes('role')).toBe('dialog')
-    expect(dialog.attributes('aria-modal')).toBe('true')
+    expect(dialog.element.tagName).toBe('DIALOG')
+    expect(dialog.attributes('role')).toBeUndefined()
+    expect(dialog.attributes('aria-modal')).toBeUndefined()
 
-    // Structural verification: the dialog has the keydown handler wired.
-    const source = readFileSync(
-      join(__dirname, '..', 'views', 'EvalEditorView.vue'),
-      'utf-8',
-    )
-    expect(source).toContain('onDirtyDialogKeydown')
-    expect(source).toContain("e.key === 'Tab'")
-    expect(source).toContain("e.key === 'Escape'")
-
-    // The dialog must have two focusable buttons (Discard and Keep editing).
-    const buttons = dialog.findAll('button')
-    expect(buttons.length).toBe(2)
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    dialog.element.dispatchEvent(tab)
+    await flush()
+    expect(tab.defaultPrevented).toBe(false)
   })
 
   // Finding 5: Badge refresh after a successful retry.
@@ -932,8 +921,9 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     }
   }
 
-  // Coverage — the Tab focus trap actually wraps focus in both directions.
-  it('wraps forward Tab from the last control to the first (finding 3)', async () => {
+  // Coverage — the inline confirmation strips are NOT modal, so Tab must be
+  // left to the document's natural order (no wrap, no preventDefault).
+  it('does not intercept forward Tab in the non-modal delete-confirm strip (finding 3)', async () => {
     evalsList = [evalItem({ id: 'eval-1' })]
     gateResponses['eval-1'] = ok({ id: 'g1', action: 'block', version: 1 })
     const wrapper = mountView()
@@ -950,14 +940,16 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     const last = buttons[buttons.length - 1].element as HTMLElement
     const firstFocus = vi.spyOn(first, 'focus')
 
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
     withActiveElement(last, () => {
-      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+      dialog.element.dispatchEvent(tab)
     })
 
-    expect(firstFocus).toHaveBeenCalled()
+    expect(tab.defaultPrevented).toBe(false)
+    expect(firstFocus).not.toHaveBeenCalled()
   })
 
-  it('wraps backward Tab from the first control to the last (finding 3)', async () => {
+  it('does not intercept backward Tab in the non-modal delete-confirm strip (finding 3)', async () => {
     evalsList = [evalItem({ id: 'eval-1' })]
     gateResponses['eval-1'] = ok({ id: 'g1', action: 'block', version: 1 })
     const wrapper = mountView()
@@ -974,11 +966,13 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     const last = buttons[buttons.length - 1].element as HTMLElement
     const lastFocus = vi.spyOn(last, 'focus')
 
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
     withActiveElement(first, () => {
-      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
+      dialog.element.dispatchEvent(tab)
     })
 
-    expect(lastFocus).toHaveBeenCalled()
+    expect(tab.defaultPrevented).toBe(false)
+    expect(lastFocus).not.toHaveBeenCalled()
   })
 
   it('keeps focus put when Tab is pressed from neither end', async () => {
@@ -1006,8 +1000,9 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     expect(lastFocus).not.toHaveBeenCalled()
   })
 
-  // Coverage — the dirty-confirm dialog's Tab focus trap wraps both ways.
-  it('wraps focus within the dirty-confirm dialog in both directions', async () => {
+  // Coverage — the dirty-confirm strip is inline and non-modal: Tab is not
+  // trapped in either direction.
+  it('leaves Tab in the natural order for the non-modal dirty-confirm strip', async () => {
     evalsList = [evalItem({ id: 'eval-1' })]
     gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
     const wrapper = mountView()
@@ -1027,15 +1022,19 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     const firstFocus = vi.spyOn(first, 'focus')
     const lastFocus = vi.spyOn(last, 'focus')
 
+    const forward = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
     withActiveElement(last, () => {
-      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+      dialog.element.dispatchEvent(forward)
     })
-    expect(firstFocus).toHaveBeenCalled()
+    expect(forward.defaultPrevented).toBe(false)
+    expect(firstFocus).not.toHaveBeenCalled()
 
+    const backward = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
     withActiveElement(first, () => {
-      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
+      dialog.element.dispatchEvent(backward)
     })
-    expect(lastFocus).toHaveBeenCalled()
+    expect(backward.defaultPrevented).toBe(false)
+    expect(lastFocus).not.toHaveBeenCalled()
   })
 
   // Coverage — gate GET without id/version falls back to null / 1.
@@ -1669,7 +1668,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     expect(togglePatchCalls()).toHaveLength(0)
   })
 
-  it('traps Tab focus within the toggle-disable dialog in both directions (F9)', async () => {
+  it('leaves Tab in the natural order for the non-modal toggle-disable strip (F9)', async () => {
     const wrapper = await openWithGate({
       id: 'gate-1',
       action: 'block',
@@ -1687,18 +1686,22 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     const firstFocus = vi.spyOn(first, 'focus')
     const lastFocus = vi.spyOn(last, 'focus')
 
+    const forward = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
     withActiveElement(last, () => {
-      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+      dialog.element.dispatchEvent(forward)
     })
-    expect(firstFocus).toHaveBeenCalled()
+    expect(forward.defaultPrevented).toBe(false)
+    expect(firstFocus).not.toHaveBeenCalled()
 
+    const backward = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
     withActiveElement(first, () => {
-      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
+      dialog.element.dispatchEvent(backward)
     })
-    expect(lastFocus).toHaveBeenCalled()
+    expect(backward.defaultPrevented).toBe(false)
+    expect(lastFocus).not.toHaveBeenCalled()
   })
 
-  it('returns early from the toggle-dialog trap with no focusable children (F9)', async () => {
+  it('keeps the non-modal toggle strip open on Tab with no focusable children (F9)', async () => {
     const wrapper = await openWithGate({
       id: 'gate-1',
       action: 'block',
@@ -1711,8 +1714,10 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await nextTick()
     const dialog = wrapper.find('[data-testid="policy-gate-toggle-confirm-dialog"]')
     dialog.element.innerHTML = ''
-    dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    dialog.element.dispatchEvent(tab)
 
+    expect(tab.defaultPrevented).toBe(false)
     expect(dialog.exists()).toBe(true)
   })
 

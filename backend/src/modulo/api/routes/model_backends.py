@@ -19,7 +19,11 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_NOT_FOUND, MSG_RESOURCE_ALREADY_EXISTS
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     deny_break_glass_mint_any_credential,
@@ -53,6 +57,7 @@ from modulo.db.crud.model_backend import (
     list_pipeline_references_for_backend,
     update_model_backend,
 )
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import TERMINAL_STATUSES, Run
@@ -636,6 +641,10 @@ async def create_model_backend_endpoint(
     _validate_provider(req.provider)
     try:
         async with session.begin():
+            # FAR-1825: bound the creation-name uniqueness lock below (the
+            # transaction's first row lock). A contended same-name row must
+            # surface 55P03 -> 409, never an unbounded request wait.
+            await set_mutation_row_lock_timeout(session)
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
@@ -734,7 +743,11 @@ async def create_model_backend_endpoint(
             detail=_MSG_MODEL_BACKENDS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "model_backends.create_model_backend_endpoint")
+        # FAR-1825: the create transaction bounds its first row lock (the
+        # same-name uniqueness SELECT ... FOR UPDATE), so 55P03 is reachable
+        # here and must be a 409 conflict, not the generic 503 below.
+        raise_session_contract_error(exc, _CODE_MODEL_BACKENDS_CREATE_MODEL)
+        raise_lock_timeout_conflict_if(exc, _CODE_MODEL_BACKENDS_CREATE_MODEL)
         logger.exception(_CODE_MODEL_BACKENDS_CREATE_MODEL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

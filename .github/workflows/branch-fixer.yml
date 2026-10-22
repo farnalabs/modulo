@@ -15,6 +15,10 @@ on:
         description: 'Review feedback or failure description'
         required: true
         type: string
+      taskKind:
+        description: 'Optional STRUCTURED task kind (FAR-2039). The receiver knows "" (a CI-failure fix, the default) and "conflict" (a merge-conflict resolution task). Omit it for CI-failure work: absent keeps the CI-failure profile exactly as before. Do not encode the task kind inside `feedback`.'
+        required: false
+        type: string
       force:
         description: 'Set true to bypass Branch Fixer coalescing (an intentional re-fire). Automated callers must NOT set this.'
         required: false
@@ -76,9 +80,11 @@ jobs:
           # before this step existed (an absent headSha derives no coalesce key,
           # so the delivery creates a run as before).
           #
-          # The explicit /repos/farnalabs/modulo/... REST path is required: this
-          # job has no actions/checkout step, so there is no git remote for `gh`
-          # to infer the repository from.
+          # The explicit /repos/farnalabs/modulo/... REST path keeps this step
+          # independent of any git remote layout (the workflow gains a minimal
+          # checkout below only so the dispatch step can call the shared
+          # scripts/dispatch_with_retry.sh; `gh` here uses GH_TOKEN + the
+          # explicit path, exactly as it did before that checkout existed).
           HEAD_SHA=""
           GH_RC=0
           HEAD_SHA=$(gh api "repos/farnalabs/modulo/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/tmp/head_sha_stderr.txt) || GH_RC=$?
@@ -89,50 +95,67 @@ jobs:
           fi
           echo "head_sha=${HEAD_SHA}" >> "${GITHUB_OUTPUT:-/dev/null}"
 
+      # The dispatch step calls scripts/dispatch_with_retry.sh, which lives
+      # in the repo — a minimal checkout provides it. persist-credentials:
+      # false and fetch-depth: 1 keep it cheap and credential-light.
+      - name: Check out the dispatch script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
       - name: Send webhook to Modulo Branch Fixer
         id: webhook
         env:
-          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
-          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          DISPATCH_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          DISPATCH_LABEL: "Modulo Branch Fixer"
           PR_NUMBER: ${{ inputs.pr_number }}
           BRANCH: ${{ inputs.branch }}
           FEEDBACK: ${{ inputs.feedback }}
+          TASK_KIND: ${{ inputs.taskKind }}
           HEAD_SHA: ${{ steps.head-sha.outputs.head_sha }}
         run: |
-          TIMESTAMP=$(date +%s)
+          # taskKind (FAR-2039): a STRUCTURED task-kind marker for the Branch
+          # Fixer, so a conflict-class relay dispatch selects the conflict task
+          # profile (ONE long attempt) instead of the CI-failure retry ladder.
+          # The receiver's vocabulary is exactly empty (a CI-failure fix) or
+          # `conflict` (see dogfood/pipeline-scripts/prompts/branch-fixer-prompt.md).
+          # An unrecognised value is refused LOUDLY rather than dispatched: a
+          # silently misclassified task is the exact defect this input exists
+          # to remove. The marker must never be derived from `feedback` - a
+          # substring parse breaks the moment the prose is reworded, and it
+          # breaks silently.
+          case "${TASK_KIND}" in
+            ""|conflict) ;;
+            *)
+              echo "::error::Unsupported taskKind '${TASK_KIND}': the Branch Fixer knows empty (CI-failure fix) or 'conflict'. Refusing to dispatch rather than silently select the wrong task profile."
+              exit 1
+              ;;
+          esac
           # headSha is added only when the lookup above resolved it. An empty
           # headSha key would derive no coalesce key anyway, but omitting it
           # keeps the "no headSha = no coalescing" contract explicit, and an
           # unchanged payload is what the fallback path has always sent.
+          # taskKind is added the same way, and only when non-empty: `+ {}`
+          # leaves the object - and its serialisation - byte-identical, so a
+          # caller that omits taskKind sends exactly the payload it sent before
+          # this input existed. This adds a capability; it changes no default.
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
             --argjson prNumber "${PR_NUMBER}" \
             --arg headSha "${HEAD_SHA}" \
             --arg failureDescription "${FEEDBACK}" \
             --arg repo "farnalabs/modulo" \
+            --arg taskKind "${TASK_KIND}" \
             '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}
-             + (if $headSha == "" then {} else {headSha: $headSha} end)')
-          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
-
-          # Retry with exponential backoff on 429/5xx (max 5 attempts)
-          for i in 1 2 3 4 5; do
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "${BODY}")
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-            if [ "$HTTP_CODE" = "202" ]; then
-              echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
-              break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
-              DELAY=$((2 ** (i - 1) * 5))
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
-              sleep "$DELAY"
-            else
-              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
-              break
-            fi
-          done
-          echo "Branch Fixer notified"
+             + (if $headSha == "" then {} else {headSha: $headSha} end)
+             + (if $taskKind == "" then {} else {taskKind: $taskKind} end)')
+          # One shared retry policy (scripts/dispatch_with_retry.sh): the old
+          # inline loop retried 429/5xx five times with backoff and then fell
+          # through to `echo "Branch Fixer notified"` — a FAILED dispatch was
+          # reported as success and the run exited 0, so a PR whose fixer
+          # dispatch was refused had NO durable signal it was never handed to
+          # the fixer. The script exits 1 on a failed dispatch (class-named
+          # ::error:: annotation + run summary), so the job fails visibly.
+          DISPATCH_BODY="${BODY}" bash scripts/dispatch_with_retry.sh

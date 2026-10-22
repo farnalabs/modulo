@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -24,6 +25,7 @@ from urllib.parse import urlsplit
 import click
 import pytest
 from click.testing import CliRunner
+from psycopg.types.json import Jsonb
 
 import modulo.cli.backup as backup_mod
 from modulo.cli.backup import (
@@ -1229,3 +1231,179 @@ def test_backup_measure_cloud_sync_by_component_equality(tmp_path: Path) -> None
         result = CliRunner().invoke(cli, ["backup", "--output-dir", str(vendor_case)], input="y\n")
     assert result.exit_code == 0, result.output
     assert "cloud-synced folder" in result.output
+
+
+#    Restore: checkpoint parameter encoding (JSONB re-adaptation, hex blobs)
+
+_TEST_DB_URL = "postgresql://modulo:pw@127.0.0.1:5432/modulo"
+_TEST_ORG_ID = "11111111-1111-1111-1111-111111111111"
+
+
+def _fake_restore_connection() -> tuple[MagicMock, MagicMock]:
+    """A stand-in for ``psycopg.connect(...)`` as used by the checkpoint
+    restore helpers. ``with psycopg.connect(...) as conn`` binds the mock
+    itself, so ``__enter__`` returns it; the cursor is recorded so the
+    parameters actually handed to psycopg can be asserted."""
+    cursor = MagicMock()
+    conn = MagicMock()
+    conn.__enter__.return_value = conn
+    conn.cursor.return_value.__enter__.return_value = cursor
+    return conn, cursor
+
+
+def _insert_params(cursor: MagicMock, call_index: int) -> tuple[Any, ...]:
+    """The parameter tuple of the Nth ``execute`` call (0 is the TRUNCATE)."""
+    params = cursor.execute.call_args_list[call_index].args[1]
+    assert isinstance(params, tuple)
+    return params
+
+
+def _insert_columns(cursor: MagicMock, call_index: int) -> list[str]:
+    """The INSERT column list of the Nth ``execute`` call, in parameter order.
+
+    Indexing the parameter tuple through this keeps the assertions honest when
+    a column is added to the INSERT (``checkpoints.type`` did exactly that to
+    the positional indices this file used to hardcode).
+    """
+    sql = cursor.execute.call_args_list[call_index].args[0]
+    assert isinstance(sql, str)
+    assert sql.startswith("INSERT INTO")
+    return [column.strip() for column in sql[sql.index("(") + 1 : sql.index(")")].split(",")]
+
+
+def _checkpoint_row(**overrides: Any) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "organisation_id": _TEST_ORG_ID,
+        "thread_id": "thread-1",
+        "checkpoint_ns": "",
+        "checkpoint_id": "1ef0",
+        "parent_checkpoint_id": None,
+        "checkpoint": {"v": 1, "id": "1ef0"},
+        "metadata": {"source": "input", "step": 0},
+    }
+    row.update(overrides)
+    return row
+
+
+def test_restore_checkpoints_encodes_jsonb_columns_with_psycopg_jsonb() -> None:
+    """Regression (FAR-19): ``SELECT *`` hands the restore DECODED JSONB
+    values, so each must be re-wrapped in ``Jsonb`` before it is used as a
+    psycopg parameter — an unwrapped dict aborts the restore with
+    ``ProgrammingError: cannot adapt type 'dict'``."""
+    checkpoint = {"v": 1, "channel_values": {"messages": ["hi"]}}
+    metadata = {"source": "loop", "step": 3, "writes": {"a": [1, 2]}}
+    rows = [_checkpoint_row(checkpoint=checkpoint, metadata=metadata)]
+    conn, cursor = _fake_restore_connection()
+    with patch("modulo.cli.backup.psycopg.connect", return_value=conn):
+        restored = backup_mod._restore_checkpoints_sync(_TEST_DB_URL, rows)
+    assert restored == 1
+    assert cursor.execute.call_args_list[0].args[0].startswith("TRUNCATE TABLE checkpoints")
+    params = _insert_params(cursor, 1)
+    columns = _insert_columns(cursor, 1)
+    assert isinstance(params[columns.index("checkpoint")], Jsonb)
+    assert isinstance(params[columns.index("metadata")], Jsonb)
+    assert params[columns.index("checkpoint")].obj == checkpoint
+    assert params[columns.index("metadata")].obj == metadata
+    assert conn.commit.called
+
+
+def test_restore_checkpoints_keeps_null_jsonb_columns_null() -> None:
+    """The wrap is conditional: a NULL JSONB column stays NULL rather than
+    becoming ``Jsonb(None)`` (which would decode to JSON ``'null'``)."""
+    checkpoint = {"v": 1, "id": "1ef0"}
+    rows = [_checkpoint_row(checkpoint=checkpoint, metadata=None)]
+    conn, cursor = _fake_restore_connection()
+    with patch("modulo.cli.backup.psycopg.connect", return_value=conn):
+        backup_mod._restore_checkpoints_sync(_TEST_DB_URL, rows)
+    params = _insert_params(cursor, 1)
+    columns = _insert_columns(cursor, 1)
+    assert isinstance(params[columns.index("checkpoint")], Jsonb)
+    assert params[columns.index("checkpoint")].obj == checkpoint
+    assert params[columns.index("metadata")] is None
+
+
+def test_restore_checkpoints_adapts_a_list_valued_jsonb_column() -> None:
+    """Lists are legal JSONB values too and get the same treatment."""
+    metadata: list[Any] = [{"step": 0}, {"step": 1}]
+    rows = [_checkpoint_row(metadata=metadata)]
+    conn, cursor = _fake_restore_connection()
+    with patch("modulo.cli.backup.psycopg.connect", return_value=conn):
+        backup_mod._restore_checkpoints_sync(_TEST_DB_URL, rows)
+    params = _insert_params(cursor, 1)
+    columns = _insert_columns(cursor, 1)
+    assert isinstance(params[columns.index("metadata")], Jsonb)
+    assert params[columns.index("metadata")].obj == metadata
+
+
+def test_restore_checkpoint_blobs_decodes_hex_blobs_to_bytes() -> None:
+    """The blob sibling shares the export encoding: ``blob`` is hex text in
+    the archive and must reach psycopg as ``bytes`` (or ``None``), never as
+    a hex string."""
+    rows = [
+        {
+            "organisation_id": _TEST_ORG_ID,
+            "thread_id": "thread-1",
+            "checkpoint_ns": "",
+            "channel": "messages",
+            "version": "1",
+            "type": "msgpack",
+            "blob": "00ff10",
+        },
+        {
+            "organisation_id": None,
+            "thread_id": "thread-1",
+            "checkpoint_ns": "",
+            "channel": "empty",
+            "version": "2",
+            "type": "msgpack",
+            "blob": "",
+        },
+        {
+            "organisation_id": None,
+            "thread_id": "thread-1",
+            "checkpoint_ns": "",
+            "channel": "null",
+            "version": "3",
+            "type": "msgpack",
+            "blob": None,
+        },
+    ]
+    conn, cursor = _fake_restore_connection()
+    with patch("modulo.cli.backup.psycopg.connect", return_value=conn):
+        restored = backup_mod._restore_checkpoint_blobs_sync(_TEST_DB_URL, rows)
+    assert restored == 3
+    assert cursor.execute.call_args_list[0].args[0].startswith("TRUNCATE TABLE checkpoint_blobs")
+    first = _insert_params(cursor, 1)
+    assert first[0] == uuid.UUID(_TEST_ORG_ID)
+    assert first[6] == b"\x00\xff\x10"
+    empty_blob = _insert_params(cursor, 2)[6]
+    assert isinstance(empty_blob, bytes)
+    assert not empty_blob
+    assert _insert_params(cursor, 3)[6] is None
+    assert conn.commit.called
+
+
+def test_restore_checkpoint_writes_decodes_hex_blobs_to_bytes() -> None:
+    """Same shape for ``checkpoint_writes`` (its blob sits at index 8)."""
+    rows = [
+        {
+            "organisation_id": _TEST_ORG_ID,
+            "thread_id": "thread-1",
+            "checkpoint_ns": "",
+            "checkpoint_id": "1ef0",
+            "task_id": "task-1",
+            "idx": 0,
+            "channel": "messages",
+            "type": "msgpack",
+            "blob": "deadbeef",
+        }
+    ]
+    conn, cursor = _fake_restore_connection()
+    with patch("modulo.cli.backup.psycopg.connect", return_value=conn):
+        restored = backup_mod._restore_checkpoint_writes_sync(_TEST_DB_URL, rows)
+    assert restored == 1
+    assert cursor.execute.call_args_list[0].args[0].startswith("TRUNCATE TABLE checkpoint_writes")
+    params = _insert_params(cursor, 1)
+    assert params[4] == "task-1"
+    assert params[8] == b"\xde\xad\xbe\xef"
+    assert conn.commit.called

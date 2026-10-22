@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jwt import InvalidTokenError as JWTError
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import modulo.api.mcp_server as ms
@@ -116,6 +116,8 @@ from modulo.api.mcp_server import (
     search_library,
     set_org_triggers_paused,
     update_eval_definition,
+    update_parameter_schema,
+    update_parameter_set,
     update_pipeline_graph,
     update_trigger,
     validate_current_auth,
@@ -166,6 +168,11 @@ def _mock_session() -> AsyncMock:
     # child turns into a dangling coroutine.
     session.in_transaction = MagicMock(return_value=True)
     session.add = MagicMock()
+    # ``execute()`` must return a plain-``MagicMock`` result: an AsyncMock
+    # return makes the SYNC result reads (``scalar_one_or_none`` / ``first`` /
+    # ``scalars``) orphan a never-awaited coroutine. Default to "no rows";
+    # individual tests overwrite this with their own result or side_effect.
+    session.execute = AsyncMock(return_value=_make_execute_result())
     nested_cm = MagicMock()
     nested_cm.__aenter__ = AsyncMock(return_value=None)
     nested_cm.__aexit__ = AsyncMock(return_value=False)
@@ -1750,14 +1757,30 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         nodes, edges = self._valid_graph()
         pipeline = MagicMock()
         pipeline.owner_team_id = None
+        pipeline.graph_nodes_json = []
+
+        async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+            # FAR-1845 re-reads the pipeline under FOR UPDATE before the write;
+            # the row exists here, so only the graph write itself returns None.
+            if getattr(stmt, "_for_update_arg", None) is not None:
+                return _make_execute_result(scalar_one_or_none=pipeline)
+            return _make_execute_result()
+
+        session = _mock_session()
+        session.execute = AsyncMock(side_effect=_execute)
+        replace = AsyncMock(return_value=None)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
             patch("modulo.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
-            patch("modulo.db.crud.pipeline.replace_pipeline_graph", new=AsyncMock(return_value=None)),
+            patch("modulo.db.crud.pipeline.replace_pipeline_graph", new=replace),
         ):
             result = await update_pipeline_graph(pipeline_id=str(uuid.uuid4()), nodes=nodes, edges=edges)
         assert result["error"] == "pipeline_not_found"
+        # The not-found envelope must come from the WRITE returning None, not
+        # from short-circuiting on the row lock re-read.
+        replace.assert_awaited_once()
 
     async def test_pipeline_gone_before_the_row_lock_returns_not_found(self) -> None:
         """FAR-1845: the transaction re-reads the pipeline under ``FOR UPDATE``.
@@ -3416,7 +3439,7 @@ class TestCreatePipelineQueueTimeout(_AuthContext):
         """FAR-1883: the MCP create tool enforces the same 1..604800 envelope as
         the REST/Pydantic layer and the DB CHECK, up front, so an out-of-range
         value is a clean tool error rather than a DB IntegrityError."""
-        result = await ms.create_pipeline(name="p", timeouts=ms.PipelineTimeoutOverrides(queue_timeout_seconds=bad))
+        result = await ms.create_pipeline(name="p", queue_timeout_seconds=bad)
         assert result["error"] == "validation_failed"
         assert result["field"] == "queue_timeout_seconds"
         assert "1 and 604800" in result["detail"]
@@ -3424,9 +3447,7 @@ class TestCreatePipelineQueueTimeout(_AuthContext):
     async def test_in_bounds_queue_timeout_threaded_to_crud(self) -> None:
         pipeline = self._pipeline_double()
         with patch("modulo.db.crud.pipeline.create_pipeline", new=AsyncMock(return_value=pipeline)) as create:
-            result = await ms.create_pipeline(
-                name="p", timeouts=ms.PipelineTimeoutOverrides(queue_timeout_seconds=3600)
-            )
+            result = await ms.create_pipeline(name="p", queue_timeout_seconds=3600)
         assert result["id"] == str(pipeline.id)
         assert create.await_args.kwargs["queue_timeout_seconds"] == 3600
 
@@ -3436,3 +3457,100 @@ class TestCreatePipelineQueueTimeout(_AuthContext):
         with patch("modulo.db.crud.pipeline.create_pipeline", new=AsyncMock(return_value=pipeline)) as create:
             await ms.create_pipeline(name="p")
         assert create.await_args.kwargs["queue_timeout_seconds"] is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-1825: SQLSTATE 55P03 on a bounded row lock is `lock_timeout`, not a
+# database outage. The arms are SCOPED to the MCP tools whose CRUD helper the
+# category-C sweep actually bounded — `update_parameter_schema` (C14) and
+# `update_parameter_set` (C7) — plus the shared generic-Exception mapper
+# (`_tool_exception_error`) that every tool's backstop uses. Other tools'
+# paths take no newly-bounded lock, so they deliberately carry no arm.
+# ---------------------------------------------------------------------------
+
+
+class _LockTimeoutDriverError(Exception):
+    """Driver-error double carrying an asyncpg ``sqlstate``."""
+
+    def __init__(self, state: str) -> None:
+        super().__init__(f"driver error {state}")
+        self.sqlstate = state
+
+
+def _lock_timeout_error() -> OperationalError:
+    return OperationalError("SELECT ... FOR UPDATE", {}, _LockTimeoutDriverError("55P03"))
+
+
+class TestLockTimeoutMapping(_AuthContext):
+    """FAR-1825: 55P03 maps to a branchable ``lock_timeout`` tool error."""
+
+    def test_shared_mapper_maps_55p03_to_lock_timeout(self) -> None:
+        result = ms._tool_exception_error("Failed to update parameter set", _lock_timeout_error(), "mcp.test")
+
+        assert result["error"] == "lock_timeout"
+        assert "another change is in progress" in result["detail"]
+
+    def test_shared_mapper_keeps_a_generic_sqlalchemy_error_as_database_unavailable(self) -> None:
+        result = ms._tool_exception_error("Failed to update parameter set", SQLAlchemyError("dead"), "mcp.test")
+
+        assert result["error"] == "database_unavailable"
+
+    async def test_update_parameter_set_maps_55p03_to_lock_timeout(self) -> None:
+        sid = uuid.uuid4()
+        pset = SimpleNamespace(
+            id=uuid.uuid4(),
+            parameter_schema_id=sid,
+            organisation_id=_ORG_ID,
+        )
+        schema = SimpleNamespace(id=sid, organisation_id=_ORG_ID)
+        with (
+            patch.object(ms, "validate_current_auth", AsyncMock(return_value=True)),
+            patch("modulo.db.crud.parameter_schema.get_schema", AsyncMock(return_value=schema)),
+            patch("modulo.db.crud.parameter_set.get_set", AsyncMock(return_value=pset)),
+            patch("modulo.db.crud.parameter_set.update_set", AsyncMock(side_effect=_lock_timeout_error())),
+        ):
+            result = await update_parameter_set(schema_id=str(sid), set_id=str(pset.id), version=1)
+
+        assert result["error"] == "lock_timeout"
+        assert "another change is in progress" in result["detail"]
+
+    async def test_update_parameter_set_keeps_a_generic_db_error_as_database_unavailable(self) -> None:
+        """The retained arm's false branch: a non-55P03 error keeps the 503 shape."""
+        sid = uuid.uuid4()
+        pset = SimpleNamespace(id=uuid.uuid4(), parameter_schema_id=sid, organisation_id=_ORG_ID)
+        schema = SimpleNamespace(id=sid, organisation_id=_ORG_ID)
+        with (
+            patch.object(ms, "validate_current_auth", AsyncMock(return_value=True)),
+            patch("modulo.db.crud.parameter_schema.get_schema", AsyncMock(return_value=schema)),
+            patch("modulo.db.crud.parameter_set.get_set", AsyncMock(return_value=pset)),
+            patch("modulo.db.crud.parameter_set.update_set", AsyncMock(side_effect=SQLAlchemyError("dead"))),
+        ):
+            result = await update_parameter_set(schema_id=str(sid), set_id=str(pset.id), version=1)
+
+        assert result["error"] == "database_unavailable"
+
+    async def test_update_parameter_schema_maps_55p03_to_lock_timeout(self) -> None:
+        sid = uuid.uuid4()
+        schema = SimpleNamespace(id=sid, organisation_id=_ORG_ID)
+        with (
+            patch.object(ms, "validate_current_auth", AsyncMock(return_value=True)),
+            patch("modulo.db.crud.parameter_schema.get_schema", AsyncMock(return_value=schema)),
+            patch("modulo.db.crud.parameter_schema.update_schema", AsyncMock(side_effect=_lock_timeout_error())),
+        ):
+            result = await update_parameter_schema(schema_id=str(sid), version=1)
+
+        assert result["error"] == "lock_timeout"
+        assert "another change is in progress" in result["detail"]
+
+    async def test_update_parameter_schema_keeps_a_generic_db_error_as_database_unavailable(self) -> None:
+        """The retained arm's false branch: a non-55P03 error keeps the 503 shape."""
+        sid = uuid.uuid4()
+        schema = SimpleNamespace(id=sid, organisation_id=_ORG_ID)
+        with (
+            patch.object(ms, "validate_current_auth", AsyncMock(return_value=True)),
+            patch("modulo.db.crud.parameter_schema.get_schema", AsyncMock(return_value=schema)),
+            patch("modulo.db.crud.parameter_schema.update_schema", AsyncMock(side_effect=SQLAlchemyError("dead"))),
+        ):
+            result = await update_parameter_schema(schema_id=str(sid), version=1)
+
+        assert result["error"] == "database_unavailable"

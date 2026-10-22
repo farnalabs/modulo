@@ -43,7 +43,9 @@ Decision table (spec, keyed on status — never prose):
 |                 | never a reviewer's "no" |
 | failed / eval_failed / stalled | ``no_delivery`` (COUNTABLE — infra/sandbox crash elevated to failed counts, PO) |
 |                 | UNLESS a per-pipeline benign signature matches (error_code, error_detail) → ``benign`` |
-|                 | (FAR-707 — business-expected, excluded from failure rates)                           |
+|                 | (FAR-707 — business-expected, excluded from failure rates), or a marker's          |
+|                 | sentinel-proven ``delivery_done`` shows the side effect happened → ``delivered``    |
+|                 | (FAR-1914 M4 — delivered-then-failed, excluded from the no-delivery streak)         |
 | complete        | ``delivered`` iff >= 1 valid ``pr_url`` OR any marker carries ``delivery_done`` (FAR-228 |
 |                 | email sentinel); else COUNTABLE ``no_delivery`` (empty-backlog, PO) |
 | (other terminal)| ``excluded`` FAIL-SAFE — a NEW terminal status added to ``TERMINAL_STATUSES``
@@ -952,6 +954,17 @@ def _countable_result(
     conflict, superseded-by-design, empty-workload no-op, ...) classifies benign
     instead of counting as a failure. Checked before reason derivation because
     it REPLACES the countable verdict, not merely its reason label.
+
+    FAR-1914 round-3 M4: a failed/stalled run whose retained marker carries
+    ``delivery_done is True`` (the FAR-228 full-line sentinel — proof the side
+    effect HAPPENED before the run later died) is DELIVERED-then-failed, not a
+    no-delivery miss. It classifies ``delivered``/``email_delivered`` so it
+    neither increments the FAR-190 ``max_no_delivery_streak`` nor breaks the
+    walk as unknown. Deliberately keyed on the SENTINEL field only: an
+    unanchored ``pr_url`` in a raw tail is never a delivery proof (it may be a
+    quoted/list URL);
+    :func:`_any_marker_delivery_done` reads the same field the complete bucket
+    trusts.
     """
     if matches_benign_signature(
         benign_signatures,
@@ -961,6 +974,14 @@ def _countable_result(
         return _classification(
             RunClassificationValue.benign,
             REASON_BENIGN,
+            computed_at=computed_at,
+            work_intact=work_intact,
+            declared_success_nodes=declared_success_nodes,
+        )
+    if _any_marker_delivery_done(raw_output_markers):
+        return _classification(
+            RunClassificationValue.delivered,
+            REASON_DELIVERED_EMAIL,
             computed_at=computed_at,
             work_intact=work_intact,
             declared_success_nodes=declared_success_nodes,

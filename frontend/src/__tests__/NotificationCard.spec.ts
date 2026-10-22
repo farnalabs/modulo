@@ -86,7 +86,9 @@ describe('NotificationCard', () => {
     // Shared `cancelReasonLabel` copy (FAR-1233) — identical to RunDetailView.
     expect(state.text()).toContain('An operator cancelled it on request.')
     // Dynamic status must be announced, not silently injected (WCAG 4.1.3).
-    expect(state.attributes('role')).toBe('status')
+    // The native <output> carries the implicit status role (Web:S6819).
+    expect(state.element.tagName).toBe('OUTPUT')
+    expect(state.attributes('role')).toBeUndefined()
     expect(state.attributes('aria-live')).toBe('polite')
   })
 
@@ -253,5 +255,16 @@ describe('NotificationCard', () => {
     const vm = wrapper.vm as unknown as { onDismiss: (s: 'self' | 'scope') => Promise<void> }
     await vm.onDismiss('self')
     expect(wrapper.text()).toContain('dismiss failed')
+  })
+
+  it('falls back to the localised message when the API rejects with a non-Error', async () => {
+    vi.mocked(dismissNotification).mockRejectedValue('dismiss failed')
+    const wrapper = mount(NotificationCard, {
+      props: { notification: makeNotification() },
+    })
+    const vm = wrapper.vm as unknown as { onDismiss: (s: 'self' | 'scope') => Promise<void> }
+    await vm.onDismiss('self')
+    expect(wrapper.text()).toContain('Failed to dismiss notification')
+    expect(wrapper.text()).not.toContain('components.NotificationCard')
   })
 })

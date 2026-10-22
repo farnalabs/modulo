@@ -195,9 +195,7 @@ class TestCreatePipelineOwnerParams(_AuthContext):
         """FAR-1257: the MCP create tool enforces the same 60..604800 envelope
         as the REST/Pydantic layer and the DB CHECK, up front, so an out-of-range
         value is a clean tool error rather than a DB IntegrityError."""
-        result = await ms.create_pipeline(
-            name="p", timeouts=ms.PipelineTimeoutOverrides(hitl_review_window_seconds=bad)
-        )
+        result = await ms.create_pipeline(name="p", hitl_review_window_seconds=bad)
         assert result["error"] == "validation_failed"
         assert "60 and 604800" in result["detail"]
 

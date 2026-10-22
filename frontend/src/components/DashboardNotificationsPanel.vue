@@ -11,7 +11,7 @@
       <div class="flex items-center gap-2">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
         <span>{{ $t('components.DashboardNotificationsPanel.notifications') }}</span>
-        <span v-if="unreadCount > 0" class="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-destructive-fill px-1.5 text-[11px] font-bold text-destructive-foreground" role="status" :aria-label="`${unreadCount} unread notifications`">{{ unreadCount }}</span>
+        <output v-if="unreadCount > 0" class="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-destructive-fill px-1.5 text-[11px] font-bold text-destructive-foreground" :aria-label="`${unreadCount} unread notifications`">{{ unreadCount }}</output>
       </div>
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -172,9 +172,10 @@ function toggleCollapsed() {
   collapsed.value = !collapsed.value;
 }
 
-// The unread badge must reflect the severity-filtered unread count
-// (warning+), not the raw count of all active notifications. Use the
-// existing dedicated endpoint rather than the paginated list total.
+// The unread badge must reflect the unread count at the signed-in user's
+// configured dashboard notification level (default `info`), not the raw
+// count of all active notifications. Use the existing dedicated endpoint
+// rather than the paginated list total.
 async function refreshUnreadCount() {
   try {
     unreadCount.value = await fetchUnreadCount();

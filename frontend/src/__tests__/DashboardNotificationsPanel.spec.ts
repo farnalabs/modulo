@@ -195,8 +195,11 @@ describe('DashboardNotificationsPanel', () => {
     await flushPromises()
     await nextTick()
 
-    const badge = wrapper.find('[role="status"]')
+    const badge = wrapper.find('output')
     expect(badge.exists()).toBe(true)
+    // Native <output> carries the implicit status role; no explicit role is
+    // allowed back (SonarCloud Web:S6819).
+    expect(badge.attributes('role')).toBeUndefined()
     // WCAG AA: 11px bold text is not "large text"; the fill-safe destructive
     // token is required for `--destructive-foreground` to clear 4.5:1.
     expect(badge.classes()).toContain('bg-destructive-fill')
@@ -220,7 +223,7 @@ describe('DashboardNotificationsPanel', () => {
 
     // Badge reflects the severity-filtered unread count (2), not the raw total (12)
     expect(mockFetchUnreadCount).toHaveBeenCalled()
-    const badge = wrapper.find('[role="status"]')
+    const badge = wrapper.find('output')
     expect(badge.exists()).toBe(true)
     expect(badge.text()).toContain('2')
   })

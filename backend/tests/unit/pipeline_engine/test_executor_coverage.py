@@ -1228,6 +1228,18 @@ def test_failure_event_matches_false_for_script_codes():
     assert _failure_event_matches({"failure"}, "failed", "script.failed", "script.failed", None) is False
 
 
+@pytest.mark.parametrize("code", ["model.insufficient_funds", "provider.billing"])
+def test_failure_event_matches_false_for_non_retryable_provider_refusals(code: str):
+    """FAR-2006: a ``failure`` retry policy must never re-dispatch a 402 refusal.
+
+    Both spellings a 402 can land on are covered: the JSONL-event code
+    (``model.insufficient_funds``) and the plain-line gateway-echo code
+    (``provider.billing``). Re-dispatching either re-hits the same billing wall,
+    so the policy matcher refuses regardless of the operator's event set.
+    """
+    assert _failure_event_matches({"failure"}, "failed", code, code, None) is False
+
+
 def test_failure_event_matches_false_for_hang():
     assert (
         _failure_event_matches({"failure"}, "failed", "node_cancelled", "node.cancelled", "sandbox likely hung")

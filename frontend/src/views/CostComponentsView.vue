@@ -15,25 +15,22 @@
 
     <FeatureGate feature-name="admin_cost_breakdown" required-tier="team" show-disabled>
 
-      <output
-        v-if="loading"
-        class="block space-y-2"
-        aria-busy="true"
-        :aria-label="$t('views.CostComponentsView.loading_components')"
-        data-testid="cost-components-loading"
-      >
-        <div
-          v-for="n in 4"
-          :key="`cost-components-skeleton-${n}`"
-          class="flex items-center justify-between rounded-lg border bg-card px-4 py-3"
-        >
-          <div class="space-y-2">
-            <SkeletonBlock height-class="h-4 w-40" />
-            <SkeletonBlock height-class="h-3 w-56" />
+      <div v-if="loading" data-testid="cost-components-loading">
+        <output class="sr-only" aria-live="polite">{{ $t('views.CostComponentsView.loading_components') }}</output>
+        <div class="space-y-2" aria-busy="true">
+          <div
+            v-for="n in 4"
+            :key="`cost-components-skeleton-${n}`"
+            class="flex items-center justify-between rounded-lg border bg-card px-4 py-3"
+          >
+            <div class="space-y-2">
+              <SkeletonBlock height-class="h-4 w-40" />
+              <SkeletonBlock height-class="h-3 w-56" />
+            </div>
+            <SkeletonBlock height-class="h-6 w-24" />
           </div>
-          <SkeletonBlock height-class="h-6 w-24" />
         </div>
-      </output>
+      </div>
 
       <ErrorAlert v-else-if="error" :message="error" :on-retry="loadComponents" />
 

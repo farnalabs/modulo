@@ -17,7 +17,11 @@ from modulo.api.constants import (
     MSG_INTERNAL_SERVER_ERROR,
     MSG_RESOURCE_ALREADY_EXISTS,
 )
-from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     get_db_session,
@@ -404,7 +408,10 @@ async def create_provider_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        # FAR-1825: ``create_provider`` bounds the SSO-name uniqueness lock, so
+        # 55P03 is reachable here — a busy row is a 409 conflict, not the 503.
         raise_session_contract_error(exc, "admin_sso.create_provider_endpoint")
+        raise_lock_timeout_conflict_if(exc, "admin_sso.create_provider_endpoint")
         _log.warning("SSO providers DB error on create: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -424,6 +431,68 @@ async def create_provider_endpoint(
 # FAR-1472 exemption: already audited by ``db.crud.sso_provider.update_provider``
 # (``sso_provider.updated`` with provider id + name); a coarse duplicate would
 # append a second same-typed event to the append-only chain.
+def _validated_provider_updates(req: SsoProviderUpdate) -> dict[str, Any]:
+    """Validate the PATCH payload, normalising ``allowed_domains``."""
+    updates = req.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
+    if "allowed_domains" in updates:
+        try:
+            updates["allowed_domains"] = validate_allowed_domains(updates["allowed_domains"])
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return updates
+
+
+def _apply_preset_derivation(updates: dict[str, Any]) -> None:
+    """Re-derive discovery_url/scopes when a non-custom preset is set."""
+    # Preset derivation on update: when preset or tenant_domain changes,
+    # re-derive discovery_url and scopes for non-custom presets.
+    effective_preset = updates.get("preset")
+    effective_tenant = updates.get("tenant_domain")
+    if effective_preset is None or effective_preset == "custom":
+        return
+    try:
+        derived_url, derived_scopes = resolve_preset(str(effective_preset), effective_tenant)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    if derived_url is not None:
+        updates["discovery_url"] = derived_url
+    if derived_scopes is not None:
+        updates["scopes"] = derived_scopes
+
+
+async def _persist_provider_update(
+    session: AsyncSession,
+    *,
+    provider_id: uuid.UUID,
+    updates: dict[str, Any],
+    current_user: TenantPrincipal,
+    settings: Settings,
+) -> Any:
+    """Apply the validated PATCH inside the RLS-scoped transaction."""
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        # FAR-1640: resolve a ``secretref://<key>`` client_secret under the
+        # caller's org RLS context before the credential is written — a
+        # missing/foreign key is a typed 422 and writes nothing.
+        if "client_secret" in updates:
+            updates["client_secret"] = await _resolve_sso_client_secret(session, settings, updates["client_secret"])
+        provider = await update_provider(
+            session,
+            provider_id,
+            org_id=current_user.organisation_id,
+            actor_user_id=current_user.account_id,
+            fernet_key=settings.fernet_key,
+            **updates,
+        )
+        # Validate the MERGED provider state (update + existing) so an
+        # auto_provision flip can't slip into dangerous mode 3.
+        if provider is not None:
+            await _reject_mode3_when_flag_off(provider, org_id=current_user.organisation_id)
+    return provider
+
+
 @router.put(
     "/providers/{provider_id}",
     dependencies=[Depends(deny_break_glass_mint)],
@@ -437,49 +506,17 @@ async def update_provider_endpoint(
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> SsoProviderResponse:
-    updates = req.model_dump(exclude_unset=True)
-    if not updates:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
-    if "allowed_domains" in updates:
-        try:
-            updates["allowed_domains"] = validate_allowed_domains(updates["allowed_domains"])
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-
-    # Preset derivation on update: when preset or tenant_domain changes,
-    # re-derive discovery_url and scopes for non-custom presets.
-    effective_preset = updates.get("preset")
-    effective_tenant = updates.get("tenant_domain")
-    if effective_preset is not None and effective_preset != "custom":
-        try:
-            derived_url, derived_scopes = resolve_preset(str(effective_preset), effective_tenant)
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-        if derived_url is not None:
-            updates["discovery_url"] = derived_url
-        if derived_scopes is not None:
-            updates["scopes"] = derived_scopes
+    updates = _validated_provider_updates(req)
+    _apply_preset_derivation(updates)
 
     try:
-        async with session.begin():
-            await set_rls_org(session, current_user.organisation_id)
-            # FAR-1640: resolve a ``secretref://<key>`` client_secret under the
-            # caller's org RLS context before the credential is written — a
-            # missing/foreign key is a typed 422 and writes nothing.
-            if "client_secret" in updates:
-                updates["client_secret"] = await _resolve_sso_client_secret(session, settings, updates["client_secret"])
-            provider = await update_provider(
-                session,
-                provider_id,
-                org_id=current_user.organisation_id,
-                actor_user_id=current_user.account_id,
-                fernet_key=settings.fernet_key,
-                **updates,
-            )
-            # Validate the MERGED provider state (update + existing) so an
-            # auto_provision flip can't slip into dangerous mode 3.
-            if provider is not None:
-                await _reject_mode3_when_flag_off(provider, org_id=current_user.organisation_id)
+        provider = await _persist_provider_update(
+            session,
+            provider_id=provider_id,
+            updates=updates,
+            current_user=current_user,
+            settings=settings,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError as exc:
@@ -495,7 +532,10 @@ async def update_provider_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        # FAR-1825: ``update_provider`` bounds the SSO-name uniqueness lock, so
+        # 55P03 is reachable here — a busy row is a 409 conflict, not the 503.
         raise_session_contract_error(exc, "admin_sso.update_provider_endpoint")
+        raise_lock_timeout_conflict_if(exc, "admin_sso.update_provider_endpoint")
         _log.warning("SSO providers DB error on update: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

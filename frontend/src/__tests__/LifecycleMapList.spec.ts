@@ -178,6 +178,30 @@ describe('LifecycleMapList', () => {
     await card.trigger('click')
     expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
   })
+
+  it('opens the map detail from the card keyboard handlers', async () => {
+    const wrapper = mount(LifecycleMapList, {
+      global: {
+        plugins: [i18n],
+        stubs: {
+          PageHeader: true,
+          FilterBar: true,
+          ErrorAlert: true,
+          EmptyState: true,
+          Button: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    const card = wrapper.find('[data-testid="lifecycle-map-list-card"]')
+    await card.trigger('keydown', { key: 'Enter' })
+    expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
+
+    routerPushMock.mockClear()
+    await card.trigger('keydown', { key: ' ' })
+    expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
+  })
 })
 
 describe('LifecycleMapList responsive layout (FAR-635)', () => {
@@ -668,6 +692,11 @@ describe('LifecycleMapList pagination', () => {
   })
 })
 
+/** The native `close` event is queued as a task (see the jsdom dialog shim). */
+function flushCloseEvent(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 describe('LifecycleMapList create dialog', () => {
   it('opens create dialog when New Map button is clicked', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
@@ -692,9 +721,91 @@ describe('LifecycleMapList create dialog', () => {
     expect(wrapper.text()).toContain('Cancel')
   })
 
+  it('open/close dialog helpers are safe no-ops while the dialog is not rendered', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
+    const wrapper = mount(LifecycleMapList, {
+      global: {
+        plugins: [i18n],
+        stubs: { PageHeader: true, FilterBar: true, ErrorAlert: true, Button: true },
+      },
+    })
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      openCreateDialog: () => void
+      closeCreateDialog: () => void
+    }
+    expect(wrapper.find('dialog').exists()).toBe(false)
+    expect(() => vm.openCreateDialog()).not.toThrow()
+    expect(() => vm.closeCreateDialog()).not.toThrow()
+    expect(wrapper.find('dialog').exists()).toBe(false)
+  })
+
+  it('creates a map, closes the dialog and opens the editor', async () => {
+    const created = { ...summaryMap, id: 'map-new', name: 'New Map' }
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return Promise.resolve(okJson(created))
+      return Promise.resolve(okJson({ items: [] }))
+    }))
+    const ButtonStub = {
+      template: '<button :disabled="disabled" @click="$emit(\'click\', $event)"><slot /></button>',
+      props: ['disabled'],
+    }
+    routerPushMock.mockClear()
+    const wrapper = mount(LifecycleMapList, {
+      attachTo: document.body,
+      global: {
+        plugins: [i18n],
+        stubs: { PageHeader: true, FilterBar: true, Button: ButtonStub },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-testid="lifecycle-map-list-create-name"]').setValue('New Map')
+    await wrapper.find('[data-testid="lifecycle-map-list-create-submit"]').trigger('click')
+    await flushPromises()
+    // The native close event is queued as a task; the @close handler that
+    // unmounts the v-if branch lands after it.
+    await flushCloseEvent()
+
+    expect(routerPushMock).toHaveBeenCalledWith({
+      name: 'lifecycle-map-editor',
+      params: { id: 'map-new' },
+    })
+    expect(wrapper.find('dialog').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('re-opening an already-open create dialog is a guarded no-op', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
+    const wrapper = mount(LifecycleMapList, {
+      attachTo: document.body,
+      global: {
+        plugins: [i18n],
+        stubs: { PageHeader: true, FilterBar: true, ErrorAlert: true, Button: true },
+      },
+    })
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { openCreateDialog: () => void }
+    await wrapper.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    const dialogEl = wrapper.find('dialog').element as HTMLDialogElement
+    expect(dialogEl.open).toBe(true)
+
+    // A second showModal() would throw InvalidStateError; the guard makes it
+    // a no-op.
+    expect(() => vm.openCreateDialog()).not.toThrow()
+    expect(dialogEl.open).toBe(true)
+    wrapper.unmount()
+  })
+
   it('closes create dialog when Cancel is clicked', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
     const wrapper = mount(LifecycleMapList, {
+      attachTo: document.body,
       global: {
         plugins: [i18n],
         stubs: {
@@ -714,10 +825,121 @@ describe('LifecycleMapList create dialog', () => {
     const cancelBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Cancel')
     expect(cancelBtn).toBeDefined()
     await cancelBtn!.trigger('click')
-    await wrapper.vm.$nextTick()
+    // The native close event is queued (shim models the browser), so the
+    // @close handler that unmounts the v-if branch lands a task later.
+    await flushPromises()
+    await flushCloseEvent()
 
     // Dialog should be closed (no longer shows "Create Lifecycle Map")
     expect(wrapper.text()).not.toContain('Create Lifecycle Map')
+
+    // Reopen: the dialog is a real modal (showModal), so focus lands inside it
+    // and Escape dispatched from the focused element closes it.
+    await wrapper.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    const dialog = wrapper.find('dialog')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.attributes('role')).toBeUndefined()
+    const dialogEl = dialog.element as HTMLDialogElement
+    expect(dialogEl.open).toBe(true)
+    const focused = document.activeElement as HTMLElement | null
+    expect(focused).not.toBeNull()
+    expect(dialogEl.contains(focused)).toBe(true)
+
+    focused!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    await flushCloseEvent()
+
+    expect(dialogEl.open).toBe(false)
+    expect(wrapper.text()).not.toContain('Create Lifecycle Map')
+    wrapper.unmount()
+  })
+
+  it('closes the create dialog on a backdrop click', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
+    const wrapper = mount(LifecycleMapList, {
+      attachTo: document.body,
+      global: {
+        plugins: [i18n],
+        stubs: { PageHeader: true, FilterBar: true, ErrorAlert: true, Button: true },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    const dialog = wrapper.find('dialog')
+    expect((dialog.element as HTMLDialogElement).open).toBe(true)
+
+    // A click whose target is the dialog itself is a ::backdrop click.
+    await dialog.trigger('click')
+    await flushPromises()
+    await flushCloseEvent()
+
+    expect((dialog.element as HTMLDialogElement).open).toBe(false)
+    expect(wrapper.text()).not.toContain('Create Lifecycle Map')
+    wrapper.unmount()
+  })
+
+  it('returns focus to the trigger after the dialog closes', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
+    // PrimeVue's Button is stubbed here (a non-focusable <button-stub>), so
+    // stand in a real focusable trigger to model the keyboard user's origin.
+    const trigger = document.createElement('button')
+    document.body.appendChild(trigger)
+    trigger.focus()
+    expect(document.activeElement).toBe(trigger)
+
+    const wrapper = mount(LifecycleMapList, {
+      attachTo: document.body,
+      global: {
+        plugins: [i18n],
+        stubs: { PageHeader: true, FilterBar: true, ErrorAlert: true, Button: true },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    const dialogEl = wrapper.find('dialog').element as HTMLDialogElement
+    expect(dialogEl.contains(document.activeElement as HTMLElement)).toBe(true)
+
+    const cancel = wrapper.findAll('button').find((b) => b.text().trim() === 'Cancel')!
+    await cancel.trigger('click')
+    await flushPromises()
+
+    expect(document.activeElement).toBe(trigger)
+    wrapper.unmount()
+    trigger.remove()
+  })
+
+  it('unmounts safely while the create dialog is open and remounts cleanly', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
+    const mountList = () =>
+      mount(LifecycleMapList, {
+        attachTo: document.body,
+        global: {
+          plugins: [i18n],
+          stubs: { PageHeader: true, FilterBar: true, ErrorAlert: true, Button: true },
+        },
+      })
+
+    const wrapper = mountList()
+    await flushPromises()
+    await wrapper.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect((wrapper.find('dialog').element as HTMLDialogElement).open).toBe(true)
+    expect(() => wrapper.unmount()).not.toThrow()
+    expect(document.querySelector('dialog')).toBeNull()
+
+    // A fresh instance must still open its dialog — an unmount that left modal
+    // state or a close handler behind would break this mount.
+    const remounted = mountList()
+    await flushPromises()
+    await remounted.find('[data-testid="lifecycle-map-list-empty-new"]').trigger('click')
+    await remounted.vm.$nextTick()
+    expect((remounted.find('dialog').element as HTMLDialogElement).open).toBe(true)
+    remounted.unmount()
   })
 
   it('shows error when create fails', async () => {
@@ -875,7 +1097,7 @@ describe('LifecycleMapList card content', () => {
     expect(card.text()).toContain('Launch Flow')
   })
 
-  it('supports keyboard navigation on card (Enter key)', async () => {
+  it('opens a map through the card native button (click, as produced by Enter/Space)', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [summaryMap] }))))
     const wrapper = mount(LifecycleMapList, {
       global: {
@@ -892,11 +1114,23 @@ describe('LifecycleMapList card content', () => {
     await flushPromises()
 
     const card = wrapper.find('[data-testid="lifecycle-map-list-card"]')
-    await card.trigger('keydown.enter')
+    // Web:S6819: the card no longer carries role=button/tabindex; the title is
+    // a native button inside an <h2> heading (h1 → h2, no skipped level), in
+    // the natural tab order.
+    expect(card.attributes('role')).toBeUndefined()
+    expect(card.attributes('tabindex')).toBeUndefined()
+    expect(card.find('h2').exists()).toBe(true)
+    const titleButton = card.find('h2 button')
+    expect(titleButton.exists()).toBe(true)
+    expect(titleButton.attributes('tabindex')).toBeUndefined()
+    expect((titleButton.element as HTMLButtonElement).disabled).toBe(false)
+    // A native button's Enter/Space activation produces a click; the card's
+    // own keyboard equivalents are covered by a dedicated test.
+    await titleButton.trigger('click')
     expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
   })
 
-  it('supports keyboard navigation on card (Space key)', async () => {
+  it('clicking the card body still opens the map for mouse users', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [summaryMap] }))))
     const wrapper = mount(LifecycleMapList, {
       global: {
@@ -913,7 +1147,7 @@ describe('LifecycleMapList card content', () => {
     await flushPromises()
 
     const card = wrapper.find('[data-testid="lifecycle-map-list-card"]')
-    await card.trigger('keydown.space')
+    await card.trigger('click')
     expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
   })
 })

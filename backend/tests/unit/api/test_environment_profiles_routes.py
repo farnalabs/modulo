@@ -831,6 +831,70 @@ class TestProfileTestEndpoint:
         assert "failed" in resp.text
         assert "check server logs" in resp.text
 
+    def test_profile_test_failure_after_provision_destroys_the_workspace(self, client: TestClient) -> None:
+        """A failure after provisioning tears the workspace down before the failed event."""
+        fake = _fake_profile()
+        hub = RuntimeProviderHub()
+        provider = MagicMock()
+        provider.create_workspace = AsyncMock(return_value="ws-ref-err")
+        provider.exec_command = AsyncMock(side_effect=RuntimeError("exec exploded"))
+        provider.destroy_workspace = AsyncMock()
+        provider.close = AsyncMock()
+        hub.register(str(fake.provider_type), provider)
+        with (
+            patch(f"{_ROUTES}.get_environment_profile") as mock_get,
+            patch(f"{_ROUTES}.set_rls_org"),
+            patch(f"{_ROUTES}._get_hub", return_value=hub),
+        ):
+            mock_get.return_value = fake
+            resp = client.post(f"{self.URL}/{_PROFILE_ID}/test")
+
+        assert resp.status_code == 200
+        assert "check server logs" in resp.text
+        provider.destroy_workspace.assert_awaited_once_with("ws-ref-err")
+
+
+class TestSandboxStreamHelpers:
+    """Direct coverage of the sandbox-stream teardown helpers."""
+
+    async def test_cleanup_failed_sandbox_reraises_http_exception(self) -> None:
+        from fastapi import HTTPException
+
+        from modulo.api.routes.environment_profiles import _cleanup_failed_sandbox
+
+        provider = MagicMock()
+        provider.destroy_workspace = AsyncMock(side_effect=HTTPException(status_code=503, detail="boom"))
+
+        with pytest.raises(HTTPException):
+            await _cleanup_failed_sandbox(provider, "ws-ref")
+
+    async def test_cleanup_failed_sandbox_logs_and_swallows_other_errors(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from modulo.api.routes.environment_profiles import _cleanup_failed_sandbox
+
+        provider = MagicMock()
+        provider.destroy_workspace = AsyncMock(side_effect=RuntimeError("teardown exploded"))
+
+        await _cleanup_failed_sandbox(provider, "ws-ref")
+
+        assert "Failed to clean up sandbox ws-ref after error" in caplog.text
+
+    async def test_close_runtime_hub_with_no_hub_is_a_noop(self) -> None:
+        from modulo.api.routes.environment_profiles import _close_runtime_hub
+
+        assert await _close_runtime_hub(None) is None
+
+    async def test_close_runtime_hub_logs_a_close_failure(self, caplog: pytest.LogCaptureFixture) -> None:
+        from modulo.api.routes.environment_profiles import _close_runtime_hub
+
+        hub = MagicMock()
+        hub.aclose = AsyncMock(side_effect=RuntimeError("close exploded"))
+
+        await _close_runtime_hub(hub)
+
+        assert "Failed to close runtime provider hub" in caplog.text
+
 
 def test_get_hub_builds_fresh_hub() -> None:
     """_get_hub() returns a live RuntimeProviderHub built from process settings."""

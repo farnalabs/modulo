@@ -552,6 +552,23 @@ async def test_gate_denies_at_capacity_with_marker_rolled_back(monkeypatch: pyte
     assert not any("UPDATE runs SET sandbox_dispatch_state" in s for s in executed)
 
 
+async def test_gate_skips_cap_for_non_host_resource_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A host-resource-only cap never denies an e2b dispatch (outside its bucket)."""
+    _patch_gate(monkeypatch, flag_on=True)
+    factory = _fake_session({"claim_count": (7,)})
+
+    async def _fake_decision(_session: Any, _org: uuid.UUID, **_kw: Any) -> Any:
+        return RunnerCapacityDecision(cap=4, active=9, host_resource_only=True)
+
+    monkeypatch.setattr("modulo.core.runner_capacity.resolve_runner_capacity_decision", _fake_decision)
+
+    slot = await acquire_runner_dispatch_slot(
+        factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_E2B
+    )
+    assert slot.status == "acquired"
+    assert slot.marker_set is True
+
+
 async def test_gate_fenced_when_claim_superseded(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_gate(monkeypatch, flag_on=False)
     factory = _fake_session({"claim_count": None})  # own-row SELECT answers no row
@@ -1088,6 +1105,13 @@ def test_sweep_d_terminal_crash_leaked_fence_clears_past_staleness() -> None:
     )
 
 
+def test_sweep_d_terminal_crash_leaked_fence_without_age_reference_keeps() -> None:
+    """A terminal crash-leaked fence with no age reference keeps its marker."""
+    fence = json.dumps({"state": MARKER_STATE_SCRIPT_EXECUTING, "attempt_key": "k"})
+    action = classify_sweep_action(**_sweep_kwargs(status="complete", marker_json=fence, stale_reference=None))
+    assert action == "keep_live"
+
+
 def test_sweep_d_terminal_non_fence_cleared() -> None:
     action = classify_sweep_action(**_sweep_kwargs(status="complete"))
     assert action == "clear_terminal"
@@ -1125,6 +1149,12 @@ def test_sweep_d_unknown_status_is_non_terminal() -> None:
 def test_sweep_e_live_long_running_marker_kept() -> None:
     """Negative test: a LIVE long-running run's (fresh) marker is NOT cleared."""
     action = classify_sweep_action(**_sweep_kwargs(status="running", stale_reference=_NOW - timedelta(hours=2)))
+    assert action == "keep_live"
+
+
+def test_sweep_e_missing_age_reference_keeps_non_terminal_marker() -> None:
+    """No age reference (legacy marker, no updated_at) means the row stays live."""
+    action = classify_sweep_action(**_sweep_kwargs(status="running", stale_reference=None))
     assert action == "keep_live"
 
 
@@ -1552,6 +1582,45 @@ async def test_sweep_clears_terminal_and_stale_markers_and_transitions_running(
     assert fence.id not in factory.cleared
     assert anomaly.id not in factory.cleared
     assert fence.id not in factory.transitioned
+
+
+async def test_sweep_org_index_cancellation_propagates() -> None:
+    """Cancellation of the org-index query aborts the sweep, never swallowed."""
+    import modulo.core.runner_capacity as rc
+
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=asyncio.CancelledError())
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=session)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=session)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+    factory = MagicMock(return_value=session_cm)
+
+    with pytest.raises(asyncio.CancelledError):
+        await rc._fetch_sweep_org_ids(factory)
+
+
+async def test_sweep_org_pass_cancellation_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cancellation inside an org pass aborts the sweep instead of counting it."""
+    import modulo.core.runner_capacity as rc
+
+    monkeypatch.setattr(rc, "_scan_org_markers", AsyncMock(side_effect=asyncio.CancelledError()))
+    with pytest.raises(asyncio.CancelledError):
+        await rc._sweep_org(
+            MagicMock(),
+            _ORG,
+            settings=SimpleNamespace(),
+            recovery_or=MagicMock(),
+            exclusion=MagicMock(),
+            now=datetime.now(UTC),
+            fresh_window=60.0,
+            stale_window=90000,
+            node_started_stale_seconds=7200,
+            org_failure_details=[],
+        )
 
 
 async def test_sweep_far1808_reclaims_node_started_leak_and_protects_fresh_heartbeat(

@@ -1951,6 +1951,24 @@ def _is_non_retryable_error_code(code: str | None) -> bool:
     return not spec.retryable
 
 
+def _sandbox_failure_error_code(exc: SandboxNodeFailedError) -> str:
+    """The caught sandbox failure's OWN canonical code, else the generic one.
+
+    Every ``SandboxNodeFailedError`` role that outlives the retry budget used
+    to be written as ``sandbox.no_output_json`` regardless of its subclass,
+    which hid the distinct retryable classes from the Error Dashboard and
+    daily facts (FAR-1887: an exhausted E2B rate-limit retry budget —
+    ``SandboxQueueTimeoutError`` — was recorded as "no output json", so
+    ``sandbox.queue_timeout`` / ``sandbox.rate_limited`` never appeared in
+    analytics). ``LEGACY_ALIASES`` keys these subclasses by exception class
+    name, so resolve through it and fall back to ``sandbox.no_output_json``
+    only for the BASE class or a subclass the alias table does not map —
+    never to ``harness.unknown``, which would be a regression for an
+    unclassified sandbox failure.
+    """
+    return LEGACY_ALIASES.get(type(exc).__name__, _CODE_SANDBOX_NO_OUTPUT_JSON)
+
+
 def _non_retryable_failure_detail(
     non_retryable_code: str,
     exc: Exception,
@@ -2964,13 +2982,15 @@ class PipelineExecutor:
         AND no pin keeps its pre-existing ``eval_defs.node_without_gate``
         anomaly warning.
 
-        ``evaluation_mode`` (FAR-939 chunk 12) is the live gate's
-        ``policy_gates.evaluation_mode``, read ONLY when the gate governs —
-        ``"human"`` marks the eval for the shared-helper skip (chunk 12
-        §3.3). It is resolved once at DTO assembly and run-frozen for the
-        run's duration: ``policy_gate_pins`` do not carry the mode, so the
-        live row's mode governs in BOTH the live-fallback and the pinned
-        path (named foreclosure, chunk 12 §10).
+        ``evaluation_mode`` (FAR-939 chunk 12, extended by FAR-1749) is the
+        gate's ``policy_gates.evaluation_mode``, resolved ONLY when the gate
+        governs — ``"human"`` marks the eval for the shared-helper skip
+        (chunk 12 §3.3). For a pinned gate the mode comes from the snapshot
+        PIN, so the run START-time mode is frozen for the run's whole gate
+        universe (every pinned gate, fired or not). A legacy pin that
+        predates the field falls back to the live row's mode — today's
+        behaviour — and a malformed pinned value logs and does the same.
+        The LIVE fallback path (no pins at all) keeps the live row's mode.
         """
 
         eval_id = str(eval_row.id)
@@ -3087,11 +3107,17 @@ class PipelineExecutor:
         """Resolve the governing verdict from a snapshot PIN (FAR-967 §3.1/§3.3).
 
         Extracted from :meth:`_resolve_governed_gate` for cognitive-complexity
-        budget (S3776) — behaviour unchanged. The pin's ``policy_gate_id``
-        must still match the live row, its ``action`` must be in the closed
-        decision vocabulary, and its optional ``node_id`` (when parseable)
-        overrides the live row's node. Returns the ungoverned verdict on any
-        pin-side rejection.
+        budget (S3776). The pin's ``policy_gate_id`` must still match the live
+        row, its ``action`` must be in the closed decision vocabulary, and its
+        optional ``node_id`` (when parseable) overrides the live row's node.
+        Returns the ungoverned verdict on any pin-side rejection.
+
+        ``evaluation_mode`` (FAR-1749): a pin carrying a closed-vocabulary
+        ``evaluation_mode`` FREEZES the mode the run started with — a live
+        flip before resume cannot change it. A legacy pin without the field
+        falls back to the live row's mode (pre-FAR-1749 behaviour), and a
+        malformed pinned value logs and does the same. A replaced gate (pin id
+        mismatch) is ungoverned, so its pinned mode is never used.
         """
         if str(pin.get("policy_gate_id")) != str(policy_gate.id):
             # The pinned gate was replaced since snapshot creation (the live
@@ -3123,12 +3149,38 @@ class PipelineExecutor:
                     "eval_defs.pin_node_id_invalid",
                     extra={"eval_id": eval_id, "pipeline_id": pipeline_key},
                 )
+
+        # FAR-1749: the pin's mode is the run-start freeze — every pinned gate
+        # (whether or not it has fired) resolves the mode the run started with.
+        # Tuple membership (not a set): a malformed pin value can be an
+        # unhashable JSON container, and ``in`` must degrade to the fallback
+        # rather than raise.
+        pinned_mode = pin.get("evaluation_mode")
+        if pinned_mode in ("human", "automatic"):
+            evaluation_mode = str(pinned_mode)
+        else:
+            # Legacy pin (pre-FAR-1749 snapshots carry no mode) or a malformed
+            # value: fall back to the live row's mode — the pre-FAR-1749
+            # behaviour. The fingerprint covers the stored pin, so a malformed
+            # value here means an unverified (case ii) pin list; log it rather
+            # than swallow it.
+            if pinned_mode is not None:
+                _log.warning(
+                    "eval_defs.pin_evaluation_mode_invalid",
+                    extra={
+                        "eval_id": eval_id,
+                        "pipeline_id": pipeline_key,
+                        "evaluation_mode": str(pinned_mode),
+                    },
+                )
+            evaluation_mode = _governed_evaluation_mode(policy_gate)
+
         return (
             str(pin_action),
             policy_gate.id,
             policy_gate.version,
             gate_node_id,
-            _governed_evaluation_mode(policy_gate),
+            evaluation_mode,
         )
 
     @staticmethod
@@ -3239,6 +3291,13 @@ class PipelineExecutor:
         resume cannot change the resumed run's behaviour (neither the
         human-governed eval skip nor the Evidence grounding can drift).
 
+        Relationship to the FAR-1749 pin freeze: for a snapshot whose pins
+        carry ``evaluation_mode`` the freshly built DTO already holds the
+        SAME run-start mode, so re-applying this stamp is a consistent
+        NO-OP there. The stamp stays load-bearing for legacy pins (which
+        carry no mode) and for the coalesced/claim path, and remains as
+        defence-in-depth. Do not remove it.
+
         Returns ``[]`` for an unparseable gate id (manual nodes have no
         claim row) or when no eval defs were built for the run.
         """
@@ -3277,6 +3336,11 @@ class PipelineExecutor:
         all see the modes the run STARTED with. Returns the number of
         entries applied (a pure no-op when no gate ever fired — every
         pre-M4 claim row carries no stamp).
+
+        For a FAR-1749 snapshot the pin already yields the same run-start
+        mode at DTO assembly, so this overlay is a consistent no-op there;
+        it is kept (not removed) for legacy pins and the coalesced/claim
+        path, and as defence-in-depth for the fired gate.
 
         A stamp whose ``policy_gate_id`` no longer matches the live DTO's
         governing gate (disabled / soft-deleted / replaced since fire) is
@@ -6527,16 +6591,20 @@ class PipelineExecutor:
             # drop) used to terminal-fail under the GENERIC
             # ``node_cancelled`` code — whose registry guidance reads "Node
             # was cancelled." — so a stall was bucketed as a cancellation in
-            # the error dashboard and daily facts, while the SAME exception
-            # escaping through the executor's generic catch canonicalises to
-            # ``sandbox.no_output_json`` (LEGACY_ALIASES). Surface the
-            # exception's own canonical code here too: one failure class, one
-            # code. EXCEPTION: the FAR-136 hang death carries "likely hung"
+            # the error dashboard and daily facts. Surface the exception's
+            # OWN canonical code here instead: one failure class, one code.
+            # FAR-1887: that must be the SUBCLASS's code, not the family's
+            # generic one — ``SandboxQueueTimeoutError`` (E2B rate-limit
+            # retry budget exhausted) and ``SandboxRateLimitedError`` carry
+            # their own ``sandbox.queue_timeout`` / ``sandbox.rate_limited``
+            # aliases, and hard-setting ``sandbox.no_output_json`` for the
+            # whole family made those classes invisible in analytics.
+            # EXCEPTION: the FAR-136 hang death carries "likely hung"
             # in the detail and is excluded from ``failure`` retries ONLY
             # while its code resolves to ``node.cancelled`` — that marker
             # keeps the generic code.
             if isinstance(exc, SandboxNodeFailedError) and "likely hung" not in error_detail:
-                error_code = _CODE_SANDBOX_NO_OUTPUT_JSON
+                error_code = _sandbox_failure_error_code(exc)
             # FAR-734: scan the retained stdout (embedded in the
             # exception message) for terminal provider-error
             # signatures.  When a signature matches, upgrade the
@@ -6544,6 +6612,9 @@ class PipelineExecutor:
             # ``model.*`` code so the Error Dashboard and daily facts
             # bucket it as a first-class failure dimension.  Fail
             # open: when no signature matches the generic code stays.
+            # FAR-2006: the 401/402 credential/funding refusal
+            # classification runs AFTER the sandbox-code override, so a
+            # provider refusal still wins over the sandbox family code.
             _provider_code = classify_provider_error(str(exc))
             if _provider_code is not None:
                 error_code = _provider_code

@@ -18,6 +18,7 @@ from modulo.api.routes.pipelines import PipelineResponse
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -59,7 +60,10 @@ def _make_pipeline() -> MagicMock:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # A bare ``AsyncMock`` returns an AsyncMock from ``execute()``, so the SYNC
+    # ``result.scalar_one_or_none()`` read in ``resolve_authz_enforce`` orphans
+    # a never-awaited coroutine on every request.
+    session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

@@ -12,7 +12,11 @@ run page. These tests pin the three parts of the fix:
   PASSED IN by the caller, inside one savepoint (reads included), under the
   same run-row ``FOR UPDATE`` serialisation the raw-output marker store uses,
   bounded by a client-side timeout;
-* ``fail_run_terminal`` persists that entry for ``harness.worker_lost`` only.
+* ``fail_run_terminal`` persists that entry for ``harness.worker_lost`` only;
+* the FAR-369 node-deadline watchdog writes the run-page entry on BOTH of its
+  branches — the terminal branch the same marker the FAR-1999 reaper writes,
+  the re-dispatch branch a sibling marker under a DISTINCT attempt key whose
+  prose never claims the run was terminalised (see the last section).
 
 The age-gate wiring is covered in
 ``tests/unit/cron_helpers/test_dispatcher_reconcile.py``. No DB, no network.
@@ -21,7 +25,9 @@ The age-gate wiring is covered in
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -599,3 +605,285 @@ async def test_worker_lost_triage_helper_propagates_cancellation() -> None:
             "00000000-0000-0000-0000-000000000002",
             "00000000-0000-0000-0000-000000000001",
         )
+
+
+# ---------------------------------------------------------------------------
+# FAR-369 node-deadline watchdog — BOTH branches leave a run-page entry
+#
+# Before this wiring the watchdog left the run page with nothing: the terminal
+# branch's ``fail_run_terminal`` writes a run-level marker for
+# ``harness.worker_lost`` only (the sandbox cancel handler's per-attempt marker
+# is not guaranteed), and the re-dispatch branch returns early after the
+# fenced pending-reset nulls ``error_code`` — its only fingerprint,
+# ``runs.node_deadline_watchdog_fired_count``, is analytics-only and absent
+# from the run response.
+# ---------------------------------------------------------------------------
+
+
+def _triage_factory() -> tuple[MagicMock, AsyncMock]:
+    """The ``async_sessionmaker`` double ``_persist_node_deadline_triage`` opens."""
+    session = AsyncMock()
+
+    class _Begin:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, *args: object) -> bool:
+            return False
+
+    session.begin = MagicMock(return_value=_Begin())
+    factory_cm = MagicMock()
+    factory_cm.__aenter__ = AsyncMock(return_value=session)
+    factory_cm.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=factory_cm), session
+
+
+def _deadline_kill_args() -> tuple[dict[str, tuple[float, int]], asyncio.Task[Any], asyncio.Event, asyncio.Event]:
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    exec_task: asyncio.Task[Any] = asyncio.create_task(asyncio.sleep(999))
+    return deadlines, exec_task, asyncio.Event(), asyncio.Event()
+
+
+async def _stop(exec_task: asyncio.Task[Any]) -> None:
+    exec_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await exec_task
+
+
+async def test_terminal_branch_persists_the_reaper_marker() -> None:
+    """The terminal deadline kill writes the SAME run-level entry the FAR-1999
+    durable reaper writes — same error code, same reason — so a run killed by
+    either path is explained identically on the run page.
+
+    Prove-the-fix: without the call site nothing is persisted, so the run's
+    ``deadline_triage`` stays ``[]`` whenever the sandbox cancel handler did not
+    retain a per-attempt marker.
+    """
+    fail = AsyncMock(return_value=True)
+    factory, _session = _triage_factory()
+    terminal_writer = AsyncMock(return_value=True)
+    deadlines, exec_task, stall, done = _deadline_kill_args()
+    with (
+        patch.object(pe, "async_sessionmaker", MagicMock(return_value=factory)),
+        patch.object(pe, "set_rls_org", AsyncMock()),
+        patch("modulo.core.pipeline_execution.fail_run_terminal", fail),
+        patch.object(pe, "_record_node_deadline_watchdog_firing", AsyncMock()),
+        patch.object(pe, "_record_derived_deadline_cost", AsyncMock()),
+        patch.object(ch, "persist_terminal_triage_marker", terminal_writer),
+    ):
+        await pe._fail_overdue_node(MagicMock(), str(_RUN), str(_ORG), deadlines, exec_task, done, stall)
+    await _stop(exec_task)
+
+    fail.assert_awaited_once()
+    terminal_writer.assert_awaited_once()
+    kwargs = terminal_writer.await_args.kwargs
+    assert kwargs["error_code"] == "node_deadline_exceeded"
+    assert kwargs["reason"] == ch._TERMINAL_TRIAGE_REASON_NODE_DEADLINE
+    assert kwargs["run_id"] == _RUN
+    assert kwargs["organisation_id"] == _ORG
+
+
+async def test_terminal_marker_projects_with_the_node_deadline_reason() -> None:
+    """The entry the terminal branch writes actually reaches ``deadline_triage``.
+
+    Drives the REAL writer and then the REAL projection, so the test fails if
+    the envelope loses its ``deadline_triage`` signature or the reason the
+    projector reads.
+    """
+    session = _writer_session(SimpleNamespace(node_attempt_count=1))
+    write = AsyncMock()
+    with (
+        patch("modulo.db.crud.run_node_outputs.read_run_markers", AsyncMock(return_value={})),
+        patch("modulo.db.crud.run_node_outputs.write_run_markers", write),
+    ):
+        assert await ch.persist_terminal_triage_marker(
+            session,  # type: ignore[arg-type]
+            run_id=_RUN,
+            organisation_id=_ORG,
+            error_code="node_deadline_exceeded",
+            reason=ch._TERMINAL_TRIAGE_REASON_NODE_DEADLINE,
+        )
+
+    markers = write.await_args.kwargs["markers"]
+    entries = runs_module._deadline_triage_from_markers(markers, run_attempt_count=1)
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["attempt_key"] == f"terminal-triage:{_RUN}"
+    assert entry["no_output_reason"] == ch._TERMINAL_TRIAGE_REASON_NODE_DEADLINE
+    assert entry["run_attempt_count"] == 1
+    assert entry["node_id"] is None
+
+
+async def test_redispatch_branch_persists_a_non_terminal_marker() -> None:
+    """The re-dispatch branch writes its OWN marker, with prose that is TRUE
+    for a still-running run.
+
+    Prove-the-fix: without the call site the re-dispatch returns with no
+    run-page evidence at all, and reusing the terminal reason would claim a
+    terminalisation that never happened.
+    """
+    factory, _session = _triage_factory()
+    terminal_writer = AsyncMock(return_value=True)
+    redispatch_writer = AsyncMock(return_value=True)
+    deadlines, exec_task, stall, done = _deadline_kill_args()
+    hook = AsyncMock(return_value=True)
+    with (
+        patch.object(pe, "async_sessionmaker", MagicMock(return_value=factory)),
+        patch.object(pe, "set_rls_org", AsyncMock()),
+        patch("modulo.core.pipeline_execution.fail_run_terminal", AsyncMock(return_value=True)),
+        patch.object(pe, "_record_node_deadline_watchdog_firing", AsyncMock()),
+        patch.object(pe, "_record_derived_deadline_cost", AsyncMock()),
+        patch.object(ch, "persist_terminal_triage_marker", terminal_writer),
+        patch.object(ch, "persist_redispatch_triage_marker", redispatch_writer),
+    ):
+        await pe._fail_overdue_node(
+            MagicMock(), str(_RUN), str(_ORG), deadlines, exec_task, done, stall, retry_hook=hook
+        )
+    await _stop(exec_task)
+
+    terminal_writer.assert_not_awaited()
+    redispatch_writer.assert_awaited_once()
+    kwargs = redispatch_writer.await_args.kwargs
+    assert kwargs["error_code"] == "node_deadline_exceeded"
+    reason = kwargs["reason"]
+    assert reason == ch._TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH
+    # The prose must not claim the run ended.
+    assert "terminalis" not in reason.lower()
+    assert "re-dispatched" in reason
+    assert reason != ch._TERMINAL_TRIAGE_REASON_NODE_DEADLINE
+    # Distinct synthetic keys: neither observation can overwrite the other.
+    assert ch._redispatch_triage_attempt_key(_RUN) != ch._terminal_triage_attempt_key(_RUN)
+
+
+async def test_redispatch_marker_coexists_with_the_terminal_marker_and_projects() -> None:
+    """A later terminalisation must not drop the earlier re-dispatch note (and
+    vice versa): both survive the read-merge-write and both project.
+
+    Drives the REAL writers and the REAL projection.
+    """
+    session = _writer_session(SimpleNamespace(node_attempt_count=2))
+    write = AsyncMock()
+    terminal_key = f"terminal-triage:{_RUN}"
+    with (
+        patch(
+            "modulo.db.crud.run_node_outputs.read_run_markers",
+            AsyncMock(
+                return_value={
+                    terminal_key: {
+                        "deadline_triage": True,
+                        "no_output_reason": ch._TERMINAL_TRIAGE_REASON_NODE_DEADLINE,
+                    }
+                }
+            ),
+        ),
+        patch("modulo.db.crud.run_node_outputs.write_run_markers", write),
+    ):
+        assert await ch.persist_redispatch_triage_marker(
+            session,  # type: ignore[arg-type]
+            run_id=_RUN,
+            organisation_id=_ORG,
+            error_code="node_deadline_exceeded",
+            reason=ch._TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH,
+        )
+
+    markers = write.await_args.kwargs["markers"]
+    assert terminal_key in markers
+    redispatch_key = f"redispatch-triage:{_RUN}"
+    assert redispatch_key in markers
+    assert markers[redispatch_key]["deadline_triage"] is True
+    assert markers[redispatch_key]["no_output_reason"] == ch._TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH
+    assert markers[redispatch_key]["attempt_key"] == redispatch_key
+
+    entries = {
+        entry["attempt_key"]: entry for entry in runs_module._deadline_triage_from_markers(markers, run_attempt_count=2)
+    }
+    assert set(entries) == {terminal_key, redispatch_key}
+    assert entries[redispatch_key]["no_output_reason"] == ch._TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH
+    assert entries[terminal_key]["no_output_reason"] == ch._TERMINAL_TRIAGE_REASON_NODE_DEADLINE
+
+
+async def test_node_deadline_triage_failure_never_fails_the_kill(caplog: pytest.LogCaptureFixture) -> None:
+    """The status write wins: a triage failure is logged and swallowed, so the
+    terminalisation that already committed is never turned into a raised error.
+    """
+    fail = AsyncMock(return_value=True)
+    derived = AsyncMock()
+    deadlines, exec_task, stall, done = _deadline_kill_args()
+    caplog.set_level(logging.WARNING, logger="modulo.core.pipeline_execution")
+    with (
+        patch.object(pe, "set_rls_org", AsyncMock(side_effect=RuntimeError("db down"))),
+        patch("modulo.core.pipeline_execution.fail_run_terminal", fail),
+        patch.object(pe, "_record_node_deadline_watchdog_firing", AsyncMock()),
+        patch.object(pe, "_record_derived_deadline_cost", derived),
+    ):
+        await pe._fail_overdue_node(MagicMock(), str(_RUN), str(_ORG), deadlines, exec_task, done, stall)
+    await _stop(exec_task)
+
+    fail.assert_awaited_once()
+    # The compensating cost booking still runs after the triage miss.
+    derived.assert_awaited_once()
+    assert "pipeline_execution.node_deadline_triage_failed" in caplog.text
+
+
+async def test_node_deadline_triage_swallows_a_write_failure(caplog: pytest.LogCaptureFixture) -> None:
+    """Best-effort at the boundary: a raising write body is logged with its
+    traceback and swallowed, never surfaced to the caller whose terminalisation
+    already committed.
+
+    The sibling test above drives a failure from inside the real write body;
+    this one pins the ``except Exception`` handler itself by raising from the
+    body directly, so a future reshuffle of the body cannot silently drop the
+    handler's coverage.
+    """
+    caplog.set_level(logging.WARNING, logger="modulo.core.pipeline_execution")
+    writer = AsyncMock(side_effect=RuntimeError("simulated write failure"))
+    with patch.object(pe, "_write_node_deadline_triage_marker", writer):
+        result = await pe._persist_node_deadline_triage(MagicMock(), str(_RUN), str(_ORG), redispatched=False)
+
+    writer.assert_awaited_once()
+    assert result is None
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "modulo.core.pipeline_execution"
+        and "pipeline_execution.node_deadline_triage_failed" in record.getMessage()
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.levelno == logging.WARNING
+    assert record.exc_info is not None
+    assert str(record.exc_info[1]) == "simulated write failure"
+    assert str(_RUN) in record.getMessage()
+    assert "redispatched=False" in record.getMessage()
+
+
+async def test_node_deadline_triage_propagates_cancellation() -> None:
+    """Worker shutdown is not a triage failure: ``CancelledError`` raised by the
+    marker write must propagate, never be swallowed as a best-effort miss."""
+    writer = AsyncMock(side_effect=asyncio.CancelledError)
+    with (
+        patch.object(pe, "_write_node_deadline_triage_marker", writer),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await pe._persist_node_deadline_triage(MagicMock(), str(_RUN), str(_ORG), redispatched=True)
+
+    writer.assert_awaited_once()
+
+
+async def test_node_deadline_triage_is_bounded_by_the_persist_timeout() -> None:
+    """A contended run row cannot stall the kill: the whole write is bounded."""
+
+    async def _hanging_rls(session: Any, org_id: Any) -> None:
+        await asyncio.sleep(30)
+
+    factory, _session = _triage_factory()
+    with (
+        patch.object(ch, "_TERMINAL_TRIAGE_PERSIST_TIMEOUT", 0.05),
+        patch.object(pe, "async_sessionmaker", MagicMock(return_value=factory)),
+        patch.object(pe, "set_rls_org", _hanging_rls),
+    ):
+        started = time.monotonic()
+        await pe._persist_node_deadline_triage(MagicMock(), str(_RUN), str(_ORG), redispatched=False)
+        elapsed = time.monotonic() - started
+
+    assert elapsed < 2.0

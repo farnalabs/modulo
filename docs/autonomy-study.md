@@ -19,8 +19,10 @@ Modulo lets each pipeline choose a default **autonomy level** for its HITL revie
 | Level | HITL review behaviour |
 |---|---|
 | `manual_approval` | Gate halts; a human must review and approve/reject. |
-| `notify_on_complete` | Gate is auto-approved at runtime but emits a notification for observability. |
-| `fully_autonomous` | Gate is skipped entirely; no halt, no notification. |
+| `notify_on_complete` | Gate is auto-approved at runtime but emits a notification for observability. Applies only to a gate that opts out with `human_only: false`. |
+| `fully_autonomous` | Gate is skipped entirely; no halt, no notification. Applies only to a gate that opts out with `human_only: false`. |
+
+**`human_only` overrides every level in this table.** A gate whose config is `human_only` (the default for every gate) always interrupts, at any autonomy level. Only a gate that explicitly sets `human_only: false` follows the rows above. In `core/pipeline_engine/node_runner.py` both the skip branch and the auto-approve branch are guarded by `not human_only_effective`, so the default gate can never be skipped.
 
 Each pipeline also carries an optional **ceiling** (`max_autonomy_level`). At
 every HITL review, a context-setter's `autonomy_recommendation` may *lower* the

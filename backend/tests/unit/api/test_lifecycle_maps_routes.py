@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import DBAPIError, IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.main import app
@@ -585,6 +585,33 @@ def test_save_version_pipeline_conflict_maps_to_409(client: tuple[TestClient, _H
     resp = http.post(f"{_BASE}/{_MAP_ID}/versions", json=payload)
 
     assert resp.status_code == 409
+
+
+def _lock_timeout_error() -> OperationalError:
+    """An ``OperationalError`` whose driver error carries SQLSTATE 55P03."""
+
+    class _PgError(Exception):
+        sqlstate = "55P03"
+
+    return OperationalError("SELECT ... FOR UPDATE", {}, _PgError("canceling statement due to lock timeout"))
+
+
+def test_save_version_lock_timeout_maps_to_409(client: tuple[TestClient, _Harness]) -> None:
+    """FAR-1825: ``save_map_version`` bounds its row lock, so 55P03 is a 409.
+
+    ``save_map_version`` → ``get_lifecycle_map_for_update`` takes the map row
+    ``FOR UPDATE`` behind ``set_mutation_row_lock_timeout``. A contended map
+    row must therefore answer the busy-row conflict, not the generic 503
+    outage reply — the arm this test pins was missed by the sweep.
+    """
+    http, harness = client
+    harness.stub("save_map_version", AsyncMock(side_effect=_lock_timeout_error()))
+
+    payload = {"stages": [], "edges": [], "notes": ""}
+    resp = http.post(f"{_BASE}/{_MAP_ID}/versions", json=payload)
+
+    assert resp.status_code == 409, resp.text
+    assert "another change is in progress" in resp.json()["detail"]
 
 
 def test_update_version_behaves_like_save(client: tuple[TestClient, _Harness]) -> None:

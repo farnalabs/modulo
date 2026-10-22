@@ -44,9 +44,12 @@ const i18n = createI18n({
   },
 })
 
-export async function loadLocaleMessages(locale: SupportedLocale): Promise<void> {
-  if (i18n.global.availableLocales.includes(locale)) return
+// Callers await this (localeStore), so the Promise contract is kept even
+// though registering the bundled messages is synchronous.
+export function loadLocaleMessages(locale: SupportedLocale): Promise<void> {
+  if (i18n.global.availableLocales.includes(locale)) return Promise.resolve()
   i18n.global.setLocaleMessage(locale, enUS)
+  return Promise.resolve()
 }
 
 export default i18n

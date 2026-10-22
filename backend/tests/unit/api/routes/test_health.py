@@ -421,6 +421,49 @@ class TestCheckDispatcherReconcile:
         assert "org_statement_timeouts=0" in result.detail
 
     @pytest.mark.asyncio
+    async def test_fresh_run_detail_surfaces_row_loop_time_deferral_counters(self) -> None:
+        """FAR-1643: a row loop that deferred rows because the org's slice was
+        about to cut it reports a DISTINCT counter — ``row_loop_time_deferred``
+        — plus the per-row instrumentation ``row_loop_slowest_row_ms``. The
+        tick stays ``ok`` by design (the processed prefix commits and the
+        remainder drains next tick), so this detail line IS the visibility: it
+        must not be folded into ``rows_deferred``, which means the row-budget
+        cap / skipped-org markers."""
+        fake = _FakeStatsRedis(
+            blob=_fresh_payload(
+                rows_deferred=2,
+                row_loop_time_deferred=7,
+                row_loop_slowest_row_ms=700.0,
+            ).encode()
+        )
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "rows_deferred=2" in result.detail
+        assert "row_loop_time_deferred=7" in result.detail
+        assert "row_loop_slowest_row_ms=700.0" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_fresh_run_detail_defaults_row_loop_counters_to_zero(self) -> None:
+        """A pre-FAR-1643 payload carries neither key: the detail must render
+        them as 0 rather than raise (the additive ``.get()`` contract every
+        counter in this line follows)."""
+        fake = _FakeStatsRedis(blob=_fresh_payload().encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "row_loop_time_deferred=0" in result.detail
+        assert "row_loop_slowest_row_ms=0" in result.detail
+
+    @pytest.mark.asyncio
     async def test_fresh_timeout_status_degraded(self) -> None:
         """FAR-746: a fresh stats blob with status='timeout' (inner deadline
         fired) must return 'degraded' (non-gating) â€” a partially-working

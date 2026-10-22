@@ -868,6 +868,63 @@ async def _fetch_output_rows(session: AsyncSession, run_id: uuid.UUID) -> Sequen
     return list((await session.execute(select(*_ROW_COLUMNS).where(RunNodeOutput.run_id == run_id))).all())
 
 
+def _is_meta_row(row: Any) -> bool:
+    """True for the reserved metadata sentinel row."""
+    return bool(row.attempt_key == FINAL_ATTEMPT_KEY and row.node_id == META_NODE_ID)
+
+
+def _valid_meta_flags(row: Any) -> dict[str, Any] | None:
+    """The metadata row's flags, or None when the row is malformed.
+
+    qa M21 — READ paths FAIL OPEN: a malformed metadata row is treated as
+    ABSENT (the run's node rows / legacy fallback still serve); raising here
+    would brick every reader for the run. The WRITE side keeps validating
+    strictly (_validate_sentinel_keys + the writer's own flag payload), so a
+    malformed row can only be corruption — logged, never fatal on read.
+    """
+    flags = row.outputs_json
+    if isinstance(flags, dict) and "empty_outputs" in flags and "empty_telemetry" in flags:
+        return flags
+    _log.warning(
+        "run_node_outputs malformed metadata row treated as absent "
+        "(expected empty_outputs/empty_telemetry booleans, got %r)",
+        flags,
+    )
+    return None
+
+
+def _collect_row_items(
+    row: Any,
+    out_items: list[tuple[str, Any]],
+    tel_items: list[tuple[str, Any]],
+    marker_items: list[tuple[str, Any]],
+) -> None:
+    """Route one ordinary row's present sides into the decode lists."""
+    if row.attempt_key == FINAL_ATTEMPT_KEY:
+        if not row.outputs_absent:
+            out_items.append((row.node_id, row.outputs_json))
+        if not row.telemetry_absent:
+            tel_items.append((row.node_id, row.node_telemetry_json))
+        return
+    if not row.markers_absent:
+        marker_items.append((row.attempt_key, row.raw_output_markers))
+
+
+def _decoded_side(
+    meta_flags: dict[str, Any] | None,
+    flag_name: str,
+    items: list[tuple[str, Any]],
+) -> dict[str, Any] | None:
+    """Decode one side: the writer flag wins over rows, then rows, then None."""
+    if meta_flags is not None and meta_flags[flag_name] is True:
+        # Flag wins over rows (design): the flags are writer-derived, so
+        # `True` + present rows is an inconsistent state we resolve to `{}`.
+        return {}
+    if items:
+        return dict(sorted(items, key=lambda item: _jsonb_canonical_key(item[0])))
+    return None
+
+
 def _assemble(rows: Sequence[Any]) -> RunBlobs:
     out_items: list[tuple[str, Any]] = []
     tel_items: list[tuple[str, Any]] = []
@@ -875,49 +932,15 @@ def _assemble(rows: Sequence[Any]) -> RunBlobs:
     meta_flags: dict[str, Any] | None = None
 
     for r in rows:
-        if r.attempt_key == FINAL_ATTEMPT_KEY and r.node_id == META_NODE_ID:
-            flags = r.outputs_json
-            if not isinstance(flags, dict) or "empty_outputs" not in flags or "empty_telemetry" not in flags:
-                # qa M21 — READ paths FAIL OPEN: a malformed metadata row is
-                # treated as ABSENT (the run's node rows / legacy fallback
-                # still serve); raising here would brick every reader for the
-                # run. The WRITE side keeps validating strictly
-                # (_validate_sentinel_keys + the writer's own flag payload),
-                # so a malformed row can only be corruption — logged, never
-                # fatal on read.
-                _log.warning(
-                    "run_node_outputs malformed metadata row treated as absent "
-                    "(expected empty_outputs/empty_telemetry booleans, got %r)",
-                    flags,
-                )
-                continue
-            meta_flags = flags
+        if _is_meta_row(r):
+            flags = _valid_meta_flags(r)
+            if flags is not None:
+                meta_flags = flags
             continue
-        if r.attempt_key == FINAL_ATTEMPT_KEY:
-            if not r.outputs_absent:
-                out_items.append((r.node_id, r.outputs_json))
-            if not r.telemetry_absent:
-                tel_items.append((r.node_id, r.node_telemetry_json))
-            continue
-        if not r.markers_absent:
-            marker_items.append((r.attempt_key, r.raw_output_markers))
+        _collect_row_items(r, out_items, tel_items, marker_items)
 
-    if meta_flags is not None and meta_flags["empty_outputs"] is True:
-        # Flag wins over rows (design): the flags are writer-derived, so
-        # `True` + present rows is an inconsistent state we resolve to `{}`.
-        outputs: dict[str, Any] | None = {}
-    elif out_items:
-        outputs = dict(sorted(out_items, key=lambda item: _jsonb_canonical_key(item[0])))
-    else:
-        outputs = None
-
-    if meta_flags is not None and meta_flags["empty_telemetry"] is True:
-        telemetry: dict[str, Any] | None = {}
-    elif tel_items:
-        telemetry = dict(sorted(tel_items, key=lambda item: _jsonb_canonical_key(item[0])))
-    else:
-        telemetry = None
-
+    outputs = _decoded_side(meta_flags, "empty_outputs", out_items)
+    telemetry = _decoded_side(meta_flags, "empty_telemetry", tel_items)
     markers: dict[str, Any] | None = None
     if marker_items:
         markers = _reassemble_markers(marker_items)

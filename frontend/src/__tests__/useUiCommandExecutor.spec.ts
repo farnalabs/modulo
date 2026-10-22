@@ -679,6 +679,24 @@ describe('useUiCommandExecutor command surface', () => {
     expect(results[0].success).toBe(true)
   })
 
+  it('cancels the batch when it is aborted while the tab is hidden', async () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+
+    const p = executeCommandBatch([{ id: '1', name: 'get_url', args: {} }])
+    await vi.advanceTimersByTimeAsync(100)
+    abortUiCommands()
+    // The visibility wait only settles when the tab reports visible again; the
+    // aborted signal then turns it into a cancellation.
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.advanceTimersByTimeAsync(100)
+    const results = await p
+    delete (document as unknown as Record<string, unknown>).visibilityState
+
+    expect(results[0].success).toBe(false)
+    expect(results[0].error).toBe('cancelled_by_user')
+  })
+
   it('review action speed re-pauses after each command', async () => {
     setActionSpeed('review')
     const results = await runBatch([{ id: '1', name: 'get_url', args: {} }])

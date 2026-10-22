@@ -75,6 +75,13 @@ async def update_set(
     values: dict[str, Any] | None = None,
     version: int,
 ) -> ParameterSet | None:
+    # FAR-1825: this is the request transaction's first row lock (the REST PUT
+    # and the MCP update_parameter_set tool both reach it unbounded otherwise).
+    # A contended parameter-set row must raise 55P03 (a visible 409), never
+    # park a pooled connection indefinitely.
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
     result = await session.execute(
         select(ParameterSet)
         .where(
@@ -133,6 +140,34 @@ async def delete_set(
     return True
 
 
+def _binding_matches_set(binding: Any, set_id_str: str) -> bool:
+    """True when a node's ``parameter_bindings_json`` entry points at the set."""
+    return isinstance(binding, dict) and str(binding.get("parameter_set_id")) == set_id_str
+
+
+def _collect_binding_refs(
+    snap: PipelineSnapshot,
+    set_id_str: str,
+    snapshots: list[uuid.UUID],
+    pipeline_nodes: list[uuid.UUID],
+) -> None:
+    """Append a snapshot + node id for every binding that points at the set."""
+    bindings = snap.parameter_bindings_json or {}
+    for node_id_str, binding in bindings.items():
+        if _binding_matches_set(binding, set_id_str):
+            snapshots.append(snap.id)
+            pipeline_nodes.append(uuid.UUID(node_id_str))
+
+
+def _graph_node_referencing_set(graph_json: Any, set_id_str: str) -> str | None:
+    """Id of the first graph node bound to the set, or None when none is."""
+    nodes = graph_json.get("nodes", []) if isinstance(graph_json, dict) else []
+    for node in nodes:
+        if isinstance(node, dict) and str(node.get("parameter_set_id")) == set_id_str:
+            return str(node["id"])
+    return None
+
+
 async def get_set_references(
     session: AsyncSession,
     set_id: uuid.UUID,
@@ -148,19 +183,12 @@ async def get_set_references(
     )
 
     for snap in rows:
-        bindings = snap.parameter_bindings_json or {}
-        for node_id_str, binding in bindings.items():
-            if isinstance(binding, dict) and str(binding.get("parameter_set_id")) == set_id_str:
-                snapshots.append(snap.id)
-                pipeline_nodes.append(uuid.UUID(node_id_str))
-
+        _collect_binding_refs(snap, set_id_str, snapshots, pipeline_nodes)
         if snap.id in snapshots:
             continue
-        nodes = snap.graph_json.get("nodes", []) if isinstance(snap.graph_json, dict) else []
-        for node in nodes:
-            if isinstance(node, dict) and str(node.get("parameter_set_id")) == set_id_str:
-                snapshots.append(snap.id)
-                pipeline_nodes.append(uuid.UUID(str(node["id"])))
-                break
+        node_id = _graph_node_referencing_set(snap.graph_json, set_id_str)
+        if node_id is not None:
+            snapshots.append(snap.id)
+            pipeline_nodes.append(uuid.UUID(node_id))
 
     return {"pipeline_nodes": pipeline_nodes, "snapshots": snapshots}

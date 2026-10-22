@@ -205,13 +205,17 @@ describe('LifecycleMapRenderer', () => {
     expect(onExternal.mock.calls[0][0].id).toBe('stage-2')
   })
 
-  it('invokes the click handler via keyboard enter and space', async () => {
+  it('exposes the stage primary action as a native button (keyboard-activatable)', async () => {
     const onModulo = vi.fn()
     const wrapper = mountRenderer({ mapData: makeMap(), onModuloStageClick: onModulo })
     const stage = wrapper.find('.stage-node')
-    await stage.trigger('keydown.enter')
-    await stage.trigger('keydown.space')
-    expect(onModulo).toHaveBeenCalledTimes(2)
+    const button = stage.find('button')
+    expect(button.exists()).toBe(true)
+    expect(button.attributes('type')).toBe('button')
+    // Native activation fires the click handler exactly once (no synthetic
+    // keydown handler duplicating it).
+    await button.trigger('click')
+    expect(onModulo).toHaveBeenCalledTimes(1)
   })
 
   it('does nothing on click for manual or placeholder stages', async () => {

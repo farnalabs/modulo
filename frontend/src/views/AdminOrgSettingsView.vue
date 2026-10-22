@@ -1,6 +1,9 @@
 <template>
   <div data-theme="agent" class="page-wide">
-    <PageHeader title="Organisation Settings" subtitle="Manage your organisation profile, export data, or delete the organisation" />
+    <PageHeader
+      :title="$t('views.AdminOrgSettingsView.title')"
+      :subtitle="$t('views.AdminOrgSettingsView.subtitle')"
+    />
 
     <!-- HITL review window (FAR-1257): the ORG default, the middle layer of
          pipeline override > org default > instance default. Value + unit
@@ -14,9 +17,9 @@
       :title="$t('views.AdminOrgSettingsView.hitl_review_window')"
       :description="$t('views.AdminOrgSettingsView.hitl_review_window_description')"
     >
-      <div v-if="hitlWindowLoading" class="flex items-center gap-2">
-        <div class="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-        <span class="text-sm text-muted-foreground">{{ $t('views.AdminOrgSettingsView.hitl_review_window_loading') }}</span>
+      <div v-if="hitlWindowLoading" class="space-y-2" aria-hidden="true" data-testid="org-hitl-review-window-skeleton">
+        <div class="h-4 w-32 animate-pulse rounded bg-muted" />
+        <div class="h-10 w-full animate-pulse rounded bg-muted" />
       </div>
 
       <div v-else-if="hitlWindowLoadError" class="space-y-2">
@@ -87,12 +90,11 @@
           role="alert"
           data-testid="org-hitl-review-window-error"
         >{{ hitlWindowError }}</p>
-        <p
+        <output
           v-else-if="hitlWindowSaved"
-          class="mt-2 text-sm text-success-text"
-          role="status"
+          class="mt-2 block text-sm text-success-text"
           data-testid="org-hitl-review-window-saved"
-        >{{ $t('views.AdminOrgSettingsView.hitl_review_window_saved') }}</p>
+        >{{ $t('views.AdminOrgSettingsView.hitl_review_window_saved') }}</output>
 
         <div class="mt-4 rounded-lg border border-input bg-muted/30 p-3" data-testid="org-hitl-review-window-status">
           <p class="text-xs font-medium">{{ hitlWindowStatus }}</p>
@@ -108,9 +110,9 @@
       :title="$t('views.AdminOrgSettingsView.mcp_authority_title')"
       :description="$t('views.AdminOrgSettingsView.mcp_authority_description')"
     >
-      <div v-if="mcpAuthorityLoading" class="flex items-center gap-2">
-        <div class="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-        <span class="text-sm text-muted-foreground">{{ $t('views.AdminOrgSettingsView.mcp_authority_loading') }}</span>
+      <div v-if="mcpAuthorityLoading" class="space-y-2" aria-hidden="true" data-testid="org-mcp-authority-skeleton">
+        <div class="h-4 w-48 animate-pulse rounded bg-muted" />
+        <div class="h-10 w-full animate-pulse rounded bg-muted" />
       </div>
 
       <div v-else-if="mcpAuthorityLoadError" class="space-y-2">
@@ -164,7 +166,7 @@
     <template v-else>
       <div class="space-y-6">
       <!-- Org Info -->
-      <SectionCard title="Organisation Info">
+      <SectionCard :title="$t('views.AdminOrgSettingsView.org_info')">
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
             <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminOrgSettingsView.name') }}</span>
@@ -178,7 +180,7 @@
             <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminOrgSettingsView.plan') }}</span>
             <p class="mt-0.5">
               <span :class="orgInfo.planTier === 'team' ? 'badge badge-context-purple' : 'badge badge-status-muted'">
-                {{ orgInfo.planTier === 'team' ? 'Team' : 'Community' }}
+                {{ orgInfo.planTier === 'team' ? $t('views.AdminOrgSettingsView.plan_team') : $t('views.AdminOrgSettingsView.plan_community') }}
               </span>
             </p>
           </div>
@@ -198,48 +200,56 @@
       </SectionCard>
 
       <!-- Data Export -->
-      <SectionCard title="Data Export" description="Export all organisation data including runs, pipelines, schemas, connectors, and settings.">
+      <SectionCard
+        :title="$t('views.AdminOrgSettingsView.data_export')"
+        :description="$t('views.AdminOrgSettingsView.data_export_description')"
+      >
 
         <div v-if="exportStatus === 'idle'" class="flex items-center gap-3">
-          <Button type="button" class="h-8 px-2.5" @click="startExport">
-            Export All Data
+          <Button type="button" class="h-8 px-2.5" data-testid="org-export-start" @click="startExport">
+            {{ $t('views.AdminOrgSettingsView.export_all_data') }}
           </Button>
         </div>
 
-        <div v-else-if="exportStatus === 'loading'" class="flex items-center gap-3">
-          <div class="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-          <span class="text-sm text-muted-foreground">{{ $t('views.AdminOrgSettingsView.exporting_data') }}</span>
+        <div v-else-if="exportStatus === 'loading'" class="space-y-2" aria-hidden="true" data-testid="org-export-skeleton">
+          <div class="h-4 w-40 animate-pulse rounded bg-muted" />
+          <div class="h-8 w-32 animate-pulse rounded bg-muted" />
         </div>
 
         <div v-else-if="exportStatus === 'error'" class="flex items-center gap-3">
-          <span class="text-sm text-destructive">Export failed: {{ exportError }}</span>
+          <span class="text-sm text-destructive" role="alert" data-testid="org-export-error">
+            {{ $t('views.AdminOrgSettingsView.export_failed', { error: exportError }) }}
+          </span>
           <button
             type="button"
             class="text-sm font-medium text-primary-text underline underline-offset-2 hover:no-underline"
+            data-testid="org-export-retry"
             @click="startExport"
           >
-            Retry
+            {{ $t('views.AdminOrgSettingsView.retry') }}
           </button>
         </div>
 
         <div v-else-if="exportStatus === 'complete'" class="flex items-center gap-3">
           <span class="badge badge-status-success">{{ $t('views.AdminOrgSettingsView.export_ready') }}</span>
-          <span class="text-sm text-muted-foreground">
-            Exported at {{ formatDate(exportData.exportedAt) }}
+          <span class="text-sm text-muted-foreground" data-testid="org-export-exported-at">
+            {{ $t('views.AdminOrgSettingsView.exported_at', { date: formatDate(exportData.exportedAt) }) }}
           </span>
           <button
             type="button"
             class="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-input bg-background px-2.5 text-sm font-medium hover:bg-muted transition-all"
+            data-testid="org-export-download"
             @click="downloadExport"
           >
-            Download
+            {{ $t('views.AdminOrgSettingsView.download') }}
           </button>
           <button
             type="button"
             class="text-sm font-medium text-primary-text underline underline-offset-2 hover:no-underline"
+            data-testid="org-export-again"
             @click="resetExport"
           >
-            Export again
+            {{ $t('views.AdminOrgSettingsView.export_again') }}
           </button>
         </div>
       </SectionCard>
@@ -270,9 +280,21 @@
       </SectionCard>
 
       <!-- Delete Organization -->
-      <SectionCard title="Delete Organisation" description="Permanently delete this organisation and all associated data. This action cannot be undone." class="border-destructive/30" title-class="text-destructive" description-class="text-destructive-text">
-        <Button type="button" severity="danger" class="h-8 px-2.5" @click="deleteDialogOpen = true">
-          Delete Organisation
+      <SectionCard
+        :title="$t('views.AdminOrgSettingsView.delete_org')"
+        :description="$t('views.AdminOrgSettingsView.delete_org_description')"
+        class="border-destructive/30"
+        title-class="text-destructive"
+        description-class="text-destructive-text"
+      >
+        <Button
+          type="button"
+          severity="danger"
+          class="h-8 px-2.5"
+          data-testid="org-delete-open"
+          @click="deleteDialogOpen = true"
+        >
+          {{ $t('views.AdminOrgSettingsView.delete_org') }}
         </Button>
       </SectionCard>
       </div>
@@ -281,21 +303,21 @@
     <FormDialog
       :open="deleteDialogOpen"
       @update:open="deleteDialogOpen = false"
-      title="Delete Organisation"
-      description="Permanently delete this organisation and all associated data. This action cannot be undone."
-      confirmText="Permanently Delete"
+      :title="$t('views.AdminOrgSettingsView.delete_org')"
+      :description="$t('views.AdminOrgSettingsView.delete_org_description')"
+      :confirmText="$t('views.AdminOrgSettingsView.permanently_delete')"
       :confirmDisabled="confirmName !== orgInfo.name || deleting"
       :loading="deleting"
       @confirm="confirmDelete"
     >
       <p class="text-sm text-muted-foreground">
-        This will permanently delete <strong>{{ orgInfo.name }}</strong> and all associated data including runs, pipelines, schemas, connectors, and settings.
+        {{ $t('views.AdminOrgSettingsView.delete_confirm_body', { name: orgInfo.name }) }}
         <br /><br />
         <span class="font-semibold text-destructive">{{ $t('views.AdminOrgSettingsView.this_action_cannot_be_undone') }}</span>
       </p>
       <div class="space-y-3">
         <label for="org-delete-confirm-input" class="text-sm text-muted-foreground">
-          Type <strong class="text-foreground">{{ orgInfo.name }}</strong> to confirm:
+          {{ $t('views.AdminOrgSettingsView.delete_confirm_label', { name: orgInfo.name }) }}
         </label>
         <input
           id="org-delete-confirm-input"
@@ -338,17 +360,33 @@ const { t } = useI18n()
 const { data: orgData, loading, error: loadError, load: loadData } = useDataFetch(
   async () => {
     const [overviewResp, orgResp] = await Promise.all([
-      (api as any).GET('/api/v1/admin/billing/overview').catch(() => null),
-      (api as any).GET('/api/v1/admin/org').catch(() => null),
+      api.GET('/api/v1/admin/billing/overview').catch(() => null),
+      api.GET('/api/v1/admin/org').catch(() => null),
     ])
-    if (overviewResp.error) return { error: { detail: `Failed to load org info: ${formatApiError(overviewResp.error)}` } }
-    if (orgResp.error) return { error: { detail: `Failed to load org info: ${formatApiError(orgResp.error)}` } }
-    const overview = overviewResp.data as BillingOverviewResponse
-    const orgProfile = orgResp.data as OrgProfileResponse
+    if (!overviewResp || overviewResp.error) {
+      return {
+        error: {
+          detail: t('views.AdminOrgSettingsView.load_failed', {
+            error: formatApiError(overviewResp?.error),
+          }),
+        },
+      }
+    }
+    if (!orgResp || orgResp.error) {
+      return {
+        error: {
+          detail: t('views.AdminOrgSettingsView.load_failed', {
+            error: formatApiError(orgResp?.error),
+          }),
+        },
+      }
+    }
+    const overview = overviewResp.data
+    const orgProfile = orgResp.data
     return {
       data: {
         id: orgProfile.id ?? '',
-        name: orgProfile.name ?? 'Unnamed Org',
+        name: orgProfile.name ?? t('views.AdminOrgSettingsView.unnamed_org'),
         slug: orgProfile.slug ?? '',
         createdAt: orgProfile.created_at ?? '',
         planTier: overview.plan_tier ?? 'community',
@@ -360,23 +398,6 @@ const { data: orgData, loading, error: loadError, load: loadData } = useDataFetc
 )
 
 const orgInfo = computed(() => orgData.value!)
-
-interface OrgProfileResponse {
-  id?: string
-  name?: string
-  slug?: string
-  created_at?: string
-  logo_url?: string
-  plan_id?: string
-}
-
-interface BillingOverviewResponse {
-  total_users?: number
-  total_teams?: number
-  total_pipelines?: number
-  plan_tier?: string
-  plan_id?: string
-}
 
 type ExportStatus = 'idle' | 'loading' | 'complete' | 'error'
 
@@ -629,7 +650,7 @@ async function toggleMcpAuthority(next: boolean) {
 }
 
 function formatDate(dateStr: string): string {
-  if (!dateStr) return 'N/A'
+  if (!dateStr) return t('views.AdminOrgSettingsView.unknown_date')
   const d = new Date(dateStr)
   return formatDateShort(d)
 }
@@ -638,13 +659,13 @@ async function startExport() {
   exportStatus.value = 'loading'
   exportError.value = null
   try {
-    const resp = await (api as any).GET('/api/v1/admin/org/export')
+    const resp = await api.GET('/api/v1/admin/org/export')
     if (resp.error) {
       exportStatus.value = 'error'
-      exportError.value = String(resp.error)
+      exportError.value = formatApiError(resp.error)
       return
     }
-    const data = resp.data as { exported_at?: string }
+    const data = resp.data
     exportData.raw = data
     exportData.exportedAt = data.exported_at ?? new Date().toISOString()
     exportStatus.value = 'complete'
@@ -678,16 +699,20 @@ async function confirmDelete() {
   deleting.value = true
   deleteError.value = null
   try {
-    const resp = await (api as any).DELETE('/api/v1/admin/org')
+    const resp = await api.DELETE('/api/v1/admin/org')
     if (resp.error) {
-      deleteError.value = `Failed to delete org: ${formatApiError(resp.error)}`
+      deleteError.value = t('views.AdminOrgSettingsView.delete_failed', {
+        error: formatApiError(resp.error),
+      })
       deleting.value = false
       return
     }
     deleteDialogOpen.value = false
     router.push('/login')
   } catch (e: unknown) {
-    deleteError.value = `Failed to delete org: ${formatApiError(e)}`
+    deleteError.value = t('views.AdminOrgSettingsView.delete_failed', {
+      error: formatApiError(e),
+    })
     deleting.value = false
   }
 }
