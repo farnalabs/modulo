@@ -549,6 +549,64 @@ async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted()
     assert not any("status='pending'" in s for s in statements)
 
 
+async def test_execute_terminal_fails_sandbox_queue_timeout_with_correct_code():
+    """FAR-1887: a SandboxQueueTimeoutError (rate-limit retry budget exhausted)
+    must terminal-fail with error_code 'sandbox.queue_timeout' (its canonical
+    code via LEGACY_ALIASES), NOT the generic 'sandbox.no_output_json'."""
+    from modulo.core.pipeline_engine.node_runner import SandboxQueueTimeoutError
+
+    run = _make_run(claim_count=20, node_attempt_count=5, claim_token="tok-claim-abc")
+    final_run = _make_run(
+        run_id=run.id,
+        status="failed",
+        claim_count=20,
+        node_attempt_count=5,
+        claim_token="tok-claim-abc",
+    )
+    snapshot = _make_snapshot()
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(SandboxQueueTimeoutError("E2B sandbox creation rate limited"))
+    registry = _mock_registry()
+    broker = registry.get_or_create.return_value
+    settings = MagicMock(saq_run_retries=5)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(
+            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
+        )
+
+    assert result is final_run
+    call = mock_finalize.await_args
+    assert call is not None
+    assert call.kwargs["status"] == "failed"
+    assert call.kwargs.get("error_code") == "sandbox.queue_timeout"
+    assert call.kwargs["is_terminal"] is True
+    assert "E2B sandbox creation rate limited" in call.kwargs["error_detail"]
+    # Live run_failed publish for WS subscribers.
+    publish_call = broker.publish.call_args
+    assert publish_call is not None
+    assert publish_call.args[0] == "run_failed"
+    payload = publish_call.args[1]
+    assert payload["error"] == "sandbox.queue_timeout"
+    # No reset once retries are exhausted.
+    assert not any("status='pending'" in s for s in statements)
+
+
 async def test_execute_non_idempotent_graph_suppresses_transient_retry():
     """FAR-295: a graph declaring a node with ``idempotent: false`` must NOT be
     re-dispatched on a transient NodeCancelledError even while retry budget
