@@ -38,7 +38,7 @@ from datetime import UTC, datetime
 from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, model_validator
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.compliance.artifacts import (
@@ -463,11 +463,18 @@ async def _collect_eval_results(
         "GET /api/v1/runs/{run_id}/evals and GET /api/v1/eval-suites; each result "
         "records the eval-definition version that scored it"
     )
+    # ADR 066 D18: a judge row with ``outcome='error'`` produced no verdict —
+    # an instrument failure, not a failed check. It stays in ``record_count``
+    # (a row WAS recorded) but is excluded from both the passed and failed
+    # tallies so the compliance evidence never reports an instrument failure as
+    # a quality failure.
+    not_an_error = EvalResult.outcome.is_distinct_from("error")
     stats = (
         await session.execute(
             select(
                 func.count(EvalResult.id),
-                func.sum(case((EvalResult.passed.is_(True), 1), else_=0)),
+                func.sum(case((and_(EvalResult.passed.is_(True), not_an_error), 1), else_=0)),
+                func.sum(case((and_(EvalResult.passed.is_(False), not_an_error), 1), else_=0)),
                 func.max(EvalResult.evaluated_at),
                 func.count(func.distinct(EvalResult.eval_id)),
             ).where(EvalResult.organisation_id == organisation_id)
@@ -483,6 +490,7 @@ async def _collect_eval_results(
         )
 
     passed = int(stats[1] or 0)
+    failed = int(stats[2] or 0)
     sample_ids = (
         (
             await session.execute(
@@ -503,9 +511,9 @@ async def _collect_eval_results(
         record_count=total,
         detail={
             "passed": passed,
-            "failed": total - passed,
-            "distinct_eval_definitions": int(stats[3] or 0),
-            "latest_evaluated_at": _iso(stats[2]),
+            "failed": failed,
+            "distinct_eval_definitions": int(stats[4] or 0),
+            "latest_evaluated_at": _iso(stats[3]),
         },
     )
 

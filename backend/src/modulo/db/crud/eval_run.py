@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.eval import Eval
@@ -10,7 +10,7 @@ from modulo.db.models.eval_result import EvalResult
 
 
 def non_guardrail_eval_results_clause() -> Any:
-    """The eval_results consumer contract (FAR-223 item 11 §4d).
+    """The eval_results quality-consumer contract (FAR-223 item 11 §4d; ADR 066 D18).
 
     Guardrail results are stored in eval_results (rows whose ``eval_id`` points
     at an ``eval_type='guardrail'`` definition). EVERY consumer must either
@@ -34,20 +34,35 @@ def non_guardrail_eval_results_clause() -> Any:
     exclusion set, re-leaking their stored results. A guardrail's ``passed``
     stays inverted after the definition is retired, so soft-deleted
     definitions must stay excluded too.
+
+    ADR 066 D18: an ``outcome='error'`` row records that the judge produced NO
+    verdict — an instrument failure, not a failed check — so it is excluded
+    from every quality aggregate's numerator AND denominator (a ``passed``
+    projection of ``False`` would otherwise count it as a failure). One shared
+    clause keeps every consumer consistent instead of per-endpoint patches.
+
+    ``is_distinct_from`` (SQL: ``IS DISTINCT FROM``) rather than ``!=`` is
+    deliberate: ``outcome`` is nullable during the FAR-2040 expand rollout, and
+    a plain inequality evaluates to NULL for legacy rows, silently dropping
+    every pre-``outcome`` pass/fail result from every pass rate.
     """
     evals_table = Eval.__table__
-    return EvalResult.eval_id.not_in(select(evals_table.c.id).where(evals_table.c.eval_type == "guardrail"))
+    return and_(
+        EvalResult.eval_id.not_in(select(evals_table.c.id).where(evals_table.c.eval_type == "guardrail")),
+        EvalResult.outcome.is_distinct_from("error"),
+    )
 
 
 async def get_run_evals(
     session: AsyncSession,
     run_id: Any,
 ) -> list[EvalResult]:
-    """Eval results for a run, EXCLUDING guardrail rows (consumer contract).
+    """Eval results for a run, EXCLUDING guardrail AND error rows (consumer contract).
 
     The MCP ``get_run_evals`` surface shows normal eval outcomes; guardrail
     interception results are surfaced via the run-detail ``guardrail_summary``
-    instead (item 11).
+    instead (item 11). ``outcome='error'`` rows are the failed instrument, not
+    a verdict, so they are excluded here too (ADR 066 D18).
     """
     result = await session.execute(
         select(EvalResult)
@@ -69,8 +84,9 @@ async def get_evals_for_runs(
     spread can be measured across the variants in one batch. The explicit
     ``organisation_id`` predicate is the BYPASSRLS isolation control (plus
     ``set_rls_org`` as defense-in-depth), so a cross-org run can never be
-    pulled into the spread. Guardrail rows are excluded per the consumer
-    contract — their ``passed`` semantics are inverted (a match = a violation).
+    pulled into the spread. Guardrail rows and judge error rows are excluded
+    per the consumer contract — guardrail ``passed`` semantics are inverted (a
+    match = a violation) and an error row produced no verdict (ADR 066 D18).
     """
     if not run_ids:
         return []

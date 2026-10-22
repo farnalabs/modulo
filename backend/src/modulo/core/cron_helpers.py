@@ -2980,11 +2980,12 @@ async def _suite_run_model_judge_guard(
     reach.
 
     A judge suite whose org has NO ACTIVE backend still cannot be judged — the
-    runner would raise ``suite contains model_judge definitions but no judge
-    callable was provided`` and terminalise the whole run as failed. Skip the
-    fire up front instead (a clear, observable skip) so config never promises a
-    run it cannot deliver. Non-judge suites are unaffected: the ACTIVE-backend
-    probe runs only for a suite that actually carries an ``model_judge`` definition.
+    runner would persist an ``outcome='error'`` row per definition per case
+    (ADR 066 D18) and terminalise the run ``failed`` with every case excluded.
+    Skip the fire up front instead (a clear, observable skip) so config never
+    promises a run it cannot deliver. Non-judge suites are unaffected: the
+    ACTIVE-backend probe runs only for a suite that actually carries an
+    ``model_judge`` definition.
     """
     from sqlalchemy import select
 
