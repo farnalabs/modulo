@@ -737,16 +737,16 @@ routes:
         deprecated: false
 
     /admin/compliance/evidence-index:
-        name: admin-compliance-evidence-index
-        breadcrumb: Compliance Evidence Index
-        parent: /
-        product_map: [feat-evidence]
-        sidebar_group: monitor
-        sidebar_order: 10
-        type: page
-        <<: *community
-        required_permissions: [compliance.evidence_index.read]
-        deprecated: false
+         name: admin-compliance-evidence-index
+         breadcrumb: Compliance Evidence Index
+         parent: /
+         product_map: [feat-evidence]
+         sidebar_group:
+         sidebar_order:
+         type: page
+         <<: *community
+         required_permissions: [compliance.evidence_index.read]
+         deprecated: false
 
 
     /admin/errors:
@@ -2791,9 +2791,6 @@ elements:
       - testid: compliance-evidence-index-error
         type: element
         dynamic_testid: false
-      - testid: compliance-evidence-index-permission-denied
-        type: element
-        dynamic_testid: false
       - testid: compliance-evidence-index-incomplete
         type: element
         dynamic_testid: false
@@ -2810,12 +2807,6 @@ elements:
         type: element
         dynamic_testid: false
       - testid: compliance-evidence-index-frameworks
-        type: element
-        dynamic_testid: false
-      - testid: compliance-evidence-index-pack-published-at
-        type: element
-        dynamic_testid: false
-      - testid: compliance-evidence-index-generated-at
         type: element
         dynamic_testid: false
       - testid: compliance-evidence-index-coverage
