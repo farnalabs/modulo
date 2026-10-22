@@ -11,6 +11,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import EvidenceIndexView from '../views/EvidenceIndexView.vue'
+import { useEvidenceStore } from '../stores/evidence'
 
 type EvidenceIndex = components['schemas']['EvidenceIndex']
 
@@ -133,5 +134,79 @@ describe('EvidenceIndexView', () => {
     expect(wrapper.text()).toContain('Evidence index is temporarily unavailable.')
     expect(wrapper.text()).not.toContain('2026.02')
     expect(wrapper.find('[data-testid="evidence-index-refresh"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('renders the empty state when the index has no artefacts', async () => {
+    mockGet.mockResolvedValueOnce(success({ ...INDEX, artifacts: [] }))
+
+    const wrapper = mountView()
+    await settle()
+
+    expect(wrapper.text()).toContain('No indexed artefacts')
+    expect(wrapper.find('table').exists()).toBe(false)
+  })
+
+  it('renders an absent artefact with its reason and no record count', async () => {
+    mockGet.mockResolvedValueOnce(
+      success({
+        ...INDEX,
+        artifacts: [
+          {
+            ...INDEX.artifacts[0],
+            status: 'absent',
+            record_count: null,
+            absence_reason: 'Not produced yet',
+          },
+        ],
+      }),
+    )
+
+    const wrapper = mountView()
+    await settle()
+
+    expect(wrapper.text()).toContain('Not produced yet')
+    expect(wrapper.text()).toContain('—')
+  })
+
+  it('does not issue a second request while the first is still in flight', async () => {
+    let resolveRequest!: (value: unknown) => void
+    mockGet.mockReturnValue(new Promise((resolve) => { resolveRequest = resolve }))
+
+    const store = useEvidenceStore()
+    const first = store.fetchIndex()
+    await store.fetchIndex()
+
+    expect(mockGet).toHaveBeenCalledTimes(1)
+    expect(store.isLoading).toBe(true)
+
+    resolveRequest(success(INDEX))
+    await first
+    expect(store.isLoading).toBe(false)
+  })
+
+  it('surfaces the HTTP status when the problem detail has no message', async () => {
+    mockGet.mockResolvedValueOnce({
+      data: undefined,
+      error: { type: 'urn:problem:modulo:internal_error', title: 'Internal Error', status: 500, detail: '' },
+      response: { status: 500, ok: false },
+    })
+
+    const store = useEvidenceStore()
+    await store.fetchIndex()
+
+    expect(store.error).toBe('HTTP 500')
+  })
+
+  it('falls back to HTTP 0 when the response is missing entirely', async () => {
+    mockGet.mockResolvedValueOnce({
+      data: undefined,
+      error: { type: 'urn:problem:modulo:internal_error', title: 'Internal Error', status: 500, detail: '' },
+      response: undefined,
+    })
+
+    const store = useEvidenceStore()
+    await store.fetchIndex()
+
+    expect(store.error).toBe('HTTP 0')
   })
 })
