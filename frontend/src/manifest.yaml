@@ -2710,12 +2710,29 @@ elements:
       - testid: lock-icon
         type: element
         dynamic_testid: false
+    /admin/evidence:
+      - testid: evidence-index-page
+        type: element
+        dynamic_testid: false
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
+      - testid: evidence-index-refresh
+        type: button
+        dynamic_testid: false
+      - testid: evidence-index-loading
+        type: element
+        dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
     /admin/evidence-redaction:
       - testid: admin-evidence-redaction-add
         type: button
         dynamic_testid: false
       - testid: admin-evidence-redaction-server-note
         type: element
+
         dynamic_testid: false
       - testid: admin-evidence-redaction-fail-closed-note
         type: element

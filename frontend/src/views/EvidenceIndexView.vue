@@ -1,7 +1,7 @@
 <template>
   <div class="page-narrow space-y-6" data-testid="evidence-index-page">
     <PageHeader :title="$t('views.EvidenceIndexView.title')" :subtitle="$t('views.EvidenceIndexView.subtitle')">
-      <template #actions>
+      <template #right>
         <button
           type="button"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
