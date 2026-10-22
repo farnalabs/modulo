@@ -305,6 +305,198 @@ async def _org_capacity_deferred(
     return True
 
 
+RETRY_POLICY_MAX_RETRIES = 5
+"""Upper bound a ``retry_policy.max_retries`` may take (mirrors the API schema).
+
+Defined here — the dependency-free dispatch seam every granting path can
+import — and re-exported by ``pipeline_engine.executor`` as
+``_RETRY_POLICY_MAX_RETRIES`` so there is ONE bound, not a second copy.
+"""
+
+
+def _non_negative_int(value: Any) -> int:
+    """Coerce a possibly-None / non-int counter to a non-negative int."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(0, value)
+
+
+def retry_executions_consumed(*, node_attempt_count: Any = 0, claim_count: Any = 0) -> int:
+    """The ONE measure of executions a run/node has already consumed (FAR-2076).
+
+    ``max(node_attempt_count, claim_count - 1)`` — the counter the FAR-369
+    watchdog re-dispatch already uses to bound both node executions
+    (``node_attempt_count``) and PRE-node hangs (each of which consumes a SAQ
+    claim without incrementing the node counter, so ``claim_count - 1`` — the
+    number of PRIOR re-claims — grows once per retry cycle). It is stated here
+    ONCE so every path that can grant another execution (the policy
+    re-dispatch, the watchdog, the worker-loss handback, the reconcile
+    re-enqueue and the SAQ transient retry) compares against the same count.
+
+    Deliberately NOT applied to a run that has not executed: callers that can
+    see a capacity-deferred row (``claim_count`` grows while the executor
+    never ran a node) must exclude it before consulting this measure — see
+    ``cron_helpers._reconcile_one_row``'s capacity-marker exclusion.
+
+    Lives in ``dispatch`` rather than in ``worker_handoff`` (where the same
+    expression originated) because the API-reachable seams that need it —
+    ``cron_helpers`` and this module — must not transit ``worker_handoff``:
+    that module imports ``pipeline_engine.executor``, which pulls LangGraph,
+    and the ``api -> langgraph`` import-linter contract forbids the chain.
+    """
+
+    return max(_non_negative_int(node_attempt_count), max(0, _non_negative_int(claim_count) - 1))
+
+
+def retry_policy_max_retries(policy: Any) -> int | None:
+    """The policy's validated ``max_retries``, or None when it imposes no budget.
+
+    The ONE validation of the budget field, shared by
+    ``pipeline_engine.executor._retry_after_policy`` (which turns a valid
+    budget into an event-matched retry decision) and by
+    :func:`retry_max_executions` (which turns it into the execution ceiling
+    every retry path is bounded by, FAR-2076).
+
+    Returns ``None`` for a non-dict policy, an absent ``max_retries`` key, a
+    bool / non-int / out-of-range value — the fail-closed "no retry" shapes
+    the caller has always treated as no budget. An EXPLICIT ``0`` is returned
+    as ``0``: it is a valid policy value, and while ``_retry_after_policy``
+    treats it as "no retry", the ceiling consumer needs to know the policy
+    really did authorise zero retries (so the transport cannot grant any).
+    """
+    if not isinstance(policy, dict):
+        return None
+    max_retries = policy.get("max_retries")
+    if isinstance(max_retries, bool) or not isinstance(max_retries, int):
+        return None
+    if not 0 <= max_retries <= RETRY_POLICY_MAX_RETRIES:
+        return None
+    return max_retries
+
+
+def retry_max_executions(policy: Any) -> int | None:
+    """Execution ceiling a ``retry_policy`` imposes (``1 + max_retries``), or None.
+
+    ``None`` means "no budget to enforce": an absent policy, a malformed
+    ``max_retries``, or a policy whose ``max_retries`` key is absent — in every
+    one of those cases existing behaviour is preserved. An EXPLICIT
+    ``max_retries: 0`` (a real, well-formed policy) yields ``1``: the run may
+    execute once and nothing may grant it a second execution.
+
+    This is the ceiling whichever path grants an execution — it deliberately
+    does NOT consult the policy's ``on`` events. A path that has already
+    matched an event (the policy re-dispatch, the watchdog) keeps its
+    event-specific budget; this ceiling only answers "how many executions can
+    this policy ever authorise".
+    """
+    max_retries = retry_policy_max_retries(policy)
+    if max_retries is None:
+        return None
+    return max_retries + 1
+
+
+def retry_budget_exhausted(
+    policy: Any,
+    *,
+    node_attempt_count: Any = 0,
+    claim_count: Any = 0,
+) -> bool:
+    """Has the policy's execution ceiling already been reached (FAR-2076)?
+
+    ``False`` when the policy imposes no ceiling (no policy / malformed
+    budget), preserving existing behaviour. Uses
+    :func:`retry_executions_consumed` so the comparison can never drift from
+    the other granting paths' bound.
+    """
+    ceiling = retry_max_executions(policy)
+    if ceiling is None:
+        return False
+    return retry_executions_consumed(node_attempt_count=node_attempt_count, claim_count=claim_count) >= ceiling
+
+
+def clamp_saq_retries(
+    policy: Any,
+    *,
+    node_attempt_count: Any = 0,
+    claim_count: Any = 0,
+    configured: int,
+) -> int:
+    """Bound the SAQ transport retry allowance by the policy budget (FAR-2076).
+
+    SAQ's ``retries`` is the number of RE-attempts after the first execution,
+    so a job enqueued with ``retries=N`` can execute a run up to ``N + 1``
+    times. Left at ``settings.saq_run_retries`` (5) it silently outran a
+    pipeline's ``retry_policy.max_retries`` (2) — the transport granted
+    executions the policy had already refused.
+
+    Returns the configured value unchanged when the policy imposes no ceiling
+    (existing behaviour preserved), else ``min(configured, remaining - 1)``
+    where ``remaining`` is the executions the ceiling still permits including
+    the one this enqueue creates. Never negative: a run already at or beyond
+    its ceiling is enqueued with zero transport retries (the reconcile
+    backstop terminal-fails that shape instead of re-dispatching it).
+    """
+    ceiling = retry_max_executions(policy)
+    if ceiling is None:
+        return configured
+    remaining = ceiling - retry_executions_consumed(
+        node_attempt_count=node_attempt_count,
+        claim_count=claim_count,
+    )
+    return max(0, min(configured, remaining - 1))
+
+
+async def _saq_retries_for_run(session: AsyncSession, run_id: uuid.UUID, *, job_type: str) -> int:
+    """Transport retry allowance for one enqueue, bounded by the policy (FAR-2076).
+
+    SAQ's ``retries`` is a RE-attempt count, so ``retries=N`` lets the job
+    execute the run up to ``N + 1`` times. Left at ``settings.saq_run_retries``
+    it silently outran a pipeline's ``retry_policy.max_retries`` — the
+    transport granted executions the policy had already refused (a run with
+    ``max_retries: 2`` reached attempt 4). The clamp comes from the ONE shared
+    helper (``worker_handoff.clamp_saq_retries``).
+
+    ``resume_run`` is NOT clamped: a resume continues from the run's LangGraph
+    checkpoint rather than re-executing the graph, and the retry policy does
+    not govern resumes. A load failure fails OPEN to the configured value —
+    the clamp is a budget guard, never an admission authority.
+    """
+    from modulo.db.crud.run import get_run
+    from modulo.db.models.pipeline import Pipeline
+    from modulo.db.soft_delete import include_soft_deleted
+
+    configured = int(get_settings().saq_run_retries)
+    if job_type == "resume_run":
+        return configured
+    try:
+        run = await get_run(session, run_id)
+        if run is None:
+            return configured
+        # FAR-1025 parity with the capacity checks: an in-flight run's pipeline
+        # may be soft-deleted after dispatch.
+        pipeline = (
+            await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))
+        ).scalar_one_or_none()
+        policy = getattr(pipeline, "retry_policy", None) if pipeline is not None else None
+        return clamp_saq_retries(
+            policy,
+            node_attempt_count=getattr(run, "node_attempt_count", 0),
+            claim_count=getattr(run, "claim_count", 0),
+            configured=configured,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "dispatch_run: could not resolve the retry-policy budget for run %s — "
+            "using the configured SAQ retries (%d)",
+            run_id,
+            configured,
+            exc_info=True,
+        )
+        return configured
+
+
 async def _record_dispatched(session: AsyncSession, run_id: uuid.UUID) -> None:
     """Write dispatched_at BEFORE enqueue (F3e).
 
@@ -455,6 +647,7 @@ async def _enqueue_saq(
     resume_data: dict[str, Any] | None,
     *,
     key_suffix: str | None = None,
+    retries: int | None = None,
 ) -> tuple[str, bool]:
     """Enqueue a run job to SAQ. Returns (job_id, deduped).
 
@@ -487,7 +680,7 @@ async def _enqueue_saq(
         key=key,
         timeout=SAQ_RUN_TIMEOUT,
         heartbeat=settings.saq_job_heartbeat,
-        retries=settings.saq_run_retries,
+        retries=settings.saq_run_retries if retries is None else retries,
         retry_delay=settings.saq_retry_delay,
         retry_backoff=False,
         ttl=SAQ_RUN_TTL,
@@ -587,6 +780,8 @@ async def _enqueue_with_retry(
     resume_data: dict[str, Any] | None,
     key_suffix: str | None,
     fail_fast: bool,
+    *,
+    retries: int,
 ) -> tuple[str, str | None]:
     """Enqueue the run job to SAQ with the configured retry policy.
 
@@ -599,7 +794,7 @@ async def _enqueue_with_retry(
     """
     try:
         job_id, deduped = await _enqueue_saq(
-            str(run_id), str(org_id), queue_name, job_type, resume_data, key_suffix=key_suffix
+            str(run_id), str(org_id), queue_name, job_type, resume_data, key_suffix=key_suffix, retries=retries
         )
     except asyncio.CancelledError:
         raise
@@ -609,7 +804,9 @@ async def _enqueue_with_retry(
             await _mark_enqueue_failed_session(run_id, org_id)
             return ("enqueue_failed", None)
         _log.warning("dispatch_run: SAQ enqueue failed for run %s: %s", run_id, exc)
-        retried = await _retry_enqueue_saq(run_id, org_id, queue_name, job_type, resume_data, key_suffix=key_suffix)
+        retried = await _retry_enqueue_saq(
+            run_id, org_id, queue_name, job_type, resume_data, key_suffix=key_suffix, retries=retries
+        )
         if retried is None:
             await _mark_enqueue_failed_session(run_id, org_id)
             return ("enqueue_failed", None)
@@ -626,6 +823,7 @@ async def _retry_enqueue_saq(
     resume_data: dict[str, Any] | None,
     *,
     key_suffix: str | None,
+    retries: int,
 ) -> tuple[str, bool] | None:
     """Retry the SAQ enqueue a bounded number of times.
 
@@ -638,7 +836,13 @@ async def _retry_enqueue_saq(
         await asyncio.sleep(attempt)
         try:
             return await _enqueue_saq(
-                str(run_id), str(org_id), queue_name, job_type, resume_data, key_suffix=key_suffix
+                str(run_id),
+                str(org_id),
+                queue_name,
+                job_type,
+                resume_data,
+                key_suffix=key_suffix,
+                retries=retries,
             )
         except asyncio.CancelledError:
             raise
@@ -700,6 +904,11 @@ async def dispatch_run(
     rid = uuid.UUID(str(run_id))
     oid = uuid.UUID(str(org_id))
     queue_name = queue or settings.saq_runs_queue
+    # FAR-2076: transport retry allowance, clamped to the pipeline retry
+    # policy's remaining execution budget. Resolved inside the admission
+    # transaction below; initialised to the configured value so every early
+    # return / rollback path keeps the historical allowance until it is known.
+    saq_retries = int(settings.saq_run_retries)
 
     # Capacity check FIRST (plan F3b/F3e). The run itself is excluded from the
     # count so a resume never counts against its own slot; a capacity-deferred
@@ -728,6 +937,7 @@ async def dispatch_run(
                 # refused here; this also hardens resumes against terminal runs.
                 _log.info("dispatch_run: run %s already terminal (%s) — not dispatched", rid, run.status)
                 return ("terminal_skipped", None)
+            saq_retries = await _saq_retries_for_run(session, rid, job_type=job_type)
             if await _capacity_deferred(session, rid):
                 _log.info("dispatch_run: run %s capacity-deferred (no enqueue)", rid)
                 return ("deferred", None)
@@ -802,4 +1012,6 @@ async def dispatch_run(
     finally:
         await session.close()
 
-    return await _enqueue_with_retry(rid, oid, queue_name, job_type, resume_data, key_suffix, fail_fast)
+    return await _enqueue_with_retry(
+        rid, oid, queue_name, job_type, resume_data, key_suffix, fail_fast, retries=saq_retries
+    )

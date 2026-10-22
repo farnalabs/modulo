@@ -344,6 +344,22 @@ ENQUEUE_FAILED_TTL_BACKSTOP_MINUTES = 60
 
 _DISPATCH_FAILED_ERROR_CODE = "dispatch_failed"
 
+# FAR-2076: the distinct, grep-able code the reconcile re-enqueue backstop
+# writes when it finds a pending run ALREADY beyond its pipeline's retry
+# budget. Before this the backstop re-dispatched any pending row whose SAQ job
+# was gone, budget-blind: a pipeline with ``max_retries: 2`` (3 executions)
+# reached attempt 4 because three mechanisms each granted an execution against
+# a different budget. Terminal-failing (rather than silently skipping) is the
+# honest outcome — skipping would leave the row pending until the age backstop
+# hours later, counted as no_progress and misattributed.
+_RETRY_BUDGET_EXHAUSTED_ERROR_CODE = "retry_budget_exhausted"
+
+# The capacity-block reason markers (mirrors ``_reconcile_capacity_marker_exclusion``
+# and ``db.crud.run``'s constants). A pending row carrying one of these was
+# CLAIMED then demoted because a slot was full — the claim never executed a
+# node — so the retry-budget gate must not count ``claim_count`` against it.
+_CAPACITY_DEFERRAL_ERROR_CODES = ("org_capacity_limited", "pipeline_capacity")
+
 # Synthetic error_detail for the genuinely detail-less failure writers (P7'):
 # applied ONLY where detail is currently NULL — never overwrites real detail.
 # Derived from the ERROR_CODE_REGISTRY guidance in
@@ -732,6 +748,9 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["node_started_executor_lost"] = stats.get("node_started_executor_lost", 0)
     # FAR-1999: runs reaped at their durable node deadline (additive .get()).
     _dispatcher_reconcile_stats["node_deadline_reaped"] = stats.get("node_deadline_reaped", 0)
+    # FAR-2076: pending runs terminal-failed because the re-enqueue backstop
+    # found them beyond their retry_policy budget (additive .get()).
+    _dispatcher_reconcile_stats["retry_budget_exhausted"] = stats.get("retry_budget_exhausted", 0)
     # Terminalizer counters (and their healthz aliases) derive from the
     # registry (FAR-720): a new terminalizer registers once below and is
     # carried through here, the module dict, the summary and the telemetry
@@ -7677,6 +7696,61 @@ async def _fail_run_dispatch_failed(session: AsyncSession, run_id: uuid.UUID, or
     )
 
 
+async def _fail_retry_budget_exhausted_run(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    *,
+    ceiling: int,
+) -> bool:
+    """FAR-2076: terminal-fail a pending run the backstop found beyond budget.
+
+    Called from ``_reconcile_one_row`` for a pending ``execute_run`` row whose
+    pipeline retry policy no longer permits another execution. The alternative
+    — silently skipping — would leave the row pending until the ~135-minute age
+    backstop collected it as ``no_progress``, hiding the real cause; the
+    alternative the defect consisted of — re-dispatching — executed the run
+    past its policy.
+
+    The UPDATE is self-contained and re-checks the premise on the row itself, so
+    a row that advanced between the scan and this write is never killed:
+
+    * ``status='pending'`` — a claimed/running/terminal row is untouched;
+    * ``GREATEST(node_attempt_count, claim_count - 1) >= :ceiling`` — the SAME
+      ``max(node_attempt_count, claim_count - 1)`` measure as
+      ``worker_handoff.retry_executions_consumed`` (stated in SQL because this
+      is a conditional single-row UPDATE), where ``:ceiling`` is
+      ``1 + max_retries``.
+
+    Capacity-marked rows (``org_capacity_limited`` / ``pipeline_capacity``)
+    are excluded by the caller: a capacity demotion consumes a SAQ claim
+    without executing a node, so counting it as an execution would terminal-fail
+    a healthy run that is merely waiting for a slot.
+
+    Returns ``True`` when the row was terminalised by this call.
+    """
+    result = await session.execute(
+        text(
+            "UPDATE runs SET status='failed', error_code=:code, error_detail=:detail, completed_at=now() "
+            "WHERE id=:rid AND organisation_id=:oid AND status='pending' "
+            "AND GREATEST(COALESCE(node_attempt_count, 0), "
+            "GREATEST(COALESCE(claim_count, 0) - 1, 0)) >= :ceiling"
+        ),
+        {
+            "rid": str(run_id),
+            "oid": str(org_id),
+            "code": _RETRY_BUDGET_EXHAUSTED_ERROR_CODE,
+            "detail": (
+                "Run not re-dispatched: its retry_policy budget is exhausted "
+                f"(executions already consumed reached the ceiling of {ceiling}); "
+                "dispatcher_reconcile found it pending with no SAQ job."
+            ),
+            "ceiling": ceiling,
+        },
+    )
+    return int(getattr(result, "rowcount", 0) or 0) > 0
+
+
 @dataclass(frozen=True)
 class ReconcileTerminalizer:
     """Declarative descriptor for one dispatcher_reconcile terminalizer class.
@@ -9233,6 +9307,9 @@ def _dispatcher_summary() -> dict[str, Any]:
         "runner_capacity_violations": 0,
         "enqueue_failed_redispatched": 0,
         "enqueue_failed_capped": 0,
+        # FAR-2076: pending runs the re-enqueue backstop found beyond their
+        # retry_policy budget and terminal-failed instead of re-dispatching.
+        "retry_budget_exhausted": 0,
         "capacity_deferred": 0,
         # FAR-1649: running/pending rows whose durable phase proves a node
         # STARTED that the row-level belt held back from ``execute_run``
@@ -9574,6 +9651,14 @@ async def _reconcile_org(
                 _checkpoint_absent_expr().label("checkpoints_absent"),
                 Run.started_at,
                 Run.claim_count,
+                # FAR-2076: the executions-consumed measure the retry-budget
+                # gate compares against the policy ceiling —
+                # ``worker_handoff.retry_executions_consumed`` reads exactly
+                # these two counters.
+                Run.node_attempt_count,
+                # FAR-2076: the gate excludes capacity-marked pending rows (a
+                # capacity demotion consumes a claim without executing a node).
+                Run.error_code,
                 Run.dispatcher,
                 # FAR-1649: consumed by the row-level nodeless recheck
                 # (_is_nodeless_zombie_row) — a durably-recorded first-node
@@ -11088,6 +11173,87 @@ async def _reconcile_one_row(
             getattr(row, "claim_count", None),
         )
         return enqueue_failed_redispatched
+
+    # FAR-2076 — the retry-budget gate on the re-enqueue backstop.
+    #
+    # Every pending ``execute_run`` re-dispatch here grants one more execution.
+    # Each mechanism that produced the pending row consulted the
+    # ``retry_policy`` against a DIFFERENT budget (or, like this backstop,
+    # counted nothing at all), so a run could execute past ``1 + max_retries``:
+    # a pipeline with ``max_retries: 2`` reached attempt 4. This is the LAST
+    # gate before the enqueue, so it bounds every producer — the fenced
+    # pending-reset (policy / transient retry / watchdog), the FAR-1627
+    # worker-shutdown handback and the enqueue-failed leg.
+    #
+    # A row ALREADY beyond budget is terminal-failed with the distinct
+    # ``retry_budget_exhausted`` code instead of re-dispatched — and instead
+    # of being silently skipped, which would strand it until the age backstop
+    # and misreport it as ``no_progress``. A within-budget row keeps the exact
+    # recovery behaviour this leg exists for (durability preserved).
+    #
+    # Capacity-marked pending rows are EXCLUDED: a capacity demotion consumes
+    # a SAQ claim while executing no node, so ``claim_count - 1`` would count
+    # a non-execution against the budget and terminal-fail a healthy run that
+    # is merely waiting for a free slot. Those rows consume no execution
+    # budget, so they cannot violate the invariant. Every OTHER pending
+    # ``execute_run`` row is in scope — including the FAR-1627 worker-shutdown
+    # handback (which stamps ``harness.worker_lost``) and the enqueue-failed
+    # recovery — so no producer can grant an execution past the ceiling.
+    # A never-dispatched row (``claim_count = 0``) consumes nothing and is
+    # always allowed.
+    is_pending_execution = (
+        row.status == "pending"
+        and _reconcile_job_type(row.status) == "execute_run"
+        and getattr(row, "error_code", None) not in _CAPACITY_DEFERRAL_ERROR_CODES
+    )
+    if is_pending_execution:
+        from modulo.core.dispatch import (
+            retry_budget_exhausted,
+            retry_executions_consumed,
+            retry_max_executions,
+        )
+
+        policy = getattr(row, "retry_policy", None)
+        ceiling = retry_max_executions(policy)
+        # The authority is the shared predicate — it can never disagree with
+        # the bound the other granting paths enforce. ``ceiling`` is only
+        # needed for the terminal detail, and is non-None whenever the
+        # predicate is True (a policy with no usable budget yields None and
+        # keeps today's behaviour).
+        if ceiling is not None and retry_budget_exhausted(
+            policy,
+            node_attempt_count=getattr(row, "node_attempt_count", 0),
+            claim_count=getattr(row, "claim_count", 0),
+        ):
+            consumed = retry_executions_consumed(
+                node_attempt_count=getattr(row, "node_attempt_count", 0),
+                claim_count=getattr(row, "claim_count", 0),
+            )
+            terminalized = await _fail_retry_budget_exhausted_run(
+                session,
+                row.id,
+                org_id,
+                ceiling=ceiling,
+            )
+            if terminalized:
+                summary["retry_budget_exhausted"] = summary.get("retry_budget_exhausted", 0) + 1
+                terminalized_run_ids.append((row.id, org_id))
+                _log.warning(
+                    "dispatcher_reconcile.retry_budget_exhausted run=%s org=%s "
+                    "consumed=%d ceiling=%d — pending run beyond its retry_policy budget; "
+                    "terminal-failed instead of re-dispatched",
+                    row.id,
+                    org_id,
+                    consumed,
+                    ceiling,
+                )
+            else:
+                # The guarded UPDATE matched no row: the row advanced between
+                # the scan and this write (claimed, terminal, or already
+                # re-counted). Never fall through to a re-dispatch on a premise
+                # that no longer holds — the next tick re-evaluates.
+                summary["skipped"] += 1
+            return enqueue_failed_redispatched
 
     # Discriminator (F6a): awaiting_human/claimed/hitl_parked -> resume_run;
     # pending/running -> execute_run. Re-dispatch with a FRESH
