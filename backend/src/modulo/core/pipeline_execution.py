@@ -31,11 +31,11 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from langgraph.errors import NodeCancelledError
-from sqlalchemy import bindparam, text
+from sqlalchemy import DateTime, bindparam, text
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, async_sessionmaker
 
@@ -3214,6 +3214,76 @@ async def _re_dispatch_capacity_blocked(run_id: str, org_id: str) -> str:
         return "failed"
 
 
+# 2026-10-22 leak: a ``running`` run with NO dispatcher identity is invisible to
+# every liveness arm, and once a node has STARTED nothing ever reclaims it.
+#
+# The observed shape (a deploy restarted the app+worker while ten runs were in
+# flight): ``status='running'``, ``dispatcher IS NULL``, ``dispatched_at IS
+# NULL``, ``dispatch_phase='first_node_dispatched'``, ``claim_count=2``,
+# ``nodes=[]``. Five sibling runs were terminal-failed promptly by the graceful
+# shutdown handoff (``worker_handoff``); these six were not, and stayed
+# ``running`` for 70+ minutes holding every concurrency slot until a human
+# cancelled them.
+#
+# Why no existing arm collected that shape (each verified by reading its WHERE):
+#   * this sweep's legacy ``worker_lost`` arm requires ``claim_count >= 5`` AND
+#     ``heartbeat_at < now() - window`` — the row has claim_count 2 and a NULL
+#     heartbeat (``NULL < ...`` is never true, so a NULL heartbeat is invisible);
+#   * ``run_admission._RECONCILE_RUNS_SQL`` deliberately EXCLUDES a node-started
+#     row from its retry-reset arm (FAR-1649: re-dispatching re-executes the
+#     started node) and only terminal-fails it once ``claim_count`` exceeds the
+#     retry budget — which never happens, because the exclusion means the row is
+#     never re-claimed, so its claim_count never grows;
+#   * ``run_admission._REAP_DEAD_HEARTBEAT_NODE_STARTED_SQL`` (FAR-2005), the
+#     SAQ zero-progress terminaliser and every ``dispatcher_reconcile`` RUNNING
+#     leg are scoped ``dispatcher='saq'``;
+#   * the B5 claim-cap arm needs ``claim_count >= SAQ_RUN_CLAIM_CAP`` (20).
+# A NULL ``dispatcher`` is a REACHABLE running state, not a corrupt one: dispatch
+# stamps it in a separate best-effort write AFTER the enqueue
+# (``dispatch._record_saq_job``), and a 55P03 expiry there deliberately leaves the
+# run ``dispatcher IS NULL`` for an already-enqueued job; a re-claim of a reset
+# row (heartbeat-stale reset / worker handoff, both of which clear ``dispatcher``)
+# likewise runs with no dispatcher identity.
+#
+# The fix therefore lives HERE, in the arm whose window is already the non-SAQ
+# one: a node-started run with no SAQ dispatcher identity and a dead heartbeat is
+# terminal-failed ``harness.worker_lost`` — the truthful code for "the executor is
+# gone" (the same code the shutdown handoff stamps), never a re-dispatch
+# (FAR-1649). It reuses this sweep's existing terminalisation path, so journeys,
+# the daily fact and the audit record are written exactly as for every other arm.
+#
+# Grace: the arm's OWN ``wl_window`` (``SAQ_WORKER_LOST_WINDOW``, 600s = twenty
+# missed 30s heartbeats). The FAR-2005 300s bound is deliberately NOT reused:
+# that bound's safety argument is explicitly scoped to ``dispatcher='saq'`` rows
+# whose heartbeat contract is known, whereas this class carries no dispatcher
+# identity — so the wider, already-established worker-lost window is the honest
+# one. Both timestamps are BOUND datetimes (not ``now()`` arithmetic) so the
+# predicate is executable under the in-memory SQLite fixture — the same technique
+# ``run_admission._REAP_DEAD_HEARTBEAT_NODE_STARTED_SQL`` uses.
+_ORPHANED_RUN_DETAIL = (
+    "Worker lost: this node-started run carries no SAQ dispatcher identity (so the "
+    "dispatcher-scoped recovery arms cannot see it) and its executor stopped "
+    "heartbeating past the worker-lost window; run terminal-failed without "
+    "re-dispatch (a started node may already have executed side effects)."
+)
+
+_SWEEP_ORPHANED_RUNS_SQL = text(
+    "UPDATE runs SET status = 'failed', error_code = 'harness.worker_lost', "
+    "error_detail = :detail, completed_at = :completed_at "
+    "WHERE status = 'running' "
+    "AND organisation_id = :oid "
+    "AND cancellation_requested = false "
+    "AND guardrail_override_resume_pending = false "
+    "AND (dispatcher IS NULL OR dispatcher != 'saq') "
+    "AND dispatch_phase = :first_node_phase "
+    "AND COALESCE(heartbeat_at, started_at, created_at) < :orphan_cutoff "
+    "RETURNING id"
+).bindparams(
+    bindparam("orphan_cutoff", type_=DateTime(timezone=True)),
+    bindparam("completed_at", type_=DateTime(timezone=True)),
+)
+
+
 async def _sweep_org_stale_runs(
     conn: Any,
     *,
@@ -3223,6 +3293,7 @@ async def _sweep_org_stale_runs(
     stranded_rows: list[Any],
     terminalised_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
     queue_expired_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    orphaned_run_ids: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
 ) -> tuple[int, int, int]:
     """Run one org's stale-run UPDATE set; return (never, queue_expired, lost) counts.
 
@@ -3231,8 +3302,15 @@ async def _sweep_org_stale_runs(
     can post-process them once the transaction commits. Extracted from
     :func:`stale_run_recovery_sweep` to keep that function's control flow shallow.
 
+    ``orphaned_run_ids`` is an OPTIONAL collector: the node-started / no-SAQ-
+    dispatcher orphans terminalised by :data:`_SWEEP_ORPHANED_RUNS_SQL` are
+    appended to ``terminalised_run_ids`` unconditionally (so they get the same
+    journeys + daily fact + audit advance as every other arm); the caller that
+    wants to report them under their own counter also passes a list here. A
+    caller that does not care about the split still gets the terminalisation.
+
     FAR-1601 (row-lock bound, 55P03 contract): the bound is issued FIRST in
-    the org transaction, so every one of the four ``UPDATE runs`` branches
+    the org transaction, so every one of the five ``UPDATE runs`` branches
     below waits at most ``mutation_row_lock_timeout_ms`` for a contended row
     instead of parking the sweep (and its transaction's row locks) unbounded.
     A 55P03 PROPAGATES out of this helper and out of
@@ -3247,7 +3325,7 @@ async def _sweep_org_stale_runs(
     tick re-runs the same UPDATE set from scratch.
     """
     # FAR-1601: bound FIRST — before the RLS set_config and before any of the
-    # four UPDATEs take their row locks.
+    # five UPDATEs take their row locks.
     await _bound_hot_runs_row_lock(conn)
     await conn.execute(
         text(_SQL_SET_ORG_ID),
@@ -3366,6 +3444,28 @@ async def _sweep_org_stale_runs(
     )
     lost_count = lost_result.rowcount or 0
     terminalised_run_ids.extend((row[0], org_id) for row in lost_result.all())
+
+    # 2026-10-22 leak (see :data:`_SWEEP_ORPHANED_RUNS_SQL`): a node-started run
+    # with no SAQ dispatcher identity is out of every other arm's scope, so this
+    # arm is its ONLY terminaliser. Runs AFTER the legacy worker_lost branch: the
+    # legacy arm's stricter shape (claim_count >= 5, non-NULL heartbeat) keeps its
+    # own code, and the two can never double-write the same row (this statement
+    # re-checks ``status = 'running'``).
+    orphan_now = datetime.now(UTC)
+    orphaned_result = await conn.execute(
+        _SWEEP_ORPHANED_RUNS_SQL,
+        {
+            "oid": str(org_id),
+            "first_node_phase": PHASE_FIRST_NODE_DISPATCHED,
+            "orphan_cutoff": orphan_now - timedelta(seconds=wl_window),
+            "completed_at": orphan_now,
+            "detail": _ORPHANED_RUN_DETAIL,
+        },
+    )
+    orphaned_rows = orphaned_result.all()
+    terminalised_run_ids.extend((row[0], org_id) for row in orphaned_rows)
+    if orphaned_run_ids is not None:
+        orphaned_run_ids.extend((row[0], org_id) for row in orphaned_rows)
     return never_count, queue_expired_count, lost_count
 
 
@@ -3592,6 +3692,16 @@ async def stale_run_recovery_sweep(
       rows (their own TTL).
     - Running runs with a heartbeat older than the worker-lost window and
       5+ claims are marked ``failed`` with ``worker_lost``.
+    - Node-STARTED running runs that carry NO SAQ dispatcher identity
+      (``dispatcher IS NULL`` or a foreign value) whose liveness reference
+      (``COALESCE(heartbeat_at, started_at, created_at)``) is older than the
+      same worker-lost window are marked ``failed`` with ``harness.worker_lost``
+      (:data:`_SWEEP_ORPHANED_RUNS_SQL`). This is the ONLY arm that can reclaim
+      that shape — the reconcile retry-reset arm excludes node-started rows
+      (FAR-1649) and every dispatcher-scoped arm requires ``dispatcher='saq'`` —
+      so without it such a run stays ``running`` forever, holding a concurrency
+      slot. Counted separately as ``worker_orphaned_swept``; terminalised
+      without re-dispatch (a started node may already have run).
     - FAR-1715: running ``dispatcher='saq'`` runs with ZERO node progress
       whose ``started_at`` is older than the shared zero-progress age bound
       (Settings ``saq_zero_progress_max_age_minutes``, ~135m at the default)
@@ -3601,7 +3711,7 @@ async def stale_run_recovery_sweep(
       (:func:`_sweep_org_saq_zero_progress_runs`). The ``status='running'``
       guard makes double-firing with the reconcile path a no-op.
     - Every run terminalised by the sweep (never_dispatched / queue.expired /
-      worker_lost / saq zero-progress) has its journeys advanced from its
+      worker_lost / worker_orphaned / saq zero-progress) has its journeys advanced from its
       CREATE-STAMPED refs
       (FAR-143 follow-up) — the raw UPDATEs never run ``finalize_cost``, so
       without this the swept runs' journeys would never move. Fail-open per
@@ -3652,6 +3762,7 @@ async def stale_run_recovery_sweep(
     )
     never_count = 0
     lost_count = 0
+    orphaned_count = 0
     queue_expired_count = 0
     zero_progress_count = 0
     stranded_rows: list[Any] = []
@@ -3662,6 +3773,10 @@ async def stale_run_recovery_sweep(
     # failure) and are advanced with that status so they never count as a
     # failed journey cycle.
     queue_expired_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
+    # 2026-10-22: the node-started / no-SAQ-dispatcher orphans reclaimed by
+    # :data:`_SWEEP_ORPHANED_RUNS_SQL`, reported under their own counter (they
+    # also join ``terminalised_run_ids`` above for the advance).
+    orphaned_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
     try:
         # Collect all org ids FIRST in system context (organisations is the
         # root table — the app role owns it, owner bypasses RLS). The sweep's
@@ -3677,6 +3792,7 @@ async def stale_run_recovery_sweep(
             return {
                 "never_dispatched_swept": 0,
                 "worker_lost_swept": 0,
+                "worker_orphaned_swept": 0,
                 "queue_expired_swept": 0,
                 "saq_zero_progress_swept": 0,
                 "stranded_capacity_redispatched": 0,
@@ -3684,6 +3800,11 @@ async def stale_run_recovery_sweep(
             }
 
         for org_id in org_ids:
+            # Orphan ids are collected INSIDE the org transaction; count only the
+            # delta from an org whose transaction COMMITTED (same truthfulness
+            # rule as the per-arm counters below — a rolled-back org swept
+            # nothing).
+            orphaned_before_org = len(orphaned_run_ids)
             async with async_engine.connect() as conn, conn.begin():
                 never_delta, queue_expired_delta, lost_delta = await _sweep_org_stale_runs(
                     conn,
@@ -3693,6 +3814,7 @@ async def stale_run_recovery_sweep(
                     stranded_rows=stranded_rows,
                     terminalised_run_ids=terminalised_run_ids,
                     queue_expired_run_ids=queue_expired_run_ids,
+                    orphaned_run_ids=orphaned_run_ids,
                 )
                 # FAR-1715: the independent SAQ zero-progress branch runs in
                 # the SAME per-org transaction, after the legacy branches (its
@@ -3709,6 +3831,7 @@ async def stale_run_recovery_sweep(
                 queue_expired_count += queue_expired_delta
                 lost_count += lost_delta
                 zero_progress_count += zero_progress_delta
+            orphaned_count += len(orphaned_run_ids) - orphaned_before_org
         stranded_count = len(stranded_rows)
 
         # Re-dispatch AFTER each org's sweep transaction commits so dispatch_run's
@@ -3728,13 +3851,15 @@ async def stale_run_recovery_sweep(
         for run_id, run_org_id in queue_expired_run_ids:
             await _advance_terminalised_run(async_engine, run_id, run_org_id, status="rejected")
 
-        if never_count or lost_count or queue_expired_count or zero_progress_count or stranded_count:
+        if never_count or lost_count or orphaned_count or queue_expired_count or zero_progress_count or stranded_count:
             _log.info(
                 "Stale run recovery: %d never-dispatched, %d queue-expired, %d worker-lost, "
+                "%d worker-orphaned (no SAQ dispatcher identity), "
                 "%d saq zero-progress runs swept, %d stranded capacity-blocked runs re-dispatched (%s)",
                 never_count,
                 queue_expired_count,
                 lost_count,
+                orphaned_count,
                 zero_progress_count,
                 stranded_count,
                 redispatch_outcomes,
@@ -3742,6 +3867,7 @@ async def stale_run_recovery_sweep(
         return {
             "never_dispatched_swept": never_count,
             "worker_lost_swept": lost_count,
+            "worker_orphaned_swept": orphaned_count,
             "queue_expired_swept": queue_expired_count,
             "saq_zero_progress_swept": zero_progress_count,
             "stranded_capacity_redispatched": stranded_count,
@@ -3760,6 +3886,7 @@ async def stale_run_recovery_sweep(
         return {
             "never_dispatched_swept": never_count,
             "worker_lost_swept": lost_count,
+            "worker_orphaned_swept": orphaned_count,
             "queue_expired_swept": queue_expired_count,
             "saq_zero_progress_swept": zero_progress_count,
             "stranded_capacity_redispatched": 0,
