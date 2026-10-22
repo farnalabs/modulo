@@ -886,6 +886,14 @@ export async function enforceRoleTierVisibility(
     return { name: 'dashboard' }
   }
 
+  if (to.meta?.requiredPermissions?.length) {
+    const planStore = usePlanStore()
+    await planStore.fetchPermissions()
+    if (!to.meta.requiredPermissions.some((permission) => planStore.userPermissions.includes(permission))) {
+      return { name: 'dashboard' }
+    }
+  }
+
   if (to.meta?.requiredRoles?.length) {
     const orgRole = payload?.org_role
     if (typeof orgRole !== 'string' || !to.meta.requiredRoles.includes(orgRole)) {
@@ -951,7 +959,12 @@ async function enforceManifestGate(
   to: RouteLocationTarget,
   token: string,
 ): Promise<{ name: string } | true> {
-  if (to.meta?.requiresSystemAdmin || to.meta?.requiredRoles?.length || to.meta?.requiredTier) {
+  if (
+    to.meta?.requiresSystemAdmin ||
+    to.meta?.requiredRoles?.length ||
+    to.meta?.requiredPermissions?.length ||
+    to.meta?.requiredTier
+  ) {
     return enforceRoleTierVisibility(to, token)
   }
   // FAR-1950: the manifest declares a gate for this path but hydration left
