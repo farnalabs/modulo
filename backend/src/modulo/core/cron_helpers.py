@@ -6688,13 +6688,10 @@ def _parse_decision_payload(payload: Any) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _decision_payload_is_faithful(payload: Any) -> bool:
+def _decision_payload_is_faithful(payload: dict[str, Any] | None) -> bool:
     if payload is None:
         return True
-    parsed = _parse_decision_payload(payload)
-    if parsed is None:
-        return False
-    return parsed.get("action") != "manual_output" or "output" in parsed
+    return payload.get("action") != "manual_output" or "output" in payload
 
 
 def _decision_is_consumable(latest: Any, payload: dict[str, Any]) -> bool:
