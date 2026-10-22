@@ -152,6 +152,7 @@ class TestRunStatusDetailParityFields:
         assert alpha["node_id"] == "alpha"
         assert alpha["no_output_reason"] == "no_output"
         assert alpha["sandbox_log_tail"] == "tail-alpha"
+        assert alpha["raw_output_head"] == "raw-alpha"
         assert alpha["raw_output_tail"] == "raw-alpha"
         assert alpha["stdout_length"] == 4
         assert alpha["stderr_length"] == 0

@@ -3336,6 +3336,7 @@ def test_deadline_triage_from_markers_projects_signed_markers_only() -> None:
     assert entry["attempt_key"] == "run:r1:node:n1:1"
     assert entry["no_output_reason"] == "node-deadline watchdog"
     assert entry["sandbox_log_tail"] == "agent.log tail"
+    assert entry["raw_output_head"] == "partial output"
     assert entry["raw_output_tail"] == "partial output"
     assert entry["stdout_length"] == 14
     assert entry["delivery_done"] is False
@@ -3357,7 +3358,59 @@ def test_deadline_triage_from_markers_truncates_long_tails() -> None:
     assert len(entries) == 1
     assert len(entries[0]["raw_output_tail"]) == runs_module._TRIAGE_RAW_OUTPUT_TAIL_CHARS
     assert entries[0]["raw_output_tail"] == "x" * runs_module._TRIAGE_RAW_OUTPUT_TAIL_CHARS
+    assert len(entries[0]["raw_output_head"]) == runs_module._TRIAGE_RAW_OUTPUT_HEAD_CHARS
+    assert entries[0]["raw_output_head"] == "x" * runs_module._TRIAGE_RAW_OUTPUT_HEAD_CHARS
     assert not entries[0]["sandbox_log_tail"]
+
+
+def test_deadline_triage_from_markers_head_is_the_front_and_tail_the_end() -> None:
+    """``raw_output_head`` is the FIRST bounded slice, ``raw_output_tail`` the
+    LAST — the head carries the agent command's opening budget breadcrumb,
+    the tail how the attempt died. A homogeneous string cannot distinguish
+    the two, so this pins the direction explicitly."""
+    long_output = "".join(f"[{i:05d}]" for i in range(1200))
+    assert len(long_output) > runs_module._TRIAGE_RAW_OUTPUT_HEAD_CHARS
+    markers = {"k1": {"deadline_triage": True, "node_id": "n1", "raw_output": long_output}}
+
+    entries = runs_module._deadline_triage_from_markers(markers)
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["raw_output_head"] == long_output[: runs_module._TRIAGE_RAW_OUTPUT_HEAD_CHARS]
+    assert entry["raw_output_tail"] == long_output[-runs_module._TRIAGE_RAW_OUTPUT_TAIL_CHARS :]
+    assert entry["raw_output_head"] != entry["raw_output_tail"]
+
+
+def test_deadline_triage_from_markers_short_output_head_equals_tail() -> None:
+    """A stdout shorter than the bound is projected whole in BOTH slices."""
+    short_output = "branch-fixer: conflict task - single attempt (timeout 2880s)"
+    assert len(short_output) < runs_module._TRIAGE_RAW_OUTPUT_HEAD_CHARS
+    markers = {"k1": {"deadline_triage": True, "node_id": "n1", "raw_output": short_output}}
+
+    entries = runs_module._deadline_triage_from_markers(markers)
+
+    assert entries[0]["raw_output_head"] == short_output
+    assert entries[0]["raw_output_tail"] == short_output
+
+
+def test_deadline_triage_from_markers_absent_raw_output_yields_empty_slices() -> None:
+    """No fabricated evidence: an absent/empty/non-str raw_output projects
+    ``""`` for both slices, exactly as the tail always has."""
+    markers = {
+        "absent": {"deadline_triage": True, "node_id": "n1"},
+        "empty": {"deadline_triage": True, "node_id": "n1", "raw_output": ""},
+        "null": {"deadline_triage": True, "node_id": "n1", "raw_output": None},
+    }
+
+    entries = runs_module._deadline_triage_from_markers(markers)
+
+    assert len(entries) == 3
+    for entry in entries:
+        # A str that is empty — never None, never fabricated content.
+        assert isinstance(entry["raw_output_head"], str)
+        assert isinstance(entry["raw_output_tail"], str)
+        assert not entry["raw_output_head"]
+        assert not entry["raw_output_tail"]
 
 
 def test_deadline_triage_from_markers_none_or_empty() -> None:
