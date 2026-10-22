@@ -24,7 +24,7 @@ SQLite removes the separate PostgreSQL service, but it does not remove the Redis
 requirement. Start Redis and both SAQ workers before running pipelines or cron and
 polling triggers; the API refuses to boot when `REDIS_URL` is empty.
 
-For a full walkthrough, see `docs/quickstart.md` and `AGENTS.md` §Local Development Setup.
+For a full walkthrough, see `docs/quickstart.md`.
 
 ### Limits
 - No sandbox isolation (agents run as subprocesses on your machine)
@@ -153,6 +153,7 @@ data residency, air-gapped).
 | `LocalRuntimeProvider` | Default; single-host, no sandbox | Capped (default 2) | None |
 | `E2BRuntimeProvider` | Add sandboxed execution with E2B | Unlimited (E2B's capacity) | Full sandbox |
 | `DockerRuntimeProvider` | Run each agent in a separate container | Host capacity | Container-level |
+| `KubernetesRuntimeProvider` | Run each agent in a long-lived pod on your own Kubernetes cluster | Cluster capacity | Container-level (pod) |
 
 All providers share the same `RuntimeProvider` ABC. Switching between them
 is a config change, not a code change.
