@@ -24,6 +24,7 @@ from modulo.core.hitl_manager import (
 )
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.team_membership import TeamMembership
+from tests.unit.api.mock_session import configure_mock_session
 
 from .conftest import _session_decide
 
@@ -65,7 +66,7 @@ def _gate(
 
 def _session_get(return_value: Any = None) -> AsyncMock:
     """Session whose execute() returns a result with scalar_one_or_none()."""
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     result = MagicMock()
     result.scalar_one_or_none.return_value = return_value
     scalars_result = MagicMock()
@@ -120,7 +121,7 @@ def _session_update(
     The ``runs`` SELECT is dispatched by statement shape, not position, so the
     gate/response sequencing above is unaffected by where the run check fires.
     """
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
 
@@ -169,7 +170,7 @@ def _session_decide_capture(update_returns_id: uuid.UUID | None, gate: HitlClaim
     Mirrors ``_session_decide`` from conftest but records every statement
     passed to ``execute``. Returns ``(session, captured_stmts)``.
     """
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
 
@@ -313,7 +314,7 @@ async def test_create_review_idempotent_if_exists():
 async def test_create_gate_integrity_error_returns_existing_row():
     """A concurrent insert racing our own insert falls back to the existing row."""
     existing = _gate()
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock(side_effect=IntegrityError("stmt", {}, Exception("duplicate key")))
 
@@ -340,7 +341,7 @@ async def test_create_gate_integrity_error_returns_existing_row():
 
 async def test_create_gate_integrity_error_lost_race_raises():
     """If the concurrent winner vanishes between our insert and re-fetch, raise."""
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock(side_effect=IntegrityError("stmt", {}, Exception("duplicate key")))
 
@@ -483,7 +484,7 @@ def _session_race(
     the pre-check can pass on an ``awaiting_human`` run while the re-read sees a
     terminal run that the EXISTS predicate refused to claim.
     """
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
 
@@ -600,7 +601,7 @@ async def test_claim_custom_expiry_minutes_is_applied():
     )
     captured: list[Any] = []
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
 
@@ -693,7 +694,7 @@ async def test_claim_update_statement_carries_run_status_exists_predicate():
     claimed_gate = _gate(account_id=_USER, claim_token="tok")
     captured: list[Any] = []
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
 
@@ -741,7 +742,7 @@ async def test_claim_update_race_on_terminal_run_raises_run_not_awaiting():
     actual status (RunNotAwaitingError) instead of a generic already-claimed."""
     pre_check = _gate(account_id=None)
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
 
@@ -789,7 +790,7 @@ async def test_claim_update_race_on_decided_gate_raises_gate_already_decided():
     pre_check = _gate(account_id=None)
     decided = _gate(account_id=_USER, decision="approved")
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
 
@@ -935,7 +936,7 @@ async def test_claim_same_account_reclaim_issues_fresh_token():
         claimed_at=datetime.now(UTC),
         expires_at=datetime.now(UTC) + timedelta(minutes=15),
     )
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
     captured: list[Any] = []
@@ -991,7 +992,7 @@ async def test_claim_same_account_reclaim_team_scoped_gate():
     membership.team_id = _TEAM
     membership.account_id = _USER
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
     gate_call_no = 0
@@ -1045,7 +1046,7 @@ async def test_claim_same_account_reclaim_on_claimed_run_succeeds():
         claimed_at=datetime.now(UTC),
         expires_at=datetime.now(UTC) + timedelta(minutes=15),
     )
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
     captured: list[Any] = []
@@ -1171,7 +1172,7 @@ async def test_claim_team_member_can_claim():
     membership.team_id = _TEAM
     membership.account_id = _USER
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
 
@@ -1240,7 +1241,7 @@ async def test_claim_team_membership_query_restricts_to_runner_or_operator_role(
     membership.account_id = _USER
     membership.role = "operator"
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     membership_stmts: list[Any] = []
     call_no = 0
 
@@ -1287,7 +1288,7 @@ async def test_claim_team_viewer_role_denied():
     """
     gate = _gate(account_id=None, required_team_id=_TEAM)
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     call_no = 0
     membership_check_hit = False
 
@@ -1334,7 +1335,7 @@ async def test_claim_team_role_lost_between_check_and_update_undoes_claim():
     membership.account_id = _USER
     membership.role = "operator"
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     call_no = 0
     undo_stmt: list[Any] = []
 
@@ -1394,7 +1395,7 @@ async def test_claim_membership_lost_between_check_and_update_undoes_claim():
     membership.team_id = _TEAM
     membership.account_id = _USER
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
 
@@ -1450,7 +1451,7 @@ async def test_claim_non_team_member_raises():
     """Non-team member gets NotTeamMemberError on a team-scoped gate."""
     gate = _gate(account_id=None, required_team_id=_TEAM)
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
 
@@ -1491,7 +1492,7 @@ async def test_claim_locked_gate_vanished_raises():
     """Team-scoped claim whose FOR UPDATE lock finds no row raises GateNotFoundError."""
     gate = _gate(account_id=None, required_team_id=_TEAM)
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
 
@@ -1525,7 +1526,7 @@ async def test_claim_locked_gate_already_decided_raises():
     gate = _gate(account_id=None, required_team_id=_TEAM)
     locked_decided = _gate(account_id=None, required_team_id=_TEAM, decision="approved")
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
 
@@ -1557,7 +1558,7 @@ async def test_claim_locked_gate_already_claimed_raises():
     gate = _gate(account_id=None, required_team_id=_TEAM)
     locked_claimed = _gate(account_id=uuid.uuid4(), required_team_id=_TEAM)
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
 
@@ -1592,7 +1593,7 @@ async def test_claim_no_required_team_still_works():
         claim_token="tok",
         expires_at=datetime.now(UTC) + timedelta(minutes=15),
     )
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
 
@@ -2258,7 +2259,7 @@ async def test_deliver_manual_null_expires_at_raises_expired():
 
 
 async def test_expire_stale_returns_expired_gates():
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     expired_result = MagicMock()
     row = type("Row", (), {"run_id": _RUN, "review_id": "gate-a"})
     row2 = type("Row", (), {"run_id": _RUN, "review_id": "gate-b"})
@@ -2273,7 +2274,7 @@ async def test_expire_stale_returns_expired_gates():
 
 
 async def test_expire_stale_none_expired_returns_empty():
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     result = MagicMock()
     result.all.return_value = []
     session.execute = AsyncMock(return_value=result)
@@ -2308,7 +2309,7 @@ async def test_list_pending_returns_undecided_gates():
     can render the claimed state (FAR-612)."""
     unclaimed = _gate(account_id=None)
     held = _gate(account_id=_USER, claim_token="tok")
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     scalars = MagicMock()
     scalars.__iter__ = lambda self: iter([unclaimed, held])
     execute_result = MagicMock()
@@ -2325,7 +2326,7 @@ async def test_list_pending_filters_to_actionable_run_statuses():
     ``awaiting_human`` or ``claimed`` status — undecided gates on terminal runs
     (data rot) are excluded from the org pending list."""
     gate = _gate(account_id=None)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     scalars = MagicMock()
     scalars.__iter__ = lambda self: iter([gate])
     execute_result = MagicMock()
@@ -2348,7 +2349,7 @@ async def test_list_pending_include_claimed_false_excludes_claimed_gates():
     includes held gates so consumers can render the claimed state; the
     exclusion is the explicit opt-out.)"""
     unclaimed = _gate(account_id=None)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     scalars = MagicMock()
     scalars.__iter__ = lambda self: iter([unclaimed])
     execute_result = MagicMock()
@@ -2368,7 +2369,7 @@ async def test_list_pending_include_claimed_returns_claimed_and_unclaimed():
     claimed-but-undecided gates so they stay visible and actionable."""
     claimed = _gate(account_id=_USER, claim_token="tok", claimed_at=datetime.now(UTC))
     unclaimed = _gate(account_id=None)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     scalars = MagicMock()
     scalars.__iter__ = lambda self: iter([claimed, unclaimed])
     execute_result = MagicMock()
@@ -2386,7 +2387,7 @@ async def test_list_pending_include_claimed_returns_claimed_and_unclaimed():
 async def test_list_pending_never_returns_decided_gates():
     """Both list_pending() modes filter on ``decision IS NULL`` — a decided
     gate is history, never pending work."""
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     scalars = MagicMock()
     scalars.__iter__ = lambda self: iter([])
     execute_result = MagicMock()
@@ -2412,7 +2413,7 @@ async def test_list_overdue_returns_overdue_gates():
     past = now - timedelta(minutes=45)
     gate = _gate(account_id=_USER, claim_token="tok", expires_at=past, claimed_at=past)
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     scalars = MagicMock()
     scalars.__iter__ = lambda self: iter([gate])
     execute_result = MagicMock()
@@ -2434,7 +2435,7 @@ async def test_list_overdue_query_filters_claimed_undecided_and_over_threshold()
     (``account_id IS NOT NULL``), undecided (``decision IS NULL``) and past the
     ``claimed_at < now - threshold`` cutoff. A mock returning no rows would pass
     even if the threshold were never applied, so pin the compiled SQL instead."""
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     result = MagicMock()
     result.scalars.return_value = []
     session.execute = AsyncMock(return_value=result)
@@ -2450,7 +2451,7 @@ async def test_list_overdue_query_filters_claimed_undecided_and_over_threshold()
 
 
 async def test_count_overdue_returns_zero():
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     result = MagicMock()
     result.scalar.return_value = 0
     session.execute = AsyncMock(return_value=result)
@@ -2464,7 +2465,7 @@ async def test_count_overdue_returns_count_and_scopes_query():
     """A non-zero count is returned verbatim (``result.scalar()``) and the
     counting query applies the same org/claimed/undecided/threshold predicate
     as ``list_overdue``."""
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     result = MagicMock()
     result.scalar.return_value = 3
     session.execute = AsyncMock(return_value=result)
@@ -2519,6 +2520,7 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
     from langgraph.types import Interrupt
 
     from modulo.core.pipeline_engine.executor import PipelineExecutor
+    from modulo.db.crud.run_node_outputs import RunBlobs
 
     run = MagicMock()
     run.id = uuid.uuid4()
@@ -2534,7 +2536,7 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
     snapshot.graph_json = {"nodes": [{"id": "a"}], "edges": []}
     snapshot.run_context_defaults = {}
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -2546,6 +2548,10 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
     scalar_result = MagicMock()
     scalar_result.scalar_one.return_value = snapshot
     scalar_result.scalar_one_or_none.return_value = cancel_run
+    # The finalize tail also reads run-node outputs; serve "no rows" so the
+    # blob reader does not fabricate a row from an unstubbed MagicMock child.
+    scalar_result.all.return_value = []
+    scalar_result.scalars.return_value.all.return_value = []
     session.execute = AsyncMock(return_value=scalar_result)
 
     @asynccontextmanager
@@ -2573,6 +2579,13 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
         ),
         patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
         patch("modulo.core.cost_controller.finalize.update_run_status", return_value=final_run) as mock_update,
+        # The finalize tail reads the run's node-output blobs; this test targets
+        # interrupt handling, so serve the "no blobs" shape rather than route
+        # every query through one scalar result.
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
         patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
@@ -2611,7 +2624,7 @@ async def _claim_capture() -> tuple[HITLManager, AsyncMock, list[Any]]:
         claim_token="tok",
         expires_at=datetime.now(UTC) + timedelta(minutes=15),
     )
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
     captured: list[Any] = []
@@ -2705,7 +2718,7 @@ async def test_hitl_queries_are_org_scoped():
     claim_sql = str(claim_update.compile(compile_kwargs={"literal_binds": True}))
     assert "organisation_id" in claim_sql
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     row = _gate(account_id=None)
     result = MagicMock()
     result.scalars.return_value = [row]
@@ -2731,7 +2744,7 @@ async def test_manager_instance_is_stateless_across_concurrent_claims():
     claimed_b = _gate(account_id=_USER, claim_token="tok-b", expires_at=datetime.now(UTC) + timedelta(minutes=15))
 
     async def _run_claim(review_id: str, gate: HitlClaim, claimed: HitlClaim) -> HitlClaim:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         session.add = MagicMock()
         session.flush = AsyncMock()
         captured: list[Any] = []
@@ -2867,7 +2880,7 @@ def _session_decide_capturing(
       2. un-park UPDATE (guarded hitl_parked → awaiting_human)
       3. session.get() → session_get_gate
     """
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
     begin_nested_cm = AsyncMock()
@@ -2934,7 +2947,7 @@ async def test_decide_failure_does_not_unpark():
     """A refused decision (expired token) never issues the un-park write."""
     past = datetime.now(UTC) - timedelta(minutes=1)
     gate = _gate(account_id=_USER, claim_token="tok", expires_at=past)
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
     begin_nested_cm = AsyncMock()
