@@ -102,11 +102,8 @@
             <span class="flex-shrink-0 text-xs text-muted-foreground">
               {{ formatDate(record.created_at) }}
             </span>
-            <span
-              v-if="record.feedback_handler_type"
-              class="inline-flex flex-shrink-0 items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
-            >
-              {{ handlerTypeLabel(record.feedback_handler_type) }}
+            <span class="inline-flex flex-shrink-0 items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+              {{ record.feedback_handler_type ? handlerTypeLabel(record.feedback_handler_type) : '—' }}
             </span>
           </button>
           <div v-if="expandedId === record.id" class="border-t p-4">
@@ -165,7 +162,7 @@
                       type="button"
                       :disabled="savingAnnotation[record.id]"
                       data-testid="feedback-inbox-mark-resolved"
-                      class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+                      class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       @click="resolveRecord(record.id)"
                     >
                       {{ $t('views.FeedbackInboxView.mark_resolved') }}
@@ -174,7 +171,7 @@
                       type="button"
                       :disabled="dismissLoading[record.id]"
                       data-testid="feedback-inbox-dismiss"
-                      class="rounded-lg border border-destructive/50 bg-background px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                      class="rounded-lg border border-destructive/50 bg-background px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       @click="dismissRecord(record.id)"
                     >
                       {{ dismissLoading[record.id] ? $t('views.FeedbackInboxView.dismissing') : $t('views.FeedbackInboxView.dismiss') }}
@@ -295,13 +292,18 @@ const records = ref<FeedbackRecordItem[]>([])
 
 const { loading, error, load: loadFeedback } = useDataFetch(
   async () => {
-    const params: Record<string, string | number> = {}
+    const params: {
+      status?: string | null
+      pipeline_id?: string | null
+      date_from?: string | null
+      date_to?: string | null
+    } = {}
     if (statusFilter.value) params.status = statusFilter.value
     if (pipelineFilter.value) params.pipeline_id = pipelineFilter.value
     if (dateFrom.value) params.date_from = dateFrom.value
     if (dateTo.value) params.date_to = dateTo.value
     const { data: resp, error: err } = await api.GET('/api/v1/feedback/inbox', {
-      params: { query: params as any },
+      params: { query: params },
     })
     if (err) return { error: err }
     records.value = ((resp?.items ?? []) as FeedbackRecordItem[]).map(r => ({ ...r }))
