@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import HTTPException, status
 
+from tests.unit.api.mock_session import configure_rls_preamble
+
 
 class TestCommunityObjectsGateListCommunity:
     """FAR-959: list_community returns 403 when the kill switch is OFF."""
@@ -121,7 +123,11 @@ class TestCommunityObjectsFlagFailOpen:
     async def test_flag_read_error_returns_true(self, mock_flag) -> None:
         from modulo.api.routes.community_library import _community_objects_enabled
 
-        session = AsyncMock()
+        # Contract-correct double: ``_community_objects_enabled`` calls
+        # ``session.in_transaction()`` SYNCHRONOUSLY — on a bare AsyncMock that
+        # returns a never-awaited coroutine (truthy, so the branch is taken for
+        # the wrong reason and the warning is emitted at GC).
+        session = configure_rls_preamble(AsyncMock())
         result = await _community_objects_enabled(session, "org-id")
         assert result is True
         assert mock_flag is not None

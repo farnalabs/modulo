@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
+from tests.unit.api.mock_session import configure_mock_session
+
 # Logger of ``modulo.api.routes.community_library`` (the teardown guard's log key).
 _COMMUNITY_LIBRARY_LOGGER = "modulo.api.routes.community_library"
 
@@ -32,7 +34,7 @@ class TestListCommunityExceptionNarrowing:
         """SQLAlchemyError from list_community_entries -> returns empty list (fail-open)."""
         from modulo.api.routes.community_library import list_community
 
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         principal = MagicMock()
         principal.organisation_id = "00000000-0000-0000-0000-000000000001"
 
@@ -53,7 +55,7 @@ class TestListCommunityExceptionNarrowing:
         """RuntimeError from list_community_entries -> propagates (fail-closed)."""
         from modulo.api.routes.community_library import list_community
 
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         principal = MagicMock()
         principal.organisation_id = "00000000-0000-0000-0000-000000000001"
 
@@ -193,7 +195,7 @@ class TestGetEntryExceptionNarrowing:
 
         from modulo.api.routes.community_library import get_entry
 
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         principal = MagicMock()
 
         with pytest.raises(HTTPException) as exc_info:
@@ -211,7 +213,7 @@ class TestGetEntryExceptionNarrowing:
         """RuntimeError from get_community_entry -> propagates (fail-closed)."""
         from modulo.api.routes.community_library import get_entry
 
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         principal = MagicMock()
 
         with pytest.raises(RuntimeError, match="unexpected"):

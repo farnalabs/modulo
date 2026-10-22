@@ -22,6 +22,7 @@ from modulo.api.models.problem import ProblemException
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 from tests.unit.api.plan_stubs import PlanStub
 
 _VALID_32 = "a" * 32
@@ -98,7 +99,9 @@ def unauth_client() -> Generator[TestClient, None, None]:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # ``set_rls_org`` reads ``in_transaction()``/``get_bind()`` SYNC; a bare
+    # AsyncMock child orphans a never-awaited coroutine per request.
+    session = configure_rls_preamble(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

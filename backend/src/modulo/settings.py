@@ -828,13 +828,27 @@ class Settings(BaseSettings):
     # wedged await consumed the ENTIRE inner budget at stage
     # ``reconcile_org:<org-id>`` and starved every other org plus
     # record_facts / the compensating sweeps (7 consecutive prod ticks, 2026-10).
-    # Each org's pass is cut at this bound; the org's transaction rolls back
-    # at its safe boundary, the tick records a truthful status='timeout' +
-    # org_timeouts marker naming the org, and the loop continues. The
-    # effective slice is additionally clamped to the tick's REMAINING budget
-    # minus a tail reserve for facts/sweeps, so this field alone never
-    # dictates the tail. ge=1 keeps a usable slice; le=119 mirrors the outer
-    # budget's ceiling (the clamp, not this field, enforces < outer budget).
+    # Each org's pass is bounded by this slice. The effective slice is
+    # additionally clamped to the tick's REMAINING budget minus a tail reserve
+    # for facts/sweeps, so this field alone never dictates the tail. ge=1 keeps
+    # a usable slice; le=119 mirrors the outer budget's ceiling (the clamp, not
+    # this field, enforces < outer budget).
+    #
+    # ROW-LOOP DEFERRAL (FAR-1643): a slice that expires while the org is
+    # PROCESSING rows no longer rolls the whole org transaction back. The
+    # per-row loop stops STARTING rows once less than an ADAPTIVE margin
+    # (``min(5s, max(0.25s, slice / 2))`` — so a 1s slice still gets room for
+    # a row) remains, counts the unprocessed rows in the distinct
+    # ``row_loop_time_deferred`` tick counter (which the readiness detail
+    # surfaces, separate from the ``rows_deferred`` orgs/row-budget cap
+    # markers) and returns normally: the rows and terminalizers it already
+    # repaired COMMIT and the remainder drains on the next 60s tick, with the
+    # tick still reported ``ok`` by design. What this bound still hard-cuts is
+    # a SINGLE row that overruns the slice on its own: the caller's
+    # ``asyncio.timeout`` fires then, the org's transaction rolls back at its
+    # safe boundary and the tick records a truthful ``status='timeout'`` +
+    # ``org_timeouts`` marker naming the org (then continues with the
+    # remaining orgs).
     dispatcher_reconcile_org_budget_seconds: int = Field(
         default=30, alias="DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS", ge=1, le=119
     )

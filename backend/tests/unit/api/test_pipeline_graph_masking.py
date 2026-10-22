@@ -33,6 +33,7 @@ from modulo.api.middleware.sensitive_mask import (
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -468,7 +469,11 @@ async def test_masked_read_to_mcp_graph_write_round_trip_preserves_stored_secret
     read_body = read_resp.json()
     assert read_body["nodes"][0]["env_vars"]["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
 
-    mock_session: Any = AsyncMock()
+    # Contract-correct children: the masked-echo resolution runs the RLS
+    # preamble (SYNC ``in_transaction()`` / ``get_bind()``) and the scoped
+    # secret read's ``set_config`` SELECT, whose SYNC result read would orphan
+    # a coroutine on a bare AsyncMock.
+    mock_session: Any = configure_mock_session(AsyncMock())
     session_cm = MagicMock()
     session_cm.__aenter__ = AsyncMock(return_value=mock_session)
     session_cm.__aexit__ = AsyncMock(return_value=False)
