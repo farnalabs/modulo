@@ -66,10 +66,17 @@ UNRAISABLE_ESCALATION = "error::pytest.PytestUnraisableExceptionWarning"
 #: Test trees AUDITED for leaked never-awaited coroutines / unclosed resources
 #: and confirmed clean under the escalation. Only these are gated; every other
 #: tree has NOT been audited to green, so a mixed ``pytest tests/`` run must not
-#: silently apply the escalation to it. Still excluded:
+#: silently apply the escalation to it.
 #:
-#: - ``conformance`` - the runtime-provider suite needs a live Kubernetes
-#:   cluster (deselected by default; nothing to run here);
+#: ``conformance`` (the runtime-provider suite, FAR-1053) was audited to green
+#: on 2026-10-23 against a live single-node ``kind`` cluster (13/13 with
+#: ``-W error::pytest.PytestUnraisableExceptionWarning``) and is gated. It is
+#: still deselected by default via ``addopts``, so the gate only applies to an
+#: explicit ``-m runtime_provider_conformance`` run and to the k8s-conformance
+#: workflow.
+#:
+#: Still excluded:
+#:
 #: - ``load`` / ``determination`` - no test modules exist (``load`` holds only
 #:   locust/support files; ``determination`` holds only fixture data).
 #:
@@ -82,7 +89,15 @@ UNRAISABLE_ESCALATION = "error::pytest.PytestUnraisableExceptionWarning"
 #: the collection path: ``tests/unit/conftest.py`` is never imported by a
 #: ``pytest tests/integration`` or ``pytest tests/bdd`` run, so a hook there
 #: cannot gate those suites.
-GATED_SUITE_ROOTS: tuple[str, ...] = ("unit", "integration", "bdd", "architecture", "connectors", "docker")
+GATED_SUITE_ROOTS: tuple[str, ...] = (
+    "unit",
+    "integration",
+    "bdd",
+    "architecture",
+    "connectors",
+    "conformance",
+    "docker",
+)
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _TESTS_ROOT = _BACKEND_ROOT / "tests"
