@@ -381,3 +381,100 @@ async def test_bind_snapshot_actor_ladder_records_honestly_unattributed_write(
         )
     finally:
         await _cleanup(db_engine, pipeline_id, connector_id)
+
+
+async def _snapshot_graph(db_engine: AsyncEngine, pipeline_id: uuid.UUID, version: int) -> Any:
+    """The frozen ``graph_json`` of one snapshot row."""
+    async with db_engine.connect() as conn:
+        value = (
+            await conn.execute(
+                text(
+                    "SELECT graph_json FROM pipeline_snapshots WHERE pipeline_id = :pid AND snapshot_version = :version"
+                ),
+                {"pid": str(pipeline_id), "version": version},
+            )
+        ).scalar_one()
+    return _as_json(value)
+
+
+def _connector_query_node(connector_id: uuid.UUID) -> dict[str, Any]:
+    """A ``connector`` node carrying a real GitHub query (FAR-2089)."""
+    return {
+        "id": str(_NODE_ID),
+        "node_type": "connector",
+        "position": {"x": 0, "y": 0},
+        "label": "github-pulls",
+        "connector_binding": {
+            "type": "github",
+            "instance_id": str(connector_id),
+            "operation": "query",
+            "resource": "pull",
+            "filters": {"state": "open", "labels": ["agent", "backend"], "limit": 25},
+            "data": {"note": "round-trip"},
+        },
+    }
+
+
+async def test_public_api_writes_a_connector_node_and_the_snapshot_carries_its_query(
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-2089 end-to-end: write -> snapshot through the REAL public API.
+
+    ``update_pipeline_graph`` is the MCP surface's public graph write. Before
+    the ``node_type`` Literal accepted ``connector`` the call returned
+    ``validation_failed`` and nothing was written, so a GitHub query node could
+    not be authored through the API at all. This drives the real tool against
+    real Postgres and then reads BOTH committed artefacts back - the pipeline
+    row a later edit sees, and the immutable snapshot a run executes - because
+    the binding's ``resource`` / ``filters`` / ``data`` must survive both.
+    """
+    pipeline_id = await _insert_pipeline(db_engine, test_org, test_user)
+    connector_id = await _insert_connector(db_engine, test_org, test_user)
+    node = _connector_query_node(connector_id)
+
+    tokens = (
+        ms._ctx_org_id.set(test_org),
+        ms._ctx_user_id.set(test_user),
+        ms._ctx_role.set("admin"),
+        ms._ctx_team_id.set(None),
+    )
+    try:
+        with (
+            patch.object(ms, "_session", _real_session_factory(db_engine)),
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_check_agent_tool_scope"),
+        ):
+            result = await ms.update_pipeline_graph(
+                pipeline_id=str(pipeline_id),
+                nodes=[node],
+                edges=[],
+            )
+    finally:
+        ms._ctx_org_id.reset(tokens[0])
+        ms._ctx_user_id.reset(tokens[1])
+        ms._ctx_role.reset(tokens[2])
+        ms._ctx_team_id.reset(tokens[3])
+
+    try:
+        assert "error" not in result, result
+
+        stored = await _stored_graph(db_engine, pipeline_id)
+        assert len(stored) == 1, stored
+        assert stored[0]["node_type"] == "connector", stored
+        stored_binding = stored[0]["connector_binding"]
+        assert stored_binding["resource"] == "pull", stored_binding
+        assert stored_binding["filters"] == {"state": "open", "labels": ["agent", "backend"], "limit": 25}
+        assert stored_binding["data"] == {"note": "round-trip"}
+
+        rows = await _snapshot_rows(db_engine, pipeline_id)
+        assert [(v, k) for v, k, _ in rows] == [(1, "edit")], rows
+        snapshot_graph = await _snapshot_graph(db_engine, pipeline_id, 1)
+        snapshot_binding = snapshot_graph["nodes"][0]["connector_binding"]
+        assert snapshot_graph["nodes"][0]["node_type"] == "connector", snapshot_graph
+        assert snapshot_binding["resource"] == "pull", snapshot_binding
+        assert snapshot_binding["filters"] == {"state": "open", "labels": ["agent", "backend"], "limit": 25}
+        assert snapshot_binding["data"] == {"note": "round-trip"}
+    finally:
+        await _cleanup(db_engine, pipeline_id, connector_id)

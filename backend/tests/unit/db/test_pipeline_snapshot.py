@@ -255,6 +255,77 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
     session.flush.assert_awaited_once()
 
 
+async def test_connector_node_binding_fields_reach_the_run_snapshot() -> None:
+    """FAR-2089: the query a caller saved is the query the run snapshot carries.
+
+    A run never reads the live row - it reads this snapshot - so a binding that
+    loses ``resource`` / ``filters`` / ``data`` on the way in leaves the engine
+    querying the connector with an empty intent. The stored node is the shape
+    ``PipelineGraphNode.model_dump(mode="json")`` persists (a connector node: no
+    ``agent_id``, so the snapshot has no Agent to materialise), and the
+    assertions are the exact values the author saved.
+    """
+    org_id = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+    connector_id = uuid.uuid4()
+    node_id = uuid.uuid4()
+    filters = {"state": "open", "labels": ["agent", "backend"], "limit": 25}
+
+    pipeline = MagicMock()
+    pipeline.id = pipeline_id
+    pipeline.organisation_id = org_id
+    pipeline.graph_nodes_json = [
+        {
+            "id": str(node_id),
+            "node_type": "connector",
+            "agent_id": None,
+            "position": {"x": 0, "y": 0},
+            "connector_binding": {
+                "type": "github",
+                "instance_id": str(connector_id),
+                "operation": "query",
+                "dispatch_action": "trigger_run",
+                "resource": "pull",
+                "filters": filters,
+                "data": {"note": "round-trip"},
+            },
+        }
+    ]
+    pipeline.run_context_defaults = {}
+
+    connector = MagicMock()
+    connector.id = connector_id
+    connector.connector_type_id = "github"
+    connector.name = "GitHub"
+    connector.credentials_ciphertext = b"must-not-be-copied"
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute.side_effect = [
+        _scalar_result(pipeline),
+        _scalars_result([]),  # pipeline edges
+        _scalars_result([connector]),  # connector instances
+        _allocation_lock_result(),  # FAR-1625 allocation row lock (result ignored)
+        _scalar_result(0),  # max(snapshot_version) - this is the first snapshot
+        _scalars_result([]),  # guardrail rows
+        _scalars_result([]),  # policy gate rows
+    ]
+
+    with _bind_lock_connection(session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert snapshot.snapshot_version == 1
+    snapshot_node = snapshot.graph_json["nodes"][0]
+    assert snapshot_node["node_type"] == "connector"
+    binding = snapshot_node["connector_binding"]
+    assert binding["resource"] == "pull"
+    assert binding["filters"] == filters
+    assert binding["data"] == {"note": "round-trip"}
+    # The reference metadata still resolves the instance, and no credentials leak
+    # into the frozen copy.
+    assert snapshot.connector_bindings_json[0]["instance_name"] == "GitHub"
+    assert "credentials" not in repr(snapshot.connector_bindings_json)
+
+
 async def test_snapshot_carries_condition_expression_for_conditional_edge() -> None:
     """A conditional edge must keep its JMESPath ``condition_expression`` when
     the live graph is frozen into a run snapshot (FAR-455). Regression guard:

@@ -1033,6 +1033,95 @@ def test_replace_pipeline_graph_accepts_manual_node_contract(client: TestClient)
         )
 
 
+def _connector_node_json(connector_id: uuid.UUID) -> dict[str, object]:
+    """A GitHub query ``connector`` node (FAR-2089)."""
+    return {
+        "id": str(uuid.uuid4()),
+        "node_type": "connector",
+        "position": {"x": 10, "y": 20},
+        "connector_binding": {
+            "type": "github",
+            "instance_id": str(connector_id),
+            "operation": "query",
+            "resource": "pull",
+            "filters": {"state": "open", "labels": ["agent", "backend"], "limit": 25},
+            "data": {"note": "round-trip"},
+        },
+    }
+
+
+def test_replace_pipeline_graph_accepts_connector_node_and_keeps_binding_fields(
+    client: TestClient,
+) -> None:
+    """FAR-2089: a ``connector`` node is accepted and its query reaches the writer.
+
+    Before the model accepted the type the request was rejected by FastAPI's
+    request-body validation (422) and never reached the handler, so nothing here
+    could persist a GitHub query binding.
+    """
+    connector_id = uuid.uuid4()
+    nodes = [_connector_node_json(connector_id)]
+
+    with (
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            return_value=(nodes, []),
+        ) as replace,
+        patch(
+            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            return_value=MagicMock(issues=[]),
+        ),
+        patch(
+            "modulo.api.routes.pipelines._resolve_graph_references",
+            return_value=([], []),
+        ),
+        patch(
+            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": []},
+        )
+
+    assert resp.status_code == 200, resp.text
+    persisted = replace.await_args.kwargs["nodes"][0]
+    assert persisted["node_type"] == "connector"
+    binding = persisted["connector_binding"]
+    assert binding["resource"] == "pull"
+    assert binding["filters"] == {"state": "open", "labels": ["agent", "backend"], "limit": 25}
+    assert binding["data"] == {"note": "round-trip"}
+
+
+def test_replace_pipeline_graph_rejects_connector_node_without_binding(
+    client: TestClient,
+) -> None:
+    """A binding-less ``connector`` node is refused with a 422, not persisted."""
+    nodes = [_connector_node_json(uuid.uuid4())]
+    nodes[0]["connector_binding"] = None
+
+    with (
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            return_value=(nodes, []),
+        ) as replace,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": []},
+        )
+
+    assert resp.status_code == 422
+    assert "Connector nodes require a connector_binding" in resp.text
+    replace.assert_not_awaited()
+
+
 def _sandbox_node_json() -> dict[str, object]:
     return {
         "id": str(uuid.uuid4()),

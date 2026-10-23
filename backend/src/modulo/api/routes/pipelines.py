@@ -1398,7 +1398,22 @@ class PipelineGraphPolicyGate(BaseModel):
 
 class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     id: uuid.UUID
-    node_type: Literal["agent", "manual", "composite", "sandbox_agent", "router", "hitl", "join", "dispatch"] = "agent"
+    node_type: Literal[
+        "agent",
+        "manual",
+        "composite",
+        "sandbox_agent",
+        "router",
+        "hitl",
+        "join",
+        "dispatch",
+        # FAR-2089: a query/write node whose whole job is its ``connector_binding``.
+        # The engine has always built ``make_connector_fn`` for this type
+        # (``pipeline_engine.graph_cache._make_node_fn``), but the public write
+        # model did not accept it, so a connector query node could not be
+        # authored through the API at all.
+        "connector",
+    ] = "agent"
     agent_id: uuid.UUID | None = None
     position: GraphPosition
     connector_binding: ConnectorBinding | None = None
@@ -1728,6 +1743,7 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             "hitl": self._validate_hitl_node,
             "join": self._validate_join_node,
             "dispatch": self._validate_dispatch_node,
+            "connector": self._validate_connector_node,
         }
         node_validators[self.node_type]()
         # FAR-1141 FIX 2: a ``dispatch`` verb on a node the engine does NOT
@@ -2079,6 +2095,46 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             )
         if self.wait_timeout is not None and not self.await_completion:
             raise ValueError("wait_timeout requires await_completion=True — the window is never read otherwise")
+
+    def _validate_connector_node(self) -> None:
+        """A connector node routes its ``connector_binding`` to a connector (FAR-2089).
+
+        The engine has always supported this node type
+        (``pipeline_engine.graph_cache._make_node_fn`` builds
+        ``make_connector_fn`` for ``node_type="connector"``), but the public
+        write model rejected the value, so a GitHub query node could not be
+        authored through the API at all.
+
+        Two rules, each mirroring the engine's own branch order:
+
+        * **binding (required).** ``_make_node_fn`` only reaches
+          ``make_connector_fn`` when ``node_routes_binding_to_connector`` is
+          true, and a binding-less node falls through to the general LLM node
+          factory - a ``connector`` node would then run as an agent node with no
+          agent. ``dispatch`` already fails loud on this shape at graph build;
+          rejecting it at save time gives the author the error instead of a
+          run-time surprise.
+        * **agent_id (forbidden).** An ``agent`` node carrying an ``agent_id``
+          is the one shape whose binding the engine explicitly does NOT route
+          (it builds the LLM node function first), so a connector node with an
+          agent would silently execute the agent and never the connector.
+
+        Output schema id / pins are deliberately NOT forbidden: a connector's
+        result is an artifact like any other node's, so pinning its shape stays
+        valid. Dispatch-only wait fields, sandbox-only fields and agent-only
+        fields are already rejected on every non-owning node type by the shared
+        checkers, so they need no restating here.
+        """
+        if self.connector_binding is None:
+            raise ValueError(
+                "Connector nodes require a connector_binding - without one the node "
+                "cannot route to a connector and would run as an agent node",
+            )
+        if self.agent_id is not None:
+            raise ValueError(
+                "Connector nodes cannot reference an agent - an agent-bound node never "
+                "routes its connector_binding, so the binding would be dead configuration",
+            )
 
     def _validate_dispatch_binding_routing(self) -> None:
         """FAR-1141 criterion 4 / FIX 2: reject a dispatch verb the engine cannot route.

@@ -334,3 +334,36 @@ async def test_binding_check_skips_non_dict_and_idless_nodes():
         graph_json={"nodes": ["not-a-node", {"node_type": "agent"}], "edges": []},
     )
     assert result.is_valid
+
+
+async def test_a_connector_node_binding_is_acl_governed_at_save_time():
+    """FAR-2089: a ``connector`` node's binding gets the SAME save-time ACL check.
+
+    Now that the public write model accepts ``node_type="connector"``, a graph
+    authored through the API can carry one - so the save-time connector check
+    must derive the routed verb from it exactly as it does for an ``agent`` node
+    with a query binding. A connector node whose bound instance is not allowed
+    to ``read`` is refused rather than saved and failed at run time.
+    """
+    cid = uuid.uuid4()
+    instance = _connector_instance(cid, allowed_operations=["write"])
+    node = {"id": "a", "node_type": "connector", "connector_binding": {"instance_id": str(cid), "operation": "query"}}
+    snap = _snapshot(graph_json=_node_graph(node), connector_bindings=[_binding(cid)])
+
+    result = await GraphValidator().validate(snap, _session_returning([instance]))
+
+    assert not result.is_valid
+    issue = next(i for i in result.issues if i.code == "CONNECTOR_MISSING_OPERATIONS")
+    assert issue.node_id == "a"
+
+
+async def test_a_connector_node_binding_to_a_read_capable_instance_is_accepted():
+    """The same shape passes once the instance allows ``read`` - the type is not the gate."""
+    cid = uuid.uuid4()
+    instance = _connector_instance(cid, allowed_operations=["read"])
+    node = {"id": "a", "node_type": "connector", "connector_binding": {"instance_id": str(cid), "operation": "query"}}
+    snap = _snapshot(graph_json=_node_graph(node), connector_bindings=[_binding(cid)])
+
+    result = await GraphValidator().validate(snap, _session_returning([instance]))
+
+    assert not any(i.code == "CONNECTOR_MISSING_OPERATIONS" for i in result.issues)
