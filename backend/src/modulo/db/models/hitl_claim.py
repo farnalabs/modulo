@@ -42,7 +42,7 @@ class HitlClaim(OrgScoped):
         # ``decision_at`` range). The per-actor window index above leads on
         # ``decided_by``, which this query does not filter, so it cannot serve
         # the scan. Partial: undecided gates never enter - and they are the
-        # growing majority. Mirrors migration 0325.
+        # growing majority. Mirrors migration 0326.
         Index(
             "ix_hitl_claims_org_decision_at",
             "organisation_id",

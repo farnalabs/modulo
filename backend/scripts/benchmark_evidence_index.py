@@ -27,7 +27,7 @@ Phases:
 
 1. **before** - the new indexes are dropped, so the measurement is the schema
    as it was before FAR-2055 (pre-existing indexes 0155 / 0218 still apply).
-2. **after** - the three new indexes are created exactly as migration 0325
+2. **after** - the three new indexes are created exactly as migration 0326
    creates them.
 3. **after, scoped** - the same indexed schema with a 30-day audit period, so
    the read is bounded by date as well as by index. This window keeps the HITL
