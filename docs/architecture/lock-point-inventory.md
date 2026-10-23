@@ -37,6 +37,11 @@
 >   `session.get(Run, with_for_update=True)` locked re-read at `7021`, same
 >   reconcile transaction bound).
 >
+> **FAR-1823 (this branch) removed D4's org-row lock** (`export_org_data`): the
+> export now uses a read-only REPEATABLE READ snapshot on a separate connection,
+> so the `.with_for_update()` call site is gone. The counts below reflect this
+> removal (D4 is now "none" in §3).
+>
 > Category C itself is unchanged at **20** sites.
 
 Counts below are **measured**, not estimated. The two enumeration commands are:
@@ -75,6 +80,12 @@ hit; the raw `file:line` set is exactly reproducible from command (1).
 | Raw SQL `FOR UPDATE` in locking DML | 2 |
 | **Total row-lock sites** | **65** |
 | Non-locking `FOR UPDATE` occurrence (RLS policy DDL) | 1 |
+
+> **Note:** The above counts include D4 (`export_org_data`) as a `.with_for_update()` site.
+> FAR-1823 removed that lock (D4 is now "none" in §3). If D4 is excluded, the
+> `.with_for_update(` count is **58**, SQLAlchemy total is **62**, and total
+> row-lock sites is **64**. The inventory below (§3/§5) reflects the post-FAR-1823
+> shape with D4 as "none".
 
 > **Count corrections (FAR-1822 + FAR-1832).** The original audit recorded **63**
 > `.with_for_update(` sites. FAR-1822 (PR #1842, merged 2026-10-15) removed the
@@ -117,7 +128,7 @@ Each site is assigned **exactly one** category:
 
 ---
 
-## 3. SQLAlchemy `.with_for_update` inventory (63 sites)
+## 3. SQLAlchemy `.with_for_update` inventory (62 lock sites; 63 rows incl. lockless D4)
 
 `lock` = the effective PostgreSQL strength (`with_for_update()` → `FOR UPDATE`;
 `key_share=True` → `FOR NO KEY UPDATE`; `read=True` → `FOR SHARE`). `txn` = transaction the
@@ -205,7 +216,7 @@ unrelated writer or is held across non-lock work.
 | C22 | `core/assistant/context_source_service.py:138` | `_upsert_context_source` | FOR UPDATE | caller txn, **bounded** (FAR-1825, in the helper before the branch) | Org-scoped assistant-context-source upsert. | no. |
 | C23 | `core/assistant/context_source_service.py:148` | `_upsert_context_source` | FOR UPDATE | caller txn, **bounded** (same FAR-1825 bound as C22 – one statement precedes both branches) | User-scoped assistant-context-source upsert (per-user variant of C22). | no. |
 
-### D – operational / other (14)
+### D – operational / other (13 lock sites; D4 retained as a none-row)
 
 > **D7, D9 and D14 have been removed.** **FAR-1822** removed D7 (the `cron_helpers`
 > scheduled-report lock – PR #1842 merged 2026-10-15; the stamp-and-commit path now
@@ -220,7 +231,7 @@ unrelated writer or is held across non-lock work.
 | D1 | `db/crud/org_deletion.py:271` | `request_org_deletion` | FOR UPDATE | caller txn, `include_soft_deleted` | Org lifecycle FSM (FAR-1624 marker). | watch – Organisation row. |
 | D2 | `db/crud/org_deletion.py:327` | `confirm_org_deletion` | FOR UPDATE | caller txn, `include_soft_deleted` | Org lifecycle FSM (FAR-1624 marker). | watch – Organisation row. |
 | D3 | `db/crud/org_deletion.py:388` | `cancel_org_deletion` | FOR UPDATE | caller txn, `include_soft_deleted` | Org lifecycle FSM (FAR-1624 marker). | watch – Organisation row. |
-| D4 | `db/crud/org_deletion.py:418` | `export_org_data` | FOR UPDATE | caller txn, `include_soft_deleted` | Org lifecycle FSM (FAR-1624 marker). | watch – Organisation row, and an export may run long under it. |
+| D4 | `db/crud/org_deletion.py:418` | `export_org_data` | **none** (read-only REPEATABLE READ snapshot on separate connection) | snapshot txn only | Org lifecycle FSM (FAR-1624 marker, **updated FAR-1823**). | **no** – the org-row `FOR UPDATE` was removed; live captures use a read-only REPEATABLE READ snapshot on a separate connection. The stored `export_bundle_json` is returned directly without any lock. The org-row lock never gave cross-table consistency because child-row UPDATEs were never blocked by it. |
 | D5 | `db/crud/error_tracking.py:86` | `upsert_error_group` | FOR UPDATE **OF error_groups** (`of=ErrorGroup`) | caller txn | Error-group aggregation upsert; `of=` avoids locking the nullable side of the `sample_event` outer join. | no. |
 | D6 | `db/crud/daily_run_count.py:54` | `upsert_daily_run_count` | FOR UPDATE | caller txn | Daily run-count upsert (non-critical convenience path; `cost_controller` is the serialised one). | no. |
 | D8 | `core/reports/scheduler.py:410` | `_fire_scheduled_report` | FOR UPDATE | **own** `session.begin()` | Scheduled-report fire **after FAR-1822 (PR #1842, merged 2026-10-15)**: the lock is now the SHORT phase-1 read+idempotency-snapshot section only – report generation and delivery run outside it (the lock-held-across-generation shape this audit flagged as risk #1 is closed). | no – short critical section (§7 risk #1 closed). |
@@ -264,18 +275,19 @@ unrelated writer or is held across non-lock work.
 | A – pipeline/trigger serialisation | 19 | 1 (R2) | **20** |
 | B – credential rotation | 10 | 0 | **10** |
 | C – entity CRUD | 20 | 0 | **20** |
-| D – operational/other | 14 | 1 (R1) | **15** |
-| **Total** | **63** | **2** | **65** |
+| D – operational/other | 13 | 1 (R1) | **14** |
+| **Total** | **62** | **2** | **64** |
 
 These are the §3 counts as they stand on this branch: the FAR-1801 authoring snapshot
 with D7 retired by FAR-1822, C1/C2/C3/D14 removed by FAR-1832, D9 retired by
-FAR-1833, and the four post-cutover sites added by other work (A19
+FAR-1833, **D4's row lock removed by FAR-1823**, and the four post-cutover sites added by other work (A19
 `_replace_pipeline_graph_txn`, D15 `_fail_node_deadline_run`, D16
 `_write_terminal_triage_marker`, D17 `_terminalize_aged_nodeless_zombies`).
-FAR-1825 re-ran §1's commands against the branch tip and reads the same **63**
-SQLAlchemy sites, so the inventory and the measurement agree; see §9 and §10.
+FAR-1825 re-ran §1's commands against the branch tip and reads the same **62**
+SQLAlchemy sites (58 `.with_for_update(` + 4 `with_for_update=`), so the inventory
+and the measurement agree when D4's removed lock is accounted for; see §9 and §10.
 
-Distinct **locked tables** (by frequency): `runs` (heaviest – A5, A6, A7, A14, A15, A18, R2, D10, D15, D16, D17, R1), `organisations` (C5, C6-generic-fallback, D1–D4), `pipelines` (A1–A4, A10–A13, A16, A17, A19), `accounts` (B9, C8), `token_families` (B4–B6), `ScheduledReport` (D8), plus
+Distinct **locked tables** (by frequency): `runs` (heaviest – A5, A6, A7, A14, A15, A18, R2, D10, D15, D16, D17, R1), `organisations` (C5, C6-generic-fallback, **D1–D3**; D4 is now "none"), `pipelines` (A1–A4, A10–A13, A16, A17, A19), `accounts` (B9, C8), `token_families` (B4–B6), `ScheduledReport` (D8), plus
 single-use rows for credentials/entities.
 
 ---
@@ -324,7 +336,7 @@ generation and the terminal stamp after it) and **releases the lock before gener
 runs**, with a Redis lease fencing concurrent fires. The `cron_helpers` lock (old D7) is gone
 entirely; D8 is now the single, short-lock site (`reports/scheduler.py:410`).
 
-### 2. The `organisations` row is a cross-feature mutex – NARROWED by FAR-1830/1832, cost path removed by FAR-1833
+### 2. The `organisations` row is a cross-feature mutex – NARROWED by FAR-1830/1832, cost path removed by FAR-1833, **export lock removed by FAR-1823**
 
 *Originally eleven distinct writers locked the same organisation row for unrelated concerns
 (sandbox concurrency, HITL window, analytics consent, OTEL config, runtime flags, licence,
@@ -344,11 +356,24 @@ inventory at all. The product-analytics writers (QA F1) use the patch's nested s
 still no pre-lock: two writers of DIFFERENT sub-fields of the block both survive without
 serialising. What still locks the `organisations` row:
 
-- **D1–D4 (deletion FSM) – intentional and preserved.** Deletion must keep exclusive
+- **D1–D3 (deletion FSM) – intentional and preserved.** Deletion must keep exclusive
   `FOR UPDATE` so a hard delete still blocks concurrent child inserts (`FOR KEY SHARE`); a
   statement-level config patch still conflicts with it, so deletion exclusivity survives
   (proven by `tests/integration/crud/test_org_settings_patch.py`:
   a config patch wait-bounds against an in-flight deletion; a child FK insert still queues).
+  **FAR-1823 reordered D1 (`request_org_deletion`) to collect the export snapshot BEFORE
+  taking the FSM lock** — the lock is now held only for the short FSM transition
+  (status/deleted_at/token/expiry + persist export_bundle_json), and premises are
+  RE-VALIDATED under the lock because a concurrent confirm/cancel may have changed the org
+  state between the snapshot and the lock acquisition.
+- **D4 (`export_org_data`) – lock REMOVED by FAR-1823.** The org-row `FOR UPDATE` was
+  dropped; live captures now use a read-only REPEATABLE READ snapshot on a SEPARATE
+  connection. The stored `export_bundle_json` is returned directly without any lock.
+  The org-row lock never gave cross-table consistency because child-row UPDATEs were
+  never blocked by it — the export reads multiple child tables the org lock does not protect.
+  **Accepted trade:** a write landing between the snapshot and the FSM transition (D1's lock)
+  is not included in the export bundle. Deletion is soft-first with a 24 h cancel path, so
+  the window is bounded and the user can cancel if the export missed a late change.
 - **C5 / C6** – generic-dialect (SQLite/MariaDB) fallbacks only; Postgres never reaches them.
 - **~~D9 (spend-ceiling gate, `FOR NO KEY UPDATE`)~~ – REMOVED by FAR-1833 (Land 2).** The
   ceiling/cumulative state moved off the org row onto `organisation_cost_state` and the row
@@ -357,8 +382,8 @@ serialising. What still locks the `organisations` row:
   implicit FK `FOR KEY SHARE` on child inserts remain – but they are now taken in a fixed
   advisory → org-row order that cannot form the old ABBA cycle; see §10.
 
-The mutex is narrower but not gone, and the residual *hold-time* watch item is D4 (org export
-can run long under its FSM lock).
+The mutex is narrower, and the residual *hold-time* watch item for D4 is **closed** (export
+no longer holds the org lock).
 
 ### 3. `replace_pipeline_graph` holds the pipeline row across the whole replace + an audit append (A13)
 `db/crud/pipeline.py:2191` locks the `Pipeline` row and then performs the HITL-gate guard, a
@@ -494,20 +519,41 @@ shipped behaviour. The corrections:
    **FIXED – FAR-1832:** the append now runs after the crud call, same transaction (atomicity
    and the fail-closed append property unchanged), pinned by
    `backend/tests/unit/api/test_far1832_lock_order.py`.
-3. **Measured counts moved (FAR-1822 + FAR-1832 + FAR-1833).** Re-measuring §1 before this
-   branch gives 58 `.with_for_update(` sites (60 SQLAlchemy call sites total once the 2
-   `session.get` kwargs are included, 62 total row-lock sites with the 2 raw SQL sites) – the
-   audit's original 63 was already stale by one when FAR-1822 (PR #1842) removed the
-   `cron_helpers` lock, and FAR-1832 removed four more (old C1, C2, C3, D14 – the locked
-   settings writers are now single-statement atomic patches). **FAR-1833 retires D9** (the
-   spend-ceiling gate's row lock becomes a per-org advisory lock), giving the **57**
-   `.with_for_update(` sites measured on this branch – **59** SQLAlchemy call sites, **61**
-   total row-lock sites. §3/§5/§7 carry the post-change shape; removed row IDs are left as
-   gaps so cross-references stay stable.
-   *Post-cutover re-derivation (FAR-1825):* four more sites landed by other work after
-   that cutover (A19 and the D15–D17 trio in `cron_helpers`), so the branch tip now
-   measures **59** `.with_for_update(` sites, **63** SQLAlchemy call sites, **65** total
-   row-lock sites – see the re-derivation block in §1 and the FAR-1825 section below.
+3. **D4 (`export_org_data`) held the org-row `FOR UPDATE` lock for live captures.**
+   The export reads multiple child tables (memberships, pipelines, runs, audit, library,
+   connectors, backends, etc.) but the org-row lock only blocks concurrent writers to the
+   `organisations` row itself — child-row UPDATEs were never blocked, so the lock gave a
+   false sense of cross-table consistency while still allowing concurrent mutations to the
+   very data being exported. **FIXED – FAR-1823:** the `FOR UPDATE` was removed; live
+   captures now use a read-only REPEATABLE READ snapshot on a SEPARATE connection. The
+   stored `export_bundle_json` is returned directly without any lock.
+4. **`request_org_deletion` (D1) held the org-row lock across the entire export
+   collection.** The export could run long (seconds) while the FSM lock was held,
+   serialising unrelated config patches and child inserts. **FIXED – FAR-1823:** reordered
+   to collect the export snapshot BEFORE taking the FSM lock. The lock is now held only
+   for the short FSM transition (status/deleted_at/token/expiry + persist export_bundle_json).
+   Premises are RE-VALIDATED under the lock because a concurrent confirm/cancel may have
+   changed the org state between the snapshot and the lock acquisition.
+5. **Measured counts moved (FAR-1822 + FAR-1823 + FAR-1832 + FAR-1833).** Re-measuring §1 before this
+    branch gives 57 `.with_for_update(` sites (59 SQLAlchemy call sites total once the 2
+    `session.get` kwargs are included, 61 total row-lock sites with the 2 raw SQL sites) – the
+    audit's original 63 was already stale by one when FAR-1822 (PR #1842) removed the
+    `cron_helpers` lock, and FAR-1823 removed one more (D4's org-row lock), and FAR-1832
+    removed four more (old C1, C2, C3, D14 – the locked settings writers are now
+    single-statement atomic patches). **FAR-1833 retires D9** (the spend-ceiling gate's
+    row lock becomes a per-org advisory lock), giving the **56** `.with_for_update(` sites
+    measured on this branch – **58** SQLAlchemy call sites, **60** total row-lock sites.
+    §3/§5/§7 carry the post-change shape; removed row IDs are left as gaps so cross-references
+    stay stable.
+    *Post-cutover re-derivation (FAR-1825):* four more sites landed by other work after
+    that cutover (A19 and the D15–D17 trio in `cron_helpers`), so the branch tip now
+    measures **59** `.with_for_update(` sites, **63** SQLAlchemy call sites, **65** total
+    row-lock sites – see the re-derivation block in §1 and the FAR-1825 section below.
+
+    **Note on D4:** FAR-1823 removed D4's `FOR UPDATE` lock. The `.with_for_update(` count
+    including D4 is 59; excluding D4 it is 58. The SQLAlchemy total including D4 is 63;
+    excluding D4 it is 62. The total row-lock sites including D4 is 65; excluding D4 it is 64.
+    The §3/§5 inventory reflects the post-FAR-1823 shape (D4 = "none").
 
 ### Correction (FAR-1833) – D9 retired: the org spend-ceiling gate is no longer a row lock
 
@@ -549,13 +595,13 @@ that was D9. The residual coupling is therefore a bounded one-way wait, never a 
 This document's own §9 caveat applies: an inventory is a hypothesis. FAR-1825 therefore
 re-ran §1's two commands against the branch tip before changing anything:
 
-| Form | At the branch tip (re-measured) |
-|---|---|
-| `.with_for_update(` | **59** |
-| `session.get(..., with_for_update=True)` | **4** (a 5th kwarg grep hit is the FAR-1914 docstring at `cron_helpers.py:6884`) |
-| SQLAlchemy call sites | **63** |
-| raw locking `FOR UPDATE` | **2** |
-| **total** | **65** |
+| Form | At the branch tip (re-measured) | Post-FAR-1823 (D4 excluded) |
+|---|---|---|
+| `.with_for_update(` | **59** | **58** |
+| `session.get(..., with_for_update=True)` | **4** (a 5th kwarg grep hit is the FAR-1914 docstring at `cron_helpers.py:6884`) | **4** |
+| SQLAlchemy call sites | **63** | **62** |
+| raw locking `FOR UPDATE` | **2** | **2** |
+| **total** | **65** | **64** |
 
 The +4 since the FAR-1833 snapshot are sites added by unrelated work, all outside
 category C: **A19** `api/mcp_server.py::_replace_pipeline_graph_txn` (already self-bounds
@@ -567,6 +613,10 @@ at `cron_helpers.py:9305`, FAR-1601); **D16**
 and **D17** `core/cron_helpers.py::_terminalize_aged_nodeless_zombies` (the FAR-1914
 locked re-read at `7021`, same reconcile transaction bound). Category C remains exactly
 **20** sites.
+
+**Post-FAR-1823 (D4 excluded):** the `.with_for_update(` count is 58, SQLAlchemy
+total is 62, and total row-lock sites is 64. D4 (`export_org_data`) is now "none"
+in §3, so it is not counted as a row-lock site.
 
 **Disposition of every category-C site** (the `txn` column in §3 carries the per-row note):
 
