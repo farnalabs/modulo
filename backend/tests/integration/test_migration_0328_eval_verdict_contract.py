@@ -12,8 +12,9 @@ Covers the migration's own contract, on a private database per test (the
   CHECK that accepts both stored names;
 * an unknown outcome / confidence kind violates its CHECK;
 * a SINGLE ``alembic upgrade 0323 -> 0328`` invocation completes (the
-  self-hosted rollout path, where 0324, 0325_run_seam_coverage and 0328 share
-  one transaction — the side-connection deadlock reproduction);
+  self-hosted rollout path, where 0324, 0325_run_seam_coverage,
+  0327_runs_execution_attempt_count and 0328 share one transaction — the
+  side-connection deadlock reproduction);
 * the ``jsonb`` envelope round-trips as an object;
 * the downgrade restores the previous shape and vocabulary.
 """
@@ -39,7 +40,7 @@ pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[2]  # backend/
 MIGRATION_REV = "0328_eval_verdict_contract"
-PREV_REV = "0325_run_seam_coverage"
+PREV_REV = "0327_runs_execution_attempt_count"
 
 _ORG = "d0c00000-0000-0000-0000-000000000001"
 _PIPELINE = "d0c00000-0000-0000-0000-000000000002"
@@ -169,9 +170,9 @@ async def one_shot_db_url(db_url: str) -> AsyncGenerator[str, None]:
     """A database at 0323, upgraded to 0328 in ONE alembic invocation.
 
     This is the self-hosted rollout path: the release's single
-    ``alembic upgrade heads`` applies 0324_purge, 0325_run_seam_coverage and 0328 in the SAME
-    transaction, which is where a side connection taking a lock on ``evals``
-    would self-deadlock.
+    ``alembic upgrade heads`` applies 0324_purge, 0325_run_seam_coverage,
+    0327_runs_execution_attempt_count and 0328 in the SAME transaction, which is
+    where a side connection taking a lock on ``evals`` would self-deadlock.
     """
     db_name, iso_url = await _fresh_db(db_url, "m0328_shot")
     try:

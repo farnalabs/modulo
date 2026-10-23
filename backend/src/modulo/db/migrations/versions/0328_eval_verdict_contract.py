@@ -1,7 +1,7 @@
 """Eval judge verdict contract: ``outcome``, error state, judge envelope (ADR 066 S1).
 
 Revision ID: 0328_eval_verdict_contract
-Revises: 0325_run_seam_coverage
+Revises: 0327_runs_execution_attempt_count
 Create Date: 2026-10-21
 
 Renumbered from ``0325_eval_verdict_contract`` when main independently landed
@@ -9,7 +9,10 @@ Renumbered from ``0325_eval_verdict_contract`` when main independently landed
 concurrent PRs claimed the same siblings (``0326_evidence_index_aggregate_indexes``
 on PR #2201 and ``0327_runs_execution_attempt_count`` on PR #2224): two files can
 share a number without a git merge conflict, so the chain is re-pointed here
-rather than leaving a second root.""
+rather than leaving a second root. ``down_revision`` now follows main's head
+``0327_runs_execution_attempt_count`` (it previously still pointed at
+``0325_run_seam_coverage``, which forked the graph into two heads once main
+advanced).""
 
 **EXPAND release — this migration deliberately does NOT set ``outcome`` NOT NULL
 and does NOT narrow the eval-type vocabulary.** Deploy ordering is
@@ -53,9 +56,9 @@ Locking / online safety (FAR-403 class, and a deadlock found in review):
   earlier revision, so the same Alembic transaction) holds ACCESS SHARE on
   ``public.evals``; a side connection taking ACCESS EXCLUSIVE there would wait
   on a lock the same transaction holds — a self-deadlock. The migration
-  connection can upgrade its own lock. ``0325_run_seam_coverage`` now sits
-  between the two revisions; it only adds a nullable column to ``runs``, so it
-  does not change the lock story.
+  connection can upgrade its own lock. ``0325_run_seam_coverage`` and
+  ``0327_runs_execution_attempt_count`` now sit between the two revisions; both
+  only add nullable columns to ``runs``, so they do not change the lock story.
 * ``eval_results`` DDL and the backfill run on a dedicated AUTOCOMMIT
   connection: every ``ALTER`` commits immediately (so its ACCESS EXCLUSIVE is
   held for that statement only, never across the following ``VALIDATE`` scan,
@@ -99,7 +102,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0328_eval_verdict_contract"
-down_revision: str | None = "0325_run_seam_coverage"
+down_revision: str | None = "0327_runs_execution_attempt_count"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
