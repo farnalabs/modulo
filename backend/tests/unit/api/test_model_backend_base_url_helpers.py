@@ -80,12 +80,12 @@ def test_stored_secret_payload_logs_and_returns_empty_on_malformed_json(caplog: 
     import logging
 
     with caplog.at_level(logging.WARNING, logger="modulo.api.routes.model_backends"):
-        assert _stored_secret_payload("{not-json") == {}
+        assert not _stored_secret_payload("{not-json")
     assert "malformed_credential_json" in caplog.text
 
 
 def test_stored_secret_payload_rejects_a_non_object() -> None:
-    assert _stored_secret_payload('["not", "an", "object"]') == {}
+    assert not _stored_secret_payload('["not", "an", "object"]')
 
 
 def test_stored_secret_payload_parses_an_object() -> None:
@@ -118,7 +118,7 @@ def test_requested_base_url_folds_in_the_legacy_value() -> None:
 
 
 def test_strip_legacy_base_url_handles_a_non_mapping_value() -> None:
-    assert _strip_legacy_base_url(None) == {}
+    assert not _strip_legacy_base_url(None)
 
 
 def test_strip_legacy_base_url_removes_only_the_endpoint_key() -> None:
@@ -138,7 +138,7 @@ def test_direct_update_base_url_rejects_a_conflicting_legacy_value() -> None:
 
 @pytest.mark.anyio
 async def test_base_urls_for_backends_returns_empty_for_no_rows() -> None:
-    assert await _base_urls_for_backends(MagicMock(), MagicMock(), []) == {}
+    assert not await _base_urls_for_backends(MagicMock(), MagicMock(), [])
 
 
 @pytest.mark.anyio

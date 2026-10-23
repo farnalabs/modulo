@@ -24,8 +24,10 @@ def test_backend_id(backend):
 
 async def test_aclose_is_idempotent_without_a_pinned_transport(backend):
     """A backend built without a custom endpoint owns no transport to close."""
+    assert backend._pin_transport is None
     await backend.aclose()
     await backend.aclose()
+    assert backend._pin_transport is None
 
 
 def test_chat_google_genai_uses_default_params():
