@@ -1,7 +1,7 @@
 """Add ``runs.execution_attempt_count`` - a dedicated durable execution counter (FAR-2076).
 
-Revision ID: 0325_runs_execution_attempt_count
-Revises: 0324_purge_eval_definitions
+Revision ID: 0327_runs_execution_attempt_count
+Revises: 0325_run_seam_coverage
 Create Date: 2026-10-22
 
 FAR-2076 unifies the retry budget (policy, transient-retry and reconcile legs)
@@ -69,8 +69,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0325_runs_execution_attempt_count"
-down_revision: str | None = "0324_purge_eval_definitions"
+revision: str = "0327_runs_execution_attempt_count"
+down_revision: str | None = "0325_run_seam_coverage"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
