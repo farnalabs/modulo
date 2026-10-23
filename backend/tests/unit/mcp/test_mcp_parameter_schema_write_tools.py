@@ -22,6 +22,7 @@ from modulo.api.mcp_server import (
     update_parameter_schema,
     update_parameter_set,
 )
+from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import ORG_ID, USER_ID, AuthContext, make_session_context
 
 NOW = datetime(2026, 9, 8, 12, 0, 0, tzinfo=UTC)
@@ -88,7 +89,7 @@ class TestCreateParameterSchema(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -107,7 +108,7 @@ class TestCreateParameterSchema(AuthContext):
     ) -> None:
         schema = _make_mock_schema()
         mock_create.return_value = schema
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await create_parameter_schema(
             name="deploy-params",
             description="Deployment parameters",
@@ -127,7 +128,7 @@ class TestCreateParameterSchema(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_create.side_effect = IntegrityError("dup", {}, Exception())
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await create_parameter_schema(name="duplicate")
         assert result["error"] == "conflict"
 
@@ -141,7 +142,7 @@ class TestCreateParameterSchema(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_create.side_effect = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await create_parameter_schema(name="test")
         assert result["error"] == "migration_required"
 
@@ -155,7 +156,7 @@ class TestCreateParameterSchema(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_create.side_effect = RuntimeError("boom")
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await create_parameter_schema(name="test")
         assert result["error"] == "server_error"
 
@@ -181,7 +182,7 @@ class TestUpdateParameterSchema(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_get.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await update_parameter_schema(schema_id=str(uuid.uuid4()), version=1)
         assert result["error"] == "not_found"
 
@@ -201,7 +202,7 @@ class TestUpdateParameterSchema(AuthContext):
         updated = _make_mock_schema(version=2)
         updated.name = "updated-name"
         mock_update.return_value = updated
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await update_parameter_schema(
             schema_id=str(existing.id),
             version=1,
@@ -224,7 +225,7 @@ class TestUpdateParameterSchema(AuthContext):
         existing = _make_mock_schema()
         mock_get.return_value = existing
         mock_update.return_value = None  # version mismatch
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await update_parameter_schema(
             schema_id=str(existing.id),
             version=1,
@@ -254,7 +255,7 @@ class TestDeleteParameterSchema(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_get.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await delete_parameter_schema(schema_id=str(uuid.uuid4()))
         assert result["error"] == "not_found"
 
@@ -273,7 +274,7 @@ class TestDeleteParameterSchema(AuthContext):
         mock_get.return_value = existing
         deleted = _make_mock_schema()
         mock_delete.return_value = deleted
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await delete_parameter_schema(schema_id=str(existing.id))
         assert result["data"]["deleted"] is True
         assert result["data"]["id"] == str(deleted.id)
@@ -300,7 +301,7 @@ class TestRestoreParameterSchema(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_get.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await restore_parameter_schema(schema_id=str(uuid.uuid4()))
         assert result["error"] == "not_found"
 
@@ -319,7 +320,7 @@ class TestRestoreParameterSchema(AuthContext):
         mock_get.return_value = existing
         restored = _make_mock_schema()
         mock_restore.return_value = restored
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await restore_parameter_schema(schema_id=str(existing.id))
         assert result["data"]["id"] == str(restored.id)
         assert result["data"]["version"] == 1
@@ -346,7 +347,7 @@ class TestCreateParameterSet(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_get.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await create_parameter_set(schema_id=str(uuid.uuid4()), name="test")
         assert result["error"] == "not_found"
 
@@ -365,7 +366,7 @@ class TestCreateParameterSet(AuthContext):
         mock_get.return_value = schema
         ps = _make_mock_set(schema_id=schema.id)
         mock_create.return_value = ps
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await create_parameter_set(
             schema_id=str(schema.id),
             name="production",
@@ -388,7 +389,7 @@ class TestCreateParameterSet(AuthContext):
         schema = _make_mock_schema()
         mock_get.return_value = schema
         mock_create.side_effect = IntegrityError("dup", {}, Exception())
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await create_parameter_set(schema_id=str(schema.id), name="duplicate")
         assert result["error"] == "conflict"
 
@@ -414,7 +415,7 @@ class TestUpdateParameterSet(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_get.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await update_parameter_set(
             schema_id=str(uuid.uuid4()),
             set_id=str(uuid.uuid4()),
@@ -436,7 +437,7 @@ class TestUpdateParameterSet(AuthContext):
         schema = _make_mock_schema()
         mock_get_schema.return_value = schema
         mock_get_set.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await update_parameter_set(
             schema_id=str(schema.id),
             set_id=str(uuid.uuid4()),
@@ -456,7 +457,7 @@ class TestUpdateParameterSet(AuthContext):
         foreign_schema = _make_mock_schema()
         foreign_schema.organisation_id = uuid.uuid4()  # not ORG_ID
         mock_get_schema.return_value = foreign_schema
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await update_parameter_set(
             schema_id=str(foreign_schema.id),
             set_id=str(uuid.uuid4()),
@@ -484,7 +485,7 @@ class TestUpdateParameterSet(AuthContext):
         updated = _make_mock_set(schema_id=schema.id, version=2)
         updated.name = "updated-set"
         mock_update.return_value = updated
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await update_parameter_set(
             schema_id=str(schema.id),
             set_id=str(existing.id),
@@ -512,7 +513,7 @@ class TestUpdateParameterSet(AuthContext):
         existing = _make_mock_set(schema_id=schema.id)
         mock_get_set.return_value = existing
         mock_update.return_value = None  # version mismatch
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await update_parameter_set(
             schema_id=str(schema.id),
             set_id=str(existing.id),
@@ -543,7 +544,7 @@ class TestDeleteParameterSet(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_get.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await delete_parameter_set(
             schema_id=str(uuid.uuid4()),
             set_id=str(uuid.uuid4()),
@@ -569,7 +570,7 @@ class TestDeleteParameterSet(AuthContext):
         mock_get_set.return_value = existing
         deleted = _make_mock_set(schema_id=schema.id)
         mock_delete.return_value = deleted
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await delete_parameter_set(
             schema_id=str(schema.id),
             set_id=str(existing.id),
@@ -599,7 +600,7 @@ class TestRestoreParameterSet(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_get.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await restore_parameter_set(
             schema_id=str(uuid.uuid4()),
             set_id=str(uuid.uuid4()),
@@ -625,7 +626,7 @@ class TestRestoreParameterSet(AuthContext):
         mock_get_set.return_value = existing
         restored = _make_mock_set(schema_id=schema.id)
         mock_restore.return_value = restored
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await restore_parameter_set(
             schema_id=str(schema.id),
             set_id=str(existing.id),

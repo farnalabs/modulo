@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from tests.bdd.conftest import harden_session_double
+
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/licensing/team_gates.feature")
 
@@ -28,6 +30,7 @@ def _store_response(request: Any, ctx: dict[str, Any], resp: Any) -> None:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    harden_session_double(session)
 
     mock_scalars = MagicMock()
     mock_scalars.all.return_value = []

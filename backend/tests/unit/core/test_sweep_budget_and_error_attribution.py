@@ -56,6 +56,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core import cron_helpers as ch
+from tests.unit.api.mock_session import make_session_factory
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -143,7 +144,7 @@ class TestDispatcherReconcileRowBudget:
             patch.object(ch, "_collect_org_ids", new_callable=AsyncMock, return_value=org_ids),
             patch.object(ch, "_reconcile_org", side_effect=fake_reconcile_org),
             patch.object(ch, "reconciler_recovery_predicate"),
-            patch.object(ch, "_open_system_factory"),
+            patch.object(ch, "_open_system_factory", return_value=make_session_factory()),
             patch("modulo.core.cron_helpers.AsyncRedis"),
         ):
             await ch._dispatcher_reconcile_body(
@@ -191,7 +192,7 @@ class TestDispatcherReconcileRowBudget:
             patch.object(ch, "_collect_org_ids", new_callable=AsyncMock, return_value=org_ids),
             patch.object(ch, "_reconcile_org", side_effect=fake_reconcile_org),
             patch.object(ch, "reconciler_recovery_predicate"),
-            patch.object(ch, "_open_system_factory"),
+            patch.object(ch, "_open_system_factory", return_value=make_session_factory()),
             patch("modulo.core.cron_helpers.AsyncRedis"),
         ):
             await ch._dispatcher_reconcile_body(
@@ -887,7 +888,7 @@ class TestSingleOrgRowBudget:
             patch.object(ch, "_collect_org_ids", new_callable=AsyncMock, return_value=[uuid.uuid4()]),
             patch.object(ch, "_reconcile_org", side_effect=fake_reconcile_org),
             patch.object(ch, "reconciler_recovery_predicate"),
-            patch.object(ch, "_open_system_factory"),
+            patch.object(ch, "_open_system_factory", return_value=make_session_factory()),
             patch("modulo.core.cron_helpers.AsyncRedis"),
         ):
             await ch._dispatcher_reconcile_body(
@@ -940,7 +941,7 @@ async def _drive_body(
         stack.enter_context(patch.object(ch, "_collect_org_ids", new_callable=AsyncMock, return_value=org_ids))
         stack.enter_context(patch.object(ch, "_reconcile_org", side_effect=fake_reconcile_org))
         stack.enter_context(patch.object(ch, "reconciler_recovery_predicate"))
-        stack.enter_context(patch.object(ch, "_open_system_factory"))
+        stack.enter_context(patch.object(ch, "_open_system_factory", return_value=make_session_factory()))
         stack.enter_context(patch.object(ch, "_run_reconcile_sweeps", sweeps))
         fact_writer = record_facts if record_facts is not None else AsyncMock()
         stack.enter_context(patch.object(ch, "_record_fact_for_terminalized_run", fact_writer))

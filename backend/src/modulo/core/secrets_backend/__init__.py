@@ -104,7 +104,15 @@ def validate_key(key: str) -> str:
 
 
 def _check_external_secrets_licensed() -> bool:
-    """Return True if the current plan permits external secrets backends.
+    """Return True if the current plan permits CHANGING the secrets-backend configuration.
+
+    This is a CONFIGURATION-SURFACE entitlement, not a runtime gate. It
+    answers "may an operator switch to / edit an external backend?", and must
+    never decide which backend the running instance resolves credentials with
+    (FAR-2059 / FAR-2060): a licence lapse must not silently downgrade a
+    configured ``vault`` / ``aws`` deployment to ``fernet``, because that turns
+    the lapse into credential-resolution failures at run time with only a log
+    warning to explain it.
 
     Uses FeatureFlagRegistry to check the ``external_secrets`` flag rather
     than an ad-hoc license check, so gating stays consistent with the
@@ -133,6 +141,29 @@ def _check_external_secrets_licensed() -> bool:
     return flag is not None and flag.currently_active
 
 
+def _warn_if_external_backend_unconfigured(name: str) -> None:
+    """Warn when an external backend is selected but lacks its own configuration.
+
+    Licence state is deliberately NOT consulted. This is the only case in
+    which the factory should say anything about an external backend: the
+    backend's own missing configuration. The selected backend is still built —
+    a genuine misconfiguration fails hard in its constructor rather than
+    silently resolving credentials through a different backend.
+
+    Only Vault has a hard "unconfigured" signal (``VAULT_ADDR`` unset — the
+    constructor refuses). AWS resolves credentials through its ambient chain
+    (instance role, web identity, container credentials, …), so a missing
+    static key is not a misconfiguration and must not produce log noise on
+    every factory call.
+    """
+    if name == "vault" and not (os.environ.get("VAULT_ADDR") or "").strip():
+        logger.warning(
+            "Secrets backend 'vault' is selected but VAULT_ADDR is unset; "
+            "VaultSecretsBackend construction will fail rather than silently "
+            "falling back to fernet.",
+        )
+
+
 def create_secrets_backend(
     *,
     fernet_key: str | None = None,
@@ -145,8 +176,12 @@ def create_secrets_backend(
     Reads *backend_name* (default ``MODULO_SECRETS_BACKEND`` env var, fallback
     ``"fernet"``) and constructs the matching implementation.
 
-    External secrets backends (``vault``, ``aws``) require a valid license key.
-    Without one, the factory falls back to ``"fernet"`` and logs a warning.
+    External secrets backends (``vault``, ``aws``) are built whenever they are
+    CONFIGURED. Licence state does NOT downgrade them (FAR-2059 / FAR-2060):
+    ``external_secrets`` gates the ability to CHANGE the configuration, never
+    the runtime resolution path. A lapse must not quietly switch a configured
+    Vault/AWS deployment to fernet, because that would turn the lapse into
+    credential-resolution failures mid-run.
 
     Args:
         fernet_key: Fernet encryption key (required only by FernetSecretsBackend).
@@ -175,17 +210,10 @@ def create_secrets_backend(
                 raise ValueError("fernet_key is required when backend_name is 'fernet'")
             return FernetSecretsBackend(fernet_key=fernet_key, session=session, old_key=old_fernet_key)
         case "vault" | "aws":
-            if not _check_external_secrets_licensed():
-                logger.warning(
-                    "External secrets backend %r requires a valid license key. Falling back to 'fernet' backend.",
-                    name,
-                )
-                from modulo.core.secrets_backend.fernet import FernetSecretsBackend
-
-                if fernet_key is None:
-                    raise ValueError("fernet_key is required when backend_name is 'fernet'")
-                return FernetSecretsBackend(fernet_key=fernet_key, session=session, old_key=old_fernet_key)
-
+            # Deliberately NO licence check here. The configured backend is the
+            # backend the instance resolves credentials with; see the module
+            # docstring and ``_check_external_secrets_licensed``.
+            _warn_if_external_backend_unconfigured(name)
             if name == "vault":
                 from modulo.core.secrets_backend.vault import VaultSecretsBackend
 

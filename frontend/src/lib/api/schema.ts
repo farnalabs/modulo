@@ -1654,8 +1654,10 @@ export interface paths {
          *     licensed path keeps the configured name, as before.
          *
          *     SAML is enabled on the single-org path if any enabled SAML provider exists
-         *     in the DB, or if env-var SAML is fully configured (enabled + license +
-         *     metadata); on the multi-org path only the env-var configuration counts.
+         *     in the DB, or if env-var SAML is fully configured (enabled + metadata); on
+         *     the multi-org path only the env-var configuration counts. Licence state
+         *     does not affect either rung (FAR-2059) — a lapse must not remove the only
+         *     sign-in method from the login page.
          */
         get: operations["sso_providers_api_v1_auth_sso_providers_get"];
         put?: never;

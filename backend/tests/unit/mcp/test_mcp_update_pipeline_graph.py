@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.api.mcp_server import update_pipeline_graph
+from tests.unit.api.mock_session import make_session_scope
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -90,7 +91,7 @@ class TestUpdatePipelineGraphGuardrailStrip:
         kept_node_id = uuid.uuid4()
         mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=None)
         mock_guardrail_rows.return_value = [_guardrail_row(bound_node_id)]
-        mock_session.return_value.__aenter__.return_value = AsyncMock()
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
         mock_replace_graph.side_effect = GuardrailBindingStripDenied(
             stripped_node_ids=[str(bound_node_id)],
             detail=(
@@ -136,7 +137,7 @@ class TestUpdatePipelineGraphGuardrailStrip:
         mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=None)
         mock_guardrail_rows.return_value = [_guardrail_row(bound_node_id)]
         mock_replace_graph.return_value = ([_graph_node(kept_node_id)], [])
-        mock_session.return_value.__aenter__.return_value = AsyncMock()
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
 
         result = await update_pipeline_graph(
             pipeline_id=str(pipeline_id),
@@ -174,7 +175,7 @@ class TestUpdatePipelineGraphGuardrailStrip:
         mock_guardrail_rows.return_value = [_guardrail_row(bound_node_id)]
         nodes = [_graph_node(bound_node_id), _graph_node(kept_node_id)]
         mock_replace_graph.return_value = (nodes, [])
-        mock_session.return_value.__aenter__.return_value = AsyncMock()
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
 
         result = await update_pipeline_graph(
             pipeline_id=str(pipeline_id),
@@ -231,7 +232,7 @@ class TestUpdatePipelineGraphHitlDescription:
         node_id = uuid.uuid4()
         pipeline_id = uuid.uuid4()
         mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=None)
-        mock_session.return_value.__aenter__.return_value = AsyncMock()
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
 
         result = await update_pipeline_graph(
             pipeline_id=str(pipeline_id),
@@ -265,7 +266,7 @@ class TestUpdatePipelineGraphHitlDescription:
         described_config = {"label": "Review", "description": "Reviewer confirms the refund amount before payout."}
         mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=None)
         mock_replace_graph.return_value = ([_hitl_node(node_id, described_config)], [])
-        mock_session.return_value.__aenter__.return_value = AsyncMock()
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
 
         result = await update_pipeline_graph(
             pipeline_id=str(pipeline_id),
@@ -317,7 +318,7 @@ class TestMcpGraphMaskingParity:
         from modulo.api.mcp_server import get_pipeline_graph_tool
         from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
-        mock_session.return_value.__aenter__.return_value = AsyncMock()
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
         mock_get_graph.return_value = ([{**_MASK_SECRET_NODE}], [])
 
         result = await get_pipeline_graph_tool(pipeline_id="2c7e9a10-8f3a-4d61-9b2c-4a5e6f809099")
@@ -351,7 +352,7 @@ class TestMcpGraphMaskingParity:
             id=uuid.uuid4(), owner_team_id=None, graph_nodes_json=[{**secret_node}]
         )
         mock_replace_graph.return_value = ([{**secret_node}], [])
-        mock_session.return_value.__aenter__.return_value = AsyncMock()
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
 
         masked_node = {
             **_MASK_SECRET_NODE,
@@ -395,7 +396,7 @@ class TestMcpGraphMaskingParity:
             id=uuid.uuid4(), owner_team_id=None, graph_nodes_json=[{**_MASK_SECRET_NODE}]
         )
         mock_replace_graph.return_value = ([{**_MASK_SECRET_NODE}], [])
-        mock_session.return_value.__aenter__.return_value = AsyncMock()
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
 
         result = await update_pipeline_graph(
             pipeline_id="2c7e9a10-8f3a-4d61-9b2c-4a5e6f809099",
@@ -441,7 +442,7 @@ class TestUpdatePipelineGraphDispatchAndValidation:
     ) -> None:
         pipeline_id = uuid.uuid4()
         mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=None, graph_nodes_json=[])
-        mock_session.return_value.__aenter__.return_value = AsyncMock()
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
         mock_reject.return_value = {
             "error": "validation_failed",
             "field": "connector_type",

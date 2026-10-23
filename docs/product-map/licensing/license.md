@@ -150,16 +150,32 @@ neither is valid; see Behaviours.)
       now routed through the shared helper), the admin feature-flag list's
       `license.has_license_key` and `license.is_valid`
       (`admin_feature_flags._build_registry` / `_license_is_valid` - `is_valid`
-      is no longer hardcoded `true`), the MCP `list_feature_flags` tool's
-      licence block (same `has_key` rule plus a truthful `is_valid`), the
-      env-SAML availability boolean (`sso.is_saml_available`), and the
-      env-SAML config gate (`auth.sso._resolve_saml_config`, which fails CLOSED
-      with the same 400 message as an absent key). A valid signed key still
-      enables every one of those surfaces
+      is no longer hardcoded `true`), and the MCP `list_feature_flags` tool's
+      licence block (same `has_key` rule plus a truthful `is_valid`). A valid
+      signed key still enables every one of those surfaces
       (`test_viewmodel_resolve_tier.py`, `test_admin_feature_flags.py`
       `TestBuildRegistryEnvKeyVerification` / `TestLicenseIsValid`,
-      `test_mcp_governance_read_tools.py`, `test_sso.py`
-      `TestSamlEnvLicenseVerification`, `sso_saml.feature`; FAR-1733)
+      `test_mcp_governance_read_tools.py`; FAR-1733). The two env-SAML
+      surfaces were licence-reading when FAR-1733 shipped; FAR-2059 removed
+      the licence condition from them (below).
+- [x] Licence state never gates authentication (FAR-2059/FAR-2060). A
+      self-hosted key is an offline signed key delivered by email, so
+      capability survives a FIXED 14-day grace past `expires_at`
+      (`license.LICENCE_GRACE_DAYS`; past the grace it grants nothing), and no
+      licence state may strand an administrator: the SSO login legs use
+      `require_feature_anonymous(..., allow_degraded_authentication=True)`, so
+      when NO valid licence resolves they pass the sign-in through (a licence
+      that DOES resolve but does not grant `sso` still 402s), and
+      `GET /api/v1/admin/license` answers Community with an admin principal.
+      Env-var SAML availability and config build are CONFIGURATION-only
+      (`sso._env_saml_available`, `auth.sso._resolve_saml_config`): a lapsed
+      key neither hides the provider nor refuses to build the config, because
+      either would lock an SSO-only deployment out of the licence screen. Team
+      entitlement stays on the admin configuration surface
+      (`require_feature("sso")` on `/api/v1/admin/sso/*`) and post-auth
+      (`test_sso_licence_admin_invariant.py`,
+      `test_sso_licence_degradation.py`,
+      `test_sso.py::TestSamlEnvLicenceIndependence`; FAR-2059/FAR-2060)
 
 ## Known Gaps
 

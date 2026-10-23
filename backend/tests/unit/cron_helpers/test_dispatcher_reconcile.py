@@ -22,6 +22,7 @@ from sqlalchemy import Delete, Select, Update
 from modulo.core import cron_helpers as ch
 from modulo.db.crud.run import ERROR_CODE_PIPELINE_CAPACITY
 from modulo.db.models.pipeline import Pipeline
+from tests.unit.api.mock_session import make_redis_client
 from tests.unit.cron_helpers._helpers import _Begin as _MockBegin
 from tests.unit.cron_helpers._helpers import _org_result, _patch_env, _rows_result
 
@@ -306,7 +307,7 @@ async def _run_reconcile(
     if terminalizer_ids:
         session.terminalizer_rows = terminalizer_ids
     factory = MagicMock(return_value=session)
-    redis_client = AsyncMock()
+    redis_client = make_redis_client()
     q = _make_queue(redis_client, job_result=queue_job_result)
     redis_cls = MagicMock()
     redis_cls.from_url.return_value = redis_client
@@ -661,7 +662,7 @@ class TestReconcilePredicateMatrix:
             ]
         )
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = _make_queue(redis_client)
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
@@ -1599,7 +1600,7 @@ class TestReconcileRedisFailSafe:
         _patch_env(monkeypatch)
         session = _MockSession([_org_result([ORG]), _rows_result([_run_row(RUN_RUNNING, "running", stale=True)])])
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = _make_queue(redis_client)
         q.job = AsyncMock(side_effect=RuntimeError("redis read failed"))
         redis_cls = MagicMock()
@@ -1634,7 +1635,7 @@ class TestNoSaqEvictionRedispatch:
         _patch_env(monkeypatch)
         session = _MockSession([_org_result([ORG]), _rows_result([_run_row(RUN_EVICTED, "running", stale=True)])])
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = _make_queue(redis_client, job_result=None)  # queue.job returns None
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
@@ -1671,7 +1672,7 @@ class TestNoSaqEvictionRedispatch:
         _patch_env(monkeypatch)
         session = _MockSession([_org_result([ORG]), _rows_result([_run_row(RUN_EVICTED, "running", stale=True)])])
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = _make_queue(redis_client, job_result=None)
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
@@ -1751,7 +1752,7 @@ class TestEnqueueFailedRecovery:
             [_org_result([ORG]), _rows_result([self._enqueue_failed_row(RUN_EVICTED, marker_minutes_ago=61)])]
         )
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         redis_client.ping.side_effect = RuntimeError("redis down")
         q = _make_queue(redis_client, job_result=None)
         redis_cls = MagicMock()
@@ -2080,7 +2081,7 @@ class TestReconcilePersistsSharedStats:
         _patch_env(monkeypatch)
         session = _MockSession([_org_result([])])
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
         with (
@@ -2102,7 +2103,7 @@ class TestReconcilePrefixAware:
         _patch_env(monkeypatch)
         session = _MockSession([_org_result([ORG]), _rows_result([_run_row(RUN_RUNNING, "running", stale=True)])])
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = MagicMock()
         q.name = "staging-runs"
         q.job_id.side_effect = lambda key: f"saq:job:staging-runs:{key}"
@@ -2284,6 +2285,12 @@ class TestAwaitingHumanHasCommittedDecision:
         comparison retains the order discrimination."""
         calls = [c.args[0] for c in session.execute.await_args_list]
         session.execute.side_effect = None
+        # The follow-up production call still reads ``result.first()``. Without
+        # an explicit result, an AsyncMock's default return value is itself an
+        # AsyncMock, so ``first()`` is a never-awaited coroutine - surfacing at
+        # GC as PytestUnraisableExceptionWarning. A plain MagicMock result is
+        # the real Result contract (sync readers); only ``execute`` is async.
+        session.execute.return_value = MagicMock()
         await ch._latest_committed_decision_row(session, ORG, RUN_AWAITING)
         decision_stmt = session.execute.await_args_list[-1].args[0]
         assert calls[0].text == decision_stmt.text
@@ -2661,7 +2668,7 @@ class TestRunApiKeySweepWiring:
         _patch_env(monkeypatch)
         session = _MockSession([_org_result([ORG]), _rows_result([])])
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = _make_queue(redis_client)
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
@@ -2753,7 +2760,7 @@ class TestRollbackThresholdsWiring:
         _patch_env(monkeypatch)
         session = _MockSession([_org_result([ORG]), _rows_result([])])
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = _make_queue(redis_client)
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
@@ -2794,7 +2801,7 @@ class TestRollbackThresholdsWiring:
         _patch_env(monkeypatch)
         session = _MockSession([_org_result([ORG]), _rows_result([])])
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = _make_queue(redis_client)
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
@@ -3247,7 +3254,7 @@ class TestDispatcherReconcileInnerDeadline:
         _patch_env(monkeypatch)
         session = _MockSession([_org_result([ORG])])
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = _make_queue(redis_client)
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
@@ -3281,7 +3288,7 @@ class TestDispatcherReconcileInnerDeadline:
         _patch_env(monkeypatch)
         session = _MockSession([_org_result([ORG])])
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = _make_queue(redis_client)
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
@@ -3314,7 +3321,7 @@ class TestDispatcherReconcileUnexpectedException:
         _patch_env(monkeypatch)
         session = _MockSession([_org_result([ORG])])
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = _make_queue(redis_client)
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
@@ -3350,7 +3357,7 @@ class TestDispatcherReconcileFactsBatchCap:
         _patch_env(monkeypatch)
         session = _MockSession([])
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = _make_queue(redis_client)
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
@@ -3400,7 +3407,7 @@ class TestDispatcherReconcileFactsBatchCap:
         _patch_env(monkeypatch)
         session = _MockSession([])
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = _make_queue(redis_client)
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client

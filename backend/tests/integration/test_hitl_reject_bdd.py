@@ -41,9 +41,21 @@ def _run[T](coro: Coroutine[Any, Any, T]) -> T:
     """Drive an async helper from a sync pytest-bdd step.
 
     The integration ``db_engine`` uses ``NullPool`` precisely so it can be used
-    from any event loop, so a fresh loop per step is safe.
+    from any event loop, so a fresh loop per step is safe. Process-global
+    engines the scenario creates (the executor's shared engine) are bound to
+    THIS loop, so they are disposed before ``asyncio.run`` closes it - otherwise
+    their asyncpg connections are orphaned and their pending
+    ``Connection._cancel`` coroutines surface as unraisable warnings.
     """
-    return asyncio.run(coro)
+    from tests.integration.conftest import dispose_process_global_engines
+
+    async def _bounded() -> T:
+        try:
+            return await coro
+        finally:
+            await dispose_process_global_engines()
+
+    return asyncio.run(_bounded())
 
 
 @pytest.fixture

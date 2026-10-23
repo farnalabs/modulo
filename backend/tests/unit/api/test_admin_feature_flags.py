@@ -30,6 +30,7 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import FeatureFlagRegistry
 from modulo.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
+    LICENCE_GRACE_DAYS,
     LicenseData,
     LicenseValidation,
     clear_license,
@@ -1418,7 +1419,7 @@ class TestBuildRegistryEnvKeyVerification:
             {
                 "tier": "team",
                 "features": ["sso"],
-                "expires_at": (datetime.now(UTC) - timedelta(days=1)).isoformat(),
+                "expires_at": (datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 1)).isoformat(),
                 "org_id": "test-org",
             }
         )

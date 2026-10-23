@@ -654,6 +654,70 @@ class TestRealLicenceResolution:
         gate = require_feature_anonymous("sso", allow_degraded_authentication=True)
         assert gate.dependency(ctx=ctx) is None
 
+    async def test_team_key_inside_delivery_grace_still_grants_sso(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-2059 grace boundary: an expiry 13 days ago still retains Team."""
+        from modulo.api.dependencies import require_feature_anonymous, resolve_anonymous_plan_context
+        from modulo.core import license as license_mod
+        from modulo.core.feature_flags import FeatureFlagRegistry
+        from modulo.core.license import LICENCE_GRACE_DAYS
+
+        key, public_key = _signed_licence(tier="team", features=["sso"], days=-(LICENCE_GRACE_DAYS - 1))
+        monkeypatch.setattr(license_mod, "_configured_public_key_hex", public_key)
+        monkeypatch.setattr(license_mod, "_current_license", None)
+        monkeypatch.setattr(FeatureFlagRegistry, "_overrides", {})
+
+        settings = Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key=_VALID_32,
+            fernet_key=_VALID_32,
+            modulo_admin_password="testpass",
+            modulo_license_key=key,
+            modulo_multi_org_enabled=True,
+        )
+
+        ctx = await resolve_anonymous_plan_context(settings, _make_mock_session())
+
+        assert ctx.has_license_key() is True
+        assert ctx.tier() == "team"
+        assert ctx.feature_enabled("sso") is True
+        gate = require_feature_anonymous("sso", allow_degraded_authentication=True)
+        assert gate.dependency(ctx=ctx) is None
+
+    async def test_team_key_past_delivery_grace_falls_to_community(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The other side: an expiry 15 days ago grants no Team capability.
+
+        The key no longer resolves, so the pre-auth entry point degrades
+        (authentication is not blocked) but the resolved plan is Community and
+        every Team feature is off post-auth.
+        """
+        from modulo.api.dependencies import require_feature_anonymous, resolve_anonymous_plan_context
+        from modulo.core import license as license_mod
+        from modulo.core.feature_flags import FeatureFlagRegistry
+        from modulo.core.license import LICENCE_GRACE_DAYS
+
+        key, public_key = _signed_licence(tier="team", features=["sso"], days=-(LICENCE_GRACE_DAYS + 1))
+        monkeypatch.setattr(license_mod, "_configured_public_key_hex", public_key)
+        monkeypatch.setattr(license_mod, "_current_license", None)
+        monkeypatch.setattr(FeatureFlagRegistry, "_overrides", {})
+
+        settings = Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key=_VALID_32,
+            fernet_key=_VALID_32,
+            modulo_admin_password="testpass",
+            modulo_license_key=key,
+            modulo_multi_org_enabled=True,
+        )
+
+        ctx = await resolve_anonymous_plan_context(settings, _make_mock_session())
+
+        assert ctx.has_license_key() is False
+        assert ctx.tier() == "community"
+        assert ctx.feature_enabled("sso") is False
+        # Identity exchange is NOT blocked: the degraded branch allows it.
+        gate = require_feature_anonymous("sso", allow_degraded_authentication=True)
+        assert gate.dependency(ctx=ctx) is None
+
 
 # ── Non-SSO endpoints should be unaffected ──
 

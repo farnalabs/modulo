@@ -40,8 +40,15 @@ def _changed_unit_tests() -> list[str]:
             continue
         # pytest support files (conftest.py, __init__.py) collect zero tests
         # when passed explicitly (exit 5) and are auto-loaded whenever sibling
-        # test files run, so they never belong in the explicit path list.
-        if Path(line).name in ("conftest.py", "__init__.py"):
+        # test files run, so they never belong in the explicit path list. The
+        # same is true of every non-test helper module under tests/ (e.g.
+        # tests/unit/api/mock_session.py): pytest collects nothing from a path
+        # that does not match its ``python_files`` patterns, and the exit-5
+        # "no tests ran" then blocks the commit.
+        name = Path(line).name
+        if name in ("conftest.py", "__init__.py"):
+            continue
+        if not (name.startswith("test_") or name.endswith("_test.py")):
             continue
         paths.append(line)
     return paths

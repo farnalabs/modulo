@@ -4,12 +4,14 @@ import base64
 import json
 import re
 from collections.abc import Generator
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 
 from modulo.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
+    LICENCE_GRACE_DAYS,
     LicenseData,
     LicenseError,
     _check_expired,
@@ -26,6 +28,11 @@ from modulo.core.license import (
 from modulo.core.registry.crypto import generate_keypair, sign_primitive
 
 _ORIGINAL_KEY = _LICENSE_PUBLIC_KEY_HEX
+
+
+def _expires_days_ago(days: int) -> str:
+    """An ISO ``expires_at`` that lapsed ``days`` days before now."""
+    return (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
 
 def _build_signed_key(payload: dict, private_key_hex: str) -> str:
@@ -140,6 +147,20 @@ class TestCheckExpired:
     def test_past_date_is_expired(self) -> None:
         assert _check_expired("2000-01-01T00:00:00+00:00") == "License has expired"
 
+    def test_just_inside_the_delivery_grace_still_retains_capability(self) -> None:
+        """FAR-2059: an expiry 13 days ago is inside the 14-day delivery grace."""
+        assert LICENCE_GRACE_DAYS == 14
+        assert _check_expired(_expires_days_ago(LICENCE_GRACE_DAYS - 1)) is None
+
+    def test_just_past_the_delivery_grace_is_expired(self) -> None:
+        """The other side of the boundary: 15 days ago is beyond the grace."""
+        assert _check_expired(_expires_days_ago(LICENCE_GRACE_DAYS + 1)) == "License has expired"
+
+    def test_first_day_past_the_grace_is_expired(self) -> None:
+        """Exactly ``LICENCE_GRACE_DAYS`` + 1 minute is already lapsed."""
+        expired = (datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS, minutes=1)).isoformat()
+        assert _check_expired(expired) == "License has expired"
+
     def test_invalid_format(self) -> None:
         assert _check_expired("not-a-date") == "Invalid expires_at format: not-a-date"
 
@@ -202,6 +223,29 @@ class TestParseAndVerifySigned:
         result = parse_and_verify(
             _build_signed_key(
                 {"tier": "community", "expires_at": "2000-01-01T00:00:00+00:00"},
+                kp["private_key"],
+            )
+        )
+        assert result.valid is False
+        assert result.error == "License has expired"
+
+    def test_signed_key_inside_delivery_grace_is_valid(self, kp: dict) -> None:
+        """FAR-2059: a key that expired 13 days ago still verifies (delivery grace)."""
+        result = parse_and_verify(
+            _build_signed_key(
+                {"tier": "team", "features": ["sso"], "expires_at": _expires_days_ago(LICENCE_GRACE_DAYS - 1)},
+                kp["private_key"],
+            )
+        )
+        assert result.valid is True
+        assert result.license_data is not None
+        assert result.license_data.tier == "team"
+
+    def test_signed_key_past_delivery_grace_is_rejected(self, kp: dict) -> None:
+        """The other side: 15 days ago is beyond the grace and grants nothing."""
+        result = parse_and_verify(
+            _build_signed_key(
+                {"tier": "team", "features": ["sso"], "expires_at": _expires_days_ago(LICENCE_GRACE_DAYS + 1)},
                 kp["private_key"],
             )
         )
@@ -274,6 +318,16 @@ class TestVerifyLicenseKey:
         )
         assert verify_license_key(key) is None
 
+    def test_key_inside_delivery_grace_is_verified(self, kp: dict) -> None:
+        """FAR-2059: the delivery grace applies to the sync per-key verifier too."""
+        key = _build_signed_key(
+            {"tier": "team", "org_id": "o1", "expires_at": _expires_days_ago(LICENCE_GRACE_DAYS - 1)},
+            kp["private_key"],
+        )
+        data = verify_license_key(key)
+        assert data is not None
+        assert data.tier == "team"
+
     def test_parse_exception_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """An unexpected parse failure fails closed (None) with a warning, never raising."""
 
@@ -333,6 +387,33 @@ class TestLicenseStore:
         store_license("ignored", data)
         assert get_license() is None
         assert get_license() is None  # cleared, not just hidden
+
+    def test_get_license_retains_stored_license_inside_delivery_grace(self) -> None:
+        """FAR-2059: 13 days past expiry is still inside the grace window."""
+        clear_license()
+        data = LicenseData(
+            tier="team",
+            features=["sso"],
+            expires_at=_expires_days_ago(LICENCE_GRACE_DAYS - 1),
+            org_id="o1",
+            raw_payload={},
+            raw_key="key",
+        )
+        store_license("ignored", data)
+        assert get_license() is data
+
+    def test_get_license_clears_stored_license_past_delivery_grace(self) -> None:
+        clear_license()
+        data = LicenseData(
+            tier="team",
+            features=["sso"],
+            expires_at=_expires_days_ago(LICENCE_GRACE_DAYS + 1),
+            org_id="o1",
+            raw_payload={},
+            raw_key="key",
+        )
+        store_license("ignored", data)
+        assert get_license() is None
 
     def test_clear_license_empties_store(self) -> None:
         data = LicenseData(

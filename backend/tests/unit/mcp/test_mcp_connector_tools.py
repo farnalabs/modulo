@@ -7,6 +7,7 @@ from cryptography.fernet import Fernet
 from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.mcp_server import create_connector, delete_connector
+from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import FERNET_KEY, AuthContext, make_session_context
 
 
@@ -50,7 +51,7 @@ class TestCreateConnectorErrors(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -68,7 +69,7 @@ class TestCreateConnectorErrors(AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_create.side_effect = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         settings = MagicMock()
         settings.fernet_key = FERNET_KEY
 
@@ -87,7 +88,7 @@ class TestCreateConnectorErrors(AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_create.side_effect = RuntimeError("boom")
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         settings = MagicMock()
         settings.fernet_key = FERNET_KEY
 
@@ -113,7 +114,7 @@ class TestCreateConnectorSuccess(AuthContext):
         ci.connector_type_id = "github"
         ci.visibility = "org"
         mock_create.return_value = ci
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         settings = MagicMock()
         settings.fernet_key = FERNET_KEY
 
@@ -165,7 +166,7 @@ class TestCreateConnectorCredentialResolution(AuthContext):
         ci.connector_type_id = "rest"
         ci.visibility = "org"
         mock_create.return_value = ci
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         settings = MagicMock()
         settings.fernet_key = FERNET_KEY
 
@@ -193,7 +194,7 @@ class TestCreateConnectorCredentialResolution(AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_backend_factory.return_value = _StubVaultBackend({})
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         settings = MagicMock()
         settings.fernet_key = FERNET_KEY
 
@@ -226,7 +227,7 @@ class TestCreateConnectorCredentialResolution(AuthContext):
         ci.connector_type_id = "rest"
         ci.visibility = "org"
         mock_create.return_value = ci
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         settings = MagicMock()
         settings.fernet_key = FERNET_KEY
 
@@ -254,7 +255,7 @@ class TestCreateConnectorCredentialResolution(AuthContext):
         """An unscoped backend is refused in multi-org before any read (FAR-1640)."""
         stub = _StubVaultBackend({"kv/x": "sk-secret"})
         mock_backend_factory.return_value = stub
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         settings = MagicMock()
         settings.fernet_key = FERNET_KEY
 
@@ -294,7 +295,7 @@ class TestDeleteConnectorErrors(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -309,7 +310,7 @@ class TestDeleteConnectorErrors(AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await delete_connector(connector_id="not-a-uuid")
 
@@ -325,7 +326,7 @@ class TestDeleteConnectorErrors(AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await delete_connector(connector_id=str(uuid.uuid4()))
 
@@ -341,7 +342,7 @@ class TestDeleteConnectorErrors(AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_delete.side_effect = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await delete_connector(connector_id=str(uuid.uuid4()))
 
@@ -358,7 +359,7 @@ class TestDeleteConnectorSuccess(AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         connector_id = str(uuid.uuid4())
 
         result = await delete_connector(connector_id=connector_id)

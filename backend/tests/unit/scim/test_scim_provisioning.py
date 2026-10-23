@@ -81,7 +81,7 @@ def _make_settings() -> Settings:
 
 def _make_mock_session() -> MagicMock:
     session = MagicMock()
-    session.execute = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock())
     session.flush = AsyncMock()
     session.delete = AsyncMock()
     session.rollback = AsyncMock()

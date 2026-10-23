@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import NullPool
 
 from modulo.db.crud.pipeline import _clone_edges, _resolve_read_session_factory, clone_pipeline
+from tests.unit.api.mock_session import configure_mock_session
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -73,7 +74,7 @@ def _make_read_session(
     results.extend([_scalar_result(source), _scalars_result(edges), _scalars_result(snapshots)])
     results.extend(_scalars_result(pins_by_snap.get(str(snap.id), [])) for snap in snapshots)
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(side_effect=results)
     session.begin = MagicMock(return_value=_BeginCM(events))
     session.add = MagicMock()
@@ -115,7 +116,7 @@ def _make_source() -> _Row:
 
 
 def _make_main_session() -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.add_all = MagicMock()
     session.flush = AsyncMock()

@@ -21,6 +21,7 @@ from modulo.core.cost_controller.finalize import (
     finalize_cost,
 )
 from modulo.db.crud.run_node_outputs import RunBlobs
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -55,7 +56,7 @@ def _make_run(**kw: Any) -> MagicMock:
 
 
 def _mock_session(run: Any) -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     return session
 

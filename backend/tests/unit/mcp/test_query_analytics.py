@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from modulo.api.mcp_server import query_analytics
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
+from tests.unit.api.mock_session import make_session_scope
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -71,7 +72,7 @@ def _patch_plan(enabled: bool):
     """Patch the org lookup + plan resolution to return an enabled/disabled plan."""
     plan = _EnabledPlan() if enabled else _DisabledPlan()
     return (
-        patch("modulo.api.mcp_server._session", return_value=_make_session_context(AsyncMock())),
+        patch("modulo.api.mcp_server._session", return_value=_make_session_context(make_session_scope())),
         patch(
             "modulo.db.crud.organisation.get_organisation",
             new=AsyncMock(return_value=MagicMock(settings_json={}, plan_id=None)),

@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.exc import InvalidRequestError, SQLAlchemyError
 
 from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
+from tests.unit.api.mock_session import configure_mock_session, make_session_scope
 from tests.unit.mcp.helpers import ORG_ID, AuthContext, make_session_context
 
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
@@ -54,7 +55,7 @@ def _make_create_session(key: MagicMock, *, is_break_glass: bool = False) -> Asy
     tool build a real ``OrgApiKey`` (real ``mk_`` key generation) and return
     a valid id/created_at.
     """
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock(
         side_effect=lambda obj: (
             setattr(obj, "id", key.id),
@@ -66,7 +67,7 @@ def _make_create_session(key: MagicMock, *, is_break_glass: bool = False) -> Asy
 
 
 def _make_list_session(keys: list[MagicMock]) -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     result = MagicMock()
     result.scalars.return_value = keys
     session.execute.return_value = result
@@ -75,7 +76,7 @@ def _make_list_session(keys: list[MagicMock]) -> AsyncMock:
 
 
 def _make_revoke_session(key: MagicMock | None) -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     result = MagicMock()
     result.scalar_one_or_none.return_value = key
     session.execute.return_value = result
@@ -122,7 +123,7 @@ class TestCreateApiKey(AuthContext):
         from modulo.api.mcp_server import create_api_key
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -455,7 +456,7 @@ class TestListApiKeys(AuthContext):
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.mcp_server.auth_list_api_keys", new=mock_list) as _mock_list,
         ):
-            mock_session.return_value = make_session_context(AsyncMock())
+            mock_session.return_value = make_session_context(make_session_scope())
             result = await list_api_keys()
 
         assert result["api_keys"][0]["id"] == str(_KEY_ID)

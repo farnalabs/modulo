@@ -116,6 +116,9 @@ class TestResolvePlanContext:
     async def test_org_license_key_wins(self) -> None:
         session = AsyncMock()
         org = MagicMock()
+        # FAR-2060: a non-empty org_id claim must name THIS org, so the test
+        # double needs an identity the claim can match.
+        org.id = "test-org"
         org.settings_json = {"license_key": "org-key"}
         org.plan_id = None
         # FAR-2060: an org-scoped key is applied ONLY when its org_id claim names

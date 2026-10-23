@@ -7,6 +7,7 @@ import pytest
 
 from modulo.api.mcp_server import bind_connector_to_node, update_pipeline_graph
 from modulo.core.team_visibility import CONNECTOR_TEAM_MISMATCH
+from tests.unit.api.mock_session import configure_mock_session, make_session_scope
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -35,7 +36,7 @@ def _clear_ctx() -> None:
 
 
 def _mock_session() -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=session)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -91,7 +92,7 @@ class TestUpdatePipelineGraphEnforcement:
                 node_id="n1",
             )
         ]
-        mock_session.return_value.__aenter__.return_value = AsyncMock()
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
 
         result = await update_pipeline_graph(
             pipeline_id=str(pipeline_id),
@@ -122,7 +123,7 @@ class TestUpdatePipelineGraphEnforcement:
         connector_id = uuid.uuid4()
         mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=_TEAM_A)
         mock_find_mismatches.side_effect = ConnectorBindingMissingError([(connector_id, "node-1")])
-        mock_session.return_value.__aenter__.return_value = AsyncMock()
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
 
         result = await update_pipeline_graph(
             pipeline_id=str(pipeline_id),
@@ -151,7 +152,7 @@ class TestUpdatePipelineGraphEnforcement:
         mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=_TEAM_A)
         mock_find_mismatches.return_value = []
         mock_replace_graph.return_value = (_valid_graph_node(connector_id), [])
-        mock_session.return_value.__aenter__.return_value = AsyncMock()
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
 
         result = await update_pipeline_graph(
             pipeline_id=str(pipeline_id),
@@ -174,7 +175,7 @@ class TestUpdatePipelineGraphEnforcement:
     ) -> None:
         pipeline_id = uuid.uuid4()
         mock_get_pipeline.return_value = None
-        mock_session.return_value.__aenter__.return_value = AsyncMock()
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
 
         result = await update_pipeline_graph(
             pipeline_id=str(pipeline_id),

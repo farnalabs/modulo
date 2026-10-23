@@ -33,6 +33,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
+from tests.bdd.conftest import harden_session_double
 
 scenarios("../features/connectors/connector_crud.feature")
 
@@ -92,6 +93,7 @@ def _make_session() -> AsyncMock:
     not the literal True, so the mint-deny never fires.
     """
     session = AsyncMock()
+    harden_session_double(session)
     bind = MagicMock()
     bind.dialect.name = "sqlite"
     session.get_bind = AsyncMock(return_value=bind)

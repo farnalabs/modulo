@@ -14,6 +14,7 @@ import pytest
 import respx
 from cryptography.fernet import Fernet
 from httpx import Response
+from tests.unit.api.mock_session import configure_mock_session
 from tests.unit.notifier.conftest import make_scalar_result, session_factory_for
 
 from modulo.core.notifier import (
@@ -64,7 +65,7 @@ def _make_db_session(
     ``session.begin()`` is pre-wired so both ``_record_delivery``/``_reset_dead_letter``
     style methods and the in-app notification block inside ``_dispatch_inline`` can use it.
     """
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     _configure_rls_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
@@ -111,7 +112,7 @@ async def _get_endpoints_for_event(
     """Helper: create a mock session, call _get_subscribed_endpoints, return results."""
     result = make_scalar_result(endpoints)
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     _configure_rls_session(session)
     session.execute = AsyncMock(return_value=result)
 
@@ -151,7 +152,7 @@ async def test_get_subscribed_endpoints_filters_auto_disabled_in_query() -> None
     """The generated query excludes auto-disabled endpoints (SQL-level filter)."""
     result = make_scalar_result([_fake_endpoint()])
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     _configure_rls_session(session)
     executed: list[Any] = []
 
@@ -198,7 +199,7 @@ async def test_get_subscribed_endpoints_runs_in_explicit_transaction() -> None:
     ep = _fake_endpoint()
     result = make_scalar_result([ep])
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     begin_cm = _configure_rls_session(session)
     session.execute = AsyncMock(return_value=result)
 
@@ -836,7 +837,7 @@ async def test_dispatch_event_creates_in_app_notification_with_zero_webhook_endp
         ),
         patch.object(notifier, "_session_factory") as factory,
     ):
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -914,7 +915,7 @@ async def test_dispatch_event_re_raises_cancelled_error_from_in_app_block(notifi
         ),
         patch("modulo.core.notifier.set_rls_org", AsyncMock(side_effect=asyncio.CancelledError)),
     ):
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -1097,7 +1098,7 @@ def _make_session_factory(
             return make_scalar_result(endpoints_by_team)
         return make_scalar_result(endpoints_org)
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     _configure_rls_session(session)
     session.execute = AsyncMock(side_effect=execute_side_effect)
 

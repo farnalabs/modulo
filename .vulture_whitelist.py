@@ -74,6 +74,13 @@ __all__ = [
     "_TeamCityTestDouble",
     "_WoodpeckerTestDouble",
     # --- Known dead in production, referenced only by tests (kept — see comments) ---
+    # FAR-2059: `external_secrets` is a CONFIGURATION-SURFACE entitlement (may an
+    # operator CHANGE the secrets-backend configuration), not a runtime
+    # resolution gate. The runtime factory deliberately no longer consults it —
+    # a licence lapse must not downgrade a configured vault/aws backend — so the
+    # helper has no production caller until the configuration surface lands. It
+    # is still exercised by tests/unit/secrets_backend/test_factory.py.
+    "_check_external_secrets_licensed",
     "LicenseKeyTier",  # test-support PlanContext double — used by BDD steps to fake licensed plans
     "circuit_state",  # test-consumed circuit-breaker observability API (health_check deliberately bypasses the breaker)
     "get_api_key_role_cap_count",  # test-support diagnostic getter for API-key role-cap security counter
