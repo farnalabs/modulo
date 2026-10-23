@@ -724,4 +724,8 @@ dev = [
 # intermediates have compromised/revoked private keys, so an on-path attacker
 # could present valid-looking certificates. certifi is transitive (requests /
 # httpx / urllib3), so it is pinned via a constraint rather than a direct dep.
-constraint-dependencies = ["pip>=26.2", "certifi>=2026.10.19"]
+#
+# PYSEC-2026-4322: brotli < 1.2.1 vulnerable. brotli is transitive (pulled in
+# via geventhttpclient), so it is pinned via a constraint rather than a direct
+# dep so pip-audit (run in CI Lint (Backend)) passes.
+constraint-dependencies = ["pip>=26.2", "certifi>=2026.10.19", "brotli>=1.2.1"]
