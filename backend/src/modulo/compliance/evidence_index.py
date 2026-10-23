@@ -69,6 +69,11 @@ from modulo.compliance.artifacts import (
 from modulo.compliance.pack import MappingPack, load_mapping_pack
 from modulo.core.audit_logger import get_chain_head
 from modulo.db.crud.hitl_review_config import human_only_effective
+
+# The single UTC normaliser used for naive timestamps; imported by its private
+# name because the value has no shared home yet and the duplicate-logic
+# baseline is shrink-only (FAR-2055).
+from modulo.db.crud.token_family import _as_utc_aware
 from modulo.db.models.audit_event import AuditEvent
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.hitl_claim import HitlClaim
@@ -252,21 +257,6 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat()
 
 
-def _aware(value: datetime | None) -> datetime | None:
-    """Coerce a naive datetime to UTC; leave an aware value untouched.
-
-    The collectors compare against ``timestamptz`` columns. A caller-supplied
-    naive value (an ISO string without an offset) has no unambiguous instant,
-    so it is read as UTC rather than silently interpreted in the server's local
-    timezone - the same normalisation :func:`_iso` applies on the way out.
-    """
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value
-
-
 def normalise_audit_period(
     period_from: datetime | None,
     period_to: datetime | None,
@@ -277,10 +267,11 @@ def normalise_audit_period(
     ``period_from == period_to`` is a valid (empty) window. Only a start AFTER
     the end is rejected. The route maps the raised :class:`ValueError` to 422;
     :func:`build_evidence_index` validates too, so the library surface fails
-    the same way for any other caller.
+    the same way for any other caller. A naive bound (an ISO string without an
+    offset) is read as UTC; an aware bound is left untouched.
     """
-    start = _aware(period_from)
-    end = _aware(period_to)
+    start = _as_utc_aware(period_from)
+    end = _as_utc_aware(period_to)
     if start is not None and end is not None and start > end:
         raise ValueError("the audit period start (from) must not be after its end (to)")
     return start, end

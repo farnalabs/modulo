@@ -49,6 +49,11 @@ from modulo.compliance.evidence_index import (
     build_evidence_index,
     normalise_audit_period,
 )
+
+# Imported by its private name because it is the single source of the
+# transaction-local statement_timeout SQL fragment; the value has no shared
+# home yet and the duplicate-logic baseline is shrink-only (FAR-2055).
+from modulo.core.analytics.guardrails import _SQL_SET_STATEMENT_TIMEOUT
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.sqlstates import is_statement_timeout
 
@@ -59,8 +64,6 @@ router = APIRouter(prefix="/api/v1/compliance", tags=["compliance"])
 #: endpoint's point of view; 30s is generous for the indexed shapes and short
 #: enough to fail fast instead of holding a connection.
 _EVIDENCE_INDEX_STATEMENT_TIMEOUT_MS = 30_000
-
-_SQL_SET_STATEMENT_TIMEOUT = "SELECT set_config('statement_timeout', :ms, true)"
 
 _MSG_TIMEOUT = (
     "The compliance evidence index exceeded its time bound. "
