@@ -141,6 +141,12 @@ def test_escalation_constant_matches_the_pytest_filter_spelling() -> None:
     assert _unit_conftest.UNRAISABLE_ESCALATION == "error::pytest.PytestUnraisableExceptionWarning"
 
 
+def _active_script_lines() -> list[str]:
+    """The coverage script's executable lines, comments excluded."""
+    script = COVERAGE_SCRIPT.read_text(encoding="utf-8")
+    return [line for line in script.splitlines() if not line.lstrip().startswith("#")]
+
+
 def _pytest_invocations(script: str) -> list[str]:
     """Every pytest command in ``script``, as one joined logical line each.
 
@@ -163,8 +169,28 @@ def _pytest_invocations(script: str) -> list[str]:
 
 
 def test_ci_unit_command_carries_the_escalation() -> None:
-    """Every CI unit pytest invocation carries the same escalation as the hook."""
+    """Every CI unit pytest invocation carries the same escalation as the hook.
+
+    Since FAR-2081 the unit suite runs as sequential shards over an explicit
+    file list, so the pytest line no longer spells ``tests/unit`` itself. What
+    must still hold: the file list is enumerated from ``tests/unit`` (a
+    different root would silently shrink the suite), pytest is invoked over
+    that list, and EVERY such invocation carries the byte-identical escalation.
+    """
+    active = _active_script_lines()
+    assert any("find tests/unit" in line for line in active), (
+        "the coverage script no longer enumerates unit test files under tests/unit"
+    )
+    shard_invocations = [line for line in active if "pytest" in line and "${files[@]}" in line]
+    assert shard_invocations, "no `pytest` invocation over the unit file list found in the coverage script"
     script = COVERAGE_SCRIPT.read_text(encoding="utf-8")
+    # The invocation is a backslash-continued command, so join the continuation
+    # lines before looking for the flag.
+    joined = script.replace("\\\n", " ")
+    assert _unit_conftest.UNRAISABLE_ESCALATION in joined
+    # ...but the whole-script check above only proves the flag appears SOMEWHERE.
+    # Check every invocation, so a future split that drops the flag from one
+    # shard fails here even though that check would still pass.
     invocations = _pytest_invocations(script)
     assert invocations, "no pytest invocation found in .github/scripts/coverage-thresholds.sh"
     offenders = [line for line in invocations if _unit_conftest.UNRAISABLE_ESCALATION not in line]
@@ -172,6 +198,22 @@ def test_ci_unit_command_carries_the_escalation() -> None:
         f"every pytest invocation must carry {_unit_conftest.UNRAISABLE_ESCALATION!r}; "
         "missing on:\n" + "\n".join(offenders)
     )
+
+
+def test_ci_unit_shard_split_is_lossless() -> None:
+    """Both shards together run every collected unit test file.
+
+    A split that drops files would also drop their coverage while the combined
+    report still claims to describe the whole suite.
+    """
+    active = "\n".join(_active_script_lines())
+    # pytest's default ``python_files`` patterns - pyproject.toml does not
+    # override them - so the enumeration must match BOTH or the split is lossy.
+    assert "test_*.py" in active, "the shard enumeration must match pytest's default python_files patterns"
+    assert "*_test.py" in active, "the shard enumeration must match pytest's default python_files patterns"
+    assert "SHARD1_FILES=(" in active, "the coverage script no longer builds two shard file lists"
+    assert "SHARD2_FILES=(" in active, "the coverage script no longer builds two shard file lists"
+    assert active.count("run_shard ") >= 2, "the coverage script no longer runs two shards"
 
 
 def test_ci_backend_test_job_runs_the_unit_coverage_script() -> None:
