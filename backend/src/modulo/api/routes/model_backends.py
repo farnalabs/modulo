@@ -10,6 +10,7 @@ import json
 import logging
 import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -1281,6 +1282,299 @@ async def _stringify_fallback_ids(
         updates["fallback_backend_ids"] = [str(fid) for fid in fallback_ids]
 
 
+@dataclass
+class _UpdateContext:
+    """State loaded once for a model-backend update (FAR-2046)."""
+
+    existing: ModelBackend
+    secrets_backend: SecretsBackend
+    secret_payload: dict[str, Any]
+    credential_base_url: str | None
+    existing_legacy: str | None
+    current_base_url: str | None
+    credential_present: bool
+
+
+@dataclass(frozen=True)
+class _EndpointUpdate:
+    """Resolved endpoint change for one update request (FAR-2046)."""
+
+    update: bool
+    requested_base_url: str | None
+    changed: bool
+
+
+async def _load_update_state(
+    session: AsyncSession,
+    backend_id: uuid.UUID,
+    principal: TenantPrincipal,
+    req: ModelBackendUpdate,
+    settings: Settings,
+    updates: dict[str, Any],
+) -> _UpdateContext:
+    """Load the row, resolve its stored endpoint and read the secret payload."""
+    existing = await get_model_backend(session, backend_id)
+    if existing is None or existing.organisation_id != principal.organisation_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
+
+    if req.default_params is not None:
+        # Never persist the legacy endpoint key; it is migrated into the
+        # credential JSON (FAR-2046).
+        updates["default_params"] = _strip_legacy_base_url(req.default_params)
+
+    secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+    secret_payload = await _read_secret_payload(secrets_backend, backend_id)
+    credential_base_url = _stored_base_url(secret_payload)
+    existing_legacy = _legacy_base_url(existing.default_params)
+    current_base_url = (credential_base_url or existing_legacy) if supports_custom_base_url(existing.provider) else None
+    credential_present = bool(existing.credentials_ciphertext) or isinstance(secret_payload.get("api_key"), str)
+    return _UpdateContext(
+        existing=existing,
+        secrets_backend=secrets_backend,
+        secret_payload=secret_payload,
+        credential_base_url=credential_base_url,
+        existing_legacy=existing_legacy,
+        current_base_url=current_base_url,
+        credential_present=credential_present,
+    )
+
+
+def _is_legacy_echo(
+    req: ModelBackendUpdate,
+    ctx: _UpdateContext,
+    legacy_supplied: bool,
+) -> bool:
+    """True when the client echoed an unchanged legacy endpoint it cannot use.
+
+    The pre-FAR-2046 UI echoed the stored ``default_params.base_url`` for every
+    provider, including ones that cannot apply it (e.g. azure_openai). Treating
+    that echo as a newly-supplied endpoint would reject a harmless edit.
+    """
+    return (
+        legacy_supplied
+        and ctx.existing_legacy is not None
+        and _legacy_base_url(req.default_params) == ctx.existing_legacy
+        and not supports_custom_base_url(ctx.existing.provider)
+    )
+
+
+def _should_preserve_legacy(
+    req: ModelBackendUpdate,
+    ctx: _UpdateContext,
+    *,
+    base_url_supplied: bool,
+    legacy_supplied: bool,
+) -> bool:
+    """True when replacing default_params must migrate the legacy endpoint.
+
+    Replacing ``default_params`` without carrying the legacy key forward would
+    silently reset a stored endpoint (FAR-2046). The legacy value is only the
+    effective endpoint when the credential JSON has none of its own.
+    """
+    return (
+        ctx.existing_legacy is not None
+        and ctx.credential_base_url is None
+        and req.default_params is not None
+        and not base_url_supplied
+        and not legacy_supplied
+        and supports_custom_base_url(ctx.existing.provider)
+    )
+
+
+def _direct_update_base_url(req: ModelBackendUpdate, legacy: str | None) -> str | None:
+    """Validate a ``base_url`` supplied directly on the update request."""
+    direct = req.base_url.strip() if isinstance(req.base_url, str) and req.base_url.strip() else None
+    if direct is not None and legacy is not None and direct != legacy:
+        raise _base_url_error(
+            "base_url and default_params.base_url disagree; supply only base_url",
+            code="base_url_conflict",
+        )
+    return _validate_base_url(direct, allow_insecure_http=bool(req.allow_insecure_http)) if direct else None
+
+
+def _requested_update_base_url(
+    req: ModelBackendUpdate,
+    ctx: _UpdateContext,
+    *,
+    base_url_supplied: bool,
+    legacy_supplied: bool,
+    preserve_legacy: bool,
+) -> str | None:
+    """Resolve and validate the endpoint the update asks to store."""
+    if base_url_supplied:
+        legacy = _legacy_base_url(req.default_params) if legacy_supplied else None
+        return _direct_update_base_url(req, legacy)
+    if legacy_supplied:
+        raw = _legacy_base_url(req.default_params)
+    elif preserve_legacy:
+        raw = ctx.existing_legacy
+    else:
+        raw = None
+    return _validate_base_url(raw, allow_insecure_http=bool(req.allow_insecure_http)) if raw else None
+
+
+def _finish_endpoint_update(
+    req: ModelBackendUpdate,
+    ctx: _UpdateContext,
+    requested_base_url: str | None,
+) -> _EndpointUpdate:
+    """Apply the endpoint capability and credential-rebinding rules."""
+    if requested_base_url is not None and not supports_custom_base_url(ctx.existing.provider):
+        raise _base_url_error(
+            f"Provider {ctx.existing.provider!r} does not support a custom base_url",
+            code="base_url_not_supported_for_provider",
+            loc="provider",
+        )
+    endpoint_changed = requested_base_url != ctx.current_base_url
+    if endpoint_changed:
+        # A destination change must be paired with a literal credential: a
+        # vault reference or a reused stored key would send the caller's secret
+        # to a new host on the post-save health check.
+        if req.api_key is not None and _is_vault_reference(req.api_key):
+            raise _base_url_literal_credential_error()
+        if ctx.credential_present and req.api_key is None:
+            raise _base_url_change_requires_credential_error()
+    return _EndpointUpdate(update=True, requested_base_url=requested_base_url, changed=endpoint_changed)
+
+
+def _resolve_endpoint_update(req: ModelBackendUpdate, ctx: _UpdateContext) -> _EndpointUpdate:
+    """Determine whether the request changes the stored endpoint."""
+    base_url_supplied = "base_url" in req.model_fields_set
+    legacy_supplied = isinstance(req.default_params, Mapping) and "base_url" in req.default_params
+    legacy_echo = _is_legacy_echo(req, ctx, legacy_supplied)
+    preserve_legacy = _should_preserve_legacy(
+        req,
+        ctx,
+        base_url_supplied=base_url_supplied,
+        legacy_supplied=legacy_supplied,
+    )
+    endpoint_update = base_url_supplied or (legacy_supplied and not legacy_echo) or preserve_legacy
+    if not endpoint_update:
+        return _EndpointUpdate(update=False, requested_base_url=None, changed=False)
+    requested_base_url = _requested_update_base_url(
+        req,
+        ctx,
+        base_url_supplied=base_url_supplied,
+        legacy_supplied=legacy_supplied,
+        preserve_legacy=preserve_legacy,
+    )
+    return _finish_endpoint_update(req, ctx, requested_base_url)
+
+
+async def _recover_stored_api_key(
+    session: AsyncSession,
+    backend_id: uuid.UUID,
+    principal: TenantPrincipal,
+    settings: Settings,
+    ctx: _UpdateContext,
+) -> None:
+    """Seed the credential JSON from a legacy ciphertext-only row.
+
+    An endpoint-only edit must never replace the key with a base_url-only
+    secret row (FAR-2046), so recover the key before writing the endpoint.
+    """
+    if isinstance(ctx.secret_payload.get("api_key"), str) or not ctx.existing.credentials_ciphertext:
+        return
+    try:
+        recovered = await decode_stored_secret_scoped(
+            session,
+            ctx.existing.credentials_ciphertext,
+            settings.fernet_key,
+            org_id=principal.organisation_id,
+        )
+    except Exception:
+        logger.warning("Could not recover stored credentials for model backend %s during update", backend_id)
+    else:
+        ctx.secret_payload["api_key"] = recovered
+
+
+async def _apply_api_key_update(
+    session: AsyncSession,
+    req: ModelBackendUpdate,
+    settings: Settings,
+    updates: dict[str, Any],
+    ctx: _UpdateContext,
+) -> str | None:
+    """Resolve and encrypt a supplied credential, returning its plaintext."""
+    if req.api_key is None:
+        return None
+    resolved_api_key, ctx.secrets_backend = await _resolve_credential_or_422(session, settings, value=req.api_key)
+    updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-ctx
+        resolved_api_key, settings.fernet_key
+    )
+    ctx.secret_payload["api_key"] = resolved_api_key
+    return resolved_api_key
+
+
+def _apply_endpoint_secret_update(
+    ctx: _UpdateContext,
+    endpoint: _EndpointUpdate,
+    updates: dict[str, Any],
+) -> None:
+    """Write the resolved endpoint into the credential payload and params."""
+    if not endpoint.update:
+        return
+    if endpoint.requested_base_url is not None:
+        ctx.secret_payload["base_url"] = endpoint.requested_base_url
+    else:
+        ctx.secret_payload.pop("base_url", None)
+    if "default_params" not in updates:
+        stripped = _strip_legacy_base_url(ctx.existing.default_params)
+        if stripped != dict(ctx.existing.default_params or {}):
+            updates["default_params"] = stripped
+
+
+async def _persist_secret_payload(
+    ctx: _UpdateContext,
+    endpoint: _EndpointUpdate,
+    resolved_api_key: str | None,
+    backend_id: uuid.UUID,
+) -> None:
+    """Persist the credential payload when a credential or endpoint changed."""
+    if resolved_api_key is None and not endpoint.update:
+        return
+    stored_key = ctx.secret_payload.get("api_key")
+    if not isinstance(stored_key, str) or not stored_key:
+        raise _base_url_error(
+            "Cannot update the endpoint without a recoverable API key; supply api_key",
+            code="credentials_unavailable",
+            loc="api_key",
+        )
+    await ctx.secrets_backend.set_secret(str(backend_id), json.dumps(ctx.secret_payload))
+
+
+def _health_credential(
+    resolved_api_key: str | None,
+    endpoint_changed: bool,
+    secret_payload: dict[str, Any],
+) -> str | None:
+    """Return the credential the post-commit health check must use, if any."""
+    if resolved_api_key is None and not endpoint_changed:
+        return None
+    raw_key = resolved_api_key if resolved_api_key is not None else secret_payload.get("api_key")
+    return raw_key if isinstance(raw_key, str) else None
+
+
+def _build_endpoint_audit(
+    current_base_url: str | None,
+    effective_base_url: str | None,
+    endpoint_changed: bool,
+) -> dict[str, Any] | None:
+    """Build the endpoint-change audit facts (hosts only, never the full URL)."""
+    if not endpoint_changed:
+        return None
+    # Hosts only — a URL path segment can itself carry a secret.
+    return {
+        "from_host": _redact_base_url(current_base_url),
+        "to_host": _redact_base_url(effective_base_url),
+        "credential_resupplied": True,
+        # A destination change only succeeds with a literal key (vault
+        # references and missing keys are rejected above).
+        "credential_kind": "literal",
+        "allow_insecure_http": bool(effective_base_url and effective_base_url.lower().startswith("http://")),
+    }
+
+
 async def _update_backend_tx(
     session: AsyncSession,
     backend_id: uuid.UUID,
@@ -1301,165 +1595,25 @@ async def _update_backend_tx(
     post-save health check sends it there). Returns the credential to use for
     the post-commit health check plus the endpoint-change audit facts.
     """
-    base_url_supplied = "base_url" in req.model_fields_set
-
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
         await _stringify_fallback_ids(session, principal.organisation_id, updates, backend_id)
-        existing = await get_model_backend(session, backend_id)
-        if existing is None or existing.organisation_id != principal.organisation_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
-
-        if req.default_params is not None:
-            # Never persist the legacy endpoint key; it is migrated into the
-            # credential JSON (FAR-2046).
-            updates["default_params"] = _strip_legacy_base_url(req.default_params)
-
-        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
-        secret_payload = await _read_secret_payload(secrets_backend, backend_id)
-        credential_base_url = _stored_base_url(secret_payload)
-        existing_legacy = _legacy_base_url(existing.default_params)
-        current_base_url = (
-            (credential_base_url or existing_legacy) if supports_custom_base_url(existing.provider) else None
-        )
-        credential_present = bool(existing.credentials_ciphertext) or isinstance(secret_payload.get("api_key"), str)
-        legacy_supplied = isinstance(req.default_params, Mapping) and "base_url" in req.default_params
-        # Replacing default_params without carrying the legacy key forward must
-        # migrate the existing endpoint into the credential JSON, never silently
-        # reset it (FAR-2046). Only when the credential JSON has no endpoint of
-        # its own can the legacy value be the effective one.
-        preserve_legacy = (
-            existing_legacy is not None
-            and credential_base_url is None
-            and req.default_params is not None
-            and not base_url_supplied
-            and not legacy_supplied
-            and supports_custom_base_url(existing.provider)
-        )
-        # A client that echoes an UNCHANGED legacy value for a provider that
-        # cannot use it (the pre-FAR-2046 UI did this for azure_openai) must
-        # not be rejected as if it were newly supplying an endpoint: drop it and
-        # let the edit succeed. A different value is still a new endpoint.
-        legacy_echo = (
-            legacy_supplied
-            and existing_legacy is not None
-            and _legacy_base_url(req.default_params) == existing_legacy
-            and not supports_custom_base_url(existing.provider)
-        )
-        endpoint_update = base_url_supplied or (legacy_supplied and not legacy_echo) or preserve_legacy
-
-        requested_base_url: str | None = None
-        endpoint_changed = False
-        if endpoint_update:
-            if base_url_supplied:
-                direct = req.base_url.strip() if isinstance(req.base_url, str) and req.base_url.strip() else None
-                legacy = _legacy_base_url(req.default_params) if legacy_supplied else None
-                if direct is not None and legacy is not None and direct != legacy:
-                    raise _base_url_error(
-                        "base_url and default_params.base_url disagree; supply only base_url",
-                        code="base_url_conflict",
-                    )
-                requested_base_url = (
-                    _validate_base_url(direct, allow_insecure_http=bool(req.allow_insecure_http)) if direct else None
-                )
-            elif legacy_supplied:
-                raw_requested = _legacy_base_url(req.default_params)
-                requested_base_url = (
-                    _validate_base_url(raw_requested, allow_insecure_http=bool(req.allow_insecure_http))
-                    if raw_requested
-                    else None
-                )
-            else:
-                # Preserve + migrate the legacy value, re-validating it so an
-                # untouched plain-HTTP legacy endpoint still needs the explicit
-                # opt-in before it is written to the credential JSON.
-                requested_base_url = (
-                    _validate_base_url(existing_legacy, allow_insecure_http=bool(req.allow_insecure_http))
-                    if existing_legacy is not None
-                    else None
-                )
-            if requested_base_url is not None and not supports_custom_base_url(existing.provider):
-                raise _base_url_error(
-                    f"Provider {existing.provider!r} does not support a custom base_url",
-                    code="base_url_not_supported_for_provider",
-                    loc="provider",
-                )
-            endpoint_changed = requested_base_url != current_base_url
-            if endpoint_changed:
-                if req.api_key is not None and _is_vault_reference(req.api_key):
-                    raise _base_url_literal_credential_error()
-                if credential_present and req.api_key is None:
-                    raise _base_url_change_requires_credential_error()
-
-        # A legacy row can have an API key only in credentials_ciphertext. Seed
-        # the credential JSON from it before writing, so an endpoint-only edit
-        # never replaces the key with a base_url-only secret row (FAR-2046).
-        if not isinstance(secret_payload.get("api_key"), str) and existing.credentials_ciphertext:
-            try:
-                recovered = await decode_stored_secret_scoped(
-                    session,
-                    existing.credentials_ciphertext,
-                    settings.fernet_key,
-                    org_id=principal.organisation_id,
-                )
-            except Exception:
-                logger.warning("Could not recover stored credentials for model backend %s during update", backend_id)
-            else:
-                secret_payload["api_key"] = recovered
-
-        resolved_api_key: str | None = None
-        if req.api_key is not None:
-            resolved_api_key, secrets_backend = await _resolve_credential_or_422(session, settings, value=req.api_key)
-            updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
-                resolved_api_key, settings.fernet_key
-            )
-            secret_payload["api_key"] = resolved_api_key
-
-        if endpoint_update:
-            if requested_base_url is not None:
-                secret_payload["base_url"] = requested_base_url
-            else:
-                secret_payload.pop("base_url", None)
-            if "default_params" not in updates:
-                stripped = _strip_legacy_base_url(existing.default_params)
-                if stripped != dict(existing.default_params or {}):
-                    updates["default_params"] = stripped
-
-        if resolved_api_key is not None or endpoint_update:
-            stored_key = secret_payload.get("api_key")
-            if not isinstance(stored_key, str) or not stored_key:
-                raise _base_url_error(
-                    "Cannot update the endpoint without a recoverable API key; supply api_key",
-                    code="credentials_unavailable",
-                    loc="api_key",
-                )
-            await secrets_backend.set_secret(str(backend_id), json.dumps(secret_payload))
+        ctx = await _load_update_state(session, backend_id, principal, req, settings, updates)
+        endpoint = _resolve_endpoint_update(req, ctx)
+        await _recover_stored_api_key(session, backend_id, principal, settings, ctx)
+        resolved_api_key = await _apply_api_key_update(session, req, settings, updates, ctx)
+        _apply_endpoint_secret_update(ctx, endpoint, updates)
+        await _persist_secret_payload(ctx, endpoint, resolved_api_key, backend_id)
 
         mb = await update_model_backend(session, backend_id, updates)
         if mb is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MODEL_BACKEND_NOT_FOUND)
         await session.refresh(mb)
-        effective_base_url = _effective_base_url(secret_payload, mb.default_params, mb.provider)
+        effective_base_url = _effective_base_url(ctx.secret_payload, mb.default_params, mb.provider)
         response = _to_response(mb, base_url=effective_base_url, can_manage=True)
-
-        health_api_key: str | None = None
-        if resolved_api_key is not None or endpoint_changed:
-            raw_key = resolved_api_key if resolved_api_key is not None else secret_payload.get("api_key")
-            health_api_key = raw_key if isinstance(raw_key, str) else None
-
-        endpoint_audit: dict[str, Any] | None = None
-        if endpoint_changed:
-            # Hosts only — a URL path segment can itself carry a secret.
-            endpoint_audit = {
-                "from_host": _redact_base_url(current_base_url),
-                "to_host": _redact_base_url(effective_base_url),
-                "credential_resupplied": True,
-                # A destination change only succeeds with a literal key (vault
-                # references and missing keys are rejected above).
-                "credential_kind": "literal",
-                "allow_insecure_http": bool(effective_base_url and effective_base_url.lower().startswith("http://")),
-            }
+        health_api_key = _health_credential(resolved_api_key, endpoint.changed, ctx.secret_payload)
+        endpoint_audit = _build_endpoint_audit(ctx.current_base_url, effective_base_url, endpoint.changed)
         return mb, response, health_api_key, endpoint_audit
 
 
