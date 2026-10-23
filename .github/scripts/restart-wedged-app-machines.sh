@@ -48,6 +48,10 @@
 # - If the restart fails, destroys the same machine so the next deploy attempt
 #   can create a replacement. A successful restart is never followed by a
 #   destroy.
+# - Captures the wedged machine's boot log to
+#   ${WEDGED_LOG_DIR:-/tmp/app-machine-logs}/<machine-id>.log before touching
+#   it (bounded, best-effort, credentials redacted) so deploy.yml can upload
+#   the evidence; a destroy otherwise discards it.
 # - Best-effort by design: a missing flyctl, an unreadable machine list, or a
 #   failed restart/destroy emits a GitHub warning and exits 0. The deploy
 #   attempt that follows is still the authoritative gate and fails loudly on
@@ -101,9 +105,30 @@ if [ -z "${WEDGED_IDS}" ]; then
   exit 0
 fi
 
+# Where the wedged machine's boot log is preserved for the deploy job's
+# artifact upload (deploy.yml "Upload app machine logs"). A destroy discards
+# the only record of WHY the app process group never became healthy, which is
+# exactly what made the 2026-10-23 outage undiagnosable from CI alone: fresh
+# machines reached `started`, never passed a check, and each retry replaced
+# them with no log surviving.
+LOG_DIR="${WEDGED_LOG_DIR:-/tmp/app-machine-logs}"
+mkdir -p "${LOG_DIR}" 2>/dev/null || true
+
 while IFS= read -r MID; do
   [ -z "${MID}" ] && continue
+  # Bounded and best-effort: capturing the log must never delay or fail the
+  # recovery it precedes.
+  LOG_FILE="${LOG_DIR}/${MID}.log"
+  timeout 90 fly logs --app "${APP}" --machine "${MID}" --no-tail > "${LOG_FILE}" 2>&1 || true
+  # The entrypoint prints the DATABASE_URL prefix, so redact the credential
+  # part before the log is echoed or persisted.
+  sed -i -E 's#(postgres(ql)?://[^:/@]+:)[^@]*@#\1***@#g; s#(redis(s)?://[^:/@]+:)[^@]*@#\1***@#g' "${LOG_FILE}" 2>/dev/null || true
   echo "::notice::Restarting wedged app machine ${MID} in ${APP} (app_liveness critical) so the next deploy attempt can make progress."
+  if [ -s "${LOG_FILE}" ]; then
+    echo "----- wedged machine ${MID} log (tail) -----"
+    tail -n 60 "${LOG_FILE}" || true
+    echo "----- end wedged machine ${MID} log -----"
+  fi
   if fly machine restart "${MID}" --app "${APP}" </dev/null; then
     echo "Restarted ${MID}."
   else
