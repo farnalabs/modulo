@@ -3442,6 +3442,18 @@ def test_cancel_triage_attempt_key_is_unique_per_node_and_attempt():
     assert key_a == "cancel-triage:run-1:node-a:3"
 
 
+def test_cancel_triage_attempt_key_falls_back_when_caller_has_no_key():
+    """FAR-2082: a caller without an attempt key still gets a stable row key.
+
+    The fallback suffix mirrors the one ``_write_raw_output_marker`` uses, so a
+    kill observed before any attempt key exists is retained under a
+    deterministic, per-node bookkeeping key rather than colliding with another
+    node (or being written under an empty suffix).
+    """
+    assert nr._cancel_triage_attempt_key("run-1", "node-a", None) == "cancel-triage:run-1:node-a:fallback"
+    assert nr._cancel_triage_attempt_key("run-1", "node-a", "") == "cancel-triage:run-1:node-a:fallback"
+
+
 async def test_sandbox_cancellation_log_tail_fetch_failure_does_not_block_marker(caplog):
     """FAR-704: a failing log-tail probe degrades to an empty tail — the triage
     marker is still persisted, then the original cancellation re-raises."""

@@ -1068,6 +1068,27 @@ class TestPerRowPredicateIsPostgresTypeSafe:
             assert f"CAST(excluded.{name} AS TEXT)" in sql, name
             assert f"CAST(run_node_outputs.{name} AS TEXT)" in sql, name
 
+    def test_group_upsert_with_no_written_sides_makes_the_conflict_a_no_op(self) -> None:
+        """FAR-2083: no payload column written ⇒ nothing changed ⇒ keep the row.
+
+        ``_row_changed_predicate`` is handed the set of written columns; when no
+        side is present (a writer upserting only the identity/metadata columns)
+        there is nothing that can have changed, so the ``DO UPDATE`` must be
+        guarded by a constant-false predicate — the row keeps its value AND its
+        stamp instead of being re-dated by an empty write.
+        """
+        stmt = _upsert_group_stmt(
+            pg_insert,
+            signature=(False, False, False, False),
+            run_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+            ignore_conflicts=False,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SAWarning)
+            sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "WHERE false" in sql
+
 
 def _is_node_progress_row(node_id: str) -> bool:
     """The rule every zero-progress predicate already applies (FAR-2052).
