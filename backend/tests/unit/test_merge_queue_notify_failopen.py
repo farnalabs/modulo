@@ -22,10 +22,19 @@ The contract pinned here:
   exits 0.
 
 These are structural assertions. Only a live tick with a real conflict and a
-real 429 exercises the path end to end, and CI never does that; the three step
-bodies were additionally driven through a stubbed dispatch/``gh`` harness when
-the fix landed (all PRs commented -> exit 0; one un-commented -> exit 1; no PR
-identified -> exit 1).
+real 429 exercises the path end to end, and CI never does that. The three step
+bodies were also driven through a stubbed dispatch/``gh`` harness out of band
+when the fix landed (all PRs commented -> exit 0; one un-commented -> exit 1; no
+PR identified -> exit 1), but that harness is not committed, so the behavioural
+check is NOT reproducible from the repo; a live tick remains the only end-to-end
+proof.
+
+This module owns the fail-open/fail-hard split.
+``tests/architecture/test_workflow_structure.py::test_merge_queue_branch_fixer_dispatch_failures_are_attributable``
+pins the attributable, durable per-PR failure arm around the same three steps.
+The division is deliberate (structure here, provenance there), but both gates
+read the same steps, so a change to a notify step's failure arm must update both
+in the same change.
 """
 
 from pathlib import Path
