@@ -42,6 +42,7 @@ def _make_run(
     snapshot_id: uuid.UUID | None = None,
     status: str = "running",
     node_attempt_count: int = 1,
+    execution_attempt_count: int | None = None,
     claim_token: str | None = "tok-claim-abc",
 ) -> MagicMock:
     run = MagicMock()
@@ -51,6 +52,9 @@ def _make_run(
     run.langgraph_thread_id = str(uuid.uuid4())
     run.status = status
     run.node_attempt_count = node_attempt_count
+    # FAR-2076: the retry budget reads the durable execution counter. In these
+    # fixtures the run reached a node, so executions == node attempts.
+    run.execution_attempt_count = node_attempt_count if execution_attempt_count is None else execution_attempt_count
     run.claim_token = claim_token
     run.claim_count = 10
     return run
@@ -1086,7 +1090,9 @@ def test_retry_backoff_bounded_by_max_retries():
     """The schedule is bounded by the retry budget: the delay for the LAST
     allowed attempt (attempt == max_retries) never schedules beyond the cap,
     and attempts beyond the budget stay at the cap (never grow unbounded)."""
-    max_retries = executor_module._RETRY_POLICY_MAX_RETRIES  # 5
+    from modulo.core.retry_budget import RETRY_POLICY_MAX_RETRIES
+
+    max_retries = RETRY_POLICY_MAX_RETRIES  # 5
     cap = executor_module._RETRY_BACKOFF_CAP_SECONDS
     for attempt_n in range(1, max_retries + 1):
         delay = _retry_backoff_seconds(attempt_n, cap=cap)

@@ -636,6 +636,7 @@ export default {
     },
     "LoginView": {
       "agent_governance_for_your_agentic_sdlc": "Agent governance for your agentic SDLC",
+      "email_placeholder": "admin{'@'}example.com",
       "login_failed": "Login failed:",
       "enter_your_password": "Enter your password",
       "modulo": "Modulo",

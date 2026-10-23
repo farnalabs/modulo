@@ -458,6 +458,22 @@ class Run(OrgScoped):
     # non-executing ones (capacity-deferral demotions, pre-node setup failures)
     # that would otherwise exhaust the retry budget (postmortem FAR-121).
     node_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # FAR-2076: dedicated durable count of EXECUTION ATTEMPTS of the graph —
+    # the single source the unified retry budget spends against. Incremented
+    # exactly once per admitted ``execute_run`` attempt, in the admission
+    # transaction (``PipelineExecutor._claim_under_capacity``), NEVER by the SAQ
+    # claim UPDATE and NEVER for a ``resume_run`` claim or a capacity-demoted
+    # claim: ``claim_count`` increments on all three, which is why deriving the
+    # budget from ``max(node_attempt_count, claim_count - 1)`` terminal-failed
+    # healthy runs with budget to spare. A pre-node death (checkpointer setup,
+    # graph compile, connector-hub init) DOES count — the attempt was made.
+    #
+    # Distinct from ``node_attempt_count`` (per-NODE attempts, so a pre-node
+    # death has no node to record) and from ``claim_count`` (every SAQ claim).
+    # Migration 0327 backfilled it from ``node_attempt_count`` (non-terminal
+    # rows only) as a deliberate LOWER bound: under-counting grants a retry,
+    # over-counting kills a healthy run.
+    execution_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     # FAR-1463: absolute node-deadline watchdog (FAR-369) FIRINGS — the durable
     # fingerprint that makes a watchdog firing observable in analytics WITHOUT
     # log access. Incremented on EVERY firing by

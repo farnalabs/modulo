@@ -727,7 +727,7 @@ dev = [
 #
 # PYSEC-2026-4322: brotli 1.2.0 vulnerable, fixed in 1.2.1. brotli is transitive
 # (locust -> geventhttpclient), so it is pinned via a constraint rather than a
-# direct dep.
+# direct dep so pip-audit (run in CI Lint (Backend)) passes.
 constraint-dependencies = [
     "pip>=26.2",
     "certifi>=2026.10.19",
