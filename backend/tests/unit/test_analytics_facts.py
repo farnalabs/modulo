@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import opentelemetry.metrics as _otel_metrics
 import pytest
+from sqlalchemy.dialects import postgresql
 
 import modulo.core.analytics as analytics_mod
 from modulo.core.analytics import maintenance as maintenance_mod
@@ -1056,6 +1057,34 @@ class TestBackfillFactsProvenanceColumns:
             "the INSERT name list must align positionally with the SELECT columns — "
             "a drift writes the wrong value into the wrong column"
         )
+
+
+class TestBackfillQueueWaitNonNegative:
+    """FAR-2079: the backfill must not persist a negative queue wait either.
+
+    The backfill recomputes the fact from the run row, so it needs the same
+    guard as the live writer: ``started_at`` is stamped once and never reset,
+    while ``dispatched_at`` is rewritten on every dispatch — after a
+    re-dispatch/resume the ordering inverts and the difference is meaningless.
+    """
+
+    async def test_queue_wait_expression_excludes_the_redispatched_inversion(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured = TestBackfillFactsProvenanceColumns._capturing_from_select(monkeypatch)
+        insert_result = MagicMock()
+        insert_result.rowcount = 1
+        session = _session(execute_side_effect=[insert_result])
+        monkeypatch.setattr(maintenance_mod, "repair_stale_facts", AsyncMock(return_value=0))
+
+        await maintenance_mod.backfill_facts(session, date(2026, 8, 12))
+
+        expr = next(c for c in captured["select"].selected_columns if c.name == "queue_wait_ms")
+        sql = str(expr.compile(dialect=postgresql.dialect()))
+        assert "dispatched_at <= runs.started_at" in sql, (
+            "the backfill must only derive a queue wait when dispatched_at precedes started_at"
+        )
+        assert "CASE WHEN" in sql.upper(), "the invalid ordering must degrade to NULL, not a negative difference"
 
 
 class TestBackfillLedger:

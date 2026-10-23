@@ -337,7 +337,21 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
                 else_=None,
             )
         ).label("avg_capacity_wait_ms"),
-        sa.func.avg(RunDailyFact.queue_wait_ms).label("avg_queue_wait_ms"),
+        # FAR-2079: exclude NEGATIVE stored samples from the mean. A re-dispatched
+        # run (reconcile re-enqueue / HITL resume) has dispatched_at rewritten
+        # past the once-stamped started_at, so facts written before the writer
+        # guard landed carry a negative queue_wait_ms. Those two timestamps
+        # belong to different attempts, so the value is not a queue wait in any
+        # direction — it is dropped from the sample set (avg ignores NULL) rather
+        # than clamped to 0, which would fabricate a measured wait of zero. This
+        # keeps avg_queue_wait_ms non-negative for historical facts without a
+        # data rewrite (facts are never rewritten after terminalisation).
+        sa.func.avg(
+            sa.case(
+                (RunDailyFact.queue_wait_ms >= 0, RunDailyFact.queue_wait_ms),
+                else_=None,
+            )
+        ).label("avg_queue_wait_ms"),
         # FAR-1421 claim→dispatch latency — DEFINITION (named in code, and the
         # one used by every caller of this surface):
         #
