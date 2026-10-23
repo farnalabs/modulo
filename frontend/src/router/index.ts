@@ -84,6 +84,7 @@ const RunsListView = () => import('../views/RunsListView.vue')
 const RunDetailView = () => import('../views/RunDetailView.vue')
 const AgentOutputDiffView = () => import('../views/AgentOutputDiffView.vue')
 const EvidenceView = () => import('../views/EvidenceView.vue')
+const EvidenceIndexView = () => import('../views/EvidenceIndexView.vue')
 const AdminAuditView = () => import('../views/AdminAuditView.vue')
 const AdminFeatureFlagsView = () => import('../views/AdminFeatureFlagsView.vue')
 const AdminPluginsView = () => import('../views/AdminPluginsView.vue')
@@ -451,6 +452,11 @@ const router = createRouter({
       path: '/admin/evidence-redaction',
       name: 'admin-evidence-redaction',
       component: AdminEvidenceRedactionView,
+    },
+    {
+      path: '/admin/evidence',
+      name: 'admin-evidence-index',
+      component: EvidenceIndexView,
     },
     {
       path: '/admin/model-backends',
