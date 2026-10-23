@@ -12,7 +12,7 @@
       <div class="text-center">
         <div class="mb-4 flex justify-center">
           <div class="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 border border-primary/20">
-            <LogoMark :size="32" transparent />
+            <LogoMark :size="32" transparent aria-hidden="true" />
           </div>
         </div>
         <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.LoginView.modulo') }}</h1>
@@ -79,7 +79,7 @@
               v-model="email"
               type="text"
               class="input-teal w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              placeholder="admin@example.com"
+              :placeholder="$t('views.LoginView.email_placeholder')"
               required
               data-testid="login-email"
             />
