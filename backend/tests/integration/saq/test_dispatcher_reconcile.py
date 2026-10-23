@@ -530,6 +530,42 @@ async def test_running_run_beyond_retry_budget_is_untouched(
 
 
 @pytest.mark.asyncio
+async def test_running_pre_node_row_beyond_retry_budget_is_not_redispatched(
+    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """FAR-2076: the gate covers EVERY non-terminal ``execute_run`` row.
+
+    A ``running`` row whose last execution died PRE-NODE (phase ``claimed``,
+    stale heartbeat, no live job, ``started_at`` NULL so the nodeless repair
+    refuses it) is selected by the generic stale-heartbeat leg. The old
+    ``status == "pending"`` gate skipped it, so it reached the final enqueue as
+    ``execute_run`` with ``retries=0`` — SAQ still granted one attempt and the
+    graph executed past ``max_retries``. At the ceiling it must not be
+    re-dispatched: the guarded terminal UPDATE only matches ``pending``, so the
+    row is left ``running`` for the nodeless/age backstop.
+    """
+    run_id, _ = await _seed_saq_run(
+        db_engine,
+        test_org,
+        test_user,
+        status="running",
+        heartbeat_stale=True,
+        dispatcher="saq",
+        # max_retries 0 => ceiling 1 execution; this run already spent it.
+        retry_policy={"on": ["failure"], "max_retries": 0},
+        execution_attempt_count=1,
+        dispatch_phase="claimed",
+    )
+
+    await ch.dispatcher_reconcile()
+
+    row = await _read_run(db_engine, run_id)
+    assert row[0] == "running"
+    assert row[1] != "harness.retry_budget_exhausted"
+    assert not await _job_exists(saq_settings_env, f"run:{run_id}")
+
+
+@pytest.mark.asyncio
 async def test_soft_deleted_pipeline_still_applies_the_budget(
     saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
 ) -> None:

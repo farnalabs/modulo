@@ -86,6 +86,7 @@ from modulo.core.pipeline_engine.decorator import (
     set_model_backend_hub,
 )
 from modulo.core.pipeline_engine.error_codes import (
+    _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED,
     _CODE_SANDBOX_AGENT_FAILED,
     _CODE_SANDBOX_NO_OUTPUT_JSON,
     ERROR_CODE_REGISTRY,
@@ -136,6 +137,7 @@ from modulo.core.pipeline_engine.runtime_retry import COMPENSATION_FAILED_CODE, 
 from modulo.core.retry_budget import (
     # The ONE retry-budget module (zero-import leaf): the bound, the ceiling and
     # the consumed measure all live there so no path can define a second copy.
+    retry_budget_exhausted,
     retry_executions_consumed,
     retry_max_executions,
     retry_policy_max_retries,
@@ -2645,6 +2647,66 @@ class PipelineExecutor:
                     # off — never resurrect it. Return it untouched so the
                     # caller does not resume execution.
                     return run
+                # FAR-2076 defence in depth: THIS is the single point every
+                # graph execution is granted through (the capacity check above
+                # has passed; the bump below spends one execution). Refuse the
+                # admission when the run has already spent its policy ceiling
+                # (`1 + max_retries`), so no present or future enqueue path can
+                # execute past it. The policy is read here (soft-delete
+                # opt-out, FAR-1025 parity) rather than threaded from a caller,
+                # so no call site can omit the gate. `None`/`{}` imposes no
+                # ceiling and is unaffected.
+                from modulo.db.soft_delete import include_soft_deleted
+
+                pipeline_row = (
+                    await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == pipeline_id)))
+                ).scalar_one_or_none()
+                retry_policy = getattr(pipeline_row, "retry_policy", None)
+                ceiling = retry_max_executions(retry_policy)
+                consumed = retry_executions_consumed(execution_attempt_count=getattr(run, "execution_attempt_count", 0))
+                if ceiling is not None and retry_budget_exhausted(retry_policy, execution_attempt_count=consumed):
+                    terminal_run = await update_run_status(
+                        session,
+                        run_id,
+                        "failed",
+                        error_code=_CODE_HARNESS_RETRY_BUDGET_EXHAUSTED,
+                        error_detail=(
+                            "Run not admitted: its retry_policy budget is exhausted "
+                            f"(execution_attempt_count={consumed} >= ceiling {ceiling}); "
+                            "the graph was not executed."
+                        ),
+                        claim_token=self._claim_token,
+                        from_status="running",
+                    )
+                    if terminal_run is None:
+                        # The fenced write lost the row (cancellation raised, or
+                        # a superseded claim, in the same instant). Do NOT invent
+                        # a terminal row: re-read and return whatever the row now
+                        # is. A cancelled row cannot execute; a superseded one is
+                        # owned by its successor, and every later write this
+                        # executor makes stays token-fenced.
+                        terminal_run = await get_run(session, run_id)
+                        if terminal_run is None:
+                            raise RunNotFoundError(run_id)
+                        _log.warning(
+                            "pipeline.retry_budget_gate_fence_lost run=%s org=%s status=%s — "
+                            "the terminal write was rejected; re-read the row instead of "
+                            "admitting the execution",
+                            run_id,
+                            org_id,
+                            terminal_run.status,
+                        )
+                        return terminal_run
+                    _log.warning(
+                        "pipeline.retry_budget_exhausted_at_admission run=%s org=%s "
+                        "execution_attempts=%s ceiling=%s — refused to execute past the "
+                        "retry_policy budget",
+                        run_id,
+                        org_id,
+                        consumed,
+                        ceiling,
+                    )
+                    return terminal_run
                 admitted = await self._claim_run_and_audit(
                     session=session,
                     run_id=run_id,
@@ -6749,21 +6811,51 @@ class PipelineExecutor:
         non-idempotent node-started run in place instead of resetting it.
 
         Returns the UPDATE rowcount (1 = the fence held / reset confirmed,
-        0 = fence lost) so callers can distinguish a confirmed reset from a
-        lost race (FAR-525: the retry counter only fires on a CONFIRMED reset).
+        0 = fence lost OR the bounded write timed out) so callers can
+        distinguish a confirmed reset from a lost race (FAR-525: the retry
+        counter only fires on a CONFIRMED reset).
+
+        FAR-2076: the reset takes the hot ``runs`` row lock and is
+        transaction-scoped BOUNDED (``set_mutation_row_lock_timeout``) before
+        its first lock. Without the bound Postgres' default ``lock_timeout``
+        (0 = wait forever) applies, so the reset blocks on the very contended
+        row that produced the admission timeout it is recovering from — the
+        worker then sits until its setup grace expires and the watchdog
+        terminalises the never-executed run the deferral exists to save. A
+        bounded 55P03 is logged and reported as rowcount 0 (fence lost), which
+        every call site already handles as "no confirmed reset"; it never
+        propagates and never stalls the worker.
         """
-        async with self._session_factory() as session, session.begin():
-            await set_rls_org(session, org_id)
-            await set_rls_execution_context(session)
-            result = await session.execute(
-                text(
-                    "UPDATE runs SET status='pending', error_code=NULL, error_detail=NULL "
-                    "WHERE id=:rid AND claim_token=:tok AND status='running' "
-                    "AND cancellation_requested = false"
-                ),
-                {"rid": str(run_id), "tok": self._claim_token},
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
+                # Transaction-scoped bound BEFORE this transaction's first lock
+                # (FAR-1610 recipe; the UPDATE below is that first lock).
+                await set_mutation_row_lock_timeout(session)
+                result = await session.execute(
+                    text(
+                        "UPDATE runs SET status='pending', error_code=NULL, error_detail=NULL "
+                        "WHERE id=:rid AND claim_token=:tok AND status='running' "
+                        "AND cancellation_requested = false"
+                    ),
+                    {"rid": str(run_id), "tok": self._claim_token},
+                )
+                return int(getattr(result, "rowcount", 0) or 0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if sqlstate_of(exc) != LOCK_NOT_AVAILABLE_SQLSTATE:
+                raise
+            _log.warning(
+                "pipeline.fenced_pending_reset_lock_timeout run=%s org=%s — bounded "
+                "mutation_row_lock_timeout_ms wait expired on the reset write; the row is "
+                "left as-is for the nodeless/age backstop (no confirmed reset)",
+                run_id,
+                org_id,
+                exc_info=True,
             )
-            return int(getattr(result, "rowcount", 0) or 0)
+            return 0
 
     async def _cleanup_run_resources(
         self,

@@ -261,6 +261,79 @@ async def test_check_capacity_second_lock_timeout_defers_instead_of_terminalisin
     assert any("capacity_check_lock_timeout" in message for message in caplog.messages)
 
 
+async def test_fenced_pending_reset_bounds_its_write_and_returns_zero_on_lock_timeout(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-2076: the deferral path's reset must be BOUNDED.
+
+    ``_fenced_pending_reset`` opens a fresh session; without its own
+    ``set_mutation_row_lock_timeout`` Postgres' default (0 = wait forever)
+    applies, so it blocks on the very contended row that produced the
+    admission timeout. The bound is issued BEFORE its first lock, and a
+    resulting 55P03 is logged and reported as rowcount 0 (no confirmed reset)
+    instead of propagating/stalling.
+    """
+    order: list[str] = []
+    session = _begin_session()
+    executor = _capacity_executor(session)
+    executor._claim_token = "tok"
+
+    async def _bound(_session: Any) -> None:
+        order.append("bound")
+
+    async def _execute(*_a: Any, **_k: Any) -> Any:
+        order.append("update")
+        raise _lock_timeout_error()
+
+    session.execute = AsyncMock(side_effect=_execute)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=_bound),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.executor"),
+    ):
+        reset = await executor._fenced_pending_reset(run_id=uuid.uuid4(), org_id=uuid.uuid4())
+
+    assert reset == 0
+    assert order == ["bound", "update"]
+    assert any("fenced_pending_reset_lock_timeout" in message for message in caplog.messages)
+
+
+async def test_check_capacity_second_lock_timeout_defers_even_when_the_reset_also_times_out() -> None:
+    """The deferral survives a reset that could not confirm the handback.
+
+    ``_fenced_pending_reset`` returns 0 when its own bounded write times out
+    (FAR-2076). The admission path must still raise
+    ``AdmissionLockTimeoutError`` so the run falls to the nodeless/age
+    backstop — never sit on the worker until the setup grace expires.
+    """
+    run = _capacity_run()
+    executor = _capacity_executor(_begin_session())
+    update = AsyncMock(side_effect=_lock_timeout_error())
+    reset = AsyncMock(return_value=0)
+    executor._fenced_pending_reset = reset  # type: ignore[method-assign]
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update),
+        pytest.raises(AdmissionLockTimeoutError),
+    ):
+        await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=1,
+            graph_json=None,
+        )
+
+    reset.assert_awaited_once()
+
+
 async def test_admission_lock_timeout_maps_to_the_non_terminal_deferred_outcome() -> None:
     """FAR-2076: the deferral contract is observable to the watchdog caller.
 

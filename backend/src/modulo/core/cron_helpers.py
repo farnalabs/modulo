@@ -7725,12 +7725,17 @@ async def _fail_retry_budget_exhausted_run(
 ) -> bool:
     """FAR-2076: terminal-fail a pending run the backstop found beyond budget.
 
-    Called from ``_reconcile_one_row`` for a pending ``execute_run`` row whose
-    pipeline retry policy no longer permits another execution. The alternative
-    — silently skipping — would leave the row pending until the ~135-minute age
-    backstop collected it as ``no_progress``, hiding the real cause; the
-    alternative the defect consisted of — re-dispatching — executed the run
-    past its policy.
+    Called from ``_reconcile_one_row`` for a non-terminal ``execute_run`` row
+    whose pipeline retry policy no longer permits another execution. The
+    alternative — silently skipping — would leave the row pending until the
+    ~135-minute age backstop collected it as ``no_progress``, hiding the real
+    cause; the alternative the defect consisted of — re-dispatching — executed
+    the run past its policy.
+
+    A ``running`` row is deliberately NOT terminalised here: the guarded
+    UPDATE matches ``status='pending'`` only, so the call is a no-op for a
+    running row, which is left to the nodeless/age backstop (the executor may
+    still own it). Never widen that predicate to running rows.
 
     The UPDATE is self-contained and re-checks the premise on the row itself, so
     a row that advanced between the scan and this write is never killed:
@@ -11265,14 +11270,20 @@ async def _reconcile_one_row(
 
     # FAR-2076 — the retry-budget gate on the re-enqueue backstop.
     #
-    # Every pending ``execute_run`` re-dispatch here grants one more execution.
-    # Each mechanism that produced the pending row consulted the
+    # Every ``execute_run`` re-dispatch here grants one more execution, for ANY
+    # non-terminal row — not just ``pending``. A ``running`` PRE-NODE row
+    # (phase ``claimed``/``loading_setup``/``setup_complete``, heartbeat stale,
+    # ``started_at`` younger than the nodeless window) is selected by the
+    # generic stale-heartbeat leg and reached the final enqueue with
+    # ``retries=0``; SAQ still granted one attempt and the graph executed a
+    # fourth time under ``max_retries: 2``. The gate therefore keys on the
+    # RESOLVED job type (``_reconcile_job_type``) for every non-terminal row.
+    # Each mechanism that produced the row consulted the
     # ``retry_policy`` against a DIFFERENT budget (or, like this backstop,
-    # counted nothing at all), so a run could execute past ``1 + max_retries``:
-    # a pipeline with ``max_retries: 2`` reached attempt 4. This is the LAST
-    # gate before the enqueue, so it bounds every producer — the fenced
-    # pending-reset (policy / transient retry / watchdog), the FAR-1627
-    # worker-shutdown handback and the enqueue-failed leg.
+    # counted nothing at all), so a run could execute past ``1 + max_retries``.
+    # This is the LAST gate before the enqueue, so it bounds every producer —
+    # the fenced pending-reset (policy / transient retry / watchdog), the
+    # FAR-1627 worker-shutdown handback and the enqueue-failed leg.
     #
     # A row ALREADY beyond budget is terminal-failed with the distinct
     # ``retry_budget_exhausted`` code instead of re-dispatched — and instead
@@ -11292,8 +11303,15 @@ async def _reconcile_one_row(
     # capacity-demoted and resume claims, so it over-counted healthy runs and
     # terminal-failed them with budget to spare — the whole-point defect of the
     # first attempt at this fix.
-    is_pending_execution = row.status == "pending" and _reconcile_job_type(row.status) == "execute_run"
-    if is_pending_execution:
+    #
+    # A budget-exhausted ``pending`` row is terminal-failed below. A
+    # budget-exhausted ``running`` row is NOT: the guarded UPDATE only matches
+    # ``status='pending'`` (deliberately — a running row is owned by the
+    # nodeless/age backstop, and the UPDATE must never race a live executor),
+    # so it is skipped this tick and left to that backstop.
+    job_type = _reconcile_job_type(row.status)
+    is_execute_execution = job_type == "execute_run" and row.status not in TERMINAL_STATUSES
+    if is_execute_execution:
         policy = getattr(row, "retry_policy", None)
         pipeline_row_id = getattr(row, "pipeline_row_id", None)
         if policy is None and pipeline_row_id is None:
@@ -11349,8 +11367,7 @@ async def _reconcile_one_row(
     # Discriminator (F6a): awaiting_human/claimed/hitl_parked -> resume_run;
     # pending/running -> execute_run. Re-dispatch with a FRESH
     # key_suffix so SAQ key dedupe never suppresses the recovery
-    # enqueue.
-    job_type = _reconcile_job_type(row.status)
+    # enqueue. ``job_type`` was resolved above for the retry-budget gate.
     key_suffix = uuid.uuid4().hex
     return await _re_dispatch_reconciled_run(
         session,
