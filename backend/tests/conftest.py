@@ -65,16 +65,24 @@ UNRAISABLE_ESCALATION = "error::pytest.PytestUnraisableExceptionWarning"
 
 #: Test trees AUDITED for leaked never-awaited coroutines / unclosed resources
 #: and confirmed clean under the escalation. Only these are gated; every other
-#: tree (architecture, conformance, connectors, determination, load, docker) has
-#: NOT been audited, so a mixed ``pytest tests/`` run must not silently apply the
-#: escalation to it.
+#: tree has NOT been audited to green, so a mixed ``pytest tests/`` run must not
+#: silently apply the escalation to it. Still excluded:
+#:
+#: - ``conformance`` - the runtime-provider suite needs a live Kubernetes
+#:   cluster (deselected by default; nothing to run here);
+#: - ``connectors`` - not yet audited;
+#: - ``docker`` - two pre-existing failures on main (a stop-vs-remove
+#:   expectation and a ``select(distinct(...))`` SAWarning escalated by the
+#:   ``error::RuntimeWarning`` ini rule), so the tree cannot reach green;
+#: - ``load`` / ``determination`` - no test modules exist (``load`` holds only
+#:   locust/support files; ``determination`` holds only fixture data).
 #:
 #: The hook lives HERE (the root conftest) rather than in a suite conftest
 #: because pytest only loads a directory's conftest when that directory is on
 #: the collection path: ``tests/unit/conftest.py`` is never imported by a
 #: ``pytest tests/integration`` or ``pytest tests/bdd`` run, so a hook there
 #: cannot gate those suites.
-GATED_SUITE_ROOTS: tuple[str, ...] = ("unit", "integration", "bdd")
+GATED_SUITE_ROOTS: tuple[str, ...] = ("unit", "integration", "bdd", "architecture")
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _TESTS_ROOT = _BACKEND_ROOT / "tests"

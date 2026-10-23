@@ -374,7 +374,7 @@ jobs:
         # leaving it ONLY there meant a PR that adds a static data-testid
         # without declaring it in the manifest went red after ~45 minutes and
         # the Branch Fixer patched the manifest.
-        run: uv run --no-build --no-sync python -m pytest tests/architecture/test_product_map_consistency.py -q --tb=short
+        run: uv run --no-build --no-sync python -m pytest tests/architecture/test_product_map_consistency.py -q --tb=short -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
       - name: Trivy filesystem scan (dependency CVEs + misconfigs)
         uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297
         # Pin the vulnerability DB to the canonical GHCR repository instead of
@@ -442,7 +442,11 @@ jobs:
         # through on main (PR #690). Wire the whole package into CI so the
         # enforcement actually gates merges.
         shell: bash
-        run: uv run --no-build --no-sync pytest tests/architecture/ -q --tb=short --timeout=120 -p no:warnings -n auto
+        # `-p no:warnings` would disable the warnings plugin entirely, making an
+        # escalated run structurally blind; the escalation plus
+        # --disable-warnings keeps the gate firing while suppressing the
+        # benign summary.
+        run: uv run --no-build --no-sync pytest tests/architecture/ -q --tb=short --timeout=120 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings -n auto
       - name: Run connector contract tests
         # The connector contract suite drives each connector (filesystem,
         # REST, shell, npm, pypi) against a real in-process HTTP server or
