@@ -705,6 +705,71 @@ async def test_deadline_kill_reset_timeout_defers_without_terminal_fail():
     assert box.deferred is True
 
 
+async def test_zombie_watchdog_reset_timeout_defers_without_terminal_fail():
+    """FAR-2076: the ZOMBIE watchdog's deferral branch, driven end-to-end.
+
+    A fenced reset that TIMES OUT (``None``) leaves the row most likely still
+    ``running`` under OUR claim token, so this watchdog's untokened
+    ``fail_run_terminal`` would LAND and kill a run with budget remaining. The
+    watchdog must defer: no terminal fail, no re-dispatch, no backoff sleep.
+
+    This drives the REAL ``zombie_watchdog`` (the existing coverage only called
+    ``_fail_overdue_node``, so this branch could be reverted with the suite
+    green). Prove-the-fix: remove the ``retry_state is None`` branch and the
+    untokened terminal fail runs — the ``fail`` assertion fails.
+    """
+    executor = _make_executor_mock(attempt_count=1, reset_rowcount=None)
+    fail = AsyncMock(return_value=True)
+    hang = asyncio.Event()
+
+    async def _hang() -> None:
+        await hang.wait()
+
+    exec_task = asyncio.create_task(_hang())
+    first_progress = asyncio.Event()  # never set — the grace expires
+    stall = asyncio.Event()
+    hook, box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
+    seams = _db_seams({"on": ["stall"], "max_retries": 2})
+    try:
+        with contextlib.ExitStack() as stack:
+            for seam in seams:
+                stack.enter_context(seam)
+            sleep_mock = stack.enter_context(
+                patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock())
+            )
+            # The zombie call site opts into the FAR-2053 delivery veto, which
+            # reads the run's marker rows; an empty record is "not delivered".
+            stack.enter_context(
+                patch(
+                    "modulo.core.pipeline_engine.watchdog_retry._read_run_markers",
+                    AsyncMock(return_value={}),
+                )
+            )
+            stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+            await zombie_watchdog(
+                MagicMock(),
+                "run-1",
+                "org-1",
+                first_progress,
+                exec_task=exec_task,
+                stall_requested=stall,
+                grace_seconds=0.01,
+                retry_hook=hook,
+            )
+    finally:
+        exec_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await exec_task
+
+    # The reset was attempted (a timeout is not a stand-down)…
+    executor._fenced_pending_reset.assert_awaited_once()
+    # …but NOTHING terminalised or re-dispatched, and no backoff was slept.
+    fail.assert_not_awaited()
+    sleep_mock.assert_not_awaited()
+    assert box.requested is False
+    assert box.deferred is True
+
+
 async def test_deadline_kill_never_resets_non_idempotent_graph():
     """FAR-1649 qa iteration 3: the fenced pending-reset is NEVER performed
     for a non-idempotent graph, so a node-started run on such a graph can
@@ -1383,6 +1448,59 @@ async def test_watchdog_no_coverage_still_terminal_fails_and_returns_failed():
     fail.assert_awaited_once()
     assert fail.await_args.kwargs["error_code"] == "executor_stalled"
     executor._fenced_pending_reset.assert_not_awaited()
+
+
+async def test_watchdog_reset_timeout_returns_deferred_without_terminal_fail():
+    """FAR-2076: the WRAPPER's deferred outcome for a timed-out watchdog reset.
+
+    The zombie watchdog sets ``box.deferred`` and stands down; the wrapper must
+    then report the non-terminal ``deferred`` outcome instead of resolving the
+    still-running row into an honest-looking ``failed``. Nothing terminalises
+    and the run is not completed — the row is left for the nodeless/age
+    backstop.
+
+    Prove-the-fix: remove the wrapper's ``deferred`` branch and the mocked
+    ``_read_run_status`` ("failed") yields ``{"status": "failed"}``.
+    """
+    executor = _make_executor_mock(attempt_count=1, reset_rowcount=None)
+    hang = asyncio.Event()
+
+    async def _hang() -> None:
+        await hang.wait()
+
+    fail = AsyncMock(return_value=True)
+    complete = AsyncMock()
+    with contextlib.ExitStack() as stack:
+        for seam in _watchdog_wrapper_seams({"on": ["stall"], "max_retries": 1}):
+            stack.enter_context(seam)
+        stack.enter_context(
+            patch(
+                "modulo.core.pipeline_engine.watchdog_retry._read_run_markers",
+                AsyncMock(return_value={}),
+            )
+        )
+        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("modulo.core.pipeline_execution.mark_complete", complete))
+        stack.enter_context(patch("modulo.core.pipeline_execution.heartbeat_loop", AsyncMock()))
+        stack.enter_context(patch("modulo.core.pipeline_execution._read_run_status", AsyncMock(return_value="failed")))
+        stack.enter_context(
+            patch(
+                "modulo.core.pipeline_execution.get_settings",
+                lambda: MagicMock(saq_setup_grace_seconds=0.01, saq_node_default_timeout_seconds=1200),
+            )
+        )
+        result = await run_executor_with_watchdog(
+            MagicMock(),
+            run_id=str(uuid.uuid4()),
+            org_id=str(uuid.uuid4()),
+            executor=executor,
+            job=MagicMock(function="execute_run"),
+            execute_fn=_hang,
+        )
+    assert result == {"status": "deferred"}
+    fail.assert_not_awaited()
+    complete.assert_not_awaited()
+    executor._fenced_pending_reset.assert_awaited_once()
 
 
 async def test_resume_job_disables_watchdog_retry():

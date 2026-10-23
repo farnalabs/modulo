@@ -256,7 +256,7 @@ async def test_check_capacity_second_lock_timeout_defers_instead_of_terminalisin
     assert update.await_count == 2
     # The run is handed back to pending, so dispatcher_reconcile re-dispatches it.
     reset.assert_awaited_once_with(run_id=run.id, org_id=org_id)
-    assert excinfo.value.reset_confirmed is True
+    assert excinfo.value.reset_state == "confirmed"
     # The deferral keeps the lock timeout as its cause for the logs.
     assert isinstance(excinfo.value.__cause__, OperationalError)
     assert any("capacity_check_lock_timeout" in message for message in caplog.messages)
@@ -306,19 +306,34 @@ async def test_fenced_pending_reset_bounds_its_write_and_returns_none_on_lock_ti
     assert any("fenced_pending_reset_lock_timeout" in message for message in caplog.messages)
 
 
-async def test_check_capacity_second_lock_timeout_defers_even_when_the_reset_also_times_out() -> None:
-    """The deferral survives a reset that could not confirm the handback.
+@pytest.mark.parametrize(
+    ("reset_rowcount", "expected_state", "expected_fragment"),
+    [
+        # The bounded reset itself timed out: NOT reset, likely still running.
+        (None, "timeout", "ALSO timed out"),
+        # A genuine fence loss: a successor owns the row or it already left
+        # running. The deferral must not claim it timed out (the old bool
+        # collapse did) and must not claim a resting state it cannot know.
+        (0, "fence_lost", "matched no row"),
+    ],
+)
+async def test_check_capacity_second_lock_timeout_defers_with_the_reset_outcome(
+    reset_rowcount: int | None, expected_state: str, expected_fragment: str
+) -> None:
+    """The deferral survives a reset that could not confirm the handback, and
+    carries the OUTCOME rather than a bool.
 
     ``_fenced_pending_reset`` returns ``None`` when its own bounded write times
-    out (FAR-2076). The admission path must still raise
-    ``AdmissionLockTimeoutError`` so the run falls to the nodeless/age
-    backstop — never sit on the worker until the setup grace expires — and the
-    error must say the row is still ``running``, not ``pending``.
+    out and ``0`` when the fence was lost; the old ``bool(reset)`` collapsed
+    both to ``False``, so the fence-lost arm falsely reported "the reset ALSO
+    timed out". Each arm must still raise ``AdmissionLockTimeoutError`` (so the
+    run falls to the nodeless/age backstop instead of sitting on the worker
+    until the setup grace expires) and must not claim the run is ``pending``.
     """
     run = _capacity_run()
     executor = _capacity_executor(_begin_session())
     update = AsyncMock(side_effect=_lock_timeout_error())
-    reset = AsyncMock(return_value=None)
+    reset = AsyncMock(return_value=reset_rowcount)
     executor._fenced_pending_reset = reset  # type: ignore[method-assign]
 
     with (
@@ -339,19 +354,22 @@ async def test_check_capacity_second_lock_timeout_defers_even_when_the_reset_als
         )
 
     reset.assert_awaited_once()
-    # The deferral must NOT claim the run is pending: a timed-out reset leaves
-    # it running under our claim token for the backstop.
-    assert excinfo.value.reset_confirmed is False
-    assert "left running" in str(excinfo.value)
+    assert excinfo.value.reset_state == expected_state
+    assert expected_fragment in str(excinfo.value)
+    # Neither arm may describe an unconfirmed handback as pending.
     assert "left pending" not in str(excinfo.value)
 
 
-async def test_admission_lock_timeout_maps_to_the_non_terminal_deferred_outcome() -> None:
+@pytest.mark.parametrize("reset_state", ["confirmed", "fence_lost", "timeout", "unknown"])
+async def test_admission_lock_timeout_maps_to_the_non_terminal_deferred_outcome(
+    reset_state: Any,
+) -> None:
     """FAR-2076: the deferral contract is observable to the watchdog caller.
 
-    ``AdmissionLockTimeoutError`` maps to ``{"status": "deferred"}`` and does
-    NOT terminal-fail the run. Any other executor exception still terminal-fails
-    (asserted here so the new branch cannot widen).
+    EVERY reset outcome maps to ``{"status": "deferred"}`` and does NOT
+    terminal-fail the run — the tri-state only changes the wording, never the
+    outcome. Any other executor exception still terminal-fails (asserted here
+    so the new branch cannot widen).
     """
     fail_run = AsyncMock()
     with patch("modulo.core.pipeline_execution.fail_run_terminal", fail_run):
@@ -360,7 +378,7 @@ async def test_admission_lock_timeout_maps_to_the_non_terminal_deferred_outcome(
             str(uuid.uuid4()),
             str(uuid.uuid4()),
             claim_token="tok",
-            exec_exc=AdmissionLockTimeoutError(uuid.uuid4(), attempts=2, reset_confirmed=True),
+            exec_exc=AdmissionLockTimeoutError(uuid.uuid4(), attempts=2, reset_state=reset_state),
             hitl_decision_resume=False,
         )
     assert deferred == {"status": "deferred"}
