@@ -1950,6 +1950,28 @@ def test_update_rejects_base_url_for_incapable_provider(client: TestClient, prov
     update_mock.assert_not_awaited()
 
 
+def test_update_rejects_conflicting_base_url_and_legacy_value(client: TestClient) -> None:
+    """Two different endpoints in one update request are ambiguous."""
+    stub = _secrets_with({"api_key": "sk-existing"})
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={
+                "base_url": _CUSTOM_BASE_URL,
+                "default_params": {"base_url": _LEGACY_BASE_URL},
+                "api_key": "sk-fresh",
+            },
+        )
+    assert resp.status_code == 422
+    assert "base_url_conflict" in str(resp.json()["detail"])
+    update_mock.assert_not_awaited()
+
+
 def test_update_rejects_legacy_http_endpoint_without_opt_in(client: TestClient) -> None:
     stub = _secrets_with({"api_key": "sk-existing"})
     with (

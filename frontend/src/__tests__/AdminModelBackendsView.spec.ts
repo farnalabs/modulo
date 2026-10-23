@@ -966,3 +966,141 @@ describe('AdminModelBackendsView — pipeline references', () => {
     expect(wrapper.find('[data-testid="admin-model-backends-refs-table-mb-2"]').text()).toContain('Pipeline p-9')
   })
 })
+
+describe('AdminModelBackendsView — base url validation mirror', () => {
+  async function openAddForProvider(provider: string) {
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="admin-model-backends-add"]').trigger('click')
+    await nextTick()
+    const vm = wrapper.vm as unknown as { formData: { provider: string } }
+    vm.formData.provider = provider
+    await nextTick()
+    return wrapper
+  }
+
+  async function fillCreateBaseUrl(wrapper: ReturnType<typeof mountView>, baseUrl: string) {
+    await wrapper.find('[data-testid="admin-model-backends-name-input"]').setValue('gw')
+    await wrapper.find('[data-testid="admin-model-backends-display-name-input"]').setValue('Gateway')
+    await wrapper.find('[data-testid="admin-model-backends-model-id-input"]').setValue('m')
+    await wrapper.find('[data-testid="admin-model-backends-api-key-input"]').setValue('k')
+    await wrapper.find('[data-testid="admin-model-backends-base-url-input"]').setValue(baseUrl)
+    await nextTick()
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+  }
+
+  it.each([
+    ['not a url', 'http(s) URL'],
+    ['ftp://example.com/v1', 'http(s) URL'],
+    ['https:foo', 'http(s) URL'],
+    ['https://metadata.google.internal/v1', 'cloud metadata'],
+    ['https://100.100.100.200/v1', 'cloud metadata'],
+    ['https://[fd00:ec2::254]/v1', 'cloud metadata'],
+    ['https://[::ffff:6464:64c8]/v1', 'cloud metadata'],
+    ['https://999.999.999.999/v1', 'http(s) URL'],
+  ])('rejects %s client-side with the mirrored rule', async (baseUrl, expected) => {
+    const wrapper = await openAddForProvider('openai')
+    await fillCreateBaseUrl(wrapper, baseUrl)
+
+    expect(mockPost).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain(expected)
+  })
+
+  it.each([
+    'https://[2001:db8::1]/v1',
+    // IPv4-mapped but not a metadata address: both comparisons must be false.
+    'https://[::ffff:808:808]/v1',
+  ])('accepts a non-metadata IPv6 literal (%s)', async (baseUrl) => {
+    const wrapper = await openAddForProvider('openai')
+    await fillCreateBaseUrl(wrapper, baseUrl)
+    await nextTick()
+
+    expect(mockPost).toHaveBeenCalledTimes(1)
+    expect(mockPost.mock.calls[0][1].body.base_url).toBe(baseUrl)
+  })
+
+  it('omits an empty base url from the create body', async () => {
+    const wrapper = await openAddForProvider('openai')
+    await fillCreateBaseUrl(wrapper, '')
+    await nextTick()
+
+    expect(mockPost).toHaveBeenCalledTimes(1)
+    expect(mockPost.mock.calls[0][1].body.base_url).toBeUndefined()
+    expect(mockPost.mock.calls[0][1].body.allow_insecure_http).toBeUndefined()
+  })
+
+  it('sends an explicit null to clear the edit endpoint and honours the opt-in checkbox', async () => {
+    mockBackendsGet([backend('mb-1', { provider: 'openai', base_url: 'https://old.internal.example/v1' })])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openEdit(wrapper, 'mb-1')
+
+    await wrapper.find('[data-testid="admin-model-backends-edit-allow-insecure-http"]').setValue(true)
+    await wrapper.find('[data-testid="admin-model-backends-edit-base-url"]').setValue('')
+    await wrapper.find('[data-testid="admin-model-backends-edit-api-key"]').setValue('sk-fresh')
+    await nextTick()
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    expect(mockPatch).toHaveBeenCalledTimes(1)
+    const body = mockPatch.mock.calls[0][1].body
+    expect(body.base_url).toBeNull()
+    expect(body.allow_insecure_http).toBe(true)
+  })
+
+  it('blocks the edit submit when the base url fails the client-side rules', async () => {
+    mockBackendsGet([backend('mb-1', { provider: 'openai', base_url: 'https://old.internal.example/v1' })])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openEdit(wrapper, 'mb-1')
+
+    await wrapper.find('[data-testid="admin-model-backends-edit-base-url"]').setValue('ftp://example.com/v1')
+    await nextTick()
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+
+    expect(mockPatch).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('http(s) URL')
+  })
+})
+
+describe('AdminModelBackendsView — tier grouping', () => {
+  it('tolerates a list response without an items field', async () => {
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/model-backends') return { data: {}, error: undefined }
+      if (url === '/api/v1/model-backends/presets') {
+        return { data: { items: [], base_url_providers: baseUrlCapableProviders }, error: undefined }
+      }
+      return { data: undefined, error: { detail: 'unrouted' } }
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('No model backends configured')
+  })
+
+  it('groups native and preview rows and tolerates a missing tier', async () => {
+    mockBackendsGet([
+      backend('mb-native'),
+      { ...backend('mb-notier'), tier: undefined },
+      backend('mb-preview', { tier: 'preview' }),
+      backend('mb-indev', { tier: 'in_dev' }),
+    ])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Display mb-native')
+    expect(wrapper.text()).toContain('Display mb-notier')
+    expect(wrapper.find('[data-testid="model-backends-preview-section"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('mb-preview')
+    // in_dev rows belong to neither group and are intentionally not rendered.
+    expect(wrapper.text()).not.toContain('mb-indev')
+  })
+})

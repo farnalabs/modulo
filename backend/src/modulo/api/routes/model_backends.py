@@ -1447,18 +1447,14 @@ def _requested_update_base_url(
     *,
     base_url_supplied: bool,
     legacy_supplied: bool,
-    preserve_legacy: bool,
 ) -> str | None:
     """Resolve and validate the endpoint the update asks to store."""
     if base_url_supplied:
         legacy = _legacy_base_url(req.default_params) if legacy_supplied else None
         return _direct_update_base_url(req, legacy)
-    if legacy_supplied:
-        raw = _legacy_base_url(req.default_params)
-    elif preserve_legacy:
-        raw = ctx.existing_legacy
-    else:
-        raw = None
+    # Without a supplied legacy value the only other way to request an endpoint
+    # update is migrating the stored legacy value (preserve_legacy).
+    raw = _legacy_base_url(req.default_params) if legacy_supplied else ctx.existing_legacy
     return _validate_base_url(raw, allow_insecure_http=bool(req.allow_insecure_http)) if raw else None
 
 
@@ -1505,7 +1501,6 @@ def _resolve_endpoint_update(req: ModelBackendUpdate, ctx: _UpdateContext) -> _E
         ctx,
         base_url_supplied=base_url_supplied,
         legacy_supplied=legacy_supplied,
-        preserve_legacy=preserve_legacy,
     )
     return _finish_endpoint_update(req, ctx, requested_base_url)
 

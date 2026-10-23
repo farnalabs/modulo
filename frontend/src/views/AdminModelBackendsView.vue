@@ -589,10 +589,11 @@ function normalizeHost(host: string): string {
 function isNonCanonicalIpLiteral(host: string): boolean {
   const normalized = normalizeHost(host)
   // A canonical dotted-quad IPv4 literal is fine; obfuscated encodings are not.
-  const ipv4 = normalized.match(/^(\d{1,3})(\.\d{1,3}){3}$/)
-  if (ipv4) {
+  // (The URL parser rejects a dotted-quad with an octet above 255, so this
+  // branch only ever sees canonical octets.)
+  if (/^(\d{1,3})(\.\d{1,3}){3}$/.test(normalized)) {
     const octets = normalized.split('.').map(Number)
-    if (octets.every((octet) => octet <= 255)) return false
+    return !octets.every((octet) => octet <= 255)
   }
   const isNumericLike = (label: string) =>
     /^\d+$/.test(label) || /^0x[0-9a-f]+$/i.test(label)
@@ -603,8 +604,11 @@ function isNonCanonicalIpLiteral(host: string): boolean {
 }
 
 function rawHostFromUrl(value: string): string {
-  const authority = value.match(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/([^/?#]*)/)?.[1] ?? ''
-  const withoutUserinfo = authority.split('@').pop() ?? ''
+  // Callers enforce the "://" form before this runs, so the authority exists.
+  const authority = value.slice(value.indexOf('://') + 3).split(/[/?#]/)[0]
+  // slice(lastIndexOf+1) drops any userinfo and is the whole authority when
+  // there is no '@' (lastIndexOf returns -1).
+  const withoutUserinfo = authority.slice(authority.lastIndexOf('@') + 1)
   if (withoutUserinfo.startsWith('[')) {
     return withoutUserinfo.slice(0, withoutUserinfo.indexOf(']') + 1)
   }
@@ -616,8 +620,9 @@ function isMetadataHost(host: string): boolean {
   if (metadataHostNames.has(normalized)) return true
   if (normalized.startsWith('169.254.')) return true
   if (normalized === '100.100.100.200' || normalized === 'fd00:ec2::254') return true
-  if (normalized.startsWith('::ffff:169.254.')) return true
-  // IPv4-mapped IPv6 in hex form ([::ffff:a9fe:a9fe] normalises here).
+  // IPv4-mapped IPv6 in hex form ([::ffff:a9fe:a9fe] normalises here). The URL
+  // parser canonicalises IPv6 to hex, so a dotted mapped form never reaches
+  // this function and does not need a separate prefix check.
   const mapped = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
   if (mapped) {
     const high = parseInt(mapped[1], 16)
@@ -638,6 +643,11 @@ function isMetadataHost(host: string): boolean {
 function validateBaseUrl(raw: string): string | null {
   const value = raw.trim()
   if (!value) return null
+  // The server's parser requires an authority ("https:foo" has none), so reject
+  // the schemeless-authority forms here rather than surfacing the 422 later.
+  if (!value.includes('://')) {
+    return t('views.AdminModelBackendsView.base_url_invalid')
+  }
   let parsed: URL
   try {
     parsed = new URL(value)
@@ -648,9 +658,6 @@ function validateBaseUrl(raw: string): string | null {
     return t('views.AdminModelBackendsView.base_url_invalid')
   }
   if (parsed.username || parsed.password || parsed.search || parsed.hash) {
-    return t('views.AdminModelBackendsView.base_url_invalid')
-  }
-  if (!parsed.hostname) {
     return t('views.AdminModelBackendsView.base_url_invalid')
   }
   if (isMetadataHost(parsed.hostname)) {
@@ -890,10 +897,12 @@ function buildCreateBody() {
 }
 
 function buildUpdateBody(): components['schemas']['ModelBackendUpdate'] {
+  // updateBackend() refuses to submit unless all three are non-empty, so they
+  // are sent as strings rather than nullable fallbacks.
   const body: components['schemas']['ModelBackendUpdate'] = {
-    name: formData.name.trim() || null,
-    display_name: formData.display_name.trim() || null,
-    model_id: formData.model_id.trim() || null,
+    name: formData.name.trim(),
+    display_name: formData.display_name.trim(),
+    model_id: formData.model_id.trim(),
     default_params: buildDefaultParams(),
     visibility: formData.visibility,
   }
