@@ -70,7 +70,6 @@ UNRAISABLE_ESCALATION = "error::pytest.PytestUnraisableExceptionWarning"
 #:
 #: - ``conformance`` - the runtime-provider suite needs a live Kubernetes
 #:   cluster (deselected by default; nothing to run here);
-#: - ``connectors`` - not yet audited;
 #: - ``docker`` - two pre-existing failures on main (a stop-vs-remove
 #:   expectation and a ``select(distinct(...))`` SAWarning escalated by the
 #:   ``error::RuntimeWarning`` ini rule), so the tree cannot reach green;
@@ -82,7 +81,7 @@ UNRAISABLE_ESCALATION = "error::pytest.PytestUnraisableExceptionWarning"
 #: the collection path: ``tests/unit/conftest.py`` is never imported by a
 #: ``pytest tests/integration`` or ``pytest tests/bdd`` run, so a hook there
 #: cannot gate those suites.
-GATED_SUITE_ROOTS: tuple[str, ...] = ("unit", "integration", "bdd", "architecture")
+GATED_SUITE_ROOTS: tuple[str, ...] = ("unit", "integration", "bdd", "architecture", "connectors")
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _TESTS_ROOT = _BACKEND_ROOT / "tests"

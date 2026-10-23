@@ -456,7 +456,11 @@ jobs:
         # regress silently. Run it here alongside the other non-Docker
         # suites.
         shell: bash
-        run: uv run --no-build --no-sync pytest tests/connectors/ -q --tb=short --timeout=180 -p no:warnings
+        # `-p no:warnings` would disable the warnings plugin entirely, making an
+        # escalated run structurally blind; the escalation plus
+        # --disable-warnings keeps the gate firing while suppressing the
+        # benign summary.
+        run: uv run --no-build --no-sync pytest tests/connectors/ -q --tb=short --timeout=180 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
       - name: Run email settings BDD scenarios
         # The admin email-settings BDD feature file is self-contained (no
         # browser/live app), so it runs here rather than only in the unit

@@ -29,12 +29,11 @@ those suites.
 A gate that can be deleted silently is not a gate. These tests pin:
 
 - the effective behaviour: for an item in a gated suite (``unit``,
-  ``integration``, ``bdd``, ``architecture``) the hook lands an ``error``
-  filter ahead of the ini ``default`` and a warned
+  ``integration``, ``bdd``, ``architecture``, ``connectors``) the hook lands an
+  ``error`` filter ahead of the ini ``default`` and a warned
   ``PytestUnraisableExceptionWarning`` actually raises;
 - the deliberate SCOPE: an item in an UNAUDITED suite (``conformance``,
-  ``connectors``, ``determination``, ``load``, ``docker``) must not install the
-  filter;
+  ``determination``, ``load``, ``docker``) must not install the filter;
 - the exact audited set in ``GATED_SUITE_ROOTS``;
 - every workflow command that names a gated-suite path still carries the
   byte-identical escalation and no longer disables the warnings plugin (BDD
@@ -98,6 +97,7 @@ _GATED_SAMPLES = {
     "integration": ("test_run_crud.py",),
     "bdd": ("steps", "test_auth.py"),
     "architecture": ("test_workflow_structure.py",),
+    "connectors": ("test_connector_contract.py",),
 }
 
 #: One representative item per UNAUDITED suite. ``load`` and ``determination``
@@ -105,7 +105,6 @@ _GATED_SAMPLES = {
 #: named so a future test module cannot enter either tree ungated.
 _UNGATED_SAMPLES = {
     "conformance": ("test_pipeline_conformance.py",),
-    "connectors": ("test_connector_contract.py",),
     "determination": ("test_determination.py",),
     "load": ("test_load_profile.py",),
     "docker": ("test_docker_compose.py",),
@@ -202,7 +201,7 @@ def test_unaudited_suite_item_does_not_install_the_filter(suite: str) -> None:
 
 
 def test_gated_suite_roots_are_the_verified_set() -> None:
-    """The audited set is exactly unit + integration + BDD + architecture.
+    """The audited set is exactly unit + integration + BDD + architecture + connectors.
 
     Widening the gate is a claim that a suite was audited under the escalation
     and ran green; that must be a deliberate edit here, never a side effect.
@@ -214,6 +213,7 @@ def test_gated_suite_roots_are_the_verified_set() -> None:
         "integration",
         "bdd",
         "architecture",
+        "connectors",
     )
 
 
@@ -244,6 +244,7 @@ def _workflow_run_commands(path: Path) -> Iterator[str]:
         (CI_WORKFLOW, "tests/integration/test_tier1b_connectors_light.py"),
         (CI_WORKFLOW, "pytest tests/architecture/test_product_map_consistency.py"),
         (CI_WORKFLOW, "pytest tests/architecture/ -q"),
+        (CI_WORKFLOW, "pytest tests/connectors/"),
         # integration-changed expands a computed file list, so it names no
         # gated path - pin it by the expansion itself.
         (CI_WORKFLOW, 'pytest "${TEST_FILES[@]}"'),
@@ -262,6 +263,7 @@ def _workflow_run_commands(path: Path) -> Iterator[str]:
         "ci-tier1b-light",
         "ci-product-map-consistency",
         "ci-architecture",
+        "ci-connectors",
         "ci-integration-changed",
         "merge-queue-unit",
         "schemathesis-nightly",
