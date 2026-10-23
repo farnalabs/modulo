@@ -109,6 +109,9 @@ def build_team_payload(
       a fresh UUID v4 so a renewal can be tied to the licence it replaces.
     - ``issued_at`` — ISO 8601 mint timestamp.
 
+    ``expires_at`` is derived from ``issued_at`` (default: now), so minting a
+    renewal with a later issue date shifts its expiry accordingly.
+
     An explicit ``renewal_mode`` outside the vocabulary raises
     :class:`LicenseSigningError` rather than silently minting the default: a
     typo must not quietly downgrade an auto-renewal licence to manual.
