@@ -7645,8 +7645,6 @@ async def _connector_invoke_phase(
             intent_active,
             exc,
         )
-        # _connector_action_failure always raises ConnectorNodeFailedError
-        raise AssertionError("unreachable") from None
 
 
 def make_connector_fn(
