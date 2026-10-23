@@ -471,13 +471,21 @@ async def _start_socket_proxy() -> str | None:
                 await _stop_socket_proxy()
                 return None
             for _ in range(40):
-                with (
-                    contextlib.suppress(Exception),
-                    aiohttp.ClientSession() as session,
-                    session.get(f"http://127.0.0.1:{host_port}/_ping", timeout=aiohttp.ClientTimeout(total=2)) as resp,
-                ):
-                    if resp.status == 200:
-                        return f"tcp://127.0.0.1:{host_port}"
+                # ``aiohttp.ClientSession`` only supports the ASYNC context
+                # manager protocol (its sync ``__enter__`` raises). Using a
+                # sync ``with`` left the session (and its connector) unclosed
+                # on every attempt - a leak the ``PytestUnraisableException-
+                # Warning`` escalation reports as an unclosed ClientSession.
+                with contextlib.suppress(Exception):
+                    async with (
+                        aiohttp.ClientSession() as session,
+                        session.get(
+                            f"http://127.0.0.1:{host_port}/_ping",
+                            timeout=aiohttp.ClientTimeout(total=2),
+                        ) as resp,
+                    ):
+                        if resp.status == 200:
+                            return f"tcp://127.0.0.1:{host_port}"
                 await asyncio.sleep(0.5)
             await _stop_socket_proxy()
             return None

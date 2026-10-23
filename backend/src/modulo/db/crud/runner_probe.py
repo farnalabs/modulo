@@ -129,15 +129,15 @@ async def list_orgs_with_runner_profiles(session: AsyncSession) -> list[uuid.UUI
     never gets a probe row (and its strip renders "not enabled on this
     deployment").
     """
-    from sqlalchemy import distinct
-
     from modulo.db.models.environment_profile import EnvironmentProfile
 
     result = await session.execute(
-        select(distinct(EnvironmentProfile.organisation_id)).where(
+        select(EnvironmentProfile.organisation_id)
+        .where(
             EnvironmentProfile.provider_type == "runner_docker",
             EnvironmentProfile.deleted_at.is_(None),
         )
+        .distinct()
     )
     return [row[0] for row in result.all()]
 

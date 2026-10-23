@@ -488,16 +488,24 @@ class DockerRuntimeProvider(RuntimeProvider):
         stream: Any = await _open_exec_stream(exec_instance)
         stdout_chunks: list[bytes] = []
         stderr_chunks: list[bytes] = []
-        while True:
-            frame = await stream.read_out()
-            if frame is None:
-                break
-            out, err = _split_exec_frame(frame)
-            if out:
-                stdout_chunks.append(out)
-            if err:
-                stderr_chunks.append(err)
-        info = await exec_instance.inspect()
+        try:
+            while True:
+                frame = await stream.read_out()
+                if frame is None:
+                    break
+                out, err = _split_exec_frame(frame)
+                if out:
+                    stdout_chunks.append(out)
+                if err:
+                    stderr_chunks.append(err)
+            info = await exec_instance.inspect()
+        finally:
+            # The hijacked exec stream holds an open response/connection; the
+            # engine never releases it for us. Closing it here is what keeps a
+            # completed ``exec_command`` from leaking an aiodocker Stream (the
+            # ``Unclosed ExecStream`` ResourceWarning the unraisable-warning
+            # gate escalates to an error).
+            await self._close_stream(stream)
         raw_exit = info.get("ExitCode")
         exit_code = int(raw_exit) if raw_exit is not None else -1
         return b"".join(stdout_chunks), b"".join(stderr_chunks), exit_code
@@ -609,6 +617,11 @@ class DockerRuntimeProvider(RuntimeProvider):
             finally:
                 process.exit_code = exit_code
                 process.done.set()
+                # Release the hijacked exec stream on EVERY exit path - natural
+                # end, stream error, or the consumer breaking out early. Only
+                # ``process.kill()`` used to close it, so a normally-completed
+                # stream leaked until GC (``Unclosed ExecStream``).
+                await self._close_stream(stream)
 
         process.chunks = _chunks()
 
