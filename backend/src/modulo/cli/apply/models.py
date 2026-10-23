@@ -273,6 +273,14 @@ class ApplyGraphConnectorBinding(BaseModel):
         "get_run_logs",
         "list_runs",
     ] = "trigger_run"
+    # FAR-2089: resource/filters/data for connector query/write operations
+    # (API ConnectorBinding twin). Declared explicitly because extra="forbid"
+    # would reject the keys the API now stores — a declarative manifest could
+    # not express the capability, and a silently-dropped field would create
+    # plan drift.
+    resource: str | None = Field(default=None, max_length=200)
+    filters: dict[str, Any] | None = Field(default=None)
+    data: dict[str, Any] | None = Field(default=None)
 
 
 class ApplyGraphSchemaPin(BaseModel):
