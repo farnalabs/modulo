@@ -266,6 +266,63 @@ class EgressResolution:
     posture: EgressPosture = EgressPosture.NONE
 
 
+def _node_policy_refusal(node_egress_policy: str | None) -> str | None:
+    """Return a refusal reason when the node policy is out of vocabulary."""
+    raw = node_egress_policy.strip().lower() if isinstance(node_egress_policy, str) else node_egress_policy
+    if raw is not None and raw not in NODE_EGRESS_POLICIES:
+        return f"unrecognised node egress_policy {node_egress_policy!r}; valid values: {NODE_EGRESS_POLICIES}"
+    return None
+
+
+def _profile_policy_refusal(profile_network_policy: str | None) -> str | None:
+    """Return a refusal reason when the profile policy is out of vocabulary."""
+    raw = profile_network_policy.strip().lower() if isinstance(profile_network_policy, str) else profile_network_policy
+    if raw is not None and raw not in PROFILE_NETWORK_POLICIES:
+        return (
+            f"unrecognised profile network_policy {profile_network_policy!r}; valid values: {PROFILE_NETWORK_POLICIES}"
+        )
+    return None
+
+
+def _effective_canonical_policy(node_egress_policy: str | None, profile_network_policy: str | None) -> str | None:
+    """Resolve the canonical policy: node explicit -> profile -> provider default."""
+    canonical_node = _map_node_to_canonical(node_egress_policy)
+    if canonical_node is not None:
+        return canonical_node
+    return _map_profile_to_canonical(profile_network_policy)
+
+
+def _selected_allowlist(
+    node_egress_allowlist: Sequence[dict[str, str | int]] | None,
+) -> tuple[list[dict[str, str | int]] | None, str | None]:
+    """Resolve the allowlist for a ``selected`` policy, or return a refusal."""
+    if node_egress_allowlist:
+        return list(node_egress_allowlist), None
+    return (
+        None,
+        (
+            "egress policy 'selected' requires a non-empty allowlist; "
+            "none available on this route (node has no egress_allowlist "
+            "and profile has no allowlist field)"
+        ),
+    )
+
+
+def _tier_refusal(tier: str, effective: str | None) -> str | None:
+    """Return a refusal reason when the tier cannot enforce the resolved policy."""
+    tier_caps = _TIER_ENFORCEMENT.get(tier)
+    if tier_caps is None:
+        return f"unknown tier {tier!r}; cannot determine enforcement capability"
+    if not tier_caps.get(effective if effective is not None else "default", False):
+        note = _TIER_REFUSAL_NOTES.get(tier)
+        return (
+            f"tier {tier!r} cannot enforce egress policy {effective!r}; "
+            f"available enforcement on this tier: "
+            f"{[k for k, v in tier_caps.items() if v]}" + (f"; {note}" if note else "")
+        )
+    return None
+
+
 def resolve_egress(
     *,
     node_egress_policy: str | None,
@@ -289,86 +346,33 @@ def resolve_egress(
     **Tier capability check.**  A tier that cannot enforce the resolved
     policy returns ``refusal`` set with a clear, actionable reason.
     """
-    # --- Validate raw inputs against their vocabularies before mapping ---
-    # An unrecognised value is a refusal (fail-closed): a typo'd or
-    # directly-written policy must not silently fall back to the provider
-    # default, which would grant egress.
-    _node_raw = node_egress_policy.strip().lower() if isinstance(node_egress_policy, str) else node_egress_policy
-    if _node_raw is not None and _node_raw not in NODE_EGRESS_POLICIES:
-        return EgressResolution(
-            policy=None,
-            allowlist=None,
-            refusal=(f"unrecognised node egress_policy {node_egress_policy!r}; valid values: {NODE_EGRESS_POLICIES}"),
-            posture=EgressPosture.NONE,
-        )
-    _profile_raw = (
-        profile_network_policy.strip().lower() if isinstance(profile_network_policy, str) else profile_network_policy
-    )
-    if _profile_raw is not None and _profile_raw not in PROFILE_NETWORK_POLICIES:
-        return EgressResolution(
-            policy=None,
-            allowlist=None,
-            refusal=(
-                f"unrecognised profile network_policy"
-                f" {profile_network_policy!r};"
-                f" valid values: {PROFILE_NETWORK_POLICIES}"
-            ),
-            posture=EgressPosture.NONE,
-        )
+    refusal = _node_policy_refusal(node_egress_policy)
+    if refusal is not None:
+        return EgressResolution(policy=None, allowlist=None, refusal=refusal, posture=EgressPosture.NONE)
 
-    canonical_node = _map_node_to_canonical(node_egress_policy)
-    canonical_profile = _map_profile_to_canonical(profile_network_policy)
+    refusal = _profile_policy_refusal(profile_network_policy)
+    if refusal is not None:
+        return EgressResolution(policy=None, allowlist=None, refusal=refusal, posture=EgressPosture.NONE)
 
-    # Resolve effective canonical policy: node explicit → profile → provider default.
-    if canonical_node is not None:
-        effective = canonical_node
-    elif canonical_profile is not None:
-        effective = canonical_profile
-    else:
-        effective = None  # provider default
+    effective = _effective_canonical_policy(node_egress_policy, profile_network_policy)
 
-    # Resolve effective allowlist: node explicit -> profile (not yet available
-    # on the profile model -> None).  Allowlist only matters for "selected".
     effective_allowlist: list[dict[str, str | int]] | None = None
     if effective == "selected":
-        # Prefer node's allowlist; fall through to profile (which currently
-        # carries no allowlist -- verify in db/models/environment_profile.py).
-        if node_egress_allowlist:
-            effective_allowlist = list(node_egress_allowlist)
-        else:
-            # No allowlist available from any source.
+        effective_allowlist, refusal = _selected_allowlist(node_egress_allowlist)
+        if refusal is not None:
             return EgressResolution(
                 policy="selected",
                 allowlist=None,
-                refusal=(
-                    "egress policy 'selected' requires a non-empty allowlist; "
-                    "none available on this route (node has no egress_allowlist "
-                    "and profile has no allowlist field)"
-                ),
+                refusal=refusal,
                 posture=EgressPosture.NONE,
             )
 
-    # Tier capability check — covers both named policies and the provider
-    # default (None).  A tier that declares "default: False" (e.g. local)
-    # cannot enforce even the provider-default posture and must refuse.
-    tier_caps = _TIER_ENFORCEMENT.get(tier)
-    if tier_caps is None:
+    refusal = _tier_refusal(tier, effective)
+    if refusal is not None:
         return EgressResolution(
             policy=effective,
             allowlist=effective_allowlist,
-            refusal=f"unknown tier {tier!r}; cannot determine enforcement capability",
-            posture=EgressPosture.NONE,
-        )
-    if not tier_caps.get(effective if effective is not None else "default", False):
-        _note = _TIER_REFUSAL_NOTES.get(tier)
-        return EgressResolution(
-            policy=effective,
-            allowlist=effective_allowlist,
-            refusal=(
-                f"tier {tier!r} cannot enforce egress policy {effective!r}; "
-                f"available enforcement on this tier: "
-                f"{[k for k, v in tier_caps.items() if v]}" + (f"; {_note}" if _note else "")
-            ),
+            refusal=refusal,
             posture=EgressPosture.NONE,
         )
 

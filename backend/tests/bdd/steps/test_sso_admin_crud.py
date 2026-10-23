@@ -30,6 +30,7 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+from tests.bdd.conftest import harden_session_double
 
 
 @pytest.fixture(autouse=True)
@@ -42,6 +43,7 @@ def _stub_audit_session() -> Generator[None, None, None]:
 
     async def _override() -> AsyncGenerator[AsyncMock, None]:
         session = AsyncMock()
+        harden_session_double(session)
         result = MagicMock()
         result.scalar.return_value = None
         result.scalar_one_or_none.return_value = None

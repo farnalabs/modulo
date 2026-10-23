@@ -400,6 +400,10 @@
             <summary class="cursor-pointer text-xs text-muted-foreground">{{ $t('views.RunDetailView.deadline_triage_output_tail') }}</summary>
             <pre class="mt-1 text-xs whitespace-pre-wrap font-mono">{{ entry.raw_output_tail }}</pre>
           </details>
+          <details v-if="entry.raw_output_head" class="mt-2">
+            <summary class="cursor-pointer text-xs text-muted-foreground">{{ $t('views.RunDetailView.deadline_triage_output_head') }}</summary>
+            <pre class="mt-1 text-xs whitespace-pre-wrap font-mono">{{ entry.raw_output_head }}</pre>
+          </details>
         </div>
       </div>
 
@@ -1035,6 +1039,7 @@ interface DeadlineTriageEntry {
   no_output_reason?: string | null
   sandbox_log_tail?: string | null
   raw_output_tail?: string | null
+  raw_output_head?: string | null
   stdout_length?: number | null
   stderr_length?: number | null
   delivery_done?: boolean

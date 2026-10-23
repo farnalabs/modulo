@@ -55,10 +55,12 @@ def _make_id_token(email: str, name: str, sub: str = "abc123") -> str:
     return f"eyJhbGciOiJSUzI1NiJ9.{payload}.signature"
 
 
-def _setup_oidc_client(license_key: str = "test-license-key") -> None:
+def _setup_oidc_client(license_key: str = "test-license-key", custom_plan: Any = None) -> None:
     from modulo.api.main import app as _app
 
-    if not license_key:
+    if custom_plan is not None:
+        _plan = custom_plan
+    elif not license_key:
         _plan = CommunityTier()
     else:
         _plan = LicenseKeyTier(
@@ -130,12 +132,32 @@ def no_team_license(ctx: dict[str, Any]) -> None:
     ctx["license_key"] = ""
 
 
+@given("I have a licence that does not grant SSO")
+def licence_without_sso(ctx: dict[str, Any]) -> None:
+    """A licence that RESOLVES but does not include the ``sso`` feature.
+
+    FAR-2059: this is a determinate entitlement refusal (402), distinct from
+    "no licence at all", which lets authentication proceed in degraded mode.
+    """
+    ctx["license_key"] = "determinate-without-sso"
+    ctx["custom_plan"] = LicenseKeyTier(
+        LicenseData(
+            tier="community",
+            features=[],
+            expires_at="",
+            org_id="",
+            raw_payload={},
+            raw_key="determinate-without-sso",
+        )
+    )
+
+
 # ── OIDC login ────────────────────────────────────────────────────────────
 
 
 @when(parsers.parse('I initiate OIDC login with "{provider}"'))
 def initiate_oidc_login(provider: str, request: Any, ctx: dict[str, Any], client: Any) -> None:
-    _setup_oidc_client(ctx.get("license_key", "test-license-key"))
+    _setup_oidc_client(ctx.get("license_key", "test-license-key"), ctx.get("custom_plan"))
     with patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc:
         mock_disc.return_value = {
             "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",

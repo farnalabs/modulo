@@ -9,10 +9,13 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from tests.bdd.conftest import harden_session_double
+
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/licensing/license_management.feature")
 
 from modulo.core.license import (
+    LICENCE_GRACE_DAYS,
     clear_license,
     parse_and_verify,
     set_public_key,
@@ -56,12 +59,7 @@ def _make_mock_session() -> Any:
     from unittest.mock import AsyncMock, MagicMock
 
     session = AsyncMock()
-    # FAR-1639 (FAR-1629 sweep): in_transaction() and add() are SYNC
-    # AsyncSession methods — bare-AsyncMock children type them as async, so
-    # production code reaching set_rls_* (db/rls.py) passes the guard
-    # vacuously (an unawaited coroutine is truthy).
-    session.in_transaction = MagicMock(return_value=True)
-    session.add = MagicMock()
+    harden_session_double(session)
 
     mock_scalars = MagicMock()
     mock_scalars.all.return_value = []
@@ -195,7 +193,9 @@ def tampered_license_key(ctx: dict[str, Any]) -> None:
 
 @given("I have an expired license key")
 def expired_license_key(ctx: dict[str, Any]) -> None:
-    payload = _valid_payload(expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat())
+    # FAR-2059: capability expiry is expires_at + the fixed delivery grace, so
+    # "expired" for this scenario means lapsed PAST the grace window.
+    payload = _valid_payload(expires_at=(datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 1)).isoformat())
     ctx["license_key"] = _sign_license_payload(payload)
 
 

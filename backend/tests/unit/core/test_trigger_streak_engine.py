@@ -39,6 +39,7 @@ import pytest
 
 from modulo.core import cron_helpers as ch
 from modulo.core import trigger_streak as ts
+from tests.unit.api.mock_session import make_redis_client
 
 ORG = uuid.uuid4()
 TRIGGER_ID = uuid.uuid4()
@@ -574,7 +575,7 @@ class TestEnforceSweep:
             patch.object(ts, "_maybe_alert_mass_cascade", new_callable=AsyncMock, return_value=False),
             patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
         ):
-            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=make_redis_client())
 
         assert summary["scanned"] == 2
         assert summary["deactivated"] == 1, "the second trigger must still be evaluated"
@@ -591,7 +592,7 @@ class TestEnforceSweep:
             patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock) as select,
             patch.object(ts, "_deactivate_trigger_on_no_delivery_streak", new_callable=AsyncMock) as deactivate,
         ):
-            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=make_redis_client())
         assert summary["kill_switch"] == "off"
         assert summary["deactivated"] == 0
         select.assert_not_awaited()
@@ -628,7 +629,7 @@ class TestEnforceSweep:
             patch.object(ts, "_maybe_alert_mass_cascade", new_callable=AsyncMock, return_value=False),
             patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
         ):
-            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=make_redis_client())
         assert summary["deactivated"] == 1, "one deactivation stays under the cap"
         assert summary["capped"] == 1, "the second trigger is capped"
 
@@ -651,7 +652,7 @@ class TestEnforceSweep:
             patch.object(ts, "_maybe_alert_mass_cascade", new_callable=AsyncMock, return_value=True) as alert,
             patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
         ):
-            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=make_redis_client())
         assert summary["deactivated"] == 1
         assert summary["alerts"] == 1
         alert.assert_awaited_once()
@@ -679,7 +680,7 @@ class TestEnforceSweep:
             patch.object(ts, "_maybe_alert_mass_cascade", new_callable=AsyncMock, return_value=False),
             patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
         ):
-            await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+            await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=make_redis_client())
 
         now = datetime.now(UTC)
         assert (now - timedelta(hours=24) - captured["cutoff"]).total_seconds() < 5
@@ -696,7 +697,7 @@ class TestEnforceSweep:
             patch.object(ts, "_maybe_alert_mass_cascade", new_callable=AsyncMock, return_value=False),
             patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
         ):
-            await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+            await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=make_redis_client())
         assert (now - captured["cutoff"]).total_seconds() < 5, "no-window variant uses ~now cutoff"
 
     @pytest.mark.asyncio
@@ -719,7 +720,7 @@ class TestEnforceSweep:
             patch.object(ts, "_maybe_alert_mass_cascade", new_callable=AsyncMock, return_value=False),
             patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=2),
         ):
-            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=make_redis_client())
         assert summary["deactivated"] == 1
         assert summary["notify_failed"] == 1
         assert summary["notify_retried"] == 2
@@ -752,7 +753,7 @@ class TestEnforceSweep:
             patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
         ):
             summary = await ts.enforce_no_delivery_streaks(
-                org_ids=[ORG], redis_client=AsyncMock(), max_triggers_per_tick=2
+                org_ids=[ORG], redis_client=make_redis_client(), max_triggers_per_tick=2
             )
         assert summary["scanned"] == 2
         assert len(calls) == 2, "a full page must be followed by a cursor page"
@@ -805,7 +806,9 @@ class TestEnforceSweep:
             patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock) as select,
             patch.object(ts, "_count_recent_streak_deactivations", new_callable=AsyncMock) as count,
         ):
-            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock(), budget_seconds=-1.0)
+            summary = await ts.enforce_no_delivery_streaks(
+                org_ids=[ORG], redis_client=make_redis_client(), budget_seconds=-1.0
+            )
         assert summary["budget_exceeded"] is True
         select.assert_not_awaited()
         count.assert_not_awaited()
@@ -844,7 +847,7 @@ class TestNotifyStreakDeactivation:
                 threshold=5,
                 reason="source_error",
                 pipeline_name="Backlog Triage",
-                redis_client=AsyncMock(),
+                redis_client=make_redis_client(),
             )
         assert ok is True
         assert dispatched["event_type"] == "trigger_deactivated"
@@ -879,7 +882,7 @@ class TestNotifyStreakDeactivation:
                 threshold=5,
                 reason="not-an-allowed-reason",
                 pipeline_name="",
-                redis_client=AsyncMock(),
+                redis_client=make_redis_client(),
             )
         assert dispatched["payload"]["reason"] == "no_delivery"
 
@@ -888,7 +891,7 @@ class TestNotifyStreakDeactivation:
         """On notifier failure: critical audit entry + per-org Redis pending
         marker so the next scheduler tick retries; the helper returns False and
         never raises."""
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
 
         class _RaisingNotifier:
             def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -922,7 +925,7 @@ class TestNotifyStreakDeactivation:
         dead-letters internally. A dead-lettered result must be treated as a
         delivery failure (pending-retry marker), never silent success
         (FAR-190 qa FIX 3)."""
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
 
         class _DeadLetterNotifier:
             def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -955,7 +958,7 @@ class TestNotifyStreakDeactivation:
     @pytest.mark.asyncio
     async def test_delivered_dispatch_result_is_success(self) -> None:
         """A fully delivered dispatch (no dead-lettered endpoint) is success."""
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
 
         class _DeliveredNotifier:
             def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -987,7 +990,7 @@ class TestNotifyStreakDeactivation:
     async def test_hanging_dispatch_is_bounded(self) -> None:
         """A hung endpoint cannot blow the 120s tick: the dispatch runs under
         asyncio.wait_for and returns failure on timeout (FAR-190 qa FIX 2)."""
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
 
         class _HangingNotifier:
             def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -1022,7 +1025,7 @@ class TestNotifyStreakDeactivation:
         """Only the FIRST failure fires the critical audit — a retry failure
         logs WARNING and re-enqueues without spamming the audit chain
         (FAR-190 qa FIX 4a)."""
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
 
         class _RaisingNotifier:
             def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -1059,7 +1062,7 @@ class TestPendingRetry:
         exists precisely because the trigger was JUST auto-deactivated), and the
         member is removed on success."""
         _patch_env(monkeypatch)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         member = ts._streak_pending_member(_deactivated_data(), threshold=5, pipeline_name="p")
         redis_client.smembers.return_value = {member}
         with (
@@ -1076,7 +1079,7 @@ class TestPendingRetry:
         cooldown stamp (FAR-190 qa FIX 4) — the member is NOT dropped, and the
         next tick's cooldown gate prevents an immediate retry."""
         _patch_env(monkeypatch)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         member = ts._streak_pending_member(_deactivated_data(), threshold=5, pipeline_name="p")
         redis_client.smembers.return_value = {member}
         with (
@@ -1098,7 +1101,7 @@ class TestPendingRetry:
         """A member retried < 15 min ago is skipped this tick (FAR-190 qa FIX 4b)
         — the dispatch is NOT re-attempted and the member is untouched."""
         _patch_env(monkeypatch)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         member = ts._streak_pending_member(
             _deactivated_data(), threshold=5, pipeline_name="p", retry_count=1, last_retry_at=int(time.time()) - 60
         )
@@ -1120,7 +1123,7 @@ class TestPendingRetry:
         _patch_env(monkeypatch)
 
         # Re-enabled: the member is dropped, never dispatched.
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         member = ts._streak_pending_member(_deactivated_data(), threshold=5, pipeline_name="p")
         redis_client.smembers.return_value = {member}
         with (
@@ -1139,7 +1142,7 @@ class TestPendingRetry:
         (active=False), so the 'auto-deactivated' notification is still valid —
         the retry guard must NOT drop it (FAR-190 qa round 2 FIX 1)."""
         _patch_env(monkeypatch)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         member = ts._streak_pending_member(_deactivated_data(), threshold=5, pipeline_name="p")
         redis_client.smembers.return_value = {member}
         with (
@@ -1157,7 +1160,7 @@ class TestPendingRetry:
         member this tick — it is neither dispatched (could be a stale notice)
         nor dropped (it may still be deactivated); the next tick re-checks."""
         _patch_env(monkeypatch)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         member = ts._streak_pending_member(_deactivated_data(), threshold=5, pipeline_name="p")
         redis_client.smembers.return_value = {member}
         with (
@@ -1175,7 +1178,7 @@ class TestPendingRetry:
         round 2 FIX 2): once the sweep deadline has passed the pass returns 0
         without reading the pending set, dispatching, or dropping members."""
         _patch_env(monkeypatch)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         member = ts._streak_pending_member(_deactivated_data(), threshold=5, pipeline_name="p")
         redis_client.smembers.return_value = {member}
         with (
@@ -1195,7 +1198,7 @@ class TestPendingRetry:
         members after the deadline are left pending (never dropped) so the pass
         can never blow the enclosing 120s tick (FAR-190 qa round 2 FIX 2)."""
         _patch_env(monkeypatch)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         members = {
             ts._streak_pending_member(_deactivated_data(id=uuid.uuid4()), threshold=5, pipeline_name="p")
             for _ in range(3)
@@ -1219,7 +1222,7 @@ class TestPendingRetry:
         members per tick — a mass-cascade backlog defers to later ticks instead
         of blowing the sweep budget (FAR-190 qa round 2 FIX 2)."""
         _patch_env(monkeypatch)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         members = {
             ts._streak_pending_member(_deactivated_data(id=uuid.uuid4()), threshold=5, pipeline_name="p")
             for _ in range(5)
@@ -1237,7 +1240,7 @@ class TestPendingRetry:
         """An unparseable pending member is srem'd — never retried forever
         (FAR-190 qa FIX 4d)."""
         _patch_env(monkeypatch)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         redis_client.smembers.return_value = {"not-json{{{"}
         with (
             patch.object(ts, "_trigger_active_state", new_callable=AsyncMock) as active_state,
@@ -1262,7 +1265,7 @@ class TestDispatchStreakNotify:
         """Once the per-tick inline budget is spent, a trip is NOT dropped: it
         is deferred to the pending-retry path (``notify_deferred``) and a
         pending marker is written so the next tick dispatches it."""
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         delta: dict[str, Any] = dict.fromkeys(ts._SWEEP_SUMMARY_KEYS, 0)
         with (
             patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock) as notify,
@@ -1345,7 +1348,7 @@ class TestReenableAnchor:
         """Re-enable clears the FAR-158 config-failure Redis counter only AFTER
         the Postgres commit (over-clearing safe, under-clearing not)."""
         _patch_env(monkeypatch)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         with (
             patch.object(ch, "get_settings", return_value=_settings()),
             patch.object(ts, "AsyncRedis") as redis_cls,
@@ -1402,7 +1405,7 @@ class TestReenableAnchor:
         path (FAR-190 qa FIX 13)."""
         _patch_env(monkeypatch)
         session = _RoutedSession()
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         redis_client.incr.return_value = 5  # reaches ONGOING_MAX_CONSECUTIVE_FAILURES
         with patch.object(ts, "record_ongoing_deactivation_lifecycle", new_callable=AsyncMock) as record:
             await ch._bump_ongoing_failure(session, redis_client, TRIGGER_ID, org_id=ORG)
@@ -1480,7 +1483,7 @@ class TestDispatcherWiring:
             ]
         )
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
         with (
@@ -1527,7 +1530,7 @@ class TestDispatcherWiring:
             ]
         )
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
         with (
@@ -2333,7 +2336,7 @@ class TestCronSweep:
             patch.object(ts, "_maybe_alert_mass_cascade", new_callable=AsyncMock, return_value=False),
             patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
         ):
-            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=make_redis_client())
         assert summary["tripped"] == 1
         assert summary["deactivated"] == 0
         claim.assert_awaited_once()
@@ -2357,7 +2360,7 @@ class TestCronSweep:
             patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock) as notify,
             patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
         ):
-            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=make_redis_client())
         assert summary["tripped"] == 0
         notify.assert_not_awaited()
 
@@ -2384,7 +2387,7 @@ class TestCronSweep:
             patch.object(ts, "_maybe_alert_mass_cascade", new_callable=AsyncMock, return_value=False),
             patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
         ):
-            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=make_redis_client())
         assert summary["deactivated"] == 1
         assert summary["tripped"] == 0
         claim.assert_not_awaited(), "the opt-in path deactivates; it never latches a notify-only trip"
@@ -2411,7 +2414,7 @@ class TestCronSweep:
             patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock, return_value=True),
             patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
         ):
-            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=make_redis_client())
         assert summary["tripped"] == 1
         assert summary["capped"] == 0
 
@@ -2433,7 +2436,7 @@ class TestCronSweep:
             patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock) as notify,
             patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
         ):
-            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=make_redis_client())
         assert summary["errors"] == 1
         assert summary["tripped"] == 0
         notify.assert_not_awaited()
@@ -2460,7 +2463,7 @@ class TestCronSweep:
                 cron,
                 delta=delta,
                 notify_budget=ts._STREAK_NOTIFY_MAX_PER_TICK,
-                redis_client=AsyncMock(),
+                redis_client=make_redis_client(),
             )
         assert delta["errors"] == 0
 
@@ -2575,7 +2578,7 @@ class TestCronNotifyPayload:
                 threshold=5,
                 reason="no_work",
                 pipeline_name="p",
-                redis_client=AsyncMock(),
+                redis_client=make_redis_client(),
             )
         assert ok is True
         return dispatched
@@ -2661,7 +2664,7 @@ class TestCronNotifyPayload:
         the active-state re-check (which exists to drop stale deactivation
         notices after re-enable) must skip it and dispatch."""
         _patch_env(monkeypatch)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         member = ts._streak_pending_member(_claimed_cron_trip(), threshold=5, pipeline_name="p")
         redis_client.smembers.return_value = {member}
         with (

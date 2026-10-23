@@ -33,6 +33,7 @@ from modulo.db.crud.variant_group import (
     validate_batch_ownership,
 )
 from modulo.db.models.agent import Agent
+from tests.unit.api.mock_session import configure_mock_session
 
 
 class TestPickVariantWeighted:
@@ -102,7 +103,7 @@ class TestPickVariantWeighted:
 @pytest.mark.asyncio
 class TestIncrementRunCount:
     async def test_increments_count(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         group_id = uuid.uuid4()
         mock_group = MagicMock()
         mock_group.run_count = 5
@@ -118,7 +119,7 @@ class TestIncrementRunCount:
         session.flush.assert_awaited_once()
 
     async def test_returns_none_when_not_found(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         group_id = uuid.uuid4()
         result_mock = MagicMock()
         result_mock.scalar_one_or_none = MagicMock(return_value=None)
@@ -131,7 +132,7 @@ class TestIncrementRunCount:
         session.flush.assert_not_called()
 
     async def test_increments_by_delta(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         group_id = uuid.uuid4()
         mock_group = MagicMock()
         mock_group.run_count = 2
@@ -149,7 +150,7 @@ class TestIncrementRunCount:
 @pytest.mark.asyncio
 class TestCheckPipelineRunQuotaForBatch:
     async def test_allows_when_headroom_for_whole_batch(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         group = MagicMock()
         group.pipeline_id = uuid.uuid4()
         group.max_concurrent_runs = 5
@@ -162,7 +163,7 @@ class TestCheckPipelineRunQuotaForBatch:
             assert await check_pipeline_run_quota_for_batch(session, group, batch_size=2) is True
 
     async def test_rejects_when_batch_breaches_quota(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         group = MagicMock()
         group.pipeline_id = uuid.uuid4()
         group.max_concurrent_runs = 5
@@ -175,7 +176,7 @@ class TestCheckPipelineRunQuotaForBatch:
             assert await check_pipeline_run_quota_for_batch(session, group, batch_size=2) is False
 
     async def test_rejects_at_exactly_quota(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         group = MagicMock()
         group.pipeline_id = uuid.uuid4()
         group.max_concurrent_runs = 2
@@ -219,7 +220,7 @@ class TestRunVariantBatch:
         ]
 
     async def test_fires_one_run_per_variant_in_insertion_order(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = self._make_group()
         group.variants = self._make_variants(["control", "experiment"])
@@ -261,7 +262,7 @@ class TestRunVariantBatch:
 
     async def test_prompt_version_override_merged_into_payload(self) -> None:
         """Prompt version comparison via run_context_overrides.prompt_version (PRD 8.19)."""
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = self._make_group()
         group.variants = [
@@ -319,7 +320,7 @@ class TestRunVariantBatch:
         render the right template for each node. The map contains ONLY the
         matching agent.
         """
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         agent_a = str(uuid.uuid4())
         group = self._make_group()
@@ -373,7 +374,7 @@ class TestRunVariantBatch:
 
         The node runner then falls back to its snapshot-embedded prompt.
         """
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = self._make_group()
         group.variants = [
@@ -420,7 +421,7 @@ class TestRunVariantBatch:
         assert "prompt_templates" not in overrides
 
     async def test_returns_none_when_quota_exceeded_for_batch(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = self._make_group()
         group.variants = self._make_variants(["control", "experiment"])
@@ -444,7 +445,7 @@ class TestRunVariantBatch:
         mock_create.assert_not_called()
 
     async def test_returns_none_when_no_variants(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = self._make_group()
         group.variants = []
@@ -461,7 +462,7 @@ class TestRunVariantBatch:
         mock_create.assert_not_called()
 
     async def test_returns_none_when_any_variant_missing_snapshot_id(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = self._make_group()
         group.variants = [
@@ -488,7 +489,7 @@ class TestRunVariantBatch:
         mock_create.assert_not_called()
 
     async def test_returns_none_when_group_deleted(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = self._make_group()
 
@@ -504,7 +505,7 @@ class TestRunVariantBatch:
 
     async def test_merges_prompt_version_override_into_payload(self) -> None:
         """PRD 8.19: prompt version comparison via run_context_overrides ``prompt_version`` key."""
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = self._make_group()
         group.variants = [
@@ -545,7 +546,7 @@ class TestRunVariantBatch:
         assert [r["frozen_snapshot"]["_run_overrides"].get("prompt_version") for r in results] == ["v3", "v4"]
 
     async def test_injects_degraded_evals_flag_into_each_run(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = self._make_group(degraded_evals=True)
         group.variants = self._make_variants(["control", "experiment"])
@@ -574,7 +575,7 @@ class TestRunVariantBatch:
             assert r["merged_payload"]["_degraded_evals"] is True
 
     async def test_filters_non_dict_variants(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = self._make_group()
         group.variants = [
@@ -608,7 +609,7 @@ class TestRunVariantBatch:
 
     async def test_stamps_same_batch_id_across_all_runs(self) -> None:
         """FAR-332 3c/3i: one fire stamps N runs with the SAME batch_id."""
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = self._make_group()
         group.variants = self._make_variants(["control", "experiment", "variant_c"])
@@ -650,7 +651,7 @@ class TestRunVariantBatch:
 
     async def test_second_fire_yields_different_batch_id(self) -> None:
         """FAR-332 3i: two fires produce DIFFERENT batch_ids."""
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = self._make_group()
         group.variants = self._make_variants(["control", "experiment"])
@@ -696,7 +697,7 @@ class TestRunVariantBatch:
 
     async def test_freezes_snapshot_and_overrides_onto_each_run(self) -> None:
         """FAR-332 3c/3i: each run carries a frozen snapshot + override config."""
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = self._make_group()
         snap_a = str(uuid.uuid4())
@@ -772,7 +773,7 @@ class TestRunVariantBatch:
 @pytest.mark.asyncio
 class TestRunVariantWeighted:
     async def test_creates_run_successfully(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = MagicMock()
         group.id = uuid.uuid4()
@@ -816,7 +817,7 @@ class TestRunVariantWeighted:
         assert result["merged_payload"]["key"] == "val"
 
     async def test_returns_none_when_quota_exceeded(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = MagicMock()
         group.id = uuid.uuid4()
@@ -841,7 +842,7 @@ class TestRunVariantWeighted:
         assert result is None
 
     async def test_returns_none_when_group_deleted(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = MagicMock()
         group.id = uuid.uuid4()
@@ -855,7 +856,7 @@ class TestRunVariantWeighted:
         assert result is None
 
     async def test_returns_none_when_no_variant_selected(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = MagicMock()
         group.id = uuid.uuid4()
@@ -883,7 +884,7 @@ class TestRunVariantWeighted:
         assert result is None
 
     async def test_returns_none_when_snapshot_id_missing(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = MagicMock()
         group.id = uuid.uuid4()
@@ -908,7 +909,7 @@ class TestRunVariantWeighted:
         assert result is None
 
     async def test_injects_degraded_evals_flag(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = MagicMock()
         group.id = uuid.uuid4()
@@ -953,7 +954,7 @@ class TestRunVariantWeighted:
         This test pins the fix: the frozen snapshot now carries variant identity
         (parity with the batch path), so a weighted run is comparable.
         """
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = MagicMock()
         group.id = uuid.uuid4()
@@ -1003,7 +1004,7 @@ class TestRunVariantWeighted:
 @pytest.mark.asyncio
 class TestGetCoverageGaps:
     async def test_returns_empty_when_no_gaps(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         group = MagicMock()
         group.pipeline_id = uuid.uuid4()
         group.variants = [
@@ -1022,7 +1023,7 @@ class TestGetCoverageGaps:
         assert result == []
 
     async def test_detects_missing_evals(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         eval_id = uuid.uuid4()
         group = MagicMock()
         group.pipeline_id = uuid.uuid4()
@@ -1046,7 +1047,7 @@ class TestGetCoverageGaps:
         assert str(eval_id) in result[0]["missing_evals"]
 
     async def test_uses_provided_eval_def_ids(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         group = MagicMock()
         group.pipeline_id = uuid.uuid4()
         eval_id = uuid.uuid4()
@@ -1062,7 +1063,7 @@ class TestGetCoverageGaps:
         assert result == []
 
     async def test_reports_variant_with_partial_coverage(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         group = MagicMock()
         group.pipeline_id = uuid.uuid4()
         eval_a = uuid.uuid4()
@@ -1082,7 +1083,7 @@ class TestGetCoverageGaps:
         assert str(eval_a) not in result[0]["missing_evals"]
 
     async def test_handles_variant_without_eval_definition_ids_key(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         group = MagicMock()
         group.pipeline_id = uuid.uuid4()
         eval_id = uuid.uuid4()
@@ -1101,7 +1102,7 @@ class TestGetCoverageGaps:
 
 class TestGetPromptDiffsMissingSnapshotId:
     async def test_skips_variants_without_snapshot_id(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         group = MagicMock()
         group.variants = [
             {"name": "variant-without-sid"},
@@ -1119,7 +1120,7 @@ class TestGetPromptDiffsMissingSnapshotId:
 
 class TestGetPromptDiffs:
     async def test_returns_empty_when_no_snapshots(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         group = MagicMock()
         group.variants = []
 
@@ -1128,7 +1129,7 @@ class TestGetPromptDiffs:
         assert result == []
 
     async def test_detects_hash_differences(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         snap1 = MagicMock()
         snap1.id = uuid.uuid4()
         snap1.prompt_pins_json = [{"agent_id": "agent_a", "prompt_version_hash": "hash_v1"}]
@@ -1154,7 +1155,7 @@ class TestGetPromptDiffs:
         assert result[0]["agent_diffs"][0]["variant_hash"] == "hash_v2"
 
     async def test_skips_missing_snapshots(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         snap1 = MagicMock()
         snap1.id = uuid.uuid4()
         snap1.prompt_pins_json = [{"agent_id": "agent_a", "prompt_version_hash": "hash_v1"}]
@@ -1175,7 +1176,7 @@ class TestGetPromptDiffs:
         assert result == []
 
     async def test_no_diffs_when_hashes_match(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         snap1 = MagicMock()
         snap1.id = uuid.uuid4()
         snap1.prompt_pins_json = [{"agent_id": "agent_a", "prompt_version_hash": "same_hash"}]
@@ -1198,7 +1199,7 @@ class TestGetPromptDiffs:
         assert result == []
 
     async def test_handles_none_prompt_pins_json(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         snap = MagicMock()
         snap.id = uuid.uuid4()
         snap.prompt_pins_json = None
@@ -1218,7 +1219,7 @@ class TestGetPromptDiffs:
 
     async def test_returns_empty_when_prompt_pins_json_empty_list(self) -> None:
         """Empty ``prompt_pins_json`` yields no agent diffs (edge case coverage)."""
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         snap1 = MagicMock()
         snap1.id = uuid.uuid4()
         snap1.prompt_pins_json = [{"agent_id": "agent_a", "prompt_version_hash": "hash_v1"}]
@@ -1243,7 +1244,7 @@ class TestGetPromptDiffs:
 
 class TestGetPromptDiffsNonDictSnapshot:
     async def test_handles_non_list_prompt_pins_json(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         snap = MagicMock()
         snap.id = uuid.uuid4()
         snap.prompt_pins_json = "not-a-list"
@@ -1378,7 +1379,7 @@ class TestResolvePromptTemplateOverride:
         )
 
     def _session(self, *, snapshot_exists: bool, graph_json: object | None) -> AsyncMock:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         id_result = MagicMock()
         id_result.scalar_one_or_none.return_value = uuid.uuid4() if snapshot_exists else None
         graph_result = MagicMock()
@@ -1582,7 +1583,7 @@ class TestResolvePromptTemplateOverride:
 @pytest.mark.asyncio
 class TestCreateVariantGroup:
     async def test_creates_and_flushes(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         variants = [{"name": "a", "snapshot_id": str(uuid.uuid4())}]
         result = await create_variant_group(
             session,
@@ -1608,14 +1609,14 @@ class TestCreateVariantGroup:
 @pytest.mark.asyncio
 class TestGetVariantGroup:
     async def test_returns_none_when_not_found(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         result_mock = MagicMock()
         result_mock.scalar_one_or_none = MagicMock(return_value=None)
         session.execute = AsyncMock(return_value=result_mock)
         assert await get_variant_group(session, uuid.uuid4()) is None
 
     async def test_with_include_deleted(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_group = MagicMock()
         result_mock = MagicMock()
         result_mock.scalar_one_or_none = MagicMock(return_value=mock_group)
@@ -1632,7 +1633,7 @@ class TestGetVariantGroup:
 @pytest.mark.asyncio
 class TestListVariantGroups:
     async def test_empty_result(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         count_result = MagicMock()
         count_result.scalar_one.return_value = 0
         items_result = MagicMock()
@@ -1645,7 +1646,7 @@ class TestListVariantGroups:
         assert total == 0
 
     async def test_with_pipeline_id_filter(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         count_result = MagicMock()
         count_result.scalar_one.return_value = 1
         items_result = MagicMock()
@@ -1661,7 +1662,7 @@ class TestListVariantGroups:
     async def test_programming_error_returns_empty(self) -> None:
         from sqlalchemy.exc import ProgrammingError
 
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         session.execute = AsyncMock(side_effect=ProgrammingError("table missing", {}, None))
         items, total = await list_variant_groups(session)
         assert items == []
@@ -1676,14 +1677,14 @@ class TestListVariantGroups:
 @pytest.mark.asyncio
 class TestUpdateVariantGroup:
     async def test_returns_none_when_not_found(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         result_mock = MagicMock()
         result_mock.scalar_one_or_none = MagicMock(return_value=None)
         session.execute = AsyncMock(return_value=result_mock)
         assert await update_variant_group(session, uuid.uuid4(), name="x") is None
 
     async def test_updates_all_fields(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_group = MagicMock()
         result_mock = MagicMock()
         result_mock.scalar_one_or_none = MagicMock(return_value=mock_group)
@@ -1708,7 +1709,7 @@ class TestUpdateVariantGroup:
         session.flush.assert_awaited_once()
 
     async def test_noop_when_no_fields(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_group = MagicMock()
         result_mock = MagicMock()
         result_mock.scalar_one_or_none = MagicMock(return_value=mock_group)
@@ -1726,14 +1727,14 @@ class TestUpdateVariantGroup:
 @pytest.mark.asyncio
 class TestSoftDeleteVariantGroup:
     async def test_returns_false_when_not_found(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         result_mock = MagicMock()
         result_mock.scalar_one_or_none = MagicMock(return_value=None)
         session.execute = AsyncMock(return_value=result_mock)
         assert await soft_delete_variant_group(session, uuid.uuid4()) is False
 
     async def test_deletes_when_found(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_group = MagicMock()
         mock_group.deleted_at = None
         result_mock = MagicMock()
@@ -1752,14 +1753,14 @@ class TestSoftDeleteVariantGroup:
 @pytest.mark.asyncio
 class TestRestoreVariantGroup:
     async def test_returns_none_when_not_found(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         result_mock = MagicMock()
         result_mock.scalar_one_or_none = MagicMock(return_value=None)
         session.execute = AsyncMock(return_value=result_mock)
         assert await restore_variant_group(session, uuid.uuid4()) is None
 
     async def test_returns_none_when_not_deleted(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_group = MagicMock()
         mock_group.deleted_at = None
         result_mock = MagicMock()
@@ -1768,7 +1769,7 @@ class TestRestoreVariantGroup:
         assert await restore_variant_group(session, uuid.uuid4()) is None
 
     async def test_restores_deleted_group(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_group = MagicMock()
         mock_group.deleted_at = datetime.now(UTC)
         result_mock = MagicMock()
@@ -1788,7 +1789,7 @@ class TestRestoreVariantGroup:
 @pytest.mark.asyncio
 class TestCheckPipelineRunQuota:
     async def test_allows_when_under_quota(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         group = MagicMock()
         group.pipeline_id = uuid.uuid4()
         group.max_concurrent_runs = 5
@@ -1800,7 +1801,7 @@ class TestCheckPipelineRunQuota:
             assert await check_pipeline_run_quota(session, group) is True
 
     async def test_rejects_when_at_quota(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         group = MagicMock()
         group.pipeline_id = uuid.uuid4()
         group.max_concurrent_runs = 5
@@ -1931,7 +1932,7 @@ class TestOverrideDiff:
 @pytest.mark.asyncio
 class TestValidateBatchOwnership:
     async def test_returns_false_when_pipeline_not_found(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         result = MagicMock()
         result.scalar_one_or_none.return_value = None
         session.execute = AsyncMock(return_value=result)
@@ -1941,7 +1942,7 @@ class TestValidateBatchOwnership:
         )
 
     async def test_returns_true_with_no_snapshots(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         result = MagicMock()
         result.scalar_one_or_none.return_value = uuid.uuid4()
         session.execute = AsyncMock(return_value=result)
@@ -1952,7 +1953,7 @@ class TestValidateBatchOwnership:
 
     async def test_returns_true_when_all_owned(self) -> None:
         sid1, sid2 = uuid.uuid4(), uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         pipeline_result = MagicMock()
         pipeline_result.scalar_one_or_none.return_value = uuid.uuid4()
         snap_result = MagicMock()
@@ -1970,7 +1971,7 @@ class TestValidateBatchOwnership:
     async def test_returns_false_when_not_all_owned(self) -> None:
         sid1 = uuid.uuid4()
         sid2 = uuid.uuid4()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         pipeline_result = MagicMock()
         pipeline_result.scalar_one_or_none.return_value = uuid.uuid4()
         snap_result = MagicMock()
@@ -1994,14 +1995,14 @@ class TestValidateBatchOwnership:
 @pytest.mark.asyncio
 class TestHasPipelineDefaultEvals:
     async def test_returns_true_when_evals_exist(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         result = MagicMock()
         result.scalar_one_or_none.return_value = uuid.uuid4()
         session.execute = AsyncMock(return_value=result)
         assert await has_pipeline_default_evals(session, uuid.uuid4()) is True
 
     async def test_returns_false_when_no_evals(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         result = MagicMock()
         result.scalar_one_or_none.return_value = None
         session.execute = AsyncMock(return_value=result)
@@ -2016,7 +2017,7 @@ class TestHasPipelineDefaultEvals:
 @pytest.mark.asyncio
 class TestGetBatchCompare:
     async def test_empty_runs_returns_empty(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with patch(
             "modulo.db.crud.variant_group.get_batch_runs",
             new_callable=AsyncMock,
@@ -2034,7 +2035,7 @@ class TestGetBatchCompare:
 @pytest.mark.asyncio
 class TestRunVariantWeightedPromptVersion:
     async def test_prompt_version_resolved_to_template(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         agent_id = str(uuid.uuid4())
         group = MagicMock()
@@ -2097,7 +2098,7 @@ class TestRunVariantWeightedPromptVersion:
         assert overrides["prompt_templates"] == {agent_id: "resolved template"}
 
     async def test_prompt_version_unresolved_no_templates(self) -> None:
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         org_id = uuid.uuid4()
         group = MagicMock()
         group.id = uuid.uuid4()
@@ -2184,7 +2185,7 @@ class TestFar1729EvalSourcePins:
             result.scalar_one_or_none = MagicMock(return_value=None)
             return result
 
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         session.execute = AsyncMock(side_effect=_execute)
         return session, captured
 

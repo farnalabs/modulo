@@ -37,6 +37,7 @@ from modulo.core.pipeline_engine.recovery import (
 from modulo.core.rate_limiter import TokenBucketRegistry
 from modulo.db.crud.run_node_outputs import RunBlobs
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -149,6 +150,7 @@ class _BeginRaiser:
 
 def _make_session(*, begin_exc: Exception | None = None) -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     if begin_exc is not None:
         session.begin = MagicMock(return_value=_BeginRaiser(begin_exc))
     else:

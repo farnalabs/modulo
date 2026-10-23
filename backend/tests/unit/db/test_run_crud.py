@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.db.crud.run import get_run_api_key_ttl_seconds
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.uuid4()
 
@@ -29,7 +30,7 @@ def _session_factory() -> MagicMock:
     """Async-context-manager session whose org read resolves to a non-dict
     settings_json (so ``_read_org_int_limit`` fails open -> org_max stays at
     the 3600 default)."""
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=session)

@@ -23,6 +23,7 @@ from sqlalchemy.exc import SQLAlchemyError
 import modulo.api.main as main
 from modulo.db import capacity as db_capacity
 from modulo.settings import Settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 
 @pytest.fixture(autouse=True)
@@ -627,6 +628,7 @@ def _result(
 
 def _mock_session(result: MagicMock | None = None) -> AsyncMock:
     session = AsyncMock()
+    configure_rls_preamble(session)
     session.in_transaction = MagicMock(return_value=True)
     session.get_bind = MagicMock(return_value=MagicMock(dialect=MagicMock(name="postgresql")))
     session.info = {}

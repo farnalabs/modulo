@@ -424,52 +424,21 @@ async def reconcile_runner_workspaces(
     docker_skip = docker_endpoint_skip_reason()
     kubernetes_skip = await kubernetes_endpoint_skip_reason()
     e2b_skip = await e2b_endpoint_skip_reason()
-    if docker_skip is not None and kubernetes_skip is not None and e2b_skip is not None:
-        if kubernetes_skip != docker_skip:
-            _log.info("runner.reconciler.skipped reason=%s scope=kubernetes", kubernetes_skip)
-        if e2b_skip != docker_skip:
-            _log.info("runner.reconciler.skipped reason=%s scope=e2b", e2b_skip)
-        _log.info("runner.reconciler.skipped reason=%s", docker_skip)
-        return {"scanned": 0, "orphans_destroyed": 0, "skipped": docker_skip}
-    if docker_skip is not None:
-        _log.info("runner.reconciler.skipped reason=%s scope=docker", docker_skip)
-    if kubernetes_skip is not None:
-        _log.info("runner.reconciler.skipped reason=%s scope=kubernetes", kubernetes_skip)
-    if e2b_skip is not None:
-        _log.info("runner.reconciler.skipped reason=%s scope=e2b", e2b_skip)
+    skipped_envelope = _all_tiers_skipped_envelope(docker_skip, kubernetes_skip, e2b_skip)
+    if skipped_envelope is not None:
+        return skipped_envelope
+    _log_partial_tier_skips(docker_skip, kubernetes_skip, e2b_skip)
 
     from modulo.settings import get_settings
 
     settings = get_settings()
     log_only = not bool(getattr(settings, "runner_reconciler_destroy_enabled", False))
-    sources: list[tuple[str, _WorkspaceSource]] = []
-    if docker_skip is None:
-        sources.append(("docker", _DockerWorkspaceSource(_resolve_docker_host())))
-    if kubernetes_skip is None:
-        sources.append(("kubernetes", _KubernetesWorkspaceSource()))
-    if e2b_skip is None:
-        sources.append(("e2b", _E2BWorkspaceSource()))
+    sources = _applicable_sources(docker_skip, kubernetes_skip, e2b_skip)
 
     scanned = 0
     orphans_destroyed = 0
-    source_by_name: dict[str, _WorkspaceSource] = dict(sources)
     try:
-        # List EVERY applicable tier before touching anything: a listing
-        # failure on the second tier must still destroy nothing (the
-        # fail-safe abort is per-sweep, not per-tier).
-        listed: list[tuple[str, _LabelledContainer]] = []
-        for source_name, source in sources:
-            try:
-                entries = await source.list_labelled_workspaces()
-            except Exception as exc:
-                _log.exception("runner.reconciler.sweep_aborted stage=container_list source=%s", source_name)
-                raise ReconcilerSweepError(
-                    f"Bundled Runner orphan sweeper aborted listing {source_name} workspaces: {exc}",
-                    scanned=0,
-                    destroyed=0,
-                ) from exc
-            listed.extend((source_name, entry) for entry in entries)
-
+        listed = await _list_labelled_workspaces(sources)
         active_run_ids, cross_ref_error = await _load_active_run_ids(async_engine)
         if cross_ref_error is not None:
             _log.error("runner.reconciler.sweep_aborted stage=cross_reference")
@@ -478,47 +447,17 @@ async def reconcile_runner_workspaces(
                 scanned=len(listed),
                 destroyed=0,
             )
-
-        for source_name, container in listed:
-            scanned += 1
-            try:
-                destroyed = await _reconcile_single_container(
-                    async_engine,
-                    source_by_name[source_name],
-                    container,
-                    active_run_ids=active_run_ids,
-                    log_only=log_only,
-                    grace_seconds=grace_seconds,
-                    max_lifetime_seconds=max_lifetime_seconds,
-                )
-            except Exception as exc:
-                # A destroy failure aborts the sweep on EVERY tier (Docker's
-                # delete raises too) and is surfaced as ReconcilerSweepError
-                # with the partial counts, so SAQ's retries and /healthz
-                # attribution engage rather than the failure vanishing into a
-                # log line while the sweep reports the orphan as destroyed.
-                _log.exception(
-                    "runner.reconciler.sweep_aborted stage=destroy source=%s container=%s",
-                    source_name,
-                    container.id,
-                )
-                raise ReconcilerSweepError(
-                    f"Bundled Runner orphan sweeper aborted destroying {source_name} workspace {container.id}: {exc}",
-                    scanned=scanned,
-                    destroyed=orphans_destroyed,
-                ) from exc
-            if destroyed:
-                orphans_destroyed += 1
+        scanned, orphans_destroyed = await _reconcile_listed_containers(
+            async_engine,
+            sources,
+            listed,
+            active_run_ids=active_run_ids,
+            log_only=log_only,
+            grace_seconds=grace_seconds,
+            max_lifetime_seconds=max_lifetime_seconds,
+        )
     finally:
-        # FAR-1051 review: close EACH source independently. A raise from one
-        # tier's close() must not skip the other tier's close, nor replace an
-        # in-flight sweep exception with the close error. Best-effort teardown
-        # fails open WITH a log (never silently).
-        for source_name, source in sources:
-            try:
-                await source.close()
-            except Exception:
-                _log.exception("runner.reconciler.source_close_failed source=%s", source_name)
+        await _close_sources(sources)
     _log.info(
         "runner.reconciler.sweep_completed scanned=%d orphans_destroyed=%d log_only=%s",
         scanned,
@@ -526,6 +465,135 @@ async def reconcile_runner_workspaces(
         log_only,
     )
     return {"scanned": scanned, "orphans_destroyed": orphans_destroyed}
+
+
+def _all_tiers_skipped_envelope(
+    docker_skip: str | None,
+    kubernetes_skip: str | None,
+    e2b_skip: str | None,
+) -> dict[str, Any] | None:
+    """Return the historical all-skipped envelope when no tier is applicable."""
+    if docker_skip is None or kubernetes_skip is None or e2b_skip is None:
+        return None
+    if kubernetes_skip != docker_skip:
+        _log.info("runner.reconciler.skipped reason=%s scope=kubernetes", kubernetes_skip)
+    if e2b_skip != docker_skip:
+        _log.info("runner.reconciler.skipped reason=%s scope=e2b", e2b_skip)
+    _log.info("runner.reconciler.skipped reason=%s", docker_skip)
+    return {"scanned": 0, "orphans_destroyed": 0, "skipped": docker_skip}
+
+
+def _log_partial_tier_skips(
+    docker_skip: str | None,
+    kubernetes_skip: str | None,
+    e2b_skip: str | None,
+) -> None:
+    """Log each non-applicable tier's reason when at least one tier applies."""
+    if docker_skip is not None:
+        _log.info("runner.reconciler.skipped reason=%s scope=docker", docker_skip)
+    if kubernetes_skip is not None:
+        _log.info("runner.reconciler.skipped reason=%s scope=kubernetes", kubernetes_skip)
+    if e2b_skip is not None:
+        _log.info("runner.reconciler.skipped reason=%s scope=e2b", e2b_skip)
+
+
+def _applicable_sources(
+    docker_skip: str | None,
+    kubernetes_skip: str | None,
+    e2b_skip: str | None,
+) -> list[tuple[str, _WorkspaceSource]]:
+    """Build the workspace sources for every applicable tier."""
+    sources: list[tuple[str, _WorkspaceSource]] = []
+    if docker_skip is None:
+        sources.append(("docker", _DockerWorkspaceSource(_resolve_docker_host())))
+    if kubernetes_skip is None:
+        sources.append(("kubernetes", _KubernetesWorkspaceSource()))
+    if e2b_skip is None:
+        sources.append(("e2b", _E2BWorkspaceSource()))
+    return sources
+
+
+async def _list_labelled_workspaces(
+    sources: list[tuple[str, _WorkspaceSource]],
+) -> list[tuple[str, _LabelledContainer]]:
+    """List every applicable tier's workspaces before touching anything.
+
+    A listing failure on any tier aborts the sweep with zero destroyed: the
+    fail-safe abort is per-sweep, not per-tier.
+    """
+    listed: list[tuple[str, _LabelledContainer]] = []
+    for source_name, source in sources:
+        try:
+            entries = await source.list_labelled_workspaces()
+        except Exception as exc:
+            _log.exception("runner.reconciler.sweep_aborted stage=container_list source=%s", source_name)
+            raise ReconcilerSweepError(
+                f"Bundled Runner orphan sweeper aborted listing {source_name} workspaces: {exc}",
+                scanned=0,
+                destroyed=0,
+            ) from exc
+        listed.extend((source_name, entry) for entry in entries)
+    return listed
+
+
+async def _reconcile_listed_containers(
+    async_engine: Any,
+    sources: list[tuple[str, _WorkspaceSource]],
+    listed: list[tuple[str, _LabelledContainer]],
+    *,
+    active_run_ids: set[str],
+    log_only: bool,
+    grace_seconds: int,
+    max_lifetime_seconds: int,
+) -> tuple[int, int]:
+    """Reconcile each listed container, returning ``(scanned, destroyed)``.
+
+    A destroy failure aborts the sweep on EVERY tier and is surfaced as
+    :class:`ReconcilerSweepError` with the partial counts, so SAQ's retries
+    and ``/healthz`` attribution engage rather than the failure vanishing
+    into a log line while the sweep reports the orphan as destroyed.
+    """
+    scanned = 0
+    orphans_destroyed = 0
+    source_by_name: dict[str, _WorkspaceSource] = dict(sources)
+    for source_name, container in listed:
+        scanned += 1
+        try:
+            destroyed = await _reconcile_single_container(
+                async_engine,
+                source_by_name[source_name],
+                container,
+                active_run_ids=active_run_ids,
+                log_only=log_only,
+                grace_seconds=grace_seconds,
+                max_lifetime_seconds=max_lifetime_seconds,
+            )
+        except Exception as exc:
+            _log.exception(
+                "runner.reconciler.sweep_aborted stage=destroy source=%s container=%s",
+                source_name,
+                container.id,
+            )
+            raise ReconcilerSweepError(
+                f"Bundled Runner orphan sweeper aborted destroying {source_name} workspace {container.id}: {exc}",
+                scanned=scanned,
+                destroyed=orphans_destroyed,
+            ) from exc
+        if destroyed:
+            orphans_destroyed += 1
+    return scanned, orphans_destroyed
+
+
+async def _close_sources(sources: list[tuple[str, _WorkspaceSource]]) -> None:
+    """Close each source independently; one close failure never skips the rest.
+
+    FAR-1051 review: best-effort teardown fails open WITH a log (never silently).
+    """
+    for source_name, source in sources:
+        try:
+            await source.close()
+        except Exception:
+            _log.exception("runner.reconciler.source_close_failed source=%s", source_name)
 
 
 async def destroy_workspaces_for_run(run_id: str) -> dict[str, int]:

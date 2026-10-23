@@ -66,6 +66,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
 from tests.unit._store_seed import seed_run_blobs
+from tests.unit.api.mock_session import make_redis_client
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -2110,7 +2111,7 @@ class TestPeriodicWiring:
         _patch_env(monkeypatch)
         session = _MockSession([_org_result([_ORG]), _rows_result([])])
         factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        redis_client = make_redis_client()
         q = _make_queue(redis_client)
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client

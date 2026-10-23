@@ -375,6 +375,20 @@ async def _evaluate_event(
     return fired, None
 
 
+def _should_pass_without_evaluation(
+    config: LoopInterceptConfig,
+    definitions: Sequence[EvalDefinition],
+    tool_name: str,
+    direction: str,
+) -> bool:
+    if not config.enabled or not definitions:
+        return True
+    if not tool_matches_patterns(tool_name, config.intercepted_tool_patterns):
+        # Read-only/local-only calls pass through (ADR 044 amendment).
+        return True
+    return direction == "after" and not config.intercept_tool_results
+
+
 def _redaction_policies(definitions: Sequence[EvalDefinition]) -> tuple[list[Any], str]:
     """Collect static redaction policies from redact-action guardrails.
 
@@ -432,24 +446,8 @@ async def run_loop_interception(
 
     start = time.monotonic()
 
-    def _pass(reason: str = "", bridge_failed: bool = False) -> LoopInterceptOutcome:
-        return LoopInterceptOutcome(
-            tool_name=tool_name,
-            direction=direction,
-            action="pass",
-            blocked=False,
-            latency_ms=int((time.monotonic() - start) * 1000),
-            bridge_failed=bridge_failed,
-            reason=reason,
-        )
-
-    if not config.enabled or not definitions:
-        return _pass(), []
-    if not tool_matches_patterns(tool_name, config.intercepted_tool_patterns):
-        # Read-only/local-only calls pass through (ADR 044 amendment).
-        return _pass(), []
-    if direction == "after" and not config.intercept_tool_results:
-        return _pass(), []
+    if _should_pass_without_evaluation(config, definitions, tool_name, direction):
+        return _pass_outcome(tool_name, direction, start), []
 
     payload = serialize_tool_event(tool_name, args, direction, result_summary)
     budget_seconds = config.latency_budget_ms / 1000.0
@@ -472,153 +470,241 @@ async def run_loop_interception(
     latency_ms = int((time.monotonic() - start) * 1000)
 
     if mechanism_error:
-        return (
-            LoopInterceptOutcome(
-                tool_name=tool_name,
-                direction=direction,
-                action="pass",
-                blocked=False,
-                latency_ms=latency_ms,
-                bridge_failed=True,
-                reason=mechanism_error,
-            ),
-            [
-                LoopInterceptAuditRecord(
-                    "guardrail.loop_bridge_timeout",
-                    {
-                        "actor": SYSTEM_ACTOR,
-                        "summary": f'Loop bridge timed out for tool "{tool_name}" ({direction}): {mechanism_error}',
-                        "tool": tool_name,
-                        "direction": direction,
-                        "reason": mechanism_error,
-                    },
-                )
-            ],
-        )
+        return _bridge_failure_outcome(tool_name, direction, latency_ms, mechanism_error)
 
     blocking = [eval_def for eval_def, _ in fired if _resolve_action(eval_def) == GuardrailAction.BLOCK]
     if blocking:
-        guardrail_name = blocking[0].name
-        refuse = direction == "before" and config.block_on_guardrail
-        return (
-            LoopInterceptOutcome(
-                tool_name=tool_name,
-                direction=direction,
-                action="block",
-                blocked=refuse,
-                guardrail_name=guardrail_name,
-                latency_ms=latency_ms,
-            ),
-            [
-                LoopInterceptAuditRecord(
-                    "guardrail.loop_blocked",
-                    {
-                        "actor": SYSTEM_ACTOR,
-                        "summary": f'Loop blocked tool "{tool_name}" ({direction}) by guardrail "{guardrail_name}"',
-                        "tool": tool_name,
-                        "direction": direction,
-                        "guardrail": guardrail_name,
-                    },
-                )
-            ],
-        )
+        return _blocking_outcome(tool_name, direction, latency_ms, blocking[0], config)
 
-    redact_defs = [eval_def for eval_def in definitions if _resolve_action(eval_def) == GuardrailAction.REDACT]
-    if redact_defs:
-        policies, redact_names = _redaction_policies(redact_defs)
-        if policies:
-            try:
-                redacted_payload, redaction_entries = apply_redaction_masks(
-                    payload,
-                    policies,
-                    raise_on_block=True,
-                    guardrail_name=redact_names or "<guardrail>",
-                )
-            except GuardrailBlockedError as exc:
-                # A block-mode redaction policy fired — evidence of the guarded
-                # condition in the args. Refuse the call on the before direction.
-                refuse = direction == "before" and config.block_on_guardrail
-                return (
-                    LoopInterceptOutcome(
-                        tool_name=tool_name,
-                        direction=direction,
-                        action="block",
-                        blocked=refuse,
-                        guardrail_name=redact_names,
-                        latency_ms=latency_ms,
-                        reason=str(exc),
-                    ),
-                    [
-                        LoopInterceptAuditRecord(
-                            "guardrail.loop_blocked",
-                            {
-                                "actor": SYSTEM_ACTOR,
-                                "summary": (
-                                    f'Loop blocked tool "{tool_name}" ({direction}) by guardrail "{redact_names}"'
-                                ),
-                                "tool": tool_name,
-                                "direction": direction,
-                                "guardrail": redact_names,
-                            },
-                        )
-                    ],
-                )
-            if any(entry.applied for entry in redaction_entries):
-                masked = redacted_payload.get("args")
-                masked_args = masked if isinstance(masked, dict) else dict(args)
-                return (
-                    LoopInterceptOutcome(
-                        tool_name=tool_name,
-                        direction=direction,
-                        action="redact",
-                        blocked=False,
-                        guardrail_name=redact_names,
-                        masked_args=masked_args,
-                        latency_ms=latency_ms,
-                    ),
-                    [
-                        LoopInterceptAuditRecord(
-                            "guardrail.loop_redacted",
-                            {
-                                "actor": SYSTEM_ACTOR,
-                                "summary": (
-                                    f'Loop redacted tool "{tool_name}" ({direction}) by guardrail "{redact_names}"'
-                                ),
-                                "tool": tool_name,
-                                "direction": direction,
-                                "guardrail": redact_names,
-                            },
-                        )
-                    ],
-                )
+    redaction_outcome = _redaction_outcome(tool_name, direction, args, payload, definitions, latency_ms, config)
+    if redaction_outcome is not None:
+        return redaction_outcome
 
     warned = sorted({eval_def.name for eval_def, _ in fired if _resolve_action(eval_def) == GuardrailAction.WARN})
     if warned:
-        warn_names = ",".join(warned)
-        return (
-            LoopInterceptOutcome(
-                tool_name=tool_name,
-                direction=direction,
-                action="warn",
-                blocked=False,
-                guardrail_name=warn_names,
-                latency_ms=latency_ms,
-            ),
-            [
-                LoopInterceptAuditRecord(
-                    "guardrail.loop_warned",
-                    {
-                        "actor": SYSTEM_ACTOR,
-                        "summary": f'Loop warned tool "{tool_name}" ({direction}) by guardrail "{warn_names}"',
-                        "tool": tool_name,
-                        "direction": direction,
-                        "guardrail": warn_names,
-                    },
-                )
-            ],
-        )
+        return _warn_outcome(tool_name, direction, latency_ms, warned)
 
-    return _pass(), []
+    return _pass_outcome(tool_name, direction, start), []
+
+
+def _pass_outcome(
+    tool_name: str,
+    direction: str,
+    start: float,
+    *,
+    reason: str = "",
+    bridge_failed: bool = False,
+) -> LoopInterceptOutcome:
+    """Build a pass outcome whose latency is measured from ``start``."""
+    return LoopInterceptOutcome(
+        tool_name=tool_name,
+        direction=direction,
+        action="pass",
+        blocked=False,
+        latency_ms=int((time.monotonic() - start) * 1000),
+        bridge_failed=bridge_failed,
+        reason=reason,
+    )
+
+
+def _bridge_failure_outcome(
+    tool_name: str,
+    direction: str,
+    latency_ms: int,
+    mechanism_error: str,
+) -> tuple[LoopInterceptOutcome, list[LoopInterceptAuditRecord]]:
+    """Fail open on a bridge timeout/mechanism error, with an audit record."""
+    return (
+        LoopInterceptOutcome(
+            tool_name=tool_name,
+            direction=direction,
+            action="pass",
+            blocked=False,
+            latency_ms=latency_ms,
+            bridge_failed=True,
+            reason=mechanism_error,
+        ),
+        [
+            LoopInterceptAuditRecord(
+                "guardrail.loop_bridge_timeout",
+                {
+                    "actor": SYSTEM_ACTOR,
+                    "summary": f'Loop bridge timed out for tool "{tool_name}" ({direction}): {mechanism_error}',
+                    "tool": tool_name,
+                    "direction": direction,
+                    "reason": mechanism_error,
+                },
+            )
+        ],
+    )
+
+
+def _blocking_outcome(
+    tool_name: str,
+    direction: str,
+    latency_ms: int,
+    blocking: EvalDefinition,
+    config: LoopInterceptConfig,
+) -> tuple[LoopInterceptOutcome, list[LoopInterceptAuditRecord]]:
+    """Build the block outcome for the first blocking guardrail."""
+    guardrail_name = blocking.name
+    refuse = direction == "before" and config.block_on_guardrail
+    return (
+        LoopInterceptOutcome(
+            tool_name=tool_name,
+            direction=direction,
+            action="block",
+            blocked=refuse,
+            guardrail_name=guardrail_name,
+            latency_ms=latency_ms,
+        ),
+        [
+            LoopInterceptAuditRecord(
+                "guardrail.loop_blocked",
+                {
+                    "actor": SYSTEM_ACTOR,
+                    "summary": f'Loop blocked tool "{tool_name}" ({direction}) by guardrail "{guardrail_name}"',
+                    "tool": tool_name,
+                    "direction": direction,
+                    "guardrail": guardrail_name,
+                },
+            )
+        ],
+    )
+
+
+def _redaction_outcome(
+    tool_name: str,
+    direction: str,
+    args: dict[str, Any],
+    payload: Any,
+    definitions: Sequence[EvalDefinition],
+    latency_ms: int,
+    config: LoopInterceptConfig,
+) -> tuple[LoopInterceptOutcome, list[LoopInterceptAuditRecord]] | None:
+    """Apply static redaction when any redact-action guardrail contributes one."""
+    redact_defs = [eval_def for eval_def in definitions if _resolve_action(eval_def) == GuardrailAction.REDACT]
+    if not redact_defs:
+        return None
+    policies, redact_names = _redaction_policies(redact_defs)
+    if not policies:
+        return None
+    try:
+        redacted_payload, redaction_entries = apply_redaction_masks(
+            payload,
+            policies,
+            raise_on_block=True,
+            guardrail_name=redact_names or "<guardrail>",
+        )
+    except GuardrailBlockedError as exc:
+        return _redaction_blocked_outcome(tool_name, direction, latency_ms, redact_names, exc, config)
+    if any(entry.applied for entry in redaction_entries):
+        masked = redacted_payload.get("args")
+        masked_args = masked if isinstance(masked, dict) else dict(args)
+        return _redaction_applied_outcome(tool_name, direction, latency_ms, redact_names, masked_args)
+    return None
+
+
+def _redaction_blocked_outcome(
+    tool_name: str,
+    direction: str,
+    latency_ms: int,
+    redact_names: str,
+    exc: GuardrailBlockedError,
+    config: LoopInterceptConfig,
+) -> tuple[LoopInterceptOutcome, list[LoopInterceptAuditRecord]]:
+    """Build the block outcome for a block-mode redaction policy."""
+    # A block-mode redaction policy fired — evidence of the guarded
+    # condition in the args. Refuse the call on the before direction.
+    refuse = direction == "before" and config.block_on_guardrail
+    return (
+        LoopInterceptOutcome(
+            tool_name=tool_name,
+            direction=direction,
+            action="block",
+            blocked=refuse,
+            guardrail_name=redact_names,
+            latency_ms=latency_ms,
+            reason=str(exc),
+        ),
+        [
+            LoopInterceptAuditRecord(
+                "guardrail.loop_blocked",
+                {
+                    "actor": SYSTEM_ACTOR,
+                    "summary": f'Loop blocked tool "{tool_name}" ({direction}) by guardrail "{redact_names}"',
+                    "tool": tool_name,
+                    "direction": direction,
+                    "guardrail": redact_names,
+                },
+            )
+        ],
+    )
+
+
+def _redaction_applied_outcome(
+    tool_name: str,
+    direction: str,
+    latency_ms: int,
+    redact_names: str,
+    masked_args: dict[str, Any],
+) -> tuple[LoopInterceptOutcome, list[LoopInterceptAuditRecord]]:
+    """Build the redact outcome for an applied static redaction policy."""
+    return (
+        LoopInterceptOutcome(
+            tool_name=tool_name,
+            direction=direction,
+            action="redact",
+            blocked=False,
+            guardrail_name=redact_names,
+            masked_args=masked_args,
+            latency_ms=latency_ms,
+        ),
+        [
+            LoopInterceptAuditRecord(
+                "guardrail.loop_redacted",
+                {
+                    "actor": SYSTEM_ACTOR,
+                    "summary": f'Loop redacted tool "{tool_name}" ({direction}) by guardrail "{redact_names}"',
+                    "tool": tool_name,
+                    "direction": direction,
+                    "guardrail": redact_names,
+                },
+            )
+        ],
+    )
+
+
+def _warn_outcome(
+    tool_name: str,
+    direction: str,
+    latency_ms: int,
+    warned: list[str],
+) -> tuple[LoopInterceptOutcome, list[LoopInterceptAuditRecord]]:
+    """Build the warn outcome for the sorted warning guardrail names."""
+    warn_names = ",".join(warned)
+    return (
+        LoopInterceptOutcome(
+            tool_name=tool_name,
+            direction=direction,
+            action="warn",
+            blocked=False,
+            guardrail_name=warn_names,
+            latency_ms=latency_ms,
+        ),
+        [
+            LoopInterceptAuditRecord(
+                "guardrail.loop_warned",
+                {
+                    "actor": SYSTEM_ACTOR,
+                    "summary": f'Loop warned tool "{tool_name}" ({direction}) by guardrail "{warn_names}"',
+                    "tool": tool_name,
+                    "direction": direction,
+                    "guardrail": warn_names,
+                },
+            )
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------

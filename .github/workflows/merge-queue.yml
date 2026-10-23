@@ -185,14 +185,20 @@ jobs:
     concurrency:
       group: merge-queue
       cancel-in-progress: false
-    # 30 was the observed failure ceiling: the last successful pass took 29.1 min
-    # (backend 19.9 + frontend 7.2 sequential) and every later pass hit the 30-min
-    # job cancel before the merge step. 45 gives ~15 min of headroom for the
-    # concurrent validation (~20 min) plus collection/merge/post steps, while
-    # staying bounded: this job holds the merge-queue concurrency lock
+    # 60 is the measured ceiling plus dispatch headroom. The last successful pass
+    # took 37.0 min, of which the backend/frontend validation step alone was
+    # 34.3 min; at the former 45-min timeout that left only ~8 min for the
+    # collection/merge/post steps AND up to three Branch Fixer dispatches (two
+    # of them BEFORE validation). Each dispatch can now use its whole retry
+    # budget (see DISPATCH_BUDGET_SECONDS: 120 on those steps), so a
+    # late-but-successful dispatch would have spent the 45-min margin - and a
+    # cancelled job skips both the merge steps and the failure()-gated final
+    # notification, i.e. the silent drop FAR-2066 exists to remove. Still
+    # bounded: this job holds the merge-queue concurrency lock
     # (cancel-in-progress: false), so an unbounded hold would stall every
-    # later queue pass.
-    timeout-minutes: 45
+    # later queue pass. (History: 30 was the old failure ceiling at a 29.1-min
+    # observed pass - backend 19.9 + frontend 7.2 sequential.)
+    timeout-minutes: 60
     permissions:
       contents: write
       pull-requests: write
@@ -900,6 +906,10 @@ jobs:
           DISPATCH_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
           DISPATCH_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
           DISPATCH_LABEL: "Modulo Branch Fixer"
+          # 120s, not the 300s default: this job has a 60-min timeout with only
+          # ~8 min measured headroom (37.0-min baseline, validation 34.3 min)
+          # and TWO of its three dispatches run BEFORE the batch validation.
+          DISPATCH_BUDGET_SECONDS: 120
           # Needed by the undelivered-notification fallback below (FAR-1939):
           # `gh pr comment` authenticates with the job's GITHUB_TOKEN, which
           # carries pull-requests:write (see the job's permissions block).
@@ -1240,6 +1250,10 @@ jobs:
           DISPATCH_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
           DISPATCH_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
           DISPATCH_LABEL: "Modulo Branch Fixer"
+          # 120s, not the 300s default: this job has a 60-min timeout with only
+          # ~8 min measured headroom (37.0-min baseline, validation 34.3 min)
+          # and TWO of its three dispatches run BEFORE the batch validation.
+          DISPATCH_BUDGET_SECONDS: 120
           # Needed by the durable comments below: `gh pr comment` authenticates
           # with the job's GITHUB_TOKEN, which carries pull-requests:write.
           GH_TOKEN: ${{ github.token }}
@@ -1389,7 +1403,7 @@ jobs:
           # description is written (the old script's `TEST_EXIT=$?` line was
           # unreachable on a pytest failure for that reason).
           set +e
-          uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
+          uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
           TEST_EXIT=$?
           set -e
 
@@ -2302,6 +2316,10 @@ jobs:
           DISPATCH_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
           DISPATCH_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
           DISPATCH_LABEL: "Modulo Branch Fixer"
+          # 120s, not the 300s default: this job has a 60-min timeout with only
+          # ~8 min measured headroom (37.0-min baseline, validation 34.3 min)
+          # and TWO of its three dispatches run BEFORE the batch validation.
+          DISPATCH_BUDGET_SECONDS: 120
           # Needed by the undelivered-notification fallback below (FAR-1939):
           # `gh pr comment` authenticates with the job's GITHUB_TOKEN, which
           # carries pull-requests:write (see the job's permissions block).

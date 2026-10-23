@@ -389,6 +389,20 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   untouched rather than re-dispatched against it. The heartbeat TTL remains
   the backstop for a hard crash (SIGKILL / OOM), where no shutdown hook runs,
   and for any run the observation gate skips.
+- **Over-budget retry guard (FAR-2025):** a run-level retry re-executes the
+  WHOLE run, so it is refused when the attempt that just ended had already
+  consumed the graph's node-budget allowance — the sum of its resolved
+  per-node `timeout_seconds` (the pipeline-level `node_timeout_seconds` fills
+  in any node that does not set one), less a 300 s window for provisioning,
+  the post-run envelope, and a task's own end-of-budget reserve. Such an
+  attempt is an over-budget TASK, not a transient failure: spending the same
+  allowances again cannot rescue it, so the retry only multiplies slot
+  occupancy. The guard lives in the shared `_can_retry_after_policy`, so it
+  covers both retry paths (the in-execute decision and the watchdog hook that
+  reuses it) and applies whatever event the policy matched. Unknown timing
+  data fails OPEN (the retry is allowed, as before). The worker-shutdown
+  handback and the nodeless-zombie re-dispatch do not consume node budget and
+  are unaffected.
 - **HITL review-window terminaliser (FAR-648, FAR-1257):** a sweep wired into
   `dispatcher_reconcile` (every 60s) cancels an `awaiting_human` run whose open
   gate is still UNCLAIMED and UNDECIDED past the resolved review window:
@@ -437,6 +451,31 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   `created_at` bumped, and a `coalesced` TriggerEvent is recorded. On by
   default; disable per trigger with `config_json.coalesce_pending: false`.
   Replays never coalesce.
+- **CI-failure coalesce (Branch Fixer deduplication, FAR-1034):**
+
+  > This section reflects the behaviour on the `dist/conflict-dispatch-dedupe` branch (PR #2186); it merges after that PR.
+
+  **Purpose.** Prevent duplicate Branch Fixer dispatches for the same failing PR at the same head SHA. The canonical payload-hash deduplication (`webhook_dedup_hashes`) cannot suppress these deliveries, for two different reasons per sender:
+
+  - `ci.yml`'s `notify-pr-failure` job includes the volatile `runUrl` of the failed CI run in its payload, so every delivery hashes differently and would mint a full Branch Fixer run.
+  - `branch-fixer.yml` has never carried `runUrl`. Before #2036 its payload omitted `headSha` entirely, so no coalesce key could be derived and every delivery dispatched; today its only volatile content is the caller-composed `failureDescription`, and a head movement dispatches fresh by design.
+
+  CI-failure coalescing therefore keys the suppression on the stable `(prNumber, headSha)` subset instead.
+
+  **Identity key.** `derive_ci_failure_coalesce_key` produces `ci-failure:pr:<n>:sha:<sha>` from the payload's `prNumber` and `headSha` fields. A PR with no `headSha` derives no key and is never coalesced. A new commit changes the head SHA and dispatches fresh.
+
+  **Two legs (executed in order).**
+
+  1. **Age window (primary, fast path).** Default 3600s (`_CI_FAILURE_COALESCE_WINDOW_SECONDS`). Overridable per trigger via `config_json.ci_failure_coalesce_window_seconds`, clamped to a minimum of 1s and a maximum of 7 days (`_CI_FAILURE_COALESCE_WINDOW_MAX_SECONDS`). A repeat delivery whose derived key already has a live entry in `webhook_dedup_hashes` (TTL = the window) is suppressed immediately. A `coalesced` TriggerEvent is recorded and `CiFailureCoalescedError` raised. The route commits the event inside its transaction and acks the sender with a handled 202.
+
+  2. **In-flight run (secondary).** When the age window has elapsed, a same-key delivery is STILL suppressed if any run for the same pipeline and derived key is non-terminal. Implemented in `has_in_flight_ci_failure_run` (called via the shared `_suppress_ci_failure` path). The check is pipeline-scoped, bounded by `CI_FAILURE_INFLIGHT_BACKSTOP_SECONDS` (default 7200s), and limited to `COALESCE_CANDIDATE_LIMIT` recent candidates. Each candidate run's key is recomputed and compared against the key derived at entry: the engine-stamped key is authoritative, with derivation from the candidate's `input_payload` as the legacy/verbatim-payload fallback. Fail-open: an unreadable query logs `ci_failure_coalesce.inflight_check_failed` and falls through to the age decision — dispatch is never blocked.
+
+  **Audit.** Both legs funnel through the same suppression point. The `coalesced` TriggerEvent and `CiFailureCoalescedError` carry the stable marker `ci_failure_coalesced:<key>` in `error_detail`. The log distinguishes the leg (`"inside the <window>s coalesce window"` vs `"a run for the same PR + head SHA is still in flight"`), but the event shape is identical.
+
+  **Config.** The age window is per-trigger via the optional `config_json.ci_failure_coalesce_window_seconds` override; a trigger without an override (the Branch Fixer CI-failure trigger among them) uses the 3600s default. The in-flight backstop is a global constant. Trigger mappings live in the Branch Fixer pipeline's configuration rather than the repository, so which mappings carry a `headSha` is a deployment fact; a mapping whose payload has no `headSha` (for example a review-trigger mapping that does not include one) derives no key and can never coalesce, by the rule above.
+
+  **Why the second leg exists.** The Branch Fixer `sandbox_agent` node has a 3300s (55 min) runtime cap and the node-deadline watchdog can re-dispatch it, so a single logical run can occupy the pipeline for up to ~110 min against a 1-hour default window (the exact re-dispatch count and node timeout are pipeline configuration). Without the in-flight leg, a same-key delivery after the window elapsed would mint a second full run while the first was still executing, doubling concurrency consumption.
+
 - **Dispatcher backpressure (per-funnel wedge posture):** trigger dispatch
   refuses NEW runs when the pipeline's pending queue exceeds
   `max(3 x max_concurrent_runs, 5)` rows, or its oldest genuinely-wedged

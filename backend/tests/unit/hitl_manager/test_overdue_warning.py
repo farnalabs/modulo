@@ -15,6 +15,7 @@ from modulo.core.hitl_manager.overdue_warning import (
     get_overdue_claims,
 )
 from modulo.db.models.hitl_claim import HitlClaim
+from tests.unit.api.mock_session import configure_rls_preamble
 
 from .conftest import mock_begin as _mock_begin
 from .conftest import session_factory as _mock_session_factory
@@ -190,7 +191,7 @@ def _tx_session(
     lock_failure: Exception | None = None,
 ) -> AsyncMock:
     """Per-org transaction session: lock query (two args) then overdue rows (one arg)."""
-    tx_session = AsyncMock(name="tx_session")
+    tx_session = configure_rls_preamble(AsyncMock(name="tx_session"))
     _mock_begin(tx_session)
 
     lock_result = MagicMock()
@@ -215,7 +216,7 @@ def _tx_session(
 
 
 def _stamp_session() -> AsyncMock:
-    session = AsyncMock(name="stamp_session")
+    session = configure_rls_preamble(AsyncMock(name="stamp_session"))
     _mock_begin(session)
     session.execute = AsyncMock(return_value=MagicMock())
     return session

@@ -16,6 +16,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from tests.bdd.conftest import harden_session_double
+
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/admin/node-categories.feature")
 
@@ -34,6 +36,7 @@ def nc_ctx() -> dict[str, Any]:
 
 def _make_session(ctx: dict[str, Any]) -> AsyncMock:
     session = AsyncMock()
+    harden_session_double(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

@@ -39,28 +39,28 @@ from modulo.auth.sso import (
     verify_state,
 )
 from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
-from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
+from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, LICENCE_GRACE_DAYS, clear_license, set_public_key
 from modulo.core.registry.crypto import generate_keypair, sign_primitive
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 
-# FAR-1733: the env-SAML licence gates (is_saml_available / _resolve_saml_config)
-# verify the key (signature + expiry) instead of trusting presence, so tests
-# that exercise the env-SAML path with a licence must carry a GENUINELY valid
-# signed key. The keypair below signs one at import time; the autouse fixture
-# installs the matching public key for every test and restores it after.
+# The keypair below signs real licence keys at import time; the autouse fixture
+# installs the matching public key for every test and restores it after. Tests
+# that assert a LIVE licence use the +365-day key; FAR-2059's env-SAML tests
+# additionally use a key that is past expiry AND the fixed delivery grace, to
+# prove authentication does not depend on licence state.
 _TEST_KP = generate_keypair()
 _TEST_PRIV = _TEST_KP["private_key"]
 _TEST_PUB = _TEST_KP["public_key"]
 
 
-def _make_valid_license_key(tier: str = "team") -> str:
+def _make_valid_license_key(tier: str = "team", *, days_from_now: int = 365) -> str:
     payload: dict[str, Any] = {
         "tier": tier,
         "features": ["sso", "team_rbac", "audit_viewer"],
-        "expires_at": (datetime.now(UTC) + timedelta(days=365)).isoformat(),
+        "expires_at": (datetime.now(UTC) + timedelta(days=days_from_now)).isoformat(),
         "org_id": "test-org",
     }
     sig_hex = sign_primitive(payload, _TEST_PRIV)
@@ -74,6 +74,11 @@ def _make_valid_license_key(tier: str = "team") -> str:
 
 
 _VALID_LICENSE_KEY = _make_valid_license_key()
+
+# FAR-2059: a genuinely signed key whose capability window has closed — past
+# both ``expires_at`` and the fixed delivery grace, so every resolver treats it
+# exactly like an absent key.
+_LAPSED_LICENSE_KEY = _make_valid_license_key(days_from_now=-(LICENCE_GRACE_DAYS + 1))
 
 
 @pytest.fixture(autouse=True)
@@ -109,6 +114,10 @@ def _override(**kwargs: str | bool) -> Settings:
         "database_url": "postgresql+asyncpg://localhost/test",
         "secret_key": _VALID_32,
         "fernet_key": _VALID_32,
+        # The mock session returns no organisations; multi-org is the honest
+        # representation of "no tenant to bind" now that the single-org
+        # invariant fails closed on an unidentifiable tenant (FAR-2060).
+        "modulo_multi_org_enabled": True,
         "modulo_license_key": _VALID_LICENSE_KEY,
         "modulo_oidc_providers": json.dumps(
             [
@@ -400,12 +409,19 @@ class TestSsoProvidersEndpoint:
         assert resp.status_code == 200
         assert resp.json()["saml"] is True
 
-    def test_sso_providers_disabled_returns_200_empty(self, client: TestClient) -> None:
-        """Unlicensed/feature-disabled -> normal 200 with an EMPTY providers list.
+    def test_sso_providers_unlicensed_still_lists_configured_providers(self, client: TestClient) -> None:
+        """FAR-2059: an unlicensed instance still advertises its configured providers.
 
         The endpoint is fetched by the login page BEFORE authentication, so it
-        must never raise an auth/plan error (the old 402 behaviour put a console
-        error on every login).
+        must never raise an auth/plan error. It must ALSO not hide the only
+        sign-in method: suppressing the listing on a lapsed key stranded every
+        SSO-only deployment (the login page rendered no SSO option at all).
+        Suppression is reserved for a licence that RESOLVES but does not grant
+        sso — a determinate downgrade where the auth gate would 402.
+
+        Env-var SAML needs IdP metadata configured, which this fixture does not
+        set, so ``saml`` is still False here. Licence state no longer affects
+        it (FAR-2059).
         """
         _override_settings(modulo_license_key="", modulo_saml_enabled=True)
         with (
@@ -414,19 +430,26 @@ class TestSsoProvidersEndpoint:
         ):
             resp = client.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 200
-        assert resp.json() == {"oidc": [], "saml": False}
+        body = resp.json()
+        assert {"google", "github"} <= {p["provider_id"] for p in body["oidc"]}
+        assert body["saml"] is False
 
 
 # ---------------------------------------------------------------------------
-# FAR-1733 — env-SAML licence gates verify the key (fail closed)
+# FAR-2059 — env-SAML must not depend on licence state
 # ---------------------------------------------------------------------------
-# The env branch of is_saml_available and the env fallback of
-# _resolve_saml_config previously trusted the env-var key on mere PRESENCE.
-# Both now require a key parse_and_verify confirms; an unverifiable key does
-# not enable env-SAML (the DB-provider path is unaffected).
+# FAR-1733 originally made the env branch of is_saml_available and the env
+# fallback of _resolve_saml_config fail CLOSED on an unverifiable key. That
+# posture conflicts with the FAR-2059 invariant ("there is no licence state in
+# which no administrator can reach the licence screen"): a lapsed key is
+# indistinguishable from an absent one, so failing closed here stranded an
+# SSO-only instance — no button on the login page and a 400 from the login
+# leg. Availability is now a CONFIGURATION question (enabled + IdP metadata);
+# the Team entitlement lives on the admin configuration surface
+# (require_feature("sso")) and post-auth, where the plan resolves to Community.
 
 
-class TestSamlEnvLicenseVerification:
+class TestSamlEnvLicenceIndependence:
     SAMPLE_IDP_METADATA = """<?xml version="1.0"?>
 <md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
                      entityID="https://idp.example.com">
@@ -445,19 +468,29 @@ class TestSamlEnvLicenseVerification:
             modulo_saml_idp_metadata_xml=self.SAMPLE_IDP_METADATA,
         )
 
-    # ── site 4: is_saml_available ───────────────────────────────────────
+    # ── is_saml_available ───────────────────────────────────────────────
 
-    async def test_env_saml_unavailable_with_invalid_license_key(self) -> None:
-        """FAR-1733 prove-the-fix: an env key present but unverifiable must NOT
-        enable the env-SAML availability boolean. The old code trusted presence,
-        so this assertion fails against the old code.
+    async def test_env_saml_available_with_lapsed_licence(self) -> None:
+        """FAR-2059 prove-the-fix: a past-grace key must NOT hide env-SAML.
+
+        Against the old (FAR-1733) code this assertion fails — the availability
+        boolean was False, so the login page offered the deployment no way in.
         """
+        from modulo.api.routes.sso import is_saml_available
+
+        settings = self._env_settings(_LAPSED_LICENSE_KEY)
+        session = _mock_session()
+        with patch("modulo.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=None):
+            assert await is_saml_available(settings, None, session) is True
+
+    async def test_env_saml_available_with_unverifiable_licence(self) -> None:
+        """An unverifiable key is not a reason to hide the only sign-in method."""
         from modulo.api.routes.sso import is_saml_available
 
         settings = self._env_settings("not-a-valid-key")
         session = _mock_session()
         with patch("modulo.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=None):
-            assert await is_saml_available(settings, None, session) is False
+            assert await is_saml_available(settings, None, session) is True
 
     async def test_env_saml_available_with_valid_license_key(self) -> None:
         """The VALID-key path still enables env-SAML (must not be broken)."""
@@ -478,21 +511,35 @@ class TestSamlEnvLicenseVerification:
         with patch("modulo.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=db_saml):
             assert await is_saml_available(settings, None, session) is True
 
-    # ── site 5: _resolve_saml_config env fallback ───────────────────────
+    # ── _resolve_saml_config env fallback ───────────────────────────────
 
-    async def test_env_saml_config_fails_closed_on_invalid_license_key(self) -> None:
-        """FAR-1733 prove-the-fix: the env fallback previously accepted ANY
-        non-empty key; an unverifiable key now raises (fail closed).
+    async def test_env_saml_config_builds_with_lapsed_licence(self) -> None:
+        """FAR-2059 prove-the-fix: the config builder runs on a past-grace key.
+
+        Against the old code this raised ``ValueError("SAML requires a license
+        key")`` — the lockout, since the env config is the instance's only
+        sign-in path.
         """
         from modulo.auth.sso import _resolve_saml_config
 
-        settings = self._env_settings("not-a-valid-key")
+        settings = self._env_settings(_LAPSED_LICENSE_KEY)
         session = _mock_session()
-        with (
-            patch("modulo.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=None),
-            pytest.raises(ValueError, match="requires a license"),
-        ):
-            await _resolve_saml_config(None, session, settings)
+        with patch("modulo.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=None):
+            idp_metadata, entity_id, _key, _cert, db = await _resolve_saml_config(None, session, settings)
+        assert idp_metadata == self.SAMPLE_IDP_METADATA
+        assert db is None
+        assert entity_id == settings.modulo_saml_entity_id
+
+    async def test_env_saml_config_builds_without_licence(self) -> None:
+        """An absent env key is equally not a reason to refuse to build config."""
+        from modulo.auth.sso import _resolve_saml_config
+
+        settings = self._env_settings("")
+        session = _mock_session()
+        with patch("modulo.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=None):
+            idp_metadata, _entity_id, _key, _cert, db = await _resolve_saml_config(None, session, settings)
+        assert idp_metadata == self.SAMPLE_IDP_METADATA
+        assert db is None
 
     async def test_env_saml_config_passes_with_valid_license_key(self) -> None:
         """The VALID-key path still resolves the env SAML config (must not be broken)."""
@@ -506,20 +553,15 @@ class TestSamlEnvLicenseVerification:
         assert db is None
         assert entity_id == settings.modulo_saml_entity_id
 
-    async def test_env_saml_config_fails_closed_on_absent_license_key(self) -> None:
-        from modulo.auth.sso import _resolve_saml_config
+    async def test_env_saml_login_route_redirects_with_lapsed_licence(self) -> None:
+        """End-to-end: a past-grace key still completes the pre-auth login leg.
 
-        settings = self._env_settings("")
-        session = _mock_session()
-        with (
-            patch("modulo.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=None),
-            pytest.raises(ValueError, match="requires a license"),
-        ):
-            await _resolve_saml_config(None, session, settings)
-
-    async def test_env_saml_login_route_maps_invalid_key_to_400(self) -> None:
-        """End-to-end through the pre-auth login route: invalid key -> 400."""
-        settings = self._env_settings("not-a-valid-key")
+        The IdP metadata is inline, so no live IdP is needed — the request
+        exercises the whole leg: the degrade-never-strand gate (plan resolves
+        to Community, no key), the config build, and AuthnRequest generation.
+        Against the old code this was a 400 "requires a license key".
+        """
+        settings = self._env_settings(_LAPSED_LICENSE_KEY)
         _app.dependency_overrides[get_settings] = lambda: settings
         mock_session = _mock_session()
 
@@ -528,17 +570,21 @@ class TestSamlEnvLicenseVerification:
 
         _app.dependency_overrides[get_db_session] = _override_session
         _app.dependency_overrides[get_system_db_session] = _override_session
-        _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="team"))
+        _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(
+            FeatureFlagRegistry(current_tier="community")
+        )
         _app.dependency_overrides[get_anonymous_plan_context] = lambda: DbPlanContext(
-            FeatureFlagRegistry(current_tier="team")
+            FeatureFlagRegistry(current_tier="community")
         )
         try:
             with patch("modulo.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=None):
                 resp = TestClient(_app).get("/api/v1/auth/saml/login", follow_redirects=False)
         finally:
             _app.dependency_overrides.clear()
-        assert resp.status_code == 400
-        assert "requires a license" in resp.json()["detail"]
+        assert resp.status_code == 307, resp.text
+        location = resp.headers["location"]
+        assert "idp.example.com" in location
+        assert "SAMLRequest" in location
 
 
 # ---------------------------------------------------------------------------
@@ -1174,14 +1220,20 @@ class TestSamlGetAuthUrl:
             with pytest.raises(ValueError, match="SAML is not enabled"):
                 await saml_get_auth_url(settings, "http://localhost/acs", session, session)
 
-    async def test_raises_when_no_license(self) -> None:
+    async def test_no_licence_reaches_the_metadata_check(self) -> None:
+        """FAR-2059: an absent licence is not refused — the next real gap is.
+
+        The env config build no longer consults licence state, so the failure
+        here is the missing IdP metadata (the old code raised "requires a
+        license" first).
+        """
         from modulo.auth.sso import saml_get_auth_url
 
         settings = _override(modulo_license_key="", modulo_saml_enabled=True)
         session = _mock_session()
         with patch("modulo.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock) as mock_db:
             mock_db.return_value = None
-            with pytest.raises(ValueError, match="requires a license"):
+            with pytest.raises(ValueError, match="metadata not configured"):
                 await saml_get_auth_url(settings, "http://localhost/acs", session, session)
 
     async def test_raises_when_no_metadata_source(self) -> None:
@@ -1244,12 +1296,17 @@ class TestSamlProcessResponse:
         with pytest.raises(ValueError, match="SAML is not enabled"):
             await saml_process_response("response", settings, session, session)
 
-    async def test_raises_when_no_license(self) -> None:
+    async def test_no_licence_reaches_the_metadata_check(self) -> None:
+        """FAR-2059: the ACS leg is not licence-gated either.
+
+        With no licence the config build progresses to its real precondition —
+        configured IdP metadata — instead of refusing at a licence gate.
+        """
         from modulo.auth.sso import saml_process_response
 
         settings = _override(modulo_license_key="", modulo_saml_enabled=True)
         session = _mock_session()
-        with pytest.raises(ValueError, match="requires a license"):
+        with pytest.raises(ValueError, match="metadata not configured"):
             await saml_process_response("response", settings, session, session)
 
     async def test_raises_when_no_assertion(self) -> None:
@@ -1865,11 +1922,13 @@ class TestSsoProvidersEndpointDb:
             patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
             # FAR-1978: DB providers are only advertised on the single-org login
             # path, so the fixture must resolve exactly one login-active org.
-            patch("modulo.api.routes.sso.list_login_active_orgs", new_callable=AsyncMock) as mock_orgs,
+            # FAR-2060: the tenant answer is the ONE shared helper
+            # (``resolve_login_tenant``), imported at call time by the resolver.
+            patch("modulo.db.crud.organisation.resolve_login_tenant", new_callable=AsyncMock) as mock_tenant,
             patch("modulo.api.routes.sso.list_enabled_oidc_providers", new_callable=AsyncMock) as mock_list,
             patch("modulo.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock) as mock_saml,
         ):
-            mock_orgs.return_value = [SimpleNamespace(id=org_id)]
+            mock_tenant.return_value = (True, SimpleNamespace(id=org_id, slug="org", name="Org"))
             mock_list.return_value = [db_provider]
             mock_saml.return_value = None
             resp = client.get("/api/v1/auth/sso/providers")

@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.mcp_server import set_org_triggers_paused
+from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import AuthContext, make_session_context
 
 
@@ -45,7 +46,7 @@ class TestSetOrgTriggersPausedErrors(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -82,7 +83,7 @@ class TestSetOrgTriggersPausedErrors(AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch("modulo.db.crud.organisation.get_organisation", AsyncMock(return_value=None)):
             result = await set_org_triggers_paused(paused=True)
         assert result["error"] == "not_found"
@@ -134,7 +135,7 @@ class TestSetOrgTriggersPausedSuccess(AuthContext):
     ) -> None:
         org = _make_org(paused=True, paused_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC))
         mock_get_org.return_value = org
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await set_org_triggers_paused(paused=False)
 
@@ -186,7 +187,7 @@ class TestSetOrgTriggersPausedSuccess(AuthContext):
         org = _make_org(paused=False, paused_at=None)
         mock_get_org.return_value = org
         mock_append_audit.side_effect = SQLAlchemyError("audit write failed")
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await set_org_triggers_paused(paused=True)
 

@@ -227,6 +227,7 @@ class TestResolveTier:
     def test_org_key_takes_precedence(self) -> None:
         """A valid org-level key (rung 1) is resolved before the env-var rung."""
         org = MagicMock()
+        org.id = "test-org"  # matches the signed key's org_id claim (FAR-2060)
         org.settings_json = {"license_key": _sign_license_payload(_valid_payload(tier="team"))}
         assert _resolve_tier(_make_settings(modulo_license_key="not-a-valid-key"), org=org) == "team"
 

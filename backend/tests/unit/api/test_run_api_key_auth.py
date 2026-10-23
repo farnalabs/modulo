@@ -11,6 +11,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from modulo.auth.dependencies import InvalidToken, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import create_access_token
 from modulo.settings import get_settings
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -21,6 +22,7 @@ def _make_session(key_record: object | None = None) -> AsyncMock:
     if key_record is None:
         key_record = _fake_key()
     session = AsyncMock()
+    configure_rls_preamble(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

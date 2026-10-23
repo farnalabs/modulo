@@ -1,0 +1,15 @@
+{
+  "samples": [
+    {
+      "connector_id": "55555555-5555-5555-5555-555555555555",
+      "connector_type": "github",
+      "resource": "repos",
+      "records": [
+        {"full_name": "personal/my-project", "description": "Personal project"},
+        {"full_name": "personal/utils", "description": "Utility library"}
+      ],
+      "sample_count": 2,
+      "error": null
+    }
+  ]
+}

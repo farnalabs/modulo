@@ -29,6 +29,7 @@ from modulo.core.mcp.scope_validator import (
     resolve_tool_access,
     set_request_allowed_tools,
 )
+from tests.unit.api.mock_session import make_session_scope
 
 
 class TestCheckToolScope:
@@ -760,7 +761,7 @@ class TestToolHandlerScopeErrorFormat:
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.mcp_server.HITLManager") as manager_class,
         ):
-            mock_session.return_value.__aenter__.return_value = AsyncMock()
+            mock_session.return_value.__aenter__.return_value = make_session_scope()
             manager_class.return_value.claim = AsyncMock(return_value=gate)
             result = await _rh(
                 run_id=_FAKE_ID,

@@ -305,6 +305,11 @@ def test_sigkill_mid_bootstrap_leaves_no_partial_pgdata(tmp_path: Path) -> None:
         leftover_pwfiles = list(tmp_path.glob(".initdb-pwfile-*"))
         assert leftover_pwfiles
     finally:
+        # Close every Popen pipe: an unclosed stdin is an unraisable
+        # ResourceWarning at GC, which the unit suite escalates (the file
+        # descriptor leak class) and which fails the test that caused it.
+        if proc.stdin:
+            proc.stdin.close()
         if proc.stdout:
             proc.stdout.close()
         if proc.stderr:
@@ -339,6 +344,11 @@ def test_pause_gate_resume_completes_the_bootstrap(tmp_path: Path) -> None:
         assert pgdata.exists() is True
         assert (pgdata / "PG_VERSION").exists()
     finally:
+        # Close every Popen pipe: an unclosed stdin is an unraisable
+        # ResourceWarning at GC, which the unit suite escalates (the file
+        # descriptor leak class) and which fails the test that caused it.
+        if proc.stdin:
+            proc.stdin.close()
         if proc.stdout:
             proc.stdout.close()
         if proc.stderr:

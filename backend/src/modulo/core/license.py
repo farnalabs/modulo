@@ -19,10 +19,24 @@ import base64
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from modulo.core.registry.crypto import verify_signature
+
+#: Fixed delivery grace after ``expires_at``, in days.
+#:
+#: A self-hosted licence is an OFFLINE SIGNED KEY: a renewal is minted at the
+#: charge date and delivered by email, so the customer can legitimately still
+#: be holding the previous (now expired) key while the replacement is in
+#: transit. Capability therefore survives for this window past ``expires_at``
+#: — the grace covers KEY DELIVERY, it does not grant free use. Fourteen days
+#: is that delivery window.
+#:
+#: Deliberately a module-level constant, NOT an env var, a ``Settings`` field or
+#: a database column: an operator must not be able to extend the paid
+#: capability window by configuration.
+LICENCE_GRACE_DAYS = 14
 
 # Ed25519 public key (hex-encoded, 64 hex chars).
 # In production this would be set via environment or mounted secret.
@@ -100,9 +114,16 @@ def _decode_license_key(key: str) -> tuple[bytes, bytes]:
 
 
 def _check_expired(expires_at: str) -> str | None:
+    """Return an error when the licence's CAPABILITY has lapsed.
+
+    Capability expiry is ``expires_at + LICENCE_GRACE_DAYS``, not
+    ``expires_at``: the fixed delivery grace exists so a renewal key can arrive
+    after the old key's expiry without stranding the instance. Within the grace
+    window the key still grants its tier; past it, it grants nothing.
+    """
     try:
         exp = datetime.fromisoformat(expires_at)
-        if exp < datetime.now(exp.tzinfo):
+        if exp + timedelta(days=LICENCE_GRACE_DAYS) < datetime.now(exp.tzinfo):
             return "License has expired"
     except ValueError:
         return f"Invalid expires_at format: {expires_at}"
@@ -156,7 +177,12 @@ def store_license(_key: str, data: LicenseData) -> None:
 
 
 def get_license() -> LicenseData | None:
-    """Return the in-memory license if present and not expired."""
+    """Return the in-memory license if present and still within its capability window.
+
+    A licence past ``expires_at + LICENCE_GRACE_DAYS`` is cleared and resolves
+    to ``None`` (the instance then runs on Community); within the grace window
+    it is returned unchanged and keeps granting its tier.
+    """
     if _current_license is None:
         return None
     if _current_license.expires_at:
@@ -181,10 +207,12 @@ def verify_license_key(key: str) -> LicenseData | None:
     The synchronous, session-free per-key form of the canonical
     licence-ladder check (``core.feature_flags.resolve_effective_license``,
     whose key rungs share this fall-through contract via
-    ``_verified_license_key``): an absent key, a bad signature, an expired
-    licence, or any unexpected parse failure all resolve to ``None`` so the
-    caller falls through to the next rung (or the unlicensed default). A key
-    is NEVER trusted on mere presence.
+    ``_verified_license_key``): an absent key, a bad signature, a licence
+    lapsed past its fixed delivery grace (``LICENCE_GRACE_DAYS``), or any
+    unexpected parse failure all resolve to ``None`` so the caller falls
+    through to the next rung (or the unlicensed default). A key is NEVER
+    trusted on mere presence, and a key inside its grace window is NOT treated
+    as lapsed.
     """
     if not key:
         return None

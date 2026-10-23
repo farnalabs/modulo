@@ -87,6 +87,7 @@ from modulo.db.models.run import (
     TERMINAL_STATUSES,
     Run,
 )
+from modulo.db.models.run_node_outputs import SENTINEL_NODE_ID_PREFIX
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
 from modulo.db.sqlstates import is_row_lock_timeout, is_statement_timeout
 from modulo.settings import (
@@ -474,14 +475,42 @@ _NO_PROGRESS_ERROR_DETAIL_PREFIX_FMT = "No node progress within the {age}m age b
 # the ORM predicate's parameterised leg cannot desynchronise (FAR-1649 qa
 # finding 7): there is one constant and one bind, not two spellings to pin
 # together.
+#
+# FAR-2052: the ``__final__`` leg means "a NODE finalised a store row", never
+# "any row is present". ``workspace_input_audit`` writes
+# ``(run_id, '__mwi_audit__', '__final__')`` BEFORE any node runs (the resolved
+# managed-workspace-input audit), so an unscoped leg read a run whose inputs had
+# merely been resolved as already-progressing: the zero-progress shape went
+# false, the nodeless repairs and the FAR-1999 node-deadline reaper skipped a
+# genuinely stuck run, and only the ~135-minute mid-graph age gate could collect
+# it. ``__run_meta__`` (run metadata) and ``__unknown__`` (unparseable-marker
+# evidence) are bookkeeping rows of the same kind.
+#
+# The reserved ``__``-prefixed sentinel namespace is defined ONCE in
+# :data:`modulo.db.models.run_node_outputs.SENTINEL_NODE_ID_PREFIX`; the graph
+# validator REJECTS any node id using that prefix (``DB_SENTINEL_NODE_ID_PREFIX``
+# in ``core/graph_validator``), so a genuine node id can never be excluded here.
+# ``substr`` rather than ``LIKE '__%'``: ``_`` is a LIKE wildcard, so that
+# pattern would match ANY two leading characters (the ``agent_return_legacy``
+# precedent). Assembled with str.replace from the shared constant (the
+# trigger_streak ``__STATUSES__`` precedent — S608 flags f-string/format SQL
+# construction), so the raw-SQL leg and :func:`_final_row_absent_expr`'s ORM leg
+# cannot drift.
+_NON_SENTINEL_FINAL_NODE_ID_SQL = (
+    ("substr(rno.node_id, 1, __SENTINEL_PREFIX_LENGTH__) <> '__SENTINEL_PREFIX__'")  # nosec B608 - static fragment, module constants only
+    .replace("__SENTINEL_PREFIX_LENGTH__", str(len(SENTINEL_NODE_ID_PREFIX)))
+    .replace("__SENTINEL_PREFIX__", SENTINEL_NODE_ID_PREFIX)
+)
+_NON_SENTINEL_FINAL_NODE_ID_TOKEN = "__NON_SENTINEL_FINAL_NODE_ID__"
 _ZERO_PROGRESS_SHAPE_SQL = (
-    "COALESCE(node_attempt_count,0) = 0 AND node_token_usage IS NULL "
+    "COALESCE(node_attempt_count,0) = 0 AND node_token_usage IS NULL "  # nosec B608 - static constant fragments, never caller data
     "AND NOT EXISTS (SELECT 1 FROM run_node_outputs rno "
-    "WHERE rno.run_id = runs.id AND rno.attempt_key = :final_key) "
+    "WHERE rno.run_id = runs.id AND rno.attempt_key = :final_key "
+    "AND __NON_SENTINEL_FINAL_NODE_ID__) "
     "AND NOT EXISTS (SELECT 1 FROM checkpoints cp "
     "WHERE cp.organisation_id = runs.organisation_id AND cp.thread_id = runs.langgraph_thread_id) "
     "AND (dispatch_phase IS NULL OR dispatch_phase <> :first_node_phase)"
-)
+).replace(_NON_SENTINEL_FINAL_NODE_ID_TOKEN, _NON_SENTINEL_FINAL_NODE_ID_SQL)
 _ZERO_PROGRESS_SHAPE_TOKEN = "__ZERO_PROGRESS_SHAPE__"
 
 # The two FAR-1329 statements. Assembled from static templates + str.replace
@@ -1763,156 +1792,102 @@ async def fire_cron_trigger(
     factory: async_sessionmaker[AsyncSession] | None = None,
     advance_next_fire_at: bool = False,
 ) -> dict[str, Any]:
-    """Fire one cron trigger — create a run, log the TriggerEvent, dispatch it.
+    """Fire one cron trigger — create a run, log the TriggerEvent, dispatch it."""
+    if factory is None:
+        factory = _open_factory()
+    async with factory() as session, session.begin():
+        return await _fire_cron_trigger_in_session(
+            session,
+            trigger_id=trigger_id,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            cron_expression=cron_expression,
+            snapshot_id=snapshot_id,
+            advance_next_fire_at=advance_next_fire_at,
+        )
 
-    SAQ per-item fire job (``advance_next_fire_at=False``, the default): the
-    atomic next_fire_at advance already happened in ``fire_due_triggers`` at
-    enqueue time; this job sets ``last_fired_at`` only.
 
-    ``advance_next_fire_at=True`` preserves the legacy behaviour (CronFireTask,
-    removed in PR C).
-    """
+async def _fire_cron_trigger_in_session(
+    session: AsyncSession,
+    *,
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    cron_expression: str,
+    snapshot_id: uuid.UUID | None,
+    advance_next_fire_at: bool,
+) -> dict[str, Any]:
     from sqlalchemy import update
 
     from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+    from modulo.core.run_admission import evaluate_backpressure
     from modulo.db.crud.run import create_run
     from modulo.db.models.trigger import Trigger
 
-    if factory is None:
-        factory = _open_factory()
-
-    async with factory() as session, session.begin():
-        await _set_rls_org(session, org_id)
-
-        key1, key2 = _uuid_to_lock_keys(trigger_id)
-        lock_result = await session.execute(
-            text(_SQL_TRY_ADVISORY_LOCK),
-            {"key1": key1, "key2": key2},
-        )
-        if not lock_result.scalar_one():
-            return {"status": "skipped", "reason": "trigger_busy"}
-        result = await session.execute(
+    await _set_rls_org(session, org_id)
+    key1, key2 = _uuid_to_lock_keys(trigger_id)
+    lock_result = await session.execute(text(_SQL_TRY_ADVISORY_LOCK), {"key1": key1, "key2": key2})
+    if not lock_result.scalar_one():
+        return {"status": "skipped", "reason": "trigger_busy"}
+    trigger = (
+        await session.execute(
             select(Trigger).where(
                 Trigger.id == trigger_id,
                 Trigger.organisation_id == org_id,
                 Trigger.deleted_at.is_(None),
             )
         )
-        trigger = result.scalar_one_or_none()
-        if trigger is None or not trigger.active:
-            return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
-
-        # Org-wide pause (kill-switch) — checked BEFORE the snapshot auto-create
-        # so a paused org never produces a snapshot. No paused TriggerEvent here
-        # (this is the race backstop only; the create_run gate is the authority).
-        # Degraded on a pre-migration ProgrammingError (not-paused) inside a
-        # savepoint so the per-item transaction is never poisoned.
-        if await _org_is_paused_degraded(session, org_id):
-            return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
-
-        active_count = await _count_active_runs(session, trigger_id)
-        if active_count >= trigger.max_concurrent_runs:
-            return await _concurrency_limit_skip(session, trigger, org_id, active_count)
-
-        # FAR-604 dispatcher backpressure: skip-not-defer when the pipeline's
-        # pending queue is over the depth/age limits (the queue can never
-        # drain onto a wedged admission gate; more rows only ratchet it).
-        from modulo.core.run_admission import evaluate_backpressure
-
-        backpressured, bp_reason = await evaluate_backpressure(session, pipeline_id=pipeline_id)
-        if backpressured:
-            return await _backpressure_skip(session, trigger, org_id, bp_reason)
-
-        skip = await _cron_spend_gate_skip(session, trigger, org_id)
-        if skip is not None:
-            return skip
-
-        # FAR-1519 item 3: an unpinned cron fire freezes the CURRENT live
-        # graph here (auto-create below), exactly like the manual/webhook/
-        # slack/test paths and like this function's own catch-up callers —
-        # never the "latest existing snapshot", which goes stale the moment
-        # the graph is edited and made every post-edit cron run execute the
-        # first snapshot forever. Only an explicit config pin bypasses this.
-        #
-        # FAR-1536: the auto-create and create_run share a SAVEPOINT. Every
-        # return out of this function (including skips) COMMITs the enclosing
-        # transaction, so the pause-race skip below would otherwise persist an
-        # unreferenced snapshot — a row no run points at, minted by a fire that
-        # did nothing. Rolling back to the savepoint restores the invariant
-        # "a fire that skips writes no snapshot" for this path. The skip itself
-        # is unchanged: only the savepoint rolls back, the outer transaction
-        # still commits, so the job still returns skipped (never a failed job
-        # that only becomes a skip after an SAQ retry).
-        try:
-            async with session.begin_nested():
+    ).scalar_one_or_none()
+    if trigger is None or not trigger.active:
+        return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
+    if await _org_is_paused_degraded(session, org_id):
+        return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+    active_count = await _count_active_runs(session, trigger_id)
+    if active_count >= trigger.max_concurrent_runs:
+        return await _concurrency_limit_skip(session, trigger, org_id, active_count)
+    backpressured, bp_reason = await evaluate_backpressure(session, pipeline_id=pipeline_id)
+    if backpressured:
+        return await _backpressure_skip(session, trigger, org_id, bp_reason)
+    skip = await _cron_spend_gate_skip(session, trigger, org_id)
+    if skip is not None:
+        return skip
+    try:
+        async with session.begin_nested():
+            if snapshot_id is None:
+                snapshot_id = await _auto_create_snapshot(session, trigger, org_id, pipeline_id)
                 if snapshot_id is None:
-                    snapshot_id = await _auto_create_snapshot(session, trigger, org_id, pipeline_id)
-                    if snapshot_id is None:
-                        # The no_pipeline TriggerEvent and last_fired_at stamp
-                        # inside _auto_create_snapshot are meant to persist
-                        # (skip-not-defer, review PR #982): leaving the
-                        # savepoint normally RELEASEs it into the outer txn.
-                        return {"status": "skipped", "reason": "pipeline_not_found"}
+                    return {"status": "skipped", "reason": "pipeline_not_found"}
+            config = trigger.config_json or {}
+            from modulo.core.trigger_engine import _warn_unrecognised_config_keys
 
-                config = trigger.config_json or {}
-                from modulo.core.trigger_engine import _warn_unrecognised_config_keys
-
-                _warn_unrecognised_config_keys(trigger_id, config)
-                input_payload = config.get("input_template", {})
-
-                run = await create_run(
-                    session,
-                    org_id=org_id,
-                    pipeline_id=pipeline_id,
-                    snapshot_id=snapshot_id,
-                    trigger_type="cron",
-                    trigger_id=trigger_id,
-                    input_payload=input_payload,
-                )
-        except TriggersPausedError:
-            # TOCTOU race backstop: the org was paused between the early check
-            # and create_run. Skip, no paused TriggerEvent (race backstop only).
-            # The savepoint above rolled back the auto-created snapshot with it.
-            _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
-            return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
-        except PipelineNotRunnableError as exc:
-            # FAR-1528: the pipeline was archived/soft-deleted. Mirrors the
-            # pause skip exactly — quiet typed skip, NO TriggerEvent, NO
-            # last_fired_at write — so an archived pipeline's still-active
-            # trigger is a per-tick skip instead of a job that fails on every
-            # tick (next_fire_at was already advanced at enqueue time).
-            _log.info(_LOG_PIPELINE_NOT_RUNNABLE_SKIP, trigger_id, org_id, exc.state)
-            return {"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON}
-
-        event = await _log_event(
-            session,
-            trigger=trigger,
-            org_id=org_id,
-            result="accepted",
-            run_id=run.id,
-        )
-
-        # last_fired_at reflects an actual fire (run created). next_fire_at is
-        # advanced ONLY at enqueue time (fire_due_triggers) — or here for the
-        # legacy path (pre-PR C).
-        values: dict[str, Any] = {"last_fired_at": datetime.now(UTC)}
-        if advance_next_fire_at:
-            values["next_fire_at"] = compute_next_fire(
-                cron_expression,
-                after=datetime.now(UTC),
-                timezone=trigger.cron_timezone or "UTC",
+            _warn_unrecognised_config_keys(trigger_id, config)
+            input_payload = config.get("input_template", {})
+            run = await create_run(
+                session,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+                snapshot_id=snapshot_id,
+                trigger_type="cron",
+                trigger_id=trigger_id,
+                input_payload=input_payload,
             )
-        await session.execute(update(Trigger).where(Trigger.id == trigger_id).values(**values))
-
-        _log.info("Cron trigger %s fired -> run %s", trigger_id, run.id)
-        return {
-            "status": "fired",
-            "run_id": str(run.id),
-            "event_id": str(event.id),
-            "input_payload": input_payload,
-        }
-
-    return {"status": "error", "reason": "unexpected"}
+    except TriggersPausedError:
+        _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
+        return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+    except PipelineNotRunnableError as exc:
+        _log.info(_LOG_PIPELINE_NOT_RUNNABLE_SKIP, trigger_id, org_id, exc.state)
+        return {"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON}
+    event = await _log_event(session, trigger=trigger, org_id=org_id, result="accepted", run_id=run.id)
+    values: dict[str, Any] = {"last_fired_at": datetime.now(UTC)}
+    if advance_next_fire_at:
+        values["next_fire_at"] = compute_next_fire(
+            cron_expression,
+            after=datetime.now(UTC),
+            timezone=trigger.cron_timezone or "UTC",
+        )
+    await session.execute(update(Trigger).where(Trigger.id == trigger_id).values(**values))
+    _log.info("Cron trigger %s fired -> run %s", trigger_id, run.id)
+    return {"status": "fired", "run_id": str(run.id), "event_id": str(event.id), "input_payload": input_payload}
 
 
 async def _polling_pre_fire_gate(
@@ -4682,14 +4657,29 @@ def _reconcile_capacity_marker_exclusion(capacity_redispatch_seconds: int) -> An
 
 def _final_row_absent_expr() -> Any:
     """The ONE correlated NOT-EXISTS expression for the run's far-583 store
-    finalisation marker: ``NOT EXISTS(run_node_output __final__ row)``.
+    finalisation marker: ``NOT EXISTS(run_node_output __final__ row for a real
+    node)``.
 
     Single definition shared by the nodeless zombie predicate (line-level
     WHERE leg) and the reconcile org SELECT (the ``outputs_absent`` labeled
     column — the label is applied at the call site) so the two correlated
     subqueries can never drift (qa iteration 1 rider).
+
+    FAR-2052: the ``__final__`` leg is scoped to GENUINE node rows. The reserved
+    ``__``-prefixed sentinel namespace is bookkeeping, not progress — notably
+    ``workspace_input_audit`` writes ``(run_id, '__mwi_audit__', '__final__')``
+    before any node runs, so an unscoped leg made a run whose managed workspace
+    inputs were merely resolved read as already-progressing (the zero-progress
+    shape then excluded it from the nodeless repairs and the FAR-1999
+    node-deadline reaper). The prefix comes from
+    :data:`modulo.db.models.run_node_outputs.SENTINEL_NODE_ID_PREFIX` — the
+    graph validator rejects it for real node ids — and ``substr`` is used rather
+    than ``LIKE '__%'`` because ``_`` is a LIKE wildcard that would match any
+    two leading characters. The raw-SQL twin is
+    :data:`_ZERO_PROGRESS_SHAPE_SQL`'s ``_NON_SENTINEL_FINAL_NODE_ID_SQL``.
     """
     from sqlalchemy import exists as sa_exists
+    from sqlalchemy import func as sa_func
     from sqlalchemy import select as sa_select
 
     from modulo.db.models.run import Run
@@ -4701,6 +4691,7 @@ def _final_row_absent_expr() -> Any:
         .where(
             RunNodeOutput.run_id == Run.id,
             RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
+            sa_func.substr(RunNodeOutput.node_id, 1, len(SENTINEL_NODE_ID_PREFIX)) != SENTINEL_NODE_ID_PREFIX,
         )
     )
 
@@ -4961,10 +4952,11 @@ def _is_zero_progress_shape_row(row: Any) -> bool:
     """Row-level mirror of :data:`_ZERO_PROGRESS_SHAPE_SQL` (FAR-1740).
 
     True when the reconcile flags say ZERO node progress: no token usage, no
-    finalised store row (``outputs_absent``), no LangGraph checkpoint
-    (``checkpoints_absent``) AND no durably-recorded first-node start. Fails
-    CLOSED (``False``) when a flag is absent, so a row source that forgets a
-    column is never treated as zero-progress.
+    finalised store row from a genuine node (``outputs_absent`` — bookkeeping
+    rows in the reserved ``__`` sentinel namespace do not count, FAR-2052), no
+    LangGraph checkpoint (``checkpoints_absent``) AND no durably-recorded
+    first-node start. Fails CLOSED (``False``) when a flag is absent, so a row
+    source that forgets a column is never treated as zero-progress.
 
     FAR-1914: the durable ``first_node_dispatched`` phase (FAR-1649) proves a
     node STARTED even though no super-step completed, so such a row is NOT
@@ -4982,11 +4974,13 @@ def _is_zero_progress_shape_row(row: Any) -> bool:
 def _has_zero_progress_evidence(row: Any) -> bool:
     """Do the reconcile flags prove ZERO node progress for *row*?
 
-    No token usage (written when the run finalises), no finalised store row
-    (``outputs_absent``), and no LangGraph checkpoint (``checkpoints_absent`` —
-    a checkpoint is written when a node COMPLETES a super-step). Fails CLOSED
-    (``False``) when a flag is absent, so a row source that forgets a column is
-    never treated as zero-progress.
+    No token usage (written when the run finalises), no finalised store row from
+    a genuine node (``outputs_absent`` — reserved ``__`` sentinel bookkeeping
+    rows such as the workspace-input audit are not node progress, FAR-2052), and
+    no LangGraph checkpoint (``checkpoints_absent`` — a checkpoint is written
+    when a node COMPLETES a super-step). Fails CLOSED (``False``) when a flag is
+    absent, so a row source that forgets a column is never treated as
+    zero-progress.
     """
     return (
         getattr(row, "node_token_usage", None) is None
@@ -6685,6 +6679,31 @@ def _decision_review_identity(latest: Any) -> str | None:
     return str(row_review_id) if row_review_id else None
 
 
+def _parse_decision_payload(payload: Any) -> dict[str, Any] | None:
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (ValueError, TypeError):
+            return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _decision_payload_is_faithful(payload: dict[str, Any] | None) -> bool:
+    if payload is None:
+        return True
+    return payload.get("action") != "manual_output" or "output" in payload
+
+
+def _decision_is_consumable(latest: Any, payload: dict[str, Any]) -> bool:
+    if not payload.get("review_id"):
+        return False
+    identity = _decision_review_identity(latest)
+    action = payload.get("action")
+    if identity is not None and identity.startswith(("hitl_review_", "guardrail_conformance")):
+        return action in ("approved", "rejected", "deliver_manual")
+    return action == "manual_output" or action in ("approved", "rejected", "deliver_manual")
+
+
 async def _awaiting_human_has_committed_decision(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -6765,24 +6784,14 @@ async def _awaiting_human_has_committed_decision(
     latest = await _latest_committed_decision_row(session, org_id, run_id)
     if latest is None or latest[0] is None:
         return False
-    payload = latest[1]
-    if isinstance(payload, str):
-        try:
-            payload = json.loads(payload)
-        except (ValueError, TypeError):
-            payload = None
-    if payload is not None and not isinstance(payload, dict):
-        # FAR-541 iteration 3: the guard and ``_committed_decision_resume_data``
-        # must agree — reconstruction returns None for a non-dict payload, so
-        # resuming here would dispatch resume_run with resume_data=None (an
-        # empty decision). SKIP.
+    payload = _parse_decision_payload(latest[1])
+    if latest[1] is not None and payload is None:
+        # FAR-541 iteration 3: the guard and reconstruction must agree — a
+        # corrupted non-dict payload cannot be reconstructed safely.
         return False
-    if isinstance(payload, dict):
-        action = payload.get("action")
-        if action == "manual_output" and "output" not in payload:
-            # A manual-output decision MUST carry its output — otherwise the
-            # manual node resumes with ``{"action": "approved"}`` as its output.
-            return False
+    if not _decision_payload_is_faithful(payload):
+        # A manual-output decision MUST carry its output.
+        return False
     # Gate scoping (FAR-541): the decision must resolve the gate the run is
     # waiting at. See the docstring for the state matrix.
     if await _pending_claimed_review_id(session, org_id, run_id) is not None:
@@ -6815,25 +6824,8 @@ async def _awaiting_human_has_committed_decision(
     # (HITL gates first fired that day), so NO backfill migration is shipped.
     # Ops remedy: stamp the row's ``decision_payload`` manually in the DB (or
     # raise a ticket for the run's owner) to unblock it.
-    if not isinstance(payload, dict) or not payload.get("review_id"):
-        # Unstamped / legacy ""-stamped (falsy) — cannot be verified -> SKIP.
-        return False
-    identity = _decision_review_identity(latest)
-    action = payload.get("action")
-    if identity is not None and identity.startswith(("hitl_review_", "guardrail_conformance")):
-        # GATE / guardrail park: the gate consumer accepts only verdict
-        # actions and the conformance consumer only recognized override
-        # actions — a ``manual_output`` committed at either is not a verdict
-        # that consumer accepts, so resuming it would bounce the run back to
-        # awaiting_human and re-dispatch-loop (FAR-541 iteration 3).
-        return action in ("approved", "rejected", "deliver_manual")
-    # MANUAL-NODE park (the interrupt stamps ``review_id: node_id``): the manual
-    # consumer completes the node on any payload stamped with its node id, so
-    # a committed ``manual_output`` (its ``output`` presence was checked
-    # above) is a legitimately concluded decision whose resume job was lost —
-    # skipping it would wedge the run forever (re-decide 409s, recover-node
-    # bounces). Resume it (FAR-541 iteration 4, FIX A).
-    return action == "manual_output" or action in ("approved", "rejected", "deliver_manual")
+    # Unstamped or consumer-incompatible decisions cannot be verified safely.
+    return payload is not None and _decision_is_consumable(latest, payload)
 
 
 async def _committed_decision_resume_data(
@@ -6931,6 +6923,29 @@ _RECONCILE_POST_ORGS_RESERVE_SECONDS = 15
 # Smallest org slice worth starting: below this the remaining budget goes to
 # record_facts / the compensating sweeps and the org is deferred, not cut.
 _RECONCILE_ORG_MIN_SECONDS = 1.0
+# FAR-1643: MAXIMUM headroom kept for the per-row loop to exit CLEANLY before
+# the caller's per-org slice cuts the whole transaction. The prod episodes
+# localise the cut to the row loop (last observed stage ``row_loop:13/15``),
+# so a new row is not started once less than the margin remains: the rows
+# already processed COMMIT and the remainder drains on the next 60s tick,
+# instead of the lot rolling back and raising a readiness alert.
+#
+# The margin is ADAPTIVE, not this constant verbatim — ``_attempt_reconcile_org``
+# applies ``min(this, max(0.25, org_slice_seconds / 2))``. A flat 5s margin
+# would be a DEAD ZONE on a short slice: ``dispatcher_reconcile_org_budget_seconds``
+# allows ``ge=1`` and the tick-tail clamp can yield a 1-5s slice, in which
+# "less than 5s of the slice remains" is true before the loop starts — every
+# row would be deferred forever while the tick reported ``ok``. A 1s slice
+# therefore gets a 0.5s margin (a row CAN start), a 30s slice keeps 5s, and
+# the 0.25s floor keeps the window non-degenerate. A single row that itself
+# overruns the margin is still caught by the CALLER's ``asyncio.timeout``
+# backstop — this is a clean-exit improvement, never a replacement for the
+# hard bound.
+_RECONCILE_ROW_DEFER_MARGIN_SECONDS = 5.0
+# FAR-1643: lower bound on the adaptive row-deferral margin. Keeps the window
+# non-degenerate on a very short slice while leaving a real chance to start
+# one row.
+_RECONCILE_ROW_DEFER_MARGIN_MIN_SECONDS = 0.25
 # FAR-1644 (M2): the per-org-cut discriminator is the slice ITSELF — see the
 # ``except TimeoutError`` arm in ``_dispatcher_reconcile_body``. It used to
 # subtract a 0.5s ``_RECONCILE_ORG_CUT_SLACK_SECONDS`` first, on the theory
@@ -8876,6 +8891,21 @@ async def _attempt_reconcile_org(
     terminalized_len_before = len(ctx.terminalized_run_ids)
     age_gate_len_before = len(ctx.age_gate_run_ids)
     org_pass_started = time.monotonic()
+    # FAR-1643: the same slice expressed as an absolute deadline so the row
+    # loop can stop STARTING rows with margin to spare. The ``asyncio.timeout``
+    # below stays armed as the hard backstop for a single row that overruns it.
+    org_deadline_monotonic = time.monotonic() + org_slice_seconds
+    # FAR-1643: the margin is ADAPTIVE to the slice, never the 5s cap verbatim.
+    # A flat 5s margin on a 1-5s slice (``dispatcher_reconcile_org_budget_seconds``
+    # allows ``ge=1``; the tick-tail clamp can also shrink the slice) would sit
+    # INSIDE the slice before the loop began, deferring every row forever while
+    # the tick reported ``ok`` — a dead zone that never starts a row. Half the
+    # slice (floored at 0.25s, capped at the constant) always leaves room for at
+    # least one row attempt: 1s -> 0.5s, 30s -> 5s.
+    row_defer_margin_seconds = min(
+        _RECONCILE_ROW_DEFER_MARGIN_SECONDS,
+        max(_RECONCILE_ROW_DEFER_MARGIN_MIN_SECONDS, org_slice_seconds / 2),
+    )
     try:
         async with asyncio.timeout(org_slice_seconds):
             return await _reconcile_org(
@@ -8895,6 +8925,9 @@ async def _attempt_reconcile_org(
                     row_budget=row_budget,
                 ),
                 stage=stage,
+                org_deadline_monotonic=org_deadline_monotonic,
+                row_defer_margin_seconds=row_defer_margin_seconds,
+                org_slice_seconds=org_slice_seconds,
             )
     except TimeoutError:
         # FAR-1525: the org's pass raised a builtin TimeoutError. The
@@ -9272,6 +9305,16 @@ def _dispatcher_summary() -> dict[str, Any]:
         "org_pool_timeouts": 0,
         "org_connect_timeouts": 0,
         "org_statement_timeouts": 0,
+        # FAR-1643 row-loop time deferral: rows NOT started because the org's
+        # slice was about to cut the row loop. DISTINCT from ``rows_deferred``
+        # (orgs/cap markers) so the readiness detail tells a time-deferral
+        # from a row-budget cap. The processed prefix commits and the
+        # remainder drains on the next 60s tick, so the tick stays ok.
+        "row_loop_time_deferred": 0,
+        # FAR-1643 instrumentation: the slowest single row the tick's row
+        # loops measured (ms). Lets the next deferral distinguish one
+        # pathological row from a uniformly slow loop.
+        "row_loop_slowest_row_ms": 0,
     }
     # Terminalizer counters (and their healthz aliases) derive from the
     # registry (FAR-720) — a new terminalizer registers once below without a
@@ -9294,6 +9337,9 @@ async def _reconcile_org(
     age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
     limits: _ReconcileOrgLimits = _ReconcileOrgLimits(),
     stage: dict[str, str] | None = None,
+    org_deadline_monotonic: float | None = None,
+    row_defer_margin_seconds: float = _RECONCILE_ROW_DEFER_MARGIN_SECONDS,
+    org_slice_seconds: float | None = None,
 ) -> int:
     """Run one org's reconcile pass (terminalizers + row select + per-row loop).
 
@@ -9317,12 +9363,50 @@ async def _reconcile_org(
     exercising one specific branch) means unbounded, exactly as before
     FAR-1425.
 
-    TIME: this pass is bounded by the CALLER (FAR-1525) — the reconcile body
-    wraps the call in ``asyncio.timeout`` at
+    TIME: this pass is still bounded by the CALLER (FAR-1525) — the reconcile
+    body wraps the call in ``asyncio.timeout`` at
     ``dispatcher_reconcile_org_budget_seconds``. On expiry the transaction
     above rolls back at its safe boundary and the caller unwinds the counts
     and terminalizer ids this pass recorded; direct callers (tests) remain
     unbounded, exactly as before.
+
+    ROW-LOOP DEFERRAL (FAR-1643): the prod ``dispatcher_reconcile`` alert
+    episodes LOCALISED the 30s org bound to time spent PROCESSING ROWS, not
+    waiting — ``last_error`` carried
+    ``during stage=reconcile_org:<id>/row_loop:13/15`` with
+    ``org_pool_timeouts`` / ``org_connect_timeouts`` /
+    ``org_statement_timeouts`` / ``org_lock_timeouts`` all at 0. That
+    localises the cut to the row loop; it does NOT measure a per-row cost
+    (the earlier "~2s/row" figure was inferred from one stage sample). The
+    per-row cost is now INSTRUMENTED per tick as
+    ``summary["row_loop_slowest_row_ms"]`` plus the ``slowest_row_seconds``
+    field on the deferral WARNING, so the next occurrence can tell a single
+    pathological row from a uniformly slow loop instead of assuming either.
+
+    A cut there discards the WHOLE org transaction, including every
+    terminalizer and row this pass had already repaired. When the caller
+    supplies ``org_deadline_monotonic`` (the absolute end of this org's
+    slice), the per-row loop therefore stops STARTING a new row once less
+    than ``row_defer_margin_seconds`` remains, counts the unprocessed rows in
+    ``summary["row_loop_time_deferred"]`` (DISTINCT from the FAR-1425 cap
+    marker ``rows_deferred``, so the readiness detail can tell time-deferral
+    from a row-budget cap) and RETURNS NORMALLY so the processed prefix
+    commits. The deferral is a WARNING, not an INFO line, because it is the
+    durable signal operators need; the tick itself stays ``ok`` BY DESIGN (a
+    partial pass that drains next tick is not a failure) — the distinct
+    counter plus the WARNING is the visibility, rather than the old
+    rollback-and-``status=timeout`` report. The remainder drains on the next
+    60s tick. The caller's ``asyncio.timeout`` is untouched and remains the
+    hard backstop for a single row that overruns the margin.
+
+    ``row_defer_margin_seconds`` is the ADAPTIVE margin the caller derived
+    from its slice (``min(5s, max(0.25s, slice / 2))``), never a flat 5s:
+    on a 1-5s slice a flat margin would sit inside the slice before the loop
+    began and defer every row forever. ``org_slice_seconds`` is carried only
+    so the deferral WARNING can report the slice alongside the margin.
+
+    ``org_deadline_monotonic=None`` (a direct caller such as a test) means
+    unbounded in exactly the pre-FAR-1643 sense.
 
     LOCK BOUND (FAR-1601): this transaction is the ONE boundary for every
     periodic-sweep write this module makes on the hot ``runs`` table, so the
@@ -9618,14 +9702,36 @@ async def _reconcile_org(
             )
             return enqueue_failed_redispatched
 
+        row_loop_started = time.monotonic()
+        rows_processed_this_pass = 0
+        slowest_row_seconds = 0.0
+        deferred_for_time = 0
         for row_index, row in enumerate(rows):
             # FAR-1425: defence in depth — the LIMIT already caps the fetch,
             # but the loop must never be able to exceed the budget the
             # inner-deadline message advertises (``max_rows=...``).
             if row_budget is not None and row_index >= row_budget:
                 break
+            # FAR-1643: stop STARTING rows with margin to spare, so the work
+            # already done commits instead of the caller's slice rolling the
+            # whole org transaction back (the prod row_loop:13/15 cut). The
+            # unprocessed rows are counted in a DISTINCT counter — never
+            # silently dropped, and never folded into ``rows_deferred`` (the
+            # FAR-1425 cap marker) so the readiness detail can tell a
+            # time-deferral from a row-budget cap. Checked AFTER the row budget
+            # so the FAR-1425 path above keeps its exact semantics, and BEFORE
+            # the stage mark so a deferral never looks like a row in flight.
+            if (
+                org_deadline_monotonic is not None
+                and time.monotonic() >= org_deadline_monotonic - row_defer_margin_seconds
+            ):
+                deferred_for_time = len(rows) - row_index
+                summary["row_loop_time_deferred"] = summary.get("row_loop_time_deferred", 0) + deferred_for_time
+                break
             _mark(f"row_loop:{row_index}/{len(rows)}")
             summary["scanned"] += 1
+            rows_processed_this_pass += 1
+            row_started = time.monotonic()
             # FAR-1740: derive the claimed-but-nodeless window PER-PIPELINE from
             # this row's longest node timeout (frozen snapshot graph preferred,
             # then the live node list, then the pipeline default). A row whose
@@ -9657,6 +9763,40 @@ async def _reconcile_org(
                 early_detect_minutes=row_early_detect_minutes,
                 floor_nodeless_window=tuning.nodeless_window,
                 stale_window=tuning.stale_window,
+            )
+            # FAR-1643 instrumentation: the per-row cost, so the NEXT deferral
+            # can tell a single pathological row from a uniformly slow loop
+            # instead of assuming a fixed per-row figure. Measured around the
+            # whole per-row body (window derivation + repair) because that is
+            # what actually consumes the slice.
+            slowest_row_seconds = max(slowest_row_seconds, time.monotonic() - row_started)
+        # FAR-1643: the tick-level slowest-row gauge (max across orgs — the
+        # summary is shared by every org pass), surfaced in the readiness
+        # detail as ``row_loop_slowest_row_ms``.
+        summary["row_loop_slowest_row_ms"] = max(
+            float(summary.get("row_loop_slowest_row_ms", 0) or 0.0),
+            round(slowest_row_seconds * 1000, 1),
+        )
+        if deferred_for_time:
+            # WARNING, not INFO: a sustained deferral is the durable signal an
+            # operator needs (the tick deliberately stays ``ok`` — a partial
+            # pass that drains next tick is not a failure). The distinct
+            # ``row_loop_time_deferred`` counter plus this line IS the
+            # visibility; there is no rollback and no ``status=timeout``.
+            _log.warning(
+                "dispatcher_reconcile.row_loop_time_deferred org=%s deferred_rows=%d "
+                "rows_processed=%d elapsed_seconds=%.1f slowest_row_seconds=%.2f "
+                "org_slice_seconds=%s row_defer_margin_seconds=%.2f "
+                "(row loop stopped STARTING rows before the per-org slice could cut the "
+                "whole transaction; the processed prefix commits and the remainder drains "
+                "on the next 60s tick)",
+                org_id,
+                deferred_for_time,
+                rows_processed_this_pass,
+                time.monotonic() - row_loop_started,
+                slowest_row_seconds,
+                f"{org_slice_seconds:.2f}" if org_slice_seconds is not None else "n/a",
+                row_defer_margin_seconds,
             )
         # FAR-1425: the fetch above returned one row beyond the budget when
         # (and only when) matching rows remain. Count the org as deferred so

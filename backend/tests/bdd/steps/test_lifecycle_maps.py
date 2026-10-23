@@ -731,7 +731,9 @@ def self_report_with_stage_id(
     stage_mock.stage_id = stage_id
     stage_mock.stage_name = stage_id.replace("-", " ").title()
     stage_mock.position = 7
-    junction_result = AsyncMock()
+    # A SQLAlchemy Result is SYNC: an AsyncMock result makes an unconfigured
+    # reader return a never-awaited coroutine (PytestUnraisableExceptionWarning).
+    junction_result = MagicMock()
     junction_result.scalar_one_or_none = MagicMock(return_value=stage_mock)
     mock_session.execute.return_value = junction_result
 

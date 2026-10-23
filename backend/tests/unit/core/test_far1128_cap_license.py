@@ -19,6 +19,7 @@ import pytest
 from modulo.core.feature_flags import LicenseKeyTier
 from modulo.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
+    LICENCE_GRACE_DAYS,
     LicenseData,
     clear_license,
     get_license,
@@ -74,7 +75,7 @@ class TestCapLicenseArtefacts:
         set_public_key(keypair["public_key"])
 
         payload = build_team_payload("Expired Marina")
-        payload["expires_at"] = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+        payload["expires_at"] = (datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 1)).isoformat()
         artefact = _sign(payload, keypair)
 
         validation = parse_and_verify(artefact)
@@ -146,7 +147,7 @@ class TestCapLicenseArtefacts:
         keypair = generate_keypair()
         set_public_key(keypair["public_key"])
 
-        expired = (datetime.now(UTC) - timedelta(days=2)).isoformat()
+        expired = (datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 2)).isoformat()
         data = LicenseData(
             tier="team",
             features=list(TEAM_FEATURES),

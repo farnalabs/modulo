@@ -45,6 +45,7 @@ from modulo.api.mcp_server import (
 from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
 from modulo.core.registry.crypto import generate_keypair, sign_primitive
 from modulo.db.crud.base import PageResult
+from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import ORG_ID, USER_ID, AuthContext, make_session_context
 
 NOW = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
@@ -172,7 +173,7 @@ class TestListTeams(AuthContext):
         team.account_id = USER_ID
         team.created_at = NOW
         mock_list.return_value = _page([team])
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with org_patch, plan_patch, settings_patch:
@@ -191,7 +192,7 @@ class TestListTeams(AuthContext):
         # team.list resolves to viewer — the real chokepoint must allow it.
         from modulo.core.mcp.scope_validator import check_tool_scope
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with (
             org_patch,
@@ -208,7 +209,7 @@ class TestListTeams(AuthContext):
     async def test_insufficient_scope(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -246,7 +247,7 @@ class TestListTeams(AuthContext):
         mock_session: AsyncMock,
         mock_validate: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=False)
         with org_patch, plan_patch, settings_patch:
@@ -292,7 +293,7 @@ class TestListUsers(AuthContext):
         membership.role = "operator"
         membership.deactivated_at = None
         mock_accounts.return_value = ([(account, membership)], 1)
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await list_users(page=1, page_size=20, search="alice", role="operator")
 
@@ -307,7 +308,7 @@ class TestListUsers(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_role_filter_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_users(role="superuser")
         assert result["error"] == "validation_failed"
 
@@ -320,7 +321,7 @@ class TestListUsers(AuthContext):
     ) -> None:
         from modulo.api.mcp_server import _ctx_role
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         _ctx_role.set("viewer")
         result = await list_users()
         assert result["error"] == "insufficient_scope"
@@ -341,7 +342,7 @@ class TestListFeatureFlags(AuthContext):
     ) -> None:
         from modulo.api.mcp_server import _ctx_role
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         _ctx_role.set("admin")  # org admin — but NOT system admin
         result = await list_feature_flags()
         assert result["error"] == "insufficient_scope"
@@ -384,7 +385,7 @@ class TestListFeatureFlags(AuthContext):
         registry.tier_gap_flags.return_value = []
         mock_from_db.return_value = registry
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
         try:
@@ -431,7 +432,7 @@ class TestGetAuditLog(AuthContext):
             "next_cursor": None,
             "limit": 50,
         }
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         actor = str(uuid.uuid4())
         result = await get_audit_log(
@@ -450,7 +451,7 @@ class TestGetAuditLog(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_actor_uuid_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_audit_log(actor_user_id="not-a-uuid")
         assert result["error"] == "invalid_id"
         assert result["field"] == "actor_user_id"
@@ -458,7 +459,7 @@ class TestGetAuditLog(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_from_date_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_audit_log(from_date="yesterday")
         assert result["error"] == "validation_failed"
         assert result["field"] == "from_date"
@@ -515,7 +516,7 @@ class TestListNotificationDeliveries(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_cursor_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_notification_deliveries(cursor="not-a-date")
         assert result["error"] == "validation_failed"
         assert result["field"] == "cursor"
@@ -523,7 +524,7 @@ class TestListNotificationDeliveries(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_endpoint_id_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_notification_deliveries(endpoint_id="nope")
         assert result["error"] == "invalid_id"
         assert result["field"] == "endpoint_id"
@@ -556,7 +557,7 @@ class TestLifecycleMaps(AuthContext):
         lm.created_at = NOW
         lm.updated_at = NOW
         mock_list.return_value = _page([lm])
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await list_lifecycle_maps(page=1, page_size=20)
 
@@ -587,7 +588,7 @@ class TestLifecycleMaps(AuthContext):
         lm.created_at = NOW
         lm.updated_at = NOW
         mock_get.return_value = lm
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_lifecycle_map(str(lm.id))
 
@@ -604,7 +605,7 @@ class TestLifecycleMaps(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_get.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_lifecycle_map(str(uuid.uuid4()))
         assert result["error"] == "not_found"
 
@@ -626,7 +627,7 @@ class TestLifecycleMaps(AuthContext):
         lm.organisation_id = ORG_ID
         lm.owner_team_id = team_a
         mock_get.return_value = lm
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         _ctx_team_id.set(team_b)
         try:
             result = await get_lifecycle_map(str(lm.id))
@@ -709,7 +710,7 @@ class TestListSsoProviders(AuthContext):
         provider.created_at = NOW
         provider.updated_at = NOW
         mock_list.return_value = [provider]
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await list_sso_providers()
 
@@ -816,7 +817,7 @@ class TestEvalSuites(AuthContext):
         mock_session: AsyncMock,
         mock_validate: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_eval_suite("nope")
         assert result["error"] == "invalid_id"
         assert result["field"] == "suite_id"
@@ -856,7 +857,7 @@ class TestGetSchemaVersions(AuthContext):
         sv.updated_at = NOW
         mock_list_versions.return_value = _page([sv])
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_schema_versions(str(schema.id), page=1, page_size=20)
 
@@ -879,7 +880,7 @@ class TestGetSchemaVersions(AuthContext):
         schema.id = uuid.uuid4()
         schema.organisation_id = uuid.uuid4()  # a DIFFERENT org
         mock_get_schema.return_value = schema
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_schema_versions(str(schema.id))
         assert result["error"] == "not_found"
@@ -914,7 +915,7 @@ class TestGetPipelineDiff(AuthContext):
             "nodes_added": [],
             "nodes_removed": [dict(raw_node)],
         }
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         pid = str(uuid.uuid4())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
@@ -943,7 +944,7 @@ class TestGetPipelineDiff(AuthContext):
     ) -> None:
         mock_owner.return_value = None
         mock_diff.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with org_patch, plan_patch, settings_patch:
@@ -966,7 +967,7 @@ class TestGetPipelineDiff(AuthContext):
         team_a = uuid.uuid4()
         team_b = uuid.uuid4()
         mock_owner.return_value = team_a
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         _ctx_team_id.set(team_b)
         try:
             org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
@@ -984,7 +985,7 @@ class TestGetPipelineDiff(AuthContext):
         mock_session: AsyncMock,
         mock_validate: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with org_patch, plan_patch, settings_patch:
             result = await get_pipeline_diff(str(uuid.uuid4()), "not-a-uuid", str(uuid.uuid4()))
@@ -1007,7 +1008,7 @@ class TestGetPipelineDiff(AuthContext):
         ``feature_required``; the tool proceeds to read snapshot data."""
         mock_owner.return_value = None
         mock_diff.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=False)
         with org_patch, plan_patch, settings_patch:
@@ -1062,7 +1063,7 @@ class TestListTeamsErrorArms(AuthContext):
     async def test_generic_exception_maps_to_server_error(
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with (
             org_patch,
@@ -1084,7 +1085,7 @@ class TestListUsersEdgeCases(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_whitespace_search_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_users(search="   ")
         assert result["error"] == "validation_failed"
 
@@ -1099,7 +1100,7 @@ class TestListUsersEdgeCases(AuthContext):
     ) -> None:
         # search=None / role=None exercise the False arms of both validators.
         mock_accounts.return_value = ([], 0)
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_users()
         assert result["total"] == 0
         assert not result["data"]
@@ -1109,7 +1110,7 @@ class TestListUsersEdgeCases(AuthContext):
     async def test_programming_error_maps_to_migration_required(
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch("modulo.api.routes.admin._list_org_accounts", new=_boom(_programming_error())):
             result = await list_users()
         assert result["error"] == "migration_required"
@@ -1119,7 +1120,7 @@ class TestListUsersEdgeCases(AuthContext):
     async def test_generic_exception_maps_to_server_error(
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch("modulo.api.routes.admin._list_org_accounts", new=_boom(RuntimeError("boom"))):
             result = await list_users()
         assert result["error"] == "server_error"
@@ -1133,7 +1134,7 @@ class TestListFeatureFlagsErrorArms(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -1163,7 +1164,7 @@ class TestListFeatureFlagsErrorArms(AuthContext):
         plan_ctx.tier.return_value = "community"
         mock_plan.return_value = plan_ctx
         mock_from_db.side_effect = _programming_error()
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
         try:
@@ -1198,7 +1199,7 @@ class TestListFeatureFlagsErrorArms(AuthContext):
         plan_ctx.tier.return_value = "community"
         mock_plan.return_value = plan_ctx
         mock_from_db.side_effect = RuntimeError("boom")
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
         try:
@@ -1242,7 +1243,7 @@ class TestListFeatureFlagsErrorArms(AuthContext):
         registry.list_flags.return_value = []
         registry.tier_gap_flags.return_value = []
         mock_from_db.return_value = registry
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
         try:
@@ -1291,7 +1292,7 @@ class TestListFeatureFlagsErrorArms(AuthContext):
         registry.list_flags.return_value = []
         registry.tier_gap_flags.return_value = []
         mock_from_db.return_value = registry
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
         try:
@@ -1337,7 +1338,7 @@ class TestListFeatureFlagsErrorArms(AuthContext):
         registry.list_flags.return_value = []
         registry.tier_gap_flags.return_value = []
         mock_from_db.return_value = registry
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
         try:
@@ -1382,7 +1383,7 @@ class TestListFeatureFlagsErrorArms(AuthContext):
         registry.list_flags.return_value = []
         registry.tier_gap_flags.return_value = []
         mock_from_db.return_value = registry
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
         try:
@@ -1442,7 +1443,7 @@ class TestListFeatureFlagsErrorArms(AuthContext):
         registry.list_flags.return_value = []
         registry.tier_gap_flags.return_value = []
         mock_from_db.return_value = registry
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
         try:
@@ -1472,7 +1473,7 @@ class TestGetAuditLogErrorArms(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_to_date_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_audit_log(to_date="nope")
         assert result["error"] == "validation_failed"
         assert result["field"] == "to_date"
@@ -1488,7 +1489,7 @@ class TestGetAuditLogErrorArms(AuthContext):
     ) -> None:
         # from_date=None / to_date=None exercise the False arms of both date guards.
         mock_events.return_value = {"items": [], "total": 0, "next_cursor": None, "limit": 50}
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_audit_log()
         assert result["total"] == 0
         assert mock_events.await_args.kwargs["from_date"] is None
@@ -1501,7 +1502,7 @@ class TestGetAuditLogErrorArms(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -1514,7 +1515,7 @@ class TestGetAuditLogErrorArms(AuthContext):
     async def test_programming_error_maps_to_migration_required(
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch("modulo.core.audit_logger.list_audit_events", new=_boom(_programming_error())):
             result = await get_audit_log()
         assert result["error"] == "migration_required"
@@ -1524,7 +1525,7 @@ class TestGetAuditLogErrorArms(AuthContext):
     async def test_generic_exception_maps_to_server_error(
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch("modulo.core.audit_logger.list_audit_events", new=_boom(RuntimeError("boom"))):
             result = await get_audit_log()
         assert result["error"] == "server_error"
@@ -1554,7 +1555,7 @@ class TestListNotificationDeliveriesEdgeCases(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_date_from_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_notification_deliveries(date_from="nope")
         assert result["error"] == "validation_failed"
         assert result["field"] == "date_from"
@@ -1562,7 +1563,7 @@ class TestListNotificationDeliveriesEdgeCases(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_date_to_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_notification_deliveries(date_from="2026-01-01T00:00:00+00:00", date_to="nope")
         assert result["error"] == "validation_failed"
         assert result["field"] == "date_to"
@@ -1616,7 +1617,7 @@ class TestListNotificationDeliveriesEdgeCases(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -1651,7 +1652,7 @@ class TestListLifecycleMapsEdgeCases(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_owner_team_id_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_lifecycle_maps(owner_team_id="nope")
         assert result["error"] == "invalid_id"
         assert result["field"] == "owner_team_id"
@@ -1666,7 +1667,7 @@ class TestListLifecycleMapsEdgeCases(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_list.return_value = _page([])
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         owner_team_id = str(uuid.uuid4())
         result = await list_lifecycle_maps(owner_team_id=owner_team_id)
         assert result["total"] == 0
@@ -1679,7 +1680,7 @@ class TestListLifecycleMapsEdgeCases(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -1692,7 +1693,7 @@ class TestListLifecycleMapsEdgeCases(AuthContext):
     async def test_programming_error_maps_to_migration_required(
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch("modulo.core.lifecycle_map.service.list_lifecycle_maps", new=_boom(_programming_error())):
             result = await list_lifecycle_maps()
         assert result["error"] == "migration_required"
@@ -1702,7 +1703,7 @@ class TestListLifecycleMapsEdgeCases(AuthContext):
     async def test_generic_exception_maps_to_server_error(
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch("modulo.core.lifecycle_map.service.list_lifecycle_maps", new=_boom(RuntimeError("boom"))):
             result = await list_lifecycle_maps()
         assert result["error"] == "server_error"
@@ -1717,7 +1718,7 @@ class TestGetLifecycleMapErrorArms(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_id_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_lifecycle_map("nope")
         assert result["error"] == "invalid_id"
         assert result["field"] == "lifecycle_map_id"
@@ -1725,7 +1726,7 @@ class TestGetLifecycleMapErrorArms(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_none_parse_returns_invalid_id(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch("modulo.api.mcp_server._parse_uuid_param", new=_none_uuid_for("lifecycle_map_id")):
             result = await get_lifecycle_map(str(uuid.uuid4()))
         assert result["error"] == "invalid_id"
@@ -1738,7 +1739,7 @@ class TestGetLifecycleMapErrorArms(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -1751,7 +1752,7 @@ class TestGetLifecycleMapErrorArms(AuthContext):
     async def test_programming_error_maps_to_migration_required(
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch("modulo.core.lifecycle_map.service.get_lifecycle_map", new=_boom(_programming_error())):
             result = await get_lifecycle_map(str(uuid.uuid4()))
         assert result["error"] == "migration_required"
@@ -1761,7 +1762,7 @@ class TestGetLifecycleMapErrorArms(AuthContext):
     async def test_generic_exception_maps_to_server_error(
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch("modulo.core.lifecycle_map.service.get_lifecycle_map", new=_boom(RuntimeError("boom"))):
             result = await get_lifecycle_map(str(uuid.uuid4()))
         assert result["error"] == "server_error"
@@ -1805,7 +1806,7 @@ class TestListSsoProvidersErrorArms(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -1818,7 +1819,7 @@ class TestListSsoProvidersErrorArms(AuthContext):
     async def test_programming_error_maps_to_migration_required(
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch("modulo.db.crud.sso_provider.list_providers", new=_boom(_programming_error())):
             result = await list_sso_providers()
         assert result["error"] == "migration_required"
@@ -1828,7 +1829,7 @@ class TestListSsoProvidersErrorArms(AuthContext):
     async def test_generic_exception_maps_to_server_error(
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch("modulo.db.crud.sso_provider.list_providers", new=_boom(RuntimeError("boom"))):
             result = await list_sso_providers()
         assert result["error"] == "server_error"
@@ -1842,7 +1843,7 @@ class TestListEvalSuitesErrorArms(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -1882,7 +1883,7 @@ class TestGetEvalSuiteErrorArms(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_id_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_eval_suite("nope")
         assert result["error"] == "invalid_id"
         assert result["field"] == "suite_id"
@@ -1890,7 +1891,7 @@ class TestGetEvalSuiteErrorArms(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_none_parse_returns_invalid_id(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch("modulo.api.mcp_server._parse_uuid_param", new=_none_uuid_for("suite_id")):
             result = await get_eval_suite(str(uuid.uuid4()))
         assert result["error"] == "invalid_id"
@@ -1924,7 +1925,7 @@ class TestGetEvalSuiteErrorArms(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -1959,7 +1960,7 @@ class TestGetSchemaVersionsErrorArms(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_schema_id_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_schema_versions("nope")
         assert result["error"] == "invalid_id"
         assert result["field"] == "schema_id"
@@ -1967,7 +1968,7 @@ class TestGetSchemaVersionsErrorArms(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_none_parse_returns_invalid_id(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch("modulo.api.mcp_server._parse_uuid_param", new=_none_uuid_for("schema_id")):
             result = await get_schema_versions(str(uuid.uuid4()))
         assert result["error"] == "invalid_id"
@@ -1980,7 +1981,7 @@ class TestGetSchemaVersionsErrorArms(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -1993,7 +1994,7 @@ class TestGetSchemaVersionsErrorArms(AuthContext):
     async def test_programming_error_maps_to_migration_required(
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch("modulo.db.crud.schema.get_schema", new=_boom(_programming_error())):
             result = await get_schema_versions(str(uuid.uuid4()))
         assert result["error"] == "migration_required"
@@ -2003,7 +2004,7 @@ class TestGetSchemaVersionsErrorArms(AuthContext):
     async def test_generic_exception_maps_to_server_error(
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch("modulo.db.crud.schema.get_schema", new=_boom(RuntimeError("boom"))):
             result = await get_schema_versions(str(uuid.uuid4()))
         assert result["error"] == "server_error"
@@ -2013,7 +2014,7 @@ class TestGetPipelineDiffErrorArms(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_pipeline_id_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with org_patch, plan_patch, settings_patch:
             result = await get_pipeline_diff("nope", str(uuid.uuid4()), str(uuid.uuid4()))
@@ -2023,7 +2024,7 @@ class TestGetPipelineDiffErrorArms(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_none_parse_pipeline_id_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with (
             org_patch,
@@ -2038,7 +2039,7 @@ class TestGetPipelineDiffErrorArms(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_none_parse_snapshot_a_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with (
             org_patch,
@@ -2053,7 +2054,7 @@ class TestGetPipelineDiffErrorArms(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_snapshot_b_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with org_patch, plan_patch, settings_patch:
             result = await get_pipeline_diff(str(uuid.uuid4()), str(uuid.uuid4()), "not-a-uuid")
@@ -2063,7 +2064,7 @@ class TestGetPipelineDiffErrorArms(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_none_parse_snapshot_b_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with (
             org_patch,
@@ -2095,7 +2096,7 @@ class TestGetPipelineDiffErrorArms(AuthContext):
             "nodes_added": "not-a-list",
             "nodes_removed": "not-a-list",
         }
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with org_patch, plan_patch, settings_patch:
             result = await get_pipeline_diff(str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()))
@@ -2121,7 +2122,7 @@ class TestGetPipelineDiffErrorArms(AuthContext):
             "nodes_added": [],
             "nodes_removed": [],
         }
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with org_patch, plan_patch, settings_patch:
             result = await get_pipeline_diff(str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()))
@@ -2135,7 +2136,7 @@ class TestGetPipelineDiffErrorArms(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -2153,7 +2154,7 @@ class TestGetPipelineDiffErrorArms(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_owner.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with (
             org_patch,
@@ -2177,7 +2178,7 @@ class TestGetPipelineDiffErrorArms(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_owner.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with (
             org_patch,

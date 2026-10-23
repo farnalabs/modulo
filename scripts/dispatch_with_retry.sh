@@ -31,10 +31,29 @@
 # indefinitely and can outlive the PR's head SHA, so its eventual delivery
 # would already be stale.
 #
-# Retry-After (RFC 9110 delta-seconds or HTTP-date) is honoured verbatim when
-# the server sends one, with no jitter. Without it the delay is exponential
-# backoff (base 10s, per-attempt cap 60s) plus bounded jitter (<= 5s) so
-# many failing jobs do not retry in lockstep and re-saturate the same slots.
+# The numbers are chosen so the WALL-CLOCK BUDGET is the binding constraint and
+# the attempt cap is only a backstop. Scheduled waits are 10s, 20s, 40s then
+# 60s for every later attempt (plus <= 5s jitter): six sleeps put ~250-280s of
+# wall clock on the job, and the wait after the seventh attempt no longer fits
+# the 300s budget, so a saturated trigger gets ~7 attempts spread over ~4 minutes
+# instead of a burst. The cost is bounded by the same budget: a dispatch job
+# can hold a runner for at most 300s of waiting plus the per-attempt curl time
+# (10s connect / 30s total each). The attempt cap of 8 stays above the number
+# the budget permits, so it can never truncate a budget-bound run early — it
+# only guards callers that override DISPATCH_BUDGET_SECONDS upward.
+#
+# Retry-After (RFC 9110 delta-seconds or HTTP-date) is a FLOOR on when the
+# server may next accept, never the retry schedule: the delay is the LARGER of
+# the server's value and this attempt's exponential backoff (base 10s,
+# per-attempt cap 60s) plus bounded jitter (<= 5s) so many failing jobs do not
+# retry in lockstep and re-saturate the same slots. Honouring a SHORT
+# Retry-After verbatim defeats the budget: the Branch Fixer's 429 answers
+# `Retry-After: 5`, so every attempt would wait 5s, the attempt cap would be
+# spent in ~35s of sleep, and DISPATCH_BUDGET_SECONDS would never bind
+# (observed on PR #2165: 8 attempts in 38s, all HTTP 429, CI failure never
+# handed to the fix loop). A Retry-After LONGER than the remaining budget is
+# still honoured as an instruction not to retry early: the loop abandons with
+# the budget warning rather than retrying inside a window the server closed.
 #
 # Failures are NEVER silent: on a failed dispatch the script emits a class-
 # named ::error:: annotation, writes a durable GITHUB_STEP_SUMMARY block, and
@@ -103,21 +122,30 @@ parse_retry_after() {
   esac
   RETRY_EPOCH=$(date -u -d "$1" +%s 2>/dev/null) || return 0
   RETRY_NOW=$(date +%s)
-  if [ "$RETRY_EPOCH" -gt "$RETRY_NOW" ]; then
+  if [[ "$RETRY_EPOCH" -gt "$RETRY_NOW" ]]; then
     printf '%s\n' "$((RETRY_EPOCH - RETRY_NOW))"
   fi
 }
 
 retry_delay() {
   # $1 = attempt number (1-based), $2 = Retry-After seconds or empty.
-  if [ -n "$2" ]; then
+  #
+  # Retry-After is a FLOOR, not the schedule: the delay is the larger of the
+  # server's value and this attempt's exponential backoff (clamped to
+  # DISPATCH_MAX_DELAY, jitter added on top). A short Retry-After therefore
+  # cannot collapse the backoff into a tight loop that exhausts the attempt cap
+  # before the wall-clock budget can bind (see the header).
+  BACKOFF=$(( DISPATCH_BASE_DELAY * (1 << ($1 - 1)) ))
+  if [[ "$BACKOFF" -gt "$DISPATCH_MAX_DELAY" ]]; then BACKOFF="$DISPATCH_MAX_DELAY"; fi
+  BACKOFF=$(( BACKOFF + RANDOM % (DISPATCH_JITTER_MAX + 1) ))
+  # Annotated assignment keeps `set -e` from treating an empty/non-numeric
+  # value as a failed arithmetic expansion; parse_retry_after only ever emits
+  # a non-negative whole number, so `10#` is safe.
+  if [[ -n "$2" ]] && [[ "$((10#$2))" -gt "$BACKOFF" ]]; then
     printf '%s\n' "$2"
     return 0
   fi
-  DELAY=$(( DISPATCH_BASE_DELAY * (1 << ($1 - 1)) ))
-  if [ "$DELAY" -gt "$DISPATCH_MAX_DELAY" ]; then DELAY="$DISPATCH_MAX_DELAY"; fi
-  JITTER=$(( RANDOM % (DISPATCH_JITTER_MAX + 1) ))
-  printf '%s\n' "$((DELAY + JITTER))"
+  printf '%s\n' "$BACKOFF"
 }
 
 HEADER_FILE=$(mktemp)
@@ -131,7 +159,7 @@ LAST_HTTP=""
 LAST_CLASS=""
 LAST_DETAIL="unknown"
 
-while [ "$ATTEMPTS" -lt "$DISPATCH_MAX_ATTEMPTS" ]; do
+while [[ "$ATTEMPTS" -lt "$DISPATCH_MAX_ATTEMPTS" ]]; do
   ATTEMPTS=$((ATTEMPTS + 1))
   # TIMESTAMP and HMAC are recomputed on every attempt: the server enforces a
   # +/-300s replay window on X-Modulo-Timestamp, so a signature computed once
@@ -150,15 +178,15 @@ while [ "$ATTEMPTS" -lt "$DISPATCH_MAX_ATTEMPTS" ]; do
     -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
     -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
     -d "${DISPATCH_BODY}") || HTTP_CODE="000"
-  [ -n "$HTTP_CODE" ] || HTTP_CODE="000"
+  [[ -n "$HTTP_CODE" ]] || HTTP_CODE="000"
   BODY_RESP=$(cat "${BODY_FILE}" 2>/dev/null || true)
   LAST_HTTP="$HTTP_CODE"
 
   # ---- acceptance ----
-  if [ "${HTTP_CODE:0:1}" = "2" ]; then
-    if [ "$HTTP_CODE" = "202" ] || [ "$DISPATCH_ACCEPT_ANY_2XX" = "1" ]; then
+  if [[ "${HTTP_CODE:0:1}" == "2" ]]; then
+    if [[ "$HTTP_CODE" == "202" ]] || [[ "$DISPATCH_ACCEPT_ANY_2XX" == "1" ]]; then
       RESP_STATUS=$(printf '%s' "$BODY_RESP" | jq -r '.status // "accepted"' 2>/dev/null || printf 'accepted')
-      if [ "$RESP_STATUS" = "coalesced" ]; then
+      if [[ "$RESP_STATUS" == "coalesced" ]]; then
         # FAR-1034 handled no-op: duplicate delivery for the same key
         # within the coalesce window — intentionally no new run. Not an
         # error, not retried.
@@ -170,7 +198,7 @@ while [ "$ATTEMPTS" -lt "$DISPATCH_MAX_ATTEMPTS" ]; do
       break
     fi
   fi
-  if [ "$HTTP_CODE" = "400" ] && [ "$DISPATCH_DUP_400_IS_OK" = "1" ] && printf '%s' "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
+  if [[ "$HTTP_CODE" == "400" ]] && [[ "$DISPATCH_DUP_400_IS_OK" == "1" ]] && printf '%s' "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
     # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
     # engine's byte-level idempotency guard (DuplicateWebhookError) — the
     # identical payload was already ACCEPTED within the ~5-min dedup window
@@ -184,26 +212,26 @@ while [ "$ATTEMPTS" -lt "$DISPATCH_MAX_ATTEMPTS" ]; do
   # ---- classification for the retry decision ----
   LAST_CLASS=$(classify_http "$HTTP_CODE")
   LAST_DETAIL=$(printf '%s' "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || printf 'unknown')
-  [ -n "$LAST_DETAIL" ] || LAST_DETAIL="unknown"
+  [[ -n "$LAST_DETAIL" ]] || LAST_DETAIL="unknown"
 
-  if [ "$LAST_CLASS" = "terminal" ]; then
+  if [[ "$LAST_CLASS" == "terminal" ]]; then
     echo "::warning::${DISPATCH_LABEL} returned HTTP ${HTTP_CODE} (non-retryable): ${LAST_DETAIL}"
     break
   fi
 
   DISPATCH_ELAPSED=$(( $(date +%s) - DISPATCH_STARTED ))
   DISPATCH_REMAINING=$(( DISPATCH_BUDGET_SECONDS - DISPATCH_ELAPSED ))
-  if [ "$ATTEMPTS" -ge "$DISPATCH_MAX_ATTEMPTS" ]; then
+  if [[ "$ATTEMPTS" -ge "$DISPATCH_MAX_ATTEMPTS" ]]; then
     echo "::warning::${DISPATCH_LABEL} returned HTTP ${HTTP_CODE} (${LAST_CLASS}) on attempt ${ATTEMPTS}/${DISPATCH_MAX_ATTEMPTS} — attempt cap reached"
     break
   fi
-  if [ "$DISPATCH_REMAINING" -le 0 ]; then
+  if [[ "$DISPATCH_REMAINING" -le 0 ]]; then
     echo "::warning::${DISPATCH_LABEL} returned HTTP ${HTTP_CODE} (${LAST_CLASS}) — ${DISPATCH_BUDGET_SECONDS}s dispatch budget exhausted after ${DISPATCH_ELAPSED}s"
     break
   fi
   RETRY_AFTER=$(grep -i '^retry-after:' "${HEADER_FILE}" 2>/dev/null | tail -1 | cut -d: -f2- | tr -d '\r' | sed 's/^[[:space:]]*//' || true)
   DISPATCH_DELAY=$(retry_delay "$ATTEMPTS" "$(parse_retry_after "${RETRY_AFTER}")")
-  if [ "$DISPATCH_DELAY" -gt "$DISPATCH_REMAINING" ]; then
+  if [[ "$DISPATCH_DELAY" -gt "$DISPATCH_REMAINING" ]]; then
     echo "::warning::${DISPATCH_LABEL} returned HTTP ${HTTP_CODE} (${LAST_CLASS}); the next attempt needs ${DISPATCH_DELAY}s but only ${DISPATCH_REMAINING}s of the ${DISPATCH_BUDGET_SECONDS}s budget remain — not waiting"
     break
   fi
@@ -214,7 +242,7 @@ done
 # Invoked indirectly via `trap ... EXIT` — shellcheck cannot see that call.
 # shellcheck disable=SC2317
 write_result_file() {
-  if [ -n "$DISPATCH_RESULT_FILE" ]; then
+  if [[ -n "$DISPATCH_RESULT_FILE" ]]; then
     {
       printf 'DISPATCH_LAST_HTTP=%q\n' "$LAST_HTTP"
       printf 'DISPATCH_LAST_CLASS=%q\n' "$LAST_CLASS"
@@ -227,7 +255,7 @@ write_result_file() {
 }
 trap 'write_result_file; rm -f "${HEADER_FILE}" "${BODY_FILE}"' EXIT
 
-if [ "$DISPATCHED" != "true" ]; then
+if [[ "$DISPATCHED" != "true" ]]; then
   DISPATCH_ELAPSED=$(( $(date +%s) - DISPATCH_STARTED ))
   # Name the CLASS of failure, not just its HTTP code: capacity saturation
   # is an operational backlog an operator drains, while a terminal error is
@@ -255,7 +283,7 @@ if [ "$DISPATCHED" != "true" ]; then
   # A durable trace that survives the log window: the summary is attached to
   # the failed job itself, so "the fixer/reviewer was never dispatched" is
   # readable without grepping a log that may be gone.
-  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     {
       echo "### ${DISPATCH_LABEL} dispatch failed: ${DISPATCH_FAILURE}"
       echo ""

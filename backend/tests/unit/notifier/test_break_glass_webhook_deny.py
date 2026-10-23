@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy.exc import SQLAlchemyError
+from tests.unit.api.mock_session import configure_mock_session
 from tests.unit.notifier.conftest import make_scalar_result, session_factory_for
 
 from modulo.core.notifier import DispatchResult, Notifier
@@ -53,7 +54,7 @@ def _endpoint(account_id: uuid.UUID | None = None) -> NotificationEndpoint:
 
 def _session_factory(owners: list[Account], *, raise_on_execute: bool = False) -> MagicMock:
     """Session factory returning one session shared by owner-load + in-app blocks."""
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     if raise_on_execute:
         session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))
     else:
@@ -136,7 +137,7 @@ async def test_reject_keeps_non_uuid_reference_alongside_uuid_owners(notifier: N
 async def test_reject_re_raises_cancelled_error(notifier: Notifier) -> None:
     """A cancelled owner read must propagate as CancelledError, not be swallowed."""
     ep = _endpoint(account_id=uuid.uuid4())
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(side_effect=asyncio.CancelledError)
     factory = session_factory_for(session)
 

@@ -19,6 +19,7 @@ from modulo.db.crud.pipeline import (
     create_pipeline,
     update_pipeline,
 )
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ACTOR_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -29,7 +30,7 @@ _TEAM_ID = uuid.UUID("00000000-0000-0000-0000-0000000000ab")
 
 
 def _mock_session() -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     return session
 

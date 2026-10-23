@@ -1,5 +1,6 @@
 """BDD step definitions: Organisation scoping & RLS isolation."""
 
+import asyncio
 import contextlib
 import uuid
 from datetime import UTC, datetime
@@ -147,8 +148,12 @@ def trigger_cross_org_run(pipeline_name: str, client, request):
 def raw_query_with_set(org: str, mock_session, request):
     from modulo.db.rls import set_rls_org
 
+    # ``set_rls_org`` is an ASYNC function; calling it without awaiting both
+    # skips its body and leaks the coroutine object as an
+    # PytestUnraisableExceptionWarning at GC. Drive it to completion on a
+    # private loop so the step asserts the real contract.
     try:
-        set_rls_org(mock_session, uuid.UUID("00000000-0000-0000-0000-000000000001"))
+        asyncio.run(set_rls_org(mock_session, uuid.UUID("00000000-0000-0000-0000-000000000001")))
         request.node._rls_ok = True
     except Exception as e:
         request.node._rls_error = str(e)
@@ -160,7 +165,7 @@ def raw_query_without_set(request):
 
     mock_session = MagicMock()
     try:
-        set_rls_org(mock_session, None)
+        asyncio.run(set_rls_org(mock_session, None))
         request.node._rls_ok = False
     except Exception as e:
         request.node._rls_ok = False

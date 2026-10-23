@@ -351,7 +351,14 @@ async def _do_get_workspace_inputs(
 # raw_output is capped at the node's retention cap (up to 512 KB) and the
 # log tail at 6 KB — a run-detail response must carry a bounded display
 # slice, never the full retained blob.
+#
+# The head slice exists because a node-deadline kill's most useful evidence
+# is printed in the FIRST seconds (the agent command's own budget
+# breadcrumb, e.g. "timeout 2880s, 2400s of budget left"), while the tail
+# only shows how it died. Both slices are bounded display data — the
+# retained marker stays authoritative in the store.
 _TRIAGE_RAW_OUTPUT_TAIL_CHARS = 4000
+_TRIAGE_RAW_OUTPUT_HEAD_CHARS = 4000
 _TRIAGE_LOG_TAIL_CHARS = 6000
 
 
@@ -365,8 +372,15 @@ def _deadline_triage_from_markers(
     Only markers carrying the ``deadline_triage is True`` signature are
     surfaced; every other raw-output marker (delivery-done, no-parseable
     output, stall) is ignored here. String fields are truncated to bounded
-    display tails (the retained marker stays authoritative in the store).
+    display slices (the retained marker stays authoritative in the store).
     Sorted by attempt_key for a deterministic response order.
+
+    ``raw_output`` is projected as BOTH a bounded head and a bounded tail:
+    the tail is how the attempt died, the head is the agent command's
+    opening lines (its own budget breadcrumb) — the only evidence of how
+    much of the node budget the sandbox consumed before the command even
+    started. A stdout shorter than the bound yields identical head and
+    tail; an absent/empty one yields ``""`` for both.
 
     FAR-1886 B1: every entry also carries ``run_attempt_count`` — the RUN's
     ``runs.node_attempt_count`` (how many node executions had been recorded
@@ -397,6 +411,7 @@ def _deadline_triage_from_markers(
                 "attempt_key": attempt_key,
                 "no_output_reason": marker.get("no_output_reason"),
                 "sandbox_log_tail": log_tail[-_TRIAGE_LOG_TAIL_CHARS:] if log_tail else "",
+                "raw_output_head": raw_output[:_TRIAGE_RAW_OUTPUT_HEAD_CHARS] if raw_output else "",
                 "raw_output_tail": raw_output[-_TRIAGE_RAW_OUTPUT_TAIL_CHARS:] if raw_output else "",
                 "stdout_length": marker.get("stdout_length"),
                 "stderr_length": marker.get("stderr_length"),

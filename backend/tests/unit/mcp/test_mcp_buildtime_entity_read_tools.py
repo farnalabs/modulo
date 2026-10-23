@@ -34,6 +34,7 @@ from modulo.api.mcp_server import (
     validate_parameter_schema,
 )
 from modulo.db.crud.base import PageResult
+from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import ORG_ID, AuthContext, make_session_context
 
 NOW = datetime(2026, 9, 8, 12, 0, 0, tzinfo=UTC)
@@ -79,7 +80,7 @@ class TestListAgents(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -107,7 +108,7 @@ class TestListAgents(AuthContext):
         agent.created_at = NOW
         agent.prompt_template = "secret prompt body"
         mock_list.return_value = _page([agent])
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await list_agents(cursor="aGVsbG86MDAwMDAwMDA=", limit=5)
 
@@ -133,7 +134,7 @@ class TestListAgents(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_list.side_effect = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_agents()
         assert result["error"] == "migration_required"
 
@@ -147,7 +148,7 @@ class TestListAgents(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_list.side_effect = RuntimeError("boom")
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_agents()
         assert result["error"] == "server_error"
 
@@ -168,7 +169,7 @@ class TestGetAgent(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_get.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_agent(agent_id=str(uuid.uuid4()))
         assert result["error"] == "not_found"
 
@@ -189,7 +190,7 @@ class TestGetAgent(AuthContext):
         agent.organisation_id = other_org
         agent.account_id = USER_ID
         mock_get.return_value = agent
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_agent(agent_id=str(agent.id))
 
@@ -228,7 +229,7 @@ class TestGetAgent(AuthContext):
         agent.created_at = NOW
         agent.updated_at = NOW
         mock_get.return_value = agent
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_agent(agent_id=str(agent.id))
 
@@ -248,7 +249,7 @@ class TestGetAgent(AuthContext):
     ) -> None:
         """FAR-1502: the generic arm classifies — reserved code, never internal_error."""
         mock_get.side_effect = RuntimeError("boom")
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_agent(agent_id=str(uuid.uuid4()))
         assert result["error"] == "server_error"
 
@@ -273,7 +274,7 @@ class TestListConnectors(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -304,7 +305,7 @@ class TestListConnectors(AuthContext):
         ci.created_at = NOW
         ci.updated_at = NOW
         mock_list.return_value = _page([ci], next_cursor="next-page-token", total=7)
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await list_connectors(cursor=None, limit=20)
 
@@ -336,7 +337,7 @@ class TestListConnectors(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_list.side_effect = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_connectors()
         assert result["error"] == "migration_required"
 
@@ -351,7 +352,7 @@ class TestListConnectors(AuthContext):
     ) -> None:
         """FAR-1502: the generic arm classifies — reserved code, never internal_error."""
         mock_list.side_effect = RuntimeError("boom")
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_connectors()
         assert result["error"] == "server_error"
 
@@ -372,7 +373,7 @@ class TestGetConnector(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_get.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_connector(connector_id=str(uuid.uuid4()))
         assert result["error"] == "not_found"
 
@@ -389,7 +390,7 @@ class TestGetConnector(AuthContext):
         ci.id = uuid.uuid4()
         ci.organisation_id = uuid.uuid4()  # not ORG_ID
         mock_get.return_value = ci
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_connector(connector_id=str(ci.id))
 
@@ -421,7 +422,7 @@ class TestGetConnector(AuthContext):
         ci.degraded_at = NOW
         ci.last_skip_error = "rate limited"
         mock_get.return_value = ci
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_connector(connector_id=str(ci.id))
 
@@ -443,7 +444,7 @@ class TestGetConnector(AuthContext):
     ) -> None:
         """FAR-1502: the generic arm classifies — reserved code, never internal_error."""
         mock_get.side_effect = RuntimeError("boom")
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_connector(connector_id=str(uuid.uuid4()))
         assert result["error"] == "server_error"
 
@@ -512,7 +513,7 @@ class TestListModelBackends(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -544,7 +545,7 @@ class TestListModelBackends(AuthContext):
         mb.created_at = NOW
         mb.updated_at = NOW
         mock_list.return_value = _page([mb], next_cursor="cursor-2")
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await list_model_backends(cursor="cursor-1", limit=10)
 
@@ -569,7 +570,7 @@ class TestListModelBackends(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_list.side_effect = RuntimeError("boom")
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_model_backends()
         assert result["error"] == "server_error"
 
@@ -590,7 +591,7 @@ class TestGetModelBackend(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_get.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_model_backend(model_backend_id=str(uuid.uuid4()))
         assert result["error"] == "not_found"
 
@@ -607,7 +608,7 @@ class TestGetModelBackend(AuthContext):
         mb.id = uuid.uuid4()
         mb.organisation_id = uuid.uuid4()  # not ORG_ID
         mock_get.return_value = mb
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_model_backend(model_backend_id=str(mb.id))
 
@@ -642,7 +643,7 @@ class TestGetModelBackend(AuthContext):
         mb.cost_tracking = "enabled"
         mb.currency = "USD"
         mock_get.return_value = mb
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await get_model_backend(model_backend_id=str(mb.id))
 
@@ -662,7 +663,7 @@ class TestGetModelBackend(AuthContext):
     ) -> None:
         """FAR-1502: the generic arm classifies — reserved code, never internal_error."""
         mock_get.side_effect = RuntimeError("boom")
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_model_backend(model_backend_id=str(uuid.uuid4()))
         assert result["error"] == "server_error"
 
@@ -687,7 +688,7 @@ class TestListEnvironmentProfiles(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -721,7 +722,7 @@ class TestListEnvironmentProfiles(AuthContext):
         profile.owner_team_id = None
         profile.created_at = NOW
         mock_list.return_value = _page([profile])
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await list_environment_profiles(limit=200)
 
@@ -749,7 +750,7 @@ class TestListEnvironmentProfiles(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_list.side_effect = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_environment_profiles()
         assert result["error"] == "migration_required"
 
@@ -764,7 +765,7 @@ class TestListEnvironmentProfiles(AuthContext):
     ) -> None:
         """FAR-1502: the generic arm classifies — reserved code, never internal_error."""
         mock_list.side_effect = RuntimeError("boom")
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_environment_profiles()
         assert result["error"] == "server_error"
 
@@ -789,7 +790,7 @@ class TestListParameterSchemas(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -814,7 +815,7 @@ class TestListParameterSchemas(AuthContext):
         schema.parameters = [{"name": "region", "type": "string", "required": True}]
         schema.created_at = NOW
         mock_list.return_value = _page([schema], next_cursor="ps-cursor")
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await list_parameter_schemas(cursor="ps-prev", limit=50)
 
@@ -838,7 +839,7 @@ class TestListParameterSchemas(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_list.side_effect = RuntimeError("boom")
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_parameter_schemas()
         assert result["error"] == "server_error"
 
@@ -864,7 +865,7 @@ class TestGetParameterSchema(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_get.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_parameter_schema(schema_id=str(uuid.uuid4()))
         assert result["error"] == "not_found"
 
@@ -881,7 +882,7 @@ class TestGetParameterSchema(AuthContext):
         schema.id = uuid.uuid4()
         schema.organisation_id = uuid.uuid4()
         mock_get.return_value = schema
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_parameter_schema(schema_id=str(schema.id))
         assert result["error"] == "not_found"
 
@@ -904,7 +905,7 @@ class TestGetParameterSchema(AuthContext):
         schema.created_at = NOW
         schema.updated_at = NOW
         mock_get.return_value = schema
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_parameter_schema(schema_id=str(schema.id))
         assert result["data"]["id"] == str(schema.id)
         assert result["data"]["version"] == 3
@@ -932,7 +933,7 @@ class TestGetParameterSchemaReferences(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_get.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_parameter_schema_references(schema_id=str(uuid.uuid4()))
         assert result["error"] == "not_found"
 
@@ -952,7 +953,7 @@ class TestGetParameterSchemaReferences(AuthContext):
         schema.organisation_id = ORG_ID
         mock_get.return_value = schema
         mock_refs.return_value = {"agents": [uuid.uuid4()], "sets": [uuid.uuid4()]}
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_parameter_schema_references(schema_id=str(schema.id))
         assert "data" in result
         assert len(result["data"]["agents"]) == 1
@@ -980,7 +981,7 @@ class TestValidateParameterSchema(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_get.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await validate_parameter_schema(schema_id=str(uuid.uuid4()), values={})
         assert result["error"] == "not_found"
 
@@ -998,7 +999,7 @@ class TestValidateParameterSchema(AuthContext):
         schema.organisation_id = ORG_ID
         schema.parameters = [{"name": "region", "type": "string", "required": True}]
         mock_get.return_value = schema
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await validate_parameter_schema(schema_id=str(schema.id), values={"region": "us-east-1"})
         assert result["data"]["valid"] is True
         assert not result["data"]["errors"]
@@ -1017,7 +1018,7 @@ class TestValidateParameterSchema(AuthContext):
         schema.organisation_id = ORG_ID
         schema.parameters = [{"name": "region", "type": "string", "required": True}]
         mock_get.return_value = schema
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await validate_parameter_schema(schema_id=str(schema.id), values={})
         assert result["data"]["valid"] is False
         assert len(result["data"]["errors"]) == 1
@@ -1037,7 +1038,7 @@ class TestValidateParameterSchema(AuthContext):
         schema.organisation_id = ORG_ID
         schema.parameters = [{"name": "count", "type": "number"}]
         mock_get.return_value = schema
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await validate_parameter_schema(schema_id=str(schema.id), values={"count": "not-a-number"})
         assert result["data"]["valid"] is False
         assert "Expected a numeric value" in result["data"]["errors"][0]["message"]
@@ -1064,7 +1065,7 @@ class TestListParameterSets(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_get.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_parameter_sets(schema_id=str(uuid.uuid4()))
         assert result["error"] == "not_found"
 
@@ -1094,7 +1095,7 @@ class TestListParameterSets(AuthContext):
         ps.created_at = NOW
         ps.updated_at = NOW
         mock_list.return_value = [ps]
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await list_parameter_sets(schema_id=str(schema.id))
         assert len(result["data"]) == 1
         assert result["data"][0]["name"] == "production"
@@ -1121,7 +1122,7 @@ class TestGetParameterSet(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_get.return_value = None
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_parameter_set(schema_id=str(uuid.uuid4()), set_id=str(uuid.uuid4()))
         assert result["error"] == "not_found"
 
@@ -1139,7 +1140,7 @@ class TestGetParameterSet(AuthContext):
         ps.parameter_schema_id = uuid.uuid4()  # different from requested schema_id
         ps.organisation_id = ORG_ID
         mock_get.return_value = ps
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_parameter_set(schema_id=str(uuid.uuid4()), set_id=str(ps.id))
         assert result["error"] == "not_found"
 
@@ -1165,7 +1166,7 @@ class TestGetParameterSet(AuthContext):
         ps.created_at = NOW
         ps.updated_at = NOW
         mock_get.return_value = ps
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await get_parameter_set(schema_id=str(schema_id), set_id=str(ps.id))
         assert result["data"]["name"] == "staging"
         assert result["data"]["version"] == 2

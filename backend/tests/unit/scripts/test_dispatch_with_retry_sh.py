@@ -9,18 +9,36 @@ file, and supports an exit-code failure mode for transport-failure coverage.
 
 Delays are made fast by environment overrides (base/max delay 1s, jitter 0),
 never by mocking sleep. Runs stay well under a second per retry.
+
+A test that must prove the WALL-CLOCK BUDGET binding (rather than just the
+attempt cap) opts into ``virtual_clock=True``: ``sleep`` logs its argument and
+advances a virtual clock file, and ``date +%s`` reads that file. The script's
+elapsed/budget arithmetic then advances by exactly the delays it would really
+sleep, so a 300s budget can be exercised in milliseconds and the observation is
+deterministic instead of timing-dependent.
 """
 
 from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SCRIPT = REPO_ROOT / "scripts" / "dispatch_with_retry.sh"
+
+#: The suite executes the shipped shell script with a stubbed ``curl`` placed
+#: first on PATH, so it needs a POSIX shell that honours executable bits and a
+#: ``jq`` binary. A Windows host satisfies neither faithfully (MSYS bash ignores
+#: the mode bits on the stub, WSL bash cannot see Windows-style PATH entries), so
+#: the suite runs on Linux CI - not skipped coverage locally on POSIX hosts.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="requires a POSIX shell with executable-bit semantics and jq; runs on Linux CI",
+)
 
 CURL_STUB = """\
 #!/usr/bin/env bash
@@ -77,6 +95,32 @@ exit 0
 """
 
 
+VIRTUAL_EPOCH = 1_700_000_000
+
+DATE_STUB = """\
+#!/usr/bin/env bash
+# Virtual-clock date stub: `date +%s` reads the clock file that the sleep stub
+# advances. Anything else (e.g. `date -u -d <http-date> +%s`) is delegated to
+# the real date via a POSIX default PATH, so it cannot re-enter this stub.
+set -u
+if [ "$#" -eq 1 ] && [ "$1" = "+%s" ]; then
+  cat "${CANNED_VIRTUAL_CLOCK}"
+  exit 0
+fi
+command -p date "$@"
+"""
+
+SLEEP_STUB = """\
+#!/usr/bin/env bash
+# Virtual-clock sleep stub: record the requested delay and advance the clock
+# instead of blocking.
+set -u
+printf '%s\\n' "$1" >> "${CANNED_SLEEPS_LOG}"
+clock=$(cat "${CANNED_VIRTUAL_CLOCK}")
+printf '%s\\n' "$(( clock + $1 ))" > "${CANNED_VIRTUAL_CLOCK}"
+"""
+
+
 def make_env(
     tmp_path: Path,
     codes: str,
@@ -87,6 +131,7 @@ def make_env(
     summary: Path | None = None,
     result_file: Path | None = None,
     extra_env: dict[str, str] | None = None,
+    virtual_clock: bool = False,
 ) -> dict[str, str]:
     stub_dir = tmp_path / "stubs"
     stub_dir.mkdir(exist_ok=True)
@@ -120,6 +165,15 @@ def make_env(
         env["GITHUB_STEP_SUMMARY"] = str(summary)
     if result_file is not None:
         env["DISPATCH_RESULT_FILE"] = str(result_file)
+    if virtual_clock:
+        for name, content in (("date", DATE_STUB), ("sleep", SLEEP_STUB)):
+            path = stub_dir / name
+            path.write_text(content)
+            path.chmod(0o755)
+        clock = tmp_path / "clock"
+        clock.write_text(f"{VIRTUAL_EPOCH}\n", encoding="utf-8")
+        env["CANNED_VIRTUAL_CLOCK"] = str(clock)
+        env["CANNED_SLEEPS_LOG"] = str(tmp_path / "sleeps.log")
     env.update(extra_env or {})
     return env
 
@@ -143,6 +197,12 @@ def invocation_count(tmp_path: Path) -> int:
 def read_log(tmp_path: Path) -> list[str]:
     log = tmp_path / "curl.log"
     return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+
+def read_sleeps(tmp_path: Path) -> list[str]:
+    """The delays the script asked to sleep, in order (virtual clock only)."""
+    path = tmp_path / "sleeps.log"
+    return path.read_text(encoding="utf-8").split() if path.exists() else []
 
 
 def invocation_headers(log_lines: list[str]) -> list[list[str]]:
@@ -280,11 +340,86 @@ class TestCaps:
         assert invocation_count(tmp_path) == 1
         assert "budget exhausted" in proc.stdout
 
-    def test_retry_after_is_honoured_verbatim(self, tmp_path: Path) -> None:
-        headers = "retry-after: 1\r\nHTTP/1.1 429 Too Many Requests\r\n"
-        proc = run_dispatch(tmp_path, codes="429,202", body='{"run_id":"r7"}', headers=headers)
+    def test_retry_after_is_a_floor_not_the_schedule(self, tmp_path: Path) -> None:
+        # Retry-After shortens nothing: the delay is max(Retry-After, backoff).
+        # Base delay 3s beats the server's 1s, so the backoff is used.
+        headers = "Retry-After: 1\r\nHTTP/1.1 429 Too Many Requests\r\n"
+        proc = run_dispatch(
+            tmp_path,
+            codes="429,202",
+            body='{"run_id":"r7"}',
+            headers=headers,
+            extra_env={"DISPATCH_BASE_DELAY": "3", "DISPATCH_MAX_DELAY": "3"},
+        )
         assert proc.returncode == 0
-        assert "retrying in 1s" in proc.stdout
+        assert "retrying in 3s" in proc.stdout
+
+
+class TestRetryAfterFloorAndBudget:
+    """FAR-2066: a short Retry-After must not defeat the wall-clock budget.
+
+    The Branch Fixer's 429 answers `Retry-After: 5`. Honoured verbatim, every
+    attempt waits 5s, so the 8-attempt cap is spent in ~35s of sleep and the
+    300s budget never binds (observed on PR #2165: `8 attempt(s) in 38s`).
+    """
+
+    def test_retry_after_shorter_than_backoff_uses_the_backoff(self, tmp_path: Path) -> None:
+        headers = "Retry-After: 5\r\nHTTP/2 429\r\n"
+        proc = run_dispatch(
+            tmp_path,
+            codes="429,202",
+            body='{"run_id":"r9"}',
+            headers=headers,
+            virtual_clock=True,
+            extra_env={"DISPATCH_BASE_DELAY": "10", "DISPATCH_MAX_DELAY": "60", "DISPATCH_JITTER_MAX": "0"},
+        )
+        assert proc.returncode == 0
+        assert read_sleeps(tmp_path) == ["10"], "a 5s Retry-After must not shorten a 10s backoff"
+
+    def test_retry_after_longer_than_backoff_is_still_honoured(self, tmp_path: Path) -> None:
+        # The floor still works in the other direction: never retry inside the
+        # window the server closed.
+        headers = "Retry-After: 30\r\nHTTP/2 429\r\n"
+        proc = run_dispatch(
+            tmp_path,
+            codes="429,202",
+            body='{"run_id":"r10"}',
+            headers=headers,
+            virtual_clock=True,
+            extra_env={"DISPATCH_BASE_DELAY": "10", "DISPATCH_MAX_DELAY": "60", "DISPATCH_JITTER_MAX": "0"},
+        )
+        assert proc.returncode == 0
+        assert read_sleeps(tmp_path) == ["30"]
+
+    def test_saturation_spreads_across_the_budget_instead_of_burning_the_cap(self, tmp_path: Path) -> None:
+        """The regression pin: same inputs as the observed PR #2165 failure.
+
+        Old policy: 8 attempts, seven 5s sleeps (35s scheduled, ~38s observed),
+        cap reached. New policy: the budget binds at attempt 7 after 250s of
+        backoff, so the fixer gets ~4 minutes of retries spread over a
+        saturated window instead of a 35-second burst.
+        """
+        headers = "Retry-After: 5\r\nHTTP/2 429\r\n"
+        proc = run_dispatch(
+            tmp_path,
+            codes="429",
+            body='{"detail":"Concurrent run limit of 8 reached"}',
+            headers=headers,
+            virtual_clock=True,
+            extra_env={
+                "DISPATCH_BASE_DELAY": "10",
+                "DISPATCH_MAX_DELAY": "60",
+                "DISPATCH_JITTER_MAX": "0",
+                "DISPATCH_MAX_ATTEMPTS": "8",
+                "DISPATCH_BUDGET_SECONDS": "300",
+            },
+        )
+        assert proc.returncode == 1
+        assert read_sleeps(tmp_path) == ["10", "20", "40", "60", "60", "60"]
+        assert invocation_count(tmp_path) == 7, "the 300s budget, not the 8-attempt cap, must bind"
+        assert "not waiting" in proc.stdout
+        assert "only 50s of the 300s budget remain" in proc.stdout
+        assert "attempt cap reached" not in proc.stdout
 
 
 class TestDup400:

@@ -7,11 +7,13 @@ scoping goes through the real ``WHERE organisation_id = :oid`` SQL the backend
 emits, key validation / RLS-context / no-session failures go through the real
 ``validate_key`` and ``_read_org_id_from_session`` paths, the rotation fallback
 decrypts under a real old key, and the factory exercises its real default /
-unknown-name / unlicensed-fallback logic (the unlicensed ``vault`` fallback is
+unknown-name / no-unlicensed-downgrade logic (the lapsed-licence state is
 forced by patching ``_check_external_secrets_licensed`` exactly as the unit
 suite does, so the scenario is deterministic in any tier). External ``vault``
 / ``aws`` construction stays unit-tested — those backends call out to live
-services.
+services. The lapsed-licence scenario proves only the invariant the factory
+owns here: a licence lapse never substitutes a Fernet backend, so the
+unconfigured external backend either builds or fails hard in its constructor.
 """
 
 from __future__ import annotations
@@ -304,4 +306,24 @@ def step_factory_fernet(request) -> None:
     assert error is None, f"expected the factory to succeed, got: {error!r}"
     assert isinstance(request.node._secret_factory_backend, FernetSecretsBackend), (
         f"expected a FernetSecretsBackend, got {type(request.node._secret_factory_backend).__name__}"
+    )
+
+
+@then("the factory refuses to substitute a Fernet backend")
+def step_factory_refuses_fernet_substitution(request) -> None:
+    """FAR-2059: licence state must never decide the runtime resolution path.
+
+    A lapsed licence may not silently downgrade a configured external backend
+    to the Fernet store. The configured backend either builds (external, never
+    Fernet) or fails hard in its own constructor; either way the factory must
+    not swap it, and any failure must not be a licence refusal.
+    """
+    backend = request.node._secret_factory_backend
+    error = request.node._secret_error
+    assert not isinstance(backend, FernetSecretsBackend), (
+        "a licence lapse must not silently downgrade a configured external backend "
+        f"to Fernet; got {type(backend).__name__}"
+    )
+    assert error is None or "license" not in str(error).lower(), (
+        f"licence state must not decide how the backend is constructed; got: {error!r}"
     )

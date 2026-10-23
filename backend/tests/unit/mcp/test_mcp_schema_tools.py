@@ -18,6 +18,7 @@ from modulo.api.mcp_server import (
 )
 from modulo.core.seed_data.library_schemas import SCHEMAS
 from modulo.db.crud.base import PageResult
+from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import FERNET_KEY, ORG_ID, USER_ID, AuthContext, make_session_context
 
 
@@ -48,7 +49,7 @@ class TestCreateAgentErrors(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -74,7 +75,7 @@ class TestCreateAgentErrors(AuthContext):
         layer's lenient ``coerce_uuid`` silently dropped it and the agent was
         created with no template and no error.
         """
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await create_agent(name="qa", prompt_template="Review PRs", **{field: value})
 
@@ -150,7 +151,7 @@ class TestCreateAgentErrors(AuthContext):
         """FAR-220: the MCP tool must run the same Agent save gate as the REST
         routes — an unpinned ``git+`` ref returns ``validation_failed`` and
         never reaches ``db_create_agent`` (prove-the-fix)."""
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await create_agent(
             name="qa",
             prompt_template="git+https://github.com/example/repo.git@main#prompts/x.md",
@@ -168,7 +169,7 @@ class TestCreateAgentErrors(AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await create_agent(
             name="qa",
             prompt_template="git+https://github.com/example/repo.git",
@@ -186,7 +187,7 @@ class TestCreateAgentErrors(AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         result = await create_agent(
             name="qa",
             prompt_template="Review PRs",
@@ -215,7 +216,7 @@ class TestCreateAgentSuccess(AuthContext):
         agent.is_executable = True
         agent.created_at = created
         mock_create.return_value = agent
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await create_agent(
             name="qa-reviewer",
@@ -256,7 +257,7 @@ class TestCreateAgentNullableSchemaIds(AuthContext):
         agent.is_executable = True
         agent.created_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         mock_create.return_value = agent
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await create_agent(name="qa-reviewer", prompt_template="Review PRs")
 
@@ -286,7 +287,7 @@ class TestCreateAgentNullableSchemaIds(AuthContext):
         agent.is_executable = True
         agent.created_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         mock_create.return_value = agent
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         schema_id = uuid.uuid4()
         backend_id = uuid.uuid4()
@@ -329,7 +330,7 @@ class TestCreateModelBackendErrors(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -365,7 +366,7 @@ class TestCreateModelBackendSuccess(AuthContext):
             "expires_at": "2026-01-01T12:15:00+00:00",
             "expires_in_minutes": 15,
         }
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await create_model_backend(
             name="openai-prod",
@@ -411,7 +412,7 @@ class TestInferSchemaErrors(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -429,7 +430,7 @@ class TestInferSchemaErrors(AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_get_settings.return_value = _make_settings(dev_mode=False)
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await infer_schema(input_sample={"name": "x"})
 
@@ -449,7 +450,7 @@ class TestInferSchemaErrors(AuthContext):
     ) -> None:
         mock_get_settings.return_value = _make_settings(dev_mode=True)
         mock_list_backends.return_value = PageResult(items=[], total=0, page=1, page_size=1)
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await infer_schema(input_sample={"name": "x"})
 
@@ -490,7 +491,7 @@ class TestInferSchemaErrors(AuthContext):
         mock_hub_cls.return_value.__aenter__ = AsyncMock(return_value=hub)
         mock_hub_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await infer_schema(input_sample={"name": "x"})
 
@@ -532,7 +533,7 @@ class TestInferSchemaSuccess(AuthContext):
         mock_hub_cls.return_value.__aenter__ = AsyncMock(return_value=hub)
         mock_hub_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await infer_schema(input_sample={"name": "x"})
 
@@ -632,7 +633,7 @@ class TestCreateSchemaErrors(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -650,7 +651,7 @@ class TestCreateSchemaErrors(AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_create.side_effect = IntegrityError("INSERT", {}, Exception("duplicate key"))
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await create_schema(name="customer")
 
@@ -666,7 +667,7 @@ class TestCreateSchemaErrors(AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_create.side_effect = ProgrammingError("INSERT", {}, Exception("no table"))
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await create_schema(name="customer")
 
@@ -747,7 +748,7 @@ class TestListSchemasErrors(AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_list.side_effect = ProgrammingError("SELECT 1", {}, Exception("no table"))
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await list_schemas()
 
@@ -773,7 +774,7 @@ class TestListSchemasSuccess(AuthContext):
             next_cursor="cursor-abc",
             has_more=True,
         )
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await list_schemas(cursor="cursor-abc", limit=20)
 
@@ -822,7 +823,7 @@ class TestValidatePayloadErrors(AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await validate_payload(schema_id="not-a-uuid", payload={})
 
@@ -838,7 +839,7 @@ class TestValidatePayloadErrors(AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await validate_payload(schema_id=str(uuid.uuid4()), payload={})
 

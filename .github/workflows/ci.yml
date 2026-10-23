@@ -462,7 +462,7 @@ jobs:
         run: >
           uv run --no-build --no-sync pytest tests/bdd/steps/test_email_settings.py
           tests/bdd/features/infra/test_health_steps.py
-          -q --tb=short --timeout=120 -p no:warnings
+          -q --tb=short --timeout=120 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
       - name: Run repaired step-rot BDD modules
         # The step-definition repairs for auth/eval/hitl (FAR-246) live in
         # test_auth, test_eval, test_eval_block_steps and test_hitl. These are
@@ -475,7 +475,7 @@ jobs:
           uv run --no-build --no-sync pytest tests/bdd/steps/test_auth.py tests/bdd/steps/test_eval.py \
             tests/bdd/steps/test_eval_block_steps.py tests/bdd/steps/test_hitl.py \
             tests/bdd/steps/test_eval_scorer_gates.py \
-            -q --tb=short --timeout=120 -p no:warnings
+            -q --tb=short --timeout=120 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -630,7 +630,7 @@ jobs:
           # file by the Detect step.
           mapfile -t TEST_FILES < /tmp/integration-changed.txt
           echo "Running: pytest ${TEST_FILES[*]}"
-          uv run --no-build --no-sync pytest "${TEST_FILES[@]}" -q --tb=short --timeout=300 -p no:warnings
+          uv run --no-build --no-sync pytest "${TEST_FILES[@]}" -q --tb=short --timeout=300 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
@@ -698,7 +698,7 @@ jobs:
             tests/integration/test_tier1b_models_light.py \
             tests/integration/auth/test_keycloak_oidc_real_http_flow.py \
             tests/integration/auth/test_keycloak_saml_real_http_flow.py \
-            -q --tb=short --timeout=900 -p no:warnings
+            -q --tb=short --timeout=900 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
           # Tier 1b fixtures deliberately loud-skip (with a recorded reason)
@@ -1627,7 +1627,7 @@ jobs:
       - name: Break-glass boot allow-list + connectivity smoke
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
-        run: uv run --no-build --no-sync pytest tests/integration/test_break_glass_gate.py tests/integration/test_trigger_streak_engine_sql.py -q --tb=short --timeout=300 -p no:warnings
+        run: uv run --no-build --no-sync pytest tests/integration/test_break_glass_gate.py tests/integration/test_trigger_streak_engine_sql.py -q --tb=short --timeout=300 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
 
   notify-pr-failure:
     name: Trigger Branch Fixer
@@ -1930,6 +1930,9 @@ jobs:
           LAST_DETAIL="${DISPATCH_LAST_DETAIL:-unknown}"
           ATTEMPTS="${DISPATCH_ATTEMPTS:-unknown}"
           DISPATCH_ELAPSED="${DISPATCH_BUDGET_ELAPSED:-unknown}"
+          # FAR-2066 durable marker: the label an exhausted capacity/transient
+          # dispatch applies and a successful dispatch clears.
+          FIXER_PENDING_LABEL="fixer-dispatch-pending"
           if [ "$DISPATCHED" != "true" ]; then
             # Name the CLASS of failure, not just its HTTP code: capacity
             # saturation is an operational backlog an operator drains, while a
@@ -1964,6 +1967,29 @@ jobs:
                 echo "- PR: #${PR_NUM} — **the CI failure was not handed to the autonomous fix loop**."
               } >> "$GITHUB_STEP_SUMMARY"
             fi
+            # FAR-2066 durable marker: a capacity/transient exhaustion means
+            # this CI failure is still OWED a fixer run, but the only traces
+            # were a PR comment and a run summary. Label the PR so the
+            # outstanding hand-over outlives the log/review window. A TERMINAL
+            # rejection is deliberately NOT labelled: retrying cannot help, so
+            # that is a fix (secret/payload), not a pending dispatch, and the
+            # label must mean exactly one thing to whoever sweeps it.
+            #
+            # `gh pr edit --add-label` silently no-ops (FAR-1173), so the REST
+            # endpoint is used. A label failure is a WARNING, never a second
+            # hard failure: the dispatch-failure comment below remains the hard
+            # requirement (and the exit-code contract below is unchanged).
+            LABEL_NOTE=""
+            case "$LAST_CLASS" in
+              capacity|transient)
+                if LABEL_ERR=$(gh api -X POST "repos/${REPO}/issues/${PR_NUM}/labels" -f "labels[]=${FIXER_PENDING_LABEL}" 2>&1); then
+                  LABEL_NOTE="A \`${FIXER_PENDING_LABEL}\` label has been applied to this PR so the undelivered dispatch stays visible until a fixer run is handed this failure."
+                else
+                  echo "::warning::Could not apply the '${FIXER_PENDING_LABEL}' label to PR #${PR_NUM} (${LABEL_ERR}) — the dispatch-failure comment and run summary below remain the durable record."
+                  LABEL_NOTE="The \`${FIXER_PENDING_LABEL}\` label could **not** be applied automatically, so the outstanding dispatch is recorded only in this comment and the job summary."
+                fi
+                ;;
+            esac
             # FAR-1997: the job now checks out ONLY scripts/dispatch_with_retry.sh
             # (the dispatch policy is shared code, not an inline loop), but the
             # repository is still passed explicitly to every `gh` command. It
@@ -1987,11 +2013,24 @@ jobs:
 
             ${DISPATCH_ACTION}
 
+            ${LABEL_NOTE}
+
             The automated fix loop is **not active** for this PR."; then
               echo "::error::Failed to post dispatch-failure comment on PR #${PR_NUM} — the stalled fix loop could not be announced."
               exit 2
             fi
             exit 1
+          fi
+          # FAR-2066: a successful hand-over CLEARS the durable marker an
+          # earlier exhausted dispatch left behind, so the label always means
+          # "a fixer run is still owed". A 404 means the label was not present
+          # (the normal case) and is tolerated silently; any other failure is a
+          # warning on an otherwise delivered dispatch.
+          if ! LABEL_CLEAR_ERR=$(gh api -X DELETE "repos/${REPO}/issues/${PR_NUM}/labels/${FIXER_PENDING_LABEL}" 2>&1); then
+            case "$LABEL_CLEAR_ERR" in
+              *404*) : ;;
+              *) echo "::warning::Could not clear the 'fixer-dispatch-pending' label from PR #${PR_NUM} (${LABEL_CLEAR_ERR}) — the dispatch itself was delivered." ;;
+            esac
           fi
           # Explicit success exit: the dispatch was accepted (202) or was a
           # handled duplicate (400 "Duplicate webhook payload"/coalesced).

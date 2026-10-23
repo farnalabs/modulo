@@ -27,6 +27,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -53,7 +54,7 @@ def _make_executor_mock(
     """Executor double exposing exactly the seams the shared hook reuses."""
     executor = MagicMock()
     executor._claim_token = claim_token
-    executor._read_retry_attempt_state = AsyncMock(return_value=(attempt_count, claim_token))
+    executor._read_retry_attempt_state = AsyncMock(return_value=(attempt_count, claim_token, None))
     executor._probe_script_lease = AsyncMock(return_value=probe_ok)
     executor._fenced_pending_reset = AsyncMock(return_value=reset_rowcount)
     return executor
@@ -141,9 +142,15 @@ async def _consult_hook(
     reset_rowcount: int = 1,
     claim_count: int = 1,
     zero_node: bool = False,
+    attempt_started_at: datetime | None = None,
+    node_timeouts: dict[str, int] | None = None,
 ) -> tuple[bool, WatchdogRetryOutcome, AsyncMock]:
     """Run the REAL shared hook once with only DB seams mocked."""
-    executor._read_retry_attempt_state = AsyncMock(return_value=(attempt_count, executor._claim_token))
+    executor._read_retry_attempt_state = AsyncMock(
+        return_value=(attempt_count, executor._claim_token, attempt_started_at)
+    )
+    if node_timeouts is not None:
+        executor._node_timeouts = node_timeouts
     executor._fenced_pending_reset = AsyncMock(return_value=reset_rowcount)
     exec_task = asyncio.create_task(asyncio.sleep(999))
     box = WatchdogRetryOutcome()
@@ -1008,6 +1015,48 @@ async def _drive_zombie_stall(
     return fail, box, executor, marker_reader
 
 
+async def _drive_deadline_kill(
+    retry_policy: dict[str, Any],
+    *,
+    markers: dict[str, Any] | None = None,
+    read_error: Exception | None = None,
+    attempt_count: int = 1,
+) -> tuple[AsyncMock, WatchdogRetryOutcome, MagicMock, AsyncMock]:
+    """Fire the REAL absolute node-deadline watchdog at an overdue node once.
+
+    Same seams as :func:`_drive_zombie_stall`, driving ``_fail_overdue_node``
+    instead of the setup-grace watchdog. Returns
+    ``(fail_run_terminal, outcome_box, executor, marker_reader)``.
+    """
+    executor = _make_executor_mock(attempt_count=attempt_count)
+    fail = AsyncMock(return_value=True)
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    exec_task = asyncio.create_task(asyncio.sleep(999))
+    hook, box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
+    seams = _db_seams(retry_policy)
+    markers_seam = _markers_seam(markers, read_error=read_error)
+    with contextlib.ExitStack() as stack:
+        for seam in seams:
+            stack.enter_context(seam)
+        marker_reader = stack.enter_context(markers_seam)
+        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        await _fail_overdue_node(
+            MagicMock(),
+            "run-1",
+            "org-1",
+            deadlines,
+            exec_task,
+            asyncio.Event(),
+            asyncio.Event(),
+            retry_hook=hook,
+        )
+    exec_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await exec_task
+    return fail, box, executor, marker_reader
+
+
 async def test_delivered_then_stalled_run_is_not_redispatched():
     """FAR-2053: a run whose marker rows already record a delivery is NOT
     re-dispatched when it stalls — it terminal-fails with the stall path's own
@@ -1052,10 +1101,16 @@ async def test_delivery_probe_failure_vetoes_the_redispatch():
 
 
 async def test_delivery_veto_is_opt_in_per_call_site():
-    """The veto is a FLAG, not a global rule: consulting the same delivered
-    markers with ``veto_if_delivered`` unset re-dispatches, and never reads the
-    marker rows at all. This is what keeps the node-deadline path (which does
-    not pass the flag) behaviourally unchanged."""
+    """The veto is a per-call-site FLAG with a DEFAULT OF OFF, and BOTH
+    in-process watchdog call sites opt in.
+
+    Default off is what keeps the hook signature compatible with two-argument
+    callers: consulting the hook directly without the flag still re-dispatches
+    and never pays the marker read. Per call site is what FAR-2071 widened: the
+    stall path (FAR-2053) and the node-deadline path (FAR-2071) both pass the
+    flag and therefore both veto a run that already delivered.
+    """
+    # Default OFF at the hook: no veto, no marker read.
     executor = _make_executor_mock(attempt_count=1)
     seams = _db_seams({"on": ["stall"], "max_retries": 2})
     with contextlib.ExitStack() as stack:
@@ -1073,6 +1128,112 @@ async def test_delivery_veto_is_opt_in_per_call_site():
     assert dispatched is True
     assert box.requested is True
     marker_reader.assert_not_awaited()
+
+    # BOTH real call sites opt in: the same delivered markers veto each kill.
+    stall_fail, stall_box, stall_executor, stall_reader = await _drive_zombie_stall(
+        {"on": ["stall"], "max_retries": 2}, markers=_DELIVERED_MARKERS
+    )
+    stall_fail.assert_awaited_once()
+    assert stall_fail.await_args.kwargs["error_code"] == "executor_stalled"
+    assert stall_box.requested is False
+    stall_executor._fenced_pending_reset.assert_not_awaited()
+    stall_reader.assert_awaited_once()
+
+    deadline_fail, deadline_box, deadline_executor, deadline_reader = await _drive_deadline_kill(
+        {"on": ["timeout"], "max_retries": 2}, markers=_DELIVERED_MARKERS
+    )
+    deadline_fail.assert_awaited_once()
+    assert deadline_fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
+    assert deadline_box.requested is False
+    deadline_executor._fenced_pending_reset.assert_not_awaited()
+    deadline_reader.assert_awaited_once()
+
+
+async def test_delivered_run_is_not_redispatched_on_node_deadline():
+    """FAR-2071 regression: a run whose marker rows already record a delivery
+    is NOT re-dispatched when it blows a node deadline — it terminal-fails with
+    ``node_deadline_exceeded`` instead, because a re-dispatch re-executes the
+    graph from the start and would repeat the side effect.
+
+    Fails without the fix: with the veto unset on this path the hook
+    re-dispatches the delivered run and never terminal-fails."""
+    fail, box, executor, marker_reader = await _drive_deadline_kill(
+        {"on": ["timeout"], "max_retries": 2}, markers=_DELIVERED_MARKERS
+    )
+    fail.assert_awaited_once()
+    assert fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
+    assert box.requested is False
+    executor._fenced_pending_reset.assert_not_awaited()
+    marker_reader.assert_awaited_once()
+
+
+async def test_undelivered_deadline_kill_still_redispatches():
+    """FAR-2071 regression arm: with the probe present but recording no
+    delivery, the node-deadline kill re-dispatches EXACTLY as before (fenced
+    reset + the outcome box set), so the veto cannot quietly disable
+    node-deadline retries."""
+    fail, box, executor, marker_reader = await _drive_deadline_kill(
+        {"on": ["timeout"], "max_retries": 2}, markers=_UNDELIVERED_MARKERS
+    )
+    fail.assert_not_awaited()
+    assert box.requested is True
+    assert box.final_status == "failed"
+    assert box.retry_budget == 2
+    executor._fenced_pending_reset.assert_awaited_once()
+    marker_reader.assert_awaited_once()
+
+
+async def test_delivery_probe_failure_vetoes_the_deadline_redispatch(caplog: pytest.LogCaptureFixture):
+    """FAR-2071 fail direction on the node-deadline path: an unreadable
+    delivery record must not license a re-dispatch. The probe failure is
+    absorbed (it never raises into the watchdog path), is logged, and the run
+    terminal-fails."""
+    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.watchdog_retry"):
+        fail, box, executor, _marker_reader = await _drive_deadline_kill(
+            {"on": ["timeout"], "max_retries": 2}, read_error=RuntimeError("markers unreadable")
+        )
+    fail.assert_awaited_once()
+    assert fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
+    assert box.requested is False
+    executor._fenced_pending_reset.assert_not_awaited()
+    assert "watchdog_retry_delivery_probe_failed" in caplog.text
+
+
+async def test_deadline_delivery_probe_reraises_cancellation():
+    """Worker/job shutdown is not ours to swallow on the node-deadline path
+    either: a CancelledError from the probe propagates out of the watchdog
+    instead of being absorbed into a veto decision."""
+    executor = _make_executor_mock(attempt_count=1)
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    exec_task = asyncio.create_task(asyncio.sleep(999))
+    hook, _box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
+    seams = _db_seams({"on": ["timeout"], "max_retries": 2})
+    try:
+        with contextlib.ExitStack() as stack:
+            for seam in seams:
+                stack.enter_context(seam)
+            stack.enter_context(
+                patch(
+                    "modulo.core.pipeline_engine.watchdog_retry._read_run_markers",
+                    AsyncMock(side_effect=asyncio.CancelledError()),
+                )
+            )
+            stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+            with pytest.raises(asyncio.CancelledError):
+                await _fail_overdue_node(
+                    MagicMock(),
+                    "run-1",
+                    "org-1",
+                    deadlines,
+                    exec_task,
+                    asyncio.Event(),
+                    asyncio.Event(),
+                    retry_hook=hook,
+                )
+    finally:
+        exec_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await exec_task
 
 
 async def test_delivery_probe_reraises_cancellation():
@@ -1552,6 +1713,81 @@ def test_capacity_retry_budget_setting_default_and_override(monkeypatch: pytest.
     assert Settings().saq_capacity_retry_budget == 3
     monkeypatch.setenv("SAQ_CAPACITY_RETRY_BUDGET", "7")
     assert Settings().saq_capacity_retry_budget == 7
+
+
+# ---------------------------------------------------------------------------
+# FAR-2025 — a watchdog re-dispatch is refused once the attempt has spent the
+# graph's whole node-budget allowance (an over-budget task, not a transient
+# failure). The dangerous direction is the false positive: a run that failed
+# FAST must keep its retry.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_watchdog_retry_refused_when_attempt_consumed_node_budget() -> None:
+    """FAR-2025: an attempt that spent the whole node budget is not re-dispatched."""
+    executor = _make_executor_mock(claim_token="tok-far-2025")
+    dispatched, box, sleep_mock = await _consult_hook(
+        executor,
+        retry_policy={"on": ["timeout"], "max_retries": 2},
+        final_status="failed",
+        error_code="node_deadline_exceeded",
+        attempt_started_at=datetime.now(UTC) - timedelta(seconds=3300),
+        node_timeouts={"node-a": 3300},
+    )
+    assert dispatched is False
+    assert box.requested is False
+    executor._fenced_pending_reset.assert_not_awaited()
+    sleep_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_watchdog_retry_allowed_after_a_fast_failure() -> None:
+    """FAR-2025 false-positive guard: a fast failure keeps its retry budget."""
+    executor = _make_executor_mock(claim_token="tok-far-2025")
+    dispatched, box, _ = await _consult_hook(
+        executor,
+        retry_policy={"on": ["failure"], "max_retries": 2},
+        final_status="failed",
+        error_code="agent.failed",
+        attempt_started_at=datetime.now(UTC) - timedelta(seconds=60),
+        node_timeouts={"node-a": 3300},
+    )
+    assert dispatched is True
+    assert box.requested is True
+    executor._fenced_pending_reset.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_watchdog_retry_fails_open_when_elapsed_unknown() -> None:
+    """FAR-2025: an unreadable attempt start must not block the retry."""
+    executor = _make_executor_mock(claim_token="tok-far-2025")
+    dispatched, box, _ = await _consult_hook(
+        executor,
+        retry_policy={"on": ["timeout"], "max_retries": 2},
+        final_status="failed",
+        error_code="node.deadline_exceeded",
+        attempt_started_at=None,
+        node_timeouts={"node-a": 3300},
+    )
+    assert dispatched is True
+    assert box.requested is True
+
+
+@pytest.mark.asyncio
+async def test_watchdog_retry_fails_open_when_budget_unknown() -> None:
+    """FAR-2025: a graph with no explicit node timeout has no allowance to check."""
+    executor = _make_executor_mock(claim_token="tok-far-2025")
+    dispatched, box, _ = await _consult_hook(
+        executor,
+        retry_policy={"on": ["timeout"], "max_retries": 2},
+        final_status="failed",
+        error_code="node.deadline_exceeded",
+        attempt_started_at=datetime.now(UTC) - timedelta(seconds=3300),
+        node_timeouts={},
+    )
+    assert dispatched is True
+    assert box.requested is True
 
 
 # ---------------------------------------------------------------------------
