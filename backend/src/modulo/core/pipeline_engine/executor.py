@@ -5416,6 +5416,39 @@ class PipelineExecutor:
         """
         return view.get("status") == "failed" and view.get(MODULO_SYNTHETIC_FAILURE_MARKER) is True
 
+    def _downgrade_connector_failures(
+        self,
+        *,
+        final_status: str,
+        error_code: str | None,
+        error_detail: str | None,
+        completed_node_outputs: dict[str, Any],
+        node_type_map: dict[str, str],
+        stored_node_outputs: dict[str, Any] | None = None,
+        stored_node_telemetry: dict[str, Any] | None = None,
+    ) -> tuple[str, str | None, str | None]:
+        """Downgrade an explicit connector failure envelope before finalization."""
+        if final_status != "complete":
+            return final_status, error_code, error_detail
+        stored_outputs = stored_node_outputs or {}
+        stored_telemetry = stored_node_telemetry or {}
+        node_ids = set(completed_node_outputs) | set(stored_outputs) | set(stored_telemetry)
+        details: list[str] = []
+        for node_id in node_ids:
+            if node_type_map.get(node_id) not in {"connector", "dispatch"}:
+                continue
+            views = self._sandbox_failure_scan_views(completed_node_outputs.get(node_id))
+            views.extend(self._sandbox_failure_scan_views(stored_outputs.get(node_id)))
+            views.extend(self._sandbox_failure_scan_views(node_telemetry(stored_telemetry, stored_outputs, node_id)))
+            for view in views:
+                reason = _node_output_connector_failure(view)
+                if reason is not None:
+                    details.append(reason)
+                    break
+        if not details:
+            return final_status, error_code, error_detail
+        return "failed", _CODE_CONNECTOR_FAILED, "; ".join(sorted(set(details)))
+
     def _downgrade_masked_sandbox_failures(
         self,
         *,
@@ -5745,6 +5778,15 @@ class PipelineExecutor:
             stored_node_outputs, stored_node_telemetry = await self._load_stored_node_columns(
                 run_id=run_id, org_id=org_id
             )
+        final_status, error_code, error_detail = self._downgrade_connector_failures(
+            final_status=final_status,
+            error_code=error_code,
+            error_detail=error_detail,
+            completed_node_outputs=completed_node_outputs,
+            node_type_map=node_type_map,
+            stored_node_outputs=stored_node_outputs,
+            stored_node_telemetry=stored_node_telemetry,
+        )
         final_status, error_code, error_detail = self._downgrade_masked_sandbox_failures(
             run_id=run_id,
             final_status=final_status,
