@@ -1448,6 +1448,10 @@ async def test_delivery_probe_reraises_cancellation():
 def _watchdog_wrapper_seams(retry_policy: dict[str, Any] | None):
     seams = list(_db_seams(retry_policy))
     seams.append(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+    # FAR-2078: the per-attempt history close is diagnostics, not part of the
+    # retry/outcome decision these tests pin; the wrapper is driven with a
+    # MagicMock engine, so the DB write is stubbed at its named seam.
+    seams.append(patch("modulo.core.pipeline_execution._record_executor_outcome_attempt", AsyncMock(return_value=None)))
     return seams
 
 

@@ -416,6 +416,10 @@ def _transient_executor(*, execution_attempt_count: int, claim_token: str = "tok
     executor._script_lease_ok = AsyncMock(return_value=True)
     executor._fenced_pending_reset = AsyncMock(return_value=1)
     executor._cleanup_run_resources = AsyncMock()
+    # FAR-2078: the per-attempt history close is diagnostics, orthogonal to the
+    # retry decision this suite pins (a real ``object.__new__`` executor has no
+    # session factory). Its own tests drive it directly.
+    executor._record_attempt_reset = AsyncMock()
     return executor
 
 
@@ -898,6 +902,11 @@ class _FakeExecutorSession:
     def begin(self) -> _FakeBegin:
         return _FakeBegin()
 
+    def begin_nested(self) -> _FakeBegin:
+        # FAR-2078: the admission writes the per-attempt history row inside a
+        # SAVEPOINT so a failed diagnostics write cannot abort the admission.
+        return _FakeBegin()
+
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> Any:
         self.executed.append((str(stmt), params))
         return SimpleNamespace(fetchone=lambda: ("id",), rowcount=1, scalar_one_or_none=lambda: None)
@@ -1051,6 +1060,10 @@ class _AdmissionSession:
         return self._bind
 
     def begin(self) -> _FakeBegin:
+        return _FakeBegin()
+
+    def begin_nested(self) -> _FakeBegin:
+        # FAR-2078: the admission opens the per-attempt row inside a SAVEPOINT.
         return _FakeBegin()
 
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> Any:

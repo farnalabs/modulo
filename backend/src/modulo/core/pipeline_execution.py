@@ -63,7 +63,15 @@ from modulo.core.dispatch_phases import (
     PHASE_STREAMING,
 )
 from modulo.db.crud.run import get_run
-from modulo.db.models.run import ACTIVE_RUN_STATUSES
+from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES
+from modulo.db.models.run_attempt import (
+    ATTEMPT_TERMINAL_REASON_COMPLETED,
+    ATTEMPT_TERMINAL_REASON_DEADLINE,
+    ATTEMPT_TERMINAL_REASON_GUARD_CAP,
+    ATTEMPT_TERMINAL_REASON_PROVIDER_ERROR,
+    ATTEMPT_TERMINAL_REASON_STALL,
+    ATTEMPT_TERMINAL_REASON_WORKER_LOST,
+)
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 
 __all__ = [
@@ -1351,6 +1359,202 @@ def _heartbeat_failure(
     return consecutive_failures
 
 
+# ---------------------------------------------------------------------------
+# FAR-2078 slice 2 — per-attempt execution instrumentation (close side).
+#
+# One ``run_attempts`` row is opened by the executor at ADMISSION
+# (``PipelineExecutor._claim_under_capacity``, in the same transaction as the
+# FAR-2076 execution-budget bump). This block is the CLOSE side: it stamps
+# ``ended_at`` / ``terminal_reason`` / ``error_code`` on the latest OPEN row
+# once the attempt ends.
+#
+# Every write is FAIL-OPEN: an attempt row is diagnostics, so a failure to
+# write one must never fail the run or the reset. ``CancelledError`` still
+# propagates — swallowing cancellation is not fail-open, it is a hang.
+# ---------------------------------------------------------------------------
+
+#: Error codes that identify a watchdog STALL kill (the run row's spelling and
+#: the registry spelling).
+_ATTEMPT_STALL_CODES: frozenset[str] = frozenset(
+    {
+        EXECUTOR_STALLED_ERROR_CODE,
+        "executor.stalled",
+    }
+)
+
+#: Error codes that identify a node-deadline kill. The run row carries the
+#: underscore spelling written by ``fail_run_terminal``; the executor's
+#: node-level taxonomy uses the dotted form.
+_ATTEMPT_DEADLINE_CODES: frozenset[str] = frozenset(
+    {
+        NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+        "node.deadline_exceeded",
+        "node.timeout",
+    }
+)
+
+#: Error codes that identify a WORKER LOSS (graceful shutdown handback, lost
+#: heartbeat, or a stale sweep attributing the loss).
+_ATTEMPT_WORKER_LOST_CODES: frozenset[str] = frozenset(
+    {
+        EXECUTOR_HEARTBEAT_LOST_ERROR_CODE,
+        "harness.executor_heartbeat_lost",
+        "harness.worker_lost",
+        "worker_lost",
+        "harness.dispatch_failed",
+        "never_dispatched",
+        "no_progress",
+    }
+)
+
+#: Error codes / statuses that identify a GUARD CAP: a configured guard or
+#: ceiling ended the attempt (runaway protection, spend ceiling, retry-budget
+#: ceiling, or a guardrail eval block).
+_ATTEMPT_GUARD_CAP_CODES: frozenset[str] = frozenset(
+    {
+        "runaway",
+        "node.runaway",
+        "cost_ceiling_exceeded",
+        "harness.retry_budget_exhausted",
+        "eval_blocked",
+    }
+)
+
+#: Terminal statuses that end an attempt WITHOUT an execution error — the
+#: attempt ran to a deliberate end (a human rejected it, a router matched
+#: nothing, an operator cancelled it). Mapped to ``completed``: the closed
+#: vocabulary has no ``cancelled`` / ``rejected`` value, and every other value
+#: asserts a kill cause that did not happen. The run row carries the precise
+#: status; the attempt row records that the attempt did not die of a kill.
+_ATTEMPT_DELIBERATE_END_STATUSES: frozenset[str] = frozenset({"rejected", "router_no_match", "cancelled"})
+
+#: Terminal statuses whose ending is a configured cap rather than an error.
+_ATTEMPT_CAP_STATUSES: frozenset[str] = frozenset({"budget_exceeded", "cost_ceiling_exceeded", "eval_failed"})
+
+
+def attempt_terminal_reason(status: str | None, error_code: str | None) -> str | None:
+    """Map a run outcome to the closed ``run_attempts.terminal_reason`` set.
+
+    Returns ``None`` when the attempt has NOT ended: a non-terminal run (most
+    importantly ``awaiting_human`` — a HITL resume is a checkpoint
+    continuation, NOT a new execution attempt, so the same attempt row stays
+    open across the pause and is closed when the resumed stream ends).
+
+    ``provider_error`` is the ERROR bucket: the attempt terminalised on an
+    execution error that is not one of the specific causes above (a
+    provider/model refusal or a generic executor failure). ``error_code``
+    carries the concrete cause, so nothing is lost — the closed vocabulary
+    simply has no plain ``error`` value.
+    """
+    if status is None or status not in TERMINAL_STATUSES:
+        return None
+    code = (error_code or "").strip().lower()
+    if status == "complete":
+        return ATTEMPT_TERMINAL_REASON_COMPLETED
+    if status == "stalled" or code in _ATTEMPT_STALL_CODES:
+        return ATTEMPT_TERMINAL_REASON_STALL
+    if code in _ATTEMPT_DEADLINE_CODES:
+        return ATTEMPT_TERMINAL_REASON_DEADLINE
+    if code in _ATTEMPT_WORKER_LOST_CODES:
+        return ATTEMPT_TERMINAL_REASON_WORKER_LOST
+    if code in _ATTEMPT_GUARD_CAP_CODES or status in _ATTEMPT_CAP_STATUSES:
+        return ATTEMPT_TERMINAL_REASON_GUARD_CAP
+    if status in _ATTEMPT_DELIBERATE_END_STATUSES:
+        return ATTEMPT_TERMINAL_REASON_COMPLETED
+    return ATTEMPT_TERMINAL_REASON_PROVIDER_ERROR
+
+
+async def record_attempt_close(
+    session_factory: async_sessionmaker[Any],
+    run_id: str | uuid.UUID,
+    org_id: str | uuid.UUID,
+    *,
+    terminal_reason: str,
+    error_code: str | None = None,
+) -> int | None:
+    """Close the run's latest OPEN attempt on *session_factory* (FAIL-OPEN).
+
+    Never raises (``CancelledError`` excepted — swallowing cancellation is a
+    hang, not fail-open). Returns the closed ``attempt_index``, or ``None``
+    when there was no open row or the write failed. Every caller treats the
+    result as informational: this is diagnostics, and a failure here must
+    never fail the run, the reset, or the shutdown handback it records.
+
+    Takes a SESSION FACTORY rather than an engine so the executor can pass its
+    own ``_session_factory`` and every caller shares one implementation.
+    """
+    from modulo.db.crud.run_attempts import close_attempt
+
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, uuid.UUID(str(org_id)))
+            return await close_attempt(
+                session,
+                uuid.UUID(str(run_id)),
+                terminal_reason=terminal_reason,
+                error_code=error_code,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "pipeline_execution.attempt_close_failed run=%s org=%s terminal_reason=%s",
+            run_id,
+            org_id,
+            terminal_reason,
+            exc_info=True,
+        )
+        return None
+
+
+def engine_session_factory(aeng: AsyncEngine) -> async_sessionmaker[Any]:
+    """Session factory matching this module's ``autobegin=False`` convention."""
+    return async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+
+
+async def _close_attempt_for_terminal_row(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    status: str | None,
+    error_code: str | None,
+) -> None:
+    """Close the attempt when *status* is terminal (FAIL-OPEN, no-op otherwise)."""
+    reason = attempt_terminal_reason(status, error_code)
+    if reason is None:
+        return
+    await record_attempt_close(
+        engine_session_factory(aeng), run_id, org_id, terminal_reason=reason, error_code=error_code
+    )
+
+
+async def _record_executor_outcome_attempt(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    status: str | None,
+    error_code: str | None,
+) -> None:
+    """Close the attempt for the executor's resolved terminal status.
+
+    Named seam for ``run_executor_with_watchdog``: the wrapper tests patch it so
+    they pin the OUTCOME mapping without touching a database. FAIL-OPEN, and a
+    no-op for every non-terminal status (``awaiting_human`` keeps the attempt
+    open — a resume continues it).
+
+    *error_code* is the value the executor already returned on its ``Run`` row
+    (``None`` when the task was cancelled). No extra read: a terminal failure
+    that ended in a raw write was already closed by ``fail_run_terminal`` with
+    its code, and the remaining status-only outcomes (complete / cancelled /
+    stalled) need no code to be classified.
+    """
+    if status not in TERMINAL_STATUSES:
+        return
+    await _close_attempt_for_terminal_row(aeng, run_id, org_id, status=status, error_code=error_code)
+
+
 async def mark_complete(
     aeng: AsyncEngine,
     run_id: str,
@@ -1421,6 +1625,14 @@ async def mark_complete(
         # would never advance. Advance from the run's CREATE-STAMPED refs (no
         # self-report parse here — there are no merged outputs).
         await _advance_journeys_from_stored_refs(aeng, run_id, org_id, RUN_COMPLETE_STATUS)
+        # FAR-2078: the attempt that produced this completion ended here
+        # (fail-open diagnostics; the attempt itself already committed).
+        await record_attempt_close(
+            engine_session_factory(aeng),
+            run_id,
+            org_id,
+            terminal_reason=ATTEMPT_TERMINAL_REASON_COMPLETED,
+        )
 
 
 # FAR-1886 B1: the graceful worker-shutdown handback's registry code
@@ -1559,6 +1771,13 @@ async def fail_run_terminal(
         # triage entry here (its own session, fail-open).
         if error_code == _WORKER_LOST_TRIAGE_ERROR_CODE:
             await _persist_worker_lost_triage(aeng, run_id, org_id)
+        # FAR-2078: close the open attempt with this terminal outcome. This is
+        # the terminal-fail path shared by the watchdog kills (stall /
+        # deadline), heartbeat loss, the worker-shutdown handback, the generic
+        # executor failure and the stale sweeps — so one close site covers
+        # them all. The fenced write above landed, so the outcome is ours
+        # (a fence loss returns ``ok=False`` above and never reaches here).
+        await _close_attempt_for_terminal_row(aeng, run_id, org_id, status="failed", error_code=error_code)
     return ok
 
 
@@ -2949,6 +3168,20 @@ async def run_executor_with_watchdog(
         # no-op; a failed/pending/superseded run is filtered here before the
         # session even opens.
         await _salvage_cancelled_run_cost(aeng, run_id, org_id)
+    # FAR-2078: the ONE close point for an attempt that ended through the
+    # executor's own terminal tail (normal completion, a finalize downgrade, or
+    # an early terminal return such as a spend-ceiling refusal). Watchdog kills
+    # and raw terminal writes close in ``fail_run_terminal``; when that already
+    # closed the row this is a no-op (``close_attempt`` targets only an OPEN
+    # row). A non-terminal status — ``awaiting_human`` in particular — leaves
+    # the row open: a resume continues the SAME attempt.
+    await _record_executor_outcome_attempt(
+        aeng,
+        run_id,
+        org_id,
+        status=result_status,
+        error_code=getattr(exec_result, "error_code", None),
+    )
     return _executor_status_response(result_status)
 
 
