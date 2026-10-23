@@ -34,8 +34,10 @@ pluggable store. The ``SecretsBackend`` ABC exposes async ``get_secret`` /
 ``set_secret``
 / ``delete_secret``; the factory selects ``fernet`` (default, Fernet-encrypted
 rows in the ``secrets`` table), ``vault`` (HashiCorp Vault) or ``aws`` (Secrets
-Manager). The ``external_secrets`` entitlement gates *changing* the backend
-configuration, not building the configured one (FAR-2059 / FAR-2060).
+Manager). External backends are available on every tier - there is no
+entitlement gate on them (FAR-2100 retired the `external_secrets` flag that
+could never fire), and no licence state changes which backend the factory
+builds (FAR-2059 / FAR-2060).
 ``fernet_rotation.py``
 re-encrypts every encrypted store to a new key with an ``old_key`` fallback for
 no-downtime rotation. Infra-only surface - no UI route, so it is tracked here
@@ -50,12 +52,11 @@ rather than in the manifest registry.
 - [x] Factory ``create_secrets_backend`` selects the backend from
       ``backend_name`` / ``MODULO_SECRETS_BACKEND`` (``fernet`` default,
       ``vault``, ``aws``); unknown name → ``ValueError`` listing the choices
-- [x] External backends (``vault`` / ``aws``) are license-gated via the
-      centralized ``external_secrets`` feature flag on the CONFIGURATION
-      surface only; licence state never decides the runtime resolution path,
-      so a configured backend is never silently downgraded to ``fernet`` on a
-      lapse (FAR-2059 / FAR-2060) - an unconfigured external backend fails
-      hard in its own constructor instead
+- [x] External backends (``vault`` / ``aws``) are available on ALL tiers with
+      no entitlement or licence gate (FAR-2100): a configured backend is
+      always constructed and is never silently downgraded to ``fernet`` on a
+      licence lapse (FAR-2059 / FAR-2060) - an unconfigured external backend
+      fails hard in its own constructor instead
 - [x] ``fernet`` backend encrypts values with ``cryptography.fernet.Fernet``
       and persists them in the ``secrets`` table with an
       ``(organisation_id, key)`` scope

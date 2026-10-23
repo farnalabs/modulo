@@ -20,7 +20,6 @@ _SYNCED_FLAGS: set[str] = {
     "rate_limits",
     "email_config",
     "scim",
-    "external_secrets",
     "pipeline_delete",
     "web_vitals_analytics",
 }
@@ -64,7 +63,6 @@ class TestFar114SyncedFlags:
             "rate_limits",
             "email_config",
             "scim",
-            "external_secrets",
             "pipeline_delete",
         }
         community_flags = _SYNCED_FLAGS - team_flags

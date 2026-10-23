@@ -103,44 +103,6 @@ def validate_key(key: str) -> str:
     return stripped
 
 
-def _check_external_secrets_licensed() -> bool:
-    """Return True if the current plan permits CHANGING the secrets-backend configuration.
-
-    This is a CONFIGURATION-SURFACE entitlement, not a runtime gate. It
-    answers "may an operator switch to / edit an external backend?", and must
-    never decide which backend the running instance resolves credentials with
-    (FAR-2059 / FAR-2060): a licence lapse must not silently downgrade a
-    configured ``vault`` / ``aws`` deployment to ``fernet``, because that turns
-    the lapse into credential-resolution failures at run time with only a log
-    warning to explain it.
-
-    Uses FeatureFlagRegistry to check the ``external_secrets`` flag rather
-    than an ad-hoc license check, so gating stays consistent with the
-    centralized flag definition and tier catalog.
-    """
-    from modulo.core.feature_flags import FeatureFlagRegistry
-    from modulo.core.license import get_license, parse_and_verify
-
-    tier: str = "community"
-    has_license: bool = False
-
-    lic = get_license()
-    if lic is not None:
-        tier = lic.tier
-        has_license = True
-    else:
-        raw_key = os.environ.get("MODULO_LICENSE_KEY", "")
-        if raw_key:
-            validation = parse_and_verify(raw_key)
-            if validation.valid and validation.license_data is not None:
-                tier = validation.license_data.tier
-                has_license = True
-
-    registry = FeatureFlagRegistry(current_tier=tier, has_license_key=has_license)
-    flag = registry.get_flag("external_secrets")
-    return flag is not None and flag.currently_active
-
-
 def _warn_if_external_backend_unconfigured(name: str) -> None:
     """Warn when an external backend is selected but lacks its own configuration.
 
@@ -177,11 +139,11 @@ def create_secrets_backend(
     ``"fernet"``) and constructs the matching implementation.
 
     External secrets backends (``vault``, ``aws``) are built whenever they are
-    CONFIGURED. Licence state does NOT downgrade them (FAR-2059 / FAR-2060):
-    ``external_secrets`` gates the ability to CHANGE the configuration, never
-    the runtime resolution path. A lapse must not quietly switch a configured
-    Vault/AWS deployment to fernet, because that would turn the lapse into
-    credential-resolution failures mid-run.
+    CONFIGURED. There is no licence gate: external backends are available on
+    every tier, and licence state never changes the backend the instance
+    resolves credentials with (FAR-2059 / FAR-2060 / FAR-2100). A lapse must
+    not quietly switch a configured Vault/AWS deployment to fernet, because
+    that would turn the lapse into credential-resolution failures mid-run.
 
     Args:
         fernet_key: Fernet encryption key (required only by FernetSecretsBackend).
@@ -210,9 +172,9 @@ def create_secrets_backend(
                 raise ValueError("fernet_key is required when backend_name is 'fernet'")
             return FernetSecretsBackend(fernet_key=fernet_key, session=session, old_key=old_fernet_key)
         case "vault" | "aws":
-            # Deliberately NO licence check here. The configured backend is the
-            # backend the instance resolves credentials with; see the module
-            # docstring and ``_check_external_secrets_licensed``.
+            # Deliberately NO licence check here (FAR-2100): the configured
+            # backend is the backend the instance resolves credentials with,
+            # on every tier. See the module docstring.
             _warn_if_external_backend_unconfigured(name)
             if name == "vault":
                 from modulo.core.secrets_backend.vault import VaultSecretsBackend

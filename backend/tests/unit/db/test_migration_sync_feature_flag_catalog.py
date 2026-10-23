@@ -33,7 +33,6 @@ _EXPECTED_FLAGS: set[str] = {
     "rate_limits",
     "email_config",
     "scim",
-    "external_secrets",
     "pipeline_delete",
     "web_vitals_analytics",
 }
