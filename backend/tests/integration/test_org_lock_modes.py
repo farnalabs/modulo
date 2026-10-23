@@ -14,11 +14,17 @@ analytics consent, OTEL config, runtime flags, licence) to single-statement
 atomic patches — those writers no longer take a ``FOR UPDATE`` pre-lock at all
 (the UPDATE statement's own row lock is statement-scoped, and on the generic
 non-Postgres dialects the patch helper's fallback keeps the lock it needs).
-This file pins BOTH halves: the deletion-FSM sites that must KEEP ``FOR UPDATE``,
-and the converted config writers that must NOT take one.
 
-Only the compiled SQL is asserted (no Postgres is required by this module's own
-tests), but the module lives under ``tests/integration/`` per the task contract.
+FAR-1823 then REMOVED the org-row FOR UPDATE lock from ``export_org_data``:
+live captures now use a read-only REPEATABLE READ snapshot on a separate
+connection, and the stored ``export_bundle_json`` is returned directly without
+any lock. The org-row lock never gave cross-table consistency because child-row
+UPDATEs were never blocked by it — the export reads multiple child tables that
+the org lock does not protect.
+
+This file pins BOTH halves: the deletion-FSM sites that must KEEP ``FOR UPDATE``
+(``request_org_deletion`` FSM re-read, ``confirm_org_deletion``, ``cancel_org_deletion``),
+and the converted config writers + export path that must NOT take one.
 """
 
 from __future__ import annotations
@@ -126,10 +132,10 @@ def _compiled_sql(statement: Any) -> str:
     return str(compiled).upper()
 
 
-def _assert_org_lock_is_for_update(session: _CapturingSession, label: str) -> None:
-    """Assert the first (org-lock) statement is FOR UPDATE, not a weaker mode."""
+def _assert_org_lock_is_for_update(session: _CapturingSession, label: str, statement_index: int = 0) -> None:
+    """Assert the specified (org-lock) statement is FOR UPDATE, not a weaker mode."""
     assert session.statements, f"{label}: no statement was issued"
-    sql = _compiled_sql(session.statements[0])
+    sql = _compiled_sql(session.statements[statement_index])
     assert "FOR UPDATE" in sql, f"{label}: the org lock is not FOR UPDATE: {sql}"
     assert "FOR NO KEY UPDATE" not in sql, f"{label}: the org lock was weakened to FOR NO KEY UPDATE: {sql}"
     assert "FOR SHARE" not in sql, f"{label}: the org lock was weakened to FOR SHARE: {sql}"
@@ -164,21 +170,70 @@ async def test_confirm_org_deletion_org_lock_stays_for_update() -> None:
 
 
 async def test_other_org_deletion_paths_org_lock_stays_for_update() -> None:
-    """Request, cancel and export in the deletion module keep the same FOR UPDATE lock."""
-    request_session = _CapturingSession()
-    with pytest.raises(ValueError, match=_ORG_NOT_FOUND):
+    """Request and cancel in the deletion module keep the FOR UPDATE lock.
+
+    export_org_data no longer takes an org-row lock (FAR-1823): live captures
+    use a read-only REPEATABLE READ snapshot on a separate connection, and the
+    stored export_bundle_json is returned directly without any lock.
+    """
+
+    class _RequestDeletionSession(_CapturingSession):
+        """Session that returns valid org first, then missing for request_org_deletion."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self._org_read_count = 0
+
+        async def execute(self, statement: Any, *_args: Any, **_kwargs: Any) -> Any:
+            self.statements.append(statement)
+            if "current_setting('app.organisation_id'" in str(statement):
+                return _GucResult(str(_ORG_ID))
+            # Check if this is an org read (SELECT ... FROM organisations)
+            if "FROM organisations" in str(statement) or "FROM ORGANISATIONS" in str(statement).upper():
+                self._org_read_count += 1
+                if self._org_read_count == 1:
+                    # First org read: return valid org (pre-lock validation)
+                    from unittest.mock import MagicMock
+
+                    org = MagicMock()
+                    org.id = _ORG_ID
+                    org.status = "active"
+                    org.deleted_at = None
+                    org.deletion_token = None
+                    org.deletion_token_expires_at = None
+                    org.export_bundle_json = None
+                    result = MagicMock()
+                    result.scalar_one_or_none.return_value = org
+                    return result
+                # Second org read: return missing (FSM re-read under lock)
+                return _MissingOrgResult()
+            return _MissingOrgResult()
+
+    request_session = _RequestDeletionSession()
+    # Patch _collect_org_export_in_snapshot to avoid real DB connection
+    from unittest.mock import AsyncMock, patch
+
+    target = "modulo.db.crud.org_deletion._collect_org_export_in_snapshot"
+    with patch(target, AsyncMock(return_value={"organisation": []})), pytest.raises(ValueError, match=_ORG_NOT_FOUND):
         await request_org_deletion(request_session, _ORG_ID, _ACTOR_ID)
-    _assert_org_lock_is_for_update(request_session, "request_org_deletion")
+    # request_org_deletion has two org reads: 1) pre-lock validation (no FOR UPDATE)
+    # 2) FSM FOR UPDATE re-read. Check the second statement (index 1).
+    _assert_org_lock_is_for_update(request_session, "request_org_deletion", statement_index=1)
 
     cancel_session = _CapturingSession()
     with pytest.raises(ValueError, match=_ORG_NOT_FOUND):
         await cancel_org_deletion(cancel_session, _ORG_ID)
     _assert_org_lock_is_for_update(cancel_session, "cancel_org_deletion")
 
+    # export_org_data: no org-row FOR UPDATE lock (snapshot path).
     export_session = _CapturingSession()
-    with pytest.raises(ValueError, match=_ORG_NOT_FOUND):
+    with patch(target, AsyncMock(return_value={"organisation": []})), pytest.raises(ValueError, match=_ORG_NOT_FOUND):
         await export_org_data(export_session, _ORG_ID)
-    _assert_org_lock_is_for_update(export_session, "export_org_data")
+    # export_org_data does a pre-lock validation read (no FOR UPDATE), then calls
+    # _collect_org_export_in_snapshot (patched). Assert no FOR UPDATE was issued.
+    for stmt in export_session.statements:
+        sql = _compiled_sql(stmt)
+        assert "FOR UPDATE" not in sql, f"export_org_data must not issue FOR UPDATE: {sql}"
 
 
 async def test_get_organisation_for_update_still_takes_for_update() -> None:
