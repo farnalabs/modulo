@@ -99,7 +99,8 @@ class TestFailureCoverageCarveOut:
 
 
 class TestPreservedBehaviour:
-    """Every pre-existing behaviour must be byte-for-byte unchanged."""
+    """Pre-existing behaviour that must be preserved (the FAR-2076 budget
+    authority moved, but the event-coverage taxonomy did not)."""
 
     def test_stall_policy_honors_policy_budget(self, budget_default: None) -> None:
         """The stall branch (shared matcher) keeps the policy budget, measured
@@ -124,11 +125,13 @@ class TestPreservedBehaviour:
         policy = {"on": ["ci_failure"], "max_retries": 5}
         assert ch._should_redispatch_nodeless(_row(1, policy)) is False
 
-    def test_empty_on_uses_budget_default(self, budget_default: None) -> None:
-        """An explicit empty `on` keeps budget-default repair: claim 4 True
-        (inclusive bound), claim 5 False under the default budget of 4."""
+    def test_empty_on_uses_the_shared_policy_ceiling(self, budget_default: None) -> None:
+        """FAR-2076: a NON-EMPTY policy with an explicit empty ``on`` and
+        ``max_retries: 0`` authorises exactly ONE execution (the shared
+        ``1 + max_retries`` ceiling) — it is a saveable budget, not the
+        policy-less configurable default."""
         policy = {"on": [], "max_retries": 0}
-        assert ch._should_redispatch_nodeless(_row(4, policy)) is True
+        assert ch._should_redispatch_nodeless(_row(4, policy)) is False
         assert ch._should_redispatch_nodeless(_row(5, policy)) is False
 
     def test_missing_on_uses_shared_matcher_not_budget_default(self, monkeypatch: pytest.MonkeyPatch) -> None:

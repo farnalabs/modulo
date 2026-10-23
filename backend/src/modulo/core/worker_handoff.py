@@ -333,11 +333,11 @@ async def _load_handback_row(
         select(
             Run.status,
             Run.dispatch_phase,
-            Run.claim_count,
             Run.node_attempt_count,
             # FAR-2076: the ONE execution measure. The handback's retry budget
             # compares against this, never against claim_count (which grows on
-            # capacity-demoted and resume claims).
+            # capacity-demoted and resume claims — and is not selected at all,
+            # because no reader consumes it).
             Run.execution_attempt_count,
             Run.node_token_usage,
             Run.started_at,
@@ -358,7 +358,6 @@ async def _load_handback_row(
     row = SimpleNamespace(
         status=values["status"],
         dispatch_phase=values["dispatch_phase"],
-        claim_count=values["claim_count"],
         node_attempt_count=values["node_attempt_count"],
         execution_attempt_count=values["execution_attempt_count"],
         node_token_usage=values["node_token_usage"],

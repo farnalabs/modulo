@@ -2460,30 +2460,62 @@ class PipelineExecutor:
         Fail-open, loud: any error reading the org settings, counting org
         runs, or scanning the graph logs a warning and ADMITS the run (treats
         it as no-cap) rather than raising.
+
+        FAR-2076: a 55P03 row-lock timeout on the admission transaction is
+        retried ONCE. That transaction also spends one execution attempt, so a
+        silent recovery would let the graph run uncounted; a second timeout is
+        re-raised rather than swallowed.
         """
         org_sandbox_cap, org_sandbox_host_only, org_sandbox_population = await self._read_org_sandbox_cap_full(
             org_id, graph_json, snapshot_id
         )
         org_run_limit: int | None = await self._read_org_run_concurrency_limit(org_id)
 
-        try:
-            return await self._claim_under_capacity(
-                run_id=run_id,
-                org_id=org_id,
-                pipeline_id=pipeline_id,
-                max_concurrent=max_concurrent,
-                org_sandbox_cap=org_sandbox_cap,
-                org_sandbox_host_only=org_sandbox_host_only,
-                org_sandbox_population=org_sandbox_population,
-                org_run_limit=org_run_limit,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            recovered = await self._recover_capacity_lock_timeout(exc, run_id=run_id, org_id=org_id)
-            if recovered is None:
+        # FAR-2076: the admission transaction ALSO spends one execution against
+        # the retry budget (see ``_claim_under_capacity``). A 55P03 row-lock
+        # timeout rolls that transaction back WHOLE — including the bump — so
+        # proceeding after recovery would execute the graph UNCOUNTED. Retry the
+        # admission+bump transaction exactly once; if the second attempt also
+        # times out, re-raise so the failure is visible instead of silently
+        # executing past the budget.
+        last_lock_timeout: Exception | None = None
+        for attempt in (0, 1):
+            try:
+                return await self._claim_under_capacity(
+                    run_id=run_id,
+                    org_id=org_id,
+                    pipeline_id=pipeline_id,
+                    max_concurrent=max_concurrent,
+                    org_sandbox_cap=org_sandbox_cap,
+                    org_sandbox_host_only=org_sandbox_host_only,
+                    org_sandbox_population=org_sandbox_population,
+                    org_run_limit=org_run_limit,
+                )
+            except asyncio.CancelledError:
                 raise
-            return recovered
+            except Exception as exc:
+                if sqlstate_of(exc) != LOCK_NOT_AVAILABLE_SQLSTATE:
+                    raise
+                last_lock_timeout = exc
+                if attempt == 1:
+                    _log.warning(
+                        "pipeline.capacity_check_lock_timeout run=%s — second bounded "
+                        "mutation_row_lock_timeout_ms wait expired; the admission and its "
+                        "execution-budget bump rolled back, so the attempt is NOT executed "
+                        "uncounted",
+                        run_id,
+                        exc_info=True,
+                    )
+                    raise
+                _log.warning(
+                    "pipeline.capacity_check_lock_timeout run=%s — bounded "
+                    "mutation_row_lock_timeout_ms wait expired on the claim-time "
+                    "write; retrying the admission+bump transaction once",
+                    run_id,
+                    exc_info=True,
+                )
+        assert last_lock_timeout is not None  # the loop returns or raises
+        raise last_lock_timeout
 
     async def _claim_under_capacity(
         self,
@@ -2573,12 +2605,29 @@ class PipelineExecutor:
                 # execution).
                 from modulo.core.pipeline_execution import bump_execution_attempt_count
 
-                await bump_execution_attempt_count(
+                counted = await bump_execution_attempt_count(
                     session,
                     run_id,
                     org_id,
                     claim_token=self._claim_token,
                 )
+                if not counted:
+                    # The token/status fence rejected the bump. The admission
+                    # branch above proved the row was admissible, so this is a
+                    # concurrent transition (a successor rotated the token, or
+                    # the row left ``running`` in the same instant). Never let
+                    # that be indistinguishable from a successful spend: WARN,
+                    # and proceed only because every later write the attempt
+                    # makes is itself token-fenced (a successor that took the
+                    # run spent its own attempt in its own admission).
+                    _log.warning(
+                        "pipeline.execution_attempt_not_counted run=%s org=%s — the "
+                        "claim-token/status fence rejected the execution-budget bump; "
+                        "the attempt proceeds against a superseded or no-longer-running "
+                        "row (its writes remain fenced)",
+                        run_id,
+                        org_id,
+                    )
                 return admitted
 
             decline_code, decline_detail = self._capacity_decline(
@@ -2617,41 +2666,6 @@ class PipelineExecutor:
             if pending_run is None:
                 raise RunNotFoundError(run_id)
             return pending_run
-
-    async def _recover_capacity_lock_timeout(
-        self,
-        exc: Exception,
-        *,
-        run_id: uuid.UUID,
-        org_id: uuid.UUID,
-    ) -> Run | None:
-        """Recover from a 55P03 on ``_claim_under_capacity``'s write, else ``None``.
-
-        FAR-1610: the bounded row-lock wait expired (55P03) on a claim-time
-        write. The transaction rolled back whole, so NO status change was
-        applied — the run is left exactly as it was (the SAQ claim already set
-        it ``running``). This is the same fail-open-admit posture the capacity
-        READ failures already take (see ``_check_capacity``'s docstring): WARN,
-        re-read the row, and let the caller proceed; a concurrent cancel-request
-        is still caught by the stream path's DB cancellation check. Never
-        silent.
-
-        Returns the re-read run on a 55P03; returns ``None`` for any other
-        exception so ``_check_capacity`` re-raises it unchanged.
-        """
-        if sqlstate_of(exc) != LOCK_NOT_AVAILABLE_SQLSTATE:
-            return None
-        _log.warning(
-            "pipeline.capacity_check_lock_timeout run=%s — bounded "
-            "mutation_row_lock_timeout_ms wait expired on the claim-time write; no "
-            "status change applied, proceeding with the run's current state",
-            run_id,
-            exc_info=True,
-        )
-        async with self._session_factory() as session, session.begin():
-            await set_rls_org(session, org_id)
-            await set_rls_execution_context(session)
-            return await get_run(session, run_id)
 
     async def _check_spend_ceiling_gate(
         self,

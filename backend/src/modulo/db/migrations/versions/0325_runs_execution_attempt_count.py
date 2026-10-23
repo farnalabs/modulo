@@ -24,11 +24,11 @@ This migration adds the dedicated column::
     runs.execution_attempt_count integer NOT NULL DEFAULT 0
 
 Semantics - incremented EXACTLY ONCE per execution attempt of the graph, i.e.
-per ``execute_run``. The counter is stamped by the caller inside its claim
-UPDATE; it is NEVER stamped by a ``resume_run`` claim and NEVER by a
-capacity-demoted claim. A pre-node death (checkpointer setup, graph compile,
-connector-hub init) DOES count: the attempt was made, so a retry there must
-spend budget.
+per ``execute_run``. The counter is stamped by the executor in the transaction
+that ADMITS the attempt (``_claim_under_capacity``), NOT by the SAQ claim
+UPDATE and NOT by a HITL resume claim: a capacity-demoted claim never begins an
+execution. A pre-node death (checkpointer setup, graph compile, connector-hub
+init) DOES count: the attempt was made, so a retry there must spend budget.
 
 Shape choices:
 
@@ -43,14 +43,25 @@ Shape choices:
   primary key (the claim UPDATE / the retry consult), never filtered on, so an
   index would add write cost on the hottest table for no read gain.
 
-Backfill: ``execution_attempt_count = COALESCE(node_attempt_count, 0)``.
+Backfill: ``execution_attempt_count = COALESCE(node_attempt_count, 0)`` for
+NON-TERMINAL rows only. The column is read solely for a row that can still be
+claimed or re-dispatched (``pending`` / ``running`` / ``awaiting_human`` /
+``claimed`` / ``hitl_parked``), so rewriting the whole historical table during
+the release — while the old app is still serving traffic — would lock and bloat
+the hottest table for rows no reader will ever consult. The terminal rows keep
+the column default ``0``.
+
+Note: PostgreSQL has NO no-op-update elimination. Every ``UPDATE`` writes a new
+tuple version, even when the value is unchanged — so a predicate-free statement
+rewrites the entire heap. The ``WHERE`` above is what keeps this migration off
+the historical rows; there is no Postgres optimisation that would have done so
+implicitly.
+
 ``node_attempt_count`` is a LOWER BOUND on executions (a pre-node-only history
 yields 0), and that asymmetry is deliberate: **under-counting grants a retry,
 over-counting kills a healthy run**, so under-counting is the safe direction.
 ``COALESCE`` is belt-and-braces (the source column is itself NOT NULL DEFAULT
-0). Rows whose value would not change (``node_attempt_count = 0``) are skipped
-by Postgres' no-op update optimisation, so the statement rewrites only rows
-that actually recorded an attempt.
+0).
 """
 
 from __future__ import annotations
@@ -78,9 +89,17 @@ _EXECUTION_ATTEMPT_COUNT = sa.Column(
 )
 
 # Literal SQL only (no f-string / format-built SQL - migration-fstring-sql
-# semgrep rule). A lower bound on executions; under-counting is the safe
-# direction (see the module docstring).
-_BACKFILL_EXECUTION_ATTEMPT_COUNT = "UPDATE runs SET execution_attempt_count = COALESCE(node_attempt_count, 0)"
+# semgrep rule). Scoped to the NON-TERMINAL statuses the counter is read for: a
+# predicate-free UPDATE rewrites every historical row of the hot ``runs`` table
+# while the old app still serves (Postgres has no no-op-update elimination).
+# Keep every status a reader can still claim / re-dispatch - including
+# ``hitl_parked`` and ``claimed`` so a guardrail-override resume flip is
+# covered. A lower bound on executions; under-counting is the safe direction
+# (see the module docstring).
+_BACKFILL_EXECUTION_ATTEMPT_COUNT = (
+    "UPDATE runs SET execution_attempt_count = COALESCE(node_attempt_count, 0) "
+    "WHERE status IN ('pending','running','awaiting_human','claimed','hitl_parked')"
+)
 
 
 def upgrade() -> None:
