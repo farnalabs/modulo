@@ -7517,6 +7517,7 @@ async def _connector_success_phase(
     envelope on violation, else ``None``.
     """
     if op == "write":
+        reported_failure = _connector_write_reported_failure(connector, result)
         await _connector_write_outcome_for_state(
             session_factory,
             connector,
@@ -7528,6 +7529,18 @@ async def _connector_success_phase(
             result=result,
             intent_active=intent_active,
         )
+        if reported_failure:
+            return {
+                "artifacts": [
+                    {
+                        "node_id": node_id,
+                        "status": "failed",
+                        "error": "Connector reported operation failure",
+                        "output": result,
+                    }
+                ],
+                "connector_failure": True,
+            }
     return _guard_connector_secret_output(result, node_id)
 
 
