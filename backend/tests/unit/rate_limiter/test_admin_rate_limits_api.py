@@ -111,31 +111,28 @@ class TestGetRateLimits:
 
 class TestUpdateRateLimits:
     def test_put_constructs_rate_limit_rules_and_returns_same_shape(self, client: TestClient) -> None:
-        original = list(RateLimitMiddleware.RULES)
-        try:
-            payload = {
-                "rules": [
-                    {"path_prefix": "/api/v1/limited", "max_requests": 3, "window_s": 5},
-                    {"path_prefix": "/api/v1/other", "max_requests": 7, "window_s": 60},
-                ]
-            }
-            resp = client.put("/api/v1/admin/rate-limits", json=payload)
-            assert resp.status_code == 200
-            data = resp.json()
-            assert set(data) == {"mode", "rules"}
-            assert data["mode"] == "in_memory"
-            assert data["rules"] == [
+        """The autouse ``_isolate_module_state`` fixture restores ``RULES``."""
+        payload = {
+            "rules": [
                 {"path_prefix": "/api/v1/limited", "max_requests": 3, "window_s": 5},
                 {"path_prefix": "/api/v1/other", "max_requests": 7, "window_s": 60},
             ]
-            # The PUT must have installed RateLimitRule dataclass instances
-            # (never bare tuples), which the middleware consumes.
-            assert [
-                RateLimitRule(path_prefix="/api/v1/limited", max_requests=3, window_s=5),
-                RateLimitRule(path_prefix="/api/v1/other", max_requests=7, window_s=60),
-            ] == RateLimitMiddleware.RULES
-        finally:
-            RateLimitMiddleware.set_rules(original)
+        }
+        resp = client.put("/api/v1/admin/rate-limits", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data) == {"mode", "rules"}
+        assert data["mode"] == "in_memory"
+        assert data["rules"] == [
+            {"path_prefix": "/api/v1/limited", "max_requests": 3, "window_s": 5},
+            {"path_prefix": "/api/v1/other", "max_requests": 7, "window_s": 60},
+        ]
+        # The PUT must have installed RateLimitRule dataclass instances
+        # (never bare tuples), which the middleware consumes.
+        assert [
+            RateLimitRule(path_prefix="/api/v1/limited", max_requests=3, window_s=5),
+            RateLimitRule(path_prefix="/api/v1/other", max_requests=7, window_s=60),
+        ] == RateLimitMiddleware.RULES
 
     def test_put_empty_rules_rejected(self, client: TestClient) -> None:
         resp = client.put("/api/v1/admin/rate-limits", json={"rules": []})
