@@ -215,7 +215,34 @@ async def test_binding_without_new_inputs_resaves_without_persisting_nulls(
             timeout=30.0,
         )
         assert got.status_code == 200, got.text
-        stored = got.json()["nodes"][0]["connector_binding"]
+
+        # The regression is about what a RE-SAVE persists, so drive the actual
+        # flow the editor takes: read the graph back and PUT that same payload
+        # again. The read model default-fills the absent optional fields as
+        # ``null`` (a schema-consistent, nullable response), and only the write
+        # path strips them — so a response-key-absence assertion here would test
+        # the read contract, not the persistence contract that broke the engine.
+        first_read = got.json()
+        re_save = await integration_client.put(
+            f"/api/v1/pipelines/{pipeline_id}/graph",
+            json={"nodes": first_read["nodes"], "edges": first_read["edges"]},
+            headers=headers,
+            timeout=30.0,
+        )
+        assert re_save.status_code == 200, re_save.text
+
+        # Read the PERSISTED graph (what the engine consumes at run start) and
+        # pin that the unset inputs stayed ABSENT across the round trip.
+        async with db_engine.begin() as conn:
+            await conn.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(test_org)})
+            await conn.execute(text("SELECT set_config('app.execution_context', 'true', true)"))
+            persisted_nodes = (
+                await conn.execute(
+                    text("SELECT graph_nodes_json FROM pipelines WHERE id = :id"),
+                    {"id": str(pipeline_id)},
+                )
+            ).scalar_one()
+        stored = persisted_nodes[0]["connector_binding"]
         assert "resource" not in stored
         assert "filters" not in stored
         assert "data" not in stored
