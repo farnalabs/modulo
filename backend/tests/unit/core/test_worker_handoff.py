@@ -580,9 +580,34 @@ async def test_handback_terminalises_refused_run(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
     fail = AsyncMock(return_value=True)
     monkeypatch.setattr(pipeline_execution, "fail_run_terminal", fail)
+    book_cost = AsyncMock()
+    monkeypatch.setattr(pipeline_execution, "record_worker_lost_derived_cost", book_cost)
     result = await handback_inflight_runs(engine, registry=reg)
     assert result == {"handed_back": 0, "terminalised": 1, "skipped": 0}
     fail.assert_awaited_once()
+    # FAR-2077: a LANDED terminal write books the run's elapsed sandbox cost.
+    book_cost.assert_awaited_once()
+    cost_kwargs = book_cost.await_args.kwargs
+    assert cost_kwargs["error_code"] == WORKER_LOST_ERROR_CODE
+    assert book_cost.await_args.args[0] is engine
+    assert book_cost.await_args.args[1] == str(run_id)
+
+
+async def test_handback_terminal_fenced_out_books_no_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-2077: a fenced-out terminal write is another writer's row — book nothing."""
+    run_id, org_id = uuid.uuid4(), uuid.uuid4()
+    reg = _observed_registry(run_id, org_id)
+    engine = _handback_engine()
+    monkeypatch.setattr(
+        wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1", "idempotent": False}]})
+    )
+    monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
+    monkeypatch.setattr(pipeline_execution, "fail_run_terminal", AsyncMock(return_value=False))
+    book_cost = AsyncMock()
+    monkeypatch.setattr(pipeline_execution, "record_worker_lost_derived_cost", book_cost)
+    result = await handback_inflight_runs(engine, registry=reg)
+    assert result == {"handed_back": 0, "terminalised": 0, "skipped": 1}
+    book_cost.assert_not_awaited()
 
 
 async def test_handback_terminal_write_fenced_out_counts_skipped(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -54,6 +54,7 @@ from modulo.core.cost_controller.finalize import (
     finalize_cancelled_run,
     finalize_cost,
     finalize_failed_run,
+    finalize_worker_lost_run,
     salvage_cancelled_run_cost,
 )
 from modulo.db.crud.run_node_outputs import RunBlobs
@@ -1477,6 +1478,207 @@ async def test_finalize_failed_run_envelope_swallows_non_lock_failure() -> None:
         )
     failure.assert_awaited_once()
     assert mock_log.warning.call_args.args[0] == "cost_finalize.failed_run_finalize_failed"
+
+
+# ---------------------------------------------------------------------------
+# finalize_worker_lost_run — FAR-2077 worker-shutdown derived cost
+# ---------------------------------------------------------------------------
+
+
+def _worker_lost_run(**kw: Any) -> MagicMock:
+    """A run row as the shutdown terminaliser leaves it: failed + worker_lost.
+
+    Explicit attributes matter here: a bare ``MagicMock`` yields a truthy
+    ``sandbox_id`` / non-numeric ``total_cost_usd``, which would silently
+    satisfy the very gates these tests pin.
+    """
+    run = _make_run(node_token_usage=None, outputs_json=None, **kw)
+    run.status = "failed"
+    run.error_code = "harness.worker_lost"
+    run.started_at = kw.get("started_at", datetime(2026, 10, 22, 9, 0, tzinfo=UTC))
+    run.completed_at = kw.get("completed_at", datetime(2026, 10, 22, 11, 30, tzinfo=UTC))
+    run.total_cost_usd = kw.get("total_cost_usd")
+    run.cost_breakdown = kw.get("cost_breakdown")
+    run.sandbox_id = kw.get("sandbox_id", "sbx-1")
+    run.sandbox_dispatch_state = kw.get("sandbox_dispatch_state")
+    return run
+
+
+async def test_finalize_worker_lost_run_books_elapsed_derived_sandbox_cost() -> None:
+    """FAR-2077: 2h30m of sandbox occupancy reaches the run row as derived spend.
+
+    The raw shutdown terminaliser writes no cost columns, so this is the ONLY
+    writer that can attribute the run's sandbox time. The derived line must
+    carry ``source="derived"`` provenance naming the elapsed window as its
+    basis — never a claimed model number.
+    """
+    run = _worker_lost_run()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+    ):
+        await finalize_worker_lost_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="harness.worker_lost",
+            error_detail="worker shut down mid-run",
+        )
+
+    mock_urs.assert_awaited_once()
+    kwargs = mock_urs.await_args.kwargs
+    # 2.5h at $0.13/h — the elapsed window, not the node deadline.
+    assert kwargs["total_cost_usd"] == Decimal("0.325")
+    entry = kwargs["cost_breakdown"][0]
+    assert entry["component"] == "sandbox_infra"
+    assert entry["source"] == "derived"
+    assert entry["basis"]["derived_from"] == "worker_lost_elapsed"
+    assert entry["basis"]["wall_clock_hours"] == 2.5
+
+
+async def test_finalize_worker_lost_run_never_double_books_an_attributed_run() -> None:
+    """A retried run that already carries cost is never charged again."""
+    run = _worker_lost_run(total_cost_usd=Decimal("0.4"), cost_breakdown=[{"component": "sandbox_infra"}])
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with (
+        patch("modulo.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+    ):
+        await finalize_worker_lost_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="harness.worker_lost",
+            error_detail="worker shut down mid-run",
+        )
+
+    mock_blobs.assert_not_awaited()
+    mock_urs.assert_not_awaited()
+
+
+async def test_finalize_worker_lost_run_never_reprices_a_relabelled_run() -> None:
+    """Only the failure THIS path wrote is priced — a successor's row is not ours."""
+    run = _worker_lost_run()
+    run.error_code = "node_deadline_exceeded"
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with (
+        patch("modulo.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+    ):
+        await finalize_worker_lost_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="harness.worker_lost",
+            error_detail="worker shut down mid-run",
+        )
+
+    mock_blobs.assert_not_awaited()
+    mock_urs.assert_not_awaited()
+
+
+async def test_finalize_worker_lost_run_withholds_cost_without_sandbox_evidence() -> None:
+    """An elapsed window alone is not proof a SANDBOX ran — never fabricate it.
+
+    No dispatch reservation and no retained sandbox marker means the run may
+    have been in a connector/HTTP node when the worker died, so no sandbox
+    line is written.
+    """
+    run = _worker_lost_run(sandbox_id=None, sandbox_dispatch_state=None)
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+    ):
+        await finalize_worker_lost_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="harness.worker_lost",
+            error_detail="worker shut down mid-run",
+        )
+
+    mock_urs.assert_not_awaited()
+
+
+async def test_finalize_worker_lost_run_accepts_a_live_dispatch_marker_as_evidence() -> None:
+    """A live ``sandbox_dispatch_state`` reservation proves a sandbox was running.
+
+    The shutdown terminaliser can run before the node's cancellation-retention
+    marker is persisted, so the dispatch reservation is the durable proof.
+    """
+    run = _worker_lost_run(
+        sandbox_id=None,
+        sandbox_dispatch_state='{"state": "dispatching", "attempt_key": "a", "provider": "e2b"}',
+    )
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+    ):
+        await finalize_worker_lost_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="harness.worker_lost",
+            error_detail="worker shut down mid-run",
+        )
+
+    mock_urs.assert_awaited_once()
+    assert mock_urs.await_args.kwargs["total_cost_usd"] == Decimal("0.325")
+
+
+async def test_finalize_worker_lost_run_rejects_the_hitl_tombstone_as_evidence() -> None:
+    """A ``cleared_at_hitl`` marker is NOT a live dispatch — no sandbox spend."""
+    run = _worker_lost_run(
+        sandbox_id=None,
+        sandbox_dispatch_state='{"state": "cleared_at_hitl", "attempt_key": "a", "provider": "e2b"}',
+    )
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+    ):
+        await finalize_worker_lost_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="harness.worker_lost",
+            error_detail="worker shut down mid-run",
+        )
+
+    mock_urs.assert_not_awaited()
+
+
+def test_finalize_failed_run_dispatch_marker_evidence_defaults_off() -> None:
+    """The deadline path's call site supplies no dispatch evidence — unchanged."""
+    default = inspect.signature(finalize_failed_run).parameters["dispatch_marker_evidence"].default
+    assert default is False
 
 
 # ---------------------------------------------------------------------------

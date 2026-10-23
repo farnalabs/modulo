@@ -2076,6 +2076,61 @@ async def _record_derived_deadline_cost(
         )
 
 
+async def record_worker_lost_derived_cost(
+    aengine: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    error_code: str,
+    error_detail: str,
+) -> None:
+    """Book the DERIVED sandbox cost for a worker-shutdown terminal fail (FAR-2077).
+
+    ``worker_handoff`` terminal-fails an in-flight run through
+    :func:`fail_run_terminal`, a raw writer that records no cost columns — so a
+    run that occupied a sandbox for hours reached the ledger as ``null``. The
+    elapsed time IS known (``started_at`` -> the terminal write), so this is the
+    worker-loss analogue of :func:`_record_derived_deadline_cost`: it re-reads
+    the just-failed row and attributes the sandbox occupancy through
+    ``cost_controller.finalize.finalize_worker_lost_run``.
+
+    Called only AFTER ``fail_run_terminal`` returned ``True`` — the terminal
+    write actually landed, so this is a compensating write on an already-failed
+    run, never on a re-dispatched one.
+
+    Fail-open: any failure logs and is swallowed so a completed terminal
+    failure is never turned into a raised error. ``asyncio.CancelledError`` is
+    re-raised (worker shutdown is not ours to swallow).
+
+    FAR-1313 lock bound: the FINALIZING write takes the hot ``runs`` row lock,
+    so the transaction-scoped ``set_mutation_row_lock_timeout`` is issued FIRST,
+    before any lock.
+    """
+    from modulo.core.cost_controller.finalize import finalize_worker_lost_run
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    try:
+        factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
+        async with factory() as session, session.begin():
+            await set_mutation_row_lock_timeout(session)
+            await set_rls_org(session, uuid.UUID(org_id))
+            await finalize_worker_lost_run(
+                session,
+                run_id=uuid.UUID(run_id),
+                org_id=uuid.UUID(org_id),
+                error_code=error_code,
+                error_detail=error_detail,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "pipeline_execution.worker_lost_cost_record_failed run=%s",
+            run_id,
+            exc_info=True,
+        )
+
+
 async def _write_node_deadline_triage_marker(
     aeng: AsyncEngine,
     run_id: str,
