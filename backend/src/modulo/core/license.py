@@ -269,7 +269,12 @@ def parse_and_verify(key: str) -> LicenseValidation:
     # sees the misconfiguration, not an unhelpful "bad signature".
     if is_dev_anchor_in_use() and not _dev_anchor_trusted:
         _log.error("license.dev_anchor_verification_refused")
-        return LicenseValidation(valid=False, error=DEV_ANCHOR_NOT_TRUSTED_ERROR)
+        return LicenseValidation(
+            valid=False,
+            error=DEV_ANCHOR_NOT_TRUSTED_ERROR,
+            reason=REASON_ANCHOR_MISMATCH,
+            hint=_ANCHOR_MISMATCH_HINT,
+        )
 
     sig_hex = sig_bytes.hex()
 
