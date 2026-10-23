@@ -93,6 +93,7 @@ from modulo.core.pipeline_engine.decorator import (
     set_model_backend_hub,
 )
 from modulo.core.pipeline_engine.error_codes import (
+    _CODE_CONNECTOR_FAILED,
     _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED,
     _CODE_SANDBOX_AGENT_FAILED,
     _CODE_SANDBOX_NO_OUTPUT_JSON,
@@ -1426,6 +1427,19 @@ def _node_output_agent_failure(node_output: Any) -> str | None:
     return reason
 
 
+def _node_output_connector_failure(node_output: Any) -> str | None:
+    if not isinstance(node_output, dict) or node_output.get("connector_failure") is not True:
+        return None
+    artifacts = node_output.get("artifacts")
+    if isinstance(artifacts, list):
+        for artifact in artifacts:
+            if isinstance(artifact, dict) and artifact.get("status") == "failed":
+                error = artifact.get("error")
+                if isinstance(error, str) and error:
+                    return error
+    return "Connector reported failure"
+
+
 def _node_output_sandbox_session_lost(node_output: Any) -> str | None:
     """Return a reason string when a captured node output carries the FAR-227
     session-lost marker.
@@ -1947,6 +1961,7 @@ class _StreamState:
     # (agent_status=failed OR outcome=failed) — A1 elevation (agent-failure UX,
     # phase 1): such a run must NEVER land 'complete'.
     agent_failure_reason: str | None = None
+    connector_failure_reason: str | None = None
     # FAR-227: set when a captured sandbox-agent node output carries the
     # sandbox-session-lost marker (the E2B wrapper's fallback echo — a dead
     # opencode session). Routes to retryable ``sandbox.no_output_json``.
@@ -2025,6 +2040,14 @@ def _stream_terminal_reason(
             "failed",
             _classified or _CODE_SANDBOX_NO_OUTPUT_JSON,
             _sanitize_detail(state.session_lost_reason, limit=5000),
+            usage,
+        )
+    if state.connector_failure_reason and not state.stall_reason:
+        return _terminal_failure(
+            broker,
+            "failed",
+            _CODE_CONNECTOR_FAILED,
+            _sanitize_detail(state.connector_failure_reason, limit=5000),
             usage,
         )
     if state.agent_failure_reason and not state.stall_reason:
@@ -8358,6 +8381,9 @@ class PipelineExecutor:
             state.stall_reason = stall_reason
         if agent_failure:
             state.agent_failure_reason = agent_failure
+        connector_failure = _node_output_connector_failure(output)
+        if connector_failure:
+            state.connector_failure_reason = connector_failure
         if session_lost:
             state.session_lost_reason = session_lost
             state.session_lost_retained_text = session_lost_text
