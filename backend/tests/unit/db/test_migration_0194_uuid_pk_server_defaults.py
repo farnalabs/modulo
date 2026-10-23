@@ -52,6 +52,8 @@ _EXPECTED_METADATA_COUNT = _EXPECTED_COUNT - len(_NO_ORM_MODEL_UUID_PKS)
 # set gen_random_uuid() inline on their id columns too.
 # evidence_redaction_rules (0320_evidence_redaction_rules, FAR-944) sets
 # gen_random_uuid() inline on its id column, same as the tables above.
+# run_attempts (0326_run_attempts, FAR-2078) sets gen_random_uuid() inline on
+# its id column, same as the tables above.
 _POST_0194_TABLES = frozenset(
     {
         "collection_install",
@@ -65,6 +67,7 @@ _POST_0194_TABLES = frozenset(
         "evidence_redaction_rules",
         "external_agents",
         "mcp_servers",
+        "run_attempts",
     }
 )
 
