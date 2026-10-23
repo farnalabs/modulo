@@ -29,7 +29,7 @@ Design rules (each is a requirement, not a preference):
   what every caller got before FAR-2055.
 * **Aggregates are index-served and time-bounded.** The aggregate queries are
   backed by composite (and, where the query filters a nullable column,
-  partial) indexes declared on the models and shipped by migration 0326; the
+  partial) indexes declared on the models and shipped by migration 0328; the
   route additionally caps the transaction with a Postgres
   ``statement_timeout`` so a mature instance degrades to an actionable error
   rather than holding a pooled connection open.
@@ -409,7 +409,7 @@ async def _collect_run_snapshots(
     # The period is anchored on the RUN's created_at: the evidence is "a run
     # executed in the period against a frozen snapshot", and a snapshot may be
     # reused by runs in several periods.
-    # Served by ix_runs_org_snapshot_id (migration 0326): a count(DISTINCT
+    # Served by ix_runs_org_snapshot_id (migration 0328): a count(DISTINCT
     # snapshot_id) over the org is an index-only scan, no heap fetch per run.
     count_stmt = (
         select(func.count(func.distinct(Run.snapshot_id)))
@@ -488,7 +488,7 @@ async def _collect_hitl_decisions(
         "GET /api/v1/hitl/reviews and GET /api/v1/runs/{run_id}/hitl/pending; the "
         "decision is stored on the HITL claim row"
     )
-    # Both legs are served by ix_hitl_claims_org_decision_at (migration 0326):
+    # Both legs are served by ix_hitl_claims_org_decision_at (migration 0328):
     # (organisation_id, decision_at) WHERE decision IS NOT NULL. The pre-existing
     # per-actor window index leads on decided_by, which neither query filters.
     by_decision_stmt = select(HitlClaim.decision, func.count(HitlClaim.id)).where(
@@ -583,7 +583,7 @@ async def _collect_eval_results(
     )
     # The count/sum/max legs are served by ix_eval_results_org_evaluated_at
     # (migration 0218); count(DISTINCT eval_id) by ix_eval_results_org_eval_id
-    # (migration 0326). Both are index-only for the org, and the period is a
+    # (migration 0328). Both are index-only for the org, and the period is a
     # range on the second column of the first.
     stats_stmt = select(
         func.count(EvalResult.id),

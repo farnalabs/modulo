@@ -1,8 +1,8 @@
-"""Unit tests for migration 0326_evidence_index_aggregate_indexes (FAR-2055).
+"""Unit tests for migration 0328_evidence_index_aggregate_indexes (FAR-2055).
 
 Structural + SQLite-model contract (no Postgres / Testcontainers needed):
 
-* **Revision chain** - 0326 revises ``0325_run_seam_coverage``; the
+* **Revision chain** - 0328 revises ``0327_runs_execution_attempt_count``; the
   graph's single, linear head is asserted by the shared
   ``_migration_graph.assert_single_linear_head`` helper (never a hard-coded head
   value), the revision id matches the filename, and neither ``branch_labels``
@@ -32,9 +32,9 @@ from modulo.db.models.run import Run
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0326_evidence_index_aggregate_indexes"
+_MIGRATION_NAME = "0328_evidence_index_aggregate_indexes"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
-_DOWN_REVISION = "0325_run_seam_coverage"
+_DOWN_REVISION = "0327_runs_execution_attempt_count"
 
 _HITL_INDEX = "ix_hitl_claims_org_decision_at"
 _RUNS_INDEX = "ix_runs_org_snapshot_id"
@@ -77,7 +77,7 @@ class TestChain:
     def test_single_linear_head(self) -> None:
         assert_single_linear_head(script_directory())
 
-    def test_down_revision_is_0325_run_seam_coverage(self) -> None:
+    def test_down_revision_is_0327_runs_execution_attempt_count(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:

@@ -45,8 +45,8 @@ transaction block (the 0171/0182/0309 precedent). Deploy-safety: brief
 table-size-proportional write lock per index; ``runs`` is the large table, so
 schedule outside peaks.
 
-Revision ID: 0326_evidence_index_aggregate_indexes
-Revises: 0325_run_seam_coverage
+Revision ID: 0328_evidence_index_aggregate_indexes
+Revises: 0327_runs_execution_attempt_count
 Create Date: 2026-10-22
 """
 
@@ -55,8 +55,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0326_evidence_index_aggregate_indexes"
-down_revision = "0325_run_seam_coverage"
+revision = "0328_evidence_index_aggregate_indexes"
+down_revision = "0327_runs_execution_attempt_count"
 branch_labels = None
 depends_on = None
 

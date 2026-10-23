@@ -27,7 +27,7 @@ Phases:
 
 1. **before** - the new indexes are dropped, so the measurement is the schema
    as it was before FAR-2055 (pre-existing indexes 0155 / 0218 still apply).
-2. **after** - the three new indexes are created exactly as migration 0326
+2. **after** - the three new indexes are created exactly as migration 0328
    creates them.
 3. **after, scoped** - the same indexed schema with a 30-day audit period, so
    the read is bounded by date as well as by index. This window keeps the HITL
@@ -74,7 +74,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 
-#: The three indexes FAR-2055 adds. Their names match the models and 0326.
+#: The three indexes FAR-2055 adds. Their names match the models and 0328.
 _NEW_INDEXES: tuple[tuple[str, str], ...] = (
     ("ix_hitl_claims_org_decision_at", "hitl_claims"),
     ("ix_runs_org_snapshot_id", "runs"),

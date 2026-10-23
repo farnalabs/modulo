@@ -308,7 +308,7 @@ class Run(OrgScoped):
         # snapshot indexes cannot answer that without a heap fetch per run;
         # this composite makes the aggregate an index-only scan. ``snapshot_id``
         # is immutable on a run, so the write cost is one narrow entry per run
-        # creation (not one per status transition). Mirrors migration 0326.
+        # creation (not one per status transition). Mirrors migration 0328.
         Index("ix_runs_org_snapshot_id", "organisation_id", "snapshot_id"),
         # FAR-1438 — workspace-input drift compensating sweep
         # (core/cron_helpers.py::_sweep_workspace_input_drift_flags): its
