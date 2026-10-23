@@ -13134,11 +13134,11 @@ export interface components {
             /** Filters */
             filters?: {
                 [key: string]: unknown;
-            } | null;
+            };
             /** Data */
             data?: {
                 [key: string]: unknown;
-            } | null;
+            };
         };
         /** ConnectorCreate */
         ConnectorCreate: {
