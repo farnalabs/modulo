@@ -149,33 +149,45 @@ def make_settings() -> Settings:
     )
 
 
-def make_mock_session() -> AsyncMock:
-    session = AsyncMock()
-    # set_rls_*/scanners read these AsyncSession members synchronously; a
-    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
+def harden_session_double(session: AsyncMock) -> AsyncMock:
+    """Install the SYNC ``AsyncSession`` surface production code reads directly.
+
+    ``set_rls_*``/scanners read ``add_all``/``expunge``/``add``/``info``/
+    ``in_transaction`` synchronously, and ``begin_nested()`` must be an async
+    context manager. A bare ``AsyncMock`` child returns a never-awaited
+    coroutine for each, which Python reports at garbage collection as
+    ``PytestUnraisableExceptionWarning`` (the 2026-10-21 merge-queue outage).
+    Every mock session in the BDD suite starts here; per-scenario ``execute``
+    stubs and deny-path overrides (``in_transaction`` returning ``False``)
+    layer on top.
+
+    ``info`` is a plain dict rather than an ``AsyncMock`` child: ``set_rls_org``
+    on a generic backend writes the org id there and the FAR-1830 settings-patch
+    tenant guard reads it back, so an unbound mock would look like an empty
+    context.
+    """
     session.add_all = MagicMock()
     session.expunge = MagicMock()
-    # FAR-1639 (FAR-1629 sweep): in_transaction() and add() are SYNC AsyncSession
-    # methods. Bare-AsyncMock children type them as async, so production code
-    # reaching set_rls_* (db/rls.py::_ensure_active_transaction) passes the
-    # guard vacuously (an unawaited coroutine is truthy) and leaves dangling
-    # coroutines. Tests that need the deny path override this with
-    # MagicMock(return_value=False) — see tests/bdd/steps/test_auth.py.
+    # in_transaction()/add() are SYNC AsyncSession methods. An async-typed
+    # child makes production code reach set_rls_* (db/rls.py::
+    # _ensure_active_transaction) with a truthy unawaited coroutine, passing the
+    # guard vacuously and leaking the coroutine.
     session.in_transaction = MagicMock(return_value=True)
     session.add = MagicMock()
-    # A real AsyncSession exposes ``info`` as a plain dict; ``set_rls_org`` on a
-    # generic backend writes the org id there and the FAR-1830 settings-patch
-    # tenant guard reads it back. A bare AsyncMock child is not a dict, so the
-    # guard would see an unbound context.
     session.info = {}
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=begin_cm)
     nested_cm = AsyncMock()
     nested_cm.__aenter__ = AsyncMock(return_value=None)
     nested_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin_nested = MagicMock(return_value=nested_cm)
+    return session
+
+
+def make_mock_session() -> AsyncMock:
+    session = harden_session_double(AsyncMock())
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
     scalar_mock = MagicMock()
     scalar_mock.all = MagicMock(return_value=[])
     team_mock = MagicMock()

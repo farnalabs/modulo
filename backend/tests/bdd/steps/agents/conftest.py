@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from tests.bdd.conftest import ORG_ID, USER_ID
+from tests.bdd.conftest import ORG_ID, USER_ID, harden_session_double
 
 
 def make_settings():
@@ -28,24 +28,7 @@ def make_settings():
 
 def make_mock_session() -> AsyncMock:
     session = AsyncMock()
-    # set_rls_*/scanners read these AsyncSession members synchronously; a
-    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-    session.add_all = MagicMock()
-    session.expunge = MagicMock()
-    _bdd_nested_cm = AsyncMock()
-    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-    # set_rls_* reads these AsyncSession members synchronously; a bare
-    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-    session.info = {}
-    # FAR-1639 (FAR-1629 sweep): in_transaction() and add() are SYNC
-    # AsyncSession methods — bare-AsyncMock children type them as async, so
-    # production code reaching set_rls_* (db/rls.py::_ensure_active_transaction)
-    # passes the guard vacuously (an unawaited coroutine is truthy). Tests that
-    # need the deny path override this with MagicMock(return_value=False).
-    session.in_transaction = MagicMock(return_value=True)
-    session.add = MagicMock()
+    harden_session_double(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

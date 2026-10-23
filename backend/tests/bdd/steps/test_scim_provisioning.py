@@ -16,6 +16,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal
 from modulo.settings import Settings, get_settings
+from tests.bdd.conftest import harden_session_double
 
 # ---------------------------------------------------------------------------
 # Register feature files
@@ -152,19 +153,7 @@ def _make_sync_result() -> MagicMock:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
-    # set_rls_*/scanners read these AsyncSession members synchronously; a
-    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-    session.add_all = MagicMock()
-    session.expunge = MagicMock()
-    # set_rls_* reads these AsyncSession members synchronously; a bare
-    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-    session.info = {}
-    # FAR-1639 (FAR-1629 sweep): in_transaction() and add() are SYNC
-    # AsyncSession methods — bare-AsyncMock children type them as async, so
-    # production code reaching set_rls_* (db/rls.py) passes the guard
-    # vacuously (an unawaited coroutine is truthy).
-    session.in_transaction = MagicMock(return_value=True)
-    session.add = MagicMock()
+    harden_session_double(session)
     # FAR-1639: seed the default sync-result contract on the awaited reads
     # (see _make_sync_result) so the CRUD readers do not leak coroutines.
     session.execute = AsyncMock(return_value=_make_sync_result())
@@ -184,19 +173,7 @@ def _make_audit_session() -> AsyncMock:
     itself, including its fail-closed policy, still runs.
     """
     session = AsyncMock()
-    # set_rls_*/scanners read these AsyncSession members synchronously; a
-    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-    session.add_all = MagicMock()
-    session.expunge = MagicMock()
-    # set_rls_* reads these AsyncSession members synchronously; a bare
-    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-    session.info = {}
-    # FAR-1639 (FAR-1629 sweep): in_transaction() and add() are SYNC
-    # AsyncSession methods — bare-AsyncMock children type them as async, so
-    # production code reaching set_rls_* (db/rls.py) passes the guard
-    # vacuously (an unawaited coroutine is truthy).
-    session.in_transaction = MagicMock(return_value=True)
-    session.add = MagicMock()
+    harden_session_double(session)
     result = MagicMock()
     result.scalar.return_value = None
     result.scalar_one_or_none.return_value = None

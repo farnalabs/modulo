@@ -17,6 +17,7 @@ from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
 from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
 from modulo.core.registry.crypto import generate_keypair, sign_primitive
 from modulo.settings import Settings, get_settings
+from tests.bdd.conftest import harden_session_double
 
 # FAR-1733: the env-SAML licence gates verify the key (signature + expiry)
 # instead of trusting presence, so the SAML steps must carry a GENUINELY
@@ -67,15 +68,7 @@ def _stub_audit_session() -> Generator[None, None, None]:
 
     async def _override() -> AsyncGenerator[AsyncMock, None]:
         session = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        session.add_all = MagicMock()
-        session.expunge = MagicMock()
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        session.in_transaction = MagicMock(return_value=True)
-        session.add = MagicMock()
-        session.info = {}
+        harden_session_double(session)
         result = MagicMock()
         result.scalar.return_value = None
         result.scalar_one_or_none.return_value = None

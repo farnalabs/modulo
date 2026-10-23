@@ -9,6 +9,8 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from tests.bdd.conftest import harden_session_double
+
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/licensing/license_management.feature")
 
@@ -57,23 +59,7 @@ def _make_mock_session() -> Any:
     from unittest.mock import AsyncMock, MagicMock
 
     session = AsyncMock()
-    # set_rls_*/scanners read these AsyncSession members synchronously; a
-    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-    session.add_all = MagicMock()
-    session.expunge = MagicMock()
-    _bdd_nested_cm = AsyncMock()
-    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-    # set_rls_* reads these AsyncSession members synchronously; a bare
-    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-    session.info = {}
-    # FAR-1639 (FAR-1629 sweep): in_transaction() and add() are SYNC
-    # AsyncSession methods — bare-AsyncMock children type them as async, so
-    # production code reaching set_rls_* (db/rls.py) passes the guard
-    # vacuously (an unawaited coroutine is truthy).
-    session.in_transaction = MagicMock(return_value=True)
-    session.add = MagicMock()
+    harden_session_double(session)
 
     mock_scalars = MagicMock()
     mock_scalars.all.return_value = []

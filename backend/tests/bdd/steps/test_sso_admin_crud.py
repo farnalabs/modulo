@@ -30,6 +30,7 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+from tests.bdd.conftest import harden_session_double
 
 
 @pytest.fixture(autouse=True)
@@ -42,15 +43,7 @@ def _stub_audit_session() -> Generator[None, None, None]:
 
     async def _override() -> AsyncGenerator[AsyncMock, None]:
         session = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        session.add_all = MagicMock()
-        session.expunge = MagicMock()
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        session.in_transaction = MagicMock(return_value=True)
-        session.add = MagicMock()
-        session.info = {}
+        harden_session_double(session)
         result = MagicMock()
         result.scalar.return_value = None
         result.scalar_one_or_none.return_value = None

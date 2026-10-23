@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from tests.bdd.conftest import _active_client, make_mock_pipeline
+from tests.bdd.conftest import _active_client, harden_session_double, make_mock_pipeline
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/costs/cost_controls.feature")
@@ -59,19 +59,7 @@ def _enforce_token_budget(tokens: int, ctx: dict[str, Any]) -> None:
     usage = {node_id: {"input_tokens": tokens, "output_tokens": 0, "total_tokens": tokens}}
 
     mock_session = AsyncMock()
-    # set_rls_*/scanners read these AsyncSession members synchronously; a
-    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-    mock_session.add_all = MagicMock()
-    mock_session.expunge = MagicMock()
-    _bdd_nested_cm = AsyncMock()
-    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-    mock_session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-    # set_rls_* reads these AsyncSession members synchronously; a bare
-    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-    mock_session.in_transaction = MagicMock(return_value=True)
-    mock_session.add = MagicMock()
-    mock_session.info = {}
+    harden_session_double(mock_session)
     graph_result = MagicMock()
     graph_result.scalar_one_or_none.return_value = graph_json
     agent_result = MagicMock()
@@ -255,19 +243,7 @@ def _check_spend(cost: str, ctx: dict[str, Any]) -> None:
     # execute return_value is another AsyncMock, so result readers
     # (scalar_one_or_none/scalars/first) return never-awaited coroutines.
     mock_session.execute.return_value = MagicMock()
-    # set_rls_*/scanners read these AsyncSession members synchronously; a
-    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-    mock_session.add_all = MagicMock()
-    mock_session.expunge = MagicMock()
-    _bdd_nested_cm = AsyncMock()
-    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-    mock_session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-    # set_rls_* reads these AsyncSession members synchronously; a bare
-    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-    mock_session.in_transaction = MagicMock(return_value=True)
-    mock_session.add = MagicMock()
-    mock_session.info = {}
+    harden_session_double(mock_session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -393,19 +369,7 @@ def _check_circuit_breaker(amount: str, ctx: dict[str, Any]) -> None:
     # execute return_value is another AsyncMock, so result readers
     # (scalar_one_or_none/scalars/first) return never-awaited coroutines.
     mock_session.execute.return_value = MagicMock()
-    # set_rls_*/scanners read these AsyncSession members synchronously; a
-    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-    mock_session.add_all = MagicMock()
-    mock_session.expunge = MagicMock()
-    _bdd_nested_cm = AsyncMock()
-    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-    mock_session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-    # set_rls_* reads these AsyncSession members synchronously; a bare
-    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-    mock_session.in_transaction = MagicMock(return_value=True)
-    mock_session.add = MagicMock()
-    mock_session.info = {}
+    harden_session_double(mock_session)
     mock_session.flush = AsyncMock()
 
     dispatch_mock = AsyncMock()
@@ -520,19 +484,7 @@ def admin_reenables_pipeline(pipeline_name: str, ctx: dict[str, Any]) -> None:
     # execute return_value is another AsyncMock, so result readers
     # (scalar_one_or_none/scalars/first) return never-awaited coroutines.
     mock_session.execute.return_value = MagicMock()
-    # set_rls_*/scanners read these AsyncSession members synchronously; a
-    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-    mock_session.add_all = MagicMock()
-    mock_session.expunge = MagicMock()
-    _bdd_nested_cm = AsyncMock()
-    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-    mock_session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-    # set_rls_* reads these AsyncSession members synchronously; a bare
-    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-    mock_session.in_transaction = MagicMock(return_value=True)
-    mock_session.add = MagicMock()
-    mock_session.info = {}
+    harden_session_double(mock_session)
     mock_session.flush = AsyncMock()
     update_mock = MagicMock()
 
@@ -889,10 +841,7 @@ def _run_ledger_block(cost: str, ctx: dict[str, Any]) -> None:
         return result
 
     session = AsyncMock()
-    # set_rls_*/scanners read these AsyncSession members synchronously; a
-    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-    session.add_all = MagicMock()
-    session.expunge = MagicMock()
+    harden_session_double(session)
     # NB: ``begin_nested`` stays a bare AsyncMock here on purpose. This block
     # drives the REAL ``_ledger_block`` savepoint path, and a working savepoint
     # CM makes that path attempt the full ledger write, which this deliberately
@@ -901,9 +850,7 @@ def _run_ledger_block(cost: str, ctx: dict[str, Any]) -> None:
     # this shape, so it does not surface as an unraisable warning either.
     # set_rls_* reads these AsyncSession members synchronously; a bare
     # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-    session.in_transaction = MagicMock(return_value=True)
-    session.add = MagicMock()
-    session.info = {}
+    session.begin_nested = AsyncMock()
     session.execute = AsyncMock(side_effect=_execute)
     session.flush = AsyncMock()
 

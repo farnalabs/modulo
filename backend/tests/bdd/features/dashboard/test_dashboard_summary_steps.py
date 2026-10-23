@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
+from tests.bdd.conftest import harden_session_double
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -105,18 +106,7 @@ def _make_summary_session(
     deterministic rather than erroring the strict mock.
     """
     session = AsyncMock()
-    # set_rls_*/scanners read these AsyncSession members synchronously; a
-    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-    session.add_all = MagicMock()
-    session.expunge = MagicMock()
-    _bdd_nested_cm = AsyncMock()
-    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-    # set_rls_* reads these AsyncSession members synchronously; a bare
-    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-    session.add = MagicMock()
-    session.info = {}
+    harden_session_double(session)
     bind = MagicMock()
     bind.dialect.name = "sqlite"
     session.get_bind = AsyncMock(return_value=bind)

@@ -7,8 +7,12 @@ the resulting multi-line warnings summary can grow large enough to wedge
 pytest's terminal writer (``BlockingIOError: [Errno 11] write could not
 complete without blocking``) and fail a CI step with no test named - the
 2026-10-21 merge-queue outage. The audited suites now escalate the class to an
-ERROR from ``tests/conftest.py::pytest_runtest_setup``, and every CI command
-that runs one of them carries the matching ``-W`` flag for defence in depth.
+ERROR from ``tests/conftest.py::pytest_runtest_setup``, and every workflow
+command that NAMES a gated-suite path carries the matching ``-W`` flag for
+defence in depth. The one command that runs gated tests without naming them -
+``ci.yml`` integration-changed, which expands a computed file list - is pinned
+explicitly by its ``${TEST_FILES[@]}`` needle; a command that names no gated
+path cannot be identified statically and inherits the in-process hook only.
 
 The hook is per-ITEM (``pytest_runtest_setup``), not ``pytest_configure``: the
 warnings plugin re-applies the ini/cmdline ``filterwarnings`` around every
@@ -31,14 +35,18 @@ A gate that can be deleted silently is not a gate. These tests pin:
   ``conformance``, ``connectors``, ``determination``, ``load``, ``docker``)
   must not install the filter;
 - the exact audited set in ``GATED_SUITE_ROOTS``;
-- every CI command that runs a gated suite still carries the byte-identical
-  escalation (unit coverage script, BDD workflow, main-integration workflow,
-  deploy-gate integration step, CI touched-files integration step).
+- every workflow command that names a gated-suite path still carries the
+  byte-identical escalation and no longer disables the warnings plugin (unit
+  coverage script, BDD workflow, main-integration workflow, deploy pre-deploy
+  unit and integration steps, CI email-settings/step-rot BDD steps, CI
+  integration-changed, CI tier1b-light, merge-queue unit run, schemathesis and
+  Tier 1b nightly runs).
 
 Prove-it-fails: deleting the ``warnings.filterwarnings(...)`` line from
 ``tests/conftest.py`` makes the escalation tests fail; deleting a suite from
 ``GATED_SUITE_ROOTS`` makes its parametrised case fail; dropping the ``-W`` flag
-from any of the four CI commands makes the corresponding command test fail.
+from any pinned CI command makes its command test fail, and adding a new
+gated-suite command without the flag fails the exhaustive workflow scan.
 """
 
 from __future__ import annotations
@@ -60,6 +68,10 @@ CI_WORKFLOW = REPO / ".github" / "workflows" / "ci.yml"
 BDD_WORKFLOW = REPO / ".github" / "workflows" / "bdd.yml"
 MAIN_INTEGRATION_WORKFLOW = REPO / ".github" / "workflows" / "main-integration.yml"
 DEPLOY_WORKFLOW = REPO / ".github" / "workflows" / "deploy.yml"
+MERGE_QUEUE_WORKFLOW = REPO / ".github" / "workflows" / "merge-queue.yml"
+SCHEMATHESIS_WORKFLOW = REPO / ".github" / "workflows" / "schemathesis-nightly.yml"
+TIER1B_NIGHTLY_WORKFLOW = REPO / ".github" / "workflows" / "tier1b-nightly.yml"
+WORKFLOWS_DIR = REPO / ".github" / "workflows"
 COVERAGE_SCRIPT = REPO / ".github" / "scripts" / "coverage-thresholds.sh"
 
 _CATEGORY = pytest.PytestUnraisableExceptionWarning
@@ -185,25 +197,71 @@ def _workflow_run_commands(path: Path) -> Iterator[str]:
         (BDD_WORKFLOW, "pytest tests/bdd/"),
         (MAIN_INTEGRATION_WORKFLOW, "pytest tests/integration/ -m integration"),
         (DEPLOY_WORKFLOW, "pytest tests/integration/ -m integration"),
+        (DEPLOY_WORKFLOW, "pytest tests/unit/"),
         (CI_WORKFLOW, "pytest tests/integration/test_break_glass_gate.py"),
+        (CI_WORKFLOW, "pytest tests/bdd/steps/test_email_settings.py"),
+        (CI_WORKFLOW, "pytest tests/bdd/steps/test_auth.py"),
+        (CI_WORKFLOW, "tests/integration/test_tier1b_connectors_light.py"),
+        # integration-changed expands a computed file list, so it names no
+        # gated path - pin it by the expansion itself.
+        (CI_WORKFLOW, 'pytest "${TEST_FILES[@]}"'),
+        (MERGE_QUEUE_WORKFLOW, "pytest tests/unit/"),
+        (SCHEMATHESIS_WORKFLOW, "pytest tests/integration/test_schemathesis.py"),
+        (TIER1B_NIGHTLY_WORKFLOW, "tests/integration/test_tier1b_connectors_heavy.py"),
     ],
-    ids=["bdd", "main-integration", "deploy-integration", "ci-integration-changed"],
+    ids=[
+        "bdd",
+        "main-integration",
+        "deploy-integration",
+        "deploy-unit",
+        "ci-break-glass",
+        "ci-bdd-email-settings",
+        "ci-bdd-step-rot",
+        "ci-tier1b-light",
+        "ci-integration-changed",
+        "merge-queue-unit",
+        "schemathesis-nightly",
+        "tier1b-nightly",
+    ],
 )
 def test_ci_command_for_a_gated_suite_carries_the_escalation(workflow: Path, needle: str) -> None:
-    """Every CI command that runs a gated suite carries the escalation."""
+    """Every pinned CI command that runs a gated suite carries the escalation."""
     commands = [command for command in _workflow_run_commands(workflow) if needle in command]
     assert commands, f"no `{needle}` command found in {workflow.name}"
     for command in commands:
         assert _ESCALATION in command, f"{workflow.name} command lost the escalation: {command}"
+        assert "-p no:warnings" not in command, f"{workflow.name} command disables the warnings plugin: {command}"
+        assert "--disable-warnings" in command, f"{workflow.name} command lacks --disable-warnings: {command}"
 
 
-def test_bdd_command_no_longer_disables_the_warnings_plugin() -> None:
-    """``-p no:warnings`` made this class invisible; the flag must stay gone."""
-    commands = [command for command in _workflow_run_commands(BDD_WORKFLOW) if "pytest tests/bdd/" in command]
-    assert commands
-    for command in commands:
-        assert "-p no:warnings" not in command
-        assert "--disable-warnings" in command
+def _without_shell_comments(command: str) -> str:
+    """Drop ``#`` comment lines so a path mentioned in prose is not a command.
+
+    The integration-changed Detect step's comments name
+    ``backend/tests/integration/`` while the step runs no pytest; scanning the
+    raw text would treat it as a gated-suite command.
+    """
+    return "\n".join(line for line in command.splitlines() if not line.lstrip().startswith("#"))
+
+
+def test_every_workflow_command_naming_a_gated_suite_carries_the_escalation() -> None:
+    """No workflow may run a gated-suite path without the escalation.
+
+    This is the exhaustive backstop behind the docstring's universal claim: the
+    parametrised pins are per-command and can be forgotten when a new command is
+    added, whereas this scan fails as soon as one is.
+    """
+    gated_commands = [
+        (workflow.name, command)
+        for workflow in sorted(WORKFLOWS_DIR.glob("*.yml"))
+        for command in _workflow_run_commands(workflow)
+        if "pytest" in _without_shell_comments(command)
+        and any(f"tests/{suite}" in _without_shell_comments(command) for suite in _root_conftest.GATED_SUITE_ROOTS)
+    ]
+    assert len(gated_commands) >= 10, f"expected the gated-suite command set, found {len(gated_commands)}"
+    for workflow_name, command in gated_commands:
+        assert _ESCALATION in command, f"{workflow_name} command lost the escalation: {command}"
+        assert "-p no:warnings" not in command, f"{workflow_name} command disables the warnings plugin: {command}"
 
 
 def test_ci_unit_command_carries_the_escalation() -> None:

@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from tests.bdd.conftest import ORG_ID, USER_ID, make_settings
+from tests.bdd.conftest import ORG_ID, USER_ID, harden_session_double, make_settings
 
 
 def _valid_stream_payload() -> dict[str, Any]:
@@ -398,22 +398,7 @@ def list_assistant_sessions(request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
-        # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
-        # AsyncSession methods — the route emitters call session.add(msg)
-        # un-awaited, which a bare AsyncMock child leaves dangling.
-        mock_session_inst.in_transaction = MagicMock(return_value=True)
-        mock_session_inst.add = MagicMock()
+        harden_session_double(mock_session_inst)
         mock_session_inst.begin = MagicMock()
         begin_cm = MagicMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
@@ -441,22 +426,7 @@ def get_assistant_session(request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
-        # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
-        # AsyncSession methods — the route emitters call session.add(msg)
-        # un-awaited, which a bare AsyncMock child leaves dangling.
-        mock_session_inst.in_transaction = MagicMock(return_value=True)
-        mock_session_inst.add = MagicMock()
+        harden_session_double(mock_session_inst)
         mock_session_inst.begin = MagicMock()
         begin_cm = MagicMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
@@ -476,17 +446,7 @@ def get_assistant_session_by_id(session_id: str, request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
+        harden_session_double(mock_session_inst)
         # The permission kill-switch read (resolve_authz_enforce) awaits
         # session.execute; an untyped AsyncMock awaited returns another
         # AsyncMock, so result.scalar_one_or_none() leaves a dangling
@@ -518,17 +478,7 @@ def rename_assistant_session(request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
+        harden_session_double(mock_session_inst)
         # The permission kill-switch read (resolve_authz_enforce) awaits
         # session.execute; an untyped AsyncMock awaited returns another
         # AsyncMock, so result.scalar_one_or_none() leaves a dangling
@@ -560,17 +510,7 @@ def delete_assistant_session(request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
+        harden_session_double(mock_session_inst)
         # The permission kill-switch read (resolve_authz_enforce) awaits
         # session.execute; an untyped AsyncMock awaited returns another
         # AsyncMock, so result.scalar_one_or_none() leaves a dangling
@@ -602,17 +542,7 @@ def get_other_users_session(request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
+        harden_session_double(mock_session_inst)
         # The permission kill-switch read (resolve_authz_enforce) awaits
         # session.execute; an untyped AsyncMock awaited returns another
         # AsyncMock, so result.scalar_one_or_none() leaves a dangling
@@ -652,17 +582,7 @@ def append_message(role: str, request, ctx, content: str = "Hello") -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
+        harden_session_double(mock_session_inst)
         # The permission kill-switch read (resolve_authz_enforce) awaits
         # session.execute; an untyped AsyncMock awaited returns another
         # AsyncMock, so result.scalar_one_or_none() leaves a dangling
@@ -699,17 +619,7 @@ def append_message_with_parent(role: str, content: str, request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
+        harden_session_double(mock_session_inst)
         # The permission kill-switch read (resolve_authz_enforce) awaits
         # session.execute; an untyped AsyncMock awaited returns another
         # AsyncMock, so result.scalar_one_or_none() leaves a dangling
@@ -742,17 +652,7 @@ def append_message_to_session_id(role: str, session_id: str, request, ctx) -> No
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
+        harden_session_double(mock_session_inst)
         # The permission kill-switch read (resolve_authz_enforce) awaits
         # session.execute; an untyped AsyncMock awaited returns another
         # AsyncMock, so result.scalar_one_or_none() leaves a dangling
@@ -798,22 +698,7 @@ def list_messages_for_session(request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
-        # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
-        # AsyncSession methods — the route emitters call session.add(msg)
-        # un-awaited, which a bare AsyncMock child leaves dangling.
-        mock_session_inst.in_transaction = MagicMock(return_value=True)
-        mock_session_inst.add = MagicMock()
+        harden_session_double(mock_session_inst)
         mock_session_inst.begin = MagicMock()
         begin_cm = MagicMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
@@ -833,17 +718,7 @@ def list_messages_for_session_id(session_id: str, request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
+        harden_session_double(mock_session_inst)
         # The permission kill-switch read (resolve_authz_enforce) awaits
         # session.execute; an untyped AsyncMock awaited returns another
         # AsyncMock, so result.scalar_one_or_none() leaves a dangling
@@ -878,17 +753,7 @@ def append_message_with_tool_calls(request, ctx) -> None:
         patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
+        harden_session_double(mock_session_inst)
         # The permission kill-switch read (resolve_authz_enforce) awaits
         # session.execute; an untyped AsyncMock awaited returns another
         # AsyncMock, so result.scalar_one_or_none() leaves a dangling
@@ -930,22 +795,7 @@ def get_admin_assistant_config(request, ctx) -> None:
         patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
-        # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
-        # AsyncSession methods — the route emitters call session.add(msg)
-        # un-awaited, which a bare AsyncMock child leaves dangling.
-        mock_session_inst.in_transaction = MagicMock(return_value=True)
-        mock_session_inst.add = MagicMock()
+        harden_session_double(mock_session_inst)
         mock_session_inst.begin = MagicMock()
         begin_cm = MagicMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
@@ -1032,22 +882,7 @@ def _update_assistant_config(request: Any, ctx: dict, updates: dict) -> None:
         patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
-        # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
-        # AsyncSession methods — the route emitters call session.add(msg)
-        # un-awaited, which a bare AsyncMock child leaves dangling.
-        mock_session_inst.in_transaction = MagicMock(return_value=True)
-        mock_session_inst.add = MagicMock()
+        harden_session_double(mock_session_inst)
         mock_session_inst.begin = MagicMock()
         begin_cm = MagicMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
@@ -1094,17 +929,7 @@ def create_skill(name: str, body: str, request, ctx) -> None:
         patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
+        harden_session_double(mock_session_inst)
         # The permission kill-switch read (resolve_authz_enforce) awaits
         # session.execute; an untyped AsyncMock awaited returns another
         # AsyncMock, so result.scalar_one_or_none() leaves a dangling
@@ -1140,22 +965,7 @@ def list_org_skills(request, ctx) -> None:
         patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
-        # FAR-1639 (FAR-1629 sweep): in_transaction()/add() are SYNC
-        # AsyncSession methods — the route emitters call session.add(msg)
-        # un-awaited, which a bare AsyncMock child leaves dangling.
-        mock_session_inst.in_transaction = MagicMock(return_value=True)
-        mock_session_inst.add = MagicMock()
+        harden_session_double(mock_session_inst)
         mock_session_inst.begin = MagicMock()
         begin_cm = MagicMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
@@ -1176,17 +986,7 @@ def update_org_skill(request, ctx) -> None:
         patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
+        harden_session_double(mock_session_inst)
         # The permission kill-switch read (resolve_authz_enforce) awaits
         # session.execute; an untyped AsyncMock awaited returns another
         # AsyncMock, so result.scalar_one_or_none() leaves a dangling
@@ -1218,17 +1018,7 @@ def delete_org_skill(request, ctx) -> None:
         patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
+        harden_session_double(mock_session_inst)
         # The permission kill-switch read (resolve_authz_enforce) awaits
         # session.execute; an untyped AsyncMock awaited returns another
         # AsyncMock, so result.scalar_one_or_none() leaves a dangling
@@ -1264,17 +1054,7 @@ def list_user_skills(request, ctx) -> None:
         patch("modulo.api.routes.me.get_user_skills", new_callable=AsyncMock, return_value=skills),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
+        harden_session_double(mock_session_inst)
         # The permission kill-switch read (resolve_authz_enforce) awaits
         # session.execute; an untyped AsyncMock awaited returns another
         # AsyncMock, so result.scalar_one_or_none() leaves a dangling
@@ -1303,17 +1083,7 @@ def update_org_skill_by_id(skill_id: str, name: str, request, ctx) -> None:
         patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
+        harden_session_double(mock_session_inst)
         # The permission kill-switch read (resolve_authz_enforce) awaits
         # session.execute; an untyped AsyncMock awaited returns another
         # AsyncMock, so result.scalar_one_or_none() leaves a dangling
@@ -1343,17 +1113,7 @@ def delete_org_skill_by_id(skill_id: str, request, ctx) -> None:
         patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        mock_session_inst.add_all = MagicMock()
-        mock_session_inst.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        mock_session_inst.info = {}
+        harden_session_double(mock_session_inst)
         # The permission kill-switch read (resolve_authz_enforce) awaits
         # session.execute; an untyped AsyncMock awaited returns another
         # AsyncMock, so result.scalar_one_or_none() leaves a dangling
@@ -1462,19 +1222,7 @@ def evaluate_assistant_access_control(ctx) -> None:
     result = MagicMock()
     result.scalar_one_or_none = MagicMock(return_value=entry)
     session = AsyncMock()
-    # set_rls_*/scanners read these AsyncSession members synchronously; a
-    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-    session.add_all = MagicMock()
-    session.expunge = MagicMock()
-    _bdd_nested_cm = AsyncMock()
-    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-    # set_rls_* reads these AsyncSession members synchronously; a bare
-    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-    session.in_transaction = MagicMock(return_value=True)
-    session.add = MagicMock()
-    session.info = {}
+    harden_session_double(session)
     session.execute = AsyncMock(return_value=result)
 
     service = AssistantConfigService(session)

@@ -13,7 +13,7 @@ from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.oauth import InvalidGrantError, OAuthAccessTokenClaims
 from modulo.core.rate_limiter import RateLimiterRegistry
-from tests.bdd.conftest import ORG_ID, USER_ID, make_mock_session, make_settings
+from tests.bdd.conftest import ORG_ID, USER_ID, harden_session_double, make_mock_session, make_settings
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/mcp/mcp_oauth.feature")
@@ -40,13 +40,7 @@ def _stub_audit_session() -> Generator[None, None, None]:
 
     async def _override() -> AsyncGenerator[AsyncMock, None]:
         session = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        session.add_all = MagicMock()
-        session.expunge = MagicMock()
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        session.info = {}
+        harden_session_double(session)
         result = MagicMock()
         result.scalar.return_value = None
         result.scalar_one_or_none.return_value = None

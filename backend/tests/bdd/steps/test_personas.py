@@ -27,7 +27,14 @@ from modulo.core.audit_logger.append_only import (
 )
 from modulo.db.models.audit_event import AuditEvent
 from modulo.db.models.base import Base
-from tests.bdd.conftest import ORG_ID, USER_ID, make_mock_pipeline, make_mock_run, make_mock_snapshot
+from tests.bdd.conftest import (
+    ORG_ID,
+    USER_ID,
+    harden_session_double,
+    make_mock_pipeline,
+    make_mock_run,
+    make_mock_snapshot,
+)
 
 # SQLite cannot natively bind ``uuid.UUID`` — the DBAPI raises
 # ProgrammingError. Register a hex adapter (process-global, consulted at bind
@@ -1170,19 +1177,7 @@ def _transparency_test_client(
 
     async def _session() -> AsyncMock:
         session = AsyncMock()
-        # set_rls_*/scanners read these AsyncSession members synchronously; a
-        # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-        session.add_all = MagicMock()
-        session.expunge = MagicMock()
-        _bdd_nested_cm = AsyncMock()
-        _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-        _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-        session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-        # set_rls_* reads these AsyncSession members synchronously; a bare
-        # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-        session.in_transaction = MagicMock(return_value=True)
-        session.add = MagicMock()
-        session.info = {}
+        harden_session_double(session)
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)

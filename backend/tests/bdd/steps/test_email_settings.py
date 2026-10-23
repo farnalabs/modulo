@@ -15,6 +15,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from tests.bdd.conftest import harden_session_double
+
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/admin/email-settings.feature")
 
@@ -51,19 +53,7 @@ def _seed_session(ctx: dict[str, Any]) -> AsyncMock:
     from sqlalchemy.exc import ProgrammingError
 
     session = AsyncMock()
-    # set_rls_*/scanners read these AsyncSession members synchronously; a
-    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-    session.add_all = MagicMock()
-    session.expunge = MagicMock()
-    _bdd_nested_cm = AsyncMock()
-    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-    # set_rls_* reads these AsyncSession members synchronously; a bare
-    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-    session.in_transaction = MagicMock(return_value=True)
-    session.add = MagicMock()
-    session.info = {}
+    harden_session_double(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__.return_value = session
     begin_cm.__aexit__.return_value = None

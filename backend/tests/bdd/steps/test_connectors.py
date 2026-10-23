@@ -17,6 +17,7 @@ from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.connectors.base import HealthResult
 from modulo.settings import Settings, get_settings
+from tests.bdd.conftest import harden_session_double
 
 # ---------------------------------------------------------------------------
 # Connector Health feature (active — 3 scenarios)
@@ -65,17 +66,7 @@ def _make_health_session() -> AsyncMock:
     un-seeded queries are deterministic.
     """
     session = AsyncMock()
-    # set_rls_*/scanners read these AsyncSession members synchronously; a
-    # bare AsyncMock child returns a never-awaited coroutine (unraisable leak).
-    session.add_all = MagicMock()
-    session.expunge = MagicMock()
-    _bdd_nested_cm = AsyncMock()
-    _bdd_nested_cm.__aenter__ = AsyncMock(return_value=None)
-    _bdd_nested_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin_nested = MagicMock(return_value=_bdd_nested_cm)
-    # set_rls_* reads these AsyncSession members synchronously; a bare
-    # AsyncMock child returns a never-awaited coroutine (unraisable-warning leak).
-    session.info = {}
+    harden_session_double(session)
     bind = MagicMock()
     bind.dialect.name = "sqlite"
     session.get_bind = AsyncMock(return_value=bind)
