@@ -1902,6 +1902,7 @@ async def test_connector_node_query_success_completes():
 
 async def test_connector_node_connector_raise_fails_node(monkeypatch: pytest.MonkeyPatch):
     from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from modulo.core.pipeline_engine.errors import ConnectorNodeFailedError
 
     class _FailingConnector:
         async def query(self, q: Any) -> Any:
@@ -1912,9 +1913,9 @@ async def test_connector_node_connector_raise_fails_node(monkeypatch: pytest.Mon
     monkeypatch.setattr(nr, "_resolve_connector_write_outcome", outcome)
     try:
         fn = make_connector_fn(_connector_node_def())
-        result = await fn({"run_context": {"input": {}}})
-        assert result["artifacts"][0]["status"] == "failed"
-        assert "boom" in result["artifacts"][0]["error"]
+        with pytest.raises(ConnectorNodeFailedError) as exc_info:
+            await fn({"run_context": {"input": {}}})
+        assert "boom" in str(exc_info.value)
         # QA Fix 1: the raised error is classified by the SINGLE authority even
         # for a query op (the resolution is fail-open with no session factory).
         outcome.assert_awaited_once()
@@ -1945,6 +1946,7 @@ async def test_connector_node_write_success_stamps_and_completes(monkeypatch: py
 
 async def test_connector_node_write_raise_resolves_ambiguous(monkeypatch: pytest.MonkeyPatch):
     from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from modulo.core.pipeline_engine.errors import ConnectorNodeFailedError
 
     class _RaisingConnector:
         async def write(self, payload: Any) -> Any:
@@ -1957,8 +1959,9 @@ async def test_connector_node_write_raise_resolves_ambiguous(monkeypatch: pytest
     monkeypatch.setattr(nr, "_resolve_connector_write_outcome", resolve)
     try:
         fn = make_connector_fn(node_def)
-        result = await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
-        assert result["artifacts"][0]["status"] == "failed"
+        with pytest.raises(ConnectorNodeFailedError) as exc_info:
+            await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
+        assert "write exploded" in str(exc_info.value)
         resolve.assert_awaited_once()
         assert isinstance(resolve.await_args.kwargs["exception"], RuntimeError)
     finally:

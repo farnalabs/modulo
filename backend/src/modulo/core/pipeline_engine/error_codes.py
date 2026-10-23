@@ -990,9 +990,12 @@ LEGACY_ALIASES: dict[str, str] = {
     # ``ConnectorUnknownError`` is the exception class name the executor's
     # generic catch publishes (``type(exc).__name__``); ``connector.unknown`` is
     # the prior dotted spelling kept for backward-compat.
+    # FAR-2090: connector node action failure (query/write/dispatch) →
+    # ``connector.side_effect_unknown``.
     "connector_unknown": _CODE_CONNECTOR_UNKNOWN,
     "ConnectorUnknownError": _CODE_CONNECTOR_UNKNOWN,
     "connector.unknown": _CODE_CONNECTOR_UNKNOWN,
+    "ConnectorNodeFailedError": _CODE_CONNECTOR_UNKNOWN,
     # Provider (model backend) exception class names published by executor's
     # generic catch (``type(exc).__name__``) on LLM-node failures.
     "RateLimitError": "provider.rate_limited",
