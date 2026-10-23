@@ -12,7 +12,10 @@
 #      restarted cannot be deployed onto - the next attempt must create a
 #      replacement), while a SUCCESSFUL restart never destroys anything;
 #   5. every failure is best-effort: warning, exit 0 (the deploy attempt is
-#      the authoritative gate and must not be masked).
+#      the authoritative gate and must not be masked);
+#   6. the wedged machine's boot log is captured (credentials redacted) BEFORE
+#      it is restarted/destroyed, so a destroy cannot discard the only evidence
+#      of why the app process group never became healthy.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,13 +28,22 @@ BIN_DIR="${WORK_DIR}/bin"
 mkdir -p "${BIN_DIR}"
 RESTART_LOG="${WORK_DIR}/restarts.log"
 DESTROY_LOG="${WORK_DIR}/destroys.log"
+LOGS_LOG="${WORK_DIR}/logs.log"
+APP_LOG_DIR="${WORK_DIR}/app-machine-logs"
 : > "${RESTART_LOG}"
 : > "${DESTROY_LOG}"
+: > "${LOGS_LOG}"
 
 cat > "${BIN_DIR}/fly" <<'FAKE_FLY'
 #!/usr/bin/env bash
 set -euo pipefail
 case "${1:-}" in
+  logs)
+    echo "$*" >> "${FLY_LOGS_LOG:?}"
+    echo "boot log fetched"
+    echo "DATABASE_URL fixed: postgresql://modulo_app:hunter2@db.internal:5432/modulo..."
+    exit "${FLY_LOGS_EXIT:-0}"
+    ;;
   machines)
     if [ "${2:-}" = "list" ]; then
       if [ "${FLY_MACHINES_JSON:-}" = "__FAIL__" ]; then
@@ -77,18 +89,23 @@ run_case() {
   echo "=== ${name} ==="
   : > "${RESTART_LOG}"
   : > "${DESTROY_LOG}"
+  : > "${LOGS_LOG}"
+  rm -rf "${APP_LOG_DIR}"
   set +e
   OUTPUT="$(PATH="${BIN_DIR}:${PATH}" \
     FLY_RESTART_LOG="${RESTART_LOG}" \
     FLY_DESTROY_LOG="${DESTROY_LOG}" \
+    FLY_LOGS_LOG="${LOGS_LOG}" \
     FLY_MACHINES_JSON="${json}" \
     FLY_RESTART_EXIT="${restart_exit}" \
     FLY_DESTROY_EXIT="${destroy_exit}" \
+    WEDGED_LOG_DIR="${APP_LOG_DIR}" \
     bash "${TARGET}" "${APP}" 2>&1)"
   RC=$?
   set -e
   RESTARTED="$(tr '\n' ' ' < "${RESTART_LOG}" | sed 's/ *$//')"
   DESTROYED="$(tr '\n' ' ' < "${DESTROY_LOG}" | sed 's/ *$//')"
+  LOGGED="$(tr '\n' ' ' < "${LOGS_LOG}" | sed 's/ *$//')"
   echo "  stdout: $(printf '%s' "${OUTPUT}" | tr '\n' ' ')"
 }
 
@@ -112,12 +129,21 @@ run_case "started app machine with critical app_liveness is restarted" \
 assert_eq "exit code" "0" "${RC}"
 assert_eq "restarted machine" "84e90ea2239e68" "${RESTARTED}"
 assert_eq "no destroy after a successful restart" "" "${DESTROYED}"
+assert_eq "wedged machine log captured before restart" \
+  "logs --app staging-modulo --machine 84e90ea2239e68 --no-tail" "${LOGGED}"
+assert_eq "captured log is written for the deploy artifact upload" "yes" \
+  "$([ -f "${APP_LOG_DIR}/84e90ea2239e68.log" ] && echo yes || echo no)"
+assert_eq "named password redacted from the captured log" "0" \
+  "$(grep -c 'hunter2' "${APP_LOG_DIR}/84e90ea2239e68.log" || true)"
+assert_eq "redacted log keeps its diagnostic content" "1" \
+  "$(grep -c 'boot log fetched' "${APP_LOG_DIR}/84e90ea2239e68.log" || true)"
 
 # --- 2. Healthy app machine is left alone -----------------------------------
 run_case "healthy app machine is not restarted" \
   "$(machine_json 84e90ea2239e68 started app app_liveness passing)"
 assert_eq "exit code" "0" "${RC}"
 assert_eq "no restart" "" "${RESTARTED}"
+assert_eq "no log fetch for a healthy machine" "" "${LOGGED}"
 
 # --- 3. Worker-group machine is never restarted -----------------------------
 run_case "critical worker machine is not restarted" \
