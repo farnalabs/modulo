@@ -360,16 +360,123 @@ async def test_check_capacity_second_lock_timeout_defers_with_the_reset_outcome(
     assert "left pending" not in str(excinfo.value)
 
 
-@pytest.mark.parametrize("reset_state", ["confirmed", "fence_lost", "timeout", "unknown"])
+@pytest.mark.parametrize(
+    ("observed_status", "expected_state", "expected_fragment", "forbidden_fragment"),
+    [
+        # The reset raised, but the row shows it LANDED: the run is pending and
+        # dispatcher_reconcile recovers it — NOT the nodeless/age backstop,
+        # which is running-only and cannot see a pending row.
+        ("pending", "observed_pending", "recovered by dispatcher_reconcile", "was left as-is"),
+        # The reset raised and did not land: the row is still running under our
+        # token, so the nodeless/age backstop owns it.
+        ("running", "observed_running", "nodeless/age backstop", "recovered by dispatcher_reconcile"),
+    ],
+)
+async def test_check_capacity_resolves_a_raised_reset_from_a_fresh_reread(
+    observed_status: str,
+    expected_state: str,
+    expected_fragment: str,
+    forbidden_fragment: str,
+) -> None:
+    """FAR-2076: a reset that RAISES carries no return value, so its outcome is
+    resolved from the ROW.
+
+    The old ``"unknown"`` arm said "whether it landed is unknown" and then
+    claimed the run "was left as-is for the nodeless/age backstop" — but that
+    repair only looks at ``running`` rows. If the reset DID land the row is
+    ``pending`` and the recovery sweep is ``dispatcher_reconcile``, so the old
+    wording pointed on-call at the wrong sweep. The handler now re-reads the row
+    in a fresh session and names the arm the observed status actually proves.
+    """
+    run = _capacity_run()
+    executor = _capacity_executor(_begin_session())
+    update = AsyncMock(side_effect=_lock_timeout_error())
+    executor._fenced_pending_reset = AsyncMock(side_effect=RuntimeError("reset blew up"))  # type: ignore[method-assign]
+    observed = _capacity_run(status=observed_status)
+    # Two admission attempts read the row; the third read is the resolver's.
+    get_run_mock = AsyncMock(side_effect=[run, run, observed])
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", new=get_run_mock),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update),
+        pytest.raises(AdmissionLockTimeoutError) as excinfo,
+    ):
+        await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=1,
+            graph_json=None,
+        )
+
+    assert get_run_mock.await_count == 3
+    assert excinfo.value.reset_state == expected_state
+    message = str(excinfo.value)
+    assert expected_fragment in message
+    assert forbidden_fragment not in message
+
+
+async def test_check_capacity_raised_reset_with_failed_reread_names_both_sweeps(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When the follow-up re-read ALSO fails, the outcome stays ``"unknown"`` —
+    but the wording must name BOTH recoveries and claim neither.
+
+    The pre-fix wording asserted the run "was left as-is for the nodeless/age
+    backstop", which is false whenever the reset landed (then the row is
+    ``pending`` and only ``dispatcher_reconcile`` can recover it).
+    """
+    run = _capacity_run()
+    executor = _capacity_executor(_begin_session())
+    update = AsyncMock(side_effect=_lock_timeout_error())
+    executor._fenced_pending_reset = AsyncMock(side_effect=RuntimeError("reset blew up"))  # type: ignore[method-assign]
+    get_run_mock = AsyncMock(side_effect=[run, run, RuntimeError("re-read also failed")])
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", new=get_run_mock),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update),
+        caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.executor"),
+        pytest.raises(AdmissionLockTimeoutError) as excinfo,
+    ):
+        await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=1,
+            graph_json=None,
+        )
+
+    assert excinfo.value.reset_state == "unknown"
+    message = str(excinfo.value)
+    # BOTH possible recoveries are named — the reset may have landed or not.
+    assert "recovered by dispatcher_reconcile" in message
+    assert "left for the nodeless/age backstop" in message
+    # ...and neither is asserted as the run's resting state.
+    assert "was left as-is" not in message
+    assert any("pending_reset_outcome_reread" in recorded for recorded in caplog.messages)
+
+
+@pytest.mark.parametrize(
+    "reset_state",
+    ["confirmed", "fence_lost", "timeout", "observed_pending", "observed_running", "unknown"],
+)
 async def test_admission_lock_timeout_maps_to_the_non_terminal_deferred_outcome(
     reset_state: Any,
 ) -> None:
     """FAR-2076: the deferral contract is observable to the watchdog caller.
 
     EVERY reset outcome maps to ``{"status": "deferred"}`` and does NOT
-    terminal-fail the run — the tri-state only changes the wording, never the
-    outcome. Any other executor exception still terminal-fails (asserted here
-    so the new branch cannot widen).
+    terminal-fail the run — the outcome tri-state only changes the wording,
+    never the outcome. Any other executor exception still terminal-fails
+    (asserted here so the new branch cannot widen).
     """
     fail_run = AsyncMock()
     with patch("modulo.core.pipeline_execution.fail_run_terminal", fail_run):

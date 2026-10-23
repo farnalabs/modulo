@@ -7802,9 +7802,15 @@ async def _fail_retry_budget_exhausted_run(
       ``1 + max_retries``.
 
     Capacity-marked rows (``org_capacity_limited`` / ``pipeline_capacity``)
-    are excluded by the caller: a capacity demotion consumes a SAQ claim
-    without executing the graph — it never increments the counter — so gating
-    on the counter makes that exclusion structural rather than a special case.
+    are NOT excluded by the caller — and must never be re-excluded here. A
+    capacity demotion consumes a SAQ claim without executing the graph, so it
+    never increments the durable counter; the counter therefore governs those
+    rows exactly as it governs every other pending row. A capacity-marked row
+    below the ceiling is re-dispatched, one at/above it is terminal-failed like
+    any other exhausted execution. The old marker exclusion let an at-ceiling
+    capacity-marked run execute again — the defect FAR-2076 removed; it is
+    pinned by
+    ``test_reconcile_budget_gates_a_capacity_marked_row_on_the_durable_counter``.
 
     Observability (FAR-2076) — a mass terminalisation must be visible without
     grepping run rows, mirroring ``_fail_nodeless_run``: an ERROR log, a
@@ -9790,9 +9796,6 @@ async def _reconcile_org(
                 # Selected for the terminal error_detail / triage context only
                 # — never as a budget measure.
                 Run.node_attempt_count,
-                # FAR-2076: the gate excludes capacity-marked pending rows (a
-                # capacity demotion consumes a claim while executing nothing).
-                Run.error_code,
                 Run.dispatcher,
                 # FAR-1649: consumed by the row-level nodeless recheck
                 # (_is_nodeless_zombie_row) — a durably-recorded first-node
