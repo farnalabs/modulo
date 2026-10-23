@@ -239,6 +239,8 @@ def _row(**overrides: object) -> SimpleNamespace:
         "dispatch_phase": "first_node_dispatched",
         "claim_count": 1,
         "node_attempt_count": 1,
+        # FAR-2076: the ONE execution-budget measure the handback gate reads.
+        "execution_attempt_count": 1,
         "node_token_usage": None,
         "started_at": datetime.now(UTC) - timedelta(seconds=10),
         "dispatched_at": datetime.now(UTC) - timedelta(seconds=10),
@@ -305,7 +307,10 @@ def test_gate_honours_retry_budget_on_pre_node_run() -> None:
     from modulo.core.worker_handoff import _handback_decision
 
     policy = {"on": ["stall"], "max_retries": 2}
-    decision = _handback_decision(_row(dispatch_phase="claimed", retry_policy=policy, claim_count=5), {})
+    decision = _handback_decision(
+        _row(dispatch_phase="claimed", retry_policy=policy, claim_count=5, execution_attempt_count=3),
+        {},
+    )
     assert decision.may_requeue is False
 
 
@@ -679,6 +684,7 @@ async def test_load_handback_row_builds_row_and_graph() -> None:
         "dispatch_phase": "first_node_dispatched",
         "claim_count": 2,
         "node_attempt_count": 1,
+        "execution_attempt_count": 2,
         "node_token_usage": 5,
         "started_at": None,
         "dispatched_at": None,

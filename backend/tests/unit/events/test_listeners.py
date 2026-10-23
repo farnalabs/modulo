@@ -32,6 +32,7 @@ from modulo.db.models.agent import Agent
 from modulo.db.models.notification import Notification
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
+from tests.unit.events._helpers import drain_background_tasks
 
 
 @pytest.fixture(autouse=True)
@@ -52,13 +53,9 @@ def fake_bus() -> AsyncMock:
     return AsyncMock()
 
 
-async def _drain_tasks(wait: float = 0.05) -> None:
+async def _drain_tasks() -> None:
     """Let background tasks created by a listener finish."""
-    for _ in range(50):
-        if not listeners._background_tasks:
-            await asyncio.sleep(0)
-            return
-        await asyncio.sleep(wait / 50)
+    await drain_background_tasks(listeners._background_tasks)
 
 
 # ---------------------------------------------------------------------------

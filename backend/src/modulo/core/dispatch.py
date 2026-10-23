@@ -16,6 +16,11 @@ from saq.queue.redis import RedisQueue
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+# FAR-2076: the retry budget lives in the zero-import leaf module
+# ``modulo.core.retry_budget``. Only the enqueue-side adapter helper is needed
+# here; every other consumer imports from the leaf directly, so this module
+# deliberately does not re-export names it does not use.
+from modulo.core.retry_budget import clamp_saq_retries
 from modulo.db.sqlstates import is_row_lock_timeout
 from modulo.settings import get_settings
 
@@ -305,6 +310,80 @@ async def _org_capacity_deferred(
     return True
 
 
+async def _saq_retries_for_run(run_id: uuid.UUID, *, org_id: uuid.UUID, job_type: str) -> int:
+    """Transport retry allowance for one enqueue, bounded by the policy (FAR-2076).
+
+    Measured against the pinned ``saq==0.26.4``: ``Job.retryable`` is
+    ``retries > attempts`` (``saq/job.py:262``) and the worker increments
+    ``job.attempts`` BEFORE processing (``saq/worker.py:356``), so
+    ``retries=N`` grants **N total attempts** and ``retries=0`` still grants
+    one. Left at ``settings.saq_run_retries`` the transport silently outran a
+    pipeline's ``retry_policy.max_retries`` — the transport granted executions
+    the policy had already refused. The clamp comes from the ONE shared helper
+    (``modulo.core.retry_budget.clamp_saq_retries``), which reads the durable
+    execution counter ``runs.execution_attempt_count`` — never ``claim_count``
+    (it grows on capacity-demoted and resume claims).
+
+    ``resume_run`` is NOT clamped: a resume continues from the run's LangGraph
+    checkpoint rather than re-executing the graph, so the retry policy does not
+    govern resumes.
+
+    Runs in its OWN short session, deliberately, and is called BEFORE the
+    admission transaction opens (FAR-2076). The clamp is a best-effort budget
+    guard, never an admission authority, so a read failure must fail OPEN to
+    the configured value. Swallowing that failure inside the admission
+    transaction would be unreachable: the DB error aborts the transaction
+    (25P02), the caller's next statement raises ``InFailedSQLTransactionError``
+    and the dispatch hard-fails instead of deferring. Reading it separately
+    makes the fail-open genuine; the counter only grows, so a slightly stale
+    read can only OVER-grant a transport retry — it can never under-grant one
+    and lose an execution the policy still permits. Retry GRANTING (the
+    transient-decision path, the watchdogs and the reconcile backstop) still
+    re-reads the live counter, so ``runs.execution_attempt_count`` remains the
+    single budget authority.
+    """
+    from modulo.db.crud.run import get_run
+    from modulo.db.models.pipeline import Pipeline
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
+    from modulo.db.soft_delete import include_soft_deleted
+
+    configured = int(get_settings().saq_run_retries)
+    if job_type == "resume_run":
+        return configured
+    session = _open_session()
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            run = await get_run(session, run_id)
+            if run is None:
+                return configured
+            # FAR-1025 parity with the capacity checks: an in-flight run's
+            # pipeline may be soft-deleted after dispatch.
+            pipeline = (
+                await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))
+            ).scalar_one_or_none()
+            policy = getattr(pipeline, "retry_policy", None) if pipeline is not None else None
+            return clamp_saq_retries(
+                policy,
+                execution_attempt_count=getattr(run, "execution_attempt_count", 0),
+                configured=configured,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "dispatch_run: could not resolve the retry-policy budget for run %s — "
+            "using the configured SAQ retries (%d)",
+            run_id,
+            configured,
+            exc_info=True,
+        )
+        return configured
+    finally:
+        await session.close()
+
+
 async def _record_dispatched(session: AsyncSession, run_id: uuid.UUID) -> None:
     """Write dispatched_at BEFORE enqueue (F3e).
 
@@ -455,6 +534,7 @@ async def _enqueue_saq(
     resume_data: dict[str, Any] | None,
     *,
     key_suffix: str | None = None,
+    retries: int | None = None,
 ) -> tuple[str, bool]:
     """Enqueue a run job to SAQ. Returns (job_id, deduped).
 
@@ -487,7 +567,7 @@ async def _enqueue_saq(
         key=key,
         timeout=SAQ_RUN_TIMEOUT,
         heartbeat=settings.saq_job_heartbeat,
-        retries=settings.saq_run_retries,
+        retries=settings.saq_run_retries if retries is None else retries,
         retry_delay=settings.saq_retry_delay,
         retry_backoff=False,
         ttl=SAQ_RUN_TTL,
@@ -587,6 +667,8 @@ async def _enqueue_with_retry(
     resume_data: dict[str, Any] | None,
     key_suffix: str | None,
     fail_fast: bool,
+    *,
+    retries: int,
 ) -> tuple[str, str | None]:
     """Enqueue the run job to SAQ with the configured retry policy.
 
@@ -599,7 +681,7 @@ async def _enqueue_with_retry(
     """
     try:
         job_id, deduped = await _enqueue_saq(
-            str(run_id), str(org_id), queue_name, job_type, resume_data, key_suffix=key_suffix
+            str(run_id), str(org_id), queue_name, job_type, resume_data, key_suffix=key_suffix, retries=retries
         )
     except asyncio.CancelledError:
         raise
@@ -609,7 +691,9 @@ async def _enqueue_with_retry(
             await _mark_enqueue_failed_session(run_id, org_id)
             return ("enqueue_failed", None)
         _log.warning("dispatch_run: SAQ enqueue failed for run %s: %s", run_id, exc)
-        retried = await _retry_enqueue_saq(run_id, org_id, queue_name, job_type, resume_data, key_suffix=key_suffix)
+        retried = await _retry_enqueue_saq(
+            run_id, org_id, queue_name, job_type, resume_data, key_suffix=key_suffix, retries=retries
+        )
         if retried is None:
             await _mark_enqueue_failed_session(run_id, org_id)
             return ("enqueue_failed", None)
@@ -626,6 +710,7 @@ async def _retry_enqueue_saq(
     resume_data: dict[str, Any] | None,
     *,
     key_suffix: str | None,
+    retries: int,
 ) -> tuple[str, bool] | None:
     """Retry the SAQ enqueue a bounded number of times.
 
@@ -638,7 +723,13 @@ async def _retry_enqueue_saq(
         await asyncio.sleep(attempt)
         try:
             return await _enqueue_saq(
-                str(run_id), str(org_id), queue_name, job_type, resume_data, key_suffix=key_suffix
+                str(run_id),
+                str(org_id),
+                queue_name,
+                job_type,
+                resume_data,
+                key_suffix=key_suffix,
+                retries=retries,
             )
         except asyncio.CancelledError:
             raise
@@ -700,6 +791,13 @@ async def dispatch_run(
     rid = uuid.UUID(str(run_id))
     oid = uuid.UUID(str(org_id))
     queue_name = queue or settings.saq_runs_queue
+    # FAR-2076: transport retry allowance, clamped to the pipeline retry
+    # policy's remaining execution budget. Resolved BEFORE the admission
+    # transaction opens, in its own short session: the lookup is a best-effort
+    # budget guard whose fail-open must actually be reachable, and a DB error
+    # raised INSIDE the admission transaction would abort it (25P02) instead of
+    # failing open — turning a clamp read into a hard dispatch failure.
+    saq_retries = await _saq_retries_for_run(rid, org_id=oid, job_type=job_type)
 
     # Capacity check FIRST (plan F3b/F3e). The run itself is excluded from the
     # count so a resume never counts against its own slot; a capacity-deferred
@@ -802,4 +900,6 @@ async def dispatch_run(
     finally:
         await session.close()
 
-    return await _enqueue_with_retry(rid, oid, queue_name, job_type, resume_data, key_suffix, fail_fast)
+    return await _enqueue_with_retry(
+        rid, oid, queue_name, job_type, resume_data, key_suffix, fail_fast, retries=saq_retries
+    )

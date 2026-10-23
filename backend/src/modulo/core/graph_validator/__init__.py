@@ -50,6 +50,7 @@ from modulo.core.model_class_registry import (
     model_var_registry_coverage,
     node_references_model_var,
 )
+from modulo.core.retry_budget import RETRY_POLICY_MAX_RETRIES
 from modulo.db.models.agent import Agent
 from modulo.db.models.composite_template import CompositeTemplate
 from modulo.db.models.connector_instance import ConnectorInstance
@@ -111,13 +112,14 @@ _SCHEMA_MAX_DEPTH = 20
 # image built for Modulo's own pipelines.
 _KNOWN_SANDBOX_TEMPLATES = frozenset({"opencode", "modulo-opencode"})
 
-# Pipeline retry_policy events + budget bound (kept in sync with the API
-# schema in api/routes/pipelines.py and the executor's _retry_after_policy).
+# Pipeline retry_policy events (the budget BOUND lives in the one shared
+# ``modulo.core.retry_budget`` module — imported at the top of this file; a
+# second copy here would make a raised bound read every stored policy as
+# malformed and silently disable every ceiling).
 # "eval_failed" re-dispatches a guardrail-blocked run (final_status
 # "eval_failed" / error_code "eval.blocked"); the FAR-228 idempotency gate
 # (guard A) makes that re-dispatch safe for delivery nodes.
 _RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure", "eval_failed"})
-_RETRY_POLICY_MAX_RETRIES = 5
 
 # Run-level ``backoff_schedule`` bounds (FAR-525). Hosted in retry_compensation
 # (DB-free, the schedule constants' home) so the write-site validator and the
@@ -165,7 +167,7 @@ def _is_non_negative_int(value: object) -> bool:
 
 def _is_valid_retry_budget(value: object) -> bool:
     """True for a genuine (non-bool) int within the retry_policy budget bound."""
-    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= _RETRY_POLICY_MAX_RETRIES
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= RETRY_POLICY_MAX_RETRIES
 
 
 def _as_positive_number(value: Any) -> float | None:
@@ -3650,7 +3652,8 @@ class GraphValidator:
         """Validate a pipeline's ``retry_policy``, emitting an ERROR when malformed.
 
         Valid shape: ``{"on": ["stall"|"timeout"|"failure"|"eval_failed"],
-        "max_retries": 0-5}`` (``on`` may be absent or explicitly ``null``).
+        "max_retries": 0-<the shared bound>}`` (``on`` may be absent or
+        explicitly ``null``).
         ``None``/``{}`` (no policy) passes. A malformed policy would silently
         disable retries at run time, so it is surfaced as a hard error here.
 
@@ -3673,7 +3676,8 @@ class GraphValidator:
             result.error(
                 "RETRY_POLICY_MALFORMED",
                 "retry_policy must be an object like "
-                "{'on': ['stall','timeout','failure','eval_failed'], 'max_retries': 0-5}",
+                f"{{'on': ['stall','timeout','failure','eval_failed'], "
+                f"'max_retries': 0-{RETRY_POLICY_MAX_RETRIES}}}",
             )
             return
         events = policy.get("on")
@@ -3699,7 +3703,7 @@ class GraphValidator:
         if not _is_valid_retry_budget(max_retries):
             result.error(
                 "RETRY_POLICY_MALFORMED",
-                "retry_policy 'max_retries' must be an integer between 0 and 5",
+                f"retry_policy 'max_retries' must be an integer between 0 and {RETRY_POLICY_MAX_RETRIES}",
             )
 
     @staticmethod

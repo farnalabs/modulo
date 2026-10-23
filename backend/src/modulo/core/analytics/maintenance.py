@@ -243,9 +243,20 @@ async def backfill_facts(session: Any, day: date) -> int:
         ),
         else_=None,
     )
+    # FAR-2079: the ``dispatched_at <= started_at`` guard mirrors the live
+    # writer. ``started_at`` is stamped once (first transition to running) and
+    # never reset, while ``dispatched_at`` is rewritten on every dispatch — the
+    # reconcile re-enqueue leg and a HITL resume both move it past the original
+    # start. Subtracting then yields a NEGATIVE "queue wait" whose timestamps
+    # belong to different attempts, so the sample is NULL (unknowable), never
+    # negative.
     queue_wait_ms_expr = sa.case(
         (
-            sa.and_(Run.dispatched_at.is_not(None), Run.started_at.is_not(None)),
+            sa.and_(
+                Run.dispatched_at.is_not(None),
+                Run.started_at.is_not(None),
+                Run.dispatched_at <= Run.started_at,
+            ),
             sa.cast(sa.func.extract("epoch", Run.started_at - Run.dispatched_at) * 1000, sa.BigInteger),
         ),
         else_=None,

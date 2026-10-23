@@ -16,6 +16,7 @@ import pytest
 
 from modulo.core.events import event_bus as eb
 from modulo.core.events.event_bus import EventBus
+from tests.unit.events._helpers import drain_background_tasks
 
 
 @pytest.fixture(autouse=True)
@@ -42,13 +43,9 @@ def _drain(q: asyncio.Queue[dict[str, object]]) -> list[dict[str, object]]:
     return out
 
 
-async def _drain_tasks(wait: float = 0.05) -> None:
+async def _drain_tasks() -> None:
     """Let fire-and-forget Redis broadcast tasks finish."""
-    for _ in range(50):
-        if not eb._background_tasks:
-            await asyncio.sleep(0)
-            return
-        await asyncio.sleep(wait / 50)
+    await drain_background_tasks(eb._background_tasks)
 
 
 def _event(*, rid: str, version: int) -> dict[str, str | int]:
