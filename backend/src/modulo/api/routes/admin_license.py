@@ -22,6 +22,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.feature_flags import resolve_effective_license
 from modulo.core.license import (
+    DEFAULT_RENEWAL_MODE,
     LICENCE_GRACE_DAYS,
     REASON_EXPIRED,
     REASON_MALFORMED,
@@ -77,16 +78,6 @@ LICENCE_STATES: frozenset[str] = frozenset(
         LICENCE_STATE_LAPSED,
     }
 )
-
-#: Renewal mode the signed payload documents for a key minted before FAR-2075.
-#:
-#: The typed claim (``LicenseData.renewal_mode``) is introduced by the
-#: licence-payload slice of FAR-2075 (PR #2244). This route is landed
-#: independently, so it reads the claim defensively and falls back to the
-#: documented old-key default. ``auto`` must never be assumed: it promises a
-#: replacement key is already on its way, and offering a purchase path to
-#: someone already paying causes double charges.
-_DEFAULT_RENEWAL_MODE = "manual"
 
 logger = logging.getLogger(__name__)
 
@@ -158,23 +149,19 @@ def licence_grace_ends_at(expires_at: str | None) -> str | None:
 
 
 def _renewal_claims(data: LicenseData) -> dict[str, Any]:
-    """Read the signed renewal claims off a resolved licence, defensively.
+    """Read the signed renewal claims off a resolved licence, unmodified.
 
-    ``LicenseData`` gains ``renewal_mode`` / ``term`` / ``licence_id`` /
-    ``issued_at`` in the licence-payload slice of FAR-2075 (PR #2244). Reading
-    them through ``getattr`` keeps this surface correct on BOTH sides of that
-    landing: an older ``LicenseData`` has no such attributes, which resolves to
-    exactly the defaults the signed-payload contract documents for a key minted
-    before FAR-2075 (manual renewal; no term, id or issue date). No claim
-    parsing is duplicated here — a present typed attribute is passed through
-    verbatim, so the payload slice stays the only place claim values are
-    validated.
+    ``LicenseData`` carries the claims from the licence-payload slice of
+    FAR-2075 (PR #2244), which is the ONLY place they are parsed and validated
+    (``renewal_mode`` defaults to ``"manual"`` there for a key minted before
+    that slice). This route passes the typed values through so the admin view
+    cannot drift from the signed payload's meaning.
     """
     return {
-        "renewal_mode": getattr(data, "renewal_mode", None) or _DEFAULT_RENEWAL_MODE,
-        "term_months": getattr(data, "term", None),
-        "licence_id": getattr(data, "licence_id", None),
-        "issued_at": getattr(data, "issued_at", None),
+        "renewal_mode": data.renewal_mode,
+        "term_months": data.term,
+        "licence_id": data.licence_id,
+        "issued_at": data.issued_at,
     }
 
 
@@ -186,8 +173,9 @@ class LicenseStatusResponse(BaseModel):
     org_id: str | None = None
     # -- FAR-2075 renewal surface (all backend-derived) ---------------------
     #: ``"auto"`` when the signed key says Farnalabs mints the replacement,
-    #: otherwise ``"manual"`` (also the pre-FAR-2075 default — never assume auto).
-    renewal_mode: str = _DEFAULT_RENEWAL_MODE
+    #: otherwise ``"manual"`` (the signed-payload default for an older key —
+    #: ``auto`` is never assumed: it promises a key already on its way).
+    renewal_mode: str = DEFAULT_RENEWAL_MODE
     #: Licence term in months; ``None`` for a key minted before FAR-2075.
     term_months: int | None = None
     #: Opaque stable licence identifier; ``None`` before FAR-2075.

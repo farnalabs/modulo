@@ -475,24 +475,23 @@ class TestLicenseStatusRenewalShape:
         assert response.days_until_expiry == 200
         assert response.licence_state == admin_license.LICENCE_STATE_ACTIVE
 
-    def test_renewal_claims_pass_through_when_the_payload_slice_provides_them(self) -> None:
-        """The claims land on ``LicenseData`` in FAR-2075's payload slice (#2244).
+    def test_signed_renewal_claims_reach_the_response(self) -> None:
+        """The signed claims pass through unchanged (FAR-2075 payload slice)."""
+        payload = _make_valid_payload(
+            renewal_mode="auto",
+            term=24,
+            licence_id="lic-auto-1",
+            issued_at=(datetime.now(UTC) - timedelta(days=10)).isoformat(),
+        )
+        key = _sign_license_payload(payload)
+        validation = parse_and_verify(key)
+        assert validation.license_data is not None
 
-        Set dynamically so this pins the pass-through bridge whether or not that
-        slice has merged: once it has, the same attributes arrive from the
-        signed payload and are passed through unchanged.
-        """
-        data = self._licence_data()
-        data.renewal_mode = "auto"  # type: ignore[attr-defined]
-        data.term = 12  # type: ignore[attr-defined]
-        data.licence_id = "lic-abc"  # type: ignore[attr-defined]
-        data.issued_at = "2026-01-01T00:00:00Z"  # type: ignore[attr-defined]
-
-        response = admin_license._license_status(data)
+        response = admin_license._license_status(validation.license_data)
         assert response.renewal_mode == "auto"
-        assert response.term_months == 12
-        assert response.licence_id == "lic-abc"
-        assert response.issued_at == "2026-01-01T00:00:00Z"
+        assert response.term_months == 24
+        assert response.licence_id == "lic-auto-1"
+        assert response.issued_at == payload["issued_at"]
 
     def test_no_licence_is_state_none(self) -> None:
         response = admin_license.LicenseStatusResponse(has_license=False, tier="community")
@@ -528,6 +527,24 @@ class TestGetLicenseRenewalState:
         assert data["days_until_expiry"] > 360
         expires = datetime.fromisoformat(data["expires_at"])
         assert datetime.fromisoformat(data["grace_ends_at"]) - expires == timedelta(days=LICENCE_GRACE_DAYS)
+
+    def test_reports_auto_renewal_on_the_wire(self, client: TestClient) -> None:
+        payload = _make_valid_payload(
+            renewal_mode="auto",
+            term=12,
+            licence_id="lic-auto-1",
+            issued_at=(datetime.now(UTC) - timedelta(days=10)).isoformat(),
+        )
+        key = _sign_license_payload(payload)
+        result = parse_and_verify(key)
+        assert result.license_data is not None
+        store_license(key, result.license_data)
+
+        data = self._get(client, _mock_org(settings_json={}))
+        assert data["renewal_mode"] == "auto"
+        assert data["term_months"] == 12
+        assert data["licence_id"] == "lic-auto-1"
+        assert data["issued_at"] == payload["issued_at"]
 
     def test_reports_renewal_due_inside_the_countdown(self, client: TestClient) -> None:
         expiry = datetime.now(UTC) + timedelta(days=10)
