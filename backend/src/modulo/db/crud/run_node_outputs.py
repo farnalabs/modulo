@@ -11,7 +11,12 @@ module. It provides:
   restricts it to a row whose own written value actually changed, so a write
   that re-sends an unchanged value never refreshes a sibling row's
   ``updated_at`` — one attempt's write no longer re-dates every earlier
-  attempt's marker row;
+  attempt's marker row. The guard sits on all five writers of the table (the
+  three in this module plus the two direct ``__mwi_audit__`` writers in
+  ``core/pipeline_engine/workspace_input_audit.py``) and compares every JSON
+  side as TEXT: ``schema_enforcement_json`` is plain ``json`` on Postgres,
+  which defines no ``=`` operator, so an uncast ``IS DISTINCT FROM`` is a
+  parse-time error there (see ``_row_changed_predicate``);
 * the PRIMARY-write helpers the store chokepoints call
   (``replace_run_node_outputs`` / ``write_run_markers``) — upsert + delete-
   absent, delete-absent ordered AFTER upserts, metadata flags re-derived from
@@ -82,6 +87,7 @@ from sqlalchemy import (
     DateTime,
     MetaData,
     Table,
+    Text,
     Uuid,
     and_,
     cast,
@@ -529,17 +535,34 @@ def _row_changed_predicate(stmt: Any, columns: Sequence[Any]) -> Any:
     that moves its stamp.
 
     ``IS DISTINCT FROM`` is the null-safe comparison (a NULL side vs a written
-    value is a change, and NULL vs NULL is not). On Postgres the JSONB columns
-    compare structurally; on SQLite the JSON columns compare their serialised
-    text, so an identical payload is unchanged and a reordered one may read as
-    changed — acceptable for a non-production dialect, since the invariant is
-    "never move a row that provably did not change", which holds on both.
+    value is a change, and NULL vs NULL is not). Every compared column is cast
+    to TEXT on BOTH sides, which is load bearing, not cosmetic: ``IS DISTINCT
+    FROM`` resolves through the type's ``=`` operator and Postgres defines no
+    ``=`` for ``json`` (only for ``jsonb``). This table carries BOTH flavours —
+    ``outputs_json`` / ``node_telemetry_json`` / ``raw_output_markers`` /
+    ``artifacts_json`` are ``jsonb`` on Postgres (0192/0220), but
+    ``schema_enforcement_json`` is plain ``json`` (0251) — so an uncast
+    comparison raises ``operator does not exist: json = json`` at PARSE time on
+    Postgres. That failure is not confined to a conflicting row: EVERY upsert
+    of a row carrying that column fails, and the callers treat the write as
+    best-effort, so the telemetry would silently stop. ``CAST(... AS TEXT)`` is
+    valid on Postgres (``json::text`` / ``jsonb::text``) and on SQLite, so both
+    dialects compare identically.
+
+    Casting a ``jsonb`` side loses nothing: jsonb is a normalised storage
+    format, so ``jsonb::text`` is canonical (object keys sorted, whitespace
+    fixed) and two structurally equal jsonb values always render the same text.
+    A ``json`` side renders the bytes as stored, so two semantically equal
+    documents differing only in whitespace/key order read as changed — the
+    conservative direction: it re-stamps a row (harmless) and never skips a
+    write that would have changed data.
 
     Returns the predicate to pass as ``where=``; *columns* is the set of
     written columns, so a writer only compares what it is actually setting.
     """
     comparisons = [
-        getattr(stmt.excluded, column).is_distinct_from(getattr(RunNodeOutput, column)) for column in columns
+        cast(getattr(stmt.excluded, column), Text).is_distinct_from(cast(getattr(RunNodeOutput, column), Text))
+        for column in columns
     ]
     if not comparisons:
         # No payload column is being written: nothing can have changed, so the
@@ -548,6 +571,25 @@ def _row_changed_predicate(stmt: Any, columns: Sequence[Any]) -> Any:
     if len(comparisons) == 1:
         return comparisons[0]
     return or_(*comparisons)
+
+
+def _targeted_upsert_stmt(insert_factory: Any, values: dict[str, Any], column: str) -> Any:
+    """INSERT ... ON CONFLICT DO UPDATE for ONE payload column.
+
+    Shared by :func:`persist_artifact_pointers` (``artifacts_json``) and
+    :func:`persist_schema_enforcement_record` (``schema_enforcement_json``),
+    which differ only in the column they write. Hoisted so the Postgres-dialect
+    compile test exercises the statement the writers actually execute rather
+    than a hand-built twin — the ``schema_enforcement_json`` column is plain
+    ``json`` on Postgres, where an uncast ``IS DISTINCT FROM`` is a parse-time
+    error that no SQLite-backed test can see (:func:`_row_changed_predicate`).
+    """
+    stmt = insert_factory(RunNodeOutput).values(**values)
+    return stmt.on_conflict_do_update(
+        index_elements=["run_id", "node_id", "attempt_key"],
+        set_={"updated_at": func.current_timestamp(), column: getattr(stmt.excluded, column)},
+        where=_row_changed_predicate(stmt, (column,)),
+    )
 
 
 def _upsert_group_stmt(
@@ -1296,17 +1338,7 @@ async def persist_artifact_pointers(
         "attempt_key": attempt_key,
         "artifacts_json": _sanitise_jsonb_for_store(pointers or None, run_id=run_id, label="artifacts"),
     }
-    stmt = insert_factory(RunNodeOutput).values(**values)
-    set_: dict[str, Any] = {
-        "updated_at": func.current_timestamp(),
-        "artifacts_json": stmt.excluded.artifacts_json,
-    }
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["run_id", "node_id", "attempt_key"],
-        set_=set_,
-        where=_row_changed_predicate(stmt, ("artifacts_json",)),
-    )
-    await session.execute(stmt, [values])
+    await session.execute(_targeted_upsert_stmt(insert_factory, values, "artifacts_json"), [values])
 
 
 async def persist_schema_enforcement_record(
@@ -1348,14 +1380,4 @@ async def persist_schema_enforcement_record(
             enforcement_record, run_id=run_id, label="schema enforcement"
         ),
     }
-    stmt = insert_factory(RunNodeOutput).values(**values)
-    set_: dict[str, Any] = {
-        "updated_at": func.current_timestamp(),
-        "schema_enforcement_json": stmt.excluded.schema_enforcement_json,
-    }
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["run_id", "node_id", "attempt_key"],
-        set_=set_,
-        where=_row_changed_predicate(stmt, ("schema_enforcement_json",)),
-    )
-    await session.execute(stmt, [values])
+    await session.execute(_targeted_upsert_stmt(insert_factory, values, "schema_enforcement_json"), [values])

@@ -20,12 +20,16 @@ work through the repo writers.
 import itertools
 import json
 import uuid
+import warnings
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from typing import Any
 
 import pytest
 from sqlalchemy import event, select, update
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import SAWarning
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.db.crud.run_node_outputs import (
@@ -38,6 +42,8 @@ from modulo.db.crud.run_node_outputs import (
     RunBlobs,
     _jsonb_canonical_key,
     _sanitise_jsonb,
+    _targeted_upsert_stmt,
+    _upsert_group_stmt,
     dialect_insert,
     parse_marker_node_id,
     persist_artifact_pointers,
@@ -976,6 +982,91 @@ class TestMarkerUpdatedAtProvenance:
         await _write_markers(session, run, {key: {"raw": "after"}})
 
         assert await _read_stamp(session, run, attempt_key=key) > datetime(2024, 1, 1)
+
+
+class TestPerRowPredicateIsPostgresTypeSafe:
+    """FAR-2083: the per-row predicate must be type-safe on Postgres.
+
+    ``schema_enforcement_json`` is plain ``json`` on Postgres (migration 0251
+    adds it as ``sa.JSON()``) while its four siblings are ``jsonb``
+    (0192/0220). ``json`` has no ``=`` operator, so an uncast ``IS DISTINCT
+    FROM`` raises ``operator does not exist: json = json`` at PARSE time — which
+    fails EVERY enforcement write, not only a conflicting one, and the
+    best-effort caller swallows it as ``schema_enforcement.persist_failed``.
+
+    The rest of this module runs on in-memory SQLite, where the same predicate
+    compiles to ``IS NOT`` and the defect is invisible, so these tests compile
+    the writers' REAL statements for the ``postgresql`` dialect and assert the
+    cast is in the emitted SQL. Compilation is the strongest check available
+    here: there is no Postgres integration test for these writers (a known,
+    recorded gap — compilation proves the SQL we ship, not that PG accepts it).
+    """
+
+    def test_schema_enforcement_column_is_json_not_jsonb_on_postgres(self) -> None:
+        """The premise of the cast: this column really has no ``=`` operator."""
+        column = RunNodeOutput.__table__.c.schema_enforcement_json
+        assert not isinstance(column.type.dialect_impl(postgresql.dialect()), postgresql.JSONB)
+
+    def test_blob_columns_are_jsonb_on_postgres(self) -> None:
+        """The siblings DO have ``=``: they are jsonb, so the cast is conservative."""
+        table = RunNodeOutput.__table__
+        for name in ("outputs_json", "node_telemetry_json", "raw_output_markers", "artifacts_json"):
+            assert isinstance(table.c[name].type.dialect_impl(postgresql.dialect()), postgresql.JSONB), name
+
+    def test_enforcement_writer_casts_both_sides_to_text(self) -> None:
+        stmt = _targeted_upsert_stmt(
+            pg_insert,
+            {
+                "run_id": uuid.uuid4(),
+                "organisation_id": uuid.uuid4(),
+                "node_id": "n1",
+                "attempt_key": "run:x:node:n1:0",
+                "schema_enforcement_json": {"outcome": "ok"},
+            },
+            "schema_enforcement_json",
+        )
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "CAST(excluded.schema_enforcement_json AS TEXT)" in sql
+        assert "CAST(run_node_outputs.schema_enforcement_json AS TEXT)" in sql
+        assert "IS DISTINCT FROM" in sql
+        # The UNCAST comparison is exactly the parse-time failure this prevents.
+        assert "excluded.schema_enforcement_json IS DISTINCT FROM" not in sql
+
+    def test_artifact_writer_casts_both_sides_to_text(self) -> None:
+        stmt = _targeted_upsert_stmt(
+            pg_insert,
+            {
+                "run_id": uuid.uuid4(),
+                "organisation_id": uuid.uuid4(),
+                "node_id": "n1",
+                "attempt_key": "run:x:node:n1:0",
+                "artifacts_json": [{"stream": "stdout"}],
+            },
+            "artifacts_json",
+        )
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "CAST(excluded.artifacts_json AS TEXT)" in sql
+        assert "CAST(run_node_outputs.artifacts_json AS TEXT)" in sql
+
+    def test_group_upsert_casts_every_written_blob_column(self) -> None:
+        """The marker path writes all four sides — each one must be cast."""
+        stmt = _upsert_group_stmt(
+            pg_insert,
+            signature=(True, True, True, True),
+            run_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+            ignore_conflicts=False,
+        )
+        # This statement is compiled ahead of its executemany params: node_id and
+        # attempt_key are supplied per row at execute time, so they are absent
+        # from the statement's VALUES by design and SQLAlchemy warns about the
+        # composite PK. The warning is expected here, not a defect under test.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SAWarning)
+            sql = str(stmt.compile(dialect=postgresql.dialect()))
+        for name in ("outputs_json", "node_telemetry_json", "raw_output_markers", "artifacts_json"):
+            assert f"CAST(excluded.{name} AS TEXT)" in sql, name
+            assert f"CAST(run_node_outputs.{name} AS TEXT)" in sql, name
 
 
 def _is_node_progress_row(node_id: str) -> bool:

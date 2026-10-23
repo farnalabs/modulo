@@ -3344,6 +3344,27 @@ def test_deadline_triage_from_markers_projects_signed_markers_only() -> None:
     assert entry["delivery_done"] is False
 
 
+def test_deadline_triage_from_markers_prefers_payload_attempt_key() -> None:
+    """FAR-2082/2083: a cancellation-triage row's storage key is NOT the attempt key.
+
+    The triage marker is stored under ``cancel-triage:<run>:<node>:<suffix>`` so
+    it cannot be mistaken for the attempt's own progress row, while the payload
+    keeps the attempt that really ran. The projection renders these fields
+    verbatim (``RunDetailView`` shows ``attempt_key`` beside ``node_id``), so it
+    must report the REAL attempt key — otherwise a synthetic storage key sits
+    next to a genuine node id in the operator's triage panel.
+    """
+    real_key = "run:r1:node:n1:3"
+    storage_key = f"cancel-triage:r1:n1:{real_key.rsplit(':', 1)[-1]}"
+    markers = {storage_key: {"deadline_triage": True, "node_id": "n1", "attempt_key": real_key}}
+
+    entries = runs_module._deadline_triage_from_markers(markers)
+
+    assert len(entries) == 1
+    assert entries[0]["attempt_key"] == real_key
+    assert entries[0]["node_id"] == "n1"
+
+
 def test_deadline_triage_from_markers_truncates_long_tails() -> None:
     """The retained marker's raw_output can be up to 512KB — the run-detail
     projection carries a bounded display slice, never the full blob."""
