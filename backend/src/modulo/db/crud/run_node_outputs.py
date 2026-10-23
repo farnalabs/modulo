@@ -930,6 +930,12 @@ async def write_run_markers(
     (:func:`parse_marker_node_id`), with unparseable keys stored as
     ``('__unknown__', <full key>)`` rows. Absent keys are deleted AFTER the
     upserts (delete-absent ordering).
+
+    FAR-2083: ``updated_at`` is only updated on rows where the marker value
+    actually changed. The upsert uses a per-row ``DO UPDATE ... WHERE`` guard
+    (:func:`_row_changed_predicate`) comparing ``raw_output_markers`` as TEXT,
+    so re-sending an unchanged marker leaves that row's ``updated_at`` alone.
+    Only a row whose own value differs from the stored value is re-dated.
     """
     _validate_sentinel_keys(markers, kind="marker attempt key", attempt_keys=True)
     await assert_write_org(session, organisation_id)
