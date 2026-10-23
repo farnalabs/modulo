@@ -129,11 +129,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="team",
     ),
     FeatureFlag(
-        name="external_secrets",
-        description="External secrets backends (Vault, AWS, 1Password, Azure Key Vault)",
-        tier="team",
-    ),
-    FeatureFlag(
         name="environment_profiles",
         description="Sandbox environment profiles for code execution",
         tier="team",

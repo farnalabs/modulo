@@ -276,12 +276,14 @@ async def test_after_upgrade_every_catalog_row_is_a_live_code_flag(prev_rev_db_u
     # The structural invariant the admin listing depends on: no row survives
     # whose name the current code registry does not know.
     assert remaining <= LIVE_FLAG_NAMES
-    # The sweep must not over-delete: every name in the frozen registry snapshot
-    # that was seeded survives (this catches a delete predicate that eats a live
-    # flag). Together with ``remaining <= LIVE_FLAG_NAMES`` this pins the result
-    # without re-deriving it, so a future registry addition cannot make the test
-    # tautologically re-assert the migration's own input.
-    assert set(module.LIVE_FLAG_NAMES_SNAPSHOT) <= remaining
+    # The sweep must not over-delete: every SEEDED name in the frozen registry
+    # snapshot survives (this catches a delete predicate that eats a live flag).
+    # Intersecting with ``seeded`` matters because the frozen snapshot is
+    # historical: a flag retired since 0317 (FAR-2100 retired
+    # ``external_secrets``) is in the snapshot but is no longer seeded, so
+    # requiring the whole snapshot to survive would fail for a correctly
+    # retired flag.
+    assert set(module.LIVE_FLAG_NAMES_SNAPSHOT) & set(seeded) <= remaining
 
 
 async def test_repeated_migration_upgrade_is_idempotent(prev_rev_db_url: str) -> None:
