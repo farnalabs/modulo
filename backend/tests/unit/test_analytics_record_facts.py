@@ -152,6 +152,69 @@ class TestFactTimingMs:
         )
         assert _fact_queue_wait_ms(run) == 15000
 
+    @pytest.mark.parametrize(
+        "phase_entered_at",
+        [
+            datetime(2026, 8, 7, 9, 0, 21, tzinfo=UTC),
+            None,
+        ],
+        ids=["phase-timestamp-set", "phase-timestamp-absent"],
+    )
+    def test_queue_wait_ms_is_non_negative_for_either_phase_shape(self, phase_entered_at: datetime | None) -> None:
+        """FAR-2079 acceptance: non-negative whether the dispatch-phase
+        timestamp is set or absent.
+
+        The queue-wait derivation reads ``started_at``/``dispatched_at`` only —
+        the phase timestamp is not an input (the phase→created_at derivation
+        the ticket cites belongs to the sibling ``avg_dispatch_latency_ms``) —
+        so both fact shapes must yield the same non-negative sample.
+        """
+        run = _run(
+            dispatched_at=datetime(2026, 8, 7, 9, 0, 5, tzinfo=UTC),
+            started_at=datetime(2026, 8, 7, 9, 0, 20, tzinfo=UTC),
+            dispatch_phase_entered_at=phase_entered_at,
+        )
+        value = _fact_queue_wait_ms(run)
+        assert value == 15000
+        assert value >= 0
+
+    def test_queue_wait_ms_null_when_redispatched_after_start(self) -> None:
+        """FAR-2079: the negative case observed in production.
+
+        ``started_at`` is stamped once on the first transition to running and
+        never reset; ``dispatched_at`` is REWRITTEN on every dispatch (the
+        dispatcher_reconcile re-enqueue leg and a HITL resume both do it). After
+        a re-dispatch the two timestamps belong to different attempts, so the
+        naive subtraction is negative — it is not a queue wait in either
+        direction and must be NULL, not a fabricated 0 or a negative number.
+        (Observed on the Branch Fixer pipeline: -42,935 … -4,312,681 ms.)
+        """
+        run = _run(
+            # First attempt started at 09:00; re-dispatched 20 minutes later.
+            started_at=datetime(2026, 8, 7, 9, 0, 0, tzinfo=UTC),
+            dispatched_at=datetime(2026, 8, 7, 9, 20, 0, tzinfo=UTC),
+            dispatch_phase_entered_at=datetime(2026, 8, 7, 9, 20, 0, tzinfo=UTC),
+        )
+        assert _fact_queue_wait_ms(run) is None
+
+    def test_queue_wait_ms_never_returns_a_negative_for_any_shape(self) -> None:
+        # The invariant itself: None (no valid sample) or a non-negative value.
+        shapes = [
+            _run(
+                dispatched_at=datetime(2026, 8, 7, 9, 0, 5, tzinfo=UTC),
+                started_at=datetime(2026, 8, 7, 9, 0, 20, tzinfo=UTC),
+            ),
+            _run(
+                dispatched_at=datetime(2026, 8, 7, 9, 20, 0, tzinfo=UTC),
+                started_at=datetime(2026, 8, 7, 9, 0, 0, tzinfo=UTC),
+            ),
+            _run(dispatched_at=None, started_at=datetime(2026, 8, 7, 9, 0, 0, tzinfo=UTC)),
+            _run(dispatched_at=datetime(2026, 8, 7, 9, 0, 0, tzinfo=UTC), started_at=None),
+        ]
+        for run in shapes:
+            value = _fact_queue_wait_ms(run)
+            assert value is None or value >= 0
+
     def test_queue_wait_ms_null_when_either_side_missing(self) -> None:
         assert _fact_queue_wait_ms(_run(dispatched_at=None, started_at=datetime(2026, 8, 7, tzinfo=UTC))) is None
         assert _fact_queue_wait_ms(_run(dispatched_at=datetime(2026, 8, 7, tzinfo=UTC), started_at=None)) is None
