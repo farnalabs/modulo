@@ -37,10 +37,18 @@ const backend = (id: string, over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
+const baseUrlCapableProviders = [
+  'ai21', 'deepseek', 'fireworks', 'grok', 'groq', 'jan', 'llamacpp', 'lm_studio',
+  'localai', 'ollama', 'openai', 'opencode', 'openrouter', 'perplexity', 'qwen',
+  'tgi', 'togetherai', 'vllm',
+]
+
 function mockBackendsGet(items: unknown[], presets?: unknown[]) {
   mockGet.mockImplementation(async (url: string) => {
     if (url === '/api/v1/model-backends') return { data: { items }, error: undefined }
-    if (url === '/api/v1/model-backends/presets') return { data: { items: presets ?? [] }, error: undefined }
+    if (url === '/api/v1/model-backends/presets') {
+      return { data: { items: presets ?? [], base_url_providers: baseUrlCapableProviders }, error: undefined }
+    }
     return { data: undefined, error: { detail: `unrouted: ${url}` } }
   })
 }
@@ -197,7 +205,7 @@ describe('AdminModelBackendsView — create', () => {
     expect(listCalls.length).toBeGreaterThanOrEqual(2)
   })
 
-  it('reveals the base url field for variable-base providers and merges it into default_params', async () => {
+  it('reveals the base url field for base-url providers and sends it as a top-level field', async () => {
     const wrapper = mountView()
     await nextTick()
     await openAddForm(wrapper)
@@ -214,13 +222,70 @@ describe('AdminModelBackendsView — create', () => {
     await wrapper.find('[data-testid="admin-model-backends-display-name-input"]').setValue('Ollama')
     await wrapper.find('[data-testid="admin-model-backends-model-id-input"]').setValue('llama3')
     await wrapper.find('[data-testid="admin-model-backends-api-key-input"]').setValue('x')
-    await wrapper.find('[data-testid="admin-model-backends-base-url-input"]').setValue('http://localhost:11434')
+    await wrapper.find('[data-testid="admin-model-backends-base-url-input"]').setValue('https://localhost:11434/v1')
     await nextTick()
     await wrapper.find('form').trigger('submit')
     await nextTick()
     await nextTick()
 
-    expect(mockPost.mock.calls[0][1].body.default_params).toEqual({ base_url: 'http://localhost:11434' })
+    expect(mockPost.mock.calls[0][1].body.base_url).toBe('https://localhost:11434/v1')
+    expect(mockPost.mock.calls[0][1].body.default_params).toEqual({})
+  })
+
+  it.each([
+    ['http://169.254.169.254/latest/meta-data', 'cloud metadata'],
+    ['http://2852039166/latest/meta-data', 'cloud metadata'],
+    ['http://0x7f000001/v1', 'http(s) URL'],
+    ['http://[::ffff:169.254.169.254]/v1', 'cloud metadata'],
+    ['http://[::ffff:a9fe:a9fe]/v1', 'cloud metadata'],
+    ['http://example.com/v1', 'Allow plain HTTP'],
+    ['https://user:pass@example.com/v1', 'http(s) URL'],
+    ['https://example.com/v1?x=1', 'http(s) URL'],
+  ])('rejects an invalid base url client-side before POST (%s)', async (baseUrl, expected) => {
+    const wrapper = mountView()
+    await nextTick()
+    await openAddForm(wrapper)
+
+    const vm = wrapper.vm as unknown as { formData: { provider: string } }
+    vm.formData.provider = 'openai'
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-model-backends-name-input"]').setValue('custom-gateway')
+    await wrapper.find('[data-testid="admin-model-backends-display-name-input"]').setValue('Custom Gateway')
+    await wrapper.find('[data-testid="admin-model-backends-model-id-input"]').setValue('m')
+    await wrapper.find('[data-testid="admin-model-backends-api-key-input"]').setValue('k')
+    await wrapper.find('[data-testid="admin-model-backends-base-url-input"]').setValue(baseUrl)
+    await nextTick()
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+
+    expect(mockPost).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain(expected)
+  })
+
+  it('accepts an http base url only with the explicit opt-in checkbox', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await openAddForm(wrapper)
+
+    const vm = wrapper.vm as unknown as { formData: { provider: string } }
+    vm.formData.provider = 'openai'
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-model-backends-name-input"]').setValue('custom-gateway')
+    await wrapper.find('[data-testid="admin-model-backends-display-name-input"]').setValue('Custom Gateway')
+    await wrapper.find('[data-testid="admin-model-backends-model-id-input"]').setValue('m')
+    await wrapper.find('[data-testid="admin-model-backends-api-key-input"]').setValue('k')
+    await wrapper.find('[data-testid="admin-model-backends-base-url-input"]').setValue('http://10.0.0.5:8000/v1')
+    await wrapper.find('[data-testid="admin-model-backends-allow-insecure-http"]').setValue(true)
+    await nextTick()
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    expect(mockPost).toHaveBeenCalledTimes(1)
+    expect(mockPost.mock.calls[0][1].body.base_url).toBe('http://10.0.0.5:8000/v1')
+    expect(mockPost.mock.calls[0][1].body.allow_insecure_http).toBe(true)
   })
 
   it('ignores unparseable default params JSON with a console warning', async () => {
@@ -424,7 +489,9 @@ describe('AdminModelBackendsView — preset picker', () => {
 
 describe('AdminModelBackendsView — edit', () => {
   it('pre-fills the edit form and saves via PATCH without re-sending a blank api key', async () => {
-    mockBackendsGet([backend('mb-1', { default_params: { temperature: 0.7, base_url: 'https://x' } })])
+    mockBackendsGet([
+      backend('mb-1', { provider: 'openai', default_params: { temperature: 0.7 }, base_url: 'https://x' }),
+    ])
     const wrapper = mountView()
     await nextTick()
     await nextTick()
@@ -434,6 +501,7 @@ describe('AdminModelBackendsView — edit', () => {
     expect((wrapper.find('[data-testid="admin-model-backends-edit-display-name"]').element as HTMLInputElement).value).toBe('Display mb-1')
     expect((wrapper.find('[data-testid="admin-model-backends-edit-model-id"]').element as HTMLInputElement).value).toBe('claude-sonnet')
     expect((wrapper.find('[data-testid="admin-model-backends-edit-params"]').element as HTMLTextAreaElement).value).toContain('"temperature": 0.7')
+    expect((wrapper.find('[data-testid="admin-model-backends-edit-base-url"]').element as HTMLInputElement).value).toBe('https://x')
     expect(wrapper.text()).toContain('Edit Model Backend')
 
     await wrapper.find('[data-testid="admin-model-backends-edit-name"]').setValue('mb-1-renamed')
@@ -446,7 +514,8 @@ describe('AdminModelBackendsView — edit', () => {
     expect(url).toBe('/api/v1/model-backends/{backend_id}')
     expect(opts.params.path.backend_id).toBe('mb-1')
     expect(opts.body.name).toBe('mb-1-renamed')
-    expect(opts.body.default_params).toEqual({ temperature: 0.7, base_url: 'https://x' })
+    expect(opts.body.default_params).toEqual({ temperature: 0.7 })
+    expect(opts.body.base_url).toBe('https://x')
     expect(opts.body.api_key).toBeUndefined()
     // Edit form closes.
     expect(wrapper.find('[data-testid="admin-model-backends-edit-name"]').exists()).toBe(false)
@@ -475,6 +544,85 @@ describe('AdminModelBackendsView — edit', () => {
     await nextTick()
     await nextTick()
     expect(wrapper.text()).toContain('update rejected')
+  })
+
+  it('pre-fills a legacy default_params base url and migrates it on save', async () => {
+    mockBackendsGet([
+      backend('mb-1', {
+        provider: 'openai',
+        default_params: { temperature: 0.7, base_url: 'https://legacy.internal.example/v1' },
+      }),
+    ])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openEdit(wrapper, 'mb-1')
+
+    expect(
+      (wrapper.find('[data-testid="admin-model-backends-edit-base-url"]').element as HTMLInputElement).value,
+    ).toBe('https://legacy.internal.example/v1')
+
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    expect(mockPatch).toHaveBeenCalledTimes(1)
+    const body = mockPatch.mock.calls[0][1].body
+    expect(body.base_url).toBe('https://legacy.internal.example/v1')
+    expect(body.default_params).toEqual({ temperature: 0.7 })
+    expect(body.allow_insecure_http).toBe(false)
+  })
+
+  it('requires the api key when the edit changes the endpoint', async () => {
+    mockBackendsGet([backend('mb-1', { provider: 'openai', base_url: 'https://old.internal.example/v1' })])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openEdit(wrapper, 'mb-1')
+
+    await wrapper.find('[data-testid="admin-model-backends-edit-base-url"]').setValue('https://new.internal.example/v1')
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+
+    expect(mockPatch).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('requires re-entering the API key')
+
+    await wrapper.find('[data-testid="admin-model-backends-edit-api-key"]').setValue('sk-fresh')
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    expect(mockPatch).toHaveBeenCalledTimes(1)
+    const body = mockPatch.mock.calls[0][1].body
+    expect(body.base_url).toBe('https://new.internal.example/v1')
+    expect(body.api_key).toBe('sk-fresh')
+  })
+
+  it('edits an incapable-provider legacy row and strips its legacy endpoint', async () => {
+    mockBackendsGet([
+      backend('mb-1', {
+        provider: 'anthropic',
+        default_params: { base_url: 'https://legacy.internal.example/v1', temperature: 0.7 },
+      }),
+    ])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openEdit(wrapper, 'mb-1')
+
+    // The Base URL field is not shown for a provider outside the capability map.
+    expect(wrapper.find('[data-testid="admin-model-backends-edit-base-url"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="admin-model-backends-edit-display-name"]').setValue('Renamed')
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    expect(mockPatch).toHaveBeenCalledTimes(1)
+    const body = mockPatch.mock.calls[0][1].body
+    expect(body.display_name).toBe('Renamed')
+    expect(body.default_params).toEqual({ temperature: 0.7 })
+    expect(body.base_url).toBeUndefined()
   })
 
   it('cancel closes the edit form', async () => {
@@ -816,5 +964,143 @@ describe('AdminModelBackendsView — pipeline references', () => {
     expect(refsCalls['mb-1']).toBe(2)
     expect(wrapper.find('[data-testid="admin-model-backends-refs-table-mb-1"]').text()).toContain('Pipeline p-1')
     expect(wrapper.find('[data-testid="admin-model-backends-refs-table-mb-2"]').text()).toContain('Pipeline p-9')
+  })
+})
+
+describe('AdminModelBackendsView — base url validation mirror', () => {
+  async function openAddForProvider(provider: string) {
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="admin-model-backends-add"]').trigger('click')
+    await nextTick()
+    const vm = wrapper.vm as unknown as { formData: { provider: string } }
+    vm.formData.provider = provider
+    await nextTick()
+    return wrapper
+  }
+
+  async function fillCreateBaseUrl(wrapper: ReturnType<typeof mountView>, baseUrl: string) {
+    await wrapper.find('[data-testid="admin-model-backends-name-input"]').setValue('gw')
+    await wrapper.find('[data-testid="admin-model-backends-display-name-input"]').setValue('Gateway')
+    await wrapper.find('[data-testid="admin-model-backends-model-id-input"]').setValue('m')
+    await wrapper.find('[data-testid="admin-model-backends-api-key-input"]').setValue('k')
+    await wrapper.find('[data-testid="admin-model-backends-base-url-input"]').setValue(baseUrl)
+    await nextTick()
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+  }
+
+  it.each([
+    ['not a url', 'http(s) URL'],
+    ['ftp://example.com/v1', 'http(s) URL'],
+    ['https:foo', 'http(s) URL'],
+    ['https://metadata.google.internal/v1', 'cloud metadata'],
+    ['https://100.100.100.200/v1', 'cloud metadata'],
+    ['https://[fd00:ec2::254]/v1', 'cloud metadata'],
+    ['https://[::ffff:6464:64c8]/v1', 'cloud metadata'],
+    ['https://999.999.999.999/v1', 'http(s) URL'],
+  ])('rejects %s client-side with the mirrored rule', async (baseUrl, expected) => {
+    const wrapper = await openAddForProvider('openai')
+    await fillCreateBaseUrl(wrapper, baseUrl)
+
+    expect(mockPost).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain(expected)
+  })
+
+  it.each([
+    'https://[2001:db8::1]/v1',
+    // IPv4-mapped but not a metadata address: both comparisons must be false.
+    'https://[::ffff:808:808]/v1',
+  ])('accepts a non-metadata IPv6 literal (%s)', async (baseUrl) => {
+    const wrapper = await openAddForProvider('openai')
+    await fillCreateBaseUrl(wrapper, baseUrl)
+    await nextTick()
+
+    expect(mockPost).toHaveBeenCalledTimes(1)
+    expect(mockPost.mock.calls[0][1].body.base_url).toBe(baseUrl)
+  })
+
+  it('omits an empty base url from the create body', async () => {
+    const wrapper = await openAddForProvider('openai')
+    await fillCreateBaseUrl(wrapper, '')
+    await nextTick()
+
+    expect(mockPost).toHaveBeenCalledTimes(1)
+    expect(mockPost.mock.calls[0][1].body.base_url).toBeUndefined()
+    expect(mockPost.mock.calls[0][1].body.allow_insecure_http).toBeUndefined()
+  })
+
+  it('sends an explicit null to clear the edit endpoint and honours the opt-in checkbox', async () => {
+    mockBackendsGet([backend('mb-1', { provider: 'openai', base_url: 'https://old.internal.example/v1' })])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openEdit(wrapper, 'mb-1')
+
+    await wrapper.find('[data-testid="admin-model-backends-edit-allow-insecure-http"]').setValue(true)
+    await wrapper.find('[data-testid="admin-model-backends-edit-base-url"]').setValue('')
+    await wrapper.find('[data-testid="admin-model-backends-edit-api-key"]').setValue('sk-fresh')
+    await nextTick()
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    expect(mockPatch).toHaveBeenCalledTimes(1)
+    const body = mockPatch.mock.calls[0][1].body
+    expect(body.base_url).toBeNull()
+    expect(body.allow_insecure_http).toBe(true)
+  })
+
+  it('blocks the edit submit when the base url fails the client-side rules', async () => {
+    mockBackendsGet([backend('mb-1', { provider: 'openai', base_url: 'https://old.internal.example/v1' })])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openEdit(wrapper, 'mb-1')
+
+    await wrapper.find('[data-testid="admin-model-backends-edit-base-url"]').setValue('ftp://example.com/v1')
+    await nextTick()
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+
+    expect(mockPatch).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('http(s) URL')
+  })
+})
+
+describe('AdminModelBackendsView — tier grouping', () => {
+  it('tolerates a list response without an items field', async () => {
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/model-backends') return { data: {}, error: undefined }
+      if (url === '/api/v1/model-backends/presets') {
+        return { data: { items: [], base_url_providers: baseUrlCapableProviders }, error: undefined }
+      }
+      return { data: undefined, error: { detail: 'unrouted' } }
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('No model backends configured')
+  })
+
+  it('groups native and preview rows and tolerates a missing tier', async () => {
+    mockBackendsGet([
+      backend('mb-native'),
+      { ...backend('mb-notier'), tier: undefined },
+      backend('mb-preview', { tier: 'preview' }),
+      backend('mb-indev', { tier: 'in_dev' }),
+    ])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Display mb-native')
+    expect(wrapper.text()).toContain('Display mb-notier')
+    expect(wrapper.find('[data-testid="model-backends-preview-section"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('mb-preview')
+    // in_dev rows belong to neither group and are intentionally not rendered.
+    expect(wrapper.text()).not.toContain('mb-indev')
   })
 })

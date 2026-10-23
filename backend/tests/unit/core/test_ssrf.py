@@ -300,6 +300,24 @@ async def test_validate_outbound_url_async_rejects_noncanonical_ip_encodings(
         await ssrf.validate_outbound_url_async(url)
 
 
+def test_validate_outbound_url_syntax_rejects_noncanonical_encodings() -> None:
+    """The DNS-free syntax helper is the API validation floor (FAR-2046)."""
+    assert ssrf.validate_outbound_url_syntax("https://models.example.com/v1") == ("https", "models.example.com")
+    assert ssrf.validate_outbound_url_syntax("http://10.1.2.3:8000/v1") == ("http", "10.1.2.3")
+    for url in (
+        "http://2130706433/",
+        "http://0x7f000001/",
+        "http://2852039166/",
+        "http://017700000001/",
+    ):
+        with pytest.raises(ValueError, match="IP literal"):
+            ssrf.validate_outbound_url_syntax(url)
+    with pytest.raises(ValueError, match="userinfo"):
+        ssrf.validate_outbound_url_syntax("http://user:pw@example.com/")
+    with pytest.raises(ValueError, match="http"):
+        ssrf.validate_outbound_url_syntax("ftp://example.com/")
+
+
 def test_validate_outbound_url_rejects_userinfo() -> None:
     with pytest.raises(ValueError, match="userinfo"):
         ssrf.validate_outbound_url("http://user:pw@example.com/")
@@ -488,6 +506,19 @@ def test_ipv6_site_local_and_multicast_blocked() -> None:
     for url in ("http://[fec0::1]/", "http://[ff02::1]/", "http://[::1]/"):
         with pytest.raises(ValueError, match="private/internal"):
             ssrf.validate_outbound_url(url)
+
+
+def test_aws_imds_ipv6_is_non_negotiable_even_when_ula_allowlisted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """fd00:ec2::254 must stay blocked before the allowlist is consulted (FAR-2046).
+
+    A deployment allowlisting fd00::/8 for internal gateways must not thereby
+    expose the AWS IMDSv6 endpoint.
+    """
+    monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "fd00::/8")
+    with pytest.raises(ValueError, match="private/internal"):
+        ssrf.validate_outbound_url("http://[fd00:ec2::254]/")
+    # Control: an ordinary ULA address is reachable once allowlisted.
+    assert ssrf.validate_outbound_url("http://[fd00::1234]/") is None
 
 
 def test_hex_like_hostname_not_spuriously_rejected(monkeypatch: pytest.MonkeyPatch) -> None:

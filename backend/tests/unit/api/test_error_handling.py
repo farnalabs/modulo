@@ -1312,6 +1312,10 @@ def test_model_backend_recheck_health_persists_result(client: TestClient) -> Non
             "modulo.api.routes.model_backends._run_health_check_on_save",
             new=AsyncMock(return_value=("ok", None)),
         ) as mock_health,
+        # FAR-2046: the re-check reads the stored base_url from the credential
+        # JSON, so the secrets backend must be stubbed (this suite's session
+        # mock rejects unexpected executes).
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
     ):
         client.app.dependency_overrides[get_settings] = lambda: settings
         client.app.dependency_overrides[get_db_session] = override_session
@@ -1380,6 +1384,7 @@ def test_model_backend_recheck_health_clears_not_applicable_error(client: TestCl
             "modulo.api.routes.model_backends._run_health_check_on_save",
             new=AsyncMock(return_value=("not_applicable", None)),
         ),
+        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
     ):
         client.app.dependency_overrides[get_settings] = lambda: settings
         client.app.dependency_overrides[get_db_session] = override_session

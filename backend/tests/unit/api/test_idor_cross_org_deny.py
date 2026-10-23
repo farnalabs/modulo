@@ -276,6 +276,25 @@ class TestModelBackendCrossOrgDeny:
             resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
         assert resp.status_code == 404
 
+    def test_get_model_backend_wrong_org_does_not_touch_the_secrets_backend(self, client: TestClient) -> None:
+        """The ownership check runs BEFORE endpoint resolution.
+
+        The effective endpoint lives in the credential JSON, so a cross-org
+        read must be denied without constructing the secrets backend or
+        decrypting anything. This is the structural proof for the 500 this
+        suite caught: endpoint resolution used to run first, so an
+        undecryptable credential produced a 500 instead of a 404.
+        """
+        with (
+            patch("modulo.api.routes.model_backends.get_model_backend", return_value=_wrong_org_backend()),
+            patch("modulo.api.routes.model_backends.set_rls_org"),
+            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+            patch("modulo.api.routes.model_backends.create_secrets_backend") as secrets_factory,
+        ):
+            resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
+        assert resp.status_code == 404
+        secrets_factory.assert_not_called()
+
     def test_list_pipeline_references_wrong_org_returns_404(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.model_backends.get_model_backend", return_value=_wrong_org_backend()),

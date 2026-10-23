@@ -138,11 +138,22 @@
                 <label for="adminmodelbackendsview-field-11" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.base_url') }}</label>
                 <input id="adminmodelbackendsview-field-11"
                   v-model="formData.base_url"
-                  type="text"
+                  type="url"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                   :placeholder="$t('views.AdminModelBackendsView.base_url_placeholder')"
                   data-testid="admin-model-backends-base-url-input"
                 />
+                <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.AdminModelBackendsView.base_url_help') }}</p>
+                <label class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                  <input
+                    v-model="formData.allow_insecure_http"
+                    type="checkbox"
+                    class="h-4 w-4 rounded border-input"
+                    data-testid="admin-model-backends-allow-insecure-http"
+                  />
+                  <span>{{ $t('views.AdminModelBackendsView.allow_insecure_http') }}</span>
+                </label>
+                <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.AdminModelBackendsView.allow_insecure_http_help') }}</p>
               </div>
               <div>
                 <label for="adminmodelbackendsview-field-10" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</label>
@@ -413,6 +424,27 @@
                   data-testid="admin-model-backends-edit-model-id"
                 />
               </div>
+              <div v-if="showBaseUrl">
+                <label for="adminmodelbackendsview-field-15" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.base_url') }}</label>
+                <input id="adminmodelbackendsview-field-15"
+                  v-model="formData.base_url"
+                  type="url"
+                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                  :placeholder="$t('views.AdminModelBackendsView.base_url_placeholder')"
+                  data-testid="admin-model-backends-edit-base-url"
+                />
+                <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.AdminModelBackendsView.base_url_help') }}</p>
+                <label class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                  <input
+                    v-model="formData.allow_insecure_http"
+                    type="checkbox"
+                    class="h-4 w-4 rounded border-input"
+                    data-testid="admin-model-backends-edit-allow-insecure-http"
+                  />
+                  <span>{{ $t('views.AdminModelBackendsView.allow_insecure_http') }}</span>
+                </label>
+                <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.AdminModelBackendsView.allow_insecure_http_help') }}</p>
+              </div>
               <div>
                 <label for="adminmodelbackendsview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.api_key_leave_blank_to_keep_existing') }}</label>
                 <input id="adminmodelbackendsview-field-3"
@@ -518,7 +550,7 @@ interface PresetItem {
   default_model_id: string
   description: string
   api_key_docs_url: string
-  default_params?: Record<string, unknown>
+  default_params: Record<string, unknown>
 }
 
 const { t } = useI18n()
@@ -531,13 +563,117 @@ interface BackendFormState {
   model_id: string
   api_key: string
   base_url: string
+  allow_insecure_http: boolean
   default_params: string
   visibility: string
 }
 
-const variableBaseProviders = new Set(['azure_openai', 'ollama', 'openrouter', 'custom'])
+// FAR-2046: the hub's capability map is the single source of truth. The
+// presets response carries it, so the Base URL field appears only for providers
+// that can actually apply it.
+const baseUrlProviders = computed(() => new Set(presetsResp.value?.base_url_providers ?? []))
 
-const showBaseUrl = computed(() => variableBaseProviders.has(formData.provider))
+const showBaseUrl = computed(() => baseUrlProviders.value.has(formData.provider))
+
+const metadataHostNames = new Set([
+  'metadata',
+  'metadata.google.internal',
+  'instance-data',
+  'instance-data.ec2.internal',
+])
+
+function normalizeHost(host: string): string {
+  return host.replace(/^\[|\]$/g, '').toLowerCase()
+}
+
+function isNonCanonicalIpLiteral(host: string): boolean {
+  const normalized = normalizeHost(host)
+  // A canonical dotted-quad IPv4 literal is fine; obfuscated encodings are not.
+  // (The URL parser rejects a dotted-quad with an octet above 255, so this
+  // branch only ever sees canonical octets.)
+  if (/^(\d{1,3})(\.\d{1,3}){3}$/.test(normalized)) {
+    const octets = normalized.split('.').map(Number)
+    return !octets.every((octet) => octet <= 255)
+  }
+  const isNumericLike = (label: string) =>
+    /^\d+$/.test(label) || /^0x[0-9a-f]+$/i.test(label)
+  if (!normalized.includes('.')) {
+    return /^\d+$/.test(normalized) || /^0x[0-9a-f]+$/i.test(normalized)
+  }
+  return normalized.split('.').every(isNumericLike)
+}
+
+function rawHostFromUrl(value: string): string {
+  // Callers enforce the "://" form before this runs, so the authority exists.
+  const authority = value.slice(value.indexOf('://') + 3).split(/[/?#]/)[0]
+  // slice(lastIndexOf+1) drops any userinfo and is the whole authority when
+  // there is no '@' (lastIndexOf returns -1).
+  const withoutUserinfo = authority.slice(authority.lastIndexOf('@') + 1)
+  if (withoutUserinfo.startsWith('[')) {
+    return withoutUserinfo.slice(0, withoutUserinfo.indexOf(']') + 1)
+  }
+  return withoutUserinfo.split(':')[0]
+}
+
+function isMetadataHost(host: string): boolean {
+  const normalized = normalizeHost(host)
+  if (metadataHostNames.has(normalized)) return true
+  if (normalized.startsWith('169.254.')) return true
+  if (normalized === '100.100.100.200' || normalized === 'fd00:ec2::254') return true
+  // IPv4-mapped IPv6 in hex form ([::ffff:a9fe:a9fe] normalises here). The URL
+  // parser canonicalises IPv6 to hex, so a dotted mapped form never reaches
+  // this function and does not need a separate prefix check.
+  const mapped = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+  if (mapped) {
+    const high = parseInt(mapped[1], 16)
+    const low = parseInt(mapped[2], 16)
+    const ipv4 = `${(high >> 8) & 255}.${high & 255}.${(low >> 8) & 255}.${low & 255}`
+    if (ipv4.startsWith('169.254.') || ipv4 === '100.100.100.200') return true
+  }
+  // IPv6 link-local (fe80::/10)
+  return /^fe[89ab][0-9a-f]:/.test(normalized)
+}
+
+/**
+ * Mirror the server-side base_url rules (FAR-2046): http(s) only, no embedded
+ * credentials, no query/fragment, no non-canonical IP-literal encodings,
+ * cloud-metadata targets refused, and plain http only with the explicit
+ * opt-in flag — never inferred from the hostname's shape.
+ */
+function validateBaseUrl(raw: string): string | null {
+  const value = raw.trim()
+  if (!value) return null
+  // The server's parser requires an authority ("https:foo" has none), so reject
+  // the schemeless-authority forms here rather than surfacing the 422 later.
+  if (!value.includes('://')) {
+    return t('views.AdminModelBackendsView.base_url_invalid')
+  }
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    return t('views.AdminModelBackendsView.base_url_invalid')
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return t('views.AdminModelBackendsView.base_url_invalid')
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    return t('views.AdminModelBackendsView.base_url_invalid')
+  }
+  if (isMetadataHost(parsed.hostname)) {
+    return t('views.AdminModelBackendsView.base_url_metadata_blocked')
+  }
+  if (
+    isNonCanonicalIpLiteral(parsed.hostname) ||
+    isNonCanonicalIpLiteral(rawHostFromUrl(value))
+  ) {
+    return t('views.AdminModelBackendsView.base_url_invalid')
+  }
+  if (parsed.protocol === 'http:' && !formData.allow_insecure_http) {
+    return t('views.AdminModelBackendsView.base_url_https_required')
+  }
+  return null
+}
 
 function emptyForm(): BackendFormState {
   return {
@@ -547,6 +683,7 @@ function emptyForm(): BackendFormState {
     model_id: '',
     api_key: '',
     base_url: '',
+    allow_insecure_http: false,
     default_params: '',
     visibility: 'org',
   }
@@ -559,7 +696,7 @@ const { data: backendsResp, loading, error, load: loadBackends } = useDataFetch(
 
 const { data: presetsResp, error: presetsError, load: loadPresets } = useDataFetch(
   () => api.GET('/api/v1/model-backends/presets'),
-  { initialValue: { items: [] } as { items: PresetItem[] } }
+  { initialValue: { items: [], base_url_providers: [] } as { items: PresetItem[]; base_url_providers: string[] } }
 )
 
 const presets = computed(() => presetsResp.value?.items ?? [])
@@ -576,6 +713,7 @@ const previewBackends = computed(() => (backendsResp.value?.items ?? []).filter(
 const formMode = ref<'add' | 'edit' | null>(null)
 const formData = reactive<BackendFormState>(emptyForm())
 const editBackendId = ref<string | null>(null)
+const originalBaseUrl = ref('')
 
 const saving = ref(false)
 const formError = ref<string | null>(null)
@@ -658,6 +796,7 @@ function refsHasPagination(backendId: string): boolean {
 function openAddForm() {
   formMode.value = 'add'
   Object.assign(formData, emptyForm())
+  originalBaseUrl.value = ''
   editBackendId.value = null
   deleteConfirmBackendId.value = null
   formError.value = null
@@ -681,7 +820,11 @@ function openEditForm(backend: ModelBackendItem) {
   deleteConfirmBackendId.value = null
   formError.value = null
   const params = (backend.default_params ?? {}) as Record<string, unknown>
-  const baseUrl = typeof params.base_url === 'string' ? params.base_url : ''
+  // A legacy row keeps its endpoint in default_params.base_url; pre-fill from
+  // it so the first save migrates it instead of silently resetting it.
+  const legacyBaseUrl = typeof params.base_url === 'string' ? params.base_url : ''
+  const baseUrl = backend.base_url ?? legacyBaseUrl
+  originalBaseUrl.value = baseUrl
   Object.assign(formData, {
     name: backend.name,
     display_name: backend.display_name,
@@ -689,6 +832,8 @@ function openEditForm(backend: ModelBackendItem) {
     model_id: backend.model_id,
     api_key: '',
     base_url: baseUrl,
+    // The scheme records the prior opt-in; a change still requires the key.
+    allow_insecure_http: baseUrl.trim().toLowerCase().startsWith('http://'),
     default_params: JSON.stringify(params, null, 2),
     visibility: backend.visibility,
   })
@@ -697,12 +842,14 @@ function openEditForm(backend: ModelBackendItem) {
 function closeForm() {
   formMode.value = null
   deleteConfirmBackendId.value = null
+  originalBaseUrl.value = ''
   Object.assign(formData, emptyForm())
   formError.value = null
 }
 
 function closeEditForm() {
   editBackendId.value = null
+  originalBaseUrl.value = ''
   Object.assign(formData, emptyForm())
   formError.value = null
 }
@@ -719,19 +866,30 @@ function buildDefaultParams(): Record<string, unknown> {
       console.warn('Failed to parse JSON default params', e)
     }
   }
-  if (formData.base_url.trim()) {
-    params.base_url = formData.base_url.trim()
-  }
+  // FAR-2046: base_url is endpoint configuration, not a model parameter — it
+  // travels as a top-level field and is persisted beside the API key. Strip it
+  // for EVERY provider: for a provider outside the capability map the server
+  // drops an unchanged legacy value, and sending it back would look like a new
+  // endpoint and be rejected.
+  delete params.base_url
   return params
 }
 
+function baseUrlField(): string | undefined {
+  if (!showBaseUrl.value) return undefined
+  const value = formData.base_url.trim()
+  return value || undefined
+}
+
 function buildCreateBody() {
+  const baseUrl = baseUrlField()
   return {
     name: formData.name.trim(),
     display_name: formData.display_name.trim(),
     provider: formData.provider,
     model_id: formData.model_id.trim(),
     api_key: formData.api_key.trim(),
+    ...(baseUrl ? { base_url: baseUrl, allow_insecure_http: formData.allow_insecure_http } : {}),
     default_params: buildDefaultParams(),
     visibility: formData.visibility,
     tier: 'native' as const,
@@ -739,12 +897,20 @@ function buildCreateBody() {
 }
 
 function buildUpdateBody(): components['schemas']['ModelBackendUpdate'] {
+  // updateBackend() refuses to submit unless all three are non-empty, so they
+  // are sent as strings rather than nullable fallbacks.
   const body: components['schemas']['ModelBackendUpdate'] = {
-    name: formData.name.trim() || null,
-    display_name: formData.display_name.trim() || null,
-    model_id: formData.model_id.trim() || null,
+    name: formData.name.trim(),
+    display_name: formData.display_name.trim(),
+    model_id: formData.model_id.trim(),
     default_params: buildDefaultParams(),
     visibility: formData.visibility,
+  }
+  if (showBaseUrl.value) {
+    // An explicit null clears a stored endpoint; the field is only sent for
+    // providers that can actually use one.
+    body.base_url = formData.base_url.trim() || null
+    body.allow_insecure_http = formData.allow_insecure_http
   }
   if (formData.api_key.trim()) {
     body.api_key = formData.api_key.trim()
@@ -752,8 +918,32 @@ function buildUpdateBody(): components['schemas']['ModelBackendUpdate'] {
   return body
 }
 
+function checkBaseUrl(): boolean {
+  const error = showBaseUrl.value ? validateBaseUrl(formData.base_url) : null
+  if (error) {
+    formError.value = error
+    return false
+  }
+  return true
+}
+
+function endpointChanged(): boolean {
+  return showBaseUrl.value && formData.base_url.trim() !== originalBaseUrl.value.trim()
+}
+
+function checkEndpointCredential(): boolean {
+  // The server binds a credential to its destination; prompt for the key here
+  // rather than sending an update the server will reject (FAR-2046).
+  if (endpointChanged() && !formData.api_key.trim()) {
+    formError.value = t('views.AdminModelBackendsView.base_url_change_requires_credential')
+    return false
+  }
+  return true
+}
+
 async function createBackend() {
   if (!formData.name.trim() || !formData.display_name.trim() || !formData.model_id.trim() || !formData.api_key.trim()) return
+  if (!checkBaseUrl()) return
   saving.value = true
   formError.value = null
   try {
@@ -776,6 +966,8 @@ async function createBackend() {
 
 async function updateBackend() {
   if (!editBackendId.value || !formData.name.trim() || !formData.display_name.trim() || !formData.model_id.trim()) return
+  if (!checkBaseUrl()) return
+  if (!checkEndpointCredential()) return
   saving.value = true
   formError.value = null
   try {
