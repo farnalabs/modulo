@@ -766,6 +766,10 @@ def _build_connector_bindings(
                 "connector_instance_id": str(connector_id),
                 "connector_type": (connector.connector_type_id if connector is not None else binding.get("type")),
                 "instance_name": connector.name if connector is not None else None,
+                "operation": binding.get("operation", "query"),
+                "resource": binding.get("resource"),
+                "filters": copy.deepcopy(binding.get("filters") or {}),
+                "data": copy.deepcopy(binding.get("data") or {}),
             }
         )
     return connector_bindings

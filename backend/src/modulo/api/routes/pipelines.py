@@ -1295,6 +1295,12 @@ class GraphPosition(BaseModel):
 class ConnectorBinding(BaseModel):
     type: str = Field(min_length=1, max_length=100)
     instance_id: uuid.UUID
+    # Connector query/write payloads are part of the binding contract. Declaring
+    # them here prevents Pydantic's default extra="ignore" behaviour from
+    # dropping the request before graph persistence and snapshot creation.
+    resource: str | None = Field(default=None, min_length=1, max_length=255)
+    filters: dict[str, Any] = Field(default_factory=dict)
+    data: dict[str, Any] = Field(default_factory=dict)
     # FAR-1141: the connector-binding operation verb. Declared here so the API
     # stops silently DROPPING it on save (extra="ignore" would create permanent
     # plan drift — the engine would never see the dispatch operation).
@@ -1394,7 +1400,9 @@ class PipelineGraphPolicyGate(BaseModel):
 
 class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     id: uuid.UUID
-    node_type: Literal["agent", "manual", "composite", "sandbox_agent", "router", "hitl", "join", "dispatch"] = "agent"
+    node_type: Literal[
+        "agent", "manual", "composite", "connector", "sandbox_agent", "router", "hitl", "join", "dispatch"
+    ] = "agent"
     agent_id: uuid.UUID | None = None
     position: GraphPosition
     connector_binding: ConnectorBinding | None = None
@@ -1716,6 +1724,7 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         if isinstance(info.context, dict) and info.context.get("legacy_read"):
             return self
         node_validators = {
+            "connector": self._validate_connector_node,
             "manual": self._validate_manual_node,
             "composite": self._validate_composite_node,
             "sandbox_agent": self._validate_sandbox_agent_node,
@@ -1853,6 +1862,13 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
                 f"output_schema_pin.schema_id ({self.output_schema_pin.schema_id}) "
                 f"does not match output_schema_id ({self.output_schema_id})"
             )
+
+    def _validate_connector_node(self) -> None:
+        """Connector nodes execute their binding through the connector engine."""
+        if self.agent_id is not None:
+            raise ValueError("Connector nodes cannot reference an agent")
+        if self.connector_binding is None:
+            raise ValueError("Connector nodes require a connector_binding")
 
     def _validate_manual_node(self) -> None:
         if self.agent_id is not None:
