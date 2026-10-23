@@ -372,13 +372,6 @@ _DISPATCH_FAILED_ERROR_CODE = "dispatch_failed"
 # into ``harness.unknown`` / "Unknown error".
 _RETRY_BUDGET_EXHAUSTED_ERROR_CODE = _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED
 
-# The capacity-block reason markers — the ONE shared vocabulary from
-# ``db.crud.run`` (``CAPACITY_MARKERS``), never a hand-copied literal. A pending
-# row carrying one of these was CLAIMED then demoted because a slot was full —
-# the claim never executed a node — so the retry-budget gate must not treat it
-# as an execution (it also never increments ``execution_attempt_count``).
-_CAPACITY_DEFERRAL_ERROR_CODES = CAPACITY_MARKERS
-
 # Synthetic error_detail for the genuinely detail-less failure writers (P7'):
 # applied ONLY where detail is currently NULL — never overwrites real detail.
 # Derived from the ERROR_CODE_REGISTRY guidance in
@@ -5528,16 +5521,6 @@ def _should_redispatch_nodeless(row: Any) -> bool:
         the ``max_retries`` budget. The attempt count is the shared
         ``retry_executions_consumed`` measure, so a re-dispatch is allowed
         while executions already consumed <= ``max_retries``.
-      * ``retry_policy`` absent/None, a non-dict, OR an explicit ``on`` that is
-        empty (this includes the ``{}`` column default AND the FAR-525 GUI's
-        no-op panel save ``{on: [], max_retries: 0, backoff_schedule: {...}}``):
-        re-dispatch while the durable execution count is within the
-        configurable budget (``SAQ_NODELESS_REDISPATCH_BUDGET``, default 4 since
-        FAR-812). Zero nodes have
-        executed, so every re-dispatch is safe; terminal-fail applies once the
-        budget is exhausted. The decision keys on the POLICY's EVENT CONTENT
-        (what it covers), never on dict non-emptiness — a no-op panel save
-        must not silently convert budget-default repair into terminal-fail.
       * ``retry_policy`` whose ``on`` is non-empty but does NOT cover
         ``"stall"`` and does NOT cover ``"failure"``: terminal-fail — never
         re-dispatch a nodeless zombie for a trigger it does not cover.
@@ -5547,6 +5530,20 @@ def _should_redispatch_nodeless(row: Any) -> bool:
         (``_retry_after_policy(policy, "failed", "")`` — the failure arm only
         for an empty code) rather than re-validated by hand, same shared
         execution-attempt count as the stall branch.
+      * ANY OTHER non-empty policy — including an explicit empty ``on`` (the
+        FAR-525 GUI's no-op panel save ``{on: [], max_retries: 0,
+        backoff_schedule: {...}}``) and ``{"max_retries": 0}`` — is still a
+        budget: use the SHARED ``1 + max_retries`` ceiling
+        (:func:`modulo.core.retry_budget.retry_budget_exhausted`). A saveable
+        policy with ``max_retries: 0`` authorises exactly ONE execution, never
+        the configurable default's five.
+      * ``retry_policy`` absent/None, a non-dict, or the EMPTY ``{}`` column
+        default only (no policy object at all): re-dispatch while the durable
+        execution count is within the configurable budget
+        (``SAQ_NODELESS_REDISPATCH_BUDGET``, default 4 since FAR-812). The
+        configurable default is deliberately unreachable for any non-empty
+        policy, so this leg can never grant more executions than the shared
+        ceiling its other callers enforce.
 
     FAR-1088 — why the failure carve-out is safe HERE:
     this function only ever sees nodeless zombies, which executed ZERO nodes
@@ -5574,76 +5571,39 @@ def _should_redispatch_nodeless(row: Any) -> bool:
     """
     from modulo.core.pipeline_engine.executor import _retry_after_policy
 
-    retry_policy = getattr(row, "retry_policy", None)
-    if isinstance(retry_policy, dict):
-        # FAR-733: use the SHARED _retry_after_policy matcher — the same event
-        # resolution the in-execute path and watchdog kills use.  The nodeless
-        # zombie's terminal outcome is status="running" + error_code
-        # "executor_stalled" (not yet terminalized), so we call the matcher
-        # with the terminal shape the watchdog would present: status="stalled",
-        # code="executor_stalled".  When the budget is non-None the policy
-        # covers stall; when None it does not (or the policy is malformed /
-        # zero-budget / empty-on).
-        retry_budget = _retry_after_policy(retry_policy, "stalled", "executor_stalled")
-        if retry_budget is not None:
-            # FAR-2076: the ONE shared measure — the durable
-            # ``runs.execution_attempt_count`` (executions of the graph), never
-            # a hand-derived ``claim_count - 1``. ``<= retry_budget`` is the
-            # same boundary as ``not retry_budget_exhausted``; used in this form
-            # so the event-matched budget above stays the authority.
-            attempt_count = retry_executions_consumed(
-                execution_attempt_count=getattr(row, "execution_attempt_count", 0),
-            )
-            return bool(attempt_count <= retry_budget)
-        # _retry_after_policy returned None: either the policy is malformed /
-        # zero-budget / empty-on, or its `on` does not cover "stall".  Check
-        # whether the policy is non-empty but does NOT cover stall — those
-        # must terminal-fail (never re-dispatch for an uncovered trigger).
-        on = retry_policy.get("on")
-        if isinstance(on, list) and on:
-            # FAR-1088 zero-node failure-coverage carve-out: a failure-covered
-            # policy re-dispatches this zero-node death under ITS OWN
-            # max_retries budget (same attempt count as the stall branch).
-            # Safe here because zero nodes ever executed (see docstring); the
-            # shared matcher is NOT modified. The budget is DERIVED from the
-            # SHARED matcher — ``_retry_after_policy(policy, "failed", "")``
-            # matches ONLY the failure arm for an empty code (stall/timeout/
-            # eval arms cannot fire) and fail-closes (None) on a malformed /
-            # 0 budget — instead of re-validating ``max_retries`` by hand, so
-            # the two can never drift. Guarded by the non-empty ``on`` above
-            # so the FAR-649 all-events default (absent/null ``on``) is never
-            # pulled into the carve-out: those policies already resolved
-            # through the stall matcher above (or fall through to the
-            # budget-default path when that returned None).
-            if "failure" in on:
-                failure_budget = _retry_after_policy(retry_policy, "failed", "")
-                if failure_budget is not None:
-                    attempt_count = retry_executions_consumed(
-                        execution_attempt_count=getattr(row, "execution_attempt_count", 0),
-                    )
-                    return bool(attempt_count <= failure_budget)
-            # Non-empty `on` without "stall"/"failure" coverage (or a
-            # failure-covered policy with a 0/malformed budget) — terminal-fail.
-            return False
-        # Empty / missing `on` / zero-budget / malformed policy: fall through
-        # to the budget-default repair (SAQ_NODELESS_REDISPATCH_BUDGET).
-    # No stall coverage (no/empty/None policy, an empty/missing `on`, or the
-    # GUI's no-op all-empty panel save): re-dispatch while within the
-    # configurable budget (SAQ_NODELESS_REDISPATCH_BUDGET, default 4 since
-    # FAR-812, raised from 2 — FAR-509; the first admitted attempt counts 1).
-    # This bounds the successful-claim cycles, NOT the enqueue rate — the rate
-    # is throttled in the repair branch (one re-dispatch per nodeless window
-    # per run).
-    #
-    # FAR-2076: measured on the SAME durable execution counter as the policy
-    # branches above, so ``claim_count`` is not consulted anywhere in this
-    # decision (it grows on capacity-demoted and resume claims — neither is an
-    # execution). A nodeless zombie is ``running``, so it passed admission and
-    # its counter is >= 1, preserving the historical "first claim is 1" bound
-    # for the population this branch exists for.
+    policy = getattr(row, "retry_policy", None)
     consumed = retry_executions_consumed(
         execution_attempt_count=getattr(row, "execution_attempt_count", 0),
     )
+    if isinstance(policy, dict) and policy:
+        # ANY non-empty policy is a budget — its shared ``1 + max_retries``
+        # ceiling is the authority, never the configurable no-policy default.
+        # The shared matcher decides the event-specific budget first.
+        retry_budget = _retry_after_policy(policy, "stalled", "executor_stalled")
+        if retry_budget is not None:
+            return bool(consumed <= retry_budget)
+        on = policy.get("on")
+        if isinstance(on, list) and on:
+            # Non-empty `on` that does not cover "stall": the FAR-1088
+            # zero-node failure-coverage carve-out re-dispatches under the
+            # failure arm's own budget; any other uncovered trigger
+            # terminal-fails (never re-dispatch for a trigger it does not
+            # cover). Safe because this function only sees zero-node rows.
+            if "failure" in on:
+                failure_budget = _retry_after_policy(policy, "failed", "")
+                if failure_budget is not None:
+                    return bool(consumed <= failure_budget)
+            return False
+        # Non-empty policy with an absent / null / EMPTY `on` (e.g.
+        # ``{"max_retries": 0}`` and the GUI's no-op panel save
+        # ``{on: [], max_retries: 0, ...}``): the shared ceiling applies.
+        # ``max_retries: 0`` (and a malformed budget, normalised to 0) means
+        # exactly ONE execution — NOT the configurable four-retry default.
+        return not retry_budget_exhausted(policy, execution_attempt_count=consumed)
+    # No policy object at all (``None`` / a non-dict / the empty ``{}`` column
+    # default): re-dispatch while within the configurable budget
+    # (SAQ_NODELESS_REDISPATCH_BUDGET, default 4 since FAR-812). The rate is
+    # throttled in the repair branch (one re-dispatch per nodeless window).
     return bool(consumed <= int(get_settings().saq_nodeless_redispatch_budget))
 
 
@@ -6351,7 +6311,9 @@ def _build_re_dispatch_predicate(
     )
     capacity_marked_stale = and_(
         Run.status == "pending",
-        Run.error_code.in_(("org_capacity_limited", "pipeline_capacity")),
+        # The ONE shared capacity-marker vocabulary from ``db.crud.run`` — never
+        # a hand-copied literal, so a renamed marker can never strand this leg.
+        Run.error_code.in_(CAPACITY_MARKERS),
         or_(
             Run.heartbeat_at.is_(None),
             Run.heartbeat_at < func_now_minus(capacity_redispatch_seconds),
@@ -11318,27 +11280,19 @@ async def _reconcile_one_row(
     # and misreport it as ``no_progress``. A within-budget row keeps the exact
     # recovery behaviour this leg exists for (durability preserved).
     #
-    # Capacity-marked pending rows are EXCLUDED: a capacity demotion consumes
-    # a SAQ claim while executing nothing, so a claim-derived count would
-    # charge a non-execution against the budget and terminal-fail a healthy run
-    # that is merely waiting for a free slot. Those rows consume no execution
-    # budget — they never increment ``execution_attempt_count`` — so they
-    # cannot violate the invariant. Every OTHER pending ``execute_run`` row is
-    # in scope — including the FAR-1627 worker-shutdown handback (which stamps
-    # ``harness.worker_lost``) and the enqueue-failed recovery — so no producer
-    # can grant an execution past the ceiling. A never-dispatched row
-    # (``execution_attempt_count = 0``) consumes nothing and is always allowed.
+    # Capacity-marked pending rows are NOT excluded. The old exclusion existed
+    # only because the previous measure counted a capacity claim as an
+    # execution; the durable counter is NOT incremented by a capacity demotion,
+    # so a capacity-marked row below the ceiling must still be re-dispatched and
+    # one at/above the ceiling must be terminal-failed like any other pending
+    # execution. Excluding them would let an at-ceiling run execute again.
     #
     # The measure is the durable ``runs.execution_attempt_count`` ONLY (FAR-2076).
     # ``claim_count`` must never be consulted here: it grows on
     # capacity-demoted and resume claims, so it over-counted healthy runs and
     # terminal-failed them with budget to spare — the whole-point defect of the
     # first attempt at this fix.
-    is_pending_execution = (
-        row.status == "pending"
-        and _reconcile_job_type(row.status) == "execute_run"
-        and getattr(row, "error_code", None) not in _CAPACITY_DEFERRAL_ERROR_CODES
-    )
+    is_pending_execution = row.status == "pending" and _reconcile_job_type(row.status) == "execute_run"
     if is_pending_execution:
         policy = getattr(row, "retry_policy", None)
         pipeline_row_id = getattr(row, "pipeline_row_id", None)

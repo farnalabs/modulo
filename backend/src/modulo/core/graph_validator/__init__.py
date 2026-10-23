@@ -3676,7 +3676,8 @@ class GraphValidator:
             result.error(
                 "RETRY_POLICY_MALFORMED",
                 "retry_policy must be an object like "
-                "{'on': ['stall','timeout','failure','eval_failed'], 'max_retries': 0-5}",
+                f"{{'on': ['stall','timeout','failure','eval_failed'], "
+                f"'max_retries': 0-{RETRY_POLICY_MAX_RETRIES}}}",
             )
             return
         events = policy.get("on")

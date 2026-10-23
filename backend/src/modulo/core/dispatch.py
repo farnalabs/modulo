@@ -17,18 +17,10 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 # FAR-2076: the retry budget lives in the zero-import leaf module
-# ``modulo.core.retry_budget``. These names are re-exported here for
-# compatibility — ``dispatch`` is the historical import site and hosts the
-# enqueue-side adapter (``_saq_retries_for_run``). New code should import from
-# ``modulo.core.retry_budget`` directly.
-from modulo.core.retry_budget import (  # noqa: F401  (re-exported for compatibility)
-    RETRY_POLICY_MAX_RETRIES,
-    clamp_saq_retries,
-    retry_budget_exhausted,
-    retry_executions_consumed,
-    retry_max_executions,
-    retry_policy_max_retries,
-)
+# ``modulo.core.retry_budget``. Only the enqueue-side adapter helper is needed
+# here; every other consumer imports from the leaf directly, so this module
+# deliberately does not re-export names it does not use.
+from modulo.core.retry_budget import clamp_saq_retries
 from modulo.db.sqlstates import is_row_lock_timeout
 from modulo.settings import get_settings
 

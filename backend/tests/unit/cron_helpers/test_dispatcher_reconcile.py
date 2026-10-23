@@ -989,33 +989,38 @@ class TestNodelessZombiePredicateCompiled:
 
 
 class TestNodelessRedispatchBudget:
-    """FAR-509 + FAR-733 + FAR-812: the policy-less nodeless re-dispatch budget is
-    configurable via SAQ_NODELESS_REDISPATCH_BUDGET (default 4 since FAR-812). Direct unit
-    checks of ``_should_redispatch_nodeless`` — the retry-policy taxonomy.
-    FAR-525 qa gate: the decision keys on the POLICY's EVENT CONTENT (its
-    ``on`` list), NEVER on dict non-emptiness — the FAR-525 GUI's no-op panel
-    save (``{on: [], max_retries: 0, backoff_schedule: {...}}``, always
-    non-empty) cannot silently convert budget-default repair into terminal-fail.
+    """FAR-509 + FAR-733 + FAR-812 + FAR-2076: the policy-less nodeless
+    re-dispatch budget is configurable via SAQ_NODELESS_REDISPATCH_BUDGET
+    (default 4 since FAR-812). Direct unit checks of
+    ``_should_redispatch_nodeless`` — the retry-policy taxonomy.
     FAR-649: an ABSENT ``on`` (key missing or null) with a valid budget > 0 is
-    now ALL-events coverage (stall included) — the POLICY budget applies, not
-    the budget-default.  FAR-733: when a stall-covered policy exists, the
-    decision consults the SHARED ``_retry_after_policy`` matcher (the same
-    event resolution the in-execute path and watchdog kills use), and the
-    attempt budget uses ``max(0, claim_count - 1)`` (the watchdog path's
-    budget for nodeless runs).  The 6-row characterization matrix:
+    ALL-events coverage (stall included) — the POLICY budget applies.
+    FAR-733: when a stall-covered policy exists, the decision consults the
+    SHARED ``_retry_after_policy`` matcher (the same event resolution the
+    in-execute path and watchdog kills use).
+    FAR-2076: ANY non-empty policy is a budget and uses the SHARED
+    ``1 + max_retries`` ceiling; only an ABSENT policy / non-dict / the empty
+    ``{}`` column default reaches the configurable default. The 6-row
+    characterization matrix:
 
       1. ``{}``                                        -> budget-default
-      2. ``{on: [], max_retries: N}``                  -> budget-default
-      3. ``{max_retries: N}`` (absent on)              -> stall-covered / policy budget (FAR-649/FAR-733)
+      2. ``{on: [], max_retries: N}``                  -> shared policy ceiling (1 + N)
+      3. ``{max_retries: N}`` (absent on)              -> policy budget (FAR-649/FAR-733)
       4. non-empty ``on`` without "stall"              -> terminal-fail (False)
-      5. ``{on: ["stall"], max_retries: N}``           -> stall-covered / policy budget (FAR-733)
-      6. ``{on: null, max_retries: N}``                -> stall-covered / policy budget (FAR-649/FAR-733)
+      5. ``{on: ["stall"], max_retries: N}``           -> policy budget (FAR-733)
+      6. ``{on: null, max_retries: N}``                -> policy budget (FAR-649/FAR-733)
     """
 
     @staticmethod
-    def _row(claim_count: int, retry_policy: Any = None) -> SimpleNamespace:
+    def _row(claim_count: int, retry_policy: Any = None, execution_attempt_count: int | None = None) -> SimpleNamespace:
         return _run_row(
-            RUN_RUNNING, "running", stale=False, nodeless=True, claim_count=claim_count, retry_policy=retry_policy
+            RUN_RUNNING,
+            "running",
+            stale=False,
+            nodeless=True,
+            claim_count=claim_count,
+            retry_policy=retry_policy,
+            execution_attempt_count=execution_attempt_count,
         )
 
     def test_policy_less_first_claim_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1091,16 +1096,21 @@ class TestNodelessRedispatchBudget:
         assert ch._should_redispatch_nodeless(self._row(4, retry_policy={})) is True
         assert ch._should_redispatch_nodeless(self._row(5, retry_policy={})) is False
 
-    def test_noop_panel_save_policy_gets_budget_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """FAR-525 qa gate — the no-op panel save always stores a NON-EMPTY
-        policy with an EXPLICIT empty ``on`` (``{on: [], max_retries: 0,
-        backoff_schedule: {...}}``). An explicit empty ``on`` stays
-        budget-default repair under FAR-649 too (row 2)."""
+    def test_noop_panel_save_policy_uses_the_shared_one_execution_ceiling(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAR-2076 — the no-op panel save is a NON-EMPTY policy with an
+        explicit empty ``on`` and ``max_retries: 0``
+        (``{on: [], max_retries: 0, backoff_schedule: {...}}``). A saveable
+        policy authorises exactly ONE execution (the shared ``1 + max_retries``
+        ceiling), NOT the configurable four-retry default: every re-dispatch of
+        a nodeless zombie (consumed >= 1) is past that ceiling, so the row is
+        terminal-failed rather than executed up to five times."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings())
         noop_save = {"on": [], "max_retries": 0, "backoff_schedule": {"delay_seconds": 45, "multiplier": 2.0}}
-        assert ch._should_redispatch_nodeless(self._row(2, retry_policy=noop_save)) is True
-        assert ch._should_redispatch_nodeless(self._row(3, retry_policy=noop_save)) is True
-        assert ch._should_redispatch_nodeless(self._row(4, retry_policy=noop_save)) is True
+        assert ch._should_redispatch_nodeless(self._row(2, retry_policy=noop_save)) is False
+        assert ch._should_redispatch_nodeless(self._row(3, retry_policy=noop_save)) is False
+        assert ch._should_redispatch_nodeless(self._row(4, retry_policy=noop_save)) is False
         assert ch._should_redispatch_nodeless(self._row(5, retry_policy=noop_save)) is False
 
     def test_absent_on_policy_with_budget_honors_policy_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1115,13 +1125,17 @@ class TestNodelessRedispatchBudget:
         assert ch._should_redispatch_nodeless(self._row(4, retry_policy={"max_retries": 3})) is False
         assert ch._should_redispatch_nodeless(self._row(5, retry_policy={"max_retries": 3})) is False
 
-    def test_absent_on_policy_with_zero_budget_falls_to_budget_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """An absent-`on` policy with a 0 (or malformed) budget is NOT
-        re-classified as stall-covered — it falls through to the
-        budget-default repair (the unusable-data treatment)."""
+    def test_absent_on_policy_with_zero_or_malformed_budget_uses_shared_ceiling(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAR-2076 — a NON-EMPTY policy with an absent ``on`` and a 0 (or
+        malformed) budget is still a budget: its shared ceiling is
+        ``1 + 0 == 1`` execution, so a nodeless zombie (consumed >= 1) is
+        terminal-failed. It must NOT fall through to the configurable default
+        (which would grant it up to five executions)."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings())
-        assert ch._should_redispatch_nodeless(self._row(2, retry_policy={"max_retries": 0})) is True
-        assert ch._should_redispatch_nodeless(self._row(2, retry_policy={"max_retries": "lots"})) is True
+        assert ch._should_redispatch_nodeless(self._row(2, retry_policy={"max_retries": 0})) is False
+        assert ch._should_redispatch_nodeless(self._row(2, retry_policy={"max_retries": "lots"})) is False
 
     def test_null_on_policy_with_budget_honors_policy_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-649 + FAR-733 — matrix row 6: an explicitly-NULL `on` with a
@@ -1172,6 +1186,20 @@ class TestNodelessRedispatchBudget:
         (attempt 0 <= max_retries) for any stall-covered policy."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings())
         assert ch._should_redispatch_nodeless(self._row(1, retry_policy={"on": ["stall"], "max_retries": 1})) is True
+
+    def test_durable_execution_counter_not_claim_count_decides(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-2076: the decision reads the durable execution counter, never
+        ``claim_count``.
+
+        A row with 30 claims but only ONE execution (the rest were
+        capacity-demoted / resume claims) under ``max_retries: 2`` (ceiling 3)
+        must re-dispatch. The reverse — one claim but three executions — is
+        already at the ceiling and must terminal-fail. A measure reverted to
+        ``claim_count`` flips both."""
+        monkeypatch.setattr(ch, "get_settings", lambda: _settings())
+        policy = {"on": ["stall"], "max_retries": 2}
+        assert ch._should_redispatch_nodeless(self._row(30, retry_policy=policy, execution_attempt_count=1)) is True
+        assert ch._should_redispatch_nodeless(self._row(1, retry_policy=policy, execution_attempt_count=3)) is False
 
 
 class TestNodelessRedispatchThrottle:

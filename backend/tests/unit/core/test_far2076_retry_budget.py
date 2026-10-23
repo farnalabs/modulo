@@ -19,7 +19,8 @@ These tests pin, in order:
 2. the dispatch-side clamp END TO END (what actually reaches ``_enqueue_saq``);
 3. the composed transient decision (a real dict policy, not a mock);
 4. the reconcile backstop's effects (summary / terminalized ids / writer args);
-5. the capacity-marker exclusion (both markers);
+5. the capacity-marked pending row budget-gated on the durable counter (both
+   markers, below and at the ceiling);
 6. the increment's placement (admit = spend, demote = do not, resume = do not,
    pre-node death = spend) and the exactly-ceiling boundary;
 7. the read-boundary registration of the terminal error code.
@@ -117,12 +118,28 @@ def test_consumed_coerces_garbage_to_zero() -> None:
     assert retry_executions_consumed(execution_attempt_count=True) == 0
 
 
-def test_the_validator_bound_is_the_shared_constant() -> None:
+def test_the_validator_accepts_the_shared_bound_and_rejects_above_it() -> None:
     """A second hard-coded bound in the validator would make a raised bound
-    read every stored policy as malformed and silently disable every ceiling."""
-    from modulo.core import graph_validator
+    read every stored policy as malformed and silently disable every ceiling.
 
-    assert graph_validator.RETRY_POLICY_MAX_RETRIES == RETRY_POLICY_MAX_RETRIES
+    Behavioural, not an identity comparison: a tautological
+    ``graph_validator.X == X`` assertion cannot fail and would stay green even
+    if the validator stopped using the shared constant entirely.
+    """
+    from modulo.core import graph_validator
+    from modulo.core.graph_validator._types import ValidationResult
+
+    at_bound = ValidationResult()
+    graph_validator.GraphValidator.check_retry_policy(
+        {"on": ["failure"], "max_retries": RETRY_POLICY_MAX_RETRIES}, at_bound
+    )
+    assert at_bound.is_valid
+
+    above_bound = ValidationResult()
+    graph_validator.GraphValidator.check_retry_policy(
+        {"on": ["failure"], "max_retries": RETRY_POLICY_MAX_RETRIES + 1}, above_bound
+    )
+    assert not above_bound.is_valid
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +314,20 @@ async def _transient_decision(executor: Any, policy: Any) -> dict[str, Any]:
 
 async def test_transient_requeues_below_the_policy_ceiling() -> None:
     executor = _transient_executor(execution_attempt_count=1)
+    decision = await _transient_decision(executor, _POLICY)
+    assert decision["decision"] == "requeue"
+    executor._fenced_pending_reset.assert_awaited_once()
+
+
+async def test_transient_requeues_on_the_last_permitted_execution() -> None:
+    """Boundary: consumed == ceiling - 1 grants the final permitted execution.
+
+    Ceiling is ``1 + max_retries`` (3 here). At consumed 2 the next run is the
+    third and last the policy authorises, so it MUST be requeued. Without this
+    pin an off-by-one that refuses one execution early stays invisible —
+    ``test_transient_terminalises_at_the_policy_ceiling`` only proves the
+    already-at-ceiling side."""
+    executor = _transient_executor(execution_attempt_count=_CEILING - 1)
     decision = await _transient_decision(executor, _POLICY)
     assert decision["decision"] == "requeue"
     executor._fenced_pending_reset.assert_awaited_once()
@@ -503,16 +534,28 @@ async def test_reconcile_terminalises_a_handed_back_row_beyond_budget() -> None:
 
 
 @pytest.mark.parametrize("marker", ["org_capacity_limited", "pipeline_capacity"])
-async def test_reconcile_never_budget_gates_a_capacity_marked_row(marker: str) -> None:
-    """A capacity demotion consumes a claim but executes nothing — it also
-    never increments the execution counter, so the gate must leave it alone."""
-    row = _pending_row(execution_attempt_count=0, claim_count=30, error_code=marker)
+async def test_reconcile_budget_gates_a_capacity_marked_row_on_the_durable_counter(marker: str) -> None:
+    """A capacity demotion executes nothing and never increments
+    ``execution_attempt_count``, so the durable counter alone decides. The old
+    marker exclusion is REMOVED: it let a capacity-marked row at the ceiling be
+    re-dispatched and executed again. Below the ceiling it is still recovered;
+    at/above it, terminal-failed like any other pending execution."""
+    below = _pending_row(execution_attempt_count=0, claim_count=30, error_code=marker)
 
-    dispatch_mock, budget_fail_mock, _summary, terminalized = await _run_one_row(row)
+    dispatch_mock, budget_fail_mock, _summary, terminalized = await _run_one_row(below)
 
     assert terminalized == []
     budget_fail_mock.assert_not_awaited()
     dispatch_mock.assert_awaited_once()
+
+    at_ceiling = _pending_row(execution_attempt_count=_CEILING, claim_count=30, error_code=marker)
+
+    dispatch_mock2, budget_fail_mock2, summary2, terminalized2 = await _run_one_row(at_ceiling)
+
+    assert terminalized2 == [(at_ceiling.id, ORG)]
+    assert summary2["retry_budget_exhausted"] == 1
+    budget_fail_mock2.assert_awaited_once()
+    dispatch_mock2.assert_not_awaited()
 
 
 async def test_reconcile_without_policy_preserves_the_old_recovery() -> None:

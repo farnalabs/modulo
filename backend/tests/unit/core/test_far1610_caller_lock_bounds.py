@@ -214,14 +214,17 @@ async def test_check_capacity_bounds_before_the_claim_time_write() -> None:
     assert result is run
 
 
-async def test_check_capacity_lock_timeout_skips_and_warns(
+async def test_check_capacity_lock_timeout_retries_once_then_refuses_to_execute(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A 55P03 on the claim-time write is a RECOVERY-path contention: the
-    transaction rolled back whole, no status change applied, the run is left
-    exactly as it was and the caller proceeds. WARNING, never silent."""
+    """FAR-2076: a 55P03 on the admission+bump transaction rolls the bump back,
+    so a recovered caller must NOT proceed and execute uncounted.
+
+    The admission transaction is retried once; a second lock timeout re-raises
+    (visible failure) instead of returning the run for streaming."""
     run = _capacity_run()
     executor = _capacity_executor(_begin_session())
+    update = AsyncMock(side_effect=_lock_timeout_error())
 
     with (
         patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
@@ -229,11 +232,43 @@ async def test_check_capacity_lock_timeout_skips_and_warns(
         patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
         patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
-        patch(
-            "modulo.core.pipeline_engine.executor.update_run_status",
-            new=AsyncMock(side_effect=_lock_timeout_error()),
-        ),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update),
         caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.executor"),
+        pytest.raises(OperationalError, match="lock timeout"),
+    ):
+        await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=1,
+            graph_json=None,
+        )
+
+    # Exactly two admission attempts: one retry, then a loud refusal.
+    assert update.await_count == 2
+    assert any("capacity_check_lock_timeout" in message for message in caplog.messages)
+
+
+async def test_check_capacity_lock_timeout_retry_succeeds_and_spends_once() -> None:
+    """The retry is what makes the fix safe: a transient lock timeout on the
+    first ADMISSION attempt does not lose the execution-budget bump — the second
+    attempt commits admission and runs the bump exactly once, so the attempt is
+    counted."""
+    run = _capacity_run()
+    executor = _capacity_executor(_begin_session())
+    admit = AsyncMock(side_effect=[_lock_timeout_error(), run])
+    bump = AsyncMock(return_value=True)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        # Admission branch: no active run -> the slot is free.
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=0)),
+        patch.object(executor, "_claim_run_and_audit", admit),
+        # Imported lazily inside ``_claim_under_capacity`` from this module.
+        patch("modulo.core.pipeline_execution.bump_execution_attempt_count", new=bump),
     ):
         result = await executor._check_capacity(
             run_id=run.id,
@@ -244,7 +279,9 @@ async def test_check_capacity_lock_timeout_skips_and_warns(
         )
 
     assert result is run
-    assert any("capacity_check_lock_timeout" in message for message in caplog.messages)
+    # Two admission attempts (one retry) and ONE execution-budget spend.
+    assert admit.await_count == 2
+    bump.assert_awaited_once()
 
 
 async def test_check_capacity_non_lock_failure_still_propagates() -> None:
