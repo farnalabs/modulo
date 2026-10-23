@@ -116,6 +116,7 @@ from modulo.db.crud.run import (
 )
 from modulo.db.crud.run_node_outputs import (
     RunBlobs,
+    marker_attempt_suffix,
     read_run_blobs,
     read_run_markers,
     read_run_telemetry,
@@ -4345,18 +4346,23 @@ async def list_run_artifacts(
         )
 
     # Sort rows by the trailing attempt suffix descending so the listing is
-    # newest-first. Attempt keys end in a numeric suffix (e.g.
-    # ``run:...:node:node-a:11``); a plain lexicographic sort would put ``9``
-    # after ``10``, so we parse the integer. Non-numeric suffixes (e.g.
-    # ``__final__``) fall back to the raw string so they still sort
-    # deterministically instead of raising.
+    # newest-first. A numeric suffix (``run:...:node:node-a:11``) is a claim
+    # count — the ONE ordered attempt family — so it is compared as an integer
+    # and a plain lexicographic sort cannot put ``9`` after ``10``.
+    #
+    # FAR-2084: every other attempt-identity suffix may be ANY non-empty shape
+    # (``:agent``, ``:connector``, ``:fallback``, ``claim-unknown``, 16-hex
+    # fail-open ids), because the writer stamps the suffix once per attempt and
+    # its value is an identity, not necessarily a number. Reading it as a
+    # number here is an ORDERING choice only, never a membership test: the
+    # non-numeric families trail every numeric attempt in deterministic string
+    # order. The suffix itself comes from the shared parser, never an inline
+    # ``rsplit``, so a future fail-open shape cannot silently fall outside.
     def _attempt_sort_key(row: "RunNodeOutput") -> "tuple[int, str]":
-        suffix = row.attempt_key.rsplit(":", 1)[-1]
+        suffix = marker_attempt_suffix(row.attempt_key) or row.attempt_key
         try:
             return (1, f"{int(suffix):020d}")
         except ValueError:
-            # Non-numeric suffixes (e.g. ``__final__``) are an edge category
-            # that trails all numeric attempts rather than shadowing them.
             return (0, suffix)
 
     sorted_rows = sorted(rows, key=_attempt_sort_key, reverse=True)
@@ -4393,6 +4399,12 @@ def _strip_full_attempt_suffix(attempt_key: str) -> str | None:
     store, so the run-node-output row lookup by exact attempt key returns no
     row; the download endpoint must derive the base key and resolve its pointer
     from the node's telemetry instead.
+
+    The ``<cap>`` here is a byte COUNT, not the attempt identity: this is a
+    DIFFERENT synthetic family from the marker attempt keys the FAR-2084 rule
+    governs (``run:<run>:node:<node>:<any-shape>``). Requiring it to be numeric
+    is correct for this family, so it is deliberately not routed through
+    :func:`modulo.db.crud.run_node_outputs.marker_attempt_suffix`.
     """
     parts = attempt_key.rsplit(":", 2)
     if len(parts) != 3 or parts[1] != "full":

@@ -121,6 +121,7 @@ __all__ = [
     "RunBlobs",
     "assert_write_org",
     "dialect_insert",
+    "marker_attempt_suffix",
     "parse_marker_node_id",
     "persist_schema_enforcement_record",
     "read_audit_row_outputs_json",
@@ -133,6 +134,7 @@ __all__ = [
     "read_run_telemetry",
     "replace_run_node_outputs",
     "resolve_dialect",
+    "split_attempt_key",
     "upsert_rows",
     "write_run_markers",
 ]
@@ -201,32 +203,101 @@ class RunBlobs(NamedTuple):
 
 
 # Anchored marker-key grammar (node_runner): run:<uuid>:node:<node_id>:<suffix>
-# where the suffix is a claim count, sha256 prefix, 'claim-unknown', 'fallback'
-# or 'connector'. MUST stay byte-identical to migration 0192's bound regex
-# (asserted by tests/unit/db/test_migration_run_node_outputs.py).
+# MUST stay byte-identical to migration 0192's bound regex (asserted by
+# tests/unit/db/test_migration_run_node_outputs.py). The regex deliberately
+# constrains only the RUN id + the ``:node:`` delimiter; the suffix is NOT
+# constrained (see the FAR-2084 rule below).
 _MARKER_KEY_RE = r"^run:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}:node:.+$"
 _MARKER_KEY_PREFIX_RE = re.compile(_MARKER_KEY_RE)
-# len("run:") + len(uuid) + len(":node:")
+# len("run:") + len(uuid) + len(":node:"). The runtime parser no longer slices
+# by it (split_attempt_key locates the delimiter), but it stays the shared
+# offset constant the migration-0192 SQL twin asserts against.
 _MARKER_KEY_PREFIX_LEN = 46
+_ATTEMPT_KEY_MARKER = ":node:"
+
+# FAR-2084 — THE attempt-key rule, in one place.
+#
+# A NON-EMPTY suffix after ``run:<run>:node:<node>:`` identifies the attempt,
+# whatever its shape. The suffix is written ONCE per attempt by the writer, so
+# its value is an IDENTITY, not necessarily a number and not a closed
+# vocabulary. Readers must therefore never require a numeric or an enumerated
+# suffix to treat a key as attempt-scoped. Shapes the writers produce today:
+#
+# * ``<int>`` — the DB-atomic dispatch claim count (``runner_capacity``).
+# * ``<16 lowercase hex>`` — the fail-open dispatch suffix derived from the
+#   claim token (``node_runner._claim_token_attempt_suffix``).
+# * ``claim-unknown`` — the same helper when no claim lease was available.
+# * ``fallback`` — retention (and cancel-triage) with no attempt key at all.
+# * ``agent`` / ``connector`` — STABLE per-node slots: the connector
+#   idempotency marker deliberately merges across a retry on one fixed key,
+#   and an agent node's schema-enforcement record is written under one fixed
+#   key per node. They are still attempt-SCOPED keys under this rule; no
+#   current reader needs to tell them apart from the sandbox families.
+#
+# A reader MAY read the suffix as a number when it genuinely ORDERS attempts
+# (the artifact listing does — a numeric claim count is the only ordered
+# family) — that is an ordering choice, never a membership test.
+#
+# Synthetic keys that are DELIBERATELY not attempt keys (``terminal-triage:``,
+# ``redispatch-triage:``, ``cancel-triage:``) fail this rule because they do
+# not carry the ``run:<run>:node:`` structure, so they keep landing on the
+# ``__unknown__`` sentinel row.
+
+
+def split_attempt_key(attempt_key: str) -> tuple[str, str] | None:
+    """Return ``(node_id, suffix)`` for an attempt-scoped key, else ``None``.
+
+    The ONE parser for the FAR-2084 attempt-key rule (see the block comment
+    above): the key must carry the ``run:<run>:node:<node>:<suffix>`` structure
+    with a NON-EMPTY node id and a NON-EMPTY suffix, and the suffix may be any
+    shape. The node id may itself contain colons (both writers and migration
+    0192's SQL twin split on the LAST colon), and the run id is not validated
+    here — the run id only has to be colon-free, which both the persisted UUID
+    and the synthetic ids used by callers are.
+
+    ``None`` means "this key is NOT this attempt's identity" — an empty
+    suffix or a missing ``:node:`` segment never addresses an attempt.
+    """
+    if not isinstance(attempt_key, str) or not attempt_key.startswith("run:"):
+        return None
+    marker_idx = attempt_key.find(_ATTEMPT_KEY_MARKER, len("run:"))
+    if marker_idx < 0:
+        return None
+    remainder = attempt_key[marker_idx + len(_ATTEMPT_KEY_MARKER) :]
+    node_id, sep, suffix = remainder.rpartition(":")
+    if not sep or not node_id or not suffix:
+        return None
+    return node_id, suffix
+
+
+def marker_attempt_suffix(attempt_key: str) -> str | None:
+    """The attempt-identity suffix of *attempt_key*, or ``None`` when unparseable.
+
+    Use this (never an inline ``rsplit``) to read the attempt discriminator:
+    the value is an identity of ANY non-empty shape (FAR-2084), so it must not
+    be validated as a number or matched against a list of known values.
+    """
+    parts = split_attempt_key(attempt_key)
+    return None if parts is None else parts[1]
 
 
 def parse_marker_node_id(attempt_key: str) -> str:
     """Derive the node id from a legacy marker attempt key.
 
-    Anchored twin parser: the key must start with the literal
-    ``run:<uuid>:node:`` prefix, then the node id is everything before the
-    LAST ``:`` (rsplit) so colon-containing node ids are safe; the suffix must
-    be non-empty. Anything else is unparseable and maps to
+    Anchored twin parser: the key must match the migration-0192 grammar
+    (literal ``run:<uuid>:node:`` prefix) — that anchor is a STORAGE rule, not
+    the attempt-identity rule: a non-UUID ``run:`` key is deliberately
+    unparseable so synthetic row keys land on the ``__unknown__`` sentinel.
+    Once anchored, the node id and suffix come from :func:`split_attempt_key`
+    (everything before the LAST ``:``, so colon-containing node ids are safe;
+    the suffix must be non-empty). Anything else is unparseable and maps to
     ``UNKNOWN_NODE_ID`` (the caller preserves the FULL original key as the
     attempt_key — evidence kept, never dropped).
     """
     if _MARKER_KEY_PREFIX_RE.match(attempt_key) is None:
         return UNKNOWN_NODE_ID
-    remainder = attempt_key[_MARKER_KEY_PREFIX_LEN:]
-    node_id, sep, suffix = remainder.rpartition(":")
-    if not sep or not node_id or not suffix:
-        return UNKNOWN_NODE_ID
-    return node_id
+    parts = split_attempt_key(attempt_key)
+    return UNKNOWN_NODE_ID if parts is None else parts[0]
 
 
 def _jsonb_canonical_key(key: str) -> tuple[int, bytes]:
