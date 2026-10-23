@@ -1984,6 +1984,31 @@ async def test_connector_node_connector_raise_fails_node(monkeypatch: pytest.Mon
         set_connector_hub(None)
 
 
+async def test_connector_node_write_reported_failure_returns_failed_artifact(monkeypatch: pytest.MonkeyPatch):
+    from modulo.core.pipeline_engine.decorator import set_connector_hub
+
+    class _ReportedFailureConnector:
+        async def write(self, payload: Any) -> Any:
+            return {"exit_code": 1, "stderr": "command failed"}
+
+        def write_reported_failure(self, result: Any) -> bool:
+            return True
+
+    node_def = _connector_node_def()
+    node_def["connector_binding"]["operation"] = "write"
+    set_connector_hub(_StubHub(connector=_ReportedFailureConnector()))
+    monkeypatch.setattr(nr, "_resolve_connector_write_outcome", AsyncMock())
+    try:
+        fn = make_connector_fn(node_def)
+        result = await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
+    finally:
+        set_connector_hub(None)
+
+    assert result["artifacts"][0]["status"] == "failed"
+    assert result["artifacts"][0]["output"]["exit_code"] == 1
+    assert result["connector_failure"] is True
+
+
 async def test_connector_node_write_success_stamps_and_completes(monkeypatch: pytest.MonkeyPatch):
     from modulo.core.pipeline_engine.decorator import set_connector_hub
 

@@ -4470,6 +4470,42 @@ def _split_stored_columns(envelope: dict[str, Any], node_id: str = "node-x") -> 
     return split_node_output(envelope, "sandbox_agent", None)
 
 
+def test_connector_failure_marker_produces_typed_terminal_failure():
+    from modulo.core.pipeline_engine.event_broker import RunEventBroker
+    from modulo.core.pipeline_engine.executor import _stream_terminal_reason, _StreamState
+
+    state = _StreamState(connector_failure_reason="Connector reported operation failure")
+    broker = RunEventBroker(uuid.uuid4())
+
+    result = _stream_terminal_reason(state, broker, uuid.uuid4())
+
+    assert result is not None
+    assert result[0] == "failed"
+    assert result[1] == "connector.failed"
+    assert result[2] == "Connector reported operation failure"
+
+
+@pytest.mark.asyncio
+async def test_finalize_downgrades_connector_failure():
+    """A connector node that returned a failure envelope downgrades a complete run to failed."""
+    executor, _session = _finalize_executor_with_session()
+    args = _finalize_args(uuid.uuid4(), uuid.uuid4())
+    args["node_type_map"] = {"node-conn": "connector"}
+    args["completed_node_outputs"] = {
+        "node-conn": {
+            "artifacts": [{"node_id": "node-conn", "status": "failed", "error": "upstream timeout"}],
+            "connector_failure": True,
+        }
+    }
+
+    mock_finalize, final_run = await _finalize_with_patched_tail(executor, args)
+
+    assert final_run is not None
+    assert mock_finalize.await_args.kwargs["status"] == "failed"
+    assert mock_finalize.await_args.kwargs["error_code"] == "connector.failed"
+    assert "upstream timeout" in mock_finalize.await_args.kwargs["error_detail"]
+
+
 @pytest.mark.asyncio
 async def test_finalize_downgrades_masked_sandbox_agent_failure():
     """A ``complete`` run whose completed sandbox-agent output is the stamped
