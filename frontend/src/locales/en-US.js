@@ -4178,7 +4178,18 @@ export default {
       "override_disclosure": "The override re-runs the guardrail pass on the input you supply. This is re-block safe — if the corrected input still violates a blocking guardrail, the run stays blocked.",
       "override_requires_operator": "Only operators and admins can override a guardrail block.",
       "override_invalid_json": "The corrected input payload must be valid JSON.",
-      "override_submitting": "Overriding..."
+      "override_submitting": "Overriding...",
+      "seam_coverage_title": "Guardrail Coverage by Seam",
+      "seam_ingestion_edge": "Ingestion edge",
+      "seam_node_output_edge": "Node output edge",
+      "seam_runtime_loop": "Runtime loop",
+      "state_enforced": "Enforced",
+      "state_degraded": "Degraded",
+      "state_not_applicable": "Not applicable",
+      "provenance_observed": "Observed",
+      "provenance_derived": "Derived",
+      "provenance_reported": "Reported",
+      "provenance_attested": "Attested"
     },
     "GovernanceStackView": {
       "title": "Governance Stack",
