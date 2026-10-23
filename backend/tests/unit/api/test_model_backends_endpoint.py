@@ -1247,6 +1247,21 @@ def test_get_model_backend_sqlalchemy_error_returns_503(client: TestClient) -> N
     assert resp.status_code == 503
 
 
+def test_get_model_backend_integrity_error_returns_409(client: TestClient) -> None:
+    from sqlalchemy.exc import IntegrityError as IntegrityError_
+
+    with (
+        patch(
+            "modulo.api.routes.model_backends.get_model_backend",
+            side_effect=IntegrityError_("mock", "mock", "mock"),
+        ),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/model-backends/{uuid.uuid4()}")
+    assert resp.status_code == 409
+
+
 def test_update_model_backend_sqlalchemy_error_returns_503(client: TestClient) -> None:
     from sqlalchemy.exc import SQLAlchemyError as SQLAlchemyError_
 

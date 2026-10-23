@@ -1004,29 +1004,6 @@ def _requested_fallback_ids(req: ModelBackendCreate) -> list[str] | None:
     return [str(fid) for fid in req.fallback_backend_ids]
 
 
-async def _find_same_name_backend(
-    session: AsyncSession,
-    principal: TenantPrincipal,
-    name: str,
-) -> None:
-    """Reject a duplicate name while holding the uniqueness row lock."""
-    existing = (
-        await session.execute(
-            select(ModelBackend)
-            .where(
-                ModelBackend.organisation_id == principal.organisation_id,
-                ModelBackend.name == name,
-            )
-            .with_for_update()
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"A model backend with name {name!r} already exists in this organisation",
-        )
-
-
 async def _create_backend_in_transaction(
     session: AsyncSession,
     req: ModelBackendCreate,
@@ -1053,7 +1030,24 @@ async def _create_backend_in_transaction(
         if req.fallback_backend_ids:
             await _validate_fallback_ids(session, principal.organisation_id, req.fallback_backend_ids)
 
-        await _find_same_name_backend(session, principal, req.name)
+        # C4 (FAR-1825): the uniqueness SELECT ... FOR UPDATE is this
+        # transaction's first row lock; the bound above keeps a contended row
+        # from parking the connection.
+        existing = (
+            await session.execute(
+                select(ModelBackend)
+                .where(
+                    ModelBackend.organisation_id == principal.organisation_id,
+                    ModelBackend.name == req.name,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"A model backend with name {req.name!r} already exists in this organisation",
+            )
 
         mb = await create_model_backend(
             session,
