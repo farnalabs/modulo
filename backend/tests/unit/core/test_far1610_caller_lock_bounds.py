@@ -34,7 +34,8 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from modulo.core.hitl_manager import GateNotFoundError, HITLManager
-from modulo.core.pipeline_engine.executor import PipelineExecutor, RunNotFoundError
+from modulo.core.pipeline_engine.executor import AdmissionLockTimeoutError, PipelineExecutor, RunNotFoundError
+from modulo.core.pipeline_execution import _handle_executor_failure
 
 
 def _lock_timeout_error(statement: str = "UPDATE runs") -> OperationalError:
@@ -214,17 +215,24 @@ async def test_check_capacity_bounds_before_the_claim_time_write() -> None:
     assert result is run
 
 
-async def test_check_capacity_lock_timeout_retries_once_then_refuses_to_execute(
+async def test_check_capacity_second_lock_timeout_defers_instead_of_terminalising(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """FAR-2076: a 55P03 on the admission+bump transaction rolls the bump back,
-    so a recovered caller must NOT proceed and execute uncounted.
+    """FAR-2076: two consecutive 55P03s must NOT kill a run that never executed.
 
-    The admission transaction is retried once; a second lock timeout re-raises
-    (visible failure) instead of returning the run for streaming."""
+    Both admission+bump attempts roll back, so the run consumed ZERO
+    executions. A re-raise here propagates to ``_handle_executor_failure``,
+    which terminal-fails the run as ``executor_failed`` — a transient lock wait
+    permanently killing a run that never ran. Instead the executor performs the
+    fenced pending-reset (the established non-terminal deferral) and raises
+    ``AdmissionLockTimeoutError``, which the watchdog maps to ``deferred``.
+    """
     run = _capacity_run()
+    org_id = uuid.uuid4()
     executor = _capacity_executor(_begin_session())
     update = AsyncMock(side_effect=_lock_timeout_error())
+    reset = AsyncMock(return_value=1)
+    executor._fenced_pending_reset = reset  # type: ignore[method-assign]
 
     with (
         patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
@@ -234,19 +242,56 @@ async def test_check_capacity_lock_timeout_retries_once_then_refuses_to_execute(
         patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
         patch("modulo.core.pipeline_engine.executor.update_run_status", new=update),
         caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.executor"),
-        pytest.raises(OperationalError, match="lock timeout"),
+        pytest.raises(AdmissionLockTimeoutError) as excinfo,
     ):
         await executor._check_capacity(
             run_id=run.id,
-            org_id=uuid.uuid4(),
+            org_id=org_id,
             pipeline_id=uuid.uuid4(),
             max_concurrent=1,
             graph_json=None,
         )
 
-    # Exactly two admission attempts: one retry, then a loud refusal.
+    # Exactly two admission attempts: one retry, then a DEFERRAL.
     assert update.await_count == 2
+    # The run is handed back to pending, so dispatcher_reconcile re-dispatches it.
+    reset.assert_awaited_once_with(run_id=run.id, org_id=org_id)
+    # The deferral keeps the lock timeout as its cause for the logs.
+    assert isinstance(excinfo.value.__cause__, OperationalError)
     assert any("capacity_check_lock_timeout" in message for message in caplog.messages)
+
+
+async def test_admission_lock_timeout_maps_to_the_non_terminal_deferred_outcome() -> None:
+    """FAR-2076: the deferral contract is observable to the watchdog caller.
+
+    ``AdmissionLockTimeoutError`` maps to ``{"status": "deferred"}`` and does
+    NOT terminal-fail the run. Any other executor exception still terminal-fails
+    (asserted here so the new branch cannot widen).
+    """
+    fail_run = AsyncMock()
+    with patch("modulo.core.pipeline_execution.fail_run_terminal", fail_run):
+        deferred = await _handle_executor_failure(
+            MagicMock(),
+            str(uuid.uuid4()),
+            str(uuid.uuid4()),
+            claim_token="tok",
+            exec_exc=AdmissionLockTimeoutError(uuid.uuid4(), attempts=2),
+            hitl_decision_resume=False,
+        )
+    assert deferred == {"status": "deferred"}
+    fail_run.assert_not_awaited()
+
+    with patch("modulo.core.pipeline_execution.fail_run_terminal", fail_run):
+        failed = await _handle_executor_failure(
+            MagicMock(),
+            str(uuid.uuid4()),
+            str(uuid.uuid4()),
+            claim_token="tok",
+            exec_exc=RuntimeError("boom"),
+            hitl_decision_resume=False,
+        )
+    assert failed == {"status": "failed"}
+    fail_run.assert_awaited_once()
 
 
 async def test_check_capacity_lock_timeout_retry_succeeds_and_spends_once() -> None:

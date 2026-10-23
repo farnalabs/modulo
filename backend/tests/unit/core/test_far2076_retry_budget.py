@@ -35,6 +35,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langgraph.errors import NodeCancelledError
+from sqlalchemy.exc import OperationalError
 
 from modulo.core import cron_helpers as ch
 from modulo.core import dispatch
@@ -240,12 +241,20 @@ async def test_dispatch_at_the_ceiling_grants_zero_transport_retries() -> None:
     assert retries == 0
 
 
-async def test_dispatch_after_one_execution_grants_one_transport_retry() -> None:
+async def test_dispatch_after_one_execution_grants_the_two_remaining_attempts() -> None:
+    """Measured SAQ semantics: ``retries=N`` is N TOTAL attempts.
+
+    ``saq==0.26.4`` ``Job.retryable`` is ``retries > attempts``
+    (``saq/job.py:262``) and ``job.attempts`` is incremented BEFORE processing
+    (``saq/worker.py:356``), so a job with ``retries=2`` runs at most twice.
+    After one execution of a ``max_retries: 2`` pipeline, two executions remain
+    (ceiling ``1 + 2``), so the transport allowance is 2 — not 1.
+    """
     retries = await _dispatch_retries(
         run=_run(execution_attempt_count=1),
         pipeline=SimpleNamespace(retry_policy=_POLICY),
     )
-    assert retries == 1
+    assert retries == 2
 
 
 async def test_dispatch_does_not_shrink_retries_without_a_policy() -> None:
@@ -267,12 +276,91 @@ async def test_resume_dispatch_is_never_clamped() -> None:
     assert retries == 5
 
 
+class _RecordingSession(_FakeDispatchSession):
+    """Fake session that records lifecycle order and can fail its statement."""
+
+    def __init__(self, pipeline: Any, *, name: str, order: list[str], fail: bool = False) -> None:
+        super().__init__(pipeline)
+        self._name = name
+        self._order = order
+        self._fail = fail
+
+    def begin(self) -> _FakeBegin:
+        self._order.append(f"{self._name}:begin")
+        return super().begin()
+
+    async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> Any:
+        if self._fail:
+            raise OperationalError("SELECT retry policy", {}, RuntimeError("connection reset"))
+        self._order.append(f"{self._name}:execute")
+        return await super().execute(stmt, params)
+
+    async def close(self) -> None:
+        self._order.append(f"{self._name}:close")
+
+
+async def test_dispatch_fails_open_when_the_budget_read_errors(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-2076 B: the clamp read runs in its OWN session, BEFORE admission.
+
+    Inside the admission transaction the same read failure would abort the
+    transaction (25P02) and the next statement would raise
+    ``InFailedSQLTransactionError`` — an unclassified hard dispatch failure, not
+    the intended fail-open. Resolving it separately makes the fail-open genuine.
+    """
+    run = _run()
+    pipeline = SimpleNamespace(retry_policy=_POLICY)
+    order: list[str] = []
+    opened = [0]
+
+    def _open() -> _FakeDispatchSession:
+        opened[0] += 1
+        if opened[0] == 1:
+            return _RecordingSession(pipeline, name="clamp", order=order, fail=True)
+        if opened[0] == 2:
+            return _RecordingSession(pipeline, name="admission", order=order)
+        return _FakeDispatchSession(pipeline)
+
+    enqueue = AsyncMock(return_value=("job-1", False))
+    with (
+        patch.object(dispatch, "_open_session", _open),
+        patch.object(dispatch, "get_settings", return_value=SimpleNamespace(saq_runs_queue="runs", saq_run_retries=5)),
+        patch.object(dispatch, "_capacity_deferred", AsyncMock(return_value=False)),
+        patch.object(dispatch, "_org_capacity_deferred", AsyncMock(return_value=False)),
+        patch.object(dispatch, "_slot_saturated", AsyncMock(return_value=False)),
+        patch.object(dispatch, "_enqueue_saq", enqueue),
+        patch("modulo.db.crud.run.get_run", AsyncMock(return_value=run)),
+        caplog.at_level("WARNING", logger="modulo.core.dispatch"),
+    ):
+        outcome, job_id = await dispatch.dispatch_run(uuid.uuid4(), uuid.uuid4())
+
+    assert outcome == "enqueued"
+    assert job_id == "job-1"
+    # The read failure failed OPEN to the configured allowance.
+    assert int(enqueue.await_args.kwargs["retries"]) == 5
+    # The clamp session committed/closed BEFORE the admission transaction opened.
+    assert order.index("clamp:close") < order.index("admission:begin")
+    assert any("could not resolve the retry-policy budget" in message for message in caplog.messages)
+
+
 def test_clamp_is_the_shared_helper() -> None:
-    assert clamp_saq_retries(_POLICY, execution_attempt_count=0, configured=5) == 2
-    assert clamp_saq_retries(_POLICY, execution_attempt_count=1, configured=5) == 1
-    assert clamp_saq_retries(_POLICY, execution_attempt_count=2, configured=5) == 0
+    """The allowance is the number of TOTAL ATTEMPTS SAQ may make.
+
+    Ceiling is ``1 + max_retries`` (3 here). At consumed 0 three executions
+    remain → ``retries=3``; at consumed 2 one remains → ``retries=1``; at the
+    ceiling the allowance is 0 (SAQ's floor of one attempt still applies, and
+    the reconcile backstop terminal-fails that shape instead of re-dispatching).
+    """
+    assert clamp_saq_retries(_POLICY, execution_attempt_count=0, configured=5) == 3
+    assert clamp_saq_retries(_POLICY, execution_attempt_count=1, configured=5) == 2
+    assert clamp_saq_retries(_POLICY, execution_attempt_count=2, configured=5) == 1
     assert clamp_saq_retries(_POLICY, execution_attempt_count=3, configured=5) == 0
     assert clamp_saq_retries(None, execution_attempt_count=3, configured=5) == 5
+
+
+def test_clamp_never_exceeds_the_configured_allowance() -> None:
+    assert clamp_saq_retries(_POLICY, execution_attempt_count=0, configured=1) == 1
 
 
 # ---------------------------------------------------------------------------
