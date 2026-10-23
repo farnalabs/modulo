@@ -316,6 +316,68 @@ async def test_fenced_pending_reset_bounds_its_write_and_returns_none_on_lock_ti
     assert any("fenced_pending_reset_lock_timeout" in message for message in caplog.messages)
 
 
+async def test_fenced_pending_reset_cancellation_propagates() -> None:
+    """``CancelledError`` is never swallowed by the reset's 55P03 recovery arm."""
+    session = _begin_session()
+    executor = _capacity_executor(session)
+    executor._claim_token = "tok"
+    session.execute = AsyncMock(side_effect=asyncio.CancelledError())
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await executor._fenced_pending_reset(run_id=uuid.uuid4(), org_id=uuid.uuid4())
+
+
+async def test_fenced_pending_reset_non_lock_failure_propagates() -> None:
+    """Only 55P03 is absorbed; any other failure stays visible to the caller."""
+    session = _begin_session()
+    executor = _capacity_executor(session)
+    executor._claim_token = "tok"
+    session.execute = AsyncMock(side_effect=RuntimeError("connection reset"))
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        pytest.raises(RuntimeError, match="connection reset"),
+    ):
+        await executor._fenced_pending_reset(run_id=uuid.uuid4(), org_id=uuid.uuid4())
+
+
+async def test_check_capacity_reset_cancellation_propagates() -> None:
+    """A ``CancelledError`` raised by the deferral's reset must propagate.
+
+    The deferral's ``except Exception`` arm treats a reset failure as "outcome
+    unknown", but cancellation is not a failure — swallowing it would keep the
+    worker alive after its task was cancelled.
+    """
+    run = _capacity_run()
+    executor = _capacity_executor(_begin_session())
+    update = AsyncMock(side_effect=_lock_timeout_error())
+    executor._fenced_pending_reset = AsyncMock(side_effect=asyncio.CancelledError())  # type: ignore[method-assign]
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=1,
+            graph_json=None,
+        )
+
+
 @pytest.mark.parametrize(
     ("reset_rowcount", "expected_state", "expected_fragment"),
     [

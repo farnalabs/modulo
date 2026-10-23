@@ -28,6 +28,7 @@ These tests pin, in order:
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -345,6 +346,41 @@ async def test_dispatch_fails_open_when_the_budget_read_errors(
     assert any("could not resolve the retry-policy budget" in message for message in caplog.messages)
 
 
+async def test_dispatch_fails_open_when_the_run_row_is_missing() -> None:
+    """A vanished run cannot supply a policy, so the configured allowance holds.
+
+    The clamp is a best-effort budget guard, never an admission authority: a
+    missing row must fail OPEN to ``saq_run_retries`` rather than raising or
+    granting zero retries.
+    """
+    pipeline = SimpleNamespace(retry_policy=_POLICY)
+    enqueue = AsyncMock(return_value=("job-1", False))
+    with (
+        patch.object(dispatch, "_open_session", lambda: _FakeDispatchSession(pipeline)),
+        patch.object(dispatch, "get_settings", return_value=SimpleNamespace(saq_runs_queue="runs", saq_run_retries=5)),
+        patch.object(dispatch, "_capacity_deferred", AsyncMock(return_value=False)),
+        patch.object(dispatch, "_org_capacity_deferred", AsyncMock(return_value=False)),
+        patch.object(dispatch, "_slot_saturated", AsyncMock(return_value=False)),
+        patch.object(dispatch, "_enqueue_saq", enqueue),
+        patch("modulo.db.crud.run.get_run", AsyncMock(return_value=None)),
+    ):
+        outcome, job_id = await dispatch.dispatch_run(uuid.uuid4(), uuid.uuid4())
+
+    assert (outcome, job_id) == ("enqueued", "job-1")
+    assert int(enqueue.await_args.kwargs["retries"]) == 5
+
+
+async def test_dispatch_clamp_cancellation_propagates() -> None:
+    """``CancelledError`` must never be swallowed by the clamp's fail-open arm."""
+    with (
+        patch.object(dispatch, "_open_session", lambda: _FakeDispatchSession(None)),
+        patch.object(dispatch, "get_settings", return_value=SimpleNamespace(saq_runs_queue="runs", saq_run_retries=5)),
+        patch("modulo.db.crud.run.get_run", AsyncMock(side_effect=asyncio.CancelledError())),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await dispatch.dispatch_run(uuid.uuid4(), uuid.uuid4())
+
+
 def test_clamp_is_the_shared_helper() -> None:
     """The allowance is the number of TOTAL ATTEMPTS SAQ may make.
 
@@ -434,6 +470,60 @@ async def test_transient_still_requeues_without_a_policy() -> None:
     executor = _transient_executor(execution_attempt_count=4)
     decision = await _transient_decision(executor, None)
     assert decision["decision"] == "requeue"
+
+
+async def test_transient_requeue_logs_when_the_reset_times_out(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A reset that TIMED OUT (``None``) still requeues, but must be observable.
+
+    The run is left ``running`` for the nodeless/age backstop instead of being
+    handed back to ``pending``; silence here would hide a run that no
+    dispatcher_reconcile tick can recover.
+    """
+    executor = _transient_executor(execution_attempt_count=1)
+    executor._fenced_pending_reset = AsyncMock(return_value=None)
+
+    with caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.executor"):
+        decision = await _transient_decision(executor, _POLICY)
+
+    assert decision["decision"] == "requeue"
+    assert any("transient_requeue_reset_timed_out" in message for message in caplog.messages)
+
+
+async def test_policy_redispatch_logs_when_the_reset_times_out(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A timed-out reset on the retry-policy path is logged, then still re-raises.
+
+    The re-raise is the re-dispatch signal; the WARNING is the only record that
+    the row was NOT confirmed back to ``pending`` and now depends on the age
+    backstop.
+    """
+    executor = object.__new__(PipelineExecutor)
+    executor._claim_token = "tok"
+    executor._fenced_pending_reset = AsyncMock(return_value=None)
+    executor._cleanup_run_resources = AsyncMock()
+
+    with (
+        patch("modulo.settings.get_settings", return_value=SimpleNamespace(saq_retry_delay=0)),
+        patch("asyncio.sleep", AsyncMock()),
+        caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.executor"),
+        pytest.raises(ex.RunRetryPolicyError),
+    ):
+        await executor._redispatch_after_policy(
+            run_id=uuid.uuid4(),
+            org_id=ORG,
+            final_status="failed",
+            error_code="executor_failed",
+            execution_attempt_count=1,
+            retry_budget=3,
+            pipeline_retry_policy=_POLICY,
+            model_backend_hub=None,
+            connector_hub=None,
+        )
+
+    assert any("retry_policy_reset_timed_out" in message for message in caplog.messages)
 
 
 def test_transient_allowance_is_min_of_transport_and_ceiling() -> None:
@@ -1143,6 +1233,38 @@ async def test_at_ceiling_fence_rejection_on_a_cancelling_row_is_non_executing()
         )
 
     assert excinfo.value.reason == "cancellation pending"
+
+
+async def test_at_ceiling_fence_rejection_on_our_own_running_row_is_fence_lost() -> None:
+    """Same claim token, still ``running``, no cancellation: the fence was lost.
+
+    Nothing distinguishes this row from the pre-write state, so it cannot be
+    handed to ``execute()`` (which would stream past the ceiling). The reason
+    must not be misreported as superseded or cancellation-pending.
+    """
+    fence_lost = SimpleNamespace(status="running", claim_token="tok", cancellation_requested=False)
+
+    with pytest.raises(ex.RetryBudgetGateRefusedError) as excinfo:
+        await _admit(
+            retry_policy=_POLICY,
+            execution_attempt_count=_CEILING,
+            terminal_write=None,
+            rerun_row=fence_lost,
+        )
+
+    assert excinfo.value.reason == "fence lost"
+
+
+async def test_at_ceiling_fence_rejection_when_the_row_vanished_raises_not_found() -> None:
+    """A fenced write that lost the row AND a re-read that finds nothing is a
+    genuine not-found — never an invented terminal row."""
+    with pytest.raises(ex.RunNotFoundError):
+        await _admit(
+            retry_policy=_POLICY,
+            execution_attempt_count=_CEILING,
+            terminal_write=None,
+            rerun_row=None,
+        )
 
 
 async def test_at_ceiling_fence_rejection_returns_a_genuinely_non_running_row() -> None:
