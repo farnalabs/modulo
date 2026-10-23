@@ -1,4 +1,4 @@
-"""FAR-2040 / ADR 066 S1: migration ``0326_eval_verdict_contract`` against real Postgres.
+"""FAR-2040 / ADR 066 S1: migration ``0328_eval_verdict_contract`` against real Postgres.
 
 Covers the migration's own contract, on a private database per test (the
 ``test_migration_0308`` harness):
@@ -11,8 +11,8 @@ Covers the migration's own contract, on a private database per test (the
   ``jsonb``, the closed confidence vocabulary, and a TRANSITIONAL eval-type
   CHECK that accepts both stored names;
 * an unknown outcome / confidence kind violates its CHECK;
-* a SINGLE ``alembic upgrade 0323 -> 0326`` invocation completes (the
-  self-hosted rollout path, where 0324, 0325_run_seam_coverage and 0326 share
+* a SINGLE ``alembic upgrade 0323 -> 0328`` invocation completes (the
+  self-hosted rollout path, where 0324, 0325_run_seam_coverage and 0328 share
   one transaction — the side-connection deadlock reproduction);
 * the ``jsonb`` envelope round-trips as an object;
 * the downgrade restores the previous shape and vocabulary.
@@ -38,7 +38,7 @@ from sqlalchemy.pool import NullPool
 pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[2]  # backend/
-MIGRATION_REV = "0326_eval_verdict_contract"
+MIGRATION_REV = "0328_eval_verdict_contract"
 PREV_REV = "0325_run_seam_coverage"
 
 _ORG = "d0c00000-0000-0000-0000-000000000001"
@@ -166,14 +166,14 @@ async def _insert_eval(engine: AsyncEngine, eval_type: str) -> None:
 
 @pytest_asyncio.fixture
 async def one_shot_db_url(db_url: str) -> AsyncGenerator[str, None]:
-    """A database at 0323, upgraded to 0326 in ONE alembic invocation.
+    """A database at 0323, upgraded to 0328 in ONE alembic invocation.
 
     This is the self-hosted rollout path: the release's single
-    ``alembic upgrade heads`` applies 0324_purge, 0325_run_seam_coverage and 0326 in the SAME
+    ``alembic upgrade heads`` applies 0324_purge, 0325_run_seam_coverage and 0328 in the SAME
     transaction, which is where a side connection taking a lock on ``evals``
     would self-deadlock.
     """
-    db_name, iso_url = await _fresh_db(db_url, "m0326_shot")
+    db_name, iso_url = await _fresh_db(db_url, "m0328_shot")
     try:
         _migrate(iso_url, "0323_pipeline_snapshots_substantive_version_index")
         yield iso_url
@@ -181,7 +181,7 @@ async def one_shot_db_url(db_url: str) -> AsyncGenerator[str, None]:
         await _drop_db(db_url, db_name)
 
 
-class TestMigration0326:
+class TestMigration0328:
     async def test_pre_upgrade_has_no_verdict_columns(self, pre_upgrade_db_url: str) -> None:
         """NEGATIVE CONTROL: the columns do not exist before the upgrade."""
         engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
@@ -257,8 +257,8 @@ class TestMigration0326:
         finally:
             await engine.dispose()
 
-    async def test_single_invocation_0323_to_0326_completes(self, one_shot_db_url: str) -> None:
-        """The self-hosted path: 0324 + 0325 + 0326 in ONE transaction, no deadlock."""
+    async def test_single_invocation_0323_to_0328_completes(self, one_shot_db_url: str) -> None:
+        """The self-hosted path: 0324 + 0325 + 0328 in ONE transaction, no deadlock."""
         _migrate(one_shot_db_url, MIGRATION_REV)
 
         engine = create_async_engine(one_shot_db_url, poolclass=NullPool)

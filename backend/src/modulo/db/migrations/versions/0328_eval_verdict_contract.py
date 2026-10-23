@@ -1,12 +1,15 @@
 """Eval judge verdict contract: ``outcome``, error state, judge envelope (ADR 066 S1).
 
-Revision ID: 0326_eval_verdict_contract
+Revision ID: 0328_eval_verdict_contract
 Revises: 0325_run_seam_coverage
 Create Date: 2026-10-21
 
 Renumbered from ``0325_eval_verdict_contract`` when main independently landed
-``0325_run_seam_coverage``: two files can share a number without a git merge
-conflict, so the chain is re-pointed here rather than leaving a second root.""
+``0325_run_seam_coverage``, and again from ``0326_eval_verdict_contract`` when
+concurrent PRs claimed the same siblings (``0326_evidence_index_aggregate_indexes``
+on PR #2201 and ``0327_runs_execution_attempt_count`` on PR #2224): two files can
+share a number without a git merge conflict, so the chain is re-pointed here
+rather than leaving a second root.""
 
 **EXPAND release — this migration deliberately does NOT set ``outcome`` NOT NULL
 and does NOT narrow the eval-type vocabulary.** Deploy ordering is
@@ -95,7 +98,7 @@ from typing import Any
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0326_eval_verdict_contract"
+revision: str = "0328_eval_verdict_contract"
 down_revision: str | None = "0325_run_seam_coverage"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
@@ -278,10 +281,10 @@ def _backfill_outcome() -> int:
     last: Any = _ZERO_UUID
     with _autocommit_connection() as conn:
         if not _relation_visible(conn):
-            logger.info("0326_eval_verdict_contract: fresh chain, no rows to backfill")
+            logger.info("0328_eval_verdict_contract: fresh chain, no rows to backfill")
             return 0
         logger.info(
-            "0326_eval_verdict_contract: starting online outcome backfill "
+            "0328_eval_verdict_contract: starting online outcome backfill "
             "(batch_size=%d, primary-key keyset, resumable via WHERE outcome IS NULL; "
             "progress every %d batches or %ds)",
             _BATCH_SIZE,
@@ -304,14 +307,14 @@ def _backfill_outcome() -> int:
                 time.monotonic() - progress_started >= _PROGRESS_EVERY_SECONDS
             ):
                 logger.info(
-                    "0326_eval_verdict_contract: backfill progress rows=%d batches=%d cursor=%s",
+                    "0328_eval_verdict_contract: backfill progress rows=%d batches=%d cursor=%s",
                     total,
                     batches,
                     last,
                 )
                 progress_started = time.monotonic()
     logger.info(
-        "0326_eval_verdict_contract: backfilled outcome on %d row(s) in %d batch(es)",
+        "0328_eval_verdict_contract: backfilled outcome on %d row(s) in %d batch(es)",
         total,
         batches,
     )
