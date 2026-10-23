@@ -25,6 +25,19 @@
 # machine then boots the config/image the failed attempt already wrote, and
 # the retry can make progress.
 #
+# 2026-10-23 follow-up (staging still down after the restart fix shipped):
+# a restart is not always enough. When the VM itself is unreachable, the
+# restart waits its own ~2 minute health window, fails with `watching machine
+# checks: context deadline exceeded`, and leaves the SAME wedged machine for
+# the next `fly deploy` to update in place - which times out identically
+# (observed on e29d961d0: restart failed, then attempt 3's own 5 minute health
+# wait also failed). A machine that cannot be restarted cannot be deployed
+# onto, so the fallback is to DESTROY it: the next `fly deploy` sees the app
+# below its `min_machines_running` count and creates a fresh machine from the
+# image/config instead of updating a corpse in place. The machine is already
+# unserviceable at that point (its process-local liveness probe is critical),
+# so removing it costs no availability.
+#
 # Contract
 # --------
 # - Usage: restart-wedged-app-machines.sh <app>
@@ -32,10 +45,14 @@
 #   whose `app_liveness` check is `critical` (the process-local probe - never
 #   servicecheck-*, which is deployment-scoped; restarting on it would storm
 #   every app machine for a dead queue. Same selection as web-watchdog.yml).
+# - If the restart fails, destroys the same machine so the next deploy attempt
+#   can create a replacement. A successful restart is never followed by a
+#   destroy.
 # - Best-effort by design: a missing flyctl, an unreadable machine list, or a
-#   failed restart emits a GitHub warning and exits 0. The deploy attempt that
-#   follows is still the authoritative gate and fails loudly on its own; this
-#   step must never mask or pre-empt it (2026-08-27 masked-deploy incident).
+#   failed restart/destroy emits a GitHub warning and exits 0. The deploy
+#   attempt that follows is still the authoritative gate and fails loudly on
+#   its own; this step must never mask or pre-empt it (2026-08-27
+#   masked-deploy incident).
 # - Exits 0 when there is nothing to do (the common case).
 set -euo pipefail
 
@@ -90,7 +107,15 @@ while IFS= read -r MID; do
   if fly machine restart "${MID}" --app "${APP}" </dev/null; then
     echo "Restarted ${MID}."
   else
-    echo "::warning::fly machine restart failed for ${MID} in ${APP} - continuing to the next deploy attempt."
+    # The restart failed (typically its health wait timed out), so the same
+    # machine would swallow the next `fly deploy` attempt too. Remove it and
+    # let the deploy create a healthy replacement.
+    echo "::warning::fly machine restart failed for ${MID} in ${APP} - destroying it so the next deploy attempt can create a replacement."
+    if fly machine destroy "${MID}" --app "${APP}" --force </dev/null; then
+      echo "Destroyed wedged machine ${MID}; the next deploy attempt will create a replacement."
+    else
+      echo "::warning::fly machine destroy failed for ${MID} in ${APP} - continuing to the next deploy attempt."
+    fi
   fi
 done <<< "${WEDGED_IDS}"
 

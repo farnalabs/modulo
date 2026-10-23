@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -23,6 +25,7 @@ import modulo.core.notifier as notifier_mod
 from modulo.core.events.notification_events import NOTIFIER_SESSION_KEY, _isoformat
 from modulo.core.notifier import Notifier
 from tests.unit.api.mock_session import configure_mock_session
+from tests.unit.events._helpers import drain_background_tasks
 
 _ORG = uuid.UUID("8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70")
 
@@ -36,12 +39,7 @@ def _notification() -> MagicMock:
 
 
 async def _drain_broadcast_tasks() -> None:
-    for _ in range(200):
-        if not notifier_mod._sse_broadcast_tasks:
-            await asyncio.sleep(0)
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError("sse broadcast tasks did not drain")
+    await drain_background_tasks(notifier_mod._sse_broadcast_tasks)
 
 
 def _session_factory_double() -> MagicMock:
@@ -97,23 +95,50 @@ class TestFireBroadcast:
         assert "notifier.sse_broadcast_skipped_no_loop" in caplog.text
 
 
+class _DispatchWiring:
+    """Objects a dispatch_event test can assert on after the call."""
+
+    def __init__(self, notifier: Notifier, session: Any) -> None:
+        self.notifier = notifier
+        self.session = session
+        self.mapper: MagicMock
+        self.fake_bus: AsyncMock
+
+
+@contextmanager
+def _wired_dispatch(
+    mapper: MagicMock,
+    fake_bus: AsyncMock,
+) -> Iterator[_DispatchWiring]:
+    """Patch the four inline-wiring seams (endpoints, session, mapper, bus).
+
+    The exact environment every ``TestDispatchInlineWiring`` test shares;
+    tests add further patches as an enclosing ``with`` where they need them.
+    """
+    notifier = Notifier(MagicMock(), Fernet.generate_key().decode())
+    wiring = _DispatchWiring(notifier=notifier, session=None)
+    wiring.mapper = mapper
+    wiring.fake_bus = fake_bus
+    factory = _session_factory_double()
+    with (
+        patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[])),
+        patch.object(notifier, "_session_factory", factory),
+        patch("modulo.core.notifier.event_mapper.NotificationEventMapper", return_value=mapper),
+        patch("modulo.core.events.event_bus.get_event_bus", return_value=fake_bus),
+    ):
+        wiring.session = factory.return_value.__aenter__.return_value
+        yield wiring
+
+
 class TestDispatchInlineWiring:
     async def test_successful_dispatch_fires_single_broadcast(self) -> None:
-        notifier = Notifier(MagicMock(), Fernet.generate_key().decode())
         notification = _notification()
         mapper = MagicMock()
         mapper.create_from_event = AsyncMock(return_value=notification)
-        factory = _session_factory_double()
-        session = factory.return_value.__aenter__.return_value
         fake_bus = AsyncMock()
 
-        with (
-            patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[])),
-            patch.object(notifier, "_session_factory", factory),
-            patch("modulo.core.notifier.event_mapper.NotificationEventMapper", return_value=mapper),
-            patch("modulo.core.events.event_bus.get_event_bus", return_value=fake_bus),
-        ):
-            results = await notifier.dispatch_event(_ORG, "run_failed", {"run_id": str(uuid.uuid4())})
+        with _wired_dispatch(mapper, fake_bus) as wiring:
+            results = await wiring.notifier.dispatch_event(_ORG, "run_failed", {"run_id": str(uuid.uuid4())})
 
         await _drain_broadcast_tasks()
         assert results == []
@@ -125,24 +150,19 @@ class TestDispatchInlineWiring:
         # Redis leg stays suppressed (the other half of no-double-publish).
         # ``info`` is a real dict on the contract-correct session double, so
         # assert the effect the production write produced.
-        assert session.info[NOTIFIER_SESSION_KEY] is True
+        assert wiring.session.info[NOTIFIER_SESSION_KEY] is True
 
     async def test_mapper_failure_fires_no_broadcast(self) -> None:
         """Rollback of the in-app transaction: no phantom Redis message."""
-        notifier = Notifier(MagicMock(), Fernet.generate_key().decode())
         mapper = MagicMock()
         mapper.create_from_event = AsyncMock(side_effect=RuntimeError("db down"))
-        factory = _session_factory_double()
         fake_bus = AsyncMock()
 
         with (
-            patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[])),
-            patch.object(notifier, "_session_factory", factory),
-            patch("modulo.core.notifier.event_mapper.NotificationEventMapper", return_value=mapper),
-            patch("modulo.core.events.event_bus.get_event_bus", return_value=fake_bus),
+            _wired_dispatch(mapper, fake_bus) as wiring,
             patch("modulo.core.notifier._log.exception"),
         ):
-            results = await notifier.dispatch_event(_ORG, "run_failed", {"run_id": str(uuid.uuid4())})
+            results = await wiring.notifier.dispatch_event(_ORG, "run_failed", {"run_id": str(uuid.uuid4())})
 
         await _drain_broadcast_tasks()
         assert results == []
@@ -150,19 +170,12 @@ class TestDispatchInlineWiring:
 
     async def test_unknown_event_type_returns_none_from_mapper_no_broadcast(self) -> None:
         """Mapper returns None (unrecognised event) -> no notification, no broadcast."""
-        notifier = Notifier(MagicMock(), Fernet.generate_key().decode())
         mapper = MagicMock()
         mapper.create_from_event = AsyncMock(return_value=None)
-        factory = _session_factory_double()
-        fake_bus: Any = AsyncMock()
+        fake_bus = AsyncMock()
 
-        with (
-            patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[])),
-            patch.object(notifier, "_session_factory", factory),
-            patch("modulo.core.notifier.event_mapper.NotificationEventMapper", return_value=mapper),
-            patch("modulo.core.events.event_bus.get_event_bus", return_value=fake_bus),
-        ):
-            await notifier.dispatch_event(_ORG, "totally_unrecognised_event", {})
+        with _wired_dispatch(mapper, fake_bus) as wiring:
+            await wiring.notifier.dispatch_event(_ORG, "totally_unrecognised_event", {})
 
         await _drain_broadcast_tasks()
         fake_bus.broadcast_redis_only.assert_not_awaited()

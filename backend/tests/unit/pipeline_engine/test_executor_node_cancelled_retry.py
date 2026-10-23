@@ -39,6 +39,7 @@ def _make_run(
     status: str = "pending",
     claim_count: int = 0,
     node_attempt_count: int = 0,
+    execution_attempt_count: int | None = None,
     claim_token: str | None = None,
 ) -> MagicMock:
     run = MagicMock()
@@ -49,6 +50,9 @@ def _make_run(
     run.status = status
     run.claim_count = claim_count
     run.node_attempt_count = node_attempt_count
+    # FAR-2076: the transient-retry budget reads the durable execution counter.
+    # These fixtures model executions that reached a node, so the two agree.
+    run.execution_attempt_count = node_attempt_count if execution_attempt_count is None else execution_attempt_count
     run.claim_token = claim_token
     run.idempotency_key = None
     return run
@@ -64,18 +68,26 @@ def _make_snapshot(graph_json: dict[str, Any] | None = None) -> MagicMock:
     return snap
 
 
-def _make_pipeline() -> MagicMock:
+def _make_pipeline(retry_policy: dict[str, Any] | None = None) -> MagicMock:
     pipeline = MagicMock()
     pipeline.max_concurrent_runs = 5
     pipeline.lock_wait_timeout_seconds = 30
     pipeline.max_duration_seconds = 3600
     pipeline.max_steps = 100
     pipeline.token_budget = None
+    # A real dict (or None) so ``_capture_execution_scalars`` reads it as a
+    # policy; a MagicMock default would silently read as "no policy".
+    pipeline.retry_policy = retry_policy
     return pipeline
 
 
-def _make_session(snapshot: MagicMock, statements: list[str] | None = None) -> AsyncMock:
-    pipeline = _make_pipeline()
+def _make_session(
+    snapshot: MagicMock,
+    statements: list[str] | None = None,
+    *,
+    retry_policy: dict[str, Any] | None = None,
+) -> AsyncMock:
+    pipeline = _make_pipeline(retry_policy)
 
     pipeline_result = MagicMock()
     pipeline_result.scalar_one.return_value = pipeline
@@ -227,6 +239,58 @@ async def test_execute_resets_to_pending_and_reraises_node_cancellation():
     mock_finalize.assert_not_awaited()
     # Cleanup ran so the retry re-entry gets a fresh broker.
     registry.close.assert_called_once_with(run.id)
+
+
+async def test_execute_transient_budget_reads_the_pipeline_retry_policy():
+    """FAR-2076: ``execute`` must thread the pipeline's ``retry_policy`` into the
+    transient-retry decision (the clamp's policy SOURCE).
+
+    ``max_retries: 1`` is a ceiling of TWO executions. The run has already
+    executed twice, so the transient path must terminal-fail. If the wiring at
+    the ``_prepare_and_stream`` call site were deleted (policy defaulted to
+    ``{}``), the allowance would fall back to ``SAQ_RUN_RETRIES=5`` and the run
+    would be requeued — this test fails either way round."""
+    run = _make_run(claim_count=10, node_attempt_count=2, claim_token="tok-claim-abc")
+    final_run = _make_run(
+        run_id=run.id,
+        status="failed",
+        claim_count=10,
+        node_attempt_count=2,
+        claim_token="tok-claim-abc",
+    )
+    snapshot = _make_snapshot()
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements, retry_policy={"on": ["failure"], "max_retries": 1})
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(NodeCancelledError("node-a"))
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(
+            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
+        )
+
+    assert result is final_run
+    assert mock_finalize.await_args is not None
+    assert mock_finalize.await_args.kwargs["status"] == "failed"
+    assert mock_finalize.await_args.kwargs["error_code"] == "node_cancelled"
+    # No pending reset: the policy ceiling was reached, so a requeue would have
+    # been the deleted-wiring behaviour.
+    assert not any("status='pending'" in s for s in statements)
 
 
 async def test_execute_superseded_skips_pending_reset_and_reraises():

@@ -25,6 +25,7 @@ from modulo.core.events import event_bus as eb
 from modulo.core.events.event_bus import LOCAL_PRODUCER_ID, EventBus
 from modulo.core.events.redis_broker import RedisEventBroker
 from modulo.core.events.relay import EventRelay, reset_relay_for_tests
+from tests.unit.events._helpers import drain_background_tasks
 
 _ORG = "org-fakeredis"
 
@@ -58,12 +59,7 @@ def broker(monkeypatch: pytest.MonkeyPatch) -> Any:
 
 async def _drain_broadcast_tasks() -> None:
     """Wait for EventBus fire-and-forget Redis broadcast tasks to finish."""
-    for _ in range(200):
-        if not eb._background_tasks:
-            await asyncio.sleep(0)
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError("redis broadcast tasks did not drain")
+    await drain_background_tasks(eb._background_tasks)
 
 
 async def _establish_relay(bus: EventBus, broker: RedisEventBroker) -> tuple[EventRelay, asyncio.Queue]:

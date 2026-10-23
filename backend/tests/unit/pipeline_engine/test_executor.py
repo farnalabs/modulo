@@ -4973,7 +4973,7 @@ class TestTransientFailureDetail:
             exc=NodeCancelledError("node-a"),
             script_lease_ok=False,
             graph_idempotent=True,
-            node_attempt_count=1,
+            execution_attempt_count=1,
             retries=1,
         )
         assert code == "script.side_effect_unknown"
@@ -4985,7 +4985,7 @@ class TestTransientFailureDetail:
             exc=NodeCancelledError("killed"),
             script_lease_ok=True,
             graph_idempotent=True,
-            node_attempt_count=1,
+            execution_attempt_count=1,
             retries=1,
         )
         assert code == "node_cancelled"
@@ -4999,7 +4999,7 @@ class TestTransientFailureDetail:
         must not be bucketed as a cancellation."""
         exc = SandboxNodeFailedError("agent produced no output for 600s", node_id="node-a")
         code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=exc, script_lease_ok=True, graph_idempotent=True, node_attempt_count=1, retries=1
+            exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1
         )
         assert code == "sandbox.no_output_json"
         assert "Sandbox node failed (transient) after retries exhausted: agent produced no output for 600s" in detail
@@ -5014,7 +5014,7 @@ class TestTransientFailureDetail:
             node_id="node-a",
         )
         code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=exc, script_lease_ok=True, graph_idempotent=True, node_attempt_count=1, retries=1
+            exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1
         )
         assert code == "sandbox.queue_timeout"
         assert "rate-limited after 4 attempts" in detail
@@ -5027,7 +5027,7 @@ class TestTransientFailureDetail:
             node_id="node-a",
         )
         code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=exc, script_lease_ok=True, graph_idempotent=True, node_attempt_count=1, retries=1
+            exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1
         )
         assert code == "sandbox.rate_limited"
 
@@ -5040,7 +5040,7 @@ class TestTransientFailureDetail:
 
         exc = _UnmappedSandboxError("sandbox died in an unclassified way", node_id="node-a")
         code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=exc, script_lease_ok=True, graph_idempotent=True, node_attempt_count=1, retries=1
+            exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1
         )
         assert code == "sandbox.no_output_json"
 
@@ -5054,7 +5054,7 @@ class TestTransientFailureDetail:
             node_id="node-a",
         )
         code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=exc, script_lease_ok=True, graph_idempotent=True, node_attempt_count=1, retries=1
+            exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1
         )
         assert code == "model.insufficient_funds"
 
@@ -5068,7 +5068,7 @@ class TestTransientFailureDetail:
             node_id="node-a",
         )
         code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=exc, script_lease_ok=True, graph_idempotent=True, node_attempt_count=1, retries=1
+            exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1
         )
         assert code == "node_cancelled"
         assert "likely hung" in detail
@@ -5076,7 +5076,7 @@ class TestTransientFailureDetail:
     def test_non_idempotent_graph_retry_suppression_detail(self) -> None:
         exc = SandboxNodeFailedError("side-effect fail", node_id="node-a")
         code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=exc, script_lease_ok=True, graph_idempotent=False, node_attempt_count=0, retries=1
+            exc=exc, script_lease_ok=True, graph_idempotent=False, execution_attempt_count=0, retries=1
         )
         assert code == "node_cancelled"
         assert "retry suppressed because a node in the graph is non-idempotent" in detail
@@ -5091,7 +5091,7 @@ class TestTransientFailureDetail:
             node_id="node-a",
         )
         code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=exc, script_lease_ok=True, graph_idempotent=True, node_attempt_count=1, retries=1
+            exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1
         )
         assert code == "model.rate_limited"
 
@@ -5104,7 +5104,7 @@ class TestTransientFailureDetail:
             exc=exc,
             script_lease_ok=True,
             graph_idempotent=True,
-            node_attempt_count=0,
+            execution_attempt_count=0,
             retries=1,
             non_retryable_code="model.insufficient_funds",
         )
@@ -5123,7 +5123,7 @@ class TestTransientFailureDetail:
             exc=exc,
             script_lease_ok=True,
             graph_idempotent=True,
-            node_attempt_count=1,
+            execution_attempt_count=1,
             retries=1,
             non_retryable_code="model.insufficient_funds",
         )
@@ -5140,7 +5140,7 @@ class TestTransientFailureDetail:
             exc=exc,
             script_lease_ok=False,
             graph_idempotent=True,
-            node_attempt_count=0,
+            execution_attempt_count=0,
             retries=1,
             non_retryable_code="model.insufficient_funds",
         )
