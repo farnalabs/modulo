@@ -36,21 +36,32 @@ A gate that can be deleted silently is not a gate. These tests pin:
   must not install the filter;
 - the exact audited set in ``GATED_SUITE_ROOTS``;
 - every workflow command that names a gated-suite path still carries the
-  byte-identical escalation and no longer disables the warnings plugin (unit
-  coverage script, BDD workflow, main-integration workflow, deploy pre-deploy
-  unit and integration steps, CI email-settings/step-rot BDD steps, CI
-  integration-changed, CI tier1b-light, merge-queue unit run, schemathesis and
-  Tier 1b nightly runs).
+  byte-identical escalation and no longer disables the warnings plugin (BDD
+  workflow, main-integration workflow, deploy pre-deploy unit and integration
+  steps, CI email-settings/step-rot BDD steps, CI integration-changed, CI
+  tier1b-light, merge-queue unit run, schemathesis and Tier 1b nightly runs);
+- EVERY pytest invocation in ``.github/scripts/coverage-thresholds.sh`` still
+  carries the byte-identical escalation. The unit suite is run as shards, so
+  the script passes an enumerated file list rather than a literal
+  ``tests/unit/`` path - the guard therefore locates the invocation(s) by the
+  ``pytest`` command itself and checks the flag per invocation, so a future
+  split that drops the flag on one shard fails too - and the shard split is
+  lossless;
+- the ``backend-test`` job in ``.github/workflows/ci.yml`` still invokes that
+  script.
 
 Prove-it-fails: deleting the ``warnings.filterwarnings(...)`` line from
 ``tests/conftest.py`` makes the escalation tests fail; deleting a suite from
 ``GATED_SUITE_ROOTS`` makes its parametrised case fail; dropping the ``-W`` flag
 from any pinned CI command makes its command test fail, and adding a new
-gated-suite command without the flag fails the exhaustive workflow scan.
+gated-suite command without the flag fails the exhaustive workflow scan;
+deleting the ``-W`` flag from any pytest invocation in the coverage script makes
+``test_ci_unit_command_carries_the_escalation`` fail.
 """
 
 from __future__ import annotations
 
+import re
 import warnings
 from collections.abc import Iterator
 from pathlib import Path
@@ -94,6 +105,10 @@ _UNGATED_SAMPLES = {
     "load": ("test_load_profile.py",),
     "docker": ("test_docker_compose.py",),
 }
+
+# A pytest COMMAND (not ``pytest-cov``, ``pytest.PytestUnraisableExceptionWarning``
+# or a prose mention): the word followed by whitespace.
+_PYTEST_COMMAND = re.compile(r"(?<![\w./-])pytest\s")
 
 
 def _item_at(path: Path) -> SimpleNamespace:
@@ -264,17 +279,78 @@ def test_every_workflow_command_naming_a_gated_suite_carries_the_escalation() ->
         assert "-p no:warnings" not in command, f"{workflow_name} command disables the warnings plugin: {command}"
 
 
-def test_ci_unit_command_carries_the_escalation() -> None:
-    """The CI unit pytest invocation carries the same escalation as the hook."""
+def _active_script_lines() -> list[str]:
+    """The coverage script's executable lines, comments excluded."""
     script = COVERAGE_SCRIPT.read_text(encoding="utf-8")
-    unit_invocations = [
-        line for line in script.splitlines() if "pytest tests/unit/" in line and not line.lstrip().startswith("#")
-    ]
-    assert unit_invocations, "no `pytest tests/unit/` invocation found in the coverage script"
+    return [line for line in script.splitlines() if not line.lstrip().startswith("#")]
+
+
+def _pytest_invocations(script: str) -> list[str]:
+    """Every pytest command in ``script``, as one joined logical line each.
+
+    Continuation lines are joined first: the escalation flag sits on the
+    backslash-continued line after the command, so a physical-line scan would
+    see the invocation and its flag as separate lines. Comment lines are
+    excluded - the script's explanatory comments mention ``pytest``.
+
+    The invocation is located by the ``pytest`` command itself, never by a
+    literal ``tests/unit/`` path: the unit suite is passed as an enumerated
+    file list, so that literal no longer appears.
+    """
+    invocations = []
+    for line in script.replace("\\\n", " ").splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        if _PYTEST_COMMAND.search(line):
+            invocations.append(line.strip())
+    return invocations
+
+
+def test_ci_unit_command_carries_the_escalation() -> None:
+    """Every CI unit pytest invocation carries the same escalation as the hook.
+
+    Since FAR-2081 the unit suite runs as sequential shards over an explicit
+    file list, so the pytest line no longer spells ``tests/unit`` itself. What
+    must still hold: the file list is enumerated from ``tests/unit`` (a
+    different root would silently shrink the suite), pytest is invoked over
+    that list, and EVERY such invocation carries the byte-identical escalation.
+    """
+    active = _active_script_lines()
+    assert any("find tests/unit" in line for line in active), (
+        "the coverage script no longer enumerates unit test files under tests/unit"
+    )
+    shard_invocations = [line for line in active if "pytest" in line and "${files[@]}" in line]
+    assert shard_invocations, "no `pytest` invocation over the unit file list found in the coverage script"
+    script = COVERAGE_SCRIPT.read_text(encoding="utf-8")
     # The invocation is a backslash-continued command, so join the continuation
     # lines before looking for the flag.
     joined = script.replace("\\\n", " ")
     assert _ESCALATION in joined
+    # ...but the whole-script check above only proves the flag appears SOMEWHERE.
+    # Check every invocation, so a future split that drops the flag from one
+    # shard fails here even though that check would still pass.
+    invocations = _pytest_invocations(script)
+    assert invocations, "no pytest invocation found in .github/scripts/coverage-thresholds.sh"
+    offenders = [line for line in invocations if _ESCALATION not in line]
+    assert all(_ESCALATION in line for line in invocations), (
+        f"every pytest invocation must carry {_ESCALATION!r}; missing on:\n" + "\n".join(offenders)
+    )
+
+
+def test_ci_unit_shard_split_is_lossless() -> None:
+    """Both shards together run every collected unit test file.
+
+    A split that drops files would also drop their coverage while the combined
+    report still claims to describe the whole suite.
+    """
+    active = "\n".join(_active_script_lines())
+    # pytest's default ``python_files`` patterns - pyproject.toml does not
+    # override them - so the enumeration must match BOTH or the split is lossy.
+    assert "test_*.py" in active, "the shard enumeration must match pytest's default python_files patterns"
+    assert "*_test.py" in active, "the shard enumeration must match pytest's default python_files patterns"
+    assert "SHARD1_FILES=(" in active, "the coverage script no longer builds two shard file lists"
+    assert "SHARD2_FILES=(" in active, "the coverage script no longer builds two shard file lists"
+    assert active.count("run_shard ") >= 2, "the coverage script no longer runs two shards"
 
 
 def test_ci_backend_test_job_runs_the_unit_coverage_script() -> None:
