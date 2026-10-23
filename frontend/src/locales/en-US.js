@@ -78,28 +78,6 @@ export default {
       "col_observed": "Observed at",
       "col_value": "Value"
     },
-    "EvidenceIndexView": {
-      "title": "Compliance evidence index",
-      "subtitle": "Review the evidence artefacts produced by this Modulo instance and their framework coverage.",
-      "refresh": "Refresh index",
-      "refreshing": "Refreshing...",
-      "loading": "Loading evidence index...",
-      "summary_label": "Evidence index summary",
-      "pack_version": "Pack version",
-      "generated_at": "Generated",
-      "coverage": "Coverage status",
-      "complete": "Complete",
-      "incomplete": "Incomplete",
-      "artifacts_title": "Indexed artefacts",
-      "empty_title": "No indexed artefacts",
-      "empty_description": "This instance has not produced any evidence artefacts yet.",
-      "col_type": "Artefact type",
-      "col_status": "Status",
-      "col_provenance": "Provenance",
-      "col_records": "Records",
-      "col_location": "Location",
-      "missing": "{count} artefact type is missing from the index. | {count} artefact types are missing from the index."
-    },
     "OAuthConsentView": {
       "authorize_access": "Authorize access",
       "consent_description": "Approve this application to access your organisation's MCP tools.",

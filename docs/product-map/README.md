@@ -97,7 +97,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-costs** - Cost tracking, spend limits, cost controls, and cost components - routes: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`, `/admin/costs/components`
 - **feat-hitl** - Human-in-the-loop approval gates and review - routes: `/settings/hitl-review`
 - **feat-analytics** - Reporting and analytics over runs, costs, and facts - routes: `/analytics`
-- **feat-evidence** - Evidence dashboard with a server-side field-level redaction boundary - routes: `/evidence`, `/admin/evidence-redaction`, `/admin/evidence`, `/admin/compliance/evidence-index`
+- **feat-evidence** - Evidence dashboard with a server-side field-level redaction boundary - routes: `/evidence`, `/admin/evidence-redaction`, `/admin/compliance/evidence-index`
 
 ### Improve
 - **feat-evals** - Evaluation editor and proposal queue - routes: `/evals/editor`, `/evals/proposals`
