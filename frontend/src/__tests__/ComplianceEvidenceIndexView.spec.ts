@@ -34,6 +34,8 @@ const payload = (overrides: Partial<EvidenceIndex> = {}): EvidenceIndex => ({
   pack_content_hash: 'sha256:abc',
   pack_published_at: '2026-10-20T12:00:00Z',
   generated_at: '2026-10-22T12:00:00Z',
+  period_from: null,
+  period_to: null,
   product_version: '0.9.0',
   organisation_id: 'org-1',
   framework_ids: ['soc2'],
