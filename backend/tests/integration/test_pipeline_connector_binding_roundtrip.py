@@ -240,7 +240,25 @@ async def test_binding_without_new_inputs_resaves_without_persisting_nulls(
             timeout=30.0,
         )
         assert got.status_code == 200, got.text
-        # The READ re-validates through PipelineGraphNode, so the response
+
+        # The regression is about what a RE-SAVE persists, so drive the actual
+        # flow the editor takes: read the graph back and PUT that same payload
+        # again. The read model default-fills the absent optional fields as
+        # ``null`` (a schema-consistent, nullable response), and only the write
+        # path strips them — so a response-key-absence assertion here would test
+        # the read contract, not the persistence contract that broke the engine.
+        first_read = got.json()
+        re_save = await integration_client.put(
+            f"/api/v1/pipelines/{pipeline_id}/graph",
+            json={"nodes": first_read["nodes"], "edges": first_read["edges"]},
+            headers=headers,
+            timeout=30.0,
+        )
+        assert re_save.status_code == 200, re_save.text
+
+        # Read the PERSISTED graph (what the engine consumes at run start) and
+        # pin that the unset inputs stayed ABSENT across the round trip. The
+        # READ re-validates through PipelineGraphNode, so the response
         # re-materialises the model defaults even when the keys were never
         # persisted. Which keys were WRITTEN is a property of the stored row.
         stored = await _persisted_binding(db_engine, test_org, pipeline_id)
